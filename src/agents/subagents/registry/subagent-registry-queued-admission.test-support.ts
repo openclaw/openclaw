@@ -86,7 +86,7 @@ export function registerQueuedRegistrationAdmissionCases() {
         expect(settle).not.toHaveBeenCalled();
         expect(cleanup).not.toHaveBeenCalled();
         expect(rollback).not.toHaveBeenCalled();
-        expect(f.writes).toBe(2);
+        expect(f.writes).toBe(1);
         expect(suspension.release()).toBe(true);
         await nextTurn();
         expect(launch).not.toHaveBeenCalled();

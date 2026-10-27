@@ -16,7 +16,6 @@ import {
 import { withPluginRetentionOwner } from "../plugins/plugin-retention-diagnostics.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
   prepareAgentCommandExecution,
   type PreparedAgentCommandExecution,
@@ -33,7 +32,7 @@ import { measureAgentStartup } from "./startup-timing.js";
 
 type ResolvedAgentCommandDeps = Awaited<ReturnType<typeof resolveAgentCommandDeps>>;
 
-/** Runs a local command under one request, recovery, and plugin-registry generation. */
+/** Runs a local command under one request and plugin-registry generation. */
 export async function runLocalAgentCommand<TResult>(params: {
   opts: AgentCommandOpts;
   runtime: RuntimeEnv;
@@ -60,86 +59,75 @@ export async function runLocalAgentCommand<TResult>(params: {
         params.opts.lifecycleGeneration ??
         captureAgentRunLifecycleGeneration(params.opts.runId ?? "");
       return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-        withLocalGatewayRequestScope(
-          { deps: resolvedDeps, getRuntimeConfig },
-          async () =>
-            await runWithAgentCommandRecoveryOwner({
-              lifecycleGeneration,
-              mode: "reject_uncoordinated",
-              opts: {
-                ...params.opts,
-                lifecycleGeneration,
-                senderIsOwner: params.opts.senderIsOwner ?? true,
-                allowModelOverride: params.opts.allowModelOverride ?? true,
-                // Standalone commands cannot retain transports after their idle scheduler closes.
-                cleanupBundleMcpOnRunEnd: existingHost
-                  ? params.opts.cleanupBundleMcpOnRunEnd
-                  : true,
+        withLocalGatewayRequestScope({ deps: resolvedDeps, getRuntimeConfig }, async () => {
+          const opts = {
+            ...params.opts,
+            lifecycleGeneration,
+            senderIsOwner: params.opts.senderIsOwner ?? true,
+            allowModelOverride: params.opts.allowModelOverride ?? true,
+            // Standalone commands cannot retain transports after their idle scheduler closes.
+            cleanupBundleMcpOnRunEnd: existingHost ? params.opts.cleanupBundleMcpOnRunEnd : true,
+          };
+          const prepared = await measureAgentStartup("command-prepare", () =>
+            prepareAgentCommandExecution(opts, params.runtime),
+          );
+          const capability =
+            params.operatorAuthority && prepared.opts.senderIsOwner === true
+              ? createCronCreatorAuthorityCapability(prepared.runId, { kind: "local" })
+              : undefined;
+          const admittedPrepared = capability
+            ? {
+                ...prepared,
+                opts: { ...prepared.opts, cronCreatorAuthorityCapability: capability },
+              }
+            : prepared;
+          const run = () =>
+            withPluginRetentionOwner(
+              {
+                agentId: prepared.sessionAgentId,
+                sessionKey: prepared.sessionKey,
+                runId: prepared.runId,
               },
-              prepare: async (preparedOpts) =>
-                await measureAgentStartup("command-prepare", () =>
-                  prepareAgentCommandExecution(preparedOpts, params.runtime),
-                ),
-              run: async (prepared) => {
-                const capability =
-                  params.operatorAuthority && prepared.opts.senderIsOwner === true
-                    ? createCronCreatorAuthorityCapability(prepared.runId, { kind: "local" })
-                    : undefined;
-                const admittedPrepared = capability
-                  ? {
-                      ...prepared,
-                      opts: { ...prepared.opts, cronCreatorAuthorityCapability: capability },
-                    }
-                  : prepared;
-                const run = () =>
-                  withPluginRetentionOwner(
+              async () => {
+                // Preparation owns registry selection and physical resources. Do not load
+                // an intermediate discovery registry just to select that same generation.
+                await using lease = scopePreparedModelRuntimeLease(
+                  await acquireAgentRunPreparedModelRuntime(
                     {
-                      agentId: prepared.sessionAgentId,
-                      sessionKey: prepared.sessionKey,
-                      runId: prepared.runId,
+                      config: admittedPrepared.cfg,
+                      agentId: admittedPrepared.sessionAgentId,
+                      agentDir: admittedPrepared.agentDir,
+                      workspaceDir: admittedPrepared.workspaceDir,
                     },
-                    async () => {
-                      // Preparation owns registry selection and physical resources. Do not load
-                      // an intermediate discovery registry just to select that same generation.
-                      await using lease = scopePreparedModelRuntimeLease(
-                        await acquireAgentRunPreparedModelRuntime(
-                          {
-                            config: admittedPrepared.cfg,
-                            agentId: admittedPrepared.sessionAgentId,
-                            agentDir: admittedPrepared.agentDir,
-                            workspaceDir: admittedPrepared.workspaceDir,
-                          },
-                          { abortSignal: admittedPrepared.opts.abortSignal },
-                        ),
-                      );
-                      // Tool policy dispatches through the global runner; a headless run has no root.
-                      ensureGlobalHookRunner();
-                      return await withPluginRuntimeGenerationScope(lease.snapshot, () =>
-                        lease.run(() =>
-                          params.run(
-                            {
-                              ...admittedPrepared,
-                              commandRuntimeContext: {
-                                config: lease.snapshot.config,
-                                pluginGeneration: lease.pluginGeneration,
-                              },
-                            },
-                            resolvedDeps,
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                return capability
-                  ? await runWithCronCreatorAuthorityCapability(
-                      capability,
-                      run,
-                      admittedPrepared.opts.abortSignal,
-                    )
-                  : await run();
+                    { abortSignal: admittedPrepared.opts.abortSignal },
+                  ),
+                );
+                // Tool policy dispatches through the global runner; a headless run has no root.
+                ensureGlobalHookRunner();
+                return await withPluginRuntimeGenerationScope(lease.snapshot, () =>
+                  lease.run(() =>
+                    params.run(
+                      {
+                        ...admittedPrepared,
+                        commandRuntimeContext: {
+                          config: lease.snapshot.config,
+                          pluginGeneration: lease.pluginGeneration,
+                        },
+                      },
+                      resolvedDeps,
+                    ),
+                  ),
+                );
               },
-            }),
-        ),
+            );
+          return capability
+            ? await runWithCronCreatorAuthorityCapability(
+                capability,
+                run,
+                admittedPrepared.opts.abortSignal,
+              )
+            : await run();
+        }),
       );
     }),
     async () => {

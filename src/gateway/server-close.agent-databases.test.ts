@@ -560,7 +560,7 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
 }, 300_000);
 
 it.skipIf(process.platform !== "linux")(
-  "releases restart-aborted run leases before sidecar settlement and joins managed SIGTERM cleanup",
+  "releases restart-aborted run leases before sidecar settlement and completes managed SIGTERM cleanup",
   async ({ signal }) => {
     const fixture = await closeFixture("gateway-agent-resource-close");
     const entered = createDeferredCore();
@@ -647,12 +647,6 @@ it.skipIf(process.platform !== "linux")(
       assert(admitted.status === "owned" && admitted.databaseClaim);
       operation = admitted.operation;
       operation.setPhase("running");
-      // Session delivery recovery joins its accepted reply before its service stops.
-      const replyAborted = waitForAbortSignal(operation.abortSignal);
-      kernel.kernel.setScheduledServiceHandles({
-        stopScheduledServices: kernel.runtimeState.stopScheduledServices,
-        stopDeliveryRecovery: () => Promise.race([replyAborted, release.promise]),
-      });
       const releaseClaim = admitted.databaseClaim.release;
       vi.spyOn(admitted.databaseClaim, "release").mockImplementation(() => {
         const released = Promise.resolve(releaseClaim());
@@ -668,7 +662,7 @@ it.skipIf(process.platform !== "linux")(
         plan: createSessionMaintenanceStatisticsOperation({ ...options, path: agent.path }),
       });
       expect(agentLeases.all(agent.path)).toEqual(writerLeases);
-      // External cleanup can outlive the stop budget; idle writers must not wait for it.
+      // Abort releases the run claim before independent sidecar cleanup completes.
       unregister = kernel.registerConnectionDependentSidecars({
         async stop() {
           entered.resolve();
@@ -687,38 +681,23 @@ it.skipIf(process.platform !== "linux")(
       vi.spyOn(performance, "now").mockImplementation(() => Date.now());
       stop("SIGTERM");
       await withinTest(waitForAbortSignal(getGatewayRestartDrainSignal()), signal);
-      await vi.advanceTimersByTimeAsync(29_999);
-      expect(operation.abortSignal.aborted).toBe(false);
-      expect(close).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(0);
+      await withinTest(entered.promise, signal);
       expect(close).toHaveBeenCalledWith({
         reason: "gateway restarting",
         restartExpectedMs: 1_500,
-        drainTimeoutMs: 0,
+        exitAfterClose: false,
         retainSharedState: true,
       });
       closing = close.mock.results[0]?.value;
       assert(closing);
-      await withinTest(
-        awaitGateBeforeSettlement(
-          entered.promise,
-          closing,
-          "Gateway acknowledged closure before its agent resource joined",
-        ),
-        signal,
-      );
       expect(isAgentRunRestartAbortReason(operation.abortSignal.reason)).toBe(true);
       expect(admitted.databaseClaim.isCurrent()).toBe(false);
       await writerReleased.promise;
       expect(agentLeases.all(agent.path)).toEqual([]);
-      await vi.advanceTimersByTimeAsync(10_001);
       expect(exit).not.toHaveBeenCalled();
       expect(completeBoot).not.toHaveBeenCalled();
-      expect([agent.db.isOpen, shared.isOpen]).toEqual([false, true]);
-      expect(fixture.inspectLeases).not.toThrow();
-      // The released worker owner seals before unrelated sidecars settle.
-      expect(readSqliteDatabaseCleanClose(agent.path)).toBe(true);
-      await vi.advanceTimersByTimeAsync(4_999);
+      expect(shared.isOpen).toBe(true);
       operation.complete();
       release.resolve();
       await closing;

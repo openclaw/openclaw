@@ -1,7 +1,6 @@
 import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
-import type { SessionRestartResume } from "../../config/sessions/restart-resume.js";
 import type { ProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.contracts.js";
 import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
@@ -41,7 +40,6 @@ export async function prepareAndAdmitChatSend(
     controllerInput?: SessionControllerInput;
     isDirectExternalUser?: boolean;
     goalResume?: SessionGoalOperation & { action: "resume" };
-    restartResume?: SessionRestartResume;
     providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   },
   diagnostics?: ChatSendDiagnostics,
@@ -65,7 +63,6 @@ export async function prepareAndAdmitChatSend(
     client,
     ...(options?.trustedSystemInput ? { trustedSystemInput: true } : {}),
     ...(options?.goalResume ? { goalResume: options.goalResume } : {}),
-    ...(options?.restartResume ? { restartResume: options.restartResume } : {}),
     ...(options?.providerReviewAcknowledgment
       ? { providerReviewAcknowledgment: options.providerReviewAcknowledgment }
       : {}),
@@ -95,7 +92,6 @@ export async function prepareAndAdmitChatSend(
     request: normalizedRequest.value,
     context,
     client,
-    isDirectExternalUser: options?.isDirectExternalUser,
     assertCurrent,
   });
   if (!loadedSession.ok) {

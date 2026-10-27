@@ -309,7 +309,7 @@ export function enqueueSessionEventForHost(
     settlement = "settling";
     const complete = async () => {
       try {
-        inputRecorder?.finishPendingInput?.(signal.aborted ? "cancelled" : "interrupted");
+        inputRecorder?.finishPendingInput?.("cancelled");
         await inputRecorder?.waitForPendingInputSettlement?.();
       } catch (error) {
         failure ??= error instanceof Error ? error : String(error);

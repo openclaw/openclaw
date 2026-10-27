@@ -33,23 +33,6 @@ import {
   installGatewayTestHooks,
 } from "./test-helpers.js";
 
-vi.mock(
-  "../agents/main-session-recovery/main-session-restart-recovery.js",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("../agents/main-session-recovery/main-session-restart-recovery.js")
-    >()),
-    // Attachment admission owns these cases; background recovery has no work to perform.
-    scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease: vi.fn(),
-    retryRestartAbortedMainSessionRecovery: vi.fn(async () => ({
-      started: 0,
-      settled: 0,
-      failed: 1,
-      skipped: 0,
-    })),
-  }),
-);
-
 installGatewayTestHooks({ scope: "suite" });
 const directories = createTempDirTracker();
 const sessionStoreFixture = createDirectChatSessionStoreFixture(directories);

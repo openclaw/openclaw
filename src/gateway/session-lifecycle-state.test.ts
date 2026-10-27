@@ -318,9 +318,6 @@ describe("session lifecycle state", () => {
       );
       expect(started.lifecycleRunId).toBe("provider-run");
       expect(started.status).toBeUndefined();
-      expect(started.restartRecoveryRuns).toEqual([
-        { runId: "provider-run", lifecycleGeneration: getAgentEventLifecycleGeneration() },
-      ]);
 
       const completed = await persistLifecycle(
         started,
@@ -337,7 +334,6 @@ describe("session lifecycle state", () => {
 
       expect(completed.lifecycleRunId).toBeUndefined();
       expect(completed.lastRunId).toBe("client-run");
-      expect(completed.restartRecoveryRuns).toBeUndefined();
     },
   );
 
@@ -413,15 +409,10 @@ describe("session lifecycle state", () => {
   );
 
   it("retains yielded continuation custody without recording a terminal outcome", async () => {
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const restartRecoveryRuns = [{ runId: "yielded-recovery-run", lifecycleGeneration }];
-    loggerMocks.info.mockClear();
-    loggerMocks.warn.mockClear();
     const yielded = await persistLifecycle(
       {
         ...runningEntry,
-        lifecycleRunId: "yielded-recovery-run",
-        restartRecoveryRuns,
+        lifecycleRunId: "yielded-run",
       },
       lifecycleEvent(
         {
@@ -431,7 +422,7 @@ describe("session lifecycle state", () => {
           livenessState: "paused",
           stopReason: "end_turn",
         },
-        { runId: "yielded-recovery-run", lifecycleGeneration, mainSessionRestartRecovery: true },
+        { runId: "yielded-run" },
       ),
     );
 
@@ -439,14 +430,11 @@ describe("session lifecycle state", () => {
       endedAt: 1_800,
       runtimeMs: 750,
       abortedLastRun: false,
-      lifecycleRunId: "yielded-recovery-run",
-      restartRecoveryRuns,
+      lifecycleRunId: "yielded-run",
     });
     expect(yielded.status).toBeUndefined();
-    expect(loggerMocks.info).not.toHaveBeenCalled();
-    expect(loggerMocks.warn).not.toHaveBeenCalled();
 
-    const resumed = await persistLifecycle(yielded, startEvent(2_100, "yielded-recovery-run"));
+    const resumed = await persistLifecycle(yielded, startEvent(2_100, "yielded-run"));
     expect(resumed.status).toBeUndefined();
     expect(resumed.endedAt).toBeUndefined();
     expect(resumed.startedAt).toBe(2_100);
@@ -504,23 +492,7 @@ describe("session lifecycle state", () => {
   });
 });
 
-it("keeps a suppressed lifecycle projection empty while preserving intentional field clears", () => {
-  const current: SessionEntry = {
-    sessionId: "projection-recovery",
-    updatedAt: 1_000,
-    startedAt: 900,
-    status: "interrupted",
-    lifecycleRunId: "foreground-run",
-    abortedLastRun: true,
-    restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
-    mainRestartRecovery: { cycleId: "cycle-1", revision: 2, chargedAttempts: 2 },
-  };
-  const suppressed = deriveGatewaySessionLifecycleProjectionPatch({
-    entry: current,
-    event: { ts: 2_000, sessionId: current.sessionId, data: { phase: "end", endedAt: 1_800 } },
-  });
-  expect(suppressed).toStrictEqual({});
-
+it("preserves intentional field clears in a lifecycle projection", () => {
   const next = deriveGatewaySessionLifecycleProjectionPatch({
     entry: { endedAt: 1_800, runtimeMs: 900 },
     event: { ts: 2_100, runId: "new-run", data: { phase: "start", startedAt: 2_100 } },

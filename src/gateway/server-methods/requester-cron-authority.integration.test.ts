@@ -277,7 +277,7 @@ async function createStoredJob(
 }
 
 describe("requester continuation persisted automation management", () => {
-  it("keeps recovery reads scoped and withholds a record when authority closes during its read", async ({
+  it("keeps automation reads scoped and withholds a record when authority closes during its read", async ({
     signal,
   }) => {
     const config: OpenClawConfig = { ...cfg, tools: { allow: [AUTOMATIONS_TOOL_NAME] } };
@@ -306,7 +306,7 @@ describe("requester continuation persisted automation management", () => {
           },
         },
       );
-    const own = await addOwnedJob(SESSION, "Recovery-visible record");
+    const own = await addOwnedJob(SESSION, "Owned automation record");
     const foreign = await addOwnedJob("agent:main:another-conversation", "Private foreign record");
     const responses = vi.fn<RespondFn>();
     const get = expectDefined(coreGatewayHandlers["cron.get"], "cron.get handler");
@@ -322,7 +322,7 @@ describe("requester continuation persisted automation management", () => {
           }),
       });
 
-    await inRun("recovery-inspection", undefined, async (_identity, admitted) => {
+    await inRun("automation-inspection", undefined, async (_identity, admitted) => {
       bindGatewayContextResolver(admitted, () => fixture.context);
       const entered = createDeferred();
       const release = createDeferred();
@@ -344,7 +344,6 @@ describe("requester continuation persisted automation management", () => {
           config,
           admitted,
           senderIsOwner: false,
-          forceRestartSafeTools: true,
         });
         const inspect = (jobId: string) =>
           tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId });

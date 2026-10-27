@@ -6,20 +6,8 @@ import type {
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import type { WithPreparedWorkerWorkspaceRecovery } from "./placement-reclaim-contract.js";
 import type { WorkerSessionPlacementIdentity, WorkerSessionTurnClaim } from "./placement-record.js";
-import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
-
-export type WorkerPlacementRecoveryBarrier = (params: {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  executionMode: WorkerPlacementDispatchRequest["executionMode"];
-  environmentId: string;
-  expectedGeneration: number;
-  signal?: AbortSignal;
-  run: (workspace: WorkerSessionWorkspace, assertCurrent?: () => void) => Promise<void>;
-}) => Promise<void>;
 
 export type WorkerPlacementRecoveryAdmission = (
   sessionIds: readonly string[],
@@ -32,7 +20,6 @@ export type PlacementRecoveryDeps = {
   environments: Pick<
     WorkerDispatchEnvironmentService,
     | "get"
-    | "fenceWorkerTurnForRecovery"
     | "destroy"
     | "reclaim"
     | "startTunnel"

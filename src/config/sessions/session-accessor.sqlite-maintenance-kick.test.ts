@@ -214,7 +214,7 @@ it.for(["young", "capacity", "expired"] as const)(
         },
         "delivered",
         undefined,
-        { clearAfterSettled: {}, preserveActivity: true },
+        { clearAfterSettled: true as const, preserveActivity: true },
       ),
       signal,
     );

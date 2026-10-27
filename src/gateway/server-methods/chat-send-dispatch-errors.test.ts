@@ -16,7 +16,6 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { getAgentEventLifecycleGeneration, onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
@@ -30,7 +29,6 @@ import {
   getTerminalSessionWorkAdmissionRelease,
 } from "../../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
-import * as sessionRunError from "../../sessions/session-run-error.js";
 import {
   AgentDatabaseAdmissionError,
   createAgentDatabaseInspectionRefusal,
@@ -43,7 +41,6 @@ import { createChatRunState } from "../server-chat-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import * as sessionLifecycleState from "../session-lifecycle-state.js";
 import { broadcastChatDelta } from "./chat-broadcast.js";
-import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
 import {
   createChatSendDispatchErrorLifecycle,
   handleChatSendSetupError,
@@ -55,39 +52,6 @@ import {
 
 const policyMessage =
   "OpenCode cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.";
-
-async function captureTerminalTarget(scope: {
-  agentId?: string;
-  sessionKey: string;
-  storePath: string;
-}) {
-  return withSessionEntriesFromStoresInWorker(
-    [
-      {
-        ...scope,
-        agentId: scope.agentId ?? "main",
-        sessionKeys: [scope.sessionKey],
-        projection: "exact",
-      },
-    ],
-    ([read]) => {
-      const source = read!.result.source;
-      if (!source) {
-        throw new Error("Expected an admitted physical session source");
-      }
-      return {
-        target: {
-          ...scope,
-          readSource: source,
-          target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-        },
-        expectedLifecycleRevision: read!.result.entries[0]?.entry.lifecycleRevision,
-        assertCurrent: vi.fn(),
-      };
-    },
-    { ordered: true },
-  );
-}
 
 describe("handleChatSendSetupError", () => {
   it.each([false, true])("preserves an uncertain setup outcome (cleanup: %s)", async (cleanup) => {
@@ -113,13 +77,11 @@ describe("handleChatSendSetupError", () => {
           activeRunAbort,
           cleanupAdmittedRun: vi.fn(),
           lifecycleGeneration: "test-generation",
-          restartSafeAdmission: undefined,
         },
         context: createDirectChatContext({ broadcast, dedupe, getRuntimeConfig: () => ({}) }),
         error,
         respond,
         session: { agentId: "main", clientRunId: runId, sessionKey: "agent:main:main" },
-        terminalizeRestartSafeAdmission: vi.fn(),
       });
       expect(respond).toHaveBeenCalledOnce();
       const [ok, payload, refusal] = respond.mock.calls[0]!;
@@ -158,7 +120,6 @@ describe("handleChatSendSetupError", () => {
       const broadcast = vi.fn();
       const respond = vi.fn();
       const dedupe = new Map();
-      const terminalizeRestartSafeAdmission = vi.fn();
       const restart = error instanceof GatewayDrainingError;
       const activeRunAbort = registerRpcSourceForTest({
         runId: "setup-projection-retry",
@@ -176,7 +137,6 @@ describe("handleChatSendSetupError", () => {
             activeRunAbort,
             cleanupAdmittedRun,
             lifecycleGeneration: "test-generation",
-            restartSafeAdmission: restart ? { requestFingerprint: "restart" } : undefined,
           },
           context: {
             agentRunSeq: new Map(),
@@ -194,14 +154,12 @@ describe("handleChatSendSetupError", () => {
             clientRunId: "setup-projection-retry",
             sessionKey: "agent:main:main",
           },
-          terminalizeRestartSafeAdmission,
         }).finally(() => {
           if (restart) {
             resetGatewayWorkAdmission();
           }
         });
 
-        expect(terminalizeRestartSafeAdmission).not.toHaveBeenCalled();
         expect(respond).toHaveBeenCalledWith(
           false,
           expect.objectContaining({ runId: "setup-projection-retry", status: "error" }),
@@ -223,48 +181,15 @@ describe("handleChatSendSetupError", () => {
 
 describe("createChatSendDispatchErrorLifecycle", () => {
   it.each([
-    { settlement: "fallback", missingProfile: false, policyFailure: false, sessionChanged: false },
-    { settlement: "fallback", stateContention: true },
-    { settlement: "fallback", restartFailure: true },
-    { settlement: "restart-safe", restartFailure: true },
-    { settlement: "restart-safe", stateContention: true },
-    {
-      settlement: "restart-safe",
-      missingProfile: false,
-      policyFailure: false,
-      sessionChanged: false,
-    },
-    { settlement: "fallback", missingProfile: true, policyFailure: false, sessionChanged: false },
-    {
-      settlement: "restart-safe",
-      missingProfile: true,
-      policyFailure: false,
-      sessionChanged: false,
-    },
-    { settlement: "fallback", missingProfile: false, policyFailure: true, sessionChanged: false },
-    {
-      settlement: "restart-safe",
-      missingProfile: false,
-      policyFailure: true,
-      sessionChanged: false,
-    },
-    { settlement: "fallback", missingProfile: false, policyFailure: false, sessionChanged: true },
-    {
-      settlement: "restart-safe",
-      missingProfile: false,
-      policyFailure: false,
-      sessionChanged: true,
-    },
+    { missingProfile: false, policyFailure: false, sessionChanged: false },
+    { stateContention: true },
+    { restartFailure: true },
+    { missingProfile: true, policyFailure: false, sessionChanged: false },
+    { missingProfile: false, policyFailure: true, sessionChanged: false },
+    { missingProfile: false, policyFailure: false, sessionChanged: true },
   ])(
-    "records the rejected input and bounded error through $settlement settlement (missing profile: $missingProfile, policy refusal: $policyFailure, session changed: $sessionChanged)",
-    async ({
-      settlement,
-      missingProfile,
-      policyFailure,
-      sessionChanged,
-      stateContention,
-      restartFailure,
-    }) => {
+    "records the rejected input and bounded error (missing profile: $missingProfile, policy refusal: $policyFailure, session changed: $sessionChanged)",
+    async ({ missingProfile, policyFailure, sessionChanged, stateContention, restartFailure }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         setRuntimeConfigSnapshot({});
         const target = {
@@ -277,18 +202,11 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         const lifecycleGeneration = restartFailure
           ? getAgentEventLifecycleGeneration()
           : "test-generation";
-        const restartSafe = settlement === "restart-safe";
         await upsertSessionEntryCore(target, {
           sessionId: target.sessionId,
           updatedAt: 1_000,
           startedAt: 1_000,
           lifecycleRunId: runId,
-          ...(restartSafe
-            ? {
-                restartRecoveryDeliveryRunId: runId,
-                restartRecoveryDeliverySourceRunId: runId,
-              }
-            : {}),
         });
         let userPersisted = false;
         const persistUserTurnTranscript = async () => {
@@ -297,10 +215,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           });
           userPersisted = true;
         };
-        if (restartSafe) {
-          await persistUserTurnTranscript();
-        }
-        const terminalTarget = await captureTerminalTarget(target);
         const warn = vi.fn();
         const chatRunState = createChatRunState();
         const broadcast = vi.fn();
@@ -323,9 +237,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             }),
             cleanupAdmittedRun: vi.fn(),
             lifecycleGeneration,
-            restartSafeAdmission: restartSafe
-              ? { requestFingerprint: "test-fingerprint" }
-              : undefined,
           },
           context: {
             agentRunSeq,
@@ -351,14 +262,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             rawSessionKey: target.sessionKey,
             sessionKey: target.sessionKey,
           },
-          terminalizeRestartSafeAdmission: (terminal) =>
-            terminalizeRestartSafeChatAdmission({
-              ...terminal,
-              ...terminalTarget,
-              admittedSessionId: target.sessionId,
-              clientRunId: runId,
-              startedAt: 1_000,
-            }),
           userTurnRecorder: { hasPersisted: () => userPersisted, isBlocked: () => false },
         });
 
@@ -426,9 +329,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             }),
           ]);
           expect(loadSessionEntry(target)).toMatchObject({ abortedLastRun: true });
-          if (restartSafe) {
-            expect(loadSessionEntry(target)?.restartRecoveryDeliverySourceRunId).toBe(runId);
-          }
           return;
         }
         expect(messages).toMatchObject([
@@ -501,68 +401,9 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             expect.anything(),
           );
         }
-        if (restartSafe) {
-          expect(loadSessionEntry(target)?.restartRecoveryDeliveryRunId).toBe(runId);
-          const terminal = {
-            ...terminalTarget,
-            admittedSessionId: target.sessionId,
-            clientRunId: runId,
-            startedAt: 1_000,
-            error: "Late duplicate rejection",
-            status: "failed" as const,
-            retryable: false,
-          };
-          expect(await terminalizeRestartSafeChatAdmission(terminal)).toBe(true);
-          expect(loadSessionEntry(target)?.restartRecoveryDeliveryRunId).toBeUndefined();
-          expect(await terminalizeRestartSafeChatAdmission(terminal)).toBe(false);
-          expect(
-            (await loadTranscriptEvents(target)).filter(
-              (entry) => isRecord(entry) && entry.type === "custom_message",
-            ),
-          ).toHaveLength(1);
-        }
       });
     },
   );
-
-  it("keeps restart-safe settlement successful when its notice cannot be written", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot({});
-      const target = {
-        sessionKey: "agent:main:main",
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      };
-      await upsertSessionEntryCore(target, {
-        sessionId: "settled-session",
-        updatedAt: 1_000,
-        restartRecoveryDeliveryRunId: "settled-run",
-      });
-      const report = vi
-        .spyOn(sessionRunError, "recordGatewaySessionRunFailure")
-        .mockRejectedValueOnce(new Error("notice write failed"));
-      const terminalTarget = await captureTerminalTarget(target);
-      try {
-        expect(
-          await terminalizeRestartSafeChatAdmission({
-            ...terminalTarget,
-            admittedSessionId: "settled-session",
-            clientRunId: "settled-run",
-            startedAt: 1_000,
-            status: "failed",
-            error: "Worker unavailable",
-            retryable: false,
-          }),
-        ).toBe(true);
-        expect(loadSessionEntry(target)).toMatchObject({
-          status: "failed",
-          lastRunId: "settled-run",
-        });
-        expect(loadSessionEntry(target)?.restartRecoveryDeliveryRunId).toBeUndefined();
-      } finally {
-        report.mockRestore();
-      }
-    });
-  });
 
   it.each([false, true])(
     "preserves queued refresh completion after a later dispatch failure (completed=%s)",
@@ -588,7 +429,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           activeRunAbort: registration,
           cleanupAdmittedRun,
           lifecycleGeneration: "test-generation",
-          restartSafeAdmission: undefined,
         },
         context: {
           agentRunSeq: new Map(),
@@ -612,7 +452,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           rawSessionKey: "agent:main:main",
           sessionKey: "agent:main:main",
         },
-        terminalizeRestartSafeAdmission: vi.fn(),
         userTurnRecorder: { hasPersisted: () => false, isBlocked: () => false },
       });
 
@@ -648,7 +487,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       const broadcast = vi.fn();
       const dedupe = new Map();
       const warn = vi.fn();
-      const terminalizeRestartSafeAdmission = vi.fn().mockResolvedValue(false);
       const unsubscribe = onAgentRuntimeEvent((event) => {
         if (event.runId !== runId || event.stream !== "lifecycle" || event.data.phase !== "end") {
           return;
@@ -679,7 +517,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             activeRunAbort: registration,
             cleanupAdmittedRun: registration.cleanup,
             lifecycleGeneration: "test-generation",
-            restartSafeAdmission: {} as never,
           },
           context: {
             agentRunSeq: new Map(),
@@ -703,7 +540,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             rawSessionKey: sessionKey,
             sessionKey,
           },
-          terminalizeRestartSafeAdmission,
           userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
         });
 
@@ -722,10 +558,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           expect.anything(),
         );
         expect(rpcSourceTesting.has(runId)).toBe(false);
-        expect(terminalizeRestartSafeAdmission).toHaveBeenCalledExactlyOnceWith({
-          retryable: false,
-          status: "killed",
-        });
       } finally {
         unsubscribe();
         registration.cleanup();
@@ -753,7 +585,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           activeRunAbort: registration,
           cleanupAdmittedRun: vi.fn(),
           lifecycleGeneration: "test-generation",
-          restartSafeAdmission: undefined,
         },
         context: {
           agentRunSeq: new Map(),
@@ -777,7 +608,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           rawSessionKey: "agent:main:main",
           sessionKey: "agent:main:main",
         },
-        terminalizeRestartSafeAdmission: vi.fn(),
         userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
       });
 
@@ -828,7 +658,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           activeRunAbort: registration,
           cleanupAdmittedRun: registration.cleanup,
           lifecycleGeneration: "test-generation",
-          restartSafeAdmission: undefined,
         },
         context: {
           agentRunSeq: new Map(),
@@ -852,7 +681,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           rawSessionKey: sessionKey,
           sessionKey,
         },
-        terminalizeRestartSafeAdmission: vi.fn(),
         userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
       });
 
@@ -926,7 +754,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           activeRunAbort: { ...registration, cleanup: activeRunCleanup },
           cleanupAdmittedRun,
           lifecycleGeneration: "test-generation",
-          restartSafeAdmission: undefined,
         },
         context: {
           agentRunSeq: new Map(),
@@ -952,7 +779,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           rawSessionKey: "global",
           sessionKey: "global",
         },
-        terminalizeRestartSafeAdmission: vi.fn(),
         userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
       });
 

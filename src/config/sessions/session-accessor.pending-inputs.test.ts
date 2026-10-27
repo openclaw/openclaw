@@ -313,48 +313,33 @@ it.each([
     expect(() => receipt.run(execute)).toThrow();
     expect(readStoredSource()).toEqual(storedSource);
     expect(await readTranscript()).toEqual(transcript);
-    expect((await pendingInputs()).total).toBe(disposition === "interrupted" ? 1 : 0);
+    expect((await pendingInputs()).total).toBe(0);
 
     if (!restart) {
       await expect(stage(runId, { requestFingerprint })).rejects.toThrow("ownership ended");
     }
+    if (disposition === "interrupted") {
+      await expect(stage(runId, { requestFingerprint, retryCancelled: true })).rejects.toThrow(
+        "ownership ended",
+      );
+      expect(readStoredSource()).toEqual(storedSource);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
+      expect(await pendingInputs()).toEqual({ total: 0, items: [] });
+      return;
+    }
     const renewed = await stage(runId, {
       requestFingerprint,
-      retryInterrupted: !restart,
       prepareMessageAfterIdempotencyCheck: prepare,
     });
     expect(renewed.inputId).toBe(receipt.inputId);
     expect(renewed.message).toEqual(receipt.message);
     expect(prepare).not.toHaveBeenCalled();
-    if (disposition === "collected-consumed") {
-      expect(renewed.state).toBe("consumed");
-      expect(() => renewed.run(execute)).toThrow("already been consumed");
-      expect(readStoredSource()).toEqual(storedSource);
-      expect(await readTranscript()).toEqual(transcript);
-    } else {
-      expect(renewed.state).toBe("queued");
-      const appended = await renewed.run(async () => {
-        execute();
-        return append(renewed.message);
-      });
-      expect(appended).toMatchObject({
-        ...appendResult(receipt.inputId),
-        message: receipt.message,
-      });
-      const committed = await readTranscript();
-      expect(
-        committed.filter(
-          (event) =>
-            typeof event === "object" &&
-            event !== null &&
-            "type" in event &&
-            event.type === "message",
-        ),
-      ).toEqual([expect.objectContaining({ id: receipt.inputId, message: receipt.message })]);
-      expect(await promote(renewed)).toMatchObject(appendResult(receipt.inputId, false));
-      expect(await readTranscript()).toEqual(committed);
-    }
-    expect(execute).toHaveBeenCalledTimes(disposition === "interrupted" ? 1 : 0);
+    expect(renewed.state).toBe("consumed");
+    expect(() => renewed.run(execute)).toThrow("already been consumed");
+    expect(readStoredSource()).toEqual(storedSource);
+    expect(await readTranscript()).toEqual(transcript);
+    expect(execute).not.toHaveBeenCalled();
     expect(await pendingInputs()).toEqual({ total: 0, items: [] });
   },
 );

@@ -12,6 +12,7 @@ import type {
   createGatewayCloseTestHandlerFactory,
   GatewayCloseParams,
 } from "./server-close.test-support.js";
+import { isGatewayCleanupRetainedError } from "./server-shutdown.js";
 
 type GatewayCloseHandler = ReturnType<ReturnType<typeof createGatewayCloseTestHandlerFactory>>;
 
@@ -44,7 +45,7 @@ export function registerGatewayResourceRetirementTests(
       const close = createGatewayCloseHandler({
         httpServer: { close: httpClose, closeIdleConnections: vi.fn() } as never,
       });
-      const closePromise = close({ reason: "test shutdown" });
+      const closePromise = close({ reason: "test shutdown" }).catch((error: unknown) => error);
       try {
         if (label === "bundle-mcp") {
           await vi.advanceTimersByTimeAsync(0);
@@ -53,7 +54,9 @@ export function registerGatewayResourceRetirementTests(
             mocks.disposeAllBundleLspRuntimes.mock.invocationCallOrder[0]!,
           );
         }
-        await vi.advanceTimersByTimeAsync(5_000);
+        // Disposal, the retained-work join, and the final cleanup join each have a grace.
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(isGatewayCleanupRetainedError(await closePromise)).toBe(true);
         expect(httpClose).toHaveBeenCalledOnce();
         expect(sharedStateLifecycle.has("open")).toBe(true);
         expect(mocks.closeProviderTransportDispatcherPool).not.toHaveBeenCalled();
@@ -61,8 +64,7 @@ export function registerGatewayResourceRetirementTests(
         cleanup.resolve();
         await closePromise;
       }
-      expect((await closePromise).warnings).toContain(label);
-      expect(mocks.closeProviderTransportDispatcherPool).toHaveBeenCalledOnce();
+      expect(mocks.closeProviderTransportDispatcherPool).not.toHaveBeenCalled();
     },
   );
 

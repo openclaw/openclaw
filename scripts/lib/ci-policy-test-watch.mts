@@ -126,10 +126,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   // import graph reaches only the test-instance helper. Without owner watches
   // they ran on PRs only when that helper changed and drifted for days.
   {
-    testFile: "test/gateway-background-process-restart.e2e.test.ts",
+    testFile: "test/gateway-restart-resume.e2e.test.ts",
     watchGlobs: [
       "src/gateway/server-startup-observers.ts",
-      "src/agents/bash-tools.exec-notify.ts",
+      "src/gateway/session-restart-resume.ts",
+      "src/gateway/server-run-shutdown.ts",
       "src/infra/restart-intent{,-payload}.ts",
       "src/sessions/session-controller*.ts",
     ],

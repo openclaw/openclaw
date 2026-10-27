@@ -27,58 +27,62 @@ export function registerGatewayStartupAdmissionTests(params: {
   startupModuleRestorers: Array<() => void>;
   stopSidecar: (sidecar: GatewayPostReadySidecarHandle) => Promise<void>;
 }): void {
-  it("does not activate restored recovery when close begins during activation loading", async () => {
-    const postReadyWork = createDeferred();
-    const tracked: Promise<unknown>[] = [];
-    const lifetime = new AbortController();
-    const recoveryLoad = createStartupGate();
-    const unlockStartupMethods = vi.fn();
-    const activateSubagentRegistry = vi.fn(() => ({
-      initial: Promise.resolve(),
-      pending: new Map(),
-      settled: Promise.resolve(),
-    }));
-    await installGatewaySubagentModuleLoad(
-      recoveryLoad.run,
-      activateSubagentRegistry,
-      params.startupModuleRestorers,
-    );
-    const runtime = await params.start(
-      {
-        ...params.createParams(),
-        sidecarStartup: "defer",
-        waitForPostReadyWork: () => postReadyWork.promise,
-        trackStartupWork: (run) => {
-          const work = run(lifetime.signal);
-          tracked.push(work);
-          return work;
+  it.each(["loading", "hydrating"] as const)(
+    "keeps input closed while registry %s is pending and the Gateway closes",
+    async (stage) => {
+      const tracked: Promise<unknown>[] = [];
+      const lifetime = new AbortController();
+      const registryLoad = createStartupGate();
+      const registryHydration = createStartupGate();
+      const unlockStartupMethods = vi.fn();
+      const activateSubagentRegistry = vi.fn(registryHydration.run);
+      await installGatewaySubagentModuleLoad(
+        registryLoad.run,
+        activateSubagentRegistry,
+        params.startupModuleRestorers,
+      );
+      const runtime = await params.start(
+        {
+          ...params.createParams(),
+          sidecarStartup: "defer",
+          trackStartupWork: (run) => {
+            const work = run(lifetime.signal);
+            tracked.push(work);
+            return work;
+          },
+          isClosing: () => lifetime.signal.aborted,
+          unlockStartupMethods,
         },
-        isClosing: () => lifetime.signal.aborted,
-        unlockStartupMethods,
-      },
-      params.createRuntimeDeps(),
-    );
+        params.createRuntimeDeps(),
+      );
 
-    try {
-      await runtime.startupSettled;
-      expect(activateSubagentRegistry).not.toHaveBeenCalled();
-      postReadyWork.resolve();
-      await recoveryLoad.entered;
-      lifetime.abort();
-      recoveryLoad.release();
-      await Promise.allSettled(tracked);
+      try {
+        await runtime.startupSettled;
+        await registryLoad.entered;
+        if (stage === "hydrating") {
+          registryLoad.release();
+          await registryHydration.entered;
+        } else {
+          expect(activateSubagentRegistry).not.toHaveBeenCalled();
+        }
+        expect(unlockStartupMethods).not.toHaveBeenCalled();
+        lifetime.abort();
+        registryLoad.release();
+        registryHydration.release();
+        await Promise.allSettled(tracked);
 
-      expect(activateSubagentRegistry).not.toHaveBeenCalled();
-      expect(unlockStartupMethods).toHaveBeenCalledOnce();
-    } finally {
-      lifetime.abort();
-      postReadyWork.resolve();
-      recoveryLoad.release();
-      await Promise.allSettled(tracked);
-    }
-  });
+        expect(activateSubagentRegistry).toHaveBeenCalledTimes(Number(stage === "hydrating"));
+        expect(unlockStartupMethods).not.toHaveBeenCalled();
+      } finally {
+        lifetime.abort();
+        registryLoad.release();
+        registryHydration.release();
+        await Promise.allSettled(tracked);
+      }
+    },
+  );
 
-  it.each(["orphans", "gateway_start"] as const)(
+  it.each(["session-resume", "gateway_start"] as const)(
     "retires startup %s admission parked behind suspension when the Gateway closes",
     async (stage) => {
       const gatewayStart = vi.fn<PluginHookHandlerMap["gateway_start"]>(async () => {});
@@ -89,7 +93,6 @@ export function registerGatewayStartupAdmissionTests(params: {
         handler: gatewayStart,
         source: "startup-suspension-test",
       });
-      const postReadyWork = createDeferred();
       const hookLoad = createStartupGate();
       const connectionWork = new GatewayConnectionWork();
       const refreshStarted = createDeferred();
@@ -98,28 +101,18 @@ export function registerGatewayStartupAdmissionTests(params: {
         return null;
       });
       const sidecarsReady = vi.fn();
-      // The orphan row isolates recovery admission; the hook row owns hook admission.
-      if (stage === "orphans") {
+      // Session resumption and the hook retain their own startup admission.
+      if (stage === "session-resume") {
         pluginRegistry.typedHooks.length = 0;
         hookLoad.release();
       }
       await installGatewayHookModuleLoad(hookLoad.run, params.startupModuleRestorers);
       const trackStartupWork = createDeferredWorkTracker(connectionWork);
-      const runtime = await trackStartupWork(() =>
-        params.start(
-          params.createParams({
-            pluginRegistry,
-            isClosing: () => connectionWork.isClosing,
-            trackStartupWork,
-            onSidecarsReady: sidecarsReady,
-            waitForPostReadyWork: () => postReadyWork.promise,
-          }),
-          params.createRuntimeDeps({
-            refreshLatestUpdateRestartSentinel: refresh,
-          }),
-        ),
-      );
-      let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> = null;
+      let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> =
+        stage === "session-resume" ? tryBeginGatewaySuspendAdmission(() => {}) : null;
+      if (suspension) {
+        expect(suspension.commit()).toBe(true);
+      }
       const admissionParked = createDeferred();
       const runWithAdmission = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
       const admissionSpy = vi
@@ -128,35 +121,46 @@ export function registerGatewayStartupAdmissionTests(params: {
           const work = runWithAdmission(run, origin, signal);
           if (
             origin ===
-            (stage === "orphans" ? "startup:main-session-orphans" : "hooks:gateway-start")
+            (stage === "session-resume" ? "startup:session-resume" : "hooks:gateway-start")
           ) {
             admissionParked.resolve();
           }
           return work;
         });
+      const runtime = await trackStartupWork(() =>
+        params.start(
+          params.createParams({
+            pluginRegistry,
+            sidecarStartup: "defer",
+            isClosing: () => connectionWork.isClosing,
+            trackStartupWork,
+            onSidecarsReady: sidecarsReady,
+          }),
+          params.createRuntimeDeps({
+            refreshLatestUpdateRestartSentinel: refresh,
+          }),
+        ),
+      );
       try {
-        expect(sidecarsReady).not.toHaveBeenCalled();
+        await runtime.startupSettled;
         if (stage === "gateway_start") {
-          postReadyWork.resolve();
           await hookLoad.entered;
           await refreshStarted.promise;
+          suspension = tryBeginGatewaySuspendAdmission(() => {});
+          expect(suspension?.commit()).toBe(true);
         }
-        suspension = tryBeginGatewaySuspendAdmission(() => {});
-        expect(suspension?.commit()).toBe(true);
-        postReadyWork.resolve();
         hookLoad.release();
         // Dynamic imports can outlive a turn; close only after the real admission waiter parks.
         await admissionParked.promise;
         connectionWork.beginClose();
         // Close retains admitted imports, but must retire parked admission without reopening it.
         await connectionWork.drain();
-        expect(sidecarsReady).toHaveBeenCalledTimes(stage === "orphans" ? 0 : 1);
+        expect(sidecarsReady).toHaveBeenCalledOnce();
         expect(gatewayStart).not.toHaveBeenCalled();
-        expect(refresh).toHaveBeenCalledTimes(stage === "orphans" ? 0 : 1);
+        expect(refresh).toHaveBeenCalledTimes(stage === "session-resume" ? 0 : 1);
       } finally {
         admissionSpy.mockRestore();
         suspension?.release();
-        postReadyWork.resolve();
         hookLoad.release();
         await runtime.startupSettled;
         await connectionWork.drain();

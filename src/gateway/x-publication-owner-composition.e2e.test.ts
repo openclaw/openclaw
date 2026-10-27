@@ -307,7 +307,7 @@ describe("X publication production-owner composition", () => {
     gateway.resolveGatewayContext = () => gateway;
     // Registry completion must observe the real child, not the direct fixture's empty wait result.
     vi.mocked(
-      expectDefined(gateway.recoveryRuntime, "Gateway recovery fixture").waitForAgent,
+      expectDefined(gateway.lifecycleRuntime, "Gateway recovery fixture").waitForAgent,
     ).mockImplementation(
       async (params) => (await prepareAgentWaitForTurn(gateway, params).wait()).result,
     );

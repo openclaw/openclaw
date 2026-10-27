@@ -178,7 +178,6 @@ try {
       stopTunnel: unexpected,
       destroy: unexpected,
       reclaim: unexpected,
-      fenceWorkerTurnForRecovery: unexpected,
     },
     failure: {
       failActive: unexpected,

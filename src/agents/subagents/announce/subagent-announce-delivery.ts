@@ -26,7 +26,6 @@ import { hasGeneratedMediaCompletionEvent } from "../../internal-event-contract.
 import {
   buildAgentInternalEventContext,
   collectAgentInternalEventMedia,
-  resolveAcpPromptBody,
   type AgentInternalEvent,
 } from "../../internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
@@ -98,7 +97,9 @@ async function deliverSubagentAnnouncementBound(
   if (sourceOwnerChanged()) {
     return sourceOwnerChangedResult();
   }
+  const expectedMedia = collectExpectedMediaFromInternalEvents(params.internalEvents);
   const durableGeneratedMediaHandoff =
+    expectedMedia.expectedMediaUrls.length > 0 &&
     params.expectsCompletionMessage &&
     isAgentMediatedCompletionSourceTool(params.sourceTool) &&
     hasGeneratedMediaCompletionEvent(params.internalEvents);
@@ -136,11 +137,9 @@ async function deliverSubagentAnnouncementBound(
               })
             ? "message_tool_only"
             : "automatic";
-      const expectedMedia = collectExpectedMediaFromInternalEvents(params.internalEvents);
       const queuePayload = {
         kind: "agentTurn",
         sessionKey: canonicalSessionKey,
-        message: resolveAcpPromptBody("", params.internalEvents) || params.triggerMessage,
         messageId: `${params.directIdempotencyKey}:agent-loop`,
         route: queuedRoute.route,
         ...(queuedRoute.deliveryContext ? { deliveryContext: queuedRoute.deliveryContext } : {}),

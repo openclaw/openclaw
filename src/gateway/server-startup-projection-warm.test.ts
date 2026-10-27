@@ -5,7 +5,6 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import * as orphanMarking from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import * as hostAccount from "../infra/host-account-name.js";
@@ -88,8 +87,6 @@ it("warms the recent page without gating startup and joins it before projection 
   const releaseListening = createDeferred();
   const earlyRuntimeEntered = createDeferred();
   const releaseEarlyRuntime = createDeferred();
-  const markingEntered = createDeferred();
-  const releaseMarking = createDeferred();
   const entryReceived = createDeferred<ServerResponse>();
   const secondEntryReceived = createDeferred<ServerResponse>();
   const entryClosed = createDeferred();
@@ -108,7 +105,6 @@ it("warms the recent page without gating startup and joins it before projection 
     );
   const entryPath = `${buildControlUiSessionEntryUrl(`${basePath}/chat/main/topic`, basePath)}&probe=1`;
   let startup: Promise<GatewayServer> | undefined;
-  let projection: Awaited<ReturnType<typeof projections.createSessionRowProjection>> | undefined;
   let startupFinished = false;
   let earlyEntryRequest: Promise<Response> | undefined;
   let entryRequest: Promise<Response> | undefined;
@@ -123,10 +119,6 @@ it("warms the recent page without gating startup and joins it before projection 
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:topic" },
       { sessionId: "startup-http-topic", updatedAt: 1 },
-    );
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:orphan" },
-      { sessionId: "startup-orphan", updatedAt: 1, abortedLastRun: true, status: "interrupted" },
     );
     runOpenClawAgentWriteTransaction(
       () => {
@@ -157,23 +149,13 @@ it("warms the recent page without gating startup and joins it before projection 
     vi.spyOn(projections, "createSessionRowProjection").mockImplementation(async (params) => {
       projectionEntered.resolve();
       await releaseProjection.promise;
-      projection = await createProjection(params);
+      const projection = await createProjection(params);
       const dispose = projection.dispose;
       vi.spyOn(projection, "dispose").mockImplementation(
         projectionDisposed.mockImplementation(dispose),
       );
       return projection;
     });
-    const markOrphans = orphanMarking.markStartupOrphanedMainSessionsForRecovery;
-    vi.spyOn(orphanMarking, "markStartupOrphanedMainSessionsForRecovery").mockImplementation(
-      async (params) => {
-        const result = await markOrphans(params);
-        expect(result.marked).toBe(1);
-        markingEntered.resolve();
-        await releaseMarking.promise;
-        return result;
-      },
-    );
     const transportModule = await import("./server-runtime-state.js");
     const createTransport = transportModule.createGatewayHttpTransport;
     vi.spyOn(transportModule, "createGatewayHttpTransport").mockImplementation(async (params) => {
@@ -253,17 +235,7 @@ it("warms the recent page without gating startup and joins it before projection 
     releaseEarlyRuntime.resolve();
     const server = await startup;
     await server.startupSettled;
-    await withinTest(markingEntered.promise, signal);
-    await projection?.ensureMaterialized();
-    expect(
-      projection?.describe({ agentId: "main", key: "agent:main:orphan" })?.entry
-        .mainRestartRecovery,
-    ).toBeDefined();
-    const pendingReadiness = await read("/readyz");
-    expect(pendingReadiness.status).toBe(503);
-    await pendingReadiness.arrayBuffer();
     expect(startupFinished).toBe(true);
-    releaseMarking.resolve();
     const unauthorized = await fetch(`http://127.0.0.1:${port}${entryPath}`, {
       signal: requestSignal,
     });
@@ -280,7 +252,6 @@ it("warms the recent page without gating startup and joins it before projection 
     releaseProjection.resolve();
     releaseListening.resolve();
     releaseEarlyRuntime.resolve();
-    releaseMarking.resolve();
     releaseFirstPage.resolve();
     requests.abort();
     const server = await startup?.catch(() => undefined);

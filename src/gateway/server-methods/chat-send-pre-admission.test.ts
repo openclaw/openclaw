@@ -35,7 +35,6 @@ import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-s
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
-import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import {
   prepareChatSendRetryComparison,
   resolveChatSendRequestConflict,
@@ -57,15 +56,6 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => (
     },
   ),
 }));
-vi.mock("./chat-restart-recovery.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./chat-restart-recovery.js")>()),
-  resolveDurableChatClaim: vi.fn(),
-}));
-
-const { resolveDurableChatClaim: recoverDurableChatClaim } = await vi.importActual<
-  typeof import("./chat-restart-recovery.js")
->("./chat-restart-recovery.js");
-
 type RetryParams = Parameters<typeof respondChatSendRetry>[0];
 
 function createFixture() {
@@ -98,7 +88,6 @@ function createFixture() {
       agentId: "main",
       sessionKey,
       storePath: "/tmp/chat-retry-fixture.sqlite",
-      restartSafeRequest: undefined,
       cfg: {},
       rawSessionKey: sessionKey,
       sessionLoadKey: sessionKey,
@@ -168,7 +157,6 @@ let params: ReturnType<typeof createFixture>;
 beforeEach(() => {
   vi.mocked(readSessionSubmittedInput).mockClear();
   submittedInput.mockReset().mockResolvedValue(undefined);
-  vi.mocked(resolveDurableChatClaim).mockReset();
   params = createFixture();
 });
 
@@ -427,48 +415,19 @@ it.each(["pending", "evicted", "superseded"] as const)(
   },
 );
 
-it.each(["different", undefined])(
-  "rejects a durable source retry with fingerprint %s",
-  (fingerprint) => {
-    params.session.entry = {
-      sessionId: "mention-session",
-      updatedAt: 100,
-      restartRecoveryDeliverySourceRunId: params.session.clientRunId,
-      restartRecoveryDeliveryRequestFingerprint: "original",
-    };
-    params.session.restartSafeRequest = fingerprint ? { fingerprint } : undefined;
-    expect(resolveChatSendRequestConflict(params)).toMatchObject({
-      details: { reason: "chat-request-conflict" },
-    });
-    params.session.restartSafeRequest = { fingerprint: "original" };
-    expect(resolveChatSendRequestConflict(params)).toBeUndefined();
-  },
-);
-
-it.each(["unchanged", "removed", "uncached removal"] as const)(
+it.each(["unchanged", "removed"] as const)(
   "compares %s selections to the original source after RAM identity expires",
   async (selection) => {
-    const terminal = selection === "uncached removal";
-    if (terminal) {
-      params.session.entry!.restartRecoveryTerminalRunIds = [params.session.clientRunId];
-    } else {
-      cacheSuccess(params, 200);
-    }
+    cacheSuccess(params, 200);
     submittedInput.mockResolvedValue(submittedMessage(params));
-    if (selection === "removed" || terminal) {
+    if (selection === "removed") {
       params.request.mentions = undefined;
     }
-    if (selection === "uncached removal") {
-      expect(
-        resolveChatSendRequestConflict(params, await prepareChatSendRetryComparison(params)),
-      ).toMatchObject({ details: { reason: "chat-request-conflict" } });
+    expect(await retry(params)).toBe(true);
+    if (selection === "unchanged") {
+      expectCached({ runId: params.session.clientRunId, status: "ok" });
     } else {
-      expect(await retry(params)).toBe(true);
-      if (selection === "unchanged") {
-        expectCached({ runId: params.session.clientRunId, status: "ok" });
-      } else {
-        expectConflict(params.respond);
-      }
+      expectConflict(params.respond);
     }
   },
 );
@@ -524,7 +483,6 @@ it("rejects a competing identity published while submitted comparison yields", a
 it.each(["ready", "routing changed", "archived"] as const)(
   "revalidates new-input policy after the indexed receipt read (%s)",
   async (outcome) => {
-    vi.mocked(resolveDurableChatClaim).mockImplementation(recoverDurableChatClaim);
     if (outcome === "archived") {
       params.session.entry!.archivedAt = 100;
     }
@@ -554,25 +512,8 @@ it.each(["ready", "routing changed", "archived"] as const)(
   },
 );
 
-it("rechecks a competing request admitted while durable recovery yields", async () => {
-  params.withCurrent = async (consume) => consume();
-  const { session } = params;
-  const deferred = createDeferred<Awaited<ReturnType<typeof resolveDurableChatClaim>>>();
-  const entered = createDeferred();
-  vi.mocked(resolveDurableChatClaim).mockImplementation(() => {
-    entered.resolve();
-    return deferred.promise;
-  });
-  const pending = runChatSendPreAdmission(params);
-  await entered.promise;
-  cacheSuccess(params, 200, "competing-input");
-  deferred.resolve({ kind: "continue", entry: session.entry });
-  expect(await pending).toBe(false);
-  expectConflict(params.respond);
-});
-
-it.each(["unchanged", "cached-success", "new-admission"] as const)(
-  "rechecks the canonical profile after real recovery without changing %s outcomes",
+it.each(["unchanged", "profile merged"] as const)(
+  "rechecks the canonical profile after submitted-input comparison (%s)",
   async (outcome) => {
     const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
     await withOpenClawTestState(stateOptions, async () => {
@@ -608,13 +549,13 @@ it.each(["unchanged", "cached-success", "new-admission"] as const)(
       params.assertCurrent();
       const entered = createDeferred();
       const release = createDeferred();
-      let recoveryCompleted = false;
-      vi.mocked(resolveDurableChatClaim).mockImplementationOnce(async (request) => {
+      cacheSuccess(params, 200);
+      let comparisonCompleted = false;
+      submittedInput.mockImplementationOnce(async () => {
         entered.resolve();
         await release.promise;
-        const result = await recoverDurableChatClaim(request);
-        recoveryCompleted = true;
-        return result;
+        comparisonCompleted = true;
+        return submittedMessage(params);
       });
       const pending = runChatSendPreAdmission(params);
       try {
@@ -624,23 +565,22 @@ it.each(["unchanged", "cached-success", "new-admission"] as const)(
           expect(readResidentUserProfileId(source.id)).toBe(target.id);
           expect(client.authenticatedUserProfile?.profileId).toBe(source.id);
         }
-        if (outcome === "cached-success") {
-          cacheSuccess(params, 200, params.request.requestIdentity);
-        }
         const originalReceipts = structuredClone([...context.dedupe]);
         release.resolve();
         if (outcome === "unchanged") {
-          await expect(pending).resolves.toBe(true);
+          await expect(pending).resolves.toBe(false);
         } else {
           await expect(pending).rejects.toBe(mismatch);
         }
 
-        expect(recoveryCompleted).toBe(true);
+        expect(comparisonCompleted).toBe(true);
         expect(loadSessionEntry(scope)).toEqual(originalEntry);
         expect([...context.dedupe]).toEqual(originalReceipts);
         expect(rpcSourceTesting.size).toBe(0);
         expect(client).not.toHaveProperty("invalidated", true);
-        expect(respond).not.toHaveBeenCalled();
+        if (outcome !== "unchanged") {
+          expect(respond).not.toHaveBeenCalled();
+        }
       } finally {
         release.resolve();
         await pending.catch(() => undefined);

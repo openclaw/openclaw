@@ -3,11 +3,10 @@ import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { withSessionControllerOwner } from "../sessions/session-controller.lifecycle.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -83,19 +82,12 @@ it("retains command admission through Code Mode disposal, not detached external 
     applyCodeModeCatalog({ ...harness, tools: [...harness.tools, held, late] });
     applyCodeModeCatalog({ ...successor.ctx, tools: [...successor.tools, effect] });
 
-    const execute = <T>(runId: string, run: () => Promise<T>, abortSignal?: AbortSignal) =>
-      runWithAgentCommandRecoveryOwner({
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        mode: "claim",
-        opts: { message: "Check command isolation", runId, abortSignal },
-        prepare: async () => {
-          if (runId === successorRunId) {
-            successorPrepared.resolve();
-          }
-          return target;
-        },
-        run,
-      });
+    const execute = <T>(runId: string, run: () => Promise<T>, abortSignal?: AbortSignal) => {
+      if (runId === successorRunId) {
+        successorPrepared.resolve();
+      }
+      return withSessionTurn({ ...target, agentId: target.sessionAgentId, abortSignal }, run);
+    };
     try {
       first = withSessionControllerOwner(harness.replyOperation, () =>
         execute(

@@ -29,7 +29,6 @@ import {
   stateIntegrityIssueToRepairEffect,
 } from "./doctor-state-integrity.js";
 import {
-  doctorChangesText,
   hasRepairPromptMessage,
   noteMock,
   noteStateIntegrity,
@@ -74,18 +73,6 @@ describe("doctor state integrity", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome = "";
   let stateDir = "";
-  const wedged = {
-    sessionId: "wedged-child",
-    updatedAt: 0,
-    abortedLastRun: true,
-    subagentRecovery: {
-      automaticAttempts: 2,
-      lastAttemptAt: 10,
-      lastRunId: "run-child",
-      wedgedAt: 20,
-      wedgedReason: "subagent orphan recovery blocked after 2 rapid accepted resume attempts",
-    },
-  };
   const decline = () => vi.fn(async (_params: { message: string }) => false);
   function createAgentDir(agentId: string, nested = true) {
     fs.mkdirSync(path.join(stateDir, "agents", agentId, ...(nested ? ["agent"] : [])), {
@@ -305,28 +292,6 @@ describe("doctor state integrity", () => {
     },
   );
 
-  it("clears stale aborted recovery flags in the legacy store only when approved", async () => {
-    const sessionKey = "agent:main:subagent:wedged-child";
-    writeSessionStore({}, { [sessionKey]: wedged });
-    await noteStateIntegrity(
-      {},
-      {
-        confirmRuntimeRepair: async ({ message }) =>
-          message.includes("Clear stale aborted recovery flags"),
-      },
-    );
-    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-    const persisted: Record<string, { abortedLastRun?: boolean; updatedAt?: number }> = JSON.parse(
-      fs.readFileSync(storePath, "utf8"),
-    );
-    expect(persisted[sessionKey]?.abortedLastRun).toBe(false);
-    expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(0);
-    expect(stateIntegrityText()).toContain("automatic restart recovery tombstoned");
-    expect(stateIntegrityText()).toContain(sessionKey);
-    expect(stateIntegrityText()).toContain("openclaw doctor --fix");
-    expect(doctorChangesText()).toContain("Cleared aborted restart-recovery flags");
-  });
-
   it.each(["profile", "state-dir"])(
     "does not inspect another profile's state with a %s override",
     async (selector) => {
@@ -380,7 +345,7 @@ describe("doctor state integrity", () => {
 describe("doctor retained session integrity", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("repairs canonical recovery state without editing retained rows deleted from SQLite", async () => {
+  it("leaves retired recovery state inert without restoring deleted retained rows", async () => {
     await withOpenClawTestState({ label: "retained-session-integrity" }, async (state) => {
       const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
       const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
@@ -424,12 +389,11 @@ describe("doctor retained session integrity", () => {
 
       vi.spyOn(terminalNote, "note").mockImplementation(() => {});
       await noteStateIntegrityRaw(cfg, {
-        confirmRuntimeRepair: async ({ message }) =>
-          message.startsWith("Clear stale aborted recovery flags"),
+        confirmRuntimeRepair: async () => false,
       });
 
       expect(loadSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.abortedLastRun).toBe(
-        false,
+        true,
       );
       expect(loadSessionEntry({ ...scope, sessionKey: "agent:main:deleted" })).toBeUndefined();
       expect(fs.readFileSync(storePath)).toEqual(source);

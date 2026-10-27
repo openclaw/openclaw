@@ -71,8 +71,8 @@ const writeFault = useSqliteWorkerFault([
 ]);
 
 const registryGateway = vi.hoisted(() => vi.fn<typeof callGateway>());
-vi.mock("../server-recovery-runtime-context.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../server-recovery-runtime-context.js")>()),
+vi.mock("../server-lifecycle-runtime-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-lifecycle-runtime-context.js")>()),
   bindGatewayLifecycleRequest: () => registryGateway,
 }));
 

@@ -40,7 +40,6 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     createdAt: entry.createdAt,
     initializationPending: entry.initializationPending,
     providerReview: entry.providerReview,
-    mainRestartRecovery: entry.mainRestartRecovery,
     modelSelectionLocked: entry.modelSelectionLocked,
     pluginOwnerId: entry.pluginOwnerId,
     skillLibrarySelections: entry.skillLibrarySelections,
@@ -64,14 +63,6 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
     inheritedToolAllow: entry.inheritedToolAllow,
     inheritedToolDeny: entry.inheritedToolDeny,
-    ...(entry.subagentRecovery
-      ? {
-          subagentRecovery: {
-            lastRunId: entry.subagentRecovery.lastRunId,
-            sessionLifecycleRunId: entry.subagentRecovery.sessionLifecycleRunId,
-          },
-        }
-      : {}),
     archivedAt: entry.archivedAt,
     category: entry.category,
     sidebarRoot: entry.sidebarRoot,

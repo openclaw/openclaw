@@ -35,7 +35,7 @@ import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-aut
 import type { resolveSessionSharingTargetAsync } from "../session-sharing.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
-import { isDirectChatGoalSession } from "./chat-restart-recovery.js";
+import { isDirectChatGoalSession } from "./chat-send-goal-admission.js";
 import { handleSessionGoalResumeChat } from "./chat-send-handler.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { publishCommittedSessionGoalChange } from "./session-goal-change.js";

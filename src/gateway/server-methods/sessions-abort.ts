@@ -13,7 +13,6 @@ import {
   resolveActiveEmbeddedRunOwnerByRunId,
   type ActiveEmbeddedRunOwner,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { captureYieldedMainSessionContinuation } from "../../agents/main-session-recovery/main-session-restart-recovery-target.js";
 import { isConfiguredSessionStoreAgentId } from "../../config/sessions.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveExistingAgentSessionStoreTargetsAsync } from "../../config/sessions/targets-runtime.js";
@@ -418,7 +417,6 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     let aborted = false;
     let chatAbortSucceeded = false;
     let failedResponse: Parameters<typeof respond> | undefined;
-    let descendantsCancelled = false;
     let responseMeta: Record<string, unknown> | undefined;
     let abortWarning: string | undefined;
     const capturedSessionEmbeddedRun = persistedSessionId
@@ -434,23 +432,6 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         : undefined;
     const yieldedRunId =
       typeof sessionEntry?.lifecycleRunId === "string" ? sessionEntry.lifecycleRunId : undefined;
-    const yieldedParent =
-      !requestedRunId &&
-      yieldedRunId &&
-      !preAbortRuns.has(yieldedRunId) &&
-      loadedSession &&
-      sessionEntry &&
-      captureYieldedMainSessionContinuation({
-        entry: sessionEntry,
-        requester: { agentId: targetAgentId, sessionKey: canonicalKey },
-        purpose: "stop",
-      })
-        ? {
-            runId: yieldedRunId,
-            sessionId: sessionEntry.sessionId,
-            startedAtMs: sessionEntry.startedAt,
-          }
-        : undefined;
     const nativeYieldedCandidate =
       !requestedRunId &&
       yieldedRunId &&
@@ -489,10 +470,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
             reason: "session-stop",
           });
         }
-        if (descendantsCancelled && yieldedParent) {
-          // Child cancellation consumes the wake; join its parent's terminal write too.
-          await persistSessionAbort(yieldedParent);
-        } else if (nativeYieldedParent) {
+        if (nativeYieldedParent) {
           await persistSessionAbort(nativeYieldedParent, true);
         }
       } catch (error) {
@@ -596,7 +574,6 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         ...(!requestedRunId ? { cascadeDescendants: true as const } : {}),
         hookContext: stopHookContext,
         onDescendantsCancelled: (result) => {
-          descendantsCancelled = true;
           if (
             nativeYieldedCandidate &&
             result.cancelledRequesters.some(

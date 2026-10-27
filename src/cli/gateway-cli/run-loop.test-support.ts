@@ -2,7 +2,6 @@ import { EventEmitter } from "node:events";
 import { performance } from "node:perf_hooks";
 import { expect, it, vi, type Mock, type MockInstance } from "vitest";
 import type { GatewayServer } from "../../gateway/server-public.js";
-import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { expectCallCount } from "./run-loop-cleanup.test-support.js";
@@ -33,56 +32,13 @@ export type UpdateRespawnFixtures =
     originalPlatformDescriptor: typeof originalPlatformDescriptor;
   };
 
-export const createActiveWorkSnapshot = (
-  counts: Partial<GatewayActiveWorkSnapshot["counts"]> = {},
-  blockers: GatewayActiveWorkSnapshot["blockers"] = [],
-): GatewayActiveWorkSnapshot => {
-  const resolvedCounts = {
-    queueSize: 0,
-    pendingReplies: 0,
-    embeddedRuns: 0,
-    backgroundExecSessions: 0,
-    cronRuns: 0,
-    agentRuns: 0,
-    acpRuns: 0,
-    mediaRuns: 0,
-    rootRequests: 0,
-    sessionAdmissions: 0,
-    sessionMutations: 0,
-    chatRuns: 0,
-    queuedTurns: 0,
-    terminalPersistence: 0,
-    terminalSessions: 0,
-    lifecycleWrites: 0,
-    ...counts,
-    totalActive: 0,
-  };
-  resolvedCounts.totalActive = Object.values(resolvedCounts).reduce(
-    (total, count) => total + count,
-    0,
-  );
-  return {
-    idle: resolvedCounts.totalActive === 0,
-    counts: resolvedCounts,
-    blockers,
-    writeCustody: [],
-  };
-};
-
-export function expectRestartCloseCall(
-  close: Mock<GatewayServer["close"]>,
-  maxDrainTimeoutMs: number,
-) {
+export function expectRestartCloseCall(close: Mock<GatewayServer["close"]>) {
   expect(close).toHaveBeenCalledWith(
     expect.objectContaining({
       reason: "gateway restarting",
       restartExpectedMs: 1500,
-      drainTimeoutMs: expect.any(Number),
     }),
   );
-  const closeArgs = close.mock.calls[0]?.[0];
-  expect(closeArgs?.drainTimeoutMs).toBeLessThanOrEqual(maxDrainTimeoutMs);
-  expect(closeArgs?.drainTimeoutMs).toBeGreaterThanOrEqual(0);
 }
 
 export function createSignaledStart(
@@ -202,11 +158,13 @@ export function systemdReply(timeout = "30s") {
 }
 
 export function expectStopCloseCall(close: Mock<GatewayServer["close"]>) {
-  expect(close).toHaveBeenCalledWith({
-    retainSharedState: true,
-    reason: "gateway stopping",
-    restartExpectedMs: null,
-  });
+  expect(close).toHaveBeenCalledWith(
+    expect.objectContaining({
+      retainSharedState: true,
+      reason: "gateway stopping",
+      restartExpectedMs: null,
+    }),
+  );
 }
 
 export function createCloseMock() {

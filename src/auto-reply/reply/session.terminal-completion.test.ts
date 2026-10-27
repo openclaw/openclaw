@@ -21,33 +21,17 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 describe("terminal completion session reuse", () => {
   it.each(["failed", "timeout", "killed"] as const)(
-    "recovers a %s completion before admitting a later channel source",
+    "reuses a %s session without changing its transcript when a later channel source arrives",
     async (status) => {
       const storePath = path.join(tempDirs.make("openclaw-terminal-completion-"), "sessions.json");
       const sessionKey = "agent:main:slack:fixture:direct:requester";
       const sessionId = "completion-session";
       const sourceRunId = "announce:child:succeeded";
-      const harnessCompletion = {
-        taskId: "child",
-        taskRunId: "child",
-        taskStatus: "succeeded" as const,
-        sourceRunId,
-        requesterSessionKey: sessionKey,
-        requesterAgentId: "main",
-        sessionId,
-        lifecycleRevision: "completion-revision",
-      };
-      const deliveryContext = { channel: "slack", to: "D123", accountId: "fixture" };
       const retained = {
         sessionId,
-        lifecycleRevision: harnessCompletion.lifecycleRevision,
+        lifecycleRevision: "completion-revision",
         status,
         abortedLastRun: true,
-        restartRecoveryDeliveryRunId: sourceRunId,
-        restartRecoveryDeliverySourceRunId: sourceRunId,
-        restartRecoverySourceIngress: "internal",
-        restartRecoveryDeliveryContext: deliveryContext,
-        restartRecoveryHarnessCompletion: harnessCompletion,
       };
       await writeSessionStoreFast(storePath, {
         [sessionKey]: { ...retained, updatedAt: Date.now() },

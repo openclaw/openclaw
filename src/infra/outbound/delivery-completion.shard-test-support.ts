@@ -1,7 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
-import { capturePendingFinalRecoverySource } from "../../agents/pending-final-recovery-source.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -71,12 +70,7 @@ export function installRecoveryHooks(register = true, stubState = true) {
   };
 }
 
-export async function seedRecoverySession(
-  tmpDir: string,
-  sourceRunId = "source",
-  recoveryRunId = "run",
-  extra: Partial<SessionEntry> = {},
-) {
+export async function seedDeliverySession(tmpDir: string, extra: Partial<SessionEntry> = {}) {
   const scope = {
     agentId: "main",
     sessionKey: "agent:main:dashboard:requester",
@@ -86,9 +80,6 @@ export async function seedRecoverySession(
   await replaceSessionEntry(scope, {
     sessionId: "session",
     updatedAt: 1,
-    restartRecoveryDeliveryRunId: recoveryRunId,
-    restartRecoveryDeliverySourceRunId: sourceRunId,
-    restartRecoveryDeliveryContext: context,
     ...extra,
   });
   return { scope, context, entry: loadSessionEntry(scope)! };
@@ -102,7 +93,6 @@ export async function markFinal(
 ) {
   await persistPendingFinalDeliveryMarker({
     ...scope,
-    admittedRecoverySource: capturePendingFinalRecoverySource(entry),
     deliver: true,
     sessionStore: { [scope.sessionKey]: entry },
     sessionEntry: entry,

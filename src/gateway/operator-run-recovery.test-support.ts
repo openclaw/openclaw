@@ -1,16 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { GatewayClientInfo } from "../../packages/gateway-protocol/src/client-info.js";
-import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
-import { createRestartRecoveryOperatorSource } from "../agents/operator-run-recovery-source.js";
-import type { RequesterOrigin } from "../agents/requester-origin.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntry,
-  type SessionTranscriptRuntimeTarget,
-} from "../config/sessions/session-accessor.js";
-import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAuthenticatedDeviceTokenIdentity } from "../infra/device-pairing-identity.js";
@@ -18,12 +9,10 @@ import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pair
 import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
 import type { PairedDevice } from "../infra/device-pairing.types.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import type { InputProvenance } from "../sessions/input-provenance.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { restoreGatewayRunRecovery } from "./operator-run-recovery.js";
+import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   captureOperatorToolGatewayContinuationContext,
@@ -96,9 +85,6 @@ export async function createOperatorRecoveryFixture(params: {
   clientInfo?: Pick<GatewayClientInfo, "id" | "mode">;
   localOperator?: boolean;
   sourceIngress?: "control-ui" | "internal";
-  sourceRunId?: string;
-  inputProvenance?: InputProvenance;
-  requesterOrigin?: RequesterOrigin;
 }) {
   let config = params.config;
   const context = params.context;
@@ -171,11 +157,7 @@ export async function createOperatorRecoveryFixture(params: {
     agentId,
     sessionKey: params.sessionKey ?? `agent:${agentId}:recovery-authority`,
     sessionId: params.sessionId ?? "recovery-authority-session",
-    storePath:
-      params.storePath ??
-      path.join(params.stateDir, "agents", agentId, "sessions", "sessions.json"),
-    sourceRunId: params.sourceRunId ?? "original-operator-turn",
-    recoveryRunId: "recovered-operator-turn",
+    storePath: path.join(params.stateDir, "agents", agentId, "sessions", "sessions.json"),
   };
   const entry: InternalSessionEntry = {
     sessionId: target.sessionId,
@@ -187,24 +169,9 @@ export async function createOperatorRecoveryFixture(params: {
         ? undefined
         : (params.parentSessionKey ?? `agent:${agentId}:main`),
     spawnDepth: 0,
-    restartRecoveryDeliveryRunId: target.recoveryRunId,
-    restartRecoveryDeliverySourceRunId: target.sourceRunId,
-    restartRecoverySourceIngress: params.sourceIngress ?? "control-ui",
     createdActor: { type: "human", source: "profile", id: params.profileId },
   };
-  entry.restartRecoveryOperatorSource = expectDefined(
-    createRestartRecoveryOperatorSource({
-      authority: captured.authority,
-      entry,
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      sourceRunId: target.sourceRunId,
-      inputProvenance: params.inputProvenance,
-      requesterOrigin: params.requesterOrigin,
-    }),
-    "host-captured recovery source",
-  );
-  entry.restartRecoverySourceIngress = entry.restartRecoveryOperatorSource.snapshot.sourceIngress;
+  const snapshot = expectDefined(captured.authority.recoverySnapshot, "scheduled operator source");
   await replaceSessionEntry(target, entry);
   const sourceAuthority = captured.authority;
   captured.release();
@@ -220,22 +187,14 @@ export async function createOperatorRecoveryFixture(params: {
     target,
     entry,
     sourceAuthority,
+    snapshot,
     setConfig: (next: OpenClawConfig) => {
       config = next;
     },
     retire: () => {
       current = false;
     },
-    restore: async () =>
-      (
-        await restoreGatewayRunRecovery({
-          target,
-          context,
-          assertCurrent,
-          restoreOperator: true,
-          restoreRequester: false,
-        })
-      ).operator,
+    restore: () => restoreGatewayOperatorSource({ snapshot, target, context, assertCurrent }),
   };
 }
 

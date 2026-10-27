@@ -25,7 +25,6 @@ import {
   seedAttachedPlacementEnvironment,
   writePlacementEnvironmentFixture,
 } from "./placement-test-fixtures.js";
-import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
   WorkerTunnelOwnerDisconnectedError,
@@ -87,7 +86,6 @@ export async function createHarness(
     environmentGeneration?: number;
     failMoveAfterBegin?: boolean;
     runMoveBarrier?: DispatchOptions["runMoveBarrier"];
-    recoveryBarrierError?: Error;
     isShuttingDown?: () => boolean;
     prepareAcceptedWorkspacePublication?: DispatchOptions["prepareAcceptedWorkspacePublication"];
     publishAcceptedWorkspace?: DispatchOptions["publishAcceptedWorkspace"];
@@ -358,8 +356,6 @@ export async function createHarness(
       WorkerEnvironmentService,
       "recordError" | "requestDestroy" | "requiresNodeEnrollment" | "readMachineShape"
     > = {
-    fenceWorkerTurnForRecovery:
-      createWorkerSessionPlacementGate(placementStore).fenceWorkerTurnForRecovery,
     requiresNodeEnrollment: vi.fn(() => options.requiresNodeEnrollment === true),
     readMachineShape: () => undefined,
     recordError: vi.fn((record) => record),
@@ -475,13 +471,6 @@ export async function createHarness(
         throw new Error("barrier failed");
       }
       return placement;
-    },
-    runRecoveryBarrier: async ({ run }) => {
-      log.push("recovery-barrier");
-      if (options.recoveryBarrierError) {
-        throw options.recoveryBarrierError;
-      }
-      await run({ kind: "local", path: options.workspacePath ?? "/gateway/workspace" });
     },
     runActivationBarrier: async ({ authorize, activate }) => {
       authorize?.();
@@ -668,7 +657,6 @@ export const createRecoveryService = async (
     runnerAvailability: { read: () => undefined, version: () => 0 },
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-    runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: "/gateway/workspace" }),
     runActivationBarrier: async ({ activate }) => activate(),
     runMoveBarrier: async ({ begin }) => begin(),
     resolveMoveDestination: async () => undefined,

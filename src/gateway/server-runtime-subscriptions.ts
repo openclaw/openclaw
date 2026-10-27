@@ -1,5 +1,4 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
-import { resolveAgentRunLifecycleTerminalFacts } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import { isDefinitiveRunLifecycle } from "../agents/agent-run-terminal-outcome.js";
 import { onBackgroundProcessesChanged } from "../agents/bash-process-registry.js";
@@ -187,7 +186,6 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     trackTrackedRunTerminalPersistence,
   } = createGatewayTerminalTracking({
     getScopedRpcSource,
-    restartRecoveryCandidates: params.restartRecoveryCandidates,
   });
   const getSessionKeyModule = createLazyRuntimeModule(() => import("./server-session-key.js"));
   // Lazy-load heavy chat modules only after the first agent event reaches the gateway.
@@ -391,10 +389,6 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
         }
       }
       if (terminal) {
-        const outcome = resolveAgentRunLifecycleTerminalFacts({
-          phase: lifecyclePhase === "error" ? "error" : "end",
-          data: evt.data,
-        });
         const trackedEntry = candidateRunIds
           .map((candidateRunId) => getScopedRpcSource(candidateRunId))
           .find((entry) => entry !== undefined);
@@ -460,11 +454,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
           const tracked = trackTrackedRunTerminalPersistence({
             runId: evt.runId,
             clientRunId,
-            sessionId: evt.sessionId,
             persistence,
-            // Persisted interruption still needs its shutdown recovery cycle.
-            preserveRestartRecovery:
-              outcome.reason === "cancelled" && outcome.stopReason === "restart",
           });
           if (!tracked) {
             void persistence.catch((error: unknown) => {

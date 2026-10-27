@@ -100,7 +100,6 @@ import {
   prepareIsolatedChildAdmissionProof,
   recordSpawnBoundaryFinal,
 } from "./subagent-spawn.production-boundary.test-support.js";
-import { registerRecoverySpawnCases } from "./subagent-spawn.recovery.test-support.js";
 import { registerRequestCustodySpawnCases } from "./subagent-spawn.request-custody.test-support.js";
 import { registerYieldedRequesterBatchCase } from "./subagent-spawn.requester-yield.test-support.js";
 import { registerOperatorSpawnRollbackCases } from "./subagent-spawn.rollback.test-support.js";
@@ -269,8 +268,8 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
     isDispatchAvailable: () => true,
   });
   context.createAgentTurnFacade = runtime.createAgentTurnFacade;
-  context.recoveryRuntime = runtime.recovery;
-  vi.spyOn(runtime.recovery, "waitForAgent").mockResolvedValue({ status: "pending" });
+  context.lifecycleRuntime = runtime.lifecycle;
+  vi.spyOn(runtime.lifecycle, "waitForAgent").mockResolvedValue({ status: "pending" });
   context.getGatewayMethodRegistry = () => methodRegistry;
   return { context, runtime, identities, readAgentRuntimeExecutionLineage };
 }
@@ -495,7 +494,6 @@ describe("recursive spawn production boundary", () => {
     parentRunId,
     assertNoModelExecution: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
   };
-  registerRecoverySpawnCases(boundSpawnFixture);
   registerNativePluginSpawnCases(boundSpawnFixture);
   registerCollectorResultSpawnCases(boundSpawnFixture);
   registerRequestCustodySpawnCases(boundSpawnFixture);
@@ -764,7 +762,6 @@ describe("recursive spawn production boundary", () => {
             const collector = subagentRuns.get(childRunId);
             if (collector) {
               expect(collector.execution.status).toBe("terminal");
-              expect(collector.queuedLaunch).toBeUndefined();
               expect(collector.collectorLaunchCleanupPending).toBe(false);
             }
             expect(readSession(bound, details.childSessionKey)).toBeUndefined();

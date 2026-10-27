@@ -971,7 +971,7 @@ describe("startGatewayMaintenanceTimers", () => {
     },
   );
 
-  it("leaves stalled terminal persistence and recovery ownership with the controller", async () => {
+  it("leaves stalled terminal persistence with the controller", async () => {
     const { deps } = await createTimedMaintenanceScenario();
     const runId = "run-terminal-persistence";
     const terminalRun = createActiveRun("main");
@@ -980,25 +980,11 @@ describe("startGatewayMaintenanceTimers", () => {
     terminalRun.adapter.projectSessionTerminalObservedAt = Date.now() - 120_000;
     terminalRun.adapter.projectSessionTerminalPersistence = new Promise<void>(() => {});
     rpcSourceTesting.set(runId, terminalRun);
-    const target = expectDefined(terminalRun.input.target, "Expected captured fixture target");
-    const recoveryCandidate = {
-      storePath: target.storeScope,
-      agentId: target.agentId,
-      runId,
-      sourceRunId: "source-terminal-persistence",
-      lifecycleGeneration: "generation-1",
-      sessionKey: "main",
-      sessionId: "sess-1",
-      observedAt: terminalRun.adapter.projectSessionTerminalObservedAt,
-    };
-    deps.restartRecoveryCandidates.set(runId, recoveryCandidate);
-
     const timers = startGatewayMaintenanceTimers(deps);
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(terminalRun.input.abortSignal.aborted).toBe(false);
     expect(rpcSourceTesting.get(runId)).toBe(terminalRun);
-    expect(deps.restartRecoveryCandidates.get(runId)).toBe(recoveryCandidate);
     await stopMaintenanceTimers(timers);
   });
 

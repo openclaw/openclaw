@@ -181,7 +181,6 @@ async function createBuildRecoveryHarness(
   const environments: worker.WorkerTurnEnvironmentService &
     Parameters<typeof createProviderReplayDispatch>[0]["environments"] = {
     ...worker.unusedEnvironments(),
-    fenceWorkerTurnForRecovery: gate.fenceWorkerTurnForRecovery,
     prepareProjectIntent: unexpected("prepared intent"),
     assertPreparedIntentCurrent: vi.fn(),
     getPreparedCandidates: () => [],
@@ -237,7 +236,6 @@ async function createBuildRecoveryHarness(
     initialPlacements: await worker.placements.listAsync(),
     placements: worker.placements,
     environments,
-    runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: worker.root }),
     runReclaimBarrier: async ({ begin, reclaim }) =>
       await reclaim({ kind: "local", path: worker.root }, await begin()),
     workspaceOperations,
@@ -258,7 +256,6 @@ async function createBuildRecoveryHarness(
   const provider = worker.createWorkerSessionTurnPlacementProvider({
     environments,
     placements: worker.placements,
-    isInterruptedTurn: dispatch.isInterruptedTurn,
     waitForAdmissionNode: async (params) => {
       await options.waitForAdmissionNode?.(params);
       connected = true;

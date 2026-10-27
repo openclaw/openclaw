@@ -703,17 +703,6 @@ describe("startGatewayEventSubscriptions", () => {
           "Terminal ownership settled before its held dispatch was released",
         );
         expect(firstSettled).toBe(false);
-        const recovery = {
-          storePath: expectDefined(entry.input.target, "Expected captured fixture target")
-            .storeScope,
-          agentId: getRpcSourceIdentity(entry).agentId,
-          runId,
-          sessionKey,
-          sessionId: getRpcSourceIdentity(entry).sessionId,
-          lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          observedAt: 2_000,
-        };
-        params.restartRecoveryCandidates.set(runId, recovery);
         let current = entry;
         if (change !== "newer write") {
           expect(rpcSourceTesting.deleteExpected(runId, entry)).toBe(true);
@@ -723,7 +712,6 @@ describe("startGatewayEventSubscriptions", () => {
         }
         if (change !== "removed") {
           emitTerminal(3_000);
-          params.restartRecoveryCandidates.set(runId, { ...recovery, observedAt: 3_000 });
         }
         if (change === "retired replacement") {
           expect(rpcSourceTesting.deleteExpected(runId, current)).toBe(true);
@@ -756,14 +744,11 @@ describe("startGatewayEventSubscriptions", () => {
             await expect(waitForChatAbortTerminalPersistence(entry)).rejects.toBe(failure);
           }
         }
-        if (change === "removed") {
-          expect(params.restartRecoveryCandidates.get(runId)).toEqual(recovery);
-        } else {
+        if (change !== "removed") {
           expect(rpcSourceTesting.get(runId)).toBe(
             change === "retired replacement" ? undefined : current,
           );
           expect(readLifecycleState(current)).toEqual(currentState);
-          expect(params.restartRecoveryCandidates.get(runId)?.observedAt).toBe(3_000);
         }
         if (change === "newer write") {
           successor.resolve();

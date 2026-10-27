@@ -228,20 +228,12 @@ it.each([false, true])(
       sessionId: "archived-command-source",
       updatedAt: 1,
       archivedAt: 2,
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
-      },
     });
     await replaceSessionEntry(target, { sessionId: "active-target", updatedAt: Date.now() });
     const originalSource = loadSessionEntry(source);
     const originalTarget = loadSessionEntry(target);
 
-    const { texts } = await send("owner", "/new");
-
-    expect(texts).toEqual(sendDenied ? [] : [expect.stringContaining("Use Resume in WebChat")]);
+    await expect(send("owner", "/new")).rejects.toThrow(/is archived/i);
     expect(loadSessionEntry(source)).toEqual(originalSource);
     expect(loadSessionEntry(target)).toEqual(originalTarget);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();

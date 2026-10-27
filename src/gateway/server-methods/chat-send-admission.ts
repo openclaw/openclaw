@@ -4,10 +4,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
-import {
-  hasRestartRecoveryTerminalRun,
-  isRetryableUnadoptedChatClaim,
-} from "../../config/sessions/restart-recovery-state.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -33,11 +29,6 @@ import {
 import { captureSessionControllerInterruptBefore } from "../../sessions/session-controller.stop-runtime.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import type { DedupeEntry } from "../server-shared.js";
-import {
-  resolveRestartSafeChatAdmission,
-  withRestartSafeChatPlacement,
-  type PreparedRestartSafeChatPlacement,
-} from "./chat-restart-recovery.js";
 import { assertExpectedLeafActive } from "./chat-send-active-leaf.js";
 import {
   createAdmittedChatSendCleanup,
@@ -51,7 +42,12 @@ import {
   prepareChatSendAcpRefresh,
 } from "./chat-send-admission-context.js";
 import { respondChatSessionRoutingChanged } from "./chat-send-admission-errors.js";
-import { isWorkerGoalChatAdmission } from "./chat-send-goal-admission.js";
+import {
+  isLocalGoalChatAdmission,
+  isWorkerGoalChatAdmission,
+  withGoalChatPlacement,
+  type PreparedGoalChatPlacement,
+} from "./chat-send-goal-admission.js";
 import { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import { prepareChatSendInterruptAdmission } from "./chat-send-interrupt-admission.js";
 import {
@@ -99,7 +95,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     resolvedSessionAuthProvider,
     activeRunScopeKey,
     timeoutMs,
-    restartSafeRequest,
     expectedLeafEntryId,
   } = session;
   const assertSessionTargetCurrent = () => {
@@ -168,7 +163,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let expectedActiveReplyOperation: ReplyOperation | undefined;
   let replyTargetsCaptured = false;
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
-  let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
+  let localGoalAdmission = false;
   let workerGoalAdmission = false;
   let initialSessionEntry: InternalSessionEntry | undefined;
   let admittedSessionEntry: InternalSessionEntry | undefined;
@@ -250,20 +245,19 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   };
   const commitChatWorkAdmission = async (
     initialAcp: Awaited<ReturnType<typeof prepareChatSendAcpMetadata>> | null,
-    preparedPlacement?: PreparedRestartSafeChatPlacement,
+    preparedPlacement?: PreparedGoalChatPlacement,
   ): Promise<void> => {
     let acp = initialAcp;
     if (context.workerSessionPlacementService !== placementService) {
       throw new Error("Worker placement owner changed during chat admission; retry.");
     }
     if (
-      restartSafeRequest &&
-      !context.getRuntimeConfig().cloudWorkers?.requiredProfile &&
+      request.goalOperation &&
       placementService &&
       preparedPlacement?.sessionId !== admittedSessionId
     ) {
       using placementPhase = diagnostics?.scope("detail.admission.placement_prepare");
-      return await withRestartSafeChatPlacement(placementService, admittedSessionId, (prepared) => {
+      return await withGoalChatPlacement(placementService, admittedSessionId, (prepared) => {
         placementPhase?.finish();
         return commitChatWorkAdmission(acp, prepared);
       });
@@ -274,8 +268,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       let pendingAcpRead: (() => ReturnType<typeof prepareChatSendAcpMetadata>) | undefined;
       using currentPhase = diagnostics?.scope("detail.admission.current_session");
       await withCurrentChatSendRetry(params, pendingAttemptId, (latestSession, comparison) => {
-        const currentConfig = context.getRuntimeConfig();
-        const localRecovery = restartSafeRequest && !currentConfig.cloudWorkers?.requiredProfile;
+        const readGoalPlacement = request.goalOperation !== undefined;
         retryComparison = comparison;
         params.assertCurrent?.();
         const retainedRequestConflict = resolveChatSendRequestConflict(
@@ -324,26 +317,8 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         if (pendingAcpRead) {
           return;
         }
-        const retryableClaim = isRetryableUnadoptedChatClaim(latestEntry, clientRunId);
-        if (
-          (latestEntry?.restartRecoveryDeliveryRunId &&
-            latestEntry.restartRecoveryDeliverySourceRunId === clientRunId &&
-            !retryableClaim) ||
-          hasRestartRecoveryTerminalRun(latestEntry, clientRunId)
-        ) {
-          // Recovery can settle while this retry waits on lifecycle admission.
-          // Revalidate under that admission so a stale pre-lock snapshot cannot dispatch twice.
-          reservationSuperseded = true;
-          supersedingResult = {
-            ts: Date.now(),
-            ok: true,
-            payload: { runId: clientRunId, status: "ok" as const },
-          };
-          return;
-        }
         const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry, {
           allowPendingWorkspace: true,
-          restartResume: request.restartResume,
           providerReviewAcknowledgment: request.providerReviewAcknowledgment,
           runId: clientRunId,
         });
@@ -372,44 +347,30 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           throw new Error("Worker placement owner changed during chat admission; retry.");
         }
         const placementChanged = preparedPlacement?.sessionId !== admittedSessionId;
-        if (localRecovery && placementService && placementChanged) {
+        if (readGoalPlacement && placementService && placementChanged) {
           // A fresh Goal needs placement facts outside this synchronous reader.
           refreshPlacement = true;
           return;
         }
-        const preparedRead = localRecovery ? preparedPlacement?.facts.prepareRead() : undefined;
+        const preparedRead = readGoalPlacement ? preparedPlacement?.facts.prepareRead() : undefined;
         if (preparedRead) {
           pendingPlacementRead = observeChatSendWork(preparedRead);
           return;
         }
-        const placement = localRecovery ? preparedPlacement?.facts.current() : undefined;
+        const placement = readGoalPlacement ? preparedPlacement?.facts.current() : undefined;
         const acpMeta = acp?.meta ?? null;
-        restartSafeAdmission = resolveRestartSafeChatAdmission({
-          resolveGatewayContext: context.resolveGatewayContext,
-          agentId,
-          cfg: currentConfig,
-          clientRunId,
-          context,
-          entry: latestEntry,
+        localGoalAdmission = isLocalGoalChatAdmission(
+          params,
+          latestSession,
           initialSessionEntry,
-          lifecycleTimestamps: latestSession.lifecycleTimestamps,
-          acpMeta,
-          now: Date.now(),
           placement,
-          request: restartSafeRequest,
-          requestedSessionId,
-          sessionId: admittedSessionId,
-          sessionKey: latestSession.canonicalKey,
-          storePath: latestSession.storePath,
-        });
+          acpMeta,
+        );
         workerGoalAdmission = isWorkerGoalChatAdmission(params, latestSession, placement, acpMeta);
-        if (request.goalOperation && !restartSafeAdmission && !workerGoalAdmission) {
+        if (request.goalOperation && !localGoalAdmission && !workerGoalAdmission) {
           throw new Error(
             "Goal start or resume requires an idle built-in local session with recoverable history or a supported Codex cloud-worker session.",
           );
-        }
-        if (retryableClaim && !restartSafeAdmission) {
-          throw new Error("chat retry does not match its durable admission");
         }
       }).catch((error: unknown) => {
         if (isSessionTranscriptProjectionUnavailableError(error)) {
@@ -450,6 +411,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     });
     capturedOperator = preparedInterrupt.operator;
     releaseCapturedOperator = capturedOperator.release;
+    const acp = request.goalOperation ? await prepareChatSendAcpMetadata(params) : null;
     admissionPhase?.mark("detail.admission.lifecycle_prepare");
     gatewayWorkAdmission = await beginSessionEffect({
       agentId,
@@ -465,10 +427,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       revalidateAllowed: async () => {
         admissionPhase?.finish();
         using _ = diagnostics?.scope("detail.admission.revalidate");
-        if (!restartSafeRequest) {
-          return await commitChatWorkAdmission(null);
-        }
-        return await commitChatWorkAdmission(await prepareChatSendAcpMetadata(params));
+        return await commitChatWorkAdmission(acp);
       },
       onInterrupt: (reason) => {
         admittedRunAbort.controller.abort(reason);
@@ -623,11 +582,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       target: session.sessionTarget,
       storePath,
       sourceRef,
-      admittedSessionId,
-      runId: clientRunId,
-      lifecycleRevision: (admittedSessionEntry ?? initialSessionEntry)?.lifecycleRevision,
       isActive: () => acquiredGatewayWorkAdmission.isActive(),
-      currentRegistration: () => (isRpcSourceRegistered(sourceRef) ? sourceRef : undefined),
     },
   });
   // Abandoned preparation discards media only while no transcript or pending
@@ -689,7 +644,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       rejectSessionRoutingChanged,
       releaseSourceWorkAdmission: retainedWork.release,
       retainGatewayWorkAdmission: retainedWork.retain,
-      settleTerminal: retainedWork.settleTerminal,
       withInputCommitPublication: retainedWork.withInputCommitPublication,
       acquireInputActor: () => retainedWork.acquireInputActor(),
       setPendingInputCleanup: retainedWork.setPendingInputCleanup,
@@ -702,7 +656,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           controller: admittedRunAbort.controller,
           sourceRef,
         }),
-      restartSafeAdmission,
+      localGoalAdmission,
       workerGoalAdmission,
       setDiscardAbandonedPreparedMedia: setDiscardPreparedMedia,
     },

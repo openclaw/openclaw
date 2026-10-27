@@ -35,10 +35,6 @@ import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { formatForLog } from "../ws-log.js";
 import { readPreRegisteredRun, writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
 import { broadcastChatError } from "./chat-broadcast.js";
-import {
-  terminalizeRestartSafeChatAdmission,
-  type RestartSafeChatTerminalState,
-} from "./chat-restart-recovery.js";
 import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
 import {
   prepareChatSendRetryComparison,
@@ -293,11 +289,7 @@ export function createChatSendWorkAdmission(params: {
     target: QualifiedSessionEntryAccessTarget;
     storePath: string;
     sourceRef: RpcSourceRef;
-    admittedSessionId: string;
-    runId: string;
-    lifecycleRevision: string | undefined;
     isActive: () => boolean;
-    currentRegistration: () => RpcSourceRef | undefined;
   };
 }) {
   const storage =
@@ -312,7 +304,6 @@ export function createChatSendWorkAdmission(params: {
   let references = 1;
   const cleanup: Array<() => void> = [];
   let admittedSource = params.terminal?.target.readSource;
-  let admittedLifecycleRevision = params.terminal?.lifecycleRevision;
   let finishPendingInput: (() => void | Promise<void>) | undefined;
   let inputActor: ReturnType<typeof acquireSessionInputActor> | undefined;
   let actorLifetimeActive = true;
@@ -365,7 +356,7 @@ export function createChatSendWorkAdmission(params: {
     try {
       pending = inStorage(() => finishPendingInput?.());
     } catch (error) {
-      // The durable row remains recoverable; a failed disposition write must
+      // A failed disposition write must
       // not strand session/root drain ownership during shutdown.
       warnCleanupFailure(error);
     }
@@ -396,47 +387,6 @@ export function createChatSendWorkAdmission(params: {
     }
     references += 1;
     return hold();
-  };
-  const retainSettlement = (assertOwnerCurrent: () => void) => {
-    const releaseSettlement = retain();
-    let active = true;
-    return {
-      assertCurrent() {
-        if (!active || references === 0) {
-          throw new Error("Chat settlement admission was released");
-        }
-        assertOwnerCurrent();
-      },
-      release() {
-        active = false;
-        releaseSettlement();
-      },
-    };
-  };
-  const retainTerminalSettlement = () => {
-    const terminal = params.terminal;
-    if (!terminal || !admittedSource) {
-      return undefined;
-    }
-    return {
-      ...retainSettlement(() => {
-        const registered = terminal.currentRegistration();
-        // Cancellation retires abortability first; retained settlement still owns cleanup.
-        if (!terminal.isActive() || (registered && registered !== terminal.sourceRef)) {
-          throw new Error("Chat terminal settlement no longer owns its admission");
-        }
-      }),
-      expectedLifecycleRevision: admittedLifecycleRevision,
-      target: {
-        agentId: terminal.target.agentId,
-        storePath: terminal.storePath,
-        readSource: admittedSource,
-        target: {
-          canonicalKey: terminal.target.canonicalKey,
-          storeKeys: [...terminal.target.storeKeys],
-        },
-      },
-    };
   };
   return {
     acquireInputActor() {
@@ -478,26 +428,6 @@ export function createChatSendWorkAdmission(params: {
     isActive: () => references > 0,
     release: hold(),
     retain,
-    async settleTerminal(
-      this: void,
-      state: RestartSafeChatTerminalState & { startedAt: number },
-    ): Promise<boolean> {
-      const terminal = params.terminal;
-      const settlement = retainTerminalSettlement();
-      if (!terminal || !settlement) {
-        return false;
-      }
-      try {
-        return await terminalizeRestartSafeChatAdmission({
-          ...state,
-          ...settlement,
-          admittedSessionId: terminal.admittedSessionId,
-          clientRunId: terminal.runId,
-        });
-      } finally {
-        settlement.release();
-      }
-    },
     withInputCommitPublication<T>(
       this: void,
       run: () => Promise<T>,
@@ -526,7 +456,6 @@ export function createChatSendWorkAdmission(params: {
               throw new Error("Committed chat input changed its admitted physical source");
             }
             admittedSource ??= source;
-            admittedLifecycleRevision = committedEntry.lifecycleRevision;
             onCommitted?.(source, committedEntry);
           },
           run,

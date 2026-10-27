@@ -3,9 +3,7 @@ import {
   isAgentEventLifecycleGenerationCurrent,
   onAgentEvent,
 } from "../../../infra/agent-events.js";
-import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
-import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
@@ -14,8 +12,6 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { resolveRecoveredSubagentExecutions } from "./subagent-recovered-executions.js";
-import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { prepareSubagentTerminalObservation } from "./subagent-registry-completion-runtime.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
@@ -25,7 +21,7 @@ import {
 } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
-import { withSubagentSessionEntry } from "./subagent-session-reconciliation.js";
+import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
 export function createSubagentRegistryListener(config: {
   runs: Map<string, SubagentRunRecord>;
@@ -46,36 +42,6 @@ export function createSubagentRegistryListener(config: {
   } = config;
   let listenerStop: (() => void) | null = null;
 
-  async function resolveRecoveredWake(evt: AgentEventPayload) {
-    if (
-      !evt.sessionKey ||
-      !evt.sessionId ||
-      !isSubagentSessionKey(evt.sessionKey) ||
-      !evt.lifecycleGeneration ||
-      !isAgentEventLifecycleGenerationCurrent(evt.lifecycleGeneration)
-    ) {
-      return undefined;
-    }
-    const recovered = await withSubagentSessionEntry(
-      { childSessionKey: evt.sessionKey, childAgentId: evt.agentId },
-      (session) => {
-        if (!session || session.sessionId !== evt.sessionId) {
-          return undefined;
-        }
-        const sourceRunId = resolveRecoveredSubagentExecutions(session).get(evt.runId);
-        const source = sourceRunId?.startsWith("announce:requester-settle:")
-          ? runs.get(sourceRunId)
-          : undefined;
-        return source &&
-          source.childSessionKey === evt.sessionKey &&
-          resolveSubagentChildAuthority(source, session).status === "verified"
-          ? source
-          : undefined;
-      },
-    );
-    return isAgentEventLifecycleGenerationCurrent(evt.lifecycleGeneration) ? recovered : undefined;
-  }
-
   function ensureListener() {
     if (listenerStop) {
       return;
@@ -84,14 +50,10 @@ export function createSubagentRegistryListener(config: {
       if (!evt || evt.stream !== "lifecycle") {
         return;
       }
-      // Own lifecycle writes before their first await, including restart preservation.
+      // Own lifecycle writes before their first await.
       void runWithGatewayIndependentRootWorkContinuation(async () => {
         const phase = evt.data?.phase;
-        // Session recovery changes the execution ID, but the admitted wake still
-        // owns its parent result. Route its producer facts through this same owner.
-        const entry =
-          runs.get(evt.runId) ??
-          (phase === "end" || phase === "error" ? await resolveRecoveredWake(evt) : undefined);
+        const entry = runs.get(evt.runId);
         if (!entry) {
           if (phase === "end" && typeof evt.sessionKey === "string") {
             const sessionKey = evt.sessionKey;
@@ -126,7 +88,7 @@ export function createSubagentRegistryListener(config: {
                   current.execution.status === "terminal" ||
                   current.killIntent ||
                   current.killReconciliation ||
-                  (shouldSuppressSubagentRecoverySessionEffects(current) &&
+                  (shouldSuppressSubagentSessionEffects(current) &&
                     resolveSubagentChildAuthority(current).status !== "legacy-unverified") ||
                   (current.execution.status === "running" &&
                     current.execution.startedAt === startedAt &&

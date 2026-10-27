@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import {
   retainPreparedSessionSharingFacts,
@@ -7,7 +8,16 @@ import {
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
 import { releaseSessionSourceAuthorities } from "../config/sessions/session-source-authority.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { resolveMissingOperatorScope } from "../shared/operator-scope-compat.js";
+import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
+import {
+  prepareUserProfileIdentity,
+  readResidentGatewayOwnerProfile,
+} from "../state/user-profile-list.js";
 import { errorShapeFromError } from "./error-shape.js";
+import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
+import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 import { sessionMethodDatabaseAdmission, isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
@@ -18,6 +28,7 @@ import {
   sessionMutationTargetChanged,
   type SessionMutationAuthorizationParams,
 } from "./session-sharing-authorization.js";
+import { authorizePreparedSessionMutation } from "./session-sharing-policy.js";
 import {
   prepareSessionMutationFacts,
   SessionMutationFactsUnavailableError,
@@ -30,6 +41,122 @@ import {
 } from "./session-sharing-target-input.js";
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { prepareTalkSessionTarget } from "./talk/session-target.js";
+
+/** Resolve a recorded person against current grants and an existing exact session. */
+export async function prepareSessionPrincipalRunAccess(params: {
+  context: Pick<GatewayRequestContext, "getRuntimeConfig" | "getCommittedRuntimeConfig">;
+  profileId: string;
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  storePath?: string;
+  assertCurrent?: () => void;
+}) {
+  params.assertCurrent?.();
+  const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
+  const identity = await prepareUserProfileIdentity(params.profileId);
+  const ownerProfilePath = resolveDatabasePath();
+  let sharing: Awaited<ReturnType<typeof prepareSessionMutationFacts>> | undefined;
+  const release = () => {
+    sharing?.release();
+    identity.release();
+  };
+  const readRole = () => {
+    const profile = identity.readCurrentProfile();
+    return resolveOperatorRolePolicyForAssignment(
+      params.profileId,
+      profile.assignedRole,
+      getConfig(),
+      profile.githubLogin ?? null,
+    );
+  };
+  const readScopes = () => {
+    identity.readCurrentProfile();
+    // The recorded principal must itself remain the Gateway owner; this is never a fallback.
+    if (params.profileId === GATEWAY_OWNER_PROFILE_ID) {
+      if (readResidentGatewayOwnerProfile(ownerProfilePath)?.id !== params.profileId) {
+        throw new Error("Session principal is no longer the Gateway owner.");
+      }
+      return ["operator.admin"];
+    }
+    const scopes = readRole()?.scopes;
+    if (!scopes || resolveMissingOperatorScope(["operator.sessions.write"], scopes) !== null) {
+      throw new Error("Session principal has no current run authority.");
+    }
+    return scopes;
+  };
+  try {
+    const scopes = readScopes();
+    const access = resolveGatewayOperatorAccessAuthority(params.profileId, getConfig(), {
+      requireLivePolicySet: true,
+    });
+    const preparedSharing = await prepareSessionMutationFacts({
+      cfg: getConfig(),
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      followTranscript: true,
+    });
+    sharing = preparedSharing;
+    const initialTarget = preparedSharing.readCurrent(getConfig()).target;
+    if (initialTarget.entry.sessionId !== params.sessionId) {
+      throw new Error("Session is unavailable for this principal.");
+    }
+    // A policy adapter identifies the resolved person without manufacturing a transport grant.
+    const client: GatewayClient = {
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { id: "gateway-client", version: "internal", platform: "node", mode: "backend" },
+        role: "operator",
+        scopes: [...scopes],
+      },
+      internal: {
+        syntheticClient: true,
+        operatorRoleActor: { kind: "operator", profileId: params.profileId },
+      },
+    };
+    const assertCurrent = () => {
+      params.assertCurrent?.();
+      access?.signal.throwIfAborted();
+      access?.assertCurrent();
+      const current = identity.readCurrentFacts();
+      const currentRole = readRole();
+      if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
+        throw new Error("Session principal has no current run authority.");
+      }
+      const facts = preparedSharing.readCurrent(getConfig());
+      const target = facts.target;
+      if (
+        !target ||
+        target.agentId !== params.agentId ||
+        target.entry.lifecycleRevision !== initialTarget.entry.lifecycleRevision ||
+        target.entry.archivedAt !== undefined ||
+        (params.storePath !== undefined && target.storePath !== params.storePath)
+      ) {
+        throw new Error("Session is unavailable for this principal.");
+      }
+      const error = authorizePreparedSessionMutation(
+        { cfg: getConfig(), client, agentId: params.agentId, sessionKey: params.sessionKey },
+        facts,
+        { policy: currentRole, aliases: current.aliases },
+      );
+      if (error) {
+        throw new Error(error.message);
+      }
+    };
+    assertCurrent();
+    return {
+      client,
+      assertCurrent,
+      signal: access?.signal,
+      gatewayAccessGrant: access ? access.gatewayAccessGrant : null,
+      release,
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
 
 /** Read participation in the worker while retaining its owner through authorization. */
 export async function resolveSessionMutationAuthorizationAsync(

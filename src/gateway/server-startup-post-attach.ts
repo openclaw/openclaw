@@ -15,20 +15,13 @@ import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
 import { getGatewayContextLifetime } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginServiceCronHost } from "../plugins/service-cron.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import type { AgentRecoveryProgress } from "../state/agent-database-preparation-recovery.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
-import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { scheduleGatewayPrewarm } from "./server-startup-handler-prewarm.js";
-import {
-  markGatewayStartupMainSessionOrphans,
-  runGatewayStartupObservers,
-} from "./server-startup-observers.js";
+import { runGatewayStartupObservers } from "./server-startup-observers.js";
 import {
   createGatewayStartupOutcomeRecorder,
   formatGatewayStartupOutcomes,
@@ -45,10 +38,6 @@ import { createDeferredGatewayUpdateCheck } from "./server-startup-update-check.
 import type { ReadinessChecker } from "./server/readiness.js";
 import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 type Awaitable<T> = T | Promise<T>;
-
-const loadMainSessionRestartRecoveryModule = createLazyRuntimeModule(
-  () => import("../agents/main-session-recovery/main-session-restart-recovery.js"),
-);
 
 /** Start work that depends on the HTTP server being attached and visible. */
 export async function startGatewayPostAttachRuntime(params: {
@@ -79,9 +68,6 @@ export async function startGatewayPostAttachRuntime(params: {
   deps: CliDeps;
   startChannels: () => Promise<void>;
   refreshChatMetadata?: () => Promise<void>;
-  recoveryRuntime: GatewayRecoveryRuntime;
-  mainSessionRecoveryStartupCheckedStorePaths: Set<string>;
-  isRestartRecoverySuppressed: () => boolean;
   resolveGatewayContext: GatewayContextResolver;
   logHooks: {
     info: (msg: string) => void;
@@ -89,8 +75,7 @@ export async function startGatewayPostAttachRuntime(params: {
     error: (msg: string) => void;
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
-  unlockStartupMethods: (options?: { keepChatSendUnavailable?: boolean }) => void;
-  trackInputRecovery?: (progress: Promise<AgentRecoveryProgress>) => Promise<void>;
+  unlockStartupMethods: () => void;
   loadStartupPlugins?: () => Awaitable<{
     pluginRegistry: PluginRegistry;
     gatewayMethods: string[];
@@ -124,34 +109,6 @@ export async function startGatewayPostAttachRuntime(params: {
   // The CLI's hidden capability flag supplies this typed internal handoff.
   // Rehearsal loads plugins without resuming copied jobs, services, or notices.
   const candidateCanary = params.updateCanary === true;
-  const subagentRecoverySettled = createDeferredCore();
-  const initialInputRecoveryReady = createDeferredCore();
-  const mainSessionOrphansReady = params
-    .trackStartupWork(async (signal) => {
-      await params.waitForPostReadyWork?.();
-      if (params.minimalTestGateway || candidateCanary || signal.aborted || params.isClosing?.()) {
-        return;
-      }
-      await runWithGatewayIndependentRootWorkAdmission(
-        () =>
-          markGatewayStartupMainSessionOrphans(
-            {
-              getConfig: params.getConfig,
-              isRestartRecoverySuppressed: () =>
-                params.isClosing?.() === true || params.isRestartRecoverySuppressed(),
-              scheduler: { signal },
-              startupTrace: params.startupTrace,
-              log: params.log,
-            },
-            params.mainSessionRecoveryStartupCheckedStorePaths,
-          ),
-        "startup:main-session-orphans",
-        signal,
-      );
-    })
-    .catch((err: unknown) => {
-      params.log.warn(`main-session startup orphan marking failed: ${String(err)}`);
-    });
   const controlUiRootLifecycle = params.controlUiRootLifecycle;
   const controlUiAssetsSidecar =
     !params.minimalTestGateway && controlUiRootLifecycle
@@ -352,7 +309,6 @@ export async function startGatewayPostAttachRuntime(params: {
                   deps: params.deps,
                   getCronService: params.getCronService,
                   startChannels: params.startChannels,
-                  waitForMainSessionOrphans: () => mainSessionOrphansReady,
                   trackStartupWork: params.trackStartupWork,
                   shouldStartChannels: () => params.isClosing?.() !== true,
                   refreshChatMetadata: params.refreshChatMetadata,
@@ -404,39 +360,11 @@ export async function startGatewayPostAttachRuntime(params: {
                 loaderStatsBefore.sourceTransformFallbacks,
             ],
           ]);
-          let mainSessionRecoverySidecar: GatewayPostReadySidecarHandle | undefined;
           await startupLog;
           if (params.isClosing?.()) {
             return pluginRegistry;
           }
-          try {
-            const { scheduleRestartAbortedMainSessionRecovery } =
-              await loadMainSessionRestartRecoveryModule();
-            if (params.isClosing?.() !== true) {
-              mainSessionRecoverySidecar = scheduleRestartAbortedMainSessionRecovery({
-                getConfig: params.getConfig,
-                shouldContinue: () => params.isClosing?.() !== true,
-                startupCheckedStorePaths: params.mainSessionRecoveryStartupCheckedStorePaths,
-                // Initial recovery registers each agent's custody; pending cohorts
-                // keep their own source-restoration gate instead of blocking all agents.
-                waitForStart: () => initialInputRecoveryReady.promise,
-                inputRecovery: params.resolveGatewayContext()?.inputRecovery,
-                gatewayRuntime: params.recoveryRuntime,
-              });
-            }
-          } catch (err) {
-            params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
-          }
-          if (params.isClosing?.()) {
-            if (mainSessionRecoverySidecar) {
-              params.onGatewayLifetimeSidecars(mainSessionRecoverySidecar);
-            }
-            return pluginRegistry;
-          }
-          const newGatewayLifetimeSidecars = [
-            ...scheduleGatewayPrewarm(params),
-            ...(mainSessionRecoverySidecar ? [mainSessionRecoverySidecar] : []),
-          ];
+          const newGatewayLifetimeSidecars = scheduleGatewayPrewarm(params);
           newGatewayLifetimeSidecars.push(
             scheduleTranscriptsSidecar({
               cfg: params.gatewayPluginConfigAtStart,
@@ -473,13 +401,9 @@ export async function startGatewayPostAttachRuntime(params: {
       if (params.minimalTestGateway || candidateCanary) {
         return;
       }
-      await mainSessionOrphansReady;
       if (signal.aborted || params.isClosing?.()) {
         return;
       }
-      // Agent RPCs need marked predecessors; chat also waits for saved-input recovery.
-      params.unlockStartupMethods({ keepChatSendUnavailable: true });
-      // Connect-time snapshots and legacy input routes share this admission barrier.
       params.onSidecarsReady?.();
       await runGatewayStartupObservers({
         registry: sidecarRegistry,
@@ -496,12 +420,7 @@ export async function startGatewayPostAttachRuntime(params: {
             | PluginHookGatewayCronService
             | undefined,
         isClosing: params.isClosing,
-        onSubagentRecoverySettled: subagentRecoverySettled.resolve,
-        unlockStartupMethods: () => {
-          params.unlockStartupMethods();
-          initialInputRecoveryReady.resolve();
-        },
-        trackInputRecovery: params.trackInputRecovery,
+        unlockStartupMethods: params.unlockStartupMethods,
         startupTrace: params.startupTrace,
         log: params.log,
         logHooks: params.logHooks,
@@ -515,8 +434,7 @@ export async function startGatewayPostAttachRuntime(params: {
     })
     .catch((err: unknown) => {
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
-    })
-    .finally(subagentRecoverySettled.resolve);
+    });
 
   if (params.sidecarStartup !== "defer") {
     await sidecarsPromise;
@@ -535,6 +453,5 @@ export async function startGatewayPostAttachRuntime(params: {
   return {
     stopGatewayUpdateCheck: updateCheck.stop,
     startupSettled,
-    subagentRecoverySettled: subagentRecoverySettled.promise,
   };
 }

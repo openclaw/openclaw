@@ -255,7 +255,6 @@ it.each(["ready", "caller revoked", "profile changed"] as const)(
       createCoordinatorTestService({ dispatch }),
       (_request, run) => run(),
       undefined,
-      undefined,
       { placements, environments, redispatchPlacement: vi.fn(), warn: vi.fn() },
     );
     const waitForInitialPlacement = coordinator.waitForInitialPlacement;

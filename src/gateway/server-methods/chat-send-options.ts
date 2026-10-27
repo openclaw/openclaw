@@ -1,6 +1,5 @@
 import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
-import type { SessionRestartResume } from "../../config/sessions/restart-resume.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { ProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.contracts.js";
@@ -10,7 +9,6 @@ import type { createGatewayChatUserTurnController } from "./chat-user-turn-recor
 export type ChatSendInternalOptions = {
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalResume?: SessionGoalOperation & { action: "resume" };
-  restartResume?: SessionRestartResume;
   trustedSystemInput?: boolean;
   /** The creation owner has validated an agent-authored opening turn and its source authority. */
   stageCreatedInput?: true;

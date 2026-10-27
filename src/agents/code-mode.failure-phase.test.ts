@@ -22,7 +22,7 @@ import { jsonResult, ToolInputError } from "./tools/common.js";
 afterEach(resetCodeModeTestState);
 afterEach(() => vi.restoreAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const dispatched = { bridgeDispatchStarted: true, replaySafe: false };
+const dispatched = { bridgeDispatchStarted: true };
 
 function phaseHarness(executor: "node" | "quickjs", reject: boolean) {
   const target = pluginToolWithExecute("phase_fixture", "Failure origin fixture", async () => {
@@ -174,7 +174,7 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
       const { target, run, resume } = phaseHarness(executor, reject);
       let details = await run(code, "failure-origin");
       if (parked) {
-        expect(details).toMatchObject({ status: "waiting", replaySafe: false });
+        expect(details).toMatchObject({ status: "waiting" });
         details = await resume(details, "failure-origin-wait");
       }
       expectFailure(details, phase, phase === "input" ? "invalid_input" : "internal_error", {
@@ -215,7 +215,7 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
         expect(details).toMatchObject({ status: "waiting" });
         details = await resume(details, "settlement-failure-wait");
       }
-      expectFailure(details, "input", "invalid_input", { replaySafe: false });
+      expectFailure(details, "input", "invalid_input");
       expect(target.execute).toHaveBeenCalledOnce();
       expect(log).toHaveBeenCalledExactlyOnceWith(
         expect.any(ToolInputError),
@@ -235,7 +235,7 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
     const input =
       "*** Begin Patch\n*** Update File: source.txt\n@@\n-missing\n+replacement\n*** End Patch";
     const details = await run(`await apply_patch(${JSON.stringify({ input })});`, "bad-anchor");
-    expectFailure(details, "bridge", "invalid_input", { replaySafe: false });
+    expectFailure(details, "bridge", "invalid_input");
     expect(details.error).toContain("Failed to find expected lines");
     expect(execute).toHaveBeenCalledOnce();
     expect(await fs.readFile(file, "utf8")).toBe("original\n");
@@ -265,9 +265,7 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
           : "await failure_fixture({});",
         "logged-failure",
       ),
-    ).toMatchObject(
-      caught ? { status: "completed", value: true } : { status: "failed", replaySafe: false },
-    );
+    ).toMatchObject(caught ? { status: "completed", value: true } : { status: "failed" });
     expect(target.execute).toHaveBeenCalledOnce();
     expect(log).toHaveBeenCalledExactlyOnceWith(
       failure,

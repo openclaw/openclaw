@@ -80,7 +80,6 @@ import type {
   SessionRuntimeTargetWorkerInput,
   SessionRuntimeTargetWorkerResult,
 } from "./session-entry-read.types.js";
-import type * as HarnessCompletionSourceWorker from "./session-harness-completion-source.types.js";
 import type { SessionArchivePruningSnapshot } from "./session-history-archive-pruning.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
 import type {
@@ -325,7 +324,6 @@ export type SessionHistoryWorkerInput =
   | PendingInputHistoryWorkerInput
   | SessionPendingInputReceiptsWorkerInput
   | PendingInputSourceWorker.Input
-  | HarnessCompletionSourceWorker.Input
   | SessionGoalOperationReceiptWorkerInput
   | ConversationRowsWorkerInput
   | ConversationBindingsWorkerInput
@@ -454,7 +452,6 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
       result: SessionGoalOperationLookupResult;
     };
     "session-pending-input-source": PendingInputSourceWorker.Value;
-    "session-harness-completion-source": HarnessCompletionSourceWorker.Value;
     "session-pending-input-history": {
       kind: "session-pending-input-history";
       snapshot: PendingInputHistorySnapshot;
@@ -625,7 +622,6 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readConversationDelivery: SessionHistoryReader<"conversation-delivery", "record">;
     readGoalOperationReceipt: SessionHistoryReader<"goal-operation-receipt", "result">;
     readPendingInputSource: PendingInputSourceWorker.Reader;
-    readHarnessCompletionSource: HarnessCompletionSourceWorker.Reader;
     readPendingInputHistory: SessionHistoryReader<"session-pending-input-history", "snapshot">;
     readPendingInputReceipts: SessionHistoryReader<"session-pending-input-receipts", "receipts">;
     readVoiceSessions: SessionHistoryReader<"voice-sessions">;

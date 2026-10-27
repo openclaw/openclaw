@@ -43,8 +43,6 @@ import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
-import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
-import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
@@ -64,7 +62,6 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
-import { createRestartSafeChatRequest } from "./chat-restart-recovery.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -326,7 +323,6 @@ async function loadChatSendSessionContext(params: {
 
 /** Load and validate the session/model facts shared by later admission and dispatch phases. */
 export async function prepareChatSendSession(params: {
-  isDirectExternalUser?: boolean;
   request: NormalizedChatSendRequest;
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
@@ -338,7 +334,7 @@ export async function prepareChatSendSession(params: {
   }
   const loadedValue = loaded.value;
   const { request, client } = params;
-  const { p, explicitOrigin, normalizedAttachments, turnKind, rawMessage } = request;
+  const { p } = request;
   const { cfg, agentId, sessionKey, entry, legacyKey } = loadedValue;
   if (isIncognitoSessionKey(sessionKey) && !entry) {
     return { ok: false as const, error: `Incognito session "${sessionKey}" was not found.` };
@@ -384,28 +380,6 @@ export async function prepareChatSendSession(params: {
   });
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideMs: p.timeoutMs });
   const now = Date.now();
-  const restartSafeRequest = await createRestartSafeChatRequest({
-    goalOperation: request.goalOperation,
-    cfg,
-    eligible:
-      !readChatInputRecoveryAdmission(p.idempotencyKey) &&
-      (isBrowserOperatorUiClient(request.clientInfo) || params.isDirectExternalUser === true) &&
-      turnKind === "main" &&
-      normalizedAttachments.length === 0 &&
-      !request.reconnectResumeRequested &&
-      explicitOrigin === undefined &&
-      p.deliver !== true &&
-      p.thinking === undefined &&
-      p.fastMode === undefined &&
-      p.fastAutoOnSeconds === undefined &&
-      p.timeoutMs === undefined &&
-      request.systemInputProvenance === undefined &&
-      request.systemProvenanceReceipt === undefined &&
-      !request.suppressCommandInterpretation,
-    message: rawMessage,
-    mentions: p.mentions,
-    senderIsOwner: hasGatewayAdminScope(client),
-  });
 
   return {
     ok: true as const,
@@ -417,7 +391,6 @@ export async function prepareChatSendSession(params: {
       resolvedSessionAuthProvider,
       timeoutMs,
       now,
-      restartSafeRequest,
     },
   };
 }

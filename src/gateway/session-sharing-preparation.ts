@@ -109,6 +109,7 @@ export async function prepareSessionMutationFacts(
           databaseIdentity: identity.key,
           sessionKey,
           followLifecycle: params.followLifecycle,
+          followTranscript: params.followTranscript,
           acquiring: true,
         });
         acquiringReads.set(key, retained);
@@ -250,10 +251,13 @@ export async function prepareSessionMutationFacts(
         change.agentId === agentId &&
         change.previous.sessionKeys.some((key) => initialStoreKeys.includes(key)) &&
         !(
-          params.followLifecycle &&
-          change.kind === "reset" &&
+          ((params.followTranscript &&
+            change.kind === "replace" &&
+            readPreparedSessionSharingChange(change) !== undefined) ||
+            (params.followLifecycle &&
+              change.kind === "reset" &&
+              change.previous.sessionId === change.current.sessionId)) &&
           change.previous.sessionId !== undefined &&
-          change.previous.sessionId === change.current.sessionId &&
           change.current.sessionKeys.some((key) => initialStoreKeys.includes(key))
         )
       ) {

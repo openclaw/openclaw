@@ -1,8 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
-import { supportsCurrentWorkerLaunch } from "../../worker/worker-build-identity.js";
 import { measureGatewayRestartTrace } from "../restart-trace.js";
 import { hasForcedWorkerEnvironmentAbandonment } from "./environment-errors.js";
 import {
@@ -19,24 +16,12 @@ import {
 } from "./placement-dispatch-orphan-cleanup.js";
 import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-results.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
-import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
-import {
-  placementTurnOwner,
-  projectWorkerSessionTurnClaim,
-  serializeWorkerSessionTurnClaim,
-} from "./placement-record.js";
 import type {
   PlacementRecoveryDeps,
   WorkerPlacementRecoveryAdmission,
 } from "./placement-recovery-contract.js";
-import {
-  isCurrentActiveWorkerEnvironment,
-  matchesWorkerPlacementTarget,
-} from "./placement-target.js";
+import { isCurrentActiveWorkerEnvironment } from "./placement-target.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
-import { boundedWorkerError } from "./worker-error.js";
-
-const log = createSubsystemLogger("gateway/worker-placement");
 
 const admitRecovery: WorkerPlacementRecoveryAdmission = async (_sessionIds, run) => {
   await run();
@@ -70,92 +55,24 @@ export function createPlacementRecoveryActions(
   initialPlacements: readonly WorkerDispatchPlacement[],
 ) {
   const { environments, failure, placements } = deps;
-  const interruptedClaims = new Set(
-    initialPlacements.flatMap((placement) => {
-      const claim = projectWorkerSessionTurnClaim(placement);
-      return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
-    }),
-  );
-  const isInterruptedTurn = (placement: WorkerDispatchPlacement) => {
-    const claim = projectWorkerSessionTurnClaim(placement);
-    return Boolean(claim && interruptedClaims.has(serializeWorkerSessionTurnClaim(claim)));
-  };
   // Retire orphan refs in bounded post-start sweeps, never on readiness or targeted recovery.
   // Completed roots belong to this startup pass; settlement removes new refs itself.
   let orphanCleanupPending: PendingWorkspaceResultOrphanCleanup | undefined;
 
   const reconcileActivePlacement = async (
-    initialPlacement: WorkerActiveDispatchPlacement,
+    placement: WorkerActiveDispatchPlacement,
     mode: "restart" | "runtime",
-    facts: WorkerSessionPlacementProjection,
   ): Promise<void> => {
-    let placement = initialPlacement;
-    let environment = environments.get(placement.environmentId);
-    // Retire the old turn, not its machine. The node stop acknowledgement fences the
-    // physical worker; the replacement turn receives a fresh claim on the same workspace.
-    const claim = projectWorkerSessionTurnClaim(placement);
-    const interrupted = isInterruptedTurn(placement);
-    if ((mode === "restart" || interrupted) && placement.turnClaim) {
-      if (
-        claim &&
-        interrupted &&
-        environment?.nodeDeviceId &&
-        isCurrentActiveWorkerEnvironment(placement, environment) &&
-        !facts.moves.has(placement.sessionId)
-      ) {
-        try {
-          await environments.stopTunnel(placement.environmentId, placement.activeOwnerEpoch);
-          await placements.closeWorkerTurnToolState(claim);
-          const currentFacts = await placements.readProjection([placement.sessionId], {
-            current: true,
-          });
-          const current = currentFacts.placements.get(placement.sessionId);
-          const currentEnvironment = environments.get(placement.environmentId);
-          if (
-            current?.state !== "active" ||
-            current.generation !== placement.generation ||
-            currentEnvironment?.nodeDeviceId !== environment.nodeDeviceId ||
-            !isCurrentActiveWorkerEnvironment(current, currentEnvironment) ||
-            currentFacts.moves.has(placement.sessionId)
-          ) {
-            throw new Error("Interrupted worker owner changed while stopping");
-          }
-          await placements.retainInterruptedTurnWorkspace(claim, () => {
-            const releaseEnvironment = environments.get(placement.environmentId);
-            if (!isCurrentActiveWorkerEnvironment(placement, releaseEnvironment)) {
-              throw new Error("Interrupted worker owner changed before workspace recovery");
-            }
-          });
-          const pendingFacts = await placements.readProjection([placement.sessionId], {
-            current: true,
-          });
-          await recoverPendingWorkspaceResults(deps, pendingFacts, placement.environmentId);
-          const recovered = (
-            await placements.readProjection([placement.sessionId], { current: true })
-          ).placements.get(placement.sessionId);
-          if (
-            recovered?.state !== "active" ||
-            !matchesWorkerPlacementTarget(recovered, placement) ||
-            recovered.turnClaim
-          ) {
-            return;
-          }
-          interruptedClaims.delete(serializeWorkerSessionTurnClaim(claim));
-          placement = recovered;
-          environment = environments.get(placement.environmentId);
-        } catch (error) {
-          log.warn(
-            `Interrupted cloud worker is waiting for recovery: ${boundedWorkerError(error)}`,
-          );
-          return;
-        }
-      } else {
-        const error = new Error(
-          "Active worker turn claim cannot be proven live after gateway restart",
-        );
-        await failure.failActive(placement, error, { forceClaimFence: true });
-        return;
-      }
+    const environment = environments.get(placement.environmentId);
+    if (mode === "restart" && placement.turnClaim) {
+      // A new process never adopts execution authority from a saved turn claim.
+      // Staged results and move journals settle separately before reaching this path.
+      await failure.failActive(
+        placement,
+        new Error("Active worker turn claim cannot be proven live after gateway restart"),
+        { forceClaimFence: true },
+      );
+      return;
     }
     if (
       placement.workspaceBaseManifestRef === DEVICE_FOLDER_MANIFEST_REF &&
@@ -266,7 +183,7 @@ export function createPlacementRecoveryActions(
         if (placement.state === "failed") {
           await failure.retryFailedTeardown(placement);
         } else if (placement.state === "active") {
-          await reconcileActivePlacement(placement, "runtime", facts);
+          await reconcileActivePlacement(placement, "runtime");
         }
         continue;
       }
@@ -279,32 +196,16 @@ export function createPlacementRecoveryActions(
           : undefined;
         const exactEnvironment =
           environment?.environmentId === placement.environmentId ? environment : undefined;
-        if (
-          exactEnvironment &&
-          exactEnvironment.destroyRequestedAtMs === null &&
-          (exactEnvironment.state === "requested" ||
-            exactEnvironment.state === "provisioning" ||
-            exactEnvironment.state === "bootstrapping" ||
-            ((exactEnvironment.state === "ready" || exactEnvironment.state === "idle") &&
-              supportsCurrentWorkerLaunch(exactEnvironment.bootstrapReceipt)))
-        ) {
-          // Transient provider or node-enrollment failure retains its exact durable operation.
-          continue;
-        }
         await failure.teardownEnvironment({
           placement,
           environmentId: exactEnvironment?.environmentId ?? null,
           ownerEpoch: exactEnvironment?.ownerEpoch ?? null,
-          primaryError: new Error(
-            exactEnvironment
-              ? `Provisioning worker environment cannot be recovered from ${exactEnvironment.state}`
-              : "Provisioning worker environment record is missing",
-          ),
+          primaryError: new Error("Cloud worker provisioning canceled by Gateway restart"),
         });
         continue;
       }
       if (placement.state === "active") {
-        await reconcileActivePlacement(placement, "restart", facts);
+        await reconcileActivePlacement(placement, "restart");
         continue;
       }
       if (placement.state === "failed") {
@@ -335,11 +236,11 @@ export function createPlacementRecoveryActions(
     if (deps.isShuttingDown?.()) {
       return;
     }
-    // Environment reconciliation can resume provisioning through session admission.
-    // It must finish outside admission, before any recoverSession unit enters it.
+    // Cancel old setup before environment reconciliation can perform provider work.
+    // Existing allocations, staged results, and move journals retain their cleanup owners.
     if (mode === "startup") {
-      // Older Gateways can commit draining before claiming a result, or release
-      // an unstaged failed claim. The draining placement still owes a final save.
+      // Retire interrupted setup and explicitly abandoned resources. Only existing
+      // result rows and move journals authorize file settlement after restart.
       for (const { sessionId } of await placements.readRecoveryCandidates()) {
         if (deps.isShuttingDown?.()) {
           return;
@@ -356,6 +257,18 @@ export function createPlacementRecoveryActions(
           }
           const placement = facts.placements.get(sessionId);
           if (!placement || facts.moves.has(sessionId)) {
+            return;
+          }
+          if (placement.state === "provisioning") {
+            const environment = placement.environmentId
+              ? environments.get(placement.environmentId)
+              : undefined;
+            await failure.teardownEnvironment({
+              placement,
+              environmentId: environment?.environmentId ?? null,
+              ownerEpoch: environment?.ownerEpoch ?? null,
+              primaryError: new Error("Cloud worker provisioning canceled by Gateway restart"),
+            });
             return;
           }
           const environment = placement.environmentId
@@ -381,26 +294,6 @@ export function createPlacementRecoveryActions(
             });
             return;
           }
-          if (
-            placement.state !== "draining" ||
-            placement.turnClaim ||
-            facts.pendingResults.has(sessionId)
-          ) {
-            return;
-          }
-          const claimId = `reclaim-${randomUUID()}`;
-          const claim = await placements.claimReclaimWorkspaceResult(
-            {
-              sessionId: placement.sessionId,
-              sessionKey: placement.sessionKey,
-              agentId: placement.agentId,
-              claimId,
-              runId: claimId,
-              owner: placementTurnOwner(placement),
-            },
-            (recoveryClaim) => environments.fenceWorkerTurnForRecovery(recoveryClaim),
-          );
-          await placements.handoffWorkspaceResultRecovery(claim);
         });
         const environmentId = abandonedEnvironmentId;
         if (environmentId) {
@@ -528,7 +421,6 @@ export function createPlacementRecoveryActions(
   return {
     reconcile,
     reconcileActive,
-    isInterruptedTurn,
     subscribeOrphanWorkspaceChanges: () =>
       subscribeWorkspaceResultOrphanChanges(() => orphanCleanupPending),
   };

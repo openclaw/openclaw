@@ -337,36 +337,22 @@ describe("killSubagentRunAdmin", () => {
   });
 
   it.each([false, true])(
-    "does not retarget a same-id admin successor (recovery=%s)",
-    async (recovery) => {
+    "does not retarget a same-id admin successor (live producer=%s)",
+    async (liveProducer) => {
       const childSessionKey = "agent:main:subagent:admin-same-id-successor";
       const runId = "run-admin-same-id";
       const source = await addRun({
         runId,
         childSessionKey,
-        ...(recovery
+        ...(liveProducer
           ? { childSessionIdentity: { sessionId: "sess-fenced-same-id-successor" } }
           : {}),
         ...adminOwner,
         task: "admin source",
         generation: 1,
-        ...(recovery
-          ? {
-              execution: {
-                status: "interrupted",
-                startedAt: Date.now() - 1_000,
-                restartRecovery: {
-                  sessionId: "sess-fenced-same-id-successor",
-                  sessionMarker: "sess-fenced-same-id-successor:1",
-                  idempotencyKey: runId,
-                  phase: "accepted",
-                },
-              },
-            }
-          : {}),
       });
       const cfg = cfgWithSessionStore();
-      const producer = recovery
+      const producer = liveProducer
         ? startProducer(
             childSessionKey,
             "sess-fenced-same-id-successor",
@@ -382,7 +368,7 @@ describe("killSubagentRunAdmin", () => {
         {
           cfg,
           sessionKey: childSessionKey,
-          ...(recovery ? { expectedRunId: runId } : {}),
+          ...(liveProducer ? { expectedRunId: runId } : {}),
         },
         {
           assertCurrent: () => {},
@@ -1000,9 +986,9 @@ describe("controlled subagent cancellation races", () => {
     "interrupts selected admission without retargeting an exact admin kill (%s)",
     async (mode) => {
       const exact = mode === "exact admin";
-      const sessionId = "sess-recovery-admission";
+      const sessionId = "sess-live-admission";
       const entry = await addRun(
-        runFixture("recovery-admission", {
+        runFixture("live-admission", {
           childSessionIdentity: { sessionId },
           createdAt: Date.now() - 2_000,
           ...(exact
@@ -1014,23 +1000,13 @@ describe("controlled subagent cancellation races", () => {
               }
             : { requesterSessionKey: "agent:main:main" }),
           execution: {
-            status: exact ? "interrupted" : "running",
+            status: "running",
             startedAt: Date.now() - 1_000,
-            ...(exact
-              ? {
-                  restartRecovery: {
-                    sessionId,
-                    sessionMarker: `${sessionId}:1`,
-                    idempotencyKey: "recovery-successor",
-                    phase: "accepted" as const,
-                  },
-                }
-              : {}),
           },
         }),
       );
       const { childSessionKey } = entry;
-      const storePath = await writeSession("recovery-admission", childSessionKey, {
+      const storePath = await writeSession("live-admission", childSessionKey, {
         sessionId,
         updatedAt: Date.now(),
         abortedLastRun: true,
@@ -1047,10 +1023,9 @@ describe("controlled subagent cancellation races", () => {
         entry.runId,
       );
       const handoffId = admission.createHandoff();
-      const recoveryInterrupted = vi.fn();
+      const successorInterrupted = vi.fn();
       const abort = exact
-        ? startProducer(childSessionKey, sessionId, storePath, undefined, "recovery-successor")
-            .cancel
+        ? startProducer(childSessionKey, sessionId, storePath, undefined, "live-successor").cancel
         : undefined;
       const pendingKill = exact
         ? adminKill(childSessionKey, storePath, { expectedRunId: entry.runId })
@@ -1063,19 +1038,19 @@ describe("controlled subagent cancellation races", () => {
           handoffId,
           scope: storePath,
           identities: [childSessionKey, sessionId],
-          onInterrupt: recoveryInterrupted,
+          onInterrupt: successorInterrupted,
         });
         expect(adopted).toBeDefined();
         if (exact) {
           expect(
             await replaceSubagentRunAfterSteerCore({
               previousRunId: entry.runId,
-              nextRunId: "recovery-successor",
+              nextRunId: "live-successor",
               expected: entry,
             }),
           ).toBe(true);
         } else {
-          expect(recoveryInterrupted).toHaveBeenCalledOnce();
+          expect(successorInterrupted).toHaveBeenCalledOnce();
         }
         adopted?.release();
         if (exact) {
@@ -1084,7 +1059,7 @@ describe("controlled subagent cancellation races", () => {
             killed: false,
             runId: entry.runId,
           });
-          await expectRunning(childSessionKey, { runId: "recovery-successor" });
+          await expectRunning(childSessionKey, { runId: "live-successor" });
           expect(abort).not.toHaveBeenCalled();
         } else {
           await expect(pendingKill).resolves.toMatchObject({ status: "ok" });
@@ -1105,27 +1080,13 @@ describe("controlled subagent cancellation races", () => {
   registerAdmissionDrainControlTests(controlTestDeps);
 
   it.each(["intent", "tombstone"] as const)(
-    "preserves recoverability when the kill %s cannot persist",
+    "preserves the original run when the kill %s cannot persist",
     async (phase) => {
       const sessionId = "sess-kill-write-failure";
       const { run, storePath, childSessionKey } = await storedRun(
         "kill-write-failure",
         {
           ...(phase === "intent" ? otherOwner : runOwner("agent:main:main")),
-          ...(phase === "tombstone"
-            ? {
-                execution: {
-                  status: "interrupted",
-                  startedAt: Date.now() - 1_000,
-                  restartRecovery: {
-                    sessionId,
-                    sessionMarker: `${sessionId}:1`,
-                    idempotencyKey: "recovery-kill-write-failure",
-                    phase: "reserved",
-                  },
-                },
-              }
-            : {}),
         },
         { abortedLastRun: true },
       );
@@ -1161,13 +1122,7 @@ describe("controlled subagent cancellation races", () => {
       const persisted = await latestRun(childSessionKey);
       expect(persisted).toMatchObject({
         runId: run.runId,
-        execution:
-          phase === "intent"
-            ? { status: "running" }
-            : {
-                status: "interrupted",
-                restartRecovery: { phase: "reserved" },
-              },
+        execution: { status: "running" },
       });
       expect(persisted?.killIntent).toEqual(
         phase === "intent" ? undefined : expect.objectContaining({ reason: "killed", sessionId }),

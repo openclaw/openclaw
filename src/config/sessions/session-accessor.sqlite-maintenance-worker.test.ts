@@ -233,8 +233,7 @@ describe("automatic worker planning protections", () => {
 
   it.each([
     "registry",
-    "recovery-cycle",
-    "recovery-run",
+    "resume-marker",
     "provider",
     "work-key",
     "work-id",
@@ -247,38 +246,21 @@ describe("automatic worker planning protections", () => {
       `agent:main:maintenance-protection-active-${protection}`,
       `active-${protection}`,
     );
-    const protectedKey = protection.startsWith("recovery")
-      ? `agent:main:hook:maintenance-protected-${protection}`
-      : `agent:main:subagent:maintenance-protected-${protection}`;
+    const protectedKey =
+      protection === "resume-marker"
+        ? `agent:main:hook:maintenance-protected-${protection}`
+        : `agent:main:subagent:maintenance-protected-${protection}`;
     const protectedId = `maintenance-protected-id-${protection}`;
     const aliasKey = `agent:main:subagent:maintenance-protected-alias-${protection}`;
     const sibling = `agent:main:subagent:maintenance-unprotected-${protection}`;
-    const recovery = (
-      terminal: boolean,
-    ): Partial<Parameters<typeof replaceSessionEntrySync>[1]> => {
-      if (protection === "recovery-cycle") {
-        return {
-          mainRestartRecovery: {
-            cycleId: terminal ? "finished" : "waiting",
-            revision: 1,
-            chargedAttempts: 0,
-            ...(terminal ? { tombstone: { reason: "exhausted" } } : {}),
-          },
-        };
-      }
-      const runId = terminal ? "terminal" : "awaiting-recovery";
-      return protection === "recovery-run"
-        ? {
-            restartRecoveryRuns: [{ runId, lifecycleGeneration: "previous-gateway" }],
-            ...(terminal ? { restartRecoveryTerminalRunIds: [runId] } : {}),
-          }
-        : {};
-    };
-    seed(protectedKey, protectedId, 1, recovery(false));
+    seed(protectedKey, protectedId, 1);
+    if (protection === "resume-marker") {
+      seed(protectedKey, protectedId, 1, { resumeAfterRestart: { queuedInputIds: [] } });
+    }
     if (protection.endsWith("-id")) {
       seed(aliasKey, protectedId, 1);
     }
-    seed(sibling, `unprotected-${protection}`, 1, recovery(true));
+    seed(sibling, `unprotected-${protection}`, 1);
     const run = async () => {
       const completed = observeMaintenance();
       await patchSessionEntryCore(

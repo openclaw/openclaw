@@ -6,7 +6,6 @@ import type {
   ChannelMessageSendTextContext as SendContext,
 } from "../../channels/message/types.js";
 import type { ChannelOutboundContext } from "../../channels/plugins/outbound.types.js";
-import { getRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -15,7 +14,7 @@ import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-sup
 import {
   installRecoveryHooks,
   markFinal,
-  seedRecoverySession,
+  seedDeliverySession,
 } from "./delivery-completion.shard-test-support.js";
 import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
 import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
@@ -88,9 +87,7 @@ it.each(
   "retains reported placement across same-ID final replacement (%s, %s)",
   async (mode, placement, eligible) => {
     const [, progress = receipt(), final = receipt()] = placementCases()[placement]!;
-    const { scope, entry } = await seedRecoverySession(tmpDir(), "source", "run", {
-      restartRecoveryDeliveryContext: context,
-    });
+    const { scope, entry } = await seedDeliverySession(tmpDir());
     const payloads = [{ text: "final" }];
     await markFinal(scope, entry, payloads, context);
     const completion = resolvePendingFinalDeliveryCompletion(payloads);
@@ -159,19 +156,14 @@ it.each(
       await enqueueDeliveryOnce(params, completion.deliveryId, tmpDir());
       await recover();
     }
-    const evidence = getRestartRecoveryTerminalDeliveryEvidence(loadSessionEntry(scope), "source");
+    const receipt = loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries?.[0]?.receipt;
     if (eligible) {
-      expect(evidence).toMatchObject({
-        deliveryStatus: {
-          status: "sent",
-          resultCount: placement === "aggregate-complete" ? 2 : 1,
-        },
-        durableFinalReceipt: {
-          platformMessageId: placement === "aggregate-complete" ? "first" : "m",
-        },
+      expect(receipt).toMatchObject({
+        resultCount: placement === "aggregate-complete" ? 2 : 1,
+        platformMessageId: placement === "aggregate-complete" ? "first" : "m",
       });
     } else {
-      expect(evidence).toBeUndefined();
+      expect(receipt).toBeUndefined();
     }
     expect(seen).toEqual(["m"]);
     expect(committed).toHaveBeenCalledTimes(legacy ? 0 : 1);

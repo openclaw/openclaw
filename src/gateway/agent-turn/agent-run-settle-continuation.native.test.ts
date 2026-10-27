@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../../agents/restart-recovery-prompt.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { buildRequesterSettleWakeIdentity } from "../../agents/subagents/registry/subagent-requester-settle-identity.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -317,45 +316,6 @@ describe("requester-settle processing survives later user turns", () => {
     },
   );
 
-  it.each([false, true])(
-    "resumes interrupted input without inferring completion (consumed=%s)",
-    async (consumed) => {
-      const original = await prepare();
-      if (consumed) {
-        await original.recorder!.persistApproved();
-      } else {
-        expect(original.runtimeContextFragments).toBeUndefined();
-      }
-      await release(original);
-      rotateAgentEventLifecycleGeneration();
-      const resumed = await prepare();
-      expect(resumed.runtimeContextFragments).toEqual([
-        { kind: "runtime-instruction", text: RESTART_RECOVERY_INTERRUPTION_NOTE },
-      ]);
-      expect(resumed.message).toBe(message);
-      expectNoReconciliation(resumed);
-      expect(await resumed.recorder!.persistApproved()).toMatchObject({ appended: !consumed });
-      if (!consumed) {
-        await complete(resumed);
-        await release(resumed);
-        await expectUserInputs(scope(), 1);
-        return;
-      }
-      await release(resumed);
-      const manager = await SessionManager.openAsync(scope(), fixture.sessionsDir());
-      await appendNewerTurn(manager, "newer:user", "Newer request");
-      const before = await loadTranscriptEvents(scope());
-      rotateAgentEventLifecycleGeneration();
-      const replay = await prepare();
-      expectNoReconciliation(replay);
-      await expect(
-        manager.appendMessageAsync(replay.recorder!.getPendingInputMessage!()!),
-      ).rejects.toThrow("outside the current turn");
-      expect(await loadTranscriptEvents(scope())).toEqual(before);
-      await release(replay);
-    },
-  );
-
   it("cannot publish a cancellation after losing completion authority", async () => {
     let current = true;
     const controller = new AbortController();
@@ -442,7 +402,7 @@ describe("requester-settle processing survives later user turns", () => {
     },
   );
 
-  it("preserves durable peer-delivery success and duplicate reconciliation", async () => {
+  it("preserves live peer-delivery success and duplicate reconciliation", async () => {
     const delivery: SessionSendDelivery = {
       version: 1,
       runId,
@@ -462,7 +422,7 @@ describe("requester-settle processing survives later user turns", () => {
     await original.recorder!.persistApproved();
     expect(
       original.recorder!.getPendingInputMessage!()?.["__openclaw"]?.sessionSendDelivery,
-    ).toEqual({ ...delivery, operatorSource: null });
+    ).toBeUndefined();
     await complete(original);
     await release(original);
     const before = await loadTranscriptEvents(scope());

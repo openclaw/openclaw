@@ -125,7 +125,7 @@ it.each(["delivered", "failed"] as const)(
       dispatch.mockRejectedValue(new Error("requester unavailable"));
     }
     setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: completion.dispatch });
-    resumeSubagentRun(runId, "restore");
+    resumeSubagentRun(runId);
     await fixture.settle();
     expect(dispatch).toHaveBeenCalledOnce();
     const settled = loadSubagentRegistryFromSqlite().get(runId)!;
@@ -134,7 +134,7 @@ it.each(["delivered", "failed"] as const)(
     expect(settled.delivery?.status).toBe(outcome);
 
     await restoreSubagentRunsFromDisk({ runs: subagentRuns });
-    resumeSubagentRun(runId, "restore");
+    resumeSubagentRun(runId);
     await registryTesting.sweepOnceForTests();
     await fixture.settle();
     expect(dispatch).toHaveBeenCalledOnce();
@@ -325,10 +325,10 @@ it.each([
   setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   try {
-    // Restore resumes each durable wake; the sweeper never re-drives one.
+    // Explicit delivery resumes each durable wake; the sweeper never re-drives one.
     const resumeWakes = () => {
       for (const child of entries) {
-        resumeSubagentRun(child.runId, "restore");
+        resumeSubagentRun(child.runId);
       }
     };
     if (phase !== "pending") {

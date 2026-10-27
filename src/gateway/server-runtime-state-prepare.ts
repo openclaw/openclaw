@@ -23,7 +23,6 @@ import {
 } from "../state/agent-database-admission.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
-import { GatewayInputRecovery } from "./agent-input-recovery.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
@@ -433,14 +432,13 @@ export async function prepareGatewayKernelState(params: {
   const unavailableGatewayMethods = new Set<string>(
     minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
   );
-  const inputRecovery = new GatewayInputRecovery(minimalTestGateway);
   const lifecycle = { closePreludeStarted: false };
   const startupAccountStarts = createDeferredCore();
   const gatewayInstanceRuntimeRef: { current: GatewayInstanceRuntime | undefined } = {
     current: undefined,
   };
   // Internal principals belong to this server generation and become usable only after bind.
-  // Closing flips this first so delayed recovery/channel work cannot enter a retired context.
+  // Closing flips this first so delayed channel work cannot enter a retired context.
 
   const { createChannelManager } = await startupTrace.measure(
     "gateway.channel-manager-import",
@@ -487,10 +485,7 @@ export async function prepareGatewayKernelState(params: {
       );
     },
     getPluginReloadStatus: params.getPluginReloadStatus,
-    // Recovery releases this same admission gate before readiness can admit fresh chat.
     isChatSendAvailable: () => !unavailableGatewayMethods.has("chat.send"),
-    getPendingAgentInputRecovery: () => inputRecovery.pendingAgentIds(),
-    isRequiredAgent: (agentId) => !canIsolateAgentDatabase(getRuntimeConfig(), agentId),
     shouldSkipChannelReadiness: isChannelStartupSuppressedByEnvironment,
   });
   const watchNodeRequestHandler: {
@@ -612,7 +607,6 @@ export async function prepareGatewayKernelState(params: {
     readinessEventLoopHealth,
     startupState,
     unavailableGatewayMethods,
-    inputRecovery,
     getReadiness,
     lifecycle,
     releaseStartupAccountStarts: startupAccountStarts.resolve,

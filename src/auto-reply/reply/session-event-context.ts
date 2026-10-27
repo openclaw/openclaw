@@ -130,12 +130,17 @@ export function buildSessionEventContext(params: {
   }
   const operatorAuthority = automation?.controlUiAdmin
     ? automation.operatorAuthority
-    : options.source === "plugin" || options.source === "tool_handoff"
+    : options.source === "plugin" ||
+        options.source === "tool_handoff" ||
+        options.source === "restart"
       ? readSessionEventTargetOperatorAuthority(target)
       : undefined;
   if (
     operatorAuthority &&
-    (automation?.controlUiAdmin || readSessionEventTargetOwnerContinuation(target))
+    (automation?.controlUiAdmin ||
+      (options.source === "restart"
+        ? operatorAuthority.scopes.includes("operator.admin")
+        : readSessionEventTargetOwnerContinuation(target)))
   ) {
     // A tool handoff resumes the yielded turn: it continues that turn's own owner decision
     // under the same live operator source, retaining internal provenance and the event

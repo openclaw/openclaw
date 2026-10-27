@@ -3,8 +3,6 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import type { ReplyExpectation } from "../agents/reply-completion.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
-import type { RecoveryNoticeProvenance } from "../config/sessions/recovery-notice.js";
-import type { SessionDeliveryGeneration } from "../config/sessions/session-delivery-generation.types.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
@@ -21,14 +19,11 @@ export type GatewayInstanceAgentDispatchOptions = {
   /** Host-issued source authority for independently accepted native work. */
   operatorRunAuthority?: AdmittedRunOperatorAuthority;
   agentToolCaller?: NonNullable<GatewayClient["internal"]>["agentToolCaller"];
-  /** Exact source custody to re-admit; the instance reads its private durable record itself. */
-  restartRecoveryOperatorTarget?: import("./operator-run-recovery.js").OperatorRecoveryTarget;
   /** Exact process-local source reserved by a durable lifecycle owner. */
   controllerInput?: SessionControllerInput;
   /** Host-owned input semantics, never supplied by wire request parameters. */
   replyExpectation?: ReplyExpectation;
 
-  restartRecoveryRequesterTarget?: import("./operator-run-recovery.js").OperatorRecoveryTarget;
   assertAdmissionCurrent?: () => void;
   /** Live source permission retained by accepted execution, independently of its admission claim. */
   executionSource?: SessionSourceAssertion;
@@ -66,9 +61,9 @@ type GatewayApprovalEventPublisherV2 = GatewayApprovalEventPublisher & {
   publishRequestedAsync: (kind: ChannelApprovalKind, request: unknown) => Promise<number>;
 };
 
-export type GatewayRecoverySessionMethod = "chat.history" | "chat.abort" | "sessions.delete";
+export type GatewayLifecycleSessionMethod = "chat.history" | "chat.abort" | "sessions.delete";
 
-export type GatewayRecoveryTypingParams = {
+export type GatewayLifecycleTypingParams = {
   agentId?: string;
   runId: string;
   channel: string;
@@ -78,28 +73,13 @@ export type GatewayRecoveryTypingParams = {
   isCurrent: (cfg: OpenClawConfig) => boolean;
 };
 
-export type GatewayRecoveryRuntime = {
-  prepareFailedWorkerPlacement: (target: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-  }) => Promise<{ reason: string; isCurrent: () => boolean; release: () => void } | undefined>;
-  resumeChatInput: (
-    target: import("./chat-input-recovery-source.js").ChatInputRecoveryTarget,
-    options: {
-      signal: AbortSignal;
-      assertCurrent: () => void;
-      trace?: import("./pending-input-recovery-trace.js").PendingInputRecoveryTrace;
-    },
-  ) => Promise<void>;
-  /** Healthy boots are ready synchronously; safe mode returns its owner's pause deadline. */
-  prepareRestartRecovery: (signal?: AbortSignal) => Promise<number | undefined> | undefined;
+export type GatewayLifecycleRuntime = {
   dispatchSessionMethod: <T = unknown>(
-    method: GatewayRecoverySessionMethod,
+    method: GatewayLifecycleSessionMethod,
     params: unknown,
     options?: { timeoutMs?: number; signal?: AbortSignal; assertCurrent?: () => void },
   ) => Promise<T>;
-  startRecoveryTyping?: (params: GatewayRecoveryTypingParams) => () => void;
+  startTyping?: (params: GatewayLifecycleTypingParams) => () => void;
   dispatchAgent: <T = unknown>(
     params: AgentRunRequest,
     timeoutMs?: number,
@@ -110,15 +90,13 @@ export type GatewayRecoveryRuntime = {
     timeoutMs?: number,
     signal?: AbortSignal,
   ) => Promise<T>;
-  sendRecoveryNotice: (params: {
+  sendNotice: (params: {
     channel: string;
     to: string;
     accountId?: string;
     threadId?: string | number;
     text: string;
     idempotencyKey: string;
-    generation: SessionDeliveryGeneration;
-    provenance: RecoveryNoticeProvenance;
     isCurrent?: (cfg: OpenClawConfig) => boolean;
   }) => Promise<{
     /** True when delivery produced zero platform results (policy/channel suppression). */
@@ -130,7 +108,7 @@ export type GatewayInstanceRuntime = {
   createAgentTurnFacade: InternalAgentTurnFacadeFactory;
   approvalEvents: GatewayApprovalEventPublisherV2;
   nativeApprovals: GatewayNativeApprovalRuntime;
-  recovery: GatewayRecoveryRuntime;
+  lifecycle: GatewayLifecycleRuntime;
   isAvailable: () => boolean;
   close: () => void;
 };

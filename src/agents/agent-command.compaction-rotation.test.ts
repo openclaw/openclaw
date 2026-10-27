@@ -664,8 +664,6 @@ describe("agentCommand compaction transcript rotation", () => {
         sessionId: successorSessionId,
       });
       expect(storedSuccessor?.pendingFinalDelivery).toBeUndefined();
-      expect(storedSuccessor?.restartRecoveryDeliveryContext).toBeUndefined();
-      expect(storedSuccessor?.restartRecoveryDeliveryRunId).toBeUndefined();
     },
   );
 

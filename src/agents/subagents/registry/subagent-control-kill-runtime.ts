@@ -384,7 +384,6 @@ export async function mutateSubagentRunForKill(
       }
       if (
         beforeInterruption.swarmLaunchPending !== true &&
-        beforeInterruption.execution.restartRecovery === undefined &&
         !resolveSubagentKillTargetState(beforeInterruption)
       ) {
         // Active completion must see cancellation before admission interruption.
@@ -478,7 +477,6 @@ export async function mutateSubagentRunForKill(
         !acceptance.callerFailure &&
         params.beforeSessionKill &&
         afterInterruption?.swarmLaunchPending === true &&
-        afterInterruption.execution.restartRecovery === undefined &&
         !resolveSubagentKillTargetState(afterInterruption) &&
         isCurrent()
       ) {

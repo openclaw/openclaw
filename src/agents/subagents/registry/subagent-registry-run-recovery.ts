@@ -12,7 +12,6 @@ import {
 import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
-import { createOperatorInputRecoverySource } from "../../operator-run-recovery-source.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { replaceRequesterCronAuthorityEntry } from "../requester-cron-authority.js";
 import {
@@ -237,8 +236,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       // The original requester is idle behind its own yield, so its wake credential
       // is the only path back to it once this follow-up settles.
       preserveRequesterSettleWake: true,
-      // Persist the follow-up text so restart recovery cannot reissue the task that
-      // the child already yielded on.
+      // The explicit follow-up becomes this task's current prompt.
       task: params.task,
       ...(params.gatewayContextResolver
         ? { gatewayContextResolver: params.gatewayContextResolver }
@@ -470,26 +468,12 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           const childAuthority = resolveSubagentChildAuthority(
             preserveCompletedRun ? { ...source, childSessionIdentity } : (absorbed ?? source),
           );
-          const followupRecoverySource =
-            preserveCompletedRun && childAuthority.status === "verified"
-              ? createOperatorInputRecoverySource({
-                  authority: authority?.operatorAuthority,
-                  agentId: childAuthority.childAgentId,
-                  sessionKey: source.childSessionKey,
-                  entry: { ...childAuthority.sessionIdentity, updatedAt: now },
-                  sourceRunId: nextRunId,
-                })
-              : undefined;
           const next: SubagentRunRecord = normalizeSubagentRunState({
             ...source,
             runId: nextRunId,
             // Completed follow-ups start a new task; steer retains its task's lineage.
             taskRunId: preserveCompletedRun ? nextRunId : (source.taskRunId ?? source.runId),
             requesterTurnRunId: preserveCompletedRun ? undefined : source.requesterTurnRunId,
-            // Human follow-ups belong to this child, not the completed task's parent grant.
-            operatorRecoverySource: preserveCompletedRun
-              ? followupRecoverySource
-              : source.operatorRecoverySource,
             requesterTurnYielded: preserveCompletedRun ? undefined : source.requesterTurnYielded,
             retireAfterRequesterTurn: preserveCompletedRun
               ? undefined
@@ -533,7 +517,6 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             cleanupCompletedAt: undefined,
             cleanupHandled: false,
             suppressAnnounceReason: undefined,
-            terminalOwner: undefined,
             killReconciliation: undefined,
             killIntent: undefined,
             suppressCompletionDelivery: undefined,
@@ -605,7 +588,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
               subagentRuns.releaseCompletionAuthority(replaceParams.successor);
             }
             if (!preserveCompletedRun && previousRunId !== nextRunId) {
-              // Remapped cohorts must not queue behind their restored, now-unbound input.
+              // Remapped cohorts must not queue behind their replaced input.
               retireSubagentControllerInputs(value.source);
             }
             replaceParams.onPublished?.(next);
@@ -613,7 +596,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
         },
       );
     } catch (error) {
-      log.warn("failed to persist replacement subagent recovery run", {
+      log.warn("failed to persist replacement subagent run", {
         error,
         previousRunId,
         nextRunId,

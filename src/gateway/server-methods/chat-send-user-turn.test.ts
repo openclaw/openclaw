@@ -11,6 +11,7 @@ import { normalizeCommandBody } from "../../auto-reply/commands-registry.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import { resolveSessionResetCommand } from "../../auto-reply/reply/session-reset-command.js";
+import { getRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -23,6 +24,7 @@ import { recordAcceptedSessionParticipantInput } from "../../sessions/session-pa
 import {
   isSessionPersonalBootstrapTurn,
   prepareChannelParticipantObservation,
+  readSessionInputProfileId,
 } from "../../sessions/session-participant-input.js";
 import { waitForSessionParticipantRecording } from "../../sessions/session-participant-recording.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
@@ -30,6 +32,9 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
+import { prepareSessionPrincipalRunAuthority } from "../operator-run-authority.js";
+import { queuedChatInputAdmission } from "../queued-chat-input-admission.js";
+import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { prepareTurn } from "./chat-send-user-turn-family.test-support.js";
 import { applyChatSendManagedMedia } from "./chat-send-user-turn.js";
 import { createClientInfo, createAttachments } from "./chat-send-user-turn.test-support.js";
@@ -102,6 +107,73 @@ describe("prepareChatSendUserTurn", () => {
     }
     expect(prepared.ctx).not.toHaveProperty("SenderId");
   });
+
+  it("binds a queued human input to its exact current principal admission", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = {};
+      setRuntimeConfigSnapshot(cfg);
+      const profile = ensureGatewayOwnerProfile("Queued Ada");
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:queued-requester",
+        sessionId: "queued-requester-session",
+        storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(target, {
+        sessionId: target.sessionId,
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: profile.id },
+      });
+      const admitted = await prepareSessionPrincipalRunAuthority({
+        ...target,
+        profileId: profile.id,
+        context: { getRuntimeConfig: () => cfg },
+      });
+      const isCurrent = () => {
+        try {
+          admitted.authority.assertCurrent();
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      try {
+        const client = createSyntheticPluginRuntimeClient({
+          operatorRoleActor: { kind: "operator", profileId: profile.id },
+          operatorRunAuthority: admitted.authority,
+          scopes: [...admitted.authority.scopes],
+        });
+        const prepared = queuedChatInputAdmission.run(
+          {
+            target: {
+              ...target,
+              runId: "run-1",
+              message: buildPersistedUserTurnMessage({ text: "hello", timestamp: 1 }),
+              requestHash: "request:queued-requester",
+            },
+            requestFingerprint: "queued-requester",
+            requesterProfile: { id: profile.id, displayName: profile.displayName, isCurrent },
+          },
+          () => {
+            const wrongRun = prepareTurn({ client, session: { ...target, clientRunId: "other" } });
+            expect(getRequesterProfile(wrongRun.ctx)).toBeUndefined();
+            expect(readSessionInputProfileId(wrongRun.ctx)).toBeUndefined();
+            return prepareTurn({ client, session: target });
+          },
+        );
+        const ctx = finalizeInboundContext({ ...prepared.ctx });
+        expect(requesterProfile(buildInboundUserContextPrefix(ctx))).toEqual({
+          id: profile.id,
+          display_name: "Queued Ada",
+        });
+        expect(readSessionInputProfileId(ctx)).toBe(profile.id);
+        admitted.release();
+        expect(getRequesterProfile(ctx)).toBeUndefined();
+        expect(buildInboundUserContextPrefix(ctx)).not.toContain("requester_profile");
+      } finally {
+        admitted.release();
+      }
+    }));
 
   it.each(["profile", "synthetic", "profileless", "profileless-ui", "system"] as const)(
     "records only accepted authenticated external input after retargeting: %s",

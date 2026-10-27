@@ -42,17 +42,22 @@ it("retains committed initial turns through fencing and denies their final write
   });
   const postAttach = await import("./server-startup-post-attach.js");
   const startPostAttach = postAttach.startGatewayPostAttachRuntime;
-  let inputRecoverySettled: Promise<void> | undefined;
-  const captureRecovery = vi
+  const startupReady = createDeferredCore();
+  const captureStartup = vi
     .spyOn(postAttach, "startGatewayPostAttachRuntime")
-    .mockImplementation(async (...args) => {
-      const runtime = await startPostAttach(...args);
-      inputRecoverySettled = runtime.subagentRecoverySettled;
-      return runtime;
+    .mockImplementation(async (params) => {
+      const unlockStartupMethods = params.unlockStartupMethods;
+      return startPostAttach({
+        ...params,
+        unlockStartupMethods: () => {
+          unlockStartupMethods();
+          startupReady.resolve();
+        },
+      });
     });
   const gateway = await createGatewaySuiteHarness({
     serverOptions: { bind: "loopback" },
-  }).finally(() => captureRecovery.mockRestore());
+  }).finally(() => captureStartup.mockRestore());
   const applyConfig = async (
     gatewayPatch: NonNullable<Parameters<typeof configIO.writeConfigFile>[0]["gateway"]>,
   ) => {
@@ -141,8 +146,7 @@ it("retains committed initial turns through fencing and denies their final write
     });
   try {
     await gateway.server.startupSettled;
-    assert(inputRecoverySettled);
-    await inputRecoverySettled;
+    await startupReady.promise;
     for (const scenario of cases) {
       const ws = await gateway.openWs({ origin: `http://127.0.0.1:${gateway.port}` });
       sockets.push(ws);

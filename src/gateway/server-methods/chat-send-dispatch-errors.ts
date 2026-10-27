@@ -29,7 +29,6 @@ import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-a
 import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatError, broadcastChatTerminal } from "./chat-broadcast.js";
-import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import { resolveChatSendStorageErrorMessage } from "./chat-send-admission-errors.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import {
@@ -39,7 +38,6 @@ import {
 import type { createChatSendInjectionDisposition } from "./chat-send-message-injection.js";
 import {
   classifyAcceptedChatSendFailure,
-  shouldRetainAcceptedChatSendRetryIdentity,
   type AcceptedChatSendFailureDisposition,
 } from "./chat-send-retry.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
@@ -149,7 +147,7 @@ function formatChatSendError(error: unknown): string {
 /** Finalize a chat.send that throws before detached dispatch owns cleanup. */
 type ChatSendJobAdmission = Pick<
   AdmittedChatSend,
-  "activeRunAbort" | "cleanupAdmittedRun" | "lifecycleGeneration" | "restartSafeAdmission"
+  "activeRunAbort" | "cleanupAdmittedRun" | "lifecycleGeneration"
 >;
 
 export async function handleChatSendSetupError(params: {
@@ -159,9 +157,8 @@ export async function handleChatSendSetupError(params: {
   error: unknown;
   respond: RespondFn;
   session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey">;
-  terminalizeRestartSafeAdmission: (state: RestartSafeChatTerminalState) => Promise<boolean>;
 }): Promise<void> {
-  const { cleanupAdmittedRun, lifecycleGeneration, restartSafeAdmission } = params.admission;
+  const { cleanupAdmittedRun, lifecycleGeneration } = params.admission;
   const { agentId, clientRunId, sessionKey } = params.session;
   const hidden = getAgentRunContext(clientRunId)?.projectSessionMessages === false;
   if (params.error instanceof ExpectedProfileMismatchError) {
@@ -177,38 +174,13 @@ export async function handleChatSendSetupError(params: {
   const errorKind = resolveStateContentionPresentation(params.error)?.errorKind;
   const restart =
     resolveAgentRunErrorLifecycleFields(params.error, undefined).stopReason === "restart";
-  // Before acknowledgment the browser still owns retry. Do not manufacture a
-  // terminal receipt or retire a committed recovery claim for an expected restart.
+  // Before acknowledgment the browser still owns retry after an expected restart.
   const failureDisposition = restart
     ? "client-retry"
     : classifyAcceptedChatSendFailure({
         error: params.error,
         phase: "pre-ack",
       });
-  if (restartSafeAdmission && !restart) {
-    const terminalized = await params
-      .terminalizeRestartSafeAdmission({
-        error: errorMessage,
-        errorKind,
-        retryable: shouldRetainAcceptedChatSendRetryIdentity(failureDisposition),
-        status: "failed",
-      })
-      .catch((terminalizeError: unknown) => {
-        params.context.logGateway.warn(
-          `failed to release restart-safe chat admission after setup error: ${formatForLog(
-            terminalizeError,
-          )}`,
-        );
-        return false;
-      });
-    if (terminalized) {
-      emitSessionsChanged(params.context, {
-        sessionKey,
-        ...(agentId ? { agentId } : {}),
-        reason: "chat.dispatch-error",
-      });
-    }
-  }
   cleanupAdmittedRun();
   clearAgentRunContext(clientRunId, lifecycleGeneration);
   params.context.removeChatRun(clientRunId, clientRunId, sessionKey);
@@ -265,7 +237,6 @@ export function createChatSendDispatchErrorLifecycle(params: {
     PreparedChatSendSession,
     "agentId" | "cfg" | "clientRunId" | "now" | "rawSessionKey" | "sessionKey" | "storePath"
   >;
-  terminalizeRestartSafeAdmission: (state: RestartSafeChatTerminalState) => Promise<boolean>;
   userTurnRecorder: Pick<UserTurnTranscriptRecorder, "hasPersisted" | "isBlocked">;
 }) {
   const {
@@ -274,11 +245,9 @@ export function createChatSendDispatchErrorLifecycle(params: {
     isQueuedFollowupEnqueued,
     persistUserTurnTranscript,
     session,
-    terminalizeRestartSafeAdmission,
     userTurnRecorder,
   } = params;
-  const { activeRunAbort, cleanupAdmittedRun, lifecycleGeneration, restartSafeAdmission } =
-    admission;
+  const { activeRunAbort, cleanupAdmittedRun, lifecycleGeneration } = admission;
   const { agentId, cfg, clientRunId, now, rawSessionKey, sessionKey, storePath } = session;
   const captureJobSession = () =>
     captureAgentJobSession({
@@ -347,7 +316,6 @@ export function createChatSendDispatchErrorLifecycle(params: {
     }
     const errorMessage = formatChatSendError(err);
     const errorKind = resolveStateContentionPresentation(err)?.errorKind;
-    const failureDisposition = classifyFailure(err);
     const queuedFollowupEnqueued = isQueuedFollowupEnqueued();
     if (queuedFollowupEnqueued) {
       context.logGateway.warn(
@@ -373,7 +341,6 @@ export function createChatSendDispatchErrorLifecycle(params: {
     if (abortedAtDispatchReject && abortMarkerAtDispatchReject !== undefined) {
       // chat.abort has already emitted the canonical terminal lifecycle and
       // retained its registration until that durable projection settles.
-      // A competing restart-admission write can strand an acknowledged abort.
       abortedDispatchMarker = abortMarkerAtDispatchReject;
       context.logGateway.warn(
         `chat.send post-dispatch threw after abort for runId=${clientRunId}: ${formatForLog(err)}`,
@@ -396,33 +363,6 @@ export function createChatSendDispatchErrorLifecycle(params: {
     context.chatRunState.deleteAbortMarker(clientRunId);
     activeRunAbort.cleanup();
 
-    let restartSafeDispatchFailureTerminalized = false;
-    if (
-      restartSafeAdmission &&
-      !agentTerminalOwnedAtDispatchReject &&
-      terminationFields.stopReason !== "restart"
-    ) {
-      restartSafeDispatchFailureTerminalized = await terminalizeRestartSafeAdmission({
-        error: errorMessage,
-        errorKind,
-        retryable: shouldRetainAcceptedChatSendRetryIdentity(failureDisposition),
-        status: "failed",
-      }).catch((terminalizeError: unknown) => {
-        context.logGateway.warn(
-          `failed to release restart-safe chat admission after dispatch error: ${formatForLog(
-            terminalizeError,
-          )}`,
-        );
-        return false;
-      });
-      if (restartSafeDispatchFailureTerminalized) {
-        emitSessionsChanged(context, {
-          sessionKey,
-          ...(agentId ? { agentId } : {}),
-          reason: "chat.dispatch-error",
-        });
-      }
-    }
     persistDispatchErrorUserTurn =
       userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()
         ? undefined
@@ -431,7 +371,6 @@ export function createChatSendDispatchErrorLifecycle(params: {
           };
     if (
       !suppressLifecycle &&
-      !restartSafeDispatchFailureTerminalized &&
       abortMarkerAtDispatchReject === undefined &&
       !agentTerminalOwnedAtDispatchReject
     ) {
@@ -513,26 +452,6 @@ export function createChatSendDispatchErrorLifecycle(params: {
             ? context.chatRunState.runs.get(clientRunId)?.abortMarker
             : undefined);
         if (abortMarker) {
-          if (restartSafeAdmission && !params.isAgentRunStarted()) {
-            const terminalized = await terminalizeRestartSafeAdmission({
-              retryable: activeRunAbort.entry.adapter.abortStopReason === "restart",
-              status: "killed",
-            }).catch((terminalizeError: unknown) => {
-              context.logGateway.warn(
-                `failed to release restart-safe chat admission after abort: ${formatForLog(
-                  terminalizeError,
-                )}`,
-              );
-              return false;
-            });
-            if (terminalized) {
-              emitSessionsChanged(context, {
-                sessionKey,
-                ...(agentId ? { agentId } : {}),
-                reason: "chat.abort",
-              });
-            }
-          }
           const endedAt = chatAbortMarkerTimestampMs(abortMarker);
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
@@ -617,14 +536,5 @@ export function createChatSendDispatchErrorLifecycle(params: {
     }
   };
 
-  const settleRefusal = async (refused: boolean | undefined) => {
-    if (
-      refused &&
-      restartSafeAdmission &&
-      !(await terminalizeRestartSafeAdmission({ retryable: false, status: "failed" }))
-    ) {
-      throw new Error("chat admission ownership changed before refusal settlement");
-    }
-  };
-  return { broadcastError, classifyFailure, finalize, handleError, settleRefusal };
+  return { broadcastError, classifyFailure, finalize, handleError };
 }

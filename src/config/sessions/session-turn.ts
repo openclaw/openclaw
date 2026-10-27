@@ -49,7 +49,7 @@ import {
   type SessionSourceValidation,
 } from "./session-source-authority.js";
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { restoreSessionTurnColdTranscript } from "./session-turn-cold.js";
 import {
   completeSessionTurnPublication,
@@ -535,7 +535,7 @@ export async function appendSessionTurnInWorker(
               async (snapshot) => {
                 // Metadata may advance; the writer checks the captured lifecycle at commit.
                 if (snapshot) {
-                  expectedState ??= buildRestartRecoveryExpectedState(
+                  expectedState ??= buildSessionTranscriptTurnExpectedState(
                     snapshot.entry ?? { sessionId: options.expectedSessionId, updatedAt: 0 },
                   );
                 }

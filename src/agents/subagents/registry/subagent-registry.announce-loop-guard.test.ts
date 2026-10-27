@@ -2,6 +2,8 @@
 // window, then gives up instead of looping forever after repeated failures.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { SessionEntry } from "../../../config/sessions.js";
+import { createMockGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime.test-support.js";
+import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
@@ -19,7 +21,7 @@ import {
   type MockSubagentRegistryRows,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
-import { prepareSubagentRecoveryFixture } from "./subagent-registry.persistence.test-support.js";
+import { prepareSubagentRequesterFixture } from "./subagent-registry.persistence.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const sessionStore = vi.hoisted((): Record<string, SessionEntry> => ({
@@ -133,23 +135,21 @@ describe("announce loop guard (#18264)", () => {
   const adoptedInputs: SessionControllerInput[] = [];
   let requesterClaim: SessionControllerMailboxClaim | undefined;
 
-  async function hydrateAndActivateRegistry() {
+  async function activateCompletion(entry: SubagentRunRecord) {
     await registry.initSubagentRegistry();
-    const recoveryRuntime = {
-      prepareFailedWorkerPlacement: async () => undefined,
-      prepareRestartRecovery: () => undefined,
-      resumeChatInput: async () => {
-        throw new Error("Unexpected chat input recovery");
-      },
-      dispatchAgent: vi.fn(),
-      waitForAgent: vi.fn(async () => ({ status: "pending" })),
-      sendRecoveryNotice: vi.fn(),
-    };
+    const lifecycleRuntime = createMockGatewayLifecycleRuntime();
+    vi.mocked(lifecycleRuntime.waitForAgent).mockResolvedValue({ status: "pending" });
     const gatewayContext = {
-      recoveryRuntime,
+      lifecycleRuntime,
       resolveGatewayContext: () => gatewayContext as never,
     };
-    await registry.activateSubagentRegistry(gatewayContext.resolveGatewayContext).settled;
+    await registry.activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+    const current = registry.getSubagentRunByRunId(entry.runId);
+    if (!current) {
+      throw new Error("Completion fixture lost its registered run");
+    }
+    bindGatewayContextResolver(current, gatewayContext.resolveGatewayContext);
+    registry.resumeSubagentRun(entry.runId);
   }
 
   const { flushAsync } = createLifecycleWaits("agent:main:main");
@@ -250,9 +250,9 @@ describe("announce loop guard (#18264)", () => {
     );
     restoreRun(entry);
 
-    // Initialization finalizes expired pending rows without another recipient-visible attempt.
+    // An explicit live cleanup attempt finalizes expired rows without another delivery.
     const beforeInit = Date.now();
-    await hydrateAndActivateRegistry();
+    await activateCompletion(entry);
     const completed = await waitForRun(
       entry.runId,
       (run) => typeof run.cleanupCompletedAt === "number",
@@ -269,7 +269,7 @@ describe("announce loop guard (#18264)", () => {
       restoreDelayMs: 0,
     },
     {
-      name: "restores saved backoff before transferring delivery to the controller queue",
+      name: "honors saved backoff before transferring delivery to the controller queue",
       attemptCount: 3,
       restoreDelayMs: 1_000,
     },
@@ -332,10 +332,10 @@ describe("announce loop guard (#18264)", () => {
         },
       },
     );
-    await prepareSubagentRecoveryFixture(entry, { entries: sessionStore });
+    await prepareSubagentRequesterFixture(entry, { entries: sessionStore });
     restoreRun(entry);
 
-    await hydrateAndActivateRegistry();
+    await activateCompletion(entry);
     if (restoreDelayMs) {
       await registry.initSubagentRegistry();
       expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
@@ -379,9 +379,9 @@ describe("announce loop guard (#18264)", () => {
       cleanupHandled: false,
     });
     restoreRun(entry);
-    await prepareSubagentRecoveryFixture(entry, { entries: sessionStore });
+    await prepareSubagentRequesterFixture(entry, { entries: sessionStore });
 
-    await hydrateAndActivateRegistry();
+    await activateCompletion(entry);
     await flushAsync();
 
     const stored = await waitForRun(

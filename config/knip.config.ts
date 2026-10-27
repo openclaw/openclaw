@@ -297,7 +297,6 @@ const repositoryScriptEntries = [
   "scripts/perf/codex-inference-upload-measure.ts!",
   "scripts/perf/codex-tool-report-measure.ts!",
   "scripts/perf/codex-config-parse-measure.ts!",
-  "scripts/perf/failed-placement-recovery-bench.ts!",
   "scripts/perf/provider-prompt-state-worker-measure.mjs!",
   "scripts/perf/session-diff-metadata-measure.ts!",
   "scripts/perf/session-file-workspace-measure.ts!",
@@ -523,7 +522,6 @@ const repositoryScriptEntries = [
   // Standalone owner benchmark; invocation is documented in its header.
   "scripts/perf/model-tool-projection-measure.ts!",
   "scripts/perf/trajectory-skills-metadata-measure.ts!",
-  "scripts/perf/transcript-checkpoint-retention.ts!",
   "scripts/perf/trusted-tool-matcher-measure.mjs!",
   "scripts/perf/turn-participants-measure.ts!",
   "scripts/perf/usage-aggregate-measure.ts!",
@@ -1382,8 +1380,6 @@ const rootEntries = [
   "src/agents/prepared-model-catalog.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagents/registry/subagent-registry.runtime.ts!",
-  // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.
-  "src/agents/subagents/registry/subagent-registry-restart-recovery.ts!",
   // Reply dispatch and Gateway startup consume this namespace through loadGetReplyFromConfigRuntime.
   "src/auto-reply/reply/get-reply-from-config.runtime.ts!",
   // Command attempts consume this namespace through runtime-loaders.ts's Promise.all preload.

@@ -33,7 +33,6 @@ import {
   createRunAgentTurnParams,
   createFollowupRun,
   createMockReplyOperation,
-  requireMockCall,
   createMinimalRunAgentTurnParams,
   createTestFallbackSummaryError,
   type EmbeddedAgentParams,
@@ -200,22 +199,19 @@ it("keeps the provider reset hint when the chain summary exceeds the length guar
   expect(rendered).not.toContain("API rate limit reached. Please try again later.");
 });
 
-it("surfaces restart text when fallback exhaustion wraps a drain error, keeping fail bookkeeping", async () => {
-  const { replyOperation, failMock } = createMockReplyOperation();
+it("ends quietly when fallback exhaustion wraps a drain error", async () => {
+  const replyOperation = runningOperation("wrapped-drain-error");
   state.runWithModelFallbackMock.mockRejectedValueOnce(
     exhausted(new GatewayDrainingError(), "gateway draining"),
   );
 
-  const payload = await finalPayload({
-    ...createRunAgentTurnParams(createFollowupRun()),
-    replyOperation,
-    opts: {},
-  });
-
-  expect(payload.text).toBe("⚠️ Gateway is restarting. Please wait a few seconds and try again.");
-  const failCall = requireMockCall(failMock, 0, "reply operation fail");
-  expect(failCall[0]).toBe("gateway_draining");
-  expect(failCall[1]).toBeInstanceOf(GatewayDrainingError);
+  try {
+    const result = await runRawTurn({ replyOperation });
+    expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
+    expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
+  } finally {
+    replyOperation.complete();
+  }
 });
 
 it("preserves controller restart cancellation when fallback exhaustion wraps its abort", async () => {
@@ -361,7 +357,6 @@ it.each([
       const result = await runRawTurn({
         replyOperation,
         opts: { abortSignal: upstreamAbort.signal },
-        isRestartRecoveryArmed: async () => true,
       });
 
       expect(result.outcome).toEqual({ kind: "aborted", reason });
@@ -473,7 +468,6 @@ it("settles a completed result after awaiting restart recovery", async () => {
   const execution = await runRawTurn({
     replyOperation: restartReplyOperation,
     opts: { runId },
-    isRestartRecoveryArmed: async () => true,
   });
 
   expect(execution).toEqual({

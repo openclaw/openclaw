@@ -1,14 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareAgentCommandExecutionIdentity } from "../../agents/agent-command-execution-identity.js";
 import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
-import { getRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import { installQueueTestPlugin, useOutboundFixture } from "./deliver.custody.test-support.js";
 import { settlePendingFinalDelivery } from "./delivery-completion.js";
-import { seedRecoverySession } from "./delivery-completion.shard-test-support.js";
+import { seedDeliverySession } from "./delivery-completion.shard-test-support.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import {
   enqueueDeliveryOnce,
@@ -22,7 +20,7 @@ const outbound = useOutboundFixture();
 const deliverOutboundPayloads = outbound.deliver;
 type Send = NonNullable<Parameters<typeof deliverOutboundPayloads>[0]["deps"]>["matrix"];
 
-describe("recovered requester receipt safety", () => {
+describe("pending-final transport receipt safety", () => {
   let tmpDir: string;
   beforeEach(() => {
     tmpDir = outbound.tmpDir();
@@ -43,19 +41,19 @@ describe("recovered requester receipt safety", () => {
         deliver,
       });
 
-  const evidence = (scope: Parameters<typeof loadSessionEntry>[0], source = "source-a") =>
-    getRestartRecoveryTerminalDeliveryEvidence(loadSessionEntry(scope), source);
+  const receipt = (scope: Parameters<typeof loadSessionEntry>[0]) =>
+    loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries?.[0]?.receipt;
   function expectReceipt(
     scope: Parameters<typeof loadSessionEntry>[0],
     messageId?: string,
     resultCount?: number,
   ) {
     if (!messageId) {
-      expect(evidence(scope)).toBeUndefined();
+      expect(receipt(scope)).toBeUndefined();
     } else {
-      expect(evidence(scope)).toMatchObject({
-        durableFinalReceipt: { platformMessageId: messageId },
-        ...(resultCount === undefined ? {} : { deliveryStatus: { status: "sent", resultCount } }),
+      expect(receipt(scope)).toMatchObject({
+        platformMessageId: messageId,
+        ...(resultCount === undefined ? {} : { resultCount }),
       });
     }
   }
@@ -104,49 +102,26 @@ describe("recovered requester receipt safety", () => {
   ) {
     const payloads = options.payloads ?? [{ text: "final output" }];
     const context = { channel: "matrix", to: "!original:example", threadId: "original-thread" };
-    const { scope, entry } = await seedRecoverySession(tmpDir, "source-a", "run-a", {
+    const { scope, entry } = await seedDeliverySession(tmpDir, {
       lifecycleRevision: "lifecycle-a",
-      restartRecoveryDeliveryContext: context,
-    });
-    const admission = prepareAgentCommandExecutionIdentity({
-      opts: { message: "finish the admitted task" },
-      prepared: {
-        cfg: {},
-        runId: "run-a",
-        sessionAgentId: "main",
-        sessionId: entry.sessionId,
-        sessionEntry: entry,
-        sessionKey: scope.sessionKey,
-        storePath: scope.storePath,
-      },
-      ingress: { kind: "system", boundary: "receipt-safety-test", state: "present" },
-      lifecycleGeneration: "test-generation",
+      activeWriterRunId: "run-a",
     });
     if (options.refreshSuccessor) {
       await patchSessionEntryCore(scope, () => ({
-        restartRecoveryDeliveryRunId: "run-b",
-        restartRecoveryDeliverySourceRunId: "source-b",
+        activeWriterRunId: "run-b",
       }));
-      // Match onCommitted publication: the cached entry and authoritative row both become B.
-      Object.assign(entry, loadSessionEntry(scope));
     }
-    let marker;
-    try {
-      marker = await persistPendingFinalDeliveryMarker({
-        ...scope,
-        deliver: true,
-        sessionEntry: entry,
-        sessionStore: { [scope.sessionKey]: entry },
-        admittedRecoverySource: admission.pendingFinalRecoverySource,
-        suppressVisibleSessionEffects: false,
-        sessionReboundDuringRun: false,
-        payloads,
-        deliveryContext: context,
-        runOwnedSessionId: entry.sessionId,
-      });
-    } finally {
-      admission.close();
-    }
+    const marker = await persistPendingFinalDeliveryMarker({
+      ...scope,
+      deliver: true,
+      sessionEntry: entry,
+      sessionStore: { [scope.sessionKey]: entry },
+      suppressVisibleSessionEffects: false,
+      sessionReboundDuringRun: false,
+      payloads,
+      deliveryContext: context,
+      runOwnedSessionId: entry.sessionId,
+    });
     const completion = resolvePendingFinalDeliveryCompletion(payloads);
     if (options.second) {
       await patchSessionEntryCore(scope, ({ pendingFinalDelivery }) => ({
@@ -171,8 +146,7 @@ describe("recovered requester receipt safety", () => {
     const { scope, marker } = await prepare({ refreshSuccessor: true });
     expect(marker.pendingFinalDeliveryMarkerPersisted).toBe(false);
     expect(loadSessionEntry(scope)).toMatchObject({
-      restartRecoveryDeliveryRunId: "run-b",
-      restartRecoveryDeliverySourceRunId: "source-b",
+      activeWriterRunId: "run-b",
     });
     expect(loadSessionEntry(scope)?.pendingFinalDelivery).toBeUndefined();
   });
@@ -194,7 +168,12 @@ describe("recovered requester receipt safety", () => {
       await settle(first);
       await closeOpenClawAgentDatabasesAsync(tmpDir);
       await settle({ channel: "matrix", messageId: "valid-last" }, "second");
-      expect([evidence(scope), evidence(scope, "source-b")]).toEqual([undefined, undefined]);
+      expect(receipt(scope)).toBeUndefined();
+      expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries?.[1]?.receipt).toMatchObject(
+        {
+          platformMessageId: "valid-last",
+        },
+      );
     },
   );
 
@@ -226,7 +205,7 @@ describe("recovered requester receipt safety", () => {
         { id: "second", state: "delivered", receipt: { platformMessageId: "second-id" } },
       ]);
       expect(deliveries?.[0]?.receipt).toBeUndefined();
-      expect(evidence(scope)).toBeUndefined();
+      expect(receipt(scope)).toBeUndefined();
       await expectDrained(recover, send);
     },
   );

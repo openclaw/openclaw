@@ -17,7 +17,6 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { isRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
@@ -56,7 +55,6 @@ import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state
 import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
 import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
 import {
-  buildRestartLifecycleReplyText,
   isReplyOperationSuperseded,
   resolveReplyOperationAbortReason,
 } from "./reply-operation-abort.js";
@@ -340,7 +338,6 @@ export async function handleReplyAgentRunError(
     resolveVisibleReplyDelivery: () => Promise<boolean>;
     replyExpectation: ReplyExpectation;
     userTurnAccepted?: boolean;
-    isRestartRecoveryArmed: () => Promise<boolean>;
     replyOperation: ReplyOperation;
     resolvedVerboseLevel: VerboseLevel;
     returnWithQueuedFollowupDrain: <T>(value: T) => T;
@@ -350,7 +347,6 @@ export async function handleReplyAgentRunError(
   const {
     resolveVisibleReplyDelivery,
     replyExpectation,
-    isRestartRecoveryArmed,
     replyOperation,
     resolvedVerboseLevel,
     returnWithQueuedFollowupDrain,
@@ -368,35 +364,11 @@ export async function handleReplyAgentRunError(
   }
   if (resolveReplyOperationAbortReason(replyOperation, error) === "restart") {
     replyOperation.abortForRestart();
-    if (
-      (await isRestartRecoveryArmed()) ||
-      isReplyOperationSuperseded(replyOperation) ||
-      resolveReplyOperationAbortReason(replyOperation) === "user"
-    ) {
-      return returnWithQueuedFollowupDrain({});
-    }
-    return returnWithQueuedFollowupDrain(
-      markReplyPayloadForSourceSuppressionDelivery({
-        text: buildRestartLifecycleReplyText(),
-      }),
-    );
+    return returnWithQueuedFollowupDrain({});
   }
   if (error instanceof GatewayDrainingError) {
-    replyOperation.fail("gateway_draining", error);
-    return returnWithQueuedFollowupDrain(
-      markReplyPayloadForSourceSuppressionDelivery({
-        text: buildRestartLifecycleReplyText(),
-      }),
-    );
-  }
-  if (isRestartRecoveryClaimChangedError(error)) {
-    replyOperation.fail("run_failed", error);
-    return returnWithQueuedFollowupDrain(
-      markReplyPayloadForSourceSuppressionDelivery({
-        text: "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.",
-        isError: true,
-      }),
-    );
+    replyOperation.abortForRestart();
+    return returnWithQueuedFollowupDrain({});
   }
   const knownFailurePayload = buildKnownAgentRunFailureReplyPayload({
     err: error,
@@ -423,7 +395,6 @@ export async function handleReplyAgentRunError(
 
 export async function cleanupReplyAgentRun(context: {
   blockReplyPipeline: BlockReplyPipeline | null;
-  clearRestartRecoveryDeliveryClaim: () => Promise<void>;
   releaseSourceAdmission?: () => Promise<void>;
   providedReplyOperation: ReplyOperation | undefined;
   queueKey: string;
@@ -435,7 +406,6 @@ export async function cleanupReplyAgentRun(context: {
 }): Promise<void> {
   const {
     blockReplyPipeline,
-    clearRestartRecoveryDeliveryClaim,
     releaseSourceAdmission,
     providedReplyOperation,
     queueKey,
@@ -447,16 +417,10 @@ export async function cleanupReplyAgentRun(context: {
   } = context;
 
   try {
-    try {
-      await clearRestartRecoveryDeliveryClaim();
-    } finally {
-      await releaseSourceAdmission?.();
-    }
+    await releaseSourceAdmission?.();
   } catch (error) {
     logVerbose(
-      `failed to clear restart recovery delivery context for ${sessionKey ?? "unknown"}: ${String(
-        error,
-      )}`,
+      `failed to release reply admission for ${sessionKey ?? "unknown"}: ${String(error)}`,
     );
   }
   if (shouldDrainQueuedFollowupsAfterClear) {

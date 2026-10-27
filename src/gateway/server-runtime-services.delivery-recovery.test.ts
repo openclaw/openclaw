@@ -41,7 +41,7 @@ vi.mock("../infra/session-delivery-queue-runtime.js", () => ({
   schedulePendingSessionDeliveries: async () => {},
 }));
 vi.mock("./server-restart-sentinel.js", () => ({
-  recoverPendingRestartContinuationDeliveries: async () => {},
+  recoverPendingProducedSessionDeliveries: async () => {},
   deliverQueuedSessionDelivery: async () => {},
   settleQueuedSessionDelivery: async () => {},
 }));

@@ -10,15 +10,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
-import { createPlacementFailureActions } from "./placement-dispatch-failure.js";
-import { createWorkerPlacementDispatchStartup } from "./placement-dispatch-startup.js";
-import {
-  REQUEST,
-  seedActivePlacement,
-  seedProvisioningPlacement,
-  seedSyncingPlacement,
-  seedStartingPlacement,
-} from "./placement-dispatch-test-fixtures.js";
+import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
 import {
   expectPlacement,
@@ -43,6 +35,22 @@ function createPlacementStore() {
 
 describe("worker placement restart recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("cancels an unfinished provisioning request instead of resuming it", async () => {
+    const placements = createPlacementStore();
+    const harness = await createHarness(support.testState.stateDb, placements);
+    const provisioning = await harness.placements.seedProvisioning();
+
+    await harness.service.reconcile("startup");
+
+    expectPlacement(placements, "failed", {
+      environmentId: provisioning.environmentId,
+      recoveryError: "Cloud worker provisioning canceled by Gateway restart",
+    });
+    expect(harness.environments.destroy).toHaveBeenCalledWith(provisioning.environmentId);
+    expect(harness.environments.attachSession).not.toHaveBeenCalled();
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+  });
 
   describe.each(["startup", "active"] as const)("%s recovery after worker retirement", (mode) => {
     it.each(["idle", "claimed turn", "pending result", "provider loss"] as const)(
@@ -355,54 +363,6 @@ describe("worker placement restart recovery", () => {
     },
   );
 
-  it("resumes an authoritative provisioning placement through the canonical dispatch stages", async () => {
-    const placements = createPlacementStore();
-    const harness = await createHarness(support.testState.stateDb, placements);
-    const provisioning = await harness.placements.seedProvisioning();
-    assert(provisioning.state === "provisioning", "expected provisioning fixture");
-    harness.log.length = 0;
-
-    await harness.service.resumeProvisioning(provisioning, async () => {
-      harness.log.push("environment:reconcile");
-    });
-
-    expectPlacement(placements, "active", {
-      environmentId: harness.ready.environmentId,
-      activeOwnerEpoch: harness.attached.ownerEpoch,
-      workerBundleHash: harness.ready.bootstrapReceipt?.bundleHash,
-    });
-    expect(harness.placements.current()!.generation).toBeGreaterThan(provisioning.generation);
-    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
-    expect(harness.environments.attachSession).toHaveBeenCalledOnce();
-    expect(harness.environments.destroy).not.toHaveBeenCalled();
-    expect(harness.log).toContain("recovery-barrier");
-    expect(harness.log).toContain("placement:syncing");
-    expect(harness.log).toContain("placement:starting");
-    expect(harness.log).toContain("placement:active");
-    expect(harness.log).not.toContain("activation");
-  });
-
-  it("fences provisioning recovery before attachment when its durable execution mode differs", async () => {
-    const placements = createPlacementStore();
-    const harness = await createHarness(support.testState.stateDb, placements);
-    const provisioning = await harness.placements.seedProvisioning("remote-exec");
-    assert(provisioning.state === "provisioning", "expected provisioning fixture");
-    const environment = {
-      ...harness.ready,
-      profileSnapshot: { ...harness.ready.profileSnapshot, executionMode: "worker-turn" as const },
-    };
-    vi.mocked(harness.environments.get).mockReturnValue(environment);
-
-    await harness.service.resumeProvisioning(provisioning, async () => {});
-
-    expectPlacement(placements, "failed", {
-      recoveryError: expect.stringContaining("execution mode"),
-    });
-    expect(harness.environments.attachSession).not.toHaveBeenCalled();
-    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
-    expect(harness.environments.destroy).toHaveBeenCalledWith(environment.environmentId);
-  });
-
   it("fails a placement interrupted before its environment intent and permits redispatch", async () => {
     const placements = createPlacementStore();
     const harness = await createHarness(support.testState.stateDb, placements);
@@ -415,7 +375,7 @@ describe("worker placement restart recovery", () => {
     expect(failed).toMatchObject({
       state: "failed",
       environmentId: provisioning.environmentId,
-      recoveryError: expect.stringContaining("environment"),
+      recoveryError: "Cloud worker provisioning canceled by Gateway restart",
     });
     expect(harness.environments.stopTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
@@ -434,203 +394,6 @@ describe("worker placement restart recovery", () => {
     });
     expect(active.environmentId).not.toBe(provisioning.environmentId);
   });
-
-  it.each(["requested", "provisioning", "bootstrapping", "ready", "idle"] as const)(
-    "retains an exact replayable %s environment during provisioning recovery",
-    async (state) => {
-      const placements = createPlacementStore();
-      const harness = await createHarness(support.testState.stateDb, placements);
-      const provisioning = await harness.placements.seedProvisioning();
-      const environment =
-        state === "requested" || state === "provisioning"
-          ? {
-              ...harness.ready,
-              state,
-              leaseId: null,
-              sshEndpoint: null,
-              bootstrapReceipt: null,
-              sharedHost: null,
-              tunnelStatus: "stopped" as const,
-            }
-          : state === "bootstrapping"
-            ? { ...harness.ready, state, bootstrapReceipt: null }
-            : { ...harness.ready, state };
-      vi.mocked(harness.environments.get).mockReturnValue(environment);
-
-      await harness.service.reconcile();
-
-      expect(harness.placements.current()).toEqual(provisioning);
-      expect(harness.environments.destroy).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    ["destroy-requested", { destroyRequestedAtMs: 1_000 }],
-    ["attached", { state: "attached" as const, attachedSessionIds: Array.of(REQUEST.sessionId) }],
-    ["draining", { state: "draining" as const }],
-    ["destroying", { state: "destroying" as const }],
-    ["destroyed", { state: "destroyed" as const }],
-    ["failed", { state: "failed" as const }],
-    ["orphaned", { state: "orphaned" as const }],
-    ["mismatched", { environmentId: "worker-different" }],
-    ["missing receipt", { bootstrapReceipt: null }],
-    [
-      "legacy launch dialect",
-      {
-        bootstrapReceipt: {
-          bundleHash: "a".repeat(64),
-          openclawVersion: "2026.7.2",
-          protocolFeatures: Array.of(WORKER_LAUNCH_V2_PROTOCOL_FEATURE),
-        },
-      },
-    ],
-  ] as const)("fails provisioning recovery for a %s environment", async (_kind, patch) => {
-    const placements = createPlacementStore();
-    const harness = await createHarness(support.testState.stateDb, placements);
-    await harness.placements.seedProvisioning();
-    const environment =
-      "state" in patch && patch.state === "failed"
-        ? {
-            ...harness.ready,
-            ...patch,
-            leaseId: null,
-            sshEndpoint: null,
-            bootstrapReceipt: null,
-            sharedHost: null,
-            tunnelStatus: "stopped" as const,
-          }
-        : { ...harness.ready, ...patch };
-    vi.mocked(harness.environments.get).mockReturnValue(environment);
-
-    await harness.service.reconcile();
-
-    expectPlacement(placements, "failed");
-  });
-
-  it("tears down provisioning when the recovery authority barrier rejects", async () => {
-    const message = "Session agent:main:session-1 changed before cloud worker recovery";
-    const placements = createPlacementStore();
-    const harness = await createHarness(support.testState.stateDb, placements, {
-      recoveryBarrierError: new Error(message),
-    });
-    const provisioning = await harness.placements.seedProvisioning();
-    assert(provisioning.state === "provisioning", "expected provisioning fixture");
-
-    await harness.service.resumeProvisioning(provisioning, async () => {});
-
-    expectPlacement(placements, "failed", { recoveryError: message });
-    expect(harness.environments.attachSession).not.toHaveBeenCalled();
-    expect(harness.environments.destroy).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    { timing: "before", change: "generation", state: "provisioning" },
-    { timing: "before", change: "environment", state: "provisioning" },
-    { timing: "before", change: "environment", state: "syncing" },
-    { timing: "before", change: "environment", state: "starting" },
-    { timing: "before", change: "session", state: "provisioning" },
-    { timing: "after", change: "generation", state: "provisioning" },
-    { timing: "after", change: "environment", state: "provisioning" },
-    { timing: "after", change: "environment", state: "syncing" },
-    { timing: "after", change: "environment", state: "starting" },
-    { timing: "after", change: "session", state: "provisioning" },
-  ] as const)(
-    "never tears down a newer $state $change owner when recovery fails $timing its callback",
-    async ({ change, state, timing }) => {
-      const placements = createPlacementStore();
-      const harness = await createHarness(support.testState.stateDb, placements);
-      const original = await harness.placements.seedProvisioning();
-      if (original.state !== "provisioning" || !original.environmentId) {
-        throw new Error("recovery fixture did not produce an owned provisioning placement");
-      }
-      const replacementEnvironmentId =
-        change === "environment" ? "worker-newer-environment" : original.environmentId;
-      const pendingEnvironment = {
-        ...harness.ready,
-        state: "provisioning" as const,
-        leaseId: null,
-        sshEndpoint: null,
-        bootstrapReceipt: null,
-        sharedHost: null,
-        tunnelStatus: "stopped" as const,
-      };
-      vi.mocked(harness.environments.get).mockImplementation((environmentId) =>
-        environmentId === original.environmentId
-          ? pendingEnvironment
-          : environmentId === replacementEnvironmentId
-            ? { ...harness.ready, environmentId }
-            : undefined,
-      );
-      let replacement: ReturnType<typeof placements.get>;
-      const observedPlacements = {
-        ...placements,
-        getAsync: async (sessionId: string) => {
-          const current = await placements.getAsync(sessionId);
-          return change === "session" && replacement && current
-            ? { ...current, sessionKey: "agent:main:replacement-session" }
-            : current;
-        },
-        get: (sessionId: string) => {
-          const current = placements.get(sessionId);
-          return change === "session" && replacement && current
-            ? { ...current, sessionKey: "agent:main:replacement-session" }
-            : current;
-        },
-      };
-      const replacePlacement = async () => {
-        await placements.fail({
-          sessionId: original.sessionId,
-          expectedGeneration: original.generation,
-          recoveryError: "superseded placement",
-        });
-        replacement = await {
-          provisioning: seedProvisioningPlacement,
-          syncing: seedSyncingPlacement,
-          starting: seedStartingPlacement,
-        }[state](placements, replacementEnvironmentId);
-      };
-      const startup = createWorkerPlacementDispatchStartup({
-        placements: observedPlacements,
-        environments: harness.environments,
-        failure: createPlacementFailureActions({
-          placements: observedPlacements,
-          environments: harness.environments,
-        }),
-        runRecoveryBarrier: async ({ run }) => {
-          if (timing === "after") {
-            await run({ kind: "local", path: "/gateway/workspace" });
-          }
-          await replacePlacement();
-          throw new Error("stale recovery lifecycle was replaced");
-        },
-        runActivationBarrier: async ({ activate }) => activate(),
-      });
-
-      await startup.resumeProvisioning(original, async () => {});
-
-      expect(placements.get(original.sessionId)).toEqual(replacement);
-      expect(harness.environments.stopTunnel).not.toHaveBeenCalled();
-      expect(harness.environments.destroy).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["attach", "tunnel:attached", "sync"] as const)(
-    "tears down only its exact owned placement when recovery fails during %s",
-    async (failAt) => {
-      const placements = createPlacementStore();
-      const harness = await createHarness(support.testState.stateDb, placements, { failAt });
-      const provisioning = await harness.placements.seedProvisioning();
-      assert(provisioning.state === "provisioning", "expected provisioning fixture");
-
-      await harness.service.resumeProvisioning(provisioning, async () => {});
-
-      expectPlacement(placements, "failed", {
-        environmentId: provisioning.environmentId,
-        recoveryError: expect.stringContaining("failed"),
-      });
-      expect(harness.environments.destroy).toHaveBeenCalledWith(provisioning.environmentId);
-    },
-  );
 
   it("does not recover a pending result through a worker with the legacy launch dialect", async () => {
     const placements = createPlacementStore();

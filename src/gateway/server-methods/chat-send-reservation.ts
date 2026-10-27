@@ -106,11 +106,9 @@ export function inspectGoalChatSendRetry({
   session,
   respond,
   context,
-  durableClaimAccepted,
   assertCurrent,
   prepared,
 }: ChatSendPreAdmissionParams & {
-  durableClaimAccepted?: boolean;
   prepared: Awaited<ReturnType<typeof prepareGoalChatSendRetry>>;
 }) {
   assertCurrent?.();
@@ -144,9 +142,7 @@ export function inspectGoalChatSendRetry({
       !identityConflict &&
       (pending?.payload.goalFingerprint === request.goalOperation.requestFingerprint ||
         newlyPublishedResponse ||
-        (!pending &&
-          !durableClaimAccepted &&
-          getRpcSourceForGateway(clientRunId, context.resolveGatewayContext)))
+        (!pending && getRpcSourceForGateway(clientRunId, context.resolveGatewayContext)))
     ) {
       respond(
         false,
@@ -160,7 +156,6 @@ export function inspectGoalChatSendRetry({
     if (
       identityConflict ||
       pending ||
-      durableClaimAccepted ||
       cachedResponse ||
       context.chatRunState.hasAbortMarker(clientRunId) ||
       getRpcSourceForGateway(clientRunId, context.resolveGatewayContext)

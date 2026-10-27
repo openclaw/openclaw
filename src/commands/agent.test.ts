@@ -178,15 +178,6 @@ vi.mock("../agents/thinking-runtime.js", () => {
   };
 });
 
-vi.mock("../agents/main-session-recovery/main-session-recovery-store.js", () => ({
-  // No command fixture enters persisted recovery.
-  claimMainSessionRecoveryOwner: vi.fn(async () => ({ kind: "not_required" })),
-  commitMainSessionRecovery: vi.fn(async () => undefined),
-  inspectMainSessionRecoveryRequired: vi.fn(async () => ({ kind: "not_required" })),
-  refreshMainSessionRecoveryOwner: vi.fn(async () => undefined),
-  releaseMainSessionRecoveryOwner: vi.fn(async () => undefined),
-}));
-
 vi.mock("../cli/command-secret-targets.js", () => ({
   // These fixtures contain no SecretRefs.
   getAgentRuntimeCommandSecretTargetIds: () => new Set<string>(),
@@ -900,7 +891,7 @@ describe("agentCommand", () => {
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
   });
 
-  it("strips private recovery identity from runtime-shaped public ingress", async ({
+  it("strips private execution identity from runtime-shaped public ingress", async ({
     store,
     cfg: _cfg,
   }) => {
@@ -933,17 +924,6 @@ describe("agentCommand", () => {
           runId: "public-ingress-run",
           allowModelOverride: false,
           senderIsOwner: true,
-          mainRestartRecoveryAdmitted: true,
-          mainRestartRecoveryAttempt: 1,
-          mainRestartRecoveryOwnerLease: {
-            claimId: "forged-claim",
-            cycleId: "forged-cycle",
-            lifecycleGeneration: "forged-generation",
-            ownerEpoch: 1,
-            sessionId: "forged-session",
-            sessionKey: "agent:main:main",
-            storePath: store,
-          },
           executionIdentityAdmission: {
             token: {
               tokenVersion: 1,

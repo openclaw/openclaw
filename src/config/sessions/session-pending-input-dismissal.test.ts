@@ -144,28 +144,32 @@ it("repeats a dismissal idempotently and reports ids that are no longer retained
   expect(f.states()[f.second]).toBe("cancelled");
 });
 
-it("refuses an interrupted input that a resend has reclaimed", async () => {
-  const resent = expectDefined(
-    await stageSessionPendingInput(target, {
+it("leaves legacy interrupted input inert when the sender submits a fresh input", async () => {
+  await expect(
+    stageSessionPendingInput(target, {
       runId: "interrupted",
       message: message("interrupted"),
       requestFingerprint,
-      retryInterrupted: true,
+      retryCancelled: true,
       assertCurrent,
     }),
-    "Expected the resend to reclaim interrupted custody",
+  ).rejects.toThrow("ownership ended");
+  const resent = expectDefined(
+    await stageSessionPendingInput(target, {
+      runId: "fresh-send",
+      message: message("fresh-send"),
+      requestFingerprint,
+      assertCurrent,
+    }),
+    "Expected a fresh send to acquire custody",
   );
   f.receipts.push(resent);
-  expect(resent.inputId).toBe(f.interrupted);
-  expect(f.states()[f.interrupted]).toBe("queued");
-  expect(await f.dismiss([f.interrupted])).toEqual({
-    kind: "active",
-    inputIds: [f.interrupted],
-  });
-  resent.finish("interrupted");
-  await resent.settled?.();
+  expect(resent.inputId).not.toBe(f.interrupted);
   expect(f.states()[f.interrupted]).toBe("interrupted");
-  expect((await f.dismiss([f.interrupted])).kind).toBe("dismissed");
+  expect(await f.dismiss([resent.inputId])).toEqual({
+    kind: "active",
+    inputIds: [resent.inputId],
+  });
 });
 
 it("refuses stale targets without changing retained inputs", async () => {

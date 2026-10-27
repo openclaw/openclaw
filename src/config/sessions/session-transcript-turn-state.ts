@@ -1,9 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  mergeRestartRecoveryTerminalRunIds,
-  sameRestartRecoveryTerminalRunIds,
-} from "./restart-recovery-state.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
@@ -12,32 +8,12 @@ import type {
 import type { SqliteSessionTurnOptions } from "./session-turn.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-// Metadata timestamps do not fence recovery; writer and lifecycle checks are separate.
-// Keep absent recovery fields explicit so a newly introduced claim fails the commit check.
-export function buildRestartRecoveryExpectedState(
+/** Capture ordinary transcript admission state; execution authority remains live. */
+export function buildSessionTranscriptTurnExpectedState(
   entry: SessionEntry,
-  mainRestartRecovery?: { cycleId: string; revision: number },
 ): SessionTranscriptTurnExpectedState {
-  const expectedMainRestartRecovery = mainRestartRecovery ?? entry.mainRestartRecovery;
   return {
     abortedLastRun: entry.abortedLastRun,
-    mainRestartRecoveryCycleId: expectedMainRestartRecovery?.cycleId,
-    mainRestartRecoveryRevision: expectedMainRestartRecovery?.revision,
-    restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
-    restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
-    restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
-    restartRecoveryDeliveryRequestFingerprint: entry.restartRecoveryDeliveryRequestFingerprint,
-    restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
-    restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
-    restartRecoveryRequesterAccountId: entry.restartRecoveryRequesterAccountId,
-    restartRecoveryRequesterSenderId: entry.restartRecoveryRequesterSenderId,
-    restartRecoverySameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired,
-    restartRecoveryOperatorSource: entry.restartRecoveryOperatorSource,
-    restartRecoveryRequesterSource: entry.restartRecoveryRequesterSource,
-    restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
-    restartRecoverySourceMessageChannel: entry.restartRecoverySourceMessageChannel,
-    restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
-    restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
     status: entry.status,
   };
 }
@@ -72,45 +48,6 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
             selected.entry.pendingFinalDelivery,
             expectedState.pendingFinalDelivery ?? undefined,
           )) &&
-        selected.entry.mainRestartRecovery?.cycleId === expectedState.mainRestartRecoveryCycleId &&
-        selected.entry.mainRestartRecovery?.revision ===
-          expectedState.mainRestartRecoveryRevision &&
-        selected.entry.restartRecoveryBeforeAgentReplyState ===
-          expectedState.restartRecoveryBeforeAgentReplyState &&
-        selected.entry.restartRecoveryDeliveryReceiptState ===
-          expectedState.restartRecoveryDeliveryReceiptState &&
-        selected.entry.restartRecoveryDeliveryToolCallId ===
-          expectedState.restartRecoveryDeliveryToolCallId &&
-        selected.entry.restartRecoveryDeliveryRequestFingerprint ===
-          expectedState.restartRecoveryDeliveryRequestFingerprint &&
-        selected.entry.restartRecoveryDeliveryRunId ===
-          expectedState.restartRecoveryDeliveryRunId &&
-        selected.entry.restartRecoveryDeliverySourceRunId ===
-          expectedState.restartRecoveryDeliverySourceRunId &&
-        selected.entry.restartRecoveryRequesterAccountId ===
-          expectedState.restartRecoveryRequesterAccountId &&
-        selected.entry.restartRecoveryRequesterSenderId ===
-          expectedState.restartRecoveryRequesterSenderId &&
-        selected.entry.restartRecoverySameChannelThreadRequired ===
-          expectedState.restartRecoverySameChannelThreadRequired &&
-        isDeepStrictEqual(
-          selected.entry.restartRecoveryOperatorSource,
-          expectedState.restartRecoveryOperatorSource,
-        ) &&
-        isDeepStrictEqual(
-          selected.entry.restartRecoveryRequesterSource,
-          expectedState.restartRecoveryRequesterSource,
-        ) &&
-        selected.entry.restartRecoverySourceIngress ===
-          expectedState.restartRecoverySourceIngress &&
-        selected.entry.restartRecoverySourceMessageChannel ===
-          expectedState.restartRecoverySourceMessageChannel &&
-        selected.entry.restartRecoverySourceReplyDeliveryMode ===
-          expectedState.restartRecoverySourceReplyDeliveryMode &&
-        sameRestartRecoveryTerminalRunIds(
-          selected.entry.restartRecoveryTerminalRunIds,
-          expectedState.restartRecoveryTerminalRunIds,
-        ) &&
         selected.entry.status === expectedState.status)),
   );
 }
@@ -153,12 +90,6 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
     (params.expectedSessionState !== undefined &&
       params.appendedMessages.some((message) => !message.appended));
   const touchUpdatedAt = params.touchSessionEntry === true && hasAppendedMessage ? Date.now() : 0;
-  const restartRecoveryTerminalRunIds = params.sessionLifecyclePatch?.restartRecoveryTerminalRunIds
-    ? mergeRestartRecoveryTerminalRunIds(
-        params.currentEntry.restartRecoveryTerminalRunIds,
-        params.sessionLifecyclePatch.restartRecoveryTerminalRunIds,
-      )
-    : undefined;
   return {
     ...(acceptedMessage ? params.sessionLifecyclePatch : undefined),
     ...(lastSubmittedModel &&
@@ -166,7 +97,6 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
       lastSubmittedModel.model !== params.currentEntry.lastSubmittedModel?.model)
       ? { lastSubmittedModel }
       : {}),
-    ...(acceptedMessage && restartRecoveryTerminalRunIds ? { restartRecoveryTerminalRunIds } : {}),
     ...(touchUpdatedAt > 0
       ? {
           updatedAt: Math.max(

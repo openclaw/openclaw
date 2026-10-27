@@ -63,6 +63,29 @@ async function withPhaseClock(
 }
 
 export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
+  it("exits cleanly when host retirement stays held instead of starting another runtime", async () => {
+    const retirement = createLifecycleGate();
+    const restoreHost = await blockHostRetirement(retirement);
+    try {
+      await f.withRunningGateway(async ({ captureSignal, start, runtime, exited }) => {
+        await withLifecycleClock(async () => {
+          captureSignal("SIGUSR2")();
+          await retirement.entered;
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(runtime.exit).toHaveBeenCalledWith(0);
+          await expect(exited).resolves.toBe(0);
+          expect(start).toHaveBeenCalledOnce();
+          expect(f.gatewayLog.warn).toHaveBeenCalledWith(
+            expect.stringContaining("host: cleanup exceeded 5000ms; resources remain"),
+          );
+        });
+      });
+    } finally {
+      retirement.release();
+      restoreHost();
+    }
+  });
+
   it("preserves startup and final retirement failures after every cleanup owner settles", async () => {
     const startupFailure = new Error("fixture boot failed");
     const releaseFailure = new Error("fixture lock retirement failed");
@@ -92,7 +115,6 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
   }) => {
     await withIsolatedSignals(async ({ captureSignal }) => {
       const startup = createLifecycleGate();
-      const draining = createDeferredCore();
       const order: string[] = [];
       const closeGate = createLifecycleGate(() => order.push("close"));
       const flushGate = createLifecycleGate(() => order.push("flush"));
@@ -102,10 +124,6 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
         release: vi.fn(async () => {
           order.push("release");
         }),
-      });
-      f.waitForGatewayActiveWork.mockImplementationOnce(async () => {
-        draining.resolve();
-        return { drained: true, snapshot: f.idleActiveWorkSnapshot };
       });
       f.flushLogger.mockImplementationOnce(flushGate.wait);
       const { runtime } = createRuntimeWithExitSignal();
@@ -122,7 +140,6 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
       try {
         await startup.entered;
         captureSignal("SIGTERM")();
-        await draining.promise;
         await waitForLoopTurn();
         expectUncalled(f.flushLogger, close);
         startup.release();

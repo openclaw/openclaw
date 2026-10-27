@@ -148,7 +148,6 @@ export function createInternalAgentTurnFacade(
         client: options.client,
         context,
         methodRegistry,
-        recoveryInput: dispatchOptions.recoveryInput,
         controllerInput: dispatchOptions.controllerInput,
         assertPreparationCurrent: dispatchOptions.assertAdmissionCurrent,
       });
