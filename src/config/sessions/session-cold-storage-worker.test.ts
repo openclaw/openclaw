@@ -1,10 +1,12 @@
-import { DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import * as snapshots from "../../infra/sqlite-transaction.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSessionColdBatchInWorker } from "./session-cold-storage-prepare.js";
+import { selectSessionColdBatch } from "./session-cold-storage-selection.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { mutateSessionColdTranscriptInWorker } from "./session-cold-storage-worker.js";
 import {
@@ -110,4 +112,44 @@ it("archives the next eligible window in the same pass after an oversized window
     expect(result.archivedTranscripts).toBe(1);
     expect(readSessionColdTranscript(fixture.database(), currentId)?.event_count).toBe(1);
     expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
+  }));
+
+it("selects cold windows without reading event payload sizes in the batch snapshot", () =>
+  withFixture(async (fixture) => {
+    const payloadReads: string[] = [];
+    const read = snapshots.runSqliteReadSnapshotSync;
+    vi.spyOn(snapshots, "runSqliteReadSnapshotSync").mockImplementation(
+      (database, run, options) => {
+        if (options?.operationLabel !== "cold transcript selection") {
+          return read(database, run, options);
+        }
+        const native = requireNativeSqliteDatabase(database);
+        native.setAuthorizer((action, table, column) => {
+          if (
+            action === constants.SQLITE_READ &&
+            table === "transcript_events" &&
+            (column === "event_json" || column === "event_utf8_bytes")
+          ) {
+            payloadReads.push(column);
+          }
+          return constants.SQLITE_OK;
+        });
+        try {
+          return read(database, run, options);
+        } finally {
+          native.setAuthorizer(null);
+        }
+      },
+    );
+    const selection = selectSessionColdBatch({
+      databaseOptions: fixture.options,
+      admissionIdentities: [],
+      liveSessionKeys: [],
+      cooledSessionIds: [],
+      beforeMs: 100,
+      maxTranscripts: 128,
+      maxBytes: 4096,
+    });
+    expect(selection.found).toBe(true);
+    expect(payloadReads).toEqual([]);
   }));

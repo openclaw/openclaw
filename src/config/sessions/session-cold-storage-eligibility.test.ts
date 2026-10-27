@@ -1,7 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
+import * as entryStatus from "./session-accessor.sqlite-status.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
+import { readSessionAdmissionProtectionKeys } from "./session-cold-storage-selection.js";
+import * as entryCodec from "./session-entry-json.js";
 import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 
 let database: DatabaseSync;
@@ -161,3 +164,79 @@ it.each([false, true])(
     expectProtection(["queued", "interrupted"]);
   },
 );
+
+it("checks selected windows against their owners and all cross-generation references", () => {
+  const busy = addNode("recovering", { restartRecoveryBeforeAgentReplyState: "pending" });
+  addWindow(busy.key, "busy-history");
+  const invalid = addNode("invalid", {}, "not-json");
+  addWindow(invalid.key, "invalid-history");
+  addNode("reference-owner", { previousSessionId: "referenced-history" });
+  const idle = addNode("idle");
+  addWindow(idle.key, "referenced-history");
+  addWindow(idle.key, "idle-history");
+  addWindow(idle.key, "recent-history", cutoff);
+  const selected = [
+    "busy-history",
+    "invalid-history",
+    "referenced-history",
+    "idle-history",
+    "recent-history",
+  ];
+  for (let i = 0; i < 100; i++) {
+    addNode(`unrelated-${i}`);
+  }
+  const full = protect();
+  const parse = vi.spyOn(entryCodec, "parseCanonicalSqliteSessionEntry");
+  try {
+    const narrowed = readSessionColdStorageProtection(
+      { db: database },
+      cutoff,
+      new Set(),
+      selected,
+    );
+    expect(selected.filter((id) => narrowed.has(id))).toEqual(
+      selected.filter((id) => full.has(id)),
+    );
+    expect(selected.filter((id) => narrowed.has(id))).toEqual([
+      "busy-history",
+      "invalid-history",
+      "referenced-history",
+      "recent-history",
+    ]);
+    expect(parse).toHaveBeenCalledTimes(4);
+  } finally {
+    parse.mockRestore();
+  }
+});
+
+it("uses admitted reference facts while retaining invalid and trimmed current IDs", () => {
+  addNode("current");
+  addNode(" padded ");
+  for (let i = 0; i < 100; i++) {
+    addNode(`unrelated-${i}`);
+  }
+  database.exec("UPDATE session_nodes SET entry_valid = 1");
+  addNode("reference-owner", { previousSessionId: "historical" });
+  addNode("invalid", {}, "not-json");
+  const parse = vi.spyOn(entryStatus, "parseSessionEntryJson");
+  try {
+    expect(
+      readSessionAdmissionProtectionKeys({ db: database }, [
+        "current",
+        "padded",
+        "historical",
+        "invalid",
+      ]),
+    ).toEqual(
+      new Set([
+        "agent:main:current",
+        "agent:main: padded",
+        "agent:main:reference-owner",
+        "agent:main:invalid",
+      ]),
+    );
+    expect(parse).toHaveBeenCalledTimes(2);
+  } finally {
+    parse.mockRestore();
+  }
+});
