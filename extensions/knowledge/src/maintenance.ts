@@ -258,10 +258,8 @@ export class Maintenance {
       const declared = jobs.filter((job) => job.declarationKey === REVIEW_SCRIBE_DECLARATION_KEY);
       return (declared.find((job) => job.enabled !== false) ?? declared[0])?.id;
     } catch (e) {
-      // SAFETY: the host scheduler rejects only with Error objects.
-      this.log.warn(
-        `Knowledge maintenance could not look up the review scribe: ${(e as Error).message}`,
-      );
+      const reason = e instanceof Error ? e.message : String(e);
+      this.log.warn(`Knowledge maintenance could not look up the review scribe: ${reason}`);
       return undefined;
     }
   }
