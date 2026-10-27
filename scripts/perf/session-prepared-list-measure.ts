@@ -270,6 +270,9 @@ function sampledCpu(profile: Profiler.Profile) {
 try {
   projection = await projections.createSessionRowProjection({ cfg, modelCatalog: [] });
   await projection.ensureMaterialized();
+  const searchIdentities = values["search-workload"]
+    ? await lists.prepareSessionSearchIdentityNames(projection, {}, true)
+    : undefined;
   const rows = projection.selectEntries({ agentId: "main" });
   if (values["sort-rows"]) {
     writeFileSync(
@@ -425,7 +428,7 @@ try {
             metadataPrepared: true,
           });
           const filterBefore = process.threadCpuUsage();
-          filterSessionEntries(prepared);
+          filterSessionEntries({ ...prepared, identityNames: searchIdentities?.names });
           const filterUsed = process.threadCpuUsage(filterBefore);
           sample.filterCpuMicros += filterUsed.user + filterUsed.system;
           sample.maxFilterCpuMicros = Math.max(
