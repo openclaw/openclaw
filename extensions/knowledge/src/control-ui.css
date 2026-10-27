@@ -3502,6 +3502,10 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   color: var(--muted);
   font-size: 12px;
 }
+.scribe-prompt-foot button {
+  flex: none;
+  white-space: nowrap;
+}
 @media (max-width: 720px) {
   .scribe-row,
   .scribe-detail-head {

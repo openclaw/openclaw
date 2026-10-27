@@ -118,10 +118,18 @@ function messageText(message: unknown): string {
 // One status line: optional Markdown emphasis, the state, then an optional dash and sentence.
 const STATUS_LINE = /^scribe status\s*:\s*(on|done|failed)\b\s*(?:[—–:-]+\s*)?(.*)$/i;
 
-/** The last `Scribe status:` line in one reply or run summary; Markdown emphasis is ignored. */
+/**
+ * The last `Scribe status:` line in one reply or run summary. Bold, code and quote marks are
+ * ignored; underscores only at the line's ends, so names like `America/Los_Angeles` survive.
+ */
 export function statusFromText(text: string): ScribeResult | undefined {
   for (const line of text.split("\n").toReversed()) {
-    const match = STATUS_LINE.exec(line.replace(/[*_`>]/g, "").trim());
+    const match = STATUS_LINE.exec(
+      line
+        .replace(/[*`>]/g, "")
+        .trim()
+        .replace(/^_+|_+$/g, ""),
+    );
     if (match) {
       // SAFETY: the pattern only matches the three states.
       const state = match[1]!.toLowerCase() as ScribeResult["state"];

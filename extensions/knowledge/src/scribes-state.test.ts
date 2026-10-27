@@ -117,6 +117,10 @@ describe("scribes catalog", () => {
       state: "failed",
       summary: "store not writable",
     });
+    expect(statusFromText("_Scribe status: on — next run 4:00 AM America/Los_Angeles_")).toEqual({
+      state: "on",
+      summary: "next run 4:00 AM America/Los_Angeles",
+    });
     expect(statusFromText("scribe status: on")).toEqual({ state: "on", summary: "" });
     expect(statusFromText("Scribe status: maybe — x")).toBeUndefined();
     expect(statusFromText("All done.")).toBeUndefined();
