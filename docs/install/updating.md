@@ -1025,6 +1025,9 @@ ancestor installations. Explicitly linked dependencies retain their own resoluti
 This improvement applies after the newer updater is installed; it cannot shorten
 the retention phase already running in an older updater.
 
+Post-activation schema inspection preserves captured SQLite database, WAL, and shared-memory
+artifacts so the final Doctor can verify the same migration source.
+
 Database rehearsal also avoids a second full backup of each private snapshot.
 Update schema inspection and rehearsal use SQLite online backup with a pinned
 read transaction, so a busy Gateway can keep writing while the copy includes
