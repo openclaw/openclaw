@@ -28,11 +28,13 @@ import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
+import { queuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
 import {
@@ -374,6 +376,82 @@ it("replays explicit cancellation before a retained accepted input marker", asyn
     { cached: true, runId: clientRunId },
   );
 });
+
+it("readmits a retained queued input only from its admitted physical store", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg: OpenClawConfig = {};
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const { session } = params;
+    const logicalStorePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+    await upsertSessionEntryCore(
+      { agentId: session.agentId, storePath: logicalStorePath, sessionKey: session.sessionKey },
+      session.entry!,
+    );
+    const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg,
+      key: session.sessionKey,
+      agentId: session.agentId,
+      env: state.env,
+      readOnly: true,
+      exactRead: true,
+    });
+    if (!loaded.entry || !loaded.readSource) {
+      throw new Error("Queued input fixture did not prepare its physical session source");
+    }
+    expect(loaded.storePath).toBe(logicalStorePath);
+    expect(loaded.readSource.path).not.toBe(logicalStorePath);
+    Object.assign(session, {
+      cfg,
+      entry: loaded.entry,
+      storePath: loaded.storePath,
+      readSource: loaded.readSource,
+    });
+    const foreignStorePath = state.statePath("foreign.sqlite");
+    await upsertSessionEntryCore(
+      { agentId: session.agentId, storePath: foreignStorePath, sessionKey: session.sessionKey },
+      loaded.entry,
+    );
+    const message = submittedMessage(params);
+    const comparison = {
+      agentId: session.agentId,
+      storePath: session.storePath,
+      sessionKey: session.sessionKey,
+      sessionId: loaded.entry.sessionId,
+      lifecycleRevision: loaded.entry.lifecycleRevision,
+      clientRunId: session.clientRunId,
+      submitted: message,
+      source: "pending" as const,
+    };
+    for (const storePath of [loaded.readSource.path, foreignStorePath]) {
+      params.respond.mockClear();
+      const handled = queuedChatInputAdmission.run(
+        {
+          target: {
+            agentId: session.agentId,
+            storePath,
+            sessionKey: session.sessionKey,
+            sessionId: loaded.entry.sessionId,
+            runId: session.clientRunId,
+            message,
+            requestHash: "retained-queued-input",
+          },
+          requestFingerprint: params.request.requestIdentity!,
+        },
+        () => respondChatSendRetry(params, comparison),
+      );
+      if (storePath === loaded.readSource.path) {
+        expect(handled).toBe(false);
+        expect(params.respond).not.toHaveBeenCalled();
+      } else {
+        expect(handled).toBe(true);
+        expectCached(
+          { runId: session.clientRunId, status: "ok" },
+          { cached: true, runId: session.clientRunId },
+        );
+      }
+    }
+  }));
 
 it.each(["pending", "evicted", "superseded"] as const)(
   "settles only the original input when aborting a %s reservation",

@@ -1,6 +1,7 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
+import { sameSessionTranscriptStorePath } from "../../config/sessions/transcript-store-identity.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { getRpcSourceForGateway } from "../../sessions/session-controller.rpc-sources.js";
@@ -46,7 +47,13 @@ type ChatSendRetryParams = Pick<
   >;
   session: Pick<
     ChatSendPreAdmissionParams["session"],
-    "clientRunId" | "pendingChatSendKey" | "entry" | "agentId" | "sessionKey" | "storePath"
+    | "clientRunId"
+    | "pendingChatSendKey"
+    | "entry"
+    | "agentId"
+    | "sessionKey"
+    | "storePath"
+    | "readSource"
   >;
   context: Pick<
     ChatSendPreAdmissionParams["context"],
@@ -220,7 +227,8 @@ export function respondChatSendRetry(
     if (
       comparison.source === "pending" &&
       queued?.agentId === session.agentId &&
-      queued.storePath === session.storePath &&
+      (queued.storePath === session.storePath ||
+        sameSessionTranscriptStorePath(queued.storePath, session.readSource?.path)) &&
       queued.sessionKey === session.sessionKey &&
       queued.sessionId === session.entry?.sessionId
     ) {
