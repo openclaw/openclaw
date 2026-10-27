@@ -49,6 +49,7 @@ import { expectSuccessorWorkspaceRead } from "../workspace-readiness.test-suppor
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import * as agentHandlerHelpers from "./agent-handler-helpers.js";
+import { createGate, expectCalls } from "./agent-owner.test-support.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import {
   createExecution,
@@ -86,25 +87,6 @@ vi.mock("../../agents/command/runtime-loaders.js", async (importOriginal) => ({
     resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
   }),
 }));
-
-function createGate() {
-  const entered = createDeferred();
-  const finish = createDeferred();
-  return {
-    entered: entered.promise,
-    resolve: finish.resolve,
-    wait: () => {
-      entered.resolve();
-      return finish.promise;
-    },
-  };
-}
-
-function expectCalls(count: number, ...spies: unknown[]) {
-  for (const spy of spies) {
-    expect(spy).toHaveBeenCalledTimes(count);
-  }
-}
 
 describe("startAgentRunExecution Gateway ownership", () => {
   it("reads the workspace after resuming from a retired same-session preparation", async () => {

@@ -109,7 +109,16 @@ export function createCrabboxWorkerProvider(
     resolveBinary: async (...args) => (await resolveBinary(...args)).binary,
     warn,
   });
+  const activeProvisions = new Set<{ leaseId: string }>();
   const warmImages = createCrabboxWarmImageManager({
+    isLeaseActive: (leaseId) => {
+      for (const owner of activeProvisions) {
+        if (owner.leaseId === leaseId) {
+          return true;
+        }
+      }
+      return false;
+    },
     state: dependencies.state,
     warn,
     info: dependencies.info,
@@ -250,7 +259,7 @@ export function createCrabboxWorkerProvider(
       await assertAwsWorkerHasNoInstanceProfile({ binary, signal });
     }
 
-    return async () => {
+    const provision = async () => {
       assertCurrent();
       // Completed setup can survive a crash before its capture requirement returns.
       // Sample before allocate creates the first-call record; enrolled replay stays closed.
@@ -555,6 +564,16 @@ export function createCrabboxWorkerProvider(
         if (!provisioned) {
           await heartbeats.stop(leaseId);
         }
+      }
+    };
+    return async () => {
+      // An admitted dispatch may not have created its lease yet; absence cannot release its hold.
+      const owner = { leaseId };
+      activeProvisions.add(owner);
+      try {
+        return await provision();
+      } finally {
+        activeProvisions.delete(owner);
       }
     };
   };

@@ -29,6 +29,7 @@ const reloadProfiles = [
   "large",
   "short-tail",
   "imported",
+  "offline",
 ];
 
 async function expectOwnMessageAlignment(page: Page): Promise<void> {
@@ -388,6 +389,18 @@ suite.define(() => {
               bootstrapRequests++;
             }
           });
+        }
+        if (profile === "offline") {
+          await gateway.setOnline(false);
+          await page.reload();
+          await transcript.getByText(transcriptText, { exact: true }).waitFor();
+          await sidebar.getByText("Cached only session", { exact: true }).waitFor();
+          await page.locator(".chat-pane__connection-state").waitFor({ state: "visible" });
+          expect(await page.locator(".chat-pane-cache__pane--active .skeleton").count()).toBe(0);
+          expect(await gateway.getRequests("connect")).toEqual([]);
+          expect(await gateway.getRequests("chat.send")).toEqual([]);
+          await capture("warm-offline-before-socket.png");
+          return;
         }
         await page.reload();
         const connect = await gateway.waitForRequest("connect");

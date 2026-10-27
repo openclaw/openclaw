@@ -16,9 +16,9 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
-it("reuses interleaved audience keys without expanding scopes on cache hits", () => {
+it("reuses interleaved audience keys and copies scope snapshots without iteration", () => {
   const cfg = rolePolicyConfig();
-  const revision = {};
+  let revision = {};
   const clients = ["alice", "bob"].map((user) => sharingPolicyClient({ user }));
   const key = (client: (typeof clients)[number]) =>
     prepareProjectedSessionSharing({ cfg, client, isMember: () => false }).getCacheKey(revision);
@@ -28,6 +28,9 @@ it("reuses interleaved audience keys without expanding scopes on cache hits", ()
   for (let i = 0; i < 3; i++) {
     expect(clients.map(key)).toEqual(initial);
   }
+  // A publication retires the keys; native array copying avoids iterable expansion.
+  revision = {};
+  expect(clients.map(key)).toEqual(initial);
   expect(iterate).not.toHaveBeenCalled();
   iterate.mockRestore();
 

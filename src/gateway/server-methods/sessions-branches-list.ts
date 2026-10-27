@@ -4,10 +4,8 @@ import {
   type SessionsBranchesListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listSessionBranches } from "../../config/sessions/session-accessor.js";
-import {
-  getSessionActorStorageBinding,
-  withSessionActorStorage,
-} from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
+import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import {
   captureSessionUpstreamLinkReadSource,
   prepareSessionUpstreamLink,

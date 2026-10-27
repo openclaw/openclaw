@@ -119,7 +119,8 @@ conversations and unbound documents remain denied. Broad `operator.read` callers
 retain document-ID-only access.
 
 In the Control UI, session writers can use **New Session**, send messages in
-their own conversations, and stop their own active runs. Their model, effort,
+their own conversations, fork from a persisted user message in an owned settled
+conversation, and stop their own active runs. Their model, effort,
 fast-mode, and non-full permission choices use the same session grant and the
 Gateway's allowed model catalog. Full permission mode, sandbox changes, and
 changes to an existing session's context window still require administrator access.

@@ -5,7 +5,7 @@ const escapeHtml = (text: string) =>
     /[&<>"']/g,
     (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!,
   );
-export const wikiHref = (target: string) => `#wiki=${encodeURIComponent(target)}`;
+const wikiHref = (target: string) => `#wiki=${encodeURIComponent(target)}`;
 /** One parser for navigation and rendering: code, escapes, HTML and images are not links. */
 export const markdown = new Marked({
   gfm: true,
@@ -37,10 +37,14 @@ export const markdown = new Marked({
     },
   ],
 });
-// Link extraction parses Markdown; reuse a body's parse across scans, which
-// copy records. Bounded, oldest first, so edits cannot grow it without limit.
-const extracted = new Map<string, string[]>();
-const EXTRACTED_MAX = 20_000;
+// Scans share parsed metadata across record copies. Retiring that parse must
+// also release its body; a string-keyed cache retains obsolete document versions.
+const extracted = new WeakMap<LinkRecord["metadata"], { body: string; hrefs: string[] }>();
+const extractionOwner = Symbol("knowledge.linkExtractionOwner");
+/** Merged-reference projections keep the source document's link parse. */
+export function carryLinkExtraction(source: LinkRecord, projection: LinkRecord) {
+  projection[extractionOwner] = source[extractionOwner] ?? source.metadata;
+}
 // JavaScriptCore (Bun, Safari) caps regexp backtracking memory and reports an
 // over-cap match as no match, without an error. marked's paragraph rule exceeds
 // that cap after about 49,000 lines in one block. marked then lexes the rest line
@@ -67,7 +71,7 @@ function boundBlockRuns(body: string): string {
   }
   return parts.length ? parts.join("") + body.slice(kept) : body;
 }
-export function extractLinks(body: string): string[] {
+function extractLinks(body: string): string[] {
   // Generated backlinks must not recursively create their own backlinks.
   const tokens = markdown.lexer(boundBlockRuns(body)).filter(
     (() => {
@@ -113,6 +117,7 @@ type LinkRecord = {
   path: string;
   body: string;
   metadata: { aliases?: string[] };
+  [extractionOwner]?: LinkRecord["metadata"];
 };
 // Backslash or any C0 control character.
 const UNSAFE_TARGET_CHARACTER = new RegExp(String.raw`[\\\u0000-\u001f]`);
@@ -176,15 +181,13 @@ export function resolveLinks(
 ): LinkResolution[] {
   const results: LinkResolution[] = [],
     index = linkIndex(records);
-  let hrefs = extracted.get(record.body);
-  if (!hrefs) {
-    hrefs = extractLinks(record.body);
-    if (extracted.size >= EXTRACTED_MAX) {
-      extracted.delete(extracted.keys().next().value!);
-    }
-    extracted.set(record.body, hrefs);
+  const owner = record[extractionOwner] ?? record.metadata;
+  let parsed = extracted.get(owner);
+  if (!parsed || parsed.body !== record.body) {
+    parsed = { body: record.body, hrefs: extractLinks(record.body) };
+    extracted.set(owner, parsed);
   }
-  for (const href of hrefs) {
+  for (const href of parsed.hrefs) {
     const wiki = href.startsWith("#wiki=");
     if (!wiki && (/^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(href) || !/\.md(?:#.*)?$/i.test(href))) {
       continue;

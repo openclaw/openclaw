@@ -572,10 +572,13 @@ export function createSqliteSessionActorExecutor(
     }
     return outcome;
   };
-  const snapshot = (authority: SessionActorAuthority): SessionActorHotState | undefined => {
+  const snapshot = <State extends SessionActorAuthorityFacts>(
+    authority: SessionActorAuthority,
+    readFacts: () => State | undefined,
+  ): State | undefined => {
     params.assertReadable();
     authority.assertCurrent();
-    const installed = fenced ? undefined : params.replica.read();
+    const installed = fenced ? undefined : readFacts();
     if (installed) {
       authority.authorize("commit", installed);
       authority.assertCurrent();
@@ -584,7 +587,8 @@ export function createSqliteSessionActorExecutor(
     return installed;
   };
   return {
-    snapshot,
+    snapshot: (authority) => snapshot(authority, params.replica.read),
+    snapshotEntry: (authority) => snapshot(authority, params.replica.readEntry),
     read,
     command,
     retain: params.transport.retain?.bind(params.transport),

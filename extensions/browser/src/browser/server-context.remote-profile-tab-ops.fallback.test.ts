@@ -216,14 +216,19 @@ function expectFetchCalledWithManualRedirect(
 
 describe("browser server-context loopback direct WebSocket profiles", () => {
   it("uses an HTTPS /json base for secure direct WebSocket profiles with a /cdp suffix", async () => {
+    let closed = false;
     const fetchMock = vi.fn(async (url: unknown) => {
       const u = String(url);
       if (u === "https://127.0.0.1:18800/json/list?token=abc") {
-        return jsonResponse([rawTab("T2", "https://example.com", "page", "wss://127.0.0.1")]);
+        return jsonResponse(
+          closed ? [] : [rawTab("T2", "https://example.com", "page", "wss://127.0.0.1")],
+        );
       }
-      if (
-        ["activate", "close"].some((op) => u === `https://127.0.0.1:18800/json/${op}/T2?token=abc`)
-      ) {
+      if (u === "https://127.0.0.1:18800/json/close/T2?token=abc") {
+        closed = true;
+        return jsonResponse({});
+      }
+      if (u === "https://127.0.0.1:18800/json/activate/T2?token=abc") {
         return jsonResponse({});
       }
       throw new Error(`unexpected fetch: ${u}`);

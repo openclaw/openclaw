@@ -101,21 +101,31 @@ buffer and disables auto-follow through its visible control except in the
 explicit follow case. Tail measurements hold the next native poll before the
 interval, then release that response during the measured action.
 
-| Scenario                     | Measured action and visible assertion                                                                                                                                                 |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `data-activity-first-render` | Open Activity from Pages; assert its 100-row window.                                                                                                                                  |
-| `data-activity-search`       | Search for the final session beyond the initial window; assert its title.                                                                                                             |
-| `data-activity-time-filter`  | Select All time; await the bounded 100-row replacement.                                                                                                                               |
-| `data-activity-live-update`  | Deliver one current session receipt; assert its updated recap and retained 100-row window.                                                                                            |
-| `data-activity-scroll`       | Scroll to the last row and assert its label and retained count.                                                                                                                       |
-| `data-logs-first-render`     | Open Logs from the settings sidebar; assert the newest of 500 lines.                                                                                                                  |
-| `data-logs-filter`           | Filter the full buffer by sentinel; assert 20 matching rows and the final sentinel.                                                                                                   |
-| `data-logs-level-filter`     | Disable info; assert 800 warning/error rows.                                                                                                                                          |
-| `data-logs-tail-update`      | Release 500 new lines; assert the newest line, 2,000-row cap, and eviction of the oldest.                                                                                             |
-| `data-logs-follow-update`    | Release a tail with auto-follow enabled; assert a bottom gap below 120 px before and after.                                                                                           |
-| `data-logs-refresh`          | Refresh from a full buffer; assert replacement by the latest 500 lines.                                                                                                               |
-| `data-logs-scroll`           | Scroll up, release a tail, assert no scroll jump, then scroll to the bottom.                                                                                                          |
-| `data-logs-long-stream`      | Deliver 10,000 lines over 20 native two-second polls; assert newest line and 2,000-row cap. Expected wall duration is about 40 seconds; its wait is explicitly bounded at 60 seconds. |
+| Scenario                     | Measured action and visible assertion                                                                                                                                                                |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data-activity-first-render` | Open Activity from Pages; assert its 100-row window.                                                                                                                                                 |
+| `data-activity-search`       | Search for the final session beyond the initial window; assert its title.                                                                                                                            |
+| `data-activity-time-filter`  | Select All time; await the bounded 100-row replacement.                                                                                                                                              |
+| `data-activity-live-update`  | Deliver one current session receipt; assert its updated recap and retained 100-row window.                                                                                                           |
+| `data-activity-scroll`       | Scroll to the last row and assert its label and retained count.                                                                                                                                      |
+| `data-logs-first-render`     | Open Logs from the settings sidebar; assert the newest of 500 lines.                                                                                                                                 |
+| `data-logs-filter`           | Filter the full buffer by sentinel; assert 20 matching rows and the final sentinel.                                                                                                                  |
+| `data-logs-level-filter`     | Disable info; assert 800 warning/error results and a bounded mounted window.                                                                                                                         |
+| `data-logs-tail-update`      | Release 500 new lines; assert the retained reader position, 2,000-line cap, and eviction of the oldest.                                                                                              |
+| `data-logs-follow-update`    | Release a tail with auto-follow enabled; assert a bottom gap below 120 px before and after.                                                                                                          |
+| `data-logs-refresh`          | Refresh from a full buffer; assert replacement by the latest 500 lines.                                                                                                                              |
+| `data-logs-scroll`           | Scroll up, release a tail, assert no scroll jump, then scroll to the bottom.                                                                                                                         |
+| `data-logs-long-stream`      | Enable auto-follow, deliver 10,000 lines over 20 native two-second polls, then assert newest line and 2,000-line cap. Expected wall duration is about 40 seconds; its wait is bounded at 60 seconds. |
+
+Logs always render a variable-height window. The scenarios
+read the retained result count from list-item `aria-setsize` and assert fewer than
+100 mounted rows; eager comparison builds use their DOM count. The append-only
+tail scenario keeps auto-follow disabled and verifies that the retained last
+line's position moves from 2,000 to 1,500 after trim. Follow and scroll scenarios
+separately reach the newest line. The plain End key converges on the final row
+as wrapped heights settle; the Logs browser regression covers desktop and narrow
+viewports. The application filter and export still cover all retained lines;
+browser Find and native text selection cover mounted rows.
 
 ## Board, dashboards, and workspace
 

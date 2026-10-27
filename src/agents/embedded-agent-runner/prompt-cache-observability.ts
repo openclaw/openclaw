@@ -133,7 +133,7 @@ const toolSchemaFingerprints = new WeakMap<object, string>();
 const MAX_TRACKERS = 512;
 const historyRewriteWarnings = createDedupeCache({ ttlMs: 0, maxSize: MAX_TRACKERS });
 const MAX_HISTORY_DIFF_FIELDS = 8;
-// Only these static names may enter diagnostics; extension keys can contain user data.
+// Known fields retain stable markers; other diagnostics name bounded keys, never values.
 const HISTORY_ENVELOPE_FIELDS = new Set([
   "role",
   "timestamp",
@@ -168,6 +168,10 @@ const HISTORY_BLOCK_FIELDS = new Set([
   "mimeType",
   "index",
 ]);
+
+function describeHistoryField(key: string, known: ReadonlySet<string>) {
+  return known.has(key) ? key : `other[${JSON.stringify(sanitizeForLog(key).slice(0, 80))}]`;
+}
 
 function unpackHistoryFingerprint(fingerprint: PromptHistoryFingerprint) {
   // One kind byte and a 32-byte envelope digest precede the ordered content hashes.
@@ -232,7 +236,7 @@ function describeHistoryChange(
             ...(changed.length
               ? new Set(
                   changed.map(
-                    (key) => `content[${index}].${HISTORY_BLOCK_FIELDS.has(key) ? key : "other"}`,
+                    (key) => `content[${index}].${describeHistoryField(key, HISTORY_BLOCK_FIELDS)}`,
                   ),
                 )
               : [`content[${index}]`]),
@@ -252,7 +256,7 @@ function describeHistoryChange(
   }
   for (const key of new Set([...previous.envelopeFields.keys(), ...next.envelopeFields.keys()])) {
     if (previous.envelopeFields.get(key) !== next.envelopeFields.get(key)) {
-      const field = `envelope.${HISTORY_ENVELOPE_FIELDS.has(key) ? key : "other"}`;
+      const field = `envelope.${describeHistoryField(key, HISTORY_ENVELOPE_FIELDS)}`;
       if (!fields.includes(field)) {
         fields.push(field);
       }

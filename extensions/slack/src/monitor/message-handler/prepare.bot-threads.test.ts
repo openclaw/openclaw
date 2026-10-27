@@ -191,6 +191,20 @@ describe("Slack strict bot mentions", () => {
     );
   }
 
+  it("preserves authorized bot commands when bot-thread mention gating is disabled", async () => {
+    const test = botFixture({
+      allowBots: "mentions",
+      requireExplicitBotMention: true,
+      requireMention: true,
+      requireMentionInBotThreads: false,
+      implicitMentions: { replyToBot: true, threadParticipation: true },
+    });
+    test.message.bot_id = "OTHERBOT";
+    test.message.user = "UOTHERBOT";
+    test.message.text = "/new";
+    expect((await test.prepare())?.ctxPayload.MentionSource).toBe("command_bypass");
+  });
+
   it.each(["reply_to_bot", "bot_thread_participant"])(
     "rejects untagged bots with %s while preserving explicit bots and human follow-ups",
     async (kind) => {

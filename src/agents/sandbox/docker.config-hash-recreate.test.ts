@@ -98,7 +98,35 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
     expect(calls("create")).toHaveLength(1);
     expect(calls("start")).toHaveLength(1);
     expect(calls("inspect")).toHaveLength(2);
+    expect(calls("image")).toHaveLength(0);
+    expect(calls("create")[0]?.args).toContain("--pull=never");
   });
+
+  it.each([
+    [
+      "No such image: example/custom:latest",
+      "Sandbox image not found: example/custom:latest. Build or pull it first.",
+    ],
+    ["", "container name is already in use"],
+  ])(
+    "diagnoses failed Docker creation without starting a container (%s)",
+    async (imageError, message) => {
+      const workspaceDir = tempDirs.make("openclaw-docker-create-");
+      const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
+      cfg.docker.image = "example/custom:latest";
+      prepareCreation(true);
+      spawnState.createError = imageError || "container name is already in use";
+      spawnState.imageError = imageError;
+
+      await expect(
+        harness.ensureSandboxContainer(containerParams(cfg, workspaceDir)),
+      ).rejects.toThrow(message);
+
+      expect(calls("create")).toHaveLength(1);
+      expect(calls("image")).toHaveLength(1);
+      expect(calls("start")).toHaveLength(0);
+    },
+  );
 
   it.each(["docker", "podman"] as const)(
     "completes %s setup after recreation with retained registry custody",

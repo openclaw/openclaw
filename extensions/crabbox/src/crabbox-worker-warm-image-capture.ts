@@ -27,6 +27,7 @@ import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.
 import {
   crabboxWarmImageRecoveryHint,
   withoutCrabboxWarmImageOperation,
+  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-records.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 import {
@@ -35,7 +36,6 @@ import {
   isCrabboxCaptureRefusalRetained,
   sameCrabboxWarmImageGeneration,
   type openCrabboxWarmImageStore,
-  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;

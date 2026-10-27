@@ -12,6 +12,7 @@ import {
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { runManagedCommand } from "../lib/managed-child-process.mts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
+import type { TeamShapeSessionsOptions } from "./team-shape-sessions.ts";
 
 export function parseTeamShapeOptions(argv: string[]) {
   const { values } = parseArgs({
@@ -155,7 +156,9 @@ export function parseTeamShapeOptions(argv: string[]) {
   };
 }
 
-export async function generateTeamShapeFixture(options: ReturnType<typeof parseTeamShapeOptions>) {
+export async function generateTeamShapeFixture(
+  options: ReturnType<typeof parseTeamShapeOptions> & Pick<TeamShapeSessionsOptions, "sessionKeys">,
+) {
   const startedAt = performance.now();
   const { stateDir } = options;
   mkdirSync(path.dirname(stateDir), { recursive: true });
@@ -204,7 +207,13 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
         : {}),
       agents: {
         ...(options.teamStress
-          ? { ownership: "explicit" as const, defaults: { systemAgent: { agentId: "main" } } }
+          ? {
+              ownership: "explicit" as const,
+              defaults: {
+                systemAgent: { agentId: "main" },
+                subagents: { archiveAfterMinutes: 24 * 60 },
+              },
+            }
           : {}),
         entries: Object.fromEntries(
           (options.teamStress ? ["main", "reviewer", "researcher", "planner"] : ["main"]).map(

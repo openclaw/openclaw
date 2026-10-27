@@ -260,8 +260,9 @@ async function runLocalWorkspaceProjection<T>(
     }
     throw error;
   } finally {
-    // Only acknowledged journal changes allow the frozen guest to resume.
-    const retained = store.get();
+    // Retirement finished cleanup before removal could invalidate the old binding.
+    // Otherwise, only acknowledged journal changes allow the frozen guest to resume.
+    const retained = quiescence?.retired ? undefined : store.get();
     if (
       retained &&
       !retained.journal_json &&

@@ -164,6 +164,7 @@ describe("widget-card", () => {
     const preview = documentPreview("saved-widget", { sandbox: "strict" });
     const widgetLayout = {
       read: vi.fn(() => 700),
+      readRows: () => undefined,
       write: vi.fn(),
       writeRows: vi.fn(),
       invalidateRow: vi.fn(),

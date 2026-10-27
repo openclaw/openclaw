@@ -793,9 +793,7 @@ describe("createChatSendMessageInjectionStarter", () => {
           kind: "document",
         },
       ],
-      replyOptionImages: [
-        { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
-      ],
+      replyOptionImages: [{ type: "image", data: "inbound-photo", mimeType: "image/png" }],
       documentContext: {
         status: "rendered",
         text: "[PDF content rendered to images]",
@@ -813,9 +811,9 @@ describe("createChatSendMessageInjectionStarter", () => {
         "see attached\n\n[PDF content rendered to images]",
       {
         images: [
-          { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
-          { type: "image", data: "page-1", mimeType: "image/png", sourceIndex: 1 },
-          { type: "image", data: "page-2", mimeType: "image/png", sourceIndex: 1 },
+          { type: "image", data: "inbound-photo", mimeType: "image/png" },
+          { type: "image", data: "page-1", mimeType: "image/png" },
+          { type: "image", data: "page-2", mimeType: "image/png" },
         ],
       },
     );
@@ -837,7 +835,7 @@ describe("createChatSendMessageInjectionStarter", () => {
       expect.anything(),
       "scan attached\n\n[PDF content rendered to images]",
       expect.objectContaining({
-        images: [{ type: "image", data: "page-1", mimeType: "image/png", sourceIndex: 0 }],
+        images: [{ type: "image", data: "page-1", mimeType: "image/png" }],
       }),
     );
   });

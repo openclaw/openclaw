@@ -8,7 +8,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
-import * as hostTranscriptWriter from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import * as hostTranscriptWriter from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import {
   onInternalDiagnosticEvent,

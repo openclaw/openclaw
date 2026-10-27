@@ -24,6 +24,7 @@ import {
 } from "../../../sessions/session-controller.steer.js";
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
+import { createRequesterYieldCallback } from "../../openclaw-tools.requester-yield.js";
 import { Agent, type AgentEvent, type AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -231,6 +232,63 @@ describe("runEmbeddedAttempt sessions_yield", () => {
     expect(queued.phase).toBe("preparing");
     expect(queued.mailbox.entries).toContain(queued);
     retireSessionControllerInput(queued);
+  });
+});
+
+describe("automation yield", () => {
+  const sessionKey = "agent:main:cron:yield-job:run:turn";
+  const { hoisted, runAttempt } = useContextEngineAttemptHarness(sessionKey);
+
+  it("ends the automation turn successfully without another model request", async () => {
+    const outcomes: Extract<AgentEvent, { type: "tool_execution_end" }>[] = [];
+    let requests = 0;
+    hoisted.createOpenClawCodingToolsMock.mockImplementation((options) => [
+      createSessionsYieldTool({
+        sessionId: "embedded-session",
+        claimYield: createRequesterYieldCallback({
+          requesterSessionKey: sessionKey,
+          requesterAgentId: "main",
+        }),
+        onYield: options?.onYield,
+      }),
+    ]);
+    const result = await runAttempt({
+      attemptOverrides: {
+        disableTools: false,
+        config: { tools: { codeMode: false, toolSearch: false } },
+        sessionManager: SessionManager.inMemory(),
+      },
+      createSession: () =>
+        createAgentBackedAttemptSession((model, tools) => {
+          const agent = new Agent({
+            initialState: { model, tools },
+            streamFn: () => {
+              requests++;
+              return streamAttemptAssistant(
+                model,
+                requests === 1
+                  ? attemptToolCall("yield-call", "sessions_yield")
+                  : [{ type: "text", text: "Unexpected continuation" }],
+              );
+            },
+          });
+          agent.subscribe((event) => {
+            if (event.type === "tool_execution_end") {
+              outcomes.push(event);
+            }
+          });
+          return agent;
+        }),
+    });
+    expect(outcomes).toMatchObject([
+      {
+        toolName: "sessions_yield",
+        isError: false,
+        result: { details: { status: "yielded", note: expect.stringContaining("scheduler") } },
+      },
+    ]);
+    expect(requests).toBe(1);
+    expect(result.yieldDetected).toBe(true);
   });
 });
 

@@ -309,18 +309,20 @@ export function commitSessionEntryReplacementsInDatabase(
         publishConversationBinding: (replacement.previousSessionKeys?.length ?? 0) > 0,
       },
     );
-    deleteLegacySessionEntryRows(
-      database,
-      [...(replacement.previousSessionKeys ?? [])],
-      replacement.sessionKey,
-      {
-        rehomeMembers: selectedBefore?.sessionId === replacement.entry.sessionId,
-        validatedEntries: new Map(
-          [...transactionRows].map(([key, selected]) => [key, selected.entry]),
-        ),
-        postimages: writtenPostimages,
-      },
-    );
+    if (replacement.previousSessionKeys?.length) {
+      deleteLegacySessionEntryRows(
+        database,
+        [...replacement.previousSessionKeys],
+        replacement.sessionKey,
+        {
+          rehomeMembers: selectedBefore?.sessionId === replacement.entry.sessionId,
+          validatedEntries: new Map(
+            sourceEntries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+          ),
+          postimages: writtenPostimages,
+        },
+      );
+    }
     // Each later replacement starts from the preceding write, including shared physical windows.
     const postimage = writtenPostimages.get(replacement.sessionKey);
     if (postimage) {

@@ -1,6 +1,8 @@
 /**
  * Worker receipt capture + host delivery, restoration, and entry freezing, with
  * synthetic Team-shaped 32 KiB skills metadata and an 8.8 KiB append.
+ * --phase patch measures an unchanged bookkeeping patch with no transcript delta;
+ * its base arm matches the protocol before unchanged patch entry reuse.
  * node --import ./scripts/tsx.mjs scripts/perf/session-actor-receipt-measure.ts \
  *   --arm base --mode timing
  * Repeat with --arm candidate, alternating AB/BA order for at least two pairs
@@ -36,10 +38,13 @@ const { values } = parseArgs({
   options: {
     arm: { type: "string" },
     mode: { type: "string", default: "timing" },
+    phase: { type: "string", default: "append" },
     iterations: { type: "string", default: "5000" },
   },
 });
-const arm: unknown = isMainThread ? values.arm : workerData;
+const arm: unknown = isMainThread ? values.arm : workerData.arm;
+const phase: unknown = isMainThread ? values.phase : workerData.phase;
+assert(phase === "append" || phase === "patch");
 assert(arm === "base" || arm === "candidate", "Choose --arm base or candidate");
 assert(values.mode === "timing" || values.mode === "allocation");
 const iterations = Number(values.iterations);
@@ -79,7 +84,7 @@ const before: SessionActorHotState = {
     modelContext: { kind: "unavailable", reason: "projection", generation: "synthetic-generation" },
   },
 };
-const after: SessionActorHotState = {
+const appended: SessionActorHotState = {
   ...before,
   version: { ...before.version, sequence: 1001 },
   writeToken: "synthetic-entry-revision-1001",
@@ -89,6 +94,7 @@ const after: SessionActorHotState = {
     watermark: { ...before.transcript.watermark, maxSeq: 1001 },
   },
 };
+const after = phase === "patch" ? { ...appended, transcript: before.transcript } : appended;
 const sharedBuffer = new ArrayBuffer(64);
 const event = {
   type: "message",
@@ -100,12 +106,15 @@ const event = {
 };
 event.firstView[16] = 42;
 const outcome = createSessionActorCommittedOutcome({
-  phase: "appendTranscriptEvent",
+  phase: phase === "patch" ? "patch" : "appendTranscriptEvent",
   command: { commandId: "synthetic-append", phaseId: "synthetic-turn" },
   before,
   after,
   payloads: new Map([[1001, { event, serializedBytes: serialize(event).byteLength }]]),
-  applied: { value: { projectionNeedsReconcile: false }, reducers: [] },
+  applied: {
+    value: phase === "patch" ? undefined : { projectionNeedsReconcile: false },
+    reducers: [],
+  },
 });
 type WireOutcome = SessionActorCommittedWireOutcome<typeof outcome.value>;
 type BatchComplete = { kind: "batch-complete"; senderCpuMs: number };
@@ -137,7 +146,7 @@ function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
 }
 async function measure() {
   freezeTrustedJsonSnapshot(before.entry);
-  const sender = new Worker(new URL(import.meta.url), { workerData: arm });
+  const sender = new Worker(new URL(import.meta.url), { workerData: { arm, phase } });
   let senderCpuMs = 0;
   let last: WireOutcome | undefined;
   async function receive(count: number) {
@@ -182,10 +191,12 @@ async function measure() {
       assert.notEqual(last.receipt.postimage.entry, before.entry);
     }
     // The fixture owns this event shape; the check includes aliasing, not just equal bytes.
-    const delivered = last.receipt.transcript.appendedEvents?.[0]?.event as typeof event;
-    assert.equal(delivered.firstView.buffer, delivered.secondView.buffer);
-    assert.notEqual(delivered.firstView.buffer, sharedBuffer);
-    assert.equal(delivered.secondView[0], 42);
+    if (phase === "append") {
+      const delivered = last.receipt.transcript.appendedEvents?.[0]?.event as typeof event;
+      assert.equal(delivered.firstView.buffer, delivered.secondView.buffer);
+      assert.notEqual(delivered.firstView.buffer, sharedBuffer);
+      assert.equal(delivered.secondView[0], 42);
+    }
 
     await receive(1000);
     await setImmediate();
@@ -220,7 +231,7 @@ async function measure() {
         arm,
         mode: values.mode,
         iterations,
-        fixture: "32k-entry-8.8k-append",
+        fixture: phase === "patch" ? "32k-entry-unchanged-patch" : "32k-entry-8.8k-append",
         serializedBytesPerOperation: serialize(wire).byteLength,
         elapsedMs: end - start,
         mainThreadCpuMs: (cpu.user + cpu.system) / 1000,

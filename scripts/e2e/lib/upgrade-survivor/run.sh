@@ -2800,7 +2800,13 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase seed-legacy-pending-delivery node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     seed-legacy-operator-pending-delivery
 fi
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase seed-legacy-doctor-repairs node scripts/e2e/lib/upgrade-survivor/legacy-operator-doctor-repairs.mjs seed
+fi
 phase update-candidate update_candidate_for_install_mode
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase assert-legacy-doctor-repairs node scripts/e2e/lib/upgrade-survivor/legacy-operator-doctor-repairs.mjs assert
+fi
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase assert-legacy-pending-delivery node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-legacy-operator-pending-delivery "$UPDATE_JSON" "$UPDATE_ERR"

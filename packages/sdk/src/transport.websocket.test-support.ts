@@ -74,7 +74,6 @@ export async function createSdkWebSocketServer(port = 0) {
   });
   return {
     url,
-    reply: replySdkRequest,
     setRequestHandler(handler?: typeof requestHandler) {
       requestHandler = handler;
     },

@@ -2,7 +2,6 @@ import { applyToolAvailabilityDescriptions } from "../../agents/agent-tools.defe
 import { resolveEffectiveToolPolicy } from "../../agents/agent-tools.policy.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import { resolveConversationQuestionInputMode } from "../../agents/conversation-capability-profile.js";
-import { filterRequesterYieldTools } from "../../agents/openclaw-tools.requester-yield.js";
 import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
@@ -239,7 +238,5 @@ export async function resolveSkillDispatchTools(params: {
     policyFiltered,
     getPluginToolMeta,
   );
-  return applyToolAvailabilityDescriptions(
-    filterRequesterYieldTools(policyFiltered, params.sessionKey),
-  );
+  return applyToolAvailabilityDescriptions(policyFiltered);
 }

@@ -178,7 +178,6 @@ const activeStores = new Set<SessionSnapshotStore>();
 async function parseSnapshotRecord(
   value: unknown,
   sessionKey?: string,
-  onBoard?: (board: ChatSessionSnapshot["board"]) => void,
 ): Promise<SessionSnapshotRecord | null> {
   const parsed = json.parseSnapshot(recordSchema, value);
   if (!parsed || (sessionKey && parsed.sessionKey !== sessionKey)) {
@@ -186,8 +185,6 @@ async function parseSnapshotRecord(
   }
   const historyState = parsed.snapshot.historyState;
   if (historyState !== undefined) {
-    // Do not hold board restoration behind the lazy transcript validator.
-    onBoard?.(parsed.snapshot.board);
     // A repeated dynamic import can yield past dispatch even after prewarm evaluated it.
     const isChatHistoryState =
       prewarmedHistoryStateValidator ?? (await loadChatHistoryStateValidator());
@@ -202,7 +199,6 @@ async function readSnapshotRecord(
   sessionKey: string,
   value: unknown,
   isCurrent: () => boolean,
-  onBoard?: (board: ChatSessionSnapshot["board"]) => void,
 ): Promise<ChatSessionSnapshot | null> {
   if (
     value === undefined ||
@@ -212,7 +208,7 @@ async function readSnapshotRecord(
   ) {
     return null;
   }
-  const record = await parseSnapshotRecord(value, sessionKey, onBoard);
+  const record = await parseSnapshotRecord(value, sessionKey);
   if (!isCurrent()) {
     return null;
   }
@@ -534,22 +530,26 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     }
   }
 
-  async read(
-    sessionKey: string,
-    onBoard?: (board: ChatSessionSnapshot["board"]) => void,
-    onReady?: (snapshot: ChatSessionSnapshot) => void,
-  ): Promise<ChatSessionSnapshot | null> {
+  readReady(sessionKey: string): ChatSessionSnapshot | undefined {
+    const entry = peekPrewarmedChatSnapshot();
+    const snapshot = entry?.prepared?.snapshot;
+    if (entry?.cacheKey !== sessionKey || entry.cancelled || !snapshot) {
+      return undefined;
+    }
+    consumePrewarmedChatSnapshot(sessionKey);
+    setSessionCacheValue(this.hydratedSnapshots, sessionKey, new WeakRef(snapshot));
+    return snapshot;
+  }
+
+  async read(sessionKey: string): Promise<ChatSessionSnapshot | null> {
     const scope = this.captureReadScope(sessionKey);
     try {
       const prewarm = consumePrewarmedChatSnapshot(sessionKey);
       const read = () =>
         (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey)).then((value) =>
-          readSnapshotRecord(sessionKey, value, scope.isCurrent, onBoard),
+          readSnapshotRecord(sessionKey, value, scope.isCurrent),
         );
       const prepared = prewarm ? readSharedPrewarm(prewarm, read) : undefined;
-      if (prepared?.snapshot && scope.isCurrent() && !prewarm?.cancelled) {
-        onReady?.(prepared.snapshot);
-      }
       const snapshot = await (prepared?.promise ?? read());
       if (!snapshot || !scope.isCurrent()) {
         return null;

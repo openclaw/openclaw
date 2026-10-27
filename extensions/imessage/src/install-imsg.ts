@@ -77,11 +77,7 @@ async function resolveBrewIMessageCliPath(brewExe: string): Promise<string | nul
 export async function installIMessageCli(
   runtime: RuntimeEnv,
   opts?: { upgrade?: boolean; cliPath?: string },
-): Promise<{
-  ok: boolean;
-  cliPath?: string;
-  error?: string;
-}> {
+) {
   if (process.platform !== "darwin") {
     return {
       ok: false,

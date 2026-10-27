@@ -247,7 +247,8 @@ describe("ordinary steering into automatic model fallback", () => {
     run.run.sessionKey = key;
     run.run.sessionId = `fallback-${scenario}`;
     const modelConfig = {
-      primary: "openai/gpt-test",
+      // A strict pin differs from the primary; a remembered default still permits fallback.
+      primary: scenario.endsWith("pinned-selection") ? "openai/other-primary" : "openai/gpt-test",
       fallbacks: scenario === "policy-fallback" ? undefined : ["test-alias/test-model"],
     };
     run.run.config = {

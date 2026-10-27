@@ -164,6 +164,7 @@ export type OpenClawStateReadCommand =
       type: "userModelAccounts.catalog";
       selection: import("./user-model-accounts.js").PersonalCatalogSelection;
     }
+  | { type: "userPreferences.sessionPins" }
   | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }
   | { type: "userPreferences.read"; profileId: string; keys?: readonly string[] }
   | {

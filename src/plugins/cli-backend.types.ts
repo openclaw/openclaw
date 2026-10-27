@@ -235,6 +235,11 @@ export type CliBackendExecuteContext = {
   env: Record<string, string>;
   prompt: string;
   promptContext?: CliBackendPromptContext;
+  /**
+   * `host`: OpenClaw generated this prompt (for example a background-command completion);
+   * no person typed it. Backends with a native non-user input marker should apply it.
+   */
+  promptOrigin?: "host";
   modelId: string;
   systemPrompt: string;
   sessionId?: string;

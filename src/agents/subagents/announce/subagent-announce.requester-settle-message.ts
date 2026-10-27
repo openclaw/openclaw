@@ -11,6 +11,7 @@ import {
 } from "../completion/subagent-completion-instructions.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { isSubagentObligationRetired } from "../registry/subagent-requester-settle-identity.js";
+import { getSubagentTerminalReplySummary } from "../registry/subagent-run-payload-facts.js";
 import {
   buildSubagentRestartRecoveryRoster,
   SUBAGENT_RESTART_RECOVERY_INSTRUCTION,
@@ -64,7 +65,7 @@ export function buildRequesterSettleWakeMessage(params: {
   const routeNotices = [
     ...new Set(
       params.children.flatMap((entry) => {
-        const reply = entry.completion?.terminalReply;
+        const reply = getSubagentTerminalReplySummary(entry);
         return needsRequesterSettleFindings(entry) &&
           reply?.disposition === "visible" &&
           reply.modelRouteChange

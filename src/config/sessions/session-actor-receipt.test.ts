@@ -271,43 +271,64 @@ it("refuses to restore a receipt without its exact command preimage", () => {
   );
 });
 
-it("omits only the unchanged entry held by an append command", () =>
-  withActor(async (f) => {
-    const prompt = "synthetic instructions ".repeat(1600);
-    f.writeEntry({ ...f.nativeEntry()!, skillsSnapshot: { prompt, skills: [] } });
-    for (const mode of ["matching", "stale", "changed"] as const) {
-      const before = f.read();
-      const command: Mutation = {
-        type: "session.actor.appendTranscriptEvent",
-        input: {
-          target: f.target,
-          sessionId: f.scope.sessionId,
-          lifecycleRevision: null,
-          commandId: `resident-append-${mode}`,
-          phaseId: "turn",
-          entryReference: mode === "stale" ? "stale-token" : before.writeToken,
-          reducers: mode === "changed" ? [{ kind: "activity", updatedAt: 20 }] : undefined,
-          eventJson: JSON.stringify({
-            type: "custom",
-            customType: "synthetic-receipt",
-            id: `new-event-${mode}`,
-            parentId: null,
-            data: { content: "x".repeat(6 * 1024) },
-          }),
-        },
-      };
-      await f.prepare(command);
-      const outcome = f.mutate(command);
-      assert(outcome.kind === "committed");
-      if (mode === "matching") {
-        expect(serialize(outcome).byteLength).toBeLessThan(16 * 1024);
-      } else {
-        expect(outcome.receipt.postimage).toEqual(f.read());
-        outcome.receipt.postimage.entry!.skillsSnapshot!.prompt = "caller edit";
+it.each(["append", "patch"] as const)(
+  "omits only the unchanged entry held by a %s command",
+  (phase) =>
+    withActor(async (f) => {
+      const prompt = "synthetic instructions ".repeat(1600);
+      f.writeEntry({ ...f.nativeEntry()!, skillsSnapshot: { prompt, skills: [] } });
+      for (const mode of ["matching", "stale", "changed"] as const) {
+        const before = f.read();
+        const command: Mutation = {
+          type: "session.actor.appendTranscriptEvent",
+          input: {
+            target: f.target,
+            sessionId: f.scope.sessionId,
+            lifecycleRevision: null,
+            commandId: `resident-${phase}-${mode}`,
+            phaseId: "turn",
+            entryReference: mode === "stale" ? "stale-token" : before.writeToken,
+            reducers: mode === "changed" ? [{ kind: "activity", updatedAt: 20 }] : undefined,
+            eventJson: JSON.stringify({
+              type: "custom",
+              customType: "synthetic-receipt",
+              id: `new-event-${mode}`,
+              parentId: null,
+              data: { content: "x".repeat(6 * 1024) },
+            }),
+          },
+        };
+        const selected: Mutation =
+          phase === "patch"
+            ? {
+                type: "session.actor.patch",
+                input: {
+                  target: f.target,
+                  commandId: command.input.commandId,
+                  phaseId: "turn",
+                  entryReference: command.input.entryReference,
+                  reducers: [
+                    {
+                      kind: "activity",
+                      updatedAt: mode === "changed" ? 20 : before.entry!.updatedAt,
+                    },
+                  ],
+                },
+              }
+            : command;
+        await f.prepare(selected);
+        const outcome = f.mutate(selected);
+        assert(outcome.kind === "committed");
+        if (mode === "matching") {
+          expect(serialize(outcome).byteLength).toBeLessThan(16 * 1024);
+        } else {
+          expect(outcome.receipt.postimage).toEqual(f.read());
+          outcome.receipt.postimage.entry!.skillsSnapshot!.prompt = "caller edit";
+        }
+        expect(before.entry?.skillsSnapshot?.prompt).toBe(prompt);
+        expect(f.read().entry?.skillsSnapshot?.prompt).toBe(prompt);
+        expect(f.nativeEntry()?.skillsSnapshot?.prompt).toBe(prompt);
+        expect(f.nativeEntry()?.updatedAt).toBe(mode === "changed" ? 20 : before.entry?.updatedAt);
       }
-      expect(before.entry?.skillsSnapshot?.prompt).toBe(prompt);
-      expect(f.read().entry?.skillsSnapshot?.prompt).toBe(prompt);
-      expect(f.nativeEntry()?.skillsSnapshot?.prompt).toBe(prompt);
-      expect(f.nativeEntry()?.updatedAt).toBe(mode === "changed" ? 20 : before.entry?.updatedAt);
-    }
-  }));
+    }),
+);

@@ -1,3 +1,5 @@
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 const log = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
@@ -41,6 +43,54 @@ describe("agent harness lifecycle hook helpers", () => {
     log.warn.mockClear();
     Reflect.deleteProperty(globalThis, Symbol.for("openclaw.pluginFinalizeRetryBudget"));
   });
+
+  it.each(["agent_end", "before_agent_finalize"] as const)(
+    "releases hydrated message-loader state while %s is still running",
+    async (hook) => {
+      const entered = Promise.withResolvers<void>();
+      const pending = Promise.withResolvers<void>();
+      let receivedMessages: unknown[] | undefined;
+      const dispatch = async (event: { messages: unknown[] }) => {
+        receivedMessages = event.messages;
+        entered.resolve();
+        await pending.promise;
+      };
+      const hookRunner = {
+        hasHooks: () => true,
+        runAgentEnd: dispatch,
+        runBeforeAgentFinalize: dispatch,
+      } as never;
+      function start() {
+        const attempt = { text: "completed" };
+        const reference = new WeakRef(attempt);
+        const params = {
+          ctx,
+          hookRunner,
+          event: bindAgentHarnessHookMessages({ ...EVENT }, async () => [
+            { role: "assistant", content: attempt.text },
+          ]),
+        };
+        const completion =
+          hook === "agent_end"
+            ? awaitAgentHarnessAgentEndHook(params)
+            : runAgentHarnessBeforeAgentFinalizeHook(params);
+        return { reference, completion };
+      }
+      const running = start();
+      try {
+        await entered.promise;
+        expect(receivedMessages).toEqual([{ role: "assistant", content: "completed" }]);
+        const control = new WeakRef({});
+        await setImmediate();
+        queryObjects(WeakRef);
+        expect(control.deref()).toBeUndefined();
+        expect(running.reference.deref()).toBeUndefined();
+      } finally {
+        pending.resolve();
+        await running.completion;
+      }
+    },
+  );
 
   it.each(["agent_end", "before_agent_finalize"] as const)(
     "loads %s evidence only for its subscriber and skips delivery when loading fails",

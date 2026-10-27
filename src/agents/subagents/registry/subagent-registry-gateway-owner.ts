@@ -10,6 +10,7 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
+import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../../../infra/restart-recovery-errors.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
@@ -82,7 +83,9 @@ async function restoreChannelSubagentCompletionSource(
       (mutation.previous.sessionId === entry.completionRequesterSessionId ||
         mutation.previous.sessionKeys.includes(requester.sessionKey))
     ) {
-      revoked.abort(new Error("Subagent recovery requester session changed"));
+      const reason = new Error("Subagent recovery requester session changed");
+      materializeErrorStack(reason);
+      revoked.abort(reason);
     }
   });
   let retained = false;

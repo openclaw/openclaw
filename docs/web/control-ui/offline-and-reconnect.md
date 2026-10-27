@@ -138,8 +138,11 @@ discovery; the Gateway revalidates the established session after connecting.
 Unique display-name links use the same cached route resolution, including the
 `/dashboard` namespace. Missing or ambiguous names still wait for the Gateway.
 
-Exact conversation links also wait for the scoped cached roster before presenting
-their header. Dashboard layouts restore before the pane renders, and embedded
+Exact conversation links can restore their scoped transcript without waiting for
+the sidebar roster or the socket to open. A prepared snapshot supplies the header,
+transcript, and composer in the first pane frame. The existing header connection
+indicator remains visible until live history and route confirmation finish; cached
+content stays visible while those checks run. Dashboard layouts restore before the pane renders, and embedded
 HTML widgets restore their last board metadata from the same scoped conversation
 cache and start loading the isolated sandbox while connecting. Document requests
 still require the current Gateway connection and overlap the live board refresh.
@@ -256,6 +259,17 @@ and respect unsaved-work protection.
 The current route and stored drafts survive the reload. If browser storage is unavailable
 or reload protection blocks recovery, reload the tab after saving your work;
 do not clear site data while drafts or queued messages still need recovery.
+Unsent highlighted-text comments in Side chat also restore after a Gateway restart
+or page reload, including their quoted text and source anchors. They use the same
+Gateway- and account-scoped browser draft storage, not shared session history.
+Editing or removing a comment updates that saved draft; sending the Side chat
+question or clearing Side chat retires its unsent comments. Incognito comments
+remain memory-only. Clearing browser site data removes saved comments too.
+While a Side chat comment autosave is pending, the composer shows **Saving…**.
+Automatic and in-app reloads are blocked, and a browser reload or close warns
+before discarding that unsaved input. Wait for saving to finish before refreshing;
+a forced exit can still discard a write that has not committed. Storage failures
+keep the comment available in memory with the existing browser-storage warning.
 
 If a view or stylesheet download fails during a network interruption, the open
 page keeps checking reachability with a backoff capped at 15 seconds. Coming

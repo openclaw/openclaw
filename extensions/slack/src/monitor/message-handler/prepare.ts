@@ -874,6 +874,8 @@ export async function prepareSlackMessage(params: {
     threadTs &&
     runtimeBinding?.conversation.conversationId !== threadTs;
 
+  const requireExplicitBotMention =
+    channelConfig?.requireExplicitBotMention ?? account.config.requireExplicitBotMention ?? false;
   const mentionDecision = resolveSlackMentionDecision({
     facts: {
       explicitBotMention: explicitlyMentionedBotUser || opts.source === "app_mention",
@@ -885,7 +887,9 @@ export async function prepareSlackMessage(params: {
     },
     policy: {
       isGroup: isRoom,
-      requireMention: shouldRequireMention,
+      requireMention:
+        shouldRequireMention ||
+        (isBotMessage && allowBotsMode === "mentions" && requireExplicitBotMention),
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
@@ -896,8 +900,6 @@ export async function prepareSlackMessage(params: {
     mentionDecision;
 
   if (isBotMessage && allowBotsMode === "mentions") {
-    const requireExplicitBotMention =
-      channelConfig?.requireExplicitBotMention ?? account.config.requireExplicitBotMention ?? false;
     const botMentioned =
       isDirectMessage ||
       (requireExplicitBotMention ? wasMentioned : effectiveWasMentioned) ||
