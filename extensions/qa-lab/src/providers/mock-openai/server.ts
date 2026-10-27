@@ -937,9 +937,9 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents(visibleRepresentation);
     }
-    // Empty output exercises direct fallback. Exact NO_REPLY is intentional
-    // silence and must not be used as a missing-answer fixture.
-    return buildAssistantEvents("");
+    // Quiet completion is valid consumption. A visible final without the required
+    // message tool exercises the missing-delivery fallback instead.
+    return buildAssistantEvents("Completion reviewed.");
   }
   const terminalWorkerCase = terminalTurn?.kind === "worker" ? terminalTurn.caseName : undefined;
   if (terminalWorkerCase) {

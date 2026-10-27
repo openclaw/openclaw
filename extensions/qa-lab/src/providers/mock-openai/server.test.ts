@@ -683,7 +683,7 @@ describe("qa mock openai server", () => {
         "Subagent terminal reply QA check: empty.",
         "[Internal task completion event]\nTask: qa-terminal-empty\nChild task: Subagent terminal reply QA worker: empty.\nResult: (no output)",
       ),
-      "",
+      "Completion reviewed.",
     ],
     [
       "lets child subagent prompts finish with an exact token",
@@ -1481,7 +1481,7 @@ describe("qa mock openai server", () => {
       ),
     ).toContain("QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK");
   });
-  it.each(["visible", "silent"])(
+  it.each(["visible", "silent", "empty", "fallback"])(
     "handles captured current completion v4 for %s",
     async (terminalCase) => {
       const server = await startMockServer();
@@ -1522,9 +1522,9 @@ describe("qa mock openai server", () => {
       );
       const tools = [SESSIONS_SPAWN_TOOL, MESSAGE_TOOL];
       const payload = await respond(server, input, { tools });
-      if (terminalCase === "visible") {
+      if (terminalCase !== "silent") {
         expectNoTool(payload);
-        expect(outputText(payload)).toBe("");
+        expect(outputText(payload)).toBe("Completion reviewed.");
         return;
       }
       const messageCall = findToolCall(payload, "message");
