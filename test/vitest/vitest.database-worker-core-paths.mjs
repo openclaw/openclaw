@@ -574,7 +574,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/bash-tools.exec.security-floor.test.ts",
   "src/agents/bash-tools.github-auth-selection.test.ts",
   "src/agents/bash-tools.github-identity.test.ts",
-  "src/agents/bash-tools.process.finished-retention.test.ts",
   "src/agents/bash-tools.process.scope.test.ts",
   "src/agents/bash-tools.test.ts",
   "src/agents/code-mode.agent-loop.test.ts",
