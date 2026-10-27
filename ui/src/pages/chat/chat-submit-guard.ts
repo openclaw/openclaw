@@ -49,7 +49,6 @@ export async function withChatSubmitHandoff(
   options: {
     yieldToInput: boolean;
     isCurrent: () => boolean;
-    allowActiveRunSend: boolean;
     pendingSettings?: Promise<boolean>;
   },
   deliver: (item: ChatQueueItem) => Promise<QueuedChatSendResult>,
@@ -63,12 +62,10 @@ export async function withChatSubmitHandoff(
     !isInitialChatHistoryUnavailable(host) &&
     !options.pendingSettings &&
     queued.sendState === "waiting-idle" &&
-    (queued.queueMode ||
-      (options.allowActiveRunSend && !queued.intent) ||
-      (!isChatBusy(host) &&
-        !hasDirectSessionRun(host) &&
-        host.chatQueue.find((item) => item.sendState !== "failed" || item.localCommandName)?.id ===
-          queued.id));
+    !isChatBusy(host) &&
+    !hasDirectSessionRun(host) &&
+    host.chatQueue.find((item) => item.sendState !== "failed" || item.localCommandName)?.id ===
+      queued.id;
   // Admission is durable, but delivery has not made a transport attempt yet.
   // Present that handoff inline without flashing the waiting-message tray.
   const submission =

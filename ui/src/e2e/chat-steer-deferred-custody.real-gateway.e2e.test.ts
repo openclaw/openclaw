@@ -81,11 +81,11 @@ async function rpc(page: Page, method: string, params: Record<string, unknown>) 
   );
 }
 
-describe.skipIf(!variant)("Task proof: actual deferred steering custody", () => {
+describe.skipIf(!variant)("Task proof: actual pending follow-up custody", () => {
   let instance: OpenClawTestInstance;
   let provider: Awaited<ReturnType<typeof startScrollInferenceFixture>>;
   const suite = createControlUiE2eSuite({
-    name: "Mobile deferred steering through a real Gateway",
+    name: "Mobile pending follow-up through a real Gateway",
     startServerBeforeBrowser: true,
     async startServer() {
       if (variant !== "baseline" && variant !== "fixed") {
@@ -134,13 +134,12 @@ describe.skipIf(!variant)("Task proof: actual deferred steering custody", () => 
         await pairFixture(page, instance);
         await page.goto(new URL("settings/appearance", suite.server.baseUrl).href);
         await waitForControlUiGatewayReady(page);
-        await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
+        await page.locator("[data-settings-follow-up-mode]").selectOption("server");
         await page.locator("[data-settings-send-shortcut]").selectOption("enter");
         await rpc(page, "sessions.create", {
           key: sessionKey,
           agentId: "main",
           label: "Deferred steering proof",
-          toolOverrides: { webSearch: true },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await waitForControlUiGatewayReady(page);
@@ -158,33 +157,21 @@ describe.skipIf(!variant)("Task proof: actual deferred steering custody", () => 
           })
           .waitFor();
         await stop.waitFor();
-        // The real running backend freezes its tool fingerprint. A supported public
-        // policy edit changes the next input's fingerprint, genuinely rejecting steering.
-        // No test hook changes injection availability or manufactures custody/events.
-        await rpc(page, "sessions.patch", {
-          key: sessionKey,
-          toolOverrides: { webSearch: false },
-        });
         await composer.fill(correction);
         const before = wire.frames.length;
-        await composer.press("Control+Enter");
+        await composer.press("Enter");
         await expect.poll(() => wire.requests("chat.send").length).toBe(2);
         const sent = wire.requests("chat.send")[1]!.frame;
         expect(sent.params).toMatchObject({
           sessionKey,
           message: correction,
-          queueMode: "steer",
         });
+        expect(record(sent.params)?.queueMode).toBe("followup");
         const runId = record(sent.params)?.idempotencyKey;
         if (typeof runId !== "string") {
           throw new Error("Actual steer idempotency key missing");
         }
         await expect.poll(() => wire.response(sent.id)).toMatchObject({ ok: true });
-        // Pre-ACK rejection has no warning log. Prove disposition through the
-        // authoritative receipt and automatic history refresh below instead.
-        await expect
-          .poll(() => wire.events("sessions.changed", before))
-          .toContainEqual(expect.objectContaining({ reason: "agent.input.settled" }));
         // Do not issue a manual history request before the visual assertion: production
         // settlement/history refresh must fix placement without later assistant output.
         await expect
@@ -192,8 +179,9 @@ describe.skipIf(!variant)("Task proof: actual deferred steering custody", () => 
           .toContainEqual(
             expect.objectContaining({
               pendingInputs: expect.objectContaining({
-                queuedCount: 1,
-                items: expect.arrayContaining([expect.objectContaining({ runId, queued: true })]),
+                items: expect.arrayContaining([
+                  expect.objectContaining({ runId, state: "queued" }),
+                ]),
               }),
             }),
           );
@@ -214,19 +202,24 @@ describe.skipIf(!variant)("Task proof: actual deferred steering custody", () => 
                 ["delta", "final", "error", "aborted"].includes(String(record(payload)?.state)),
             ),
         ).toEqual([]);
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        await expect.poll(() => queued.count()).toBe(1);
+        await expect.poll(() => bubble.count()).toBe(0);
+        expect(wire.requests("chat.send")).toHaveLength(2);
+        expect(provider.requests()).toBe(1);
         const custody = (await rpc(page, "chat.history", {
           sessionKey,
           inputRunIds: [runId],
         })) as History;
         expect(
-          custody.pendingInputs?.items.filter((item) => item.runId === runId && item.queued),
+          custody.pendingInputs?.items.filter(
+            (item) => item.runId === runId && item.state === "queued",
+          ),
         ).toHaveLength(1);
-        expect(custody.pendingInputs?.queuedCount).toBe(1);
-        expect(custody.inputReceipts).toContainEqual({
-          runId,
-          state: "pending",
-          queued: true,
-        });
+        expect(custody.inputReceipts).toContainEqual(
+          expect.objectContaining({ runId, state: "pending" }),
+        );
         // Stop through production UI before fixture shutdown, never finish the held
         // inference and accidentally execute the queued correction during cleanup.
         await stop.click();
@@ -239,7 +232,7 @@ describe.skipIf(!variant)("Task proof: actual deferred steering custody", () => 
 
   suite.define(() => {
     it(
-      "keeps one rejected steer in follow-up custody while the original inference remains held",
+      "keeps an admitted follow-up in Queue while the original inference remains held",
       (test) =>
         suite.runScenario(test, {
           retainedState: () => instance.stateDir,

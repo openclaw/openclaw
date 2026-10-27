@@ -15,8 +15,8 @@ import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
-import { isQueuedSendInlineState } from "../chat-progress.ts";
-import { isSteerableQueuedMessage } from "../chat-queue.ts";
+import { shouldRenderQueuedSendInThread } from "../chat-progress.ts";
+import { canDiscardQueuedMessage, isSteerableQueuedMessage } from "../chat-queue.ts";
 import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { handleQueueEditKeydown } from "./chat-composer-keydown.ts";
@@ -24,6 +24,7 @@ import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 type ChatQueueProps = {
   queue: ChatQueueItem[];
+  runId?: string | null;
   displayQueue?: ChatQueueDisplayItem[];
   connected?: boolean;
   offline?: boolean;
@@ -139,11 +140,9 @@ function mountQueueEditInput(element: HTMLTextAreaElement, value: string): void 
 
 export function renderChatQueueSolid(props: ChatQueueProps) {
   const visibleQueue = createMemo(() => {
-    const items = (props.displayQueue ?? props.queue).filter(
-      (item) =>
-        item.sendState !== "submitting" &&
-        item.sendState !== "sending" &&
-        !isQueuedSendInlineState(item),
+    const queue: ChatQueueDisplayItem[] = props.displayQueue ?? props.queue;
+    const items = queue.filter(
+      (item) => item.serverQueued || !shouldRenderQueuedSendInThread(item, props.runId),
     );
     const edit = props.queuedEdit;
     // A retired source stays available for recovery without recreating an outbox row.
@@ -171,7 +170,7 @@ export function renderChatQueueSolid(props: ChatQueueProps) {
   });
   const globalState = createMemo(() => {
     const head = props.queue.find((item) => item.sendState !== "failed" || item.localCommandName);
-    return head?.sendState === "held" && isQueuedSendInlineState(head)
+    return head?.sendState === "held" && shouldRenderQueuedSendInThread(head, props.runId)
       ? { label: t("chat.queue.states.blockedByReview"), tone: "warn" }
       : visibleQueue().some((item) => item.sendState === "waiting-model") && !props.offline
         ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
@@ -572,7 +571,9 @@ function ChatQueueItem(rowProps: {
             </button>
           </>
         ) : null}
-        {busy() || editing() ? null : (
+        {busy() ||
+        editing() ||
+        (!item().serverQueued && !canDiscardQueuedMessage(item())) ? null : (
           <openclaw-tooltip prop:content={t("chat.queue.removeQueuedMessage")}>
             <button
               class="chat-queue__remove"

@@ -170,7 +170,20 @@ export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
   );
 }
 
-export function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
+export function shouldRenderQueuedSendInThread(
+  item: ChatQueueItem,
+  activeRunId?: string | null,
+): boolean {
+  // Pending follow-ups stay in the tray; rejected inputs retain inline recovery.
+  // Transport attempts alone do not make an input part of the active turn.
+  if (
+    (item.sendInline === false || activeRunId) &&
+    (item.sendRunId ?? item.pendingRunId) !== activeRunId &&
+    item.sendState !== "failed" &&
+    item.sendState !== "held"
+  ) {
+    return false;
+  }
   // Page-local submit timing is not persisted; durable attempts keep restored prompts visible.
   return (
     queuedSendStarted(item) &&
@@ -189,7 +202,7 @@ export function resolveWorkingProgress(
   streamSegments: Array<{ ts: number; runId?: string }>,
   toolMessages: unknown[],
 ): WorkingProgress {
-  const visibleSends = queue.filter(shouldRenderQueuedSendInThread);
+  const visibleSends = queue.filter((item) => shouldRenderQueuedSendInThread(item, runId));
   const pendingSends = visibleSends.filter((item) => !isQueuedSendInlineState(item));
   const queuedProgress =
     pendingSends.find((item) => item.sendState === "submitting" || item.sendState === "sending") ??

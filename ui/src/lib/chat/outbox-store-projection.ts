@@ -265,9 +265,8 @@ export function readStoredChatOutbox(
   state: ChatComposerScope,
   scope: StoredChatOutboxScope,
 ): StoredChatOutbox | undefined {
-  return listStoredChatOutboxes(state).find(
-    (outbox) => outbox.sessionKey === scope.sessionKey && outbox.agentId === scope.agentId,
-  );
+  const key = storedChatOutboxScopeKey(scope);
+  return listStoredChatOutboxes(state).find((outbox) => storedChatOutboxScopeKey(outbox) === key);
 }
 
 function summarizeStoredChatOutboxes(

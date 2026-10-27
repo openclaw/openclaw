@@ -124,7 +124,7 @@ describe("grouped chat rendering", () => {
       label: "Waiting for reconnect",
       actionLabel: undefined,
       retry: false,
-      discard: true,
+      discard: false,
     },
     { state: "submitting", label: undefined, actionLabel: undefined, retry: false, discard: false },
     { state: "sending", label: undefined, actionLabel: undefined, retry: false, discard: false },

@@ -162,7 +162,12 @@ export function retireDeliveredQueuedUserTurn(
   host: ChatHost,
   runId: string | undefined,
   scope: StoredChatOutboxScope,
-  options?: { retainUntilConsumed?: boolean; inputConsumed?: boolean },
+  options?: {
+    retainUntilConsumed?: boolean;
+    preserveDisplay?: boolean;
+    inputConsumed?: boolean;
+    steerTargetRunId?: string;
+  },
 ): DeliveredTurnRetirement | Promise<DeliveredTurnRetirement> {
   const client = host.client;
   const owner = client ?? host;
@@ -185,7 +190,9 @@ export function retireDeliveredQueuedUserTurn(
       : "retained";
   }
   if (!stored) {
-    preserveDeliveredUserTurn(host, submissions.readDelivered(deliveryKey, owner));
+    if (options?.preserveDisplay !== false) {
+      preserveDeliveredUserTurn(host, submissions.readDelivered(deliveryKey, owner));
+    }
     return "retired";
   }
   const connectionEpoch = host.connectionEpoch;
@@ -204,7 +211,9 @@ export function retireDeliveredQueuedUserTurn(
     }
     const current = currentItem();
     if (!current) {
-      preserveDeliveredUserTurn(host, submissions.readDelivered(deliveryKey, owner));
+      if (options?.preserveDisplay !== false) {
+        preserveDeliveredUserTurn(host, submissions.readDelivered(deliveryKey, owner));
+      }
       // Consumption can retire the outbox during hydration. A replacement
       // attempt still owns the row; an absent row must not swallow chat.final.
       return readQueuedMessageById(host, stored.id) ? "stale" : "retired";
@@ -230,7 +239,9 @@ export function retireDeliveredQueuedUserTurn(
           ? remembered.message
           : message,
     });
-    preserveDeliveredUserTurn(host, submission);
+    if (options?.preserveDisplay !== false) {
+      preserveDeliveredUserTurn(host, submission);
+    }
     const beforeRemoval = currentItem();
     if (!isCurrent() || !beforeRemoval || !sameQueuedDeliveryVersion(beforeRemoval, stored)) {
       return "stale";
@@ -252,6 +263,7 @@ export function retireDeliveredQueuedUserTurn(
         ...stored,
         attachments,
         runId: stored.sendRunId,
+        steerTargetRunId: options?.steerTargetRunId,
       },
       "complete",
     );

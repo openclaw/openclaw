@@ -35,8 +35,9 @@ describe("chat composer steering queue", () => {
     const onQueueRetry = vi.fn();
     const onQueueRemove = vi.fn();
     const container = renderQueue({
+      runId: "active-run",
       queue: [
-        waiting("message", 1, { sendState: "held", sendAttempts: 1 }),
+        waiting("message", 1, { sendRunId: "rejected-run", sendState: "held", sendAttempts: 1 }),
         waiting("reset", 2, {
           text: "/reset",
           localCommandName: "reset",

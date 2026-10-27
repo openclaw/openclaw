@@ -220,23 +220,17 @@ function reconcilePendingInputPage(
   page: ChatPendingInputsPage | undefined,
   receipts?: ChatInputReceipts,
 ): ChatPendingInputsPage {
-  const { page: displayPage, acceptedRunIds } = reconcileChatInputCustody(state, page, receipts);
-  const settled = new Set([
-    ...(receipts ?? [])
-      .filter(
-        (receipt) =>
-          receipt.state === "consumed" || (receipt.state === "pending" && receipt.cancelled),
-      )
-      .map((receipt) => receipt.runId),
-    ...displayPage.items.filter((input) => input.state === "cancelled").map((input) => input.runId),
-  ]);
-  // Any positive custody receipt transfers retry ownership to the Gateway.
+  const {
+    page: displayPage,
+    acceptedRunIds,
+    placedRunIds,
+  } = reconcileChatInputCustody(state, page, receipts);
+  // Accepted follow-ups retain their local placement until custody determines the destination.
   for (const item of state.chatQueue) {
     const canonical = findChatSubmissionMessage(state.chatMessages, item.sendRunId, true);
     if (
       item.sendRunId &&
-      (acceptedRunIds.has(item.sendRunId) ||
-        settled.has(item.sendRunId) ||
+      ((item.sendInline === false ? placedRunIds : acceptedRunIds).has(item.sendRunId) ||
         (canonical && (canonical.id !== null || canonical.sequence !== null))) &&
       (!item.sessionId || item.sessionId === state.currentSessionId)
     ) {

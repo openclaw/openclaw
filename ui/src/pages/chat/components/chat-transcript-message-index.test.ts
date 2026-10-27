@@ -406,7 +406,7 @@ it("reuses transcript structure for scroll renders and rebuilds for its inputs",
 afterEach(() => resetChatThreadState());
 
 it.each([
-  { name: "dashboard frame and queued tail", framed: true, searchActive: false },
+  { name: "dashboard frame and rejected input tail", framed: true, searchActive: false },
   { name: "unframed stream without boundary", framed: false, searchActive: false },
   { name: "search projection", framed: true, searchActive: true },
 ])("retains streamed structure until visibility changes: $name", ({ framed, searchActive }) => {
@@ -446,7 +446,8 @@ it.each([
         id: "queued",
         text: "Next request",
         createdAt: 100,
-        sendState: "waiting-reconnect",
+        sendState: "failed",
+        sendError: "The follow-up was rejected.",
         sendAttempts: 1,
         sendRunId: "queued-run",
       },

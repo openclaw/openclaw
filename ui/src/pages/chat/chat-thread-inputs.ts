@@ -28,6 +28,7 @@ type InputBlock = {
 export type ChatInputOrderState = { keys: string[] };
 
 export type ChatInputPlacementProps = {
+  runId?: string | null;
   queue?: ChatQueueItem[];
   initialTurnId?: string;
   pendingInputs?: ChatPendingInputsPage["items"];
@@ -105,7 +106,7 @@ export function placeChatInputs(
   const acceptedKeys = new Map(blocks.map((block) => [block.items[0]!.key, block]));
   const historyKeys = new Set(items.map((item) => item.key));
   for (const queued of queue) {
-    if (!shouldRenderQueuedSendInThread(queued)) {
+    if (!shouldRenderQueuedSendInThread(queued, props.runId)) {
       continue;
     }
     const message = queuedSendThreadMessage(queued);

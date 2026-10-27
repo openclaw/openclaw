@@ -607,6 +607,7 @@ export async function handleSendChat(
         ? { intent, ...(host.currentSessionId ? { sessionId: host.currentSessionId } : {}) }
         : {}),
       ...(intent && expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
+      sendInline: !host.chatRunId,
       sendSubmittedAtMs: submittedAtMs,
       ...admission.scope,
       ...(sender ? { sender } : {}),
@@ -706,7 +707,6 @@ export async function handleSendChat(
       {
         yieldToInput: admittedDurably && Boolean(submissionAction),
         isCurrent: submissionOwnerIsCurrent,
-        allowActiveRunSend,
         pendingSettings,
       },
       (deliveryItem) =>

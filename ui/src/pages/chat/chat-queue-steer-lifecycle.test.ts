@@ -71,11 +71,19 @@ it.each(["custody", "receipt", "retry", "remount", "deferred", "deferred-remount
     const retryRequested = createDeferred();
     const retryAck = createDeferred<unknown>();
     let requests = 0;
+    let historyFailure: Error | undefined;
     let host = makeChatHost({
       sessionKey,
       chatMessagesBySession: new Map(),
       requestHandlers: {
-        "chat.history": history,
+        "chat.history": () => {
+          if (historyFailure) {
+            const error = historyFailure;
+            historyFailure = undefined;
+            throw error;
+          }
+          return history;
+        },
         "chat.send": () => {
           if (++requests > 1) {
             retryRequested.resolve();
@@ -149,6 +157,7 @@ it.each(["custody", "receipt", "retry", "remount", "deferred", "deferred-remount
         return extractText(message);
       };
       setQueueProps({
+        runId: host.chatRunId,
         canAbort: true,
         queue: host.chatQueue,
         displayQueue: [...buildPendingInputQueueItems(display.queuedInputs), ...display.queue],
@@ -197,19 +206,22 @@ it.each(["custody", "receipt", "retry", "remount", "deferred", "deferred-remount
       };
     };
     try {
-      expect(snapshot()).toEqual({
+      const waiting = {
         thread: [original.content, "Already visible output."],
         queue: [queued.text],
-      });
+      };
+      expect(snapshot()).toEqual(waiting);
+      expect(container.querySelector(".chat-queue__remove")).not.toBeNull();
       container.querySelector<HTMLButtonElement>(".chat-queue__steer")!.click();
       await requested.promise;
-      const delivered = [original.content, queued.text, "Already visible output."];
-      expect.soft(snapshot(), "request dispatch").toEqual({ thread: delivered, queue: [] });
+      expect.soft(snapshot(), "request dispatch").toEqual(waiting);
+      expect(container.querySelector(".chat-queue__remove")).toBeNull();
       let deferred = false;
       let consumed = false;
       let continued = false;
       let prefixPersisted = false;
       let steerProjected = true;
+      let placed = ackMode === "receipt" || ackMode === "remount";
       const continueOutput = () => {
         continued = true;
         history.inFlightRun!.text = prefixPersisted
@@ -226,7 +238,7 @@ it.each(["custody", "receipt", "retry", "remount", "deferred", "deferred-remount
         thread: [
           original.content,
           ...(prefixPersisted ? ["Already visible output."] : []),
-          ...(!deferred && steerProjected ? [queued.text] : []),
+          ...(!deferred && steerProjected && placed ? [queued.text] : []),
           ...(prefixPersisted
             ? continued
               ? ["Later output."]
@@ -234,7 +246,7 @@ it.each(["custody", "receipt", "retry", "remount", "deferred", "deferred-remount
             : [continued ? "Already visible output. Later output." : "Already visible output."]),
           ...(!deferred && !steerProjected ? [queued.text] : []),
         ],
-        queue: deferred && !consumed ? [queued.text] : [],
+        queue: !consumed && (deferred || (!placed && steerProjected)) ? [queued.text] : [],
       });
       if (ackMode === "retry") {
         ack.reject(new Error("Steer rejected"));
@@ -252,16 +264,13 @@ it.each(["custody", "receipt", "retry", "remount", "deferred", "deferred-remount
         retry!.click();
         await retryRequested.promise;
         steerProjected = true;
-        expect.soft(snapshot(), "retry retains original run ownership").toEqual(expected());
+        expect
+          .soft(snapshot(), "retry awaits acceptance without replacing the active run")
+          .toEqual({
+            thread: [original.content, "Already visible output. Later output."],
+            queue: [queued.text],
+          });
       }
-      (ackMode === "retry" ? retryAck : ack).resolve({
-        runId: queued.sendRunId,
-        status: "started",
-        ...(ackMode === "receipt" || ackMode === "remount" ? { messageSeq: 3 } : {}),
-      });
-      await transport.promise;
-      expect(host.chatRunId).toBe("active-run");
-      expect.soft(snapshot(), "ACK").toEqual(expected());
       if (ackMode === "custody" || ackMode === "retry" || ackMode.startsWith("deferred")) {
         deferred = ackMode.startsWith("deferred");
         history.pendingInputs = {
@@ -272,11 +281,29 @@ it.each(["custody", "receipt", "retry", "remount", "deferred", "deferred-remount
               message: { role: "user", content: queued.text, timestamp: 10_000 },
               acceptedAt: 10_000,
               state: "queued",
-              ...(deferred ? { queued: true as const } : {}),
             },
           ],
           total: 1,
-          queuedCount: deferred ? 1 : 0,
+          queuedCount: 0,
+        };
+      }
+      if (ackMode === "deferred") {
+        historyFailure = new Error("Custody refresh unavailable");
+      }
+      (ackMode === "retry" ? retryAck : ack).resolve({
+        runId: queued.sendRunId,
+        status: "started",
+        ...(ackMode === "receipt" || ackMode === "remount" ? { messageSeq: 3 } : {}),
+      });
+      await transport.promise;
+      expect(host.chatRunId).toBe("active-run");
+      expect.soft(snapshot(), "ACK").toEqual(expected());
+      expect(requests).toBe(ackMode === "retry" ? 2 : 1);
+      if (deferred && history.pendingInputs) {
+        history.pendingInputs = {
+          ...history.pendingInputs,
+          queuedCount: 1,
+          items: history.pendingInputs.items.map((input) => ({ ...input, queued: true })),
         };
       }
       await loadChatHistory(host);
@@ -313,6 +340,7 @@ it.each(["custody", "receipt", "retry", "remount", "deferred", "deferred-remount
         expect.soft(snapshot(), "new pane keeps authoritative input placement").toEqual(expected());
       }
       consumed = true;
+      placed = !deferred;
       history.pendingInputs = { items: [], total: 0, queuedCount: 0 };
       history.inputReceipts = [
         {
@@ -339,6 +367,7 @@ it.each(["custody", "receipt", "retry", "remount", "deferred", "deferred-remount
         },
       };
       deferred = false;
+      placed = true;
       applySessionMessagePayload(host, { message: steer }, true, {
         kind: "live",
         activeRunId: "active-run",

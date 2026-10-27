@@ -118,6 +118,7 @@ function fixture(): { props: BuildChatItemsProps; older: unknown[] } {
       queue: [
         {
           id: "queued-input",
+          sendRunId: "queued-run",
           text: "Needle queued follow-up",
           createdAt: 50,
           sendState: "waiting-reconnect",
@@ -192,7 +193,7 @@ describe("incremental history build equivalence", () => {
           (block) => block.type === "text" && block.text === "Needle queued follow-up",
         ),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(JSON.stringify(warmPrepended).includes("Unrelated answer")).toBe(!options.searchOpen);
     if (options.showToolCalls && !options.searchOpen) {
       expect(entries.flatMap((entry) => extractToolCardsCached(entry.message))).toContainEqual(

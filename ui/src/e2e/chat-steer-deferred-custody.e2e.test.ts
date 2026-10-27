@@ -1,13 +1,15 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ChatHost } from "../pages/chat/chat-send-contract.ts";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForCommittedState } from "./settle.test-support.ts";
 import { expectCount, expectVisible } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Deferred steering custody" });
 
-async function verifyCustody(page: Page) {
+async function verifyCustody(page: Page, previousRunSettled: boolean) {
   const sessionKey = "agent:main:main";
   const runId = "active-run";
   const timestamp = Date.now();
@@ -64,11 +66,16 @@ async function verifyCustody(page: Page) {
   const sent = await gateway.waitForRequest("chat.send");
   expect(sent.params).toMatchObject({ queueMode: "steer" });
   const pendingRunId = (sent.params as { idempotencyKey: string }).idempotencyKey;
-  await gateway.resolveDeferred("chat.send", { runId: pendingRunId, status: "started" });
-  await expectCount(bubble, 1);
-  // Dispatch settlement exposes follow-up custody without another parent reply.
-  await gateway.setMethodResponse("chat.history", {
+  const custodyRead = await gateway.deferNext("chat.history");
+  // Custody exists at ACK; delivery of its history response remains independently held.
+  const queuedHistory = {
     ...history,
+    ...(previousRunSettled
+      ? {
+          sessionInfo: { ...sessionInfo, hasActiveRun: false, activeRunIds: [], status: "done" },
+          inFlightRun: undefined,
+        }
+      : {}),
     inputReceipts: [{ runId: pendingRunId, state: "pending", queued: true }],
     pendingInputs: {
       items: [
@@ -84,7 +91,39 @@ async function verifyCustody(page: Page) {
       total: 1,
       queuedCount: 1,
     },
+  };
+  await gateway.setMethodResponse("chat.history", {
+    ...queuedHistory,
+    inputReceipts: [{ runId: pendingRunId, state: "pending" }],
+    pendingInputs: {
+      ...queuedHistory.pendingInputs,
+      queuedCount: 0,
+      items: queuedHistory.pendingInputs.items.map((input) => ({ ...input, queued: undefined })),
+    },
   });
+  if (previousRunSettled) {
+    await gateway.emitChatFinal({ runId, sessionKey, text: "The original reply completed." });
+    await expectCount(queued, 1);
+    await expectCount(bubble, 0);
+  }
+  await gateway.resolveDeferred("chat.send", { runId: pendingRunId, status: "started" });
+  await gateway.waitForRequest("chat.history", { after: custodyRead });
+  await expectCount(queued, 1);
+  await expectCount(bubble, 0);
+  await gateway.resolveDeferred("chat.history");
+  await waitForCommittedState(
+    page,
+    () => {
+      const state = document.querySelector<HTMLElement & { state: ChatHost }>(
+        "openclaw-chat-pane",
+      )?.state;
+      return state !== undefined && !state.chatSending;
+    },
+    undefined,
+  );
+  await expectCount(queued, 1);
+  await expectCount(bubble, 0);
+  await gateway.setMethodResponse("chat.history", queuedHistory);
   const reads = (await gateway.getRequests("chat.history")).length;
   await gateway.emitGatewayEvent("sessions.changed", {
     ...sessionInfo,
@@ -95,10 +134,18 @@ async function verifyCustody(page: Page) {
   await gateway.waitForRequest("chat.history", { after: reads });
   await expectCount(queued, 1);
   await expectCount(bubble, 0);
-  await expectVisible(stop);
+  expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+  if (!previousRunSettled) {
+    await expectVisible(stop);
+  }
 }
 
 suite.define(() => {
-  it("moves a deferred steer into the queue on custody publication without another reply", () =>
-    suite.withPage({ viewport: { width: 393, height: 852 } }, ({ page }) => verifyCustody(page)));
+  it.each([false, true])(
+    "keeps a deferred steer queued through ACK and delayed custody (previous run settled: %s)",
+    (previousRunSettled) =>
+      suite.withPage({ viewport: { width: 393, height: 852 } }, ({ page }) =>
+        verifyCustody(page, previousRunSettled),
+      ),
+  );
 });

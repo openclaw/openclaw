@@ -346,7 +346,8 @@ export function buildChatItems(
   }
   const currentRunId =
     props.runId ??
-    (props.stream !== null || queuedSends.some(shouldRenderQueuedSendInThread)
+    (props.stream !== null ||
+    queuedSends.some((item) => shouldRenderQueuedSendInThread(item, props.runId))
       ? resolveProgress().runId
       : null);
   const historyTurnBounds = findCurrentTurnBounds(items);
@@ -661,7 +662,7 @@ export function buildChatItems(
       queuedSends.some(
         (item) =>
           (item.sendState === "submitting" || item.sendState === "sending") &&
-          shouldRenderQueuedSendInThread(item),
+          shouldRenderQueuedSendInThread(item, props.runId),
       ));
   if (props.runWorking !== true && props.stream === null && !showWorkingIndicator) {
     clearWorkingProgress(props.sessionKey);

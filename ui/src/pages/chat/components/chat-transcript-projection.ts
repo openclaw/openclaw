@@ -231,7 +231,7 @@ export function projectChatTranscript(
         (item.sendState === "submitting" ||
           item.sendState === "sending" ||
           item.sendState === "waiting-model") &&
-        shouldRenderQueuedSendInThread(item),
+        shouldRenderQueuedSendInThread(item, props.runId),
     ),
     activeRunId: props.runActive ? props.runId : undefined,
     row: activeSession,

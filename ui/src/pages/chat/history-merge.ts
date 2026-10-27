@@ -117,6 +117,7 @@ function readChatSubmissionBatch(owner: ChatSessionProjectionOwner, scope: Sessi
   };
   return {
     initial: handoff,
+    delivered: deliveredInScope,
     accept: (runIds: ReadonlySet<string>, awaitTranscriptReceipt = false) => {
       runIds.forEach((runId) => retire(runId, awaitTranscriptReceipt));
       if (handoff && runIds.has(handoff.pendingRunId)) {
@@ -479,10 +480,16 @@ export function selectChatInputDisplay(
     userIdentities.set(messages, identities);
   }
   const { userIds, sendKeys, steerSendKeys } = identities;
-  const accepted = new Set(inputs.map((input) => input.runId));
+  const waiting = new Set(
+    queue.filter((item) => item.sendInline === false).map((item) => item.sendRunId),
+  );
+  const placedInputs = inputs.filter(
+    (input) => input.state !== "queued" || input.queued || !waiting.has(input.runId),
+  );
+  const accepted = new Set(placedInputs.map((input) => input.runId));
   const retainedSteer = (runId: string | undefined) =>
     Boolean(runId && (steerSendKeys.has(runId) || steerSendKeys.has(`${runId}:user`)));
-  const unseenInputs = inputs.filter(
+  const unseenInputs = placedInputs.filter(
     (input) => !userIds.has(input.id) && !retainedSteer(input.runId),
   );
   return {
@@ -524,8 +531,16 @@ export function reconcileChatInputCustody(
     ].filter((runId) => typeof runId === "string"),
   );
   retireChatSubmissionDisplay(owner, retiredDisplayRunIds);
+  const consumedRunIds = receipts
+    .filter((receipt) => receipt.state === "consumed")
+    .map((receipt) => receipt.runId);
+  const submissions = readChatSubmissionBatch(owner, readChatSessionProjectionScope(owner));
+  for (const runId of consumedRunIds) {
+    admitChatSubmission(owner, undefined, submissions?.delivered(runId) ?? null);
+  }
   return {
     acceptedRunIds,
+    placedRunIds: new Set([...retiredDisplayRunIds, ...consumedRunIds]),
     page: page ?? { items: [], total: 0 },
   };
 }

@@ -46,7 +46,7 @@ it.each([
   { connected: false, recorded: true },
   { connected: true, recorded: true },
 ])(
-  "shows initial-turn recovery controls only while reconnecting (%o)",
+  "keeps an unconfirmed initial turn visible without local discard while reconnecting (%o)",
   async ({ connected, recorded }) => {
     const onRetrySessionPlacementStartup = vi.fn();
     const onDiscardSessionPlacementStartup = vi.fn();
@@ -67,8 +67,8 @@ it.each([
     }
     expect(status?.textContent).toContain("Waiting for reconnect");
     expect(status?.querySelector(".chat-send-status__retry")).toBeNull();
-    status?.querySelector<HTMLButtonElement>(".chat-send-status__discard")?.click();
-    expect(onDiscardSessionPlacementStartup).toHaveBeenCalledOnce();
+    expect(status?.querySelector(".chat-send-status__discard")).toBeNull();
+    expect(onDiscardSessionPlacementStartup).not.toHaveBeenCalled();
     expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
   },
 );

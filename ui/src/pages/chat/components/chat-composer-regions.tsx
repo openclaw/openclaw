@@ -28,6 +28,7 @@ export function ComposerQueue(view: { composer: ChatComposerProps; showAbortable
       <ChatLazyBoundary>
         <ChatQueue
           queue={view.composer.queue}
+          runId={view.composer.runId}
           displayQueue={view.composer.displayQueue}
           connected={view.composer.connected}
           offline={view.composer.offline}

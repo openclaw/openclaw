@@ -36,7 +36,6 @@ function SendStatusAction(props: {
           aria-label={
             props.kind === "retry" ? (props.label ?? t("chat.queue.retryQueuedMessage")) : undefined
           }
-          title={props.kind === "discard" ? t("chat.queue.discardPendingMessage") : undefined}
           onClick={(event: MouseEvent) => {
             // Chromium may retarget click 2 to the next row after removal.
             if (props.kind === "retry" || event.detail <= 1) {
@@ -64,7 +63,7 @@ export function ChatSendStatus(props: { status: SendStatus; actions: ChatSendSta
   const retry = () =>
     pending() ? undefined : (action()?.onAction ?? props.actions.onRetryQueuedMessage);
   const discard = () =>
-    props.status
+    props.status && !pending()
       ? action()
         ? action()?.onDiscard
         : props.actions.onDiscardQueuedMessage

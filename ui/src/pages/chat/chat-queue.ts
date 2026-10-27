@@ -1,10 +1,6 @@
 import { compareChatQueueOrder, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
-import {
-  type StoredChatOutboxScope,
-  storedChatOutboxScopeKey,
-} from "../../lib/chat/outbox-store-scope.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import type { ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import type { SessionScopeHost } from "../../lib/sessions/index.ts";
@@ -119,6 +115,17 @@ export function excludeComposerAttachments(
   return attachments.filter((attachment) => !retainedIds.has(attachment.id));
 }
 
+export function canDiscardQueuedMessage(item: ChatQueueItem): boolean {
+  return (
+    item.sendState === "failed" ||
+    item.sendState === "held" ||
+    (!item.pendingRunId &&
+      (item.sendAttempts ?? 0) === 0 &&
+      item.sendState !== "sending" &&
+      item.sendState !== "executing-command")
+  );
+}
+
 export function removeQueuedMessage(
   host: ChatQueueScopedSessionHost,
   id: string,
@@ -157,11 +164,11 @@ export function readDeliveredQueuedChatSendForRun(
   if (!runId) {
     return null;
   }
-  const scopeKey = storedChatOutboxScopeKey(scope);
-  const outbox = listStoredChatOutboxes(host).find(
-    (candidate) => storedChatOutboxScopeKey(candidate) === scopeKey,
+  return (
+    chatOutboxOwner(host)
+      .snapshot(host, scope)
+      .find((item) => item.sendRunId === runId) ?? null
   );
-  return outbox?.queue.find((candidate) => candidate.sendRunId === runId) ?? null;
 }
 
 export function clearPendingQueueItemsForRun(

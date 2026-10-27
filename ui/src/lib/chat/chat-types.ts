@@ -207,6 +207,8 @@ export type ChatQueueItem = {
     // Provider review requires a new operator decision even if delivery has prior attempts.
     | "held"
     | "failed";
+  /** Retained placement prevents another run’s settlement from moving a follow-up. */
+  sendInline?: boolean;
   sendSubmittedAtMs?: number;
   sendRequestStartedAtMs?: number;
   sessionKey?: string;

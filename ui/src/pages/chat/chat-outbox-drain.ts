@@ -17,7 +17,7 @@ import {
   readChatResetTargetAccess,
   type ChatCommandTarget,
 } from "./chat-commands.ts";
-import { setChatError } from "./chat-history-state.ts";
+import { getAcceptedChatHistorySession, setChatError } from "./chat-history-state.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   consumeChatOutboxRetry,
@@ -25,6 +25,7 @@ import {
   settleChatOutboxRetry,
 } from "./chat-outbox-retry.ts";
 import { collectChatOutboxes, readChatOutboxLane } from "./chat-outbox-scopes.ts";
+import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatProviderReviewRow, holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
 import type { PendingComposerSnapshot } from "./chat-send-composer.ts";
@@ -160,8 +161,22 @@ async function drainStoredChatOutbox(
     if (!outbox) {
       return;
     }
+    const pending =
+      visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) &&
+      getAcceptedChatHistorySession(host)
+        ? getChatPendingInputs(host)
+        : undefined;
+    const accepted = new Set(
+      [...(pending?.page.items ?? []), ...(pending?.queuedInputs ?? [])].map(
+        (input) => input.runId,
+      ),
+    );
+    // Accepted sources may retain queue presentation while the Gateway owns delivery.
+    const waiting = outbox.queue.filter(
+      (entry) => !entry.sendRunId || !accepted.has(entry.sendRunId),
+    );
     // Fresh active-run sends bypass older rows, including when the Gateway resolves the mode.
-    const freshActiveRunItem = outbox.queue.find(
+    const freshActiveRunItem = waiting.find(
       (entry) =>
         lane.freshAdmissions.has(entry.id) &&
         (entry.queueMode ||
@@ -169,7 +184,7 @@ async function drainStoredChatOutbox(
     );
     const storedItem =
       freshActiveRunItem ??
-      outbox.queue.find(
+      waiting.find(
         (entry) =>
           lane.freshAdmissions.has(entry.id) ||
           entry.sendState !== "failed" ||

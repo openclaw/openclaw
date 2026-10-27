@@ -36,7 +36,11 @@ import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { ChatPaneComposerHandoff } from "./chat-pane-attachment-handoff.ts";
 import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
-import { removeQueuedMessage } from "./chat-queue.ts";
+import {
+  canDiscardQueuedMessage,
+  readQueuedMessageById,
+  removeQueuedMessage,
+} from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import {
@@ -358,6 +362,10 @@ export function createPageState(
   state.handleAbortChat = (options) => handleAbortChat(state, options);
   state.removeQueuedMessage = (id) => {
     if (cancelPendingQueuedChatInput(state, id)) {
+      return;
+    }
+    const pending = readQueuedMessageById(state, id);
+    if (pending && !canDiscardQueuedMessage(pending)) {
       return;
     }
     if (isQueuedMessageBeingEdited(state, id)) {

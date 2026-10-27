@@ -260,6 +260,9 @@ export function normalizeStoredQueueItem(entry: unknown): ChatQueueItem | null {
       item[key] = fieldValue;
     }
   }
+  if (typeof entry.sendInline === "boolean") {
+    item.sendInline = entry.sendInline;
+  }
   if (typeof entry.sendAttempts === "number" && Number.isFinite(entry.sendAttempts)) {
     item.sendAttempts = entry.sendAttempts;
   }

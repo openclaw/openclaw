@@ -127,7 +127,7 @@ suite.define(() => {
     60_000,
   );
 
-  it.each(["duplicate", "rejection", "discard"] as const)(
+  it.each(["duplicate", "rejection"] as const)(
     "reconciles an ACK-lost send on reconnect (%s)",
     (outcome) =>
       suite.withPage({ ...pageOptions, viewport }, async ({ page }) => {
@@ -158,7 +158,7 @@ suite.define(() => {
         await expectBrowser(userFor(page, prompt, true)).toHaveCount(1);
         expect(await page.locator(".chat-queue__item").count()).toBe(0);
         await expectBrowser(pending.getByRole("button", { name: /Retry/ })).toHaveCount(0);
-        await button(pending, "Discard").waitFor();
+        await expectBrowser(button(pending, "Discard")).toHaveCount(0);
         if (artifactDir) {
           const frame = await takeControlUiScreenshotFrame(
             page,
@@ -172,74 +172,55 @@ suite.define(() => {
           await writeFile(path.join(artifactDir, "after-waiting-for-reconnect.png"), frame.png);
         }
 
-        if (outcome === "discard") {
-          await composerFor(page).fill("The next queued message");
-          await page.getByRole("button", { name: "Send message" }).click();
-          await page
-            .locator(".chat-queue")
-            .getByText("The next queued message", { exact: true })
-            .waitFor();
-          await expectRequestCountStable(gateway, "chat.send", 1);
-          await button(pending, "Discard").click();
-          await userFor(page, prompt, true).waitFor({ state: "detached" });
-        }
         await gateway.setOnline(true);
         const sends = await waitForRequests(gateway, "chat.send", 2);
         const nextParams = requireRecord(sends[1]?.params);
         expect(nextParams.sessionKey).toBe(firstParams.sessionKey);
         let requestCount = 2;
         let acceptedRunId = runId;
-        if (outcome === "discard") {
-          expect(nextParams.message).toBe("The next queued message");
-          expect(nextParams.idempotencyKey).not.toBe(runId);
-          acceptedRunId = requireString(nextParams.idempotencyKey, "next submission key");
-          expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
-          expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
-        } else {
-          expect(nextParams).toEqual({ ...firstParams, __controlUiReconnectResume: true });
-          expect(await page.locator(".chat-queue").count()).toBe(0);
-          await expectBrowser(userFor(page, prompt, true)).toHaveCount(1);
-          await expectBrowser(page.locator(".chat-send-status")).toHaveCount(0);
-          if (artifactDir && outcome === "duplicate") {
+        expect(nextParams).toEqual({ ...firstParams, __controlUiReconnectResume: true });
+        expect(await page.locator(".chat-queue").count()).toBe(0);
+        await expectBrowser(userFor(page, prompt, true)).toHaveCount(1);
+        await expectBrowser(page.locator(".chat-send-status")).toHaveCount(0);
+        if (artifactDir && outcome === "duplicate") {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator("openclaw-chat-pane"),
+            [userFor(page, prompt, true), page.locator(".chat-group.user time")],
+            { animations: "disabled" },
+          );
+          await writeFile(path.join(artifactDir, "after-replaying-original-key.png"), frame.png);
+        }
+        if (outcome === "rejection") {
+          await gateway.rejectDeferred("chat.send", {
+            code: "INVALID_REQUEST",
+            message: "Synthetic admission rejection",
+          });
+          const failed = page.locator('.chat-send-status[data-send-state="failed"]');
+          await failed.getByText("Not sent", { exact: true }).waitFor();
+          if (artifactDir) {
             const frame = await takeControlUiScreenshotFrame(
               page,
               page.locator("openclaw-chat-pane"),
-              [userFor(page, prompt, true), page.locator(".chat-group.user time")],
+              [
+                failed.getByText("Not sent", { exact: true }),
+                failed.getByRole("button", { name: "Retry queued message" }),
+              ],
               { animations: "disabled" },
             );
-            await writeFile(path.join(artifactDir, "after-replaying-original-key.png"), frame.png);
+            await writeFile(path.join(artifactDir, "after-rejection.png"), frame.png);
           }
-          if (outcome === "rejection") {
-            await gateway.rejectDeferred("chat.send", {
-              code: "INVALID_REQUEST",
-              message: "Synthetic admission rejection",
-            });
-            const failed = page.locator('.chat-send-status[data-send-state="failed"]');
-            await failed.getByText("Not sent", { exact: true }).waitFor();
-            if (artifactDir) {
-              const frame = await takeControlUiScreenshotFrame(
-                page,
-                page.locator("openclaw-chat-pane"),
-                [
-                  failed.getByText("Not sent", { exact: true }),
-                  failed.getByRole("button", { name: "Retry queued message" }),
-                ],
-                { animations: "disabled" },
-              );
-              await writeFile(path.join(artifactDir, "after-rejection.png"), frame.png);
-            }
-            await gateway.deferNext("chat.send");
-            await failed.getByRole("button", { name: "Retry queued message" }).click();
-            const retry = await gateway.waitForRequest("chat.send", { after: 2 });
-            const retryParams = requireRecord(retry.params);
-            expect(retryParams).toEqual({
-              ...nextParams,
-              idempotencyKey: expect.any(String),
-            });
-            acceptedRunId = requireString(retryParams.idempotencyKey, "retry submission key");
-            expect(acceptedRunId).not.toBe(runId);
-            requestCount = 3;
-          }
+          await gateway.deferNext("chat.send");
+          await failed.getByRole("button", { name: "Retry queued message" }).click();
+          const retry = await gateway.waitForRequest("chat.send", { after: 2 });
+          const retryParams = requireRecord(retry.params);
+          expect(retryParams).toEqual({
+            ...nextParams,
+            idempotencyKey: expect.any(String),
+          });
+          acceptedRunId = requireString(retryParams.idempotencyKey, "retry submission key");
+          expect(acceptedRunId).not.toBe(runId);
+          requestCount = 3;
         }
         if (outcome === "duplicate") {
           const historyReads = (await gateway.getRequests("chat.history")).length;

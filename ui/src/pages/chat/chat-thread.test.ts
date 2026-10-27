@@ -5,6 +5,7 @@ import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inboun
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { prependUniqueNativeMessages } from "../../lib/chat/history-message-identity.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
@@ -1133,18 +1134,26 @@ describe("buildCachedChatItems", () => {
     expect(messageRecord(requireGroup(items[1])).content).toBe("Missing timestamp.");
   });
 
-  it("keeps an attempted pending send after the preceding reply", () => {
+  it("keeps recovered pending sends after the preceding reply", () => {
     const groups = messageGroups({
       messages: [assistant("Previous reply", 2)],
       queue: [
-        queuedSend("attempted-send-1", "retry me from the transcript", 1, "waiting-reconnect", {
+        queuedSend("attempted-send-1", "retry me from the transcript", 1, "sending", {
           sendError: "Delivery diagnostic",
           sendAttempts: 1,
+          sendRunId: "recovered-first",
+        }),
+        queuedSend("attempted-send-2", "retain both pending inputs", 3, "waiting-reconnect", {
+          sendAttempts: 1,
+          sendRunId: "recovered-second",
         }),
       ],
     });
 
-    expect(groups.map((group) => group.role)).toEqual(["assistant", "user"]);
+    expect(
+      groups.flatMap((group) => group.messages.map(({ message }) => extractText(message))),
+    ).toEqual(["Previous reply", "retry me from the transcript", "retain both pending inputs"]);
+    expect(groups.map((group) => group.role)).toEqual(["assistant", "user", "user"]);
     const message = messageRecord(groupAt(groups, 1));
     expect(persistedMessageEntryId(message)).toBeNull();
     expect(message).toMatchObject({
@@ -1153,7 +1162,7 @@ describe("buildCachedChatItems", () => {
     });
     expect(readPendingSendStatus(message)).toEqual({
       id: "attempted-send-1",
-      state: "waiting-reconnect",
+      state: "sending",
       error: "Delivery diagnostic",
     });
   });
