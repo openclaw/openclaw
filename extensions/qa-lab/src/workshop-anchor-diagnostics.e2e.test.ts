@@ -83,7 +83,6 @@ it(
             tools: { profile: "full", allow: ["skill_workshop"] },
             agents: {
               ...config.agents,
-              defaults: { ...config.agents?.defaults, heartbeat: { every: "0m" } },
               entries: {
                 ...config.agents?.entries,
                 qa: {
