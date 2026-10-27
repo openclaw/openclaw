@@ -92,6 +92,7 @@ export function createHarness(
   const finishArchive = vi.fn();
   const mocks = {
     finishArchive,
+    acknowledgeHiddenRuns: vi.fn(async () => []),
     beginArchive: vi.fn(() => finishArchive),
     patch: vi.fn(async (key: string) => ({ ok: true, key })),
     reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
@@ -123,6 +124,7 @@ export function createHarness(
       captureConnectionScope: () => connection,
       isConnectionScopeCurrent: () => current,
       patch: mocks.patch,
+      acknowledgeHiddenRuns: mocks.acknowledgeHiddenRuns,
       patchMany: (
         targets: SessionsPatchManyParams["targets"],
         patchParams: SessionsPatchManyParams["patch"],

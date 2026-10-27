@@ -32,6 +32,7 @@ import { readSessionGroupMembership } from "./session-group-membership.read.js";
 import { putSessionGroups } from "./session-groups.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import * as rowLookup from "./session-row-projection-materialize.js";
 import { listRows, writeRow } from "./session-row-projection-read-fixtures.test-support.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import {
@@ -173,7 +174,6 @@ describe("list preparation", () => {
       await projection.ensureMaterialized();
       expect(projection.materializedCount).toBe(0);
       const context = bindSessionRowProjection(requestContext(cfg), () => projection);
-      const before = projection.materializedCount;
       const reads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
       const sql = observeSqliteReadSql(StatementSync.prototype);
       const rendered: string[] = [];
@@ -199,7 +199,7 @@ describe("list preparation", () => {
           { limit: 5, offset },
           (ok, value) => {
             expect(ok).toBe(true);
-            materialized.push(projection.materializedCount - before);
+            materialized.push(projection.materializedCount);
             result = value as SessionsListResult;
           },
           null,
@@ -220,9 +220,7 @@ describe("list preparation", () => {
         );
         expect(await checkpoint).toBeLessThan(5);
         expect(rendered.toSorted()).toEqual(keys.slice(-10).toSorted());
-        expect(Math.max(...materialized)).toBe(10);
-        expect(reads).not.toHaveBeenCalled();
-        expect(sql.queries).toEqual([]);
+        expect([Math.max(...materialized), reads.mock.calls, sql.queries]).toEqual([10, [], []]);
         await projection.ensureMaterialized();
         expect(projection.materializedCount).toBe(10);
 
@@ -231,12 +229,13 @@ describe("list preparation", () => {
         rendered.length = 0;
         publishSubagentRunChanges();
         const canonicalize = vi.spyOn(storeKeys, "resolveStoredSessionKeyForAgentStore");
+        const lookups = vi.spyOn(rowLookup, "lookupSessionRow");
         for (const [index, offset] of [0, 5, 0, 5].entries()) {
           expect((await listPage(offset, index)).sessions).toEqual(pages[index]!.sessions);
         }
+        expect(lookups.mock.calls.length).toBeLessThanOrEqual(4 * 5 * 2);
         expect([rendered, projection.materializedCount, sql.queries]).toEqual([[], 10, []]);
-        expect(reads).not.toHaveBeenCalled();
-        expect(canonicalize).not.toHaveBeenCalled();
+        expect([reads.mock.calls, canonicalize.mock.calls]).toEqual([[], []]);
       } finally {
         sql.restore();
       }

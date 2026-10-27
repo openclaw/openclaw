@@ -39,6 +39,13 @@ describe("automatic candidates during provenance repair", () => {
         WHERE key = 'memory_index_meta_v1'`);
     }
     await initial.close();
+    if (resetVersions) {
+      // Published vectors outlive the cache reset; new input makes the rebuild embed again.
+      await fs.writeFile(
+        path.join(paths.workspace, "MEMORY.md"),
+        `- Keep every release local. <!-- trigger: release local --> <!-- project: ${projectKey} -->\n`,
+      );
+    }
   }
   const lookups = (manager: MemoryIndexManager) => [
     manager.listCuratedProjectCandidates(projectOpts),

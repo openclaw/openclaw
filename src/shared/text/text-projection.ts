@@ -12,26 +12,6 @@ import { trimTextPreservingCode } from "./trim-code-text.js";
 
 export { trimTextPreservingCode };
 
-/** Recombine non-streamed text without destroying Markdown's meaningful indentation. */
-export function combineNonStreamingReplyParts(parts: readonly string[]): string {
-  let combined = "";
-  for (const part of parts) {
-    if (!part.trim()) {
-      continue;
-    }
-    // Outbound media normalization trims a chunk's trailing newline, so an
-    // indented following chunk still needs its original single-line boundary.
-    const separator =
-      !combined || /[\r\n]$/.test(combined) || /^[\r\n]/.test(part)
-        ? ""
-        : /^[\t ]+\S/.test(part)
-          ? "\n"
-          : "\n\n";
-    combined += separator + part;
-  }
-  return trimTextPreservingCode(combined);
-}
-
 export type TextProjection = { text: string; delta: string | null };
 type TextProjectionUpdate = TextProjection & {
   // Producer-owned unchanged prefix, ending in non-whitespace, and mutable tail.
@@ -328,6 +308,10 @@ export function createTextProjector(filters: readonly TextFilter[]) {
           const identity = next === input || next.text === input.text;
           if (!identity) {
             project.boundaryWhitespaceOnly = false;
+            if (input.retained && !next.retained) {
+              // A rewrite cannot attest where an upstream mutable tail maps in its output.
+              next = { ...next, retained: { prefix: "", tail: next.text } };
+            }
           } else if (input.retained && (!next.retained || next.retained === input.retained)) {
             const retained =
               stage.identity === false ? { prefix: "", tail: next.text } : input.retained;
@@ -356,6 +340,7 @@ export function createTextProjection(filters: readonly TextFilter[]) {
   let text = "";
   let trimStart = 0;
   let trimEnd = 0;
+  let settledLength = 0;
   let matchesTrimmedSource: boolean | undefined;
   return {
     get source() {
@@ -363,6 +348,10 @@ export function createTextProjection(filters: readonly TextFilter[]) {
     },
     get text() {
       return text;
+    },
+    /** Prefix settled by retaining filters; filters without checkpoints preserve legacy behavior. */
+    get settledLength() {
+      return settledLength;
     },
     get matchesTrimmedSource(): boolean {
       // Padding-only stages preserve the source span. Real transforms still need
@@ -384,6 +373,7 @@ export function createTextProjection(filters: readonly TextFilter[]) {
       source = preparedSource ?? source + delta;
       matchesTrimmedSource = undefined;
       const next = project({ text: source, delta });
+      settledLength = next.retained?.prefix.length ?? next.text.length;
       // A downstream filter can cancel an intermediate replacement without changing the final prefix.
       if (next.delta === null && next.text.startsWith(text)) {
         next.delta = next.text.slice(text.length);
@@ -397,6 +387,7 @@ export function createTextProjection(filters: readonly TextFilter[]) {
       trimEnd = value.trimEnd().length;
       matchesTrimmedSource = undefined;
       const next = project({ text: source, delta: null });
+      settledLength = next.retained?.prefix.length ?? next.text.length;
       next.delta = null;
       text = next.text;
       return next.retained ? { text: next.text, delta: next.delta } : next;
@@ -429,7 +420,7 @@ export function trimTextFilter(
         const retained = input.retained;
         if (!retained || leading || retained.prefix.length <= removedLeadingLength) {
           retainedInput = undefined;
-          return undefined;
+          return retained ? { prefix: "", tail: text } : undefined;
         }
         if (retainedInput && retained.prefix.length >= retainedInput.prefix.length) {
           const growth = retained.prefix.length - retainedInput.prefix.length;

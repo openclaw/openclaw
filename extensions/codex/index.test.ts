@@ -308,13 +308,16 @@ describe("codex plugin", () => {
     expect(nodeExecServerPolicy?.defaultPlatforms).toBeUndefined();
   });
 
-  it("keeps native declarations across owner, completion, and owner turns", async () => {
+  it("declares native tools before workspace readiness across owner and completion turns", async () => {
     const { registerTool } = registerPlugin({
       pluginConfig: { appServer: { homeScope: "user" }, supervision: { enabled: true } },
     });
 
     const registration = registeredCodexTools(registerTool);
-    expect(registration.options).toEqual({ names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES] });
+    expect(registration.options).toEqual({
+      names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES],
+      workspaceAccess: "execute",
+    });
     expect(registration.create({ senderIsOwner: true }).map((tool) => tool.name)).toEqual([
       ...CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
     ]);
@@ -323,6 +326,16 @@ describe("codex plugin", () => {
       registeredCodexTools(registerTool, "codex_plugins"),
       registeredCodexTools(registerTool, "codex_threads"),
     ]) {
+      expect(registered.options?.workspaceAccess).toBe("execute");
+      expect(() =>
+        registered.factory.create({
+          senderIsOwner: true,
+          assertInvocationCurrent() {},
+          get workspaceDir(): string {
+            throw new Error("Tool declaration must not inspect the pending workspace");
+          },
+        }),
+      ).not.toThrow();
       const declaration = (owner?: boolean) =>
         registered.create({ senderIsOwner: owner }).map(({ name, description, parameters }) => ({
           name,
