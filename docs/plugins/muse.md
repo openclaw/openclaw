@@ -135,9 +135,10 @@ guessed relationships or inherited recommendations.
 
 Use **Model Setup → Meta → Muse Code** in either **Provider Access** or **AI Setup**
 in the Control UI for browser sign-in.
-The credential stays in Muse Code's own credential store; OpenClaw does not
-copy it into an auth profile. This sign-in authorizes the Muse runtime, not
-the direct Meta API route.
+The credential is saved in a Muse credential file under the OpenClaw state
+directory, separate from the default sign-in that the `muse` CLI uses on the
+same host; OpenClaw does not copy it into an auth profile. This sign-in
+authorizes the Muse runtime, not the direct Meta API route.
 
 Keep the sign-in dialog open while it shows **Waiting for approval in your
 browser…**. The device code and **Open sign-in** link remain available during

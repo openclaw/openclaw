@@ -4382,7 +4382,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/agents/models-config.providers.implicit.discovery-scope.test.ts",
   "src/agents/openai-transport-stream.failed-sse.test.ts",
   "src/agents/openai-transport-stream.replay-and-tools.test.ts",
-  "src/agents/openai-transport-stream.streaming.test.ts",
   "src/agents/openclaw-tools.sessions-steering.test.ts",
   "src/agents/project-memory-scope.test.ts",
   "src/agents/provider-local-service.shutdown.test.ts",

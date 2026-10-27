@@ -340,6 +340,14 @@ openclaw-board-widget-cell {
   overflow: auto;
 }
 
+/* Fixed grid tracks already reserve the report viewport. Keep distant charts
+   out of layout until they approach the board's scrollport. */
+.board-widget__body--fixed-report {
+  contain: strict;
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 0px;
+}
+
 .board-widget__body--scrollable .board-widget__grant {
   box-sizing: border-box;
   height: auto;

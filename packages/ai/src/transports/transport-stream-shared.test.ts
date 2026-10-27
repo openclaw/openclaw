@@ -348,7 +348,15 @@ describe("model stream cooperative scheduler", { concurrent: false }, () => {
     const stream = iterateModelStream(["first", "second", "third"]);
     await expect(stream.next()).resolves.toEqual({ done: false, value: "first" });
     now = 6;
+    // Chaining a native promise consults species; awaiting the shared promise does not.
+    const species = vi.spyOn(Promise, Symbol.species, "get");
     const second = stream.next();
+    // Let the upstream read reach admission without advancing the shared timer.
+    await Promise.resolve();
+    await Promise.resolve();
+    const chainedWaits = species.mock.calls.length;
+    species.mockRestore();
+    expect(chainedWaits).toBe(0);
     let delivered = false;
     void second.then(() => {
       delivered = true;

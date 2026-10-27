@@ -551,7 +551,7 @@ export async function prepareEmbeddedAttemptSessionManager(
   const openSessionManager = () =>
     input.withOwnedTranscriptWrite(async () => {
       const target = input.sessionTarget;
-      const limits = resolveEmbeddedSessionContextLimits(attempt.contextTokenBudget);
+      const limits = resolveEmbeddedSessionContextLimits(attempt);
       const initial = prepareInitialPersistedUserTurnCohort({
         target,
         message: preparedUserTurnMessage,

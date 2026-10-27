@@ -79,11 +79,7 @@ type Fixture = {
 
 async function withCronFixture(
   run: (fixture: Fixture) => Promise<void>,
-  options: {
-    activeDreaming?: boolean;
-    activeDreamingEnabled?: boolean;
-    additionalActiveJobs?: CronStoredJob[];
-  } = {},
+  options: { activeDreaming?: boolean; additionalActiveJobs?: CronStoredJob[] } = {},
 ) {
   await withOpenClawTestState({ label: "cron-doctor" }, async (state) => {
     const activeStore = state.statePath("cron", "jobs.json");
@@ -104,10 +100,7 @@ async function withCronFixture(
           ...(options.activeDreaming === false
             ? []
             : [
-                makeJob("survivor", {
-                  ...legacyFields,
-                  enabled: options.activeDreamingEnabled ?? false,
-                }),
+                makeJob("survivor", legacyFields),
                 makeJob("duplicate", { ...legacyFields, createdAtMs: 1_800_000_000_100 }),
               ]),
           makeJob("operator", {
@@ -609,13 +602,12 @@ describe("host Cron Doctor repair", () => {
   );
 
   it.each([
-    { layout: "inactive only", activeDreaming: false, enabled: true, existingEnabled: false },
-    { layout: "active and inactive", activeDreaming: true, enabled: true, existingEnabled: false },
-    { layout: "active and inactive", activeDreaming: true, enabled: true, existingEnabled: true },
-    { layout: "active and inactive", activeDreaming: true, enabled: false, existingEnabled: false },
+    { layout: "inactive only", activeDreaming: false, enabled: true },
+    { layout: "active and inactive", activeDreaming: true, enabled: true },
+    { layout: "active and inactive", activeDreaming: true, enabled: false },
   ])(
-    "keeps $layout history and authored lookalikes after Doctor and runtime dreaming enabled=$enabled, existing job enabled=$existingEnabled",
-    async ({ activeDreaming, enabled, existingEnabled }) => {
+    "keeps $layout history and authored lookalikes after Doctor and runtime dreaming enabled=$enabled",
+    async ({ activeDreaming, enabled }) => {
       await withCronFixture(
         async (fixture) => {
           const { activeStore, retiredStore } = fixture;
@@ -711,7 +703,7 @@ describe("host Cron Doctor repair", () => {
             expect(managed).toHaveLength(enabled ? 1 : 0);
             if (enabled) {
               expect(managed[0]).toMatchObject({
-                enabled: activeDreaming ? existingEnabled : true,
+                enabled: !activeDreaming,
                 sessionTarget: "isolated",
                 schedule: { kind: "cron", expr: "15 4 * * *", tz: "UTC" },
                 payload: { kind: "agentTurn", lightContext: true },
@@ -755,7 +747,6 @@ describe("host Cron Doctor repair", () => {
         },
         {
           activeDreaming,
-          activeDreamingEnabled: existingEnabled,
           additionalActiveJobs: [
             makeJob("authored-lookalike", {
               description: "[managed-by=memory-core.short-term-promotion] operator note",

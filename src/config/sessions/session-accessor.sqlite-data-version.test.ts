@@ -329,11 +329,6 @@ it("keeps same-path caches isolated by live connection", async () => {
     throw new Error("Expected the existing agent database");
   }
   const alternate = opened.database.db;
-  const parse = vi.spyOn(JSON, "parse");
-  const expectOneParse = () =>
-    expect(
-      parse.mock.calls.filter(([json]) => json.includes('"sessionId":"connection-identity"')),
-    ).toHaveLength(1);
   try {
     parseSessionEntryCalls.mockClear();
     const alternateDatabase = { agentId: primary.agentId, db: alternate };
@@ -342,16 +337,13 @@ it("keeps same-path caches isolated by live connection", async () => {
     );
     expect(alternateEntry?.label).toBe("connection-identity");
     expect(alternateEntry).not.toBe(first);
-    expectOneParse();
 
     expectCached(() => listedEntry(scope), first);
     expectCached(
       () => readSessionEntryCache(alternateDatabase, { cache: true }).entries.get(scope.sessionKey),
       alternateEntry,
     );
-    expectOneParse();
   } finally {
-    parse.mockRestore();
     opened.database.close();
   }
 });

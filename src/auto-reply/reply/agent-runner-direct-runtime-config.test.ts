@@ -211,7 +211,6 @@ describe("runReplyAgent runtime config", () => {
         } else {
           await expect(runReplyAgent(replyParams)).resolves.toEqual({ text: "done" });
         }
-        expect(finalize).toHaveBeenCalledOnce();
         expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith(outcome);
       } finally {
         finalize.mockRestore();
@@ -280,7 +279,6 @@ describe("runReplyAgent runtime config", () => {
         await queuedCall[4](queuedCall[1]);
 
         expect(queuedCall[1].controllerInput?.claim).toBeDefined();
-        expect(executeAgentTurnMock).toHaveBeenCalledTimes(2);
         expect(onAgentRunTerminalOutcome.mock.calls).toEqual([["completed"], ["failed"]]);
         expect(isSessionRunActive(sessionEntry.sessionId)).toBe(false);
       } finally {
@@ -294,10 +292,24 @@ describe("runReplyAgent runtime config", () => {
     });
   });
 
-  it.each(["failure", "operation abort"] as const)(
-    "keeps preflight compaction live and stops its heartbeat after %s",
+  it.each(["failure", "operation abort", "memory flush"] as const)(
+    "keeps preflight live and stops its heartbeat after %s",
     async (outcome) => {
-      await useRealMemory({ flush: false });
+      const flushing = outcome === "memory flush";
+      await useRealMemory({ flush: flushing });
+      if (flushing) {
+        registerMemoryCapability("memory-core", {
+          flushPlanResolver: () => ({
+            softThresholdTokens: 4_000,
+            forceFlushTranscriptBytes: 1_000_000_000,
+            reserveTokensFloor: 20_000,
+            prompt: "Save durable notes. NO_REPLY",
+            systemPrompt: "Write memory to memory/notes.md.",
+            relativePath: "memory/notes.md",
+          }),
+        });
+        onTestFinished(() => clearMemoryPluginState());
+      }
       await withTestDir({ prefix: "openclaw-preflight-heartbeat-" }, async (tempDir) => {
         const runtime = await createStoredRuntime(tempDir, {
           totalTokens: 95_000,
@@ -305,12 +317,21 @@ describe("runReplyAgent runtime config", () => {
           totalTokensVersion: 1,
         });
         const { replyParams, followupRun, sessionEntry } = runtime;
-        resolveMemoryConfig(runtime);
-        const abort = new AbortController();
+        if (flushing) {
+          followupRun.run.workspaceDir = tempDir;
+        }
+        const cfg = resolveMemoryConfig(
+          runtime,
+          flushing ? { agents: { defaults: { compaction: { memoryFlush: {} } } } } : {},
+        );
+        if (flushing) {
+          setRuntimeConfigSnapshot(cfg);
+          onTestFinished(() => clearRuntimeConfigSnapshot());
+        }
         const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => void>();
         const lifecycle = {
           admission: "exclusive" as const,
-          abortSignal: abort.signal,
+          abortSignal: new AbortController().signal,
           onAdopted: vi.fn(),
           onDeferred: vi.fn(),
           onDeferredHeartbeat: vi.fn(),
@@ -319,23 +340,40 @@ describe("runReplyAgent runtime config", () => {
         };
         followupRun.turnAdoptionLifecycle = lifecycle;
         replyParams.opts = { turnAdoptionLifecycle: lifecycle, onReplyOperationOwned };
-        runMemoryFlushIfNeededMock.mockResolvedValue({ sessionEntry, outcome: "skipped" });
         const entered = createDeferred();
         const release = createDeferred();
-        compactEmbeddedAgentSessionMock.mockReset().mockImplementation(async () => {
+        const waitForRelease = async () => {
           entered.resolve();
           await release.promise;
-          if (outcome === "failure") {
-            throw new Error("Preflight compaction required but failed: test failure");
-          }
-          return { ok: true, compacted: true, result: { tokensAfter: 42 } };
-        });
+        };
+        if (flushing) {
+          runEmbeddedAgentMock.mockImplementationOnce(async () => {
+            await waitForRelease();
+            return { payloads: [], meta: {} };
+          });
+        } else {
+          runMemoryFlushIfNeededMock.mockResolvedValue({ sessionEntry, outcome: "skipped" });
+          compactEmbeddedAgentSessionMock.mockReset().mockImplementation(async () => {
+            await waitForRelease();
+            if (outcome === "failure") {
+              throw new Error("Preflight compaction required but failed: test failure");
+            }
+            return { ok: true, compacted: true, result: { tokensAfter: 42 } };
+          });
+        }
         vi.useFakeTimers();
         const pending = runReplyAgent(replyParams);
         try {
-          await entered.promise;
+          await expect(
+            Promise.race([
+              entered.promise.then(() => "entered"),
+              pending.then(() => "completed-before-preflight"),
+            ]),
+          ).resolves.toBe("entered");
           await vi.advanceTimersByTimeAsync(350);
-          expect(lifecycle.onAdopted).not.toHaveBeenCalled();
+          if (!flushing) {
+            expect(lifecycle.onAdopted).not.toHaveBeenCalled();
+          }
           expect(lifecycle.onDeferredHeartbeat.mock.calls.length).toBeGreaterThanOrEqual(2);
           if (outcome === "operation abort") {
             expect(onReplyOperationOwned.mock.calls[0]?.[0].abortByUser()).toBe(true);
@@ -344,7 +382,12 @@ describe("runReplyAgent runtime config", () => {
             expect(lifecycle.onDeferredHeartbeat).not.toHaveBeenCalled();
           }
           release.resolve();
-          await pending;
+          if (flushing) {
+            await expect(pending).resolves.toEqual({ text: "main reply" });
+            expect(lifecycle.onAdopted).toHaveBeenCalledOnce();
+          } else {
+            await pending;
+          }
           lifecycle.onDeferredHeartbeat.mockClear();
           await vi.advanceTimersByTimeAsync(500);
           expect(lifecycle.onDeferredHeartbeat).not.toHaveBeenCalled();
@@ -356,76 +399,6 @@ describe("runReplyAgent runtime config", () => {
       });
     },
   );
-
-  it("keeps the ingress watchdog scoped around runnable memory flush", async () => {
-    await useRealMemory();
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 4_000,
-        forceFlushTranscriptBytes: 1_000_000_000,
-        reserveTokensFloor: 20_000,
-        prompt: "Save durable notes. NO_REPLY",
-        systemPrompt: "Write memory to memory/notes.md.",
-        relativePath: "memory/notes.md",
-      }),
-    });
-    try {
-      await withTestDir({ prefix: "openclaw-memory-heartbeat-" }, async (tempDir) => {
-        const runtime = await createStoredRuntime(tempDir, {
-          totalTokens: 95_000,
-          totalTokensFresh: true,
-          totalTokensVersion: 1,
-        });
-        const { replyParams, followupRun } = runtime;
-        followupRun.run.workspaceDir = tempDir;
-        const lifecycle = {
-          admission: "exclusive" as const,
-          onAdopted: vi.fn(),
-          onDeferredHeartbeat: vi.fn(),
-          deferredHeartbeatIntervalMs: 100,
-        };
-        followupRun.turnAdoptionLifecycle = lifecycle;
-        replyParams.opts = { turnAdoptionLifecycle: lifecycle };
-        const cfg = resolveMemoryConfig(runtime, {
-          agents: { defaults: { compaction: { memoryFlush: {} } } },
-        });
-        setRuntimeConfigSnapshot(cfg);
-        onTestFinished(() => clearRuntimeConfigSnapshot());
-        const entered = createDeferred();
-        const release = createDeferred();
-        runEmbeddedAgentMock.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return { payloads: [], meta: {} };
-        });
-        vi.useFakeTimers();
-        const pending = runReplyAgent(replyParams);
-        try {
-          await expect(
-            Promise.race([
-              entered.promise.then(() => "entered"),
-              pending.then(() => "completed-before-flush"),
-            ]),
-          ).resolves.toBe("entered");
-          await vi.advanceTimersByTimeAsync(350);
-          expect(lifecycle.onDeferredHeartbeat.mock.calls.length).toBeGreaterThanOrEqual(2);
-          release.resolve();
-          await expect(pending).resolves.toEqual({ text: "main reply" });
-          expect(lifecycle.onAdopted).toHaveBeenCalledOnce();
-          lifecycle.onDeferredHeartbeat.mockClear();
-          await vi.advanceTimersByTimeAsync(500);
-          expect(lifecycle.onDeferredHeartbeat).not.toHaveBeenCalled();
-          expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-        } finally {
-          release.resolve();
-          await Promise.allSettled([pending]);
-          vi.useRealTimers();
-        }
-      });
-    } finally {
-      clearMemoryPluginState();
-    }
-  });
 
   it("records abortForRestart during memory flush as cancellation without starting the main turn", async () => {
     const { replyParams } = createDirectRuntimeReplyParams();

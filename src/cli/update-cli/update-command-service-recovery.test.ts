@@ -1,7 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { StateDatabaseDiscovery } from "../../infra/update-candidate-paths.js";
-import { resolveGatewayRecoverySchemaPaths } from "./update-command-service-recovery.js";
+import { resolveGatewayRecoverySchemaPaths } from "./update-command-recovery-schema-paths.js";
 
 describe("migrated Gateway recovery schema ownership", () => {
   it("excludes plugin databases while retaining discovered agent databases", () => {

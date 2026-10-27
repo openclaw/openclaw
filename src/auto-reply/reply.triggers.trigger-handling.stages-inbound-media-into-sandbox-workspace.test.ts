@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path, { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { readCloneFileMetadata } from "@openclaw/fs-safe/copy";
 import { afterEach, beforeEach, describe, expect, it as baseTest, vi } from "vitest";
 import { slugifySessionKey } from "../agents/sandbox/shared.js";
 import { resolveStagedInputMediaPaths } from "../media/staged-inputs.js";
@@ -113,6 +114,29 @@ function expectUnstaged({ ctx, sessionCtx, result }: StagedMedia, source: string
 }
 
 describe("stageSandboxMedia", () => {
+  it.for([
+    { bytes: 64 * 1024, cloned: false },
+    { bytes: 32 * 1024 * 1024, cloned: true },
+  ])(
+    "copies independent inputs with size-appropriate transfer work: %j",
+    async ({ bytes, cloned }, { media: m }) => {
+      const original = Buffer.alloc(bytes, 42);
+      const source = await m.inbound("independent.bin", original);
+      const stagedPath = expectStaged(await m.stageMedia(source), m.sandboxDir);
+      const destination = join(m.sandboxDir, stagedPath);
+      expect((await fs.readFile(destination)).equals(original)).toBe(true);
+      const [sourceMetadata, stagedMetadata] = await readCloneFileMetadata([source, destination]);
+      if (sourceMetadata) {
+        expect(stagedMetadata?.cloneId === sourceMetadata.cloneId).toBe(cloned);
+        expect(stagedMetadata?.ino).not.toBe(sourceMetadata.ino);
+      }
+      await fs.writeFile(destination, "edited staged input");
+      expect((await fs.readFile(source)).equals(original)).toBe(true);
+      await fs.writeFile(source, "edited original");
+      await expect(fs.readFile(destination, "utf8")).resolves.toBe("edited staged input");
+    },
+  );
+
   it("leaves no staged input directory when an owned source is missing", async ({ media: m }) => {
     sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
     const projectFile = await m.write("openclaw/keep.txt", "existing project file");

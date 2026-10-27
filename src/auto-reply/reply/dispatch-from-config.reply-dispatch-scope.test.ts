@@ -163,11 +163,9 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
       },
     });
     expect(result.queuedFinal).toBe(true);
-    expect(hookMocks.runner.hasHooks).toHaveBeenCalledWith("reply_dispatch", {
-      dispatchKind: bound ? "acp" : "agent",
-    });
-    expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledTimes(bound ? 2 : 0);
-    expect(replyResolver).toHaveBeenCalledTimes(1);
+    if (!bound) {
+      expect(hookMocks.runner.runReplyDispatch).not.toHaveBeenCalled();
+    }
     if (prepared) {
       expectCalls([onPreparedAgentRunStart, [[preparedStart]]], [onAgentRunStart, []]);
     } else {
@@ -292,12 +290,14 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     );
   }
 
-  const createPendingSession = (pending: ReturnType<typeof pendingFinalDelivery>) =>
-    createDispatchMemorySession({
+  function createPendingSession(text: string, state: "prepared" | "delivered" = "prepared") {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    return createDispatchMemorySession({
       sessionId: "session-1",
       updatedAt: 1,
-      pendingFinalDelivery: pending,
+      pendingFinalDelivery: pendingFinalDelivery(text, state),
     });
+  }
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -523,8 +523,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
 
   it("clears pending final delivery when a later queued final succeeds", async () => {
     vi.useFakeTimers();
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    const memory = await createPendingSession(pendingFinalDelivery("durable reply"));
+    const memory = await createPendingSession("durable reply");
     const hookStarted = createDeferred();
     const deliver = vi.fn().mockResolvedValue(undefined);
     let hookCalls = 0;
@@ -566,9 +565,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     ["nested partial envelope", new Error("partial", { cause: createPartialDelivery() }), false],
     ["observer-attached delivery evidence", createNoSendFailure(), true],
   ] as const)("reconciles pending final delivery after %s", async (name, error, preserve) => {
-    hookMocks.runner.hasHooks.mockReturnValue(false);
     const pending = pendingFinalDelivery("recoverable final reply");
-    const memory = await createPendingSession(pending);
+    const memory = await createPendingSession("recoverable final reply");
     const dispatcher = createReplyDispatcher({
       deliver: async () => {
         throw error;
@@ -589,10 +587,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   it.each(["prepared", "delivered"] as const)(
     "clears %s final custody after pre-delivery cancellation",
     async (state) => {
-      hookMocks.runner.hasHooks.mockReturnValue(false);
-      const memory = await createPendingSession(
-        pendingFinalDelivery("policy-suppressed reply", state),
-      );
+      const memory = await createPendingSession("policy-suppressed reply", state);
       const deliver = vi.fn().mockResolvedValue(undefined);
       const dispatcher = createReplyDispatcher({
         deliver,

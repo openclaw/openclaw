@@ -627,6 +627,8 @@ function BoardWidgetCellContent(
             {
               "board-widget__body--scrollable": scrollable(),
               "board-widget__body--card": presentation() === "card",
+              "board-widget__body--fixed-report":
+                props.widget!.heightMode === "fixed" && contribution()?.kind === "session:report",
             },
           ]}
         >

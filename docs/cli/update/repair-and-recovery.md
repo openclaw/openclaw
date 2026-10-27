@@ -449,16 +449,9 @@ can also clear the older updater's first-hop block without replacing packages.
 Other unfinished recovery still requires its original owner.
 
 For a package update stranded by an older updater's launcher ownership checks,
-use the manual installation hop, then repair from the new CLI at the same root:
-
-```bash
-npm install -g openclaw@latest
-openclaw doctor --fix
-openclaw update repair
-```
-
-Follow the [manual update precautions](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
-including a verified backup and stopping the managed Gateway during replacement.
+follow the [manual update procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+and run `openclaw update repair` from the new CLI at the same root right after
+`openclaw doctor --fix`, before refreshing and starting the Gateway service.
 When the installed package directory matches neither recorded generation, repair
 closes the previous package operation as `superseded-by-manual-install`, warns with
 its operation ID, and preserves any remaining staged files and helper beside the installation.
@@ -1110,7 +1103,9 @@ or snapshots. They do not make immutable releases eligible for `update cleanup`;
 Doctor's `<database>.pre-startup-migration-<id>.bak` groups, including their
 `.scoped.bak` members, become eligible only
 after Doctor verifies migration completion and update history records a successful
-update that started later. Until then they appear as protected. Changed backups remain blocked; unrecorded backups remain protected unless
+update that started later. Until then they appear as protected. An external
+supervisor's native update counts once the supervisor accepts it with `update finish`.
+Releases it swaps without `update migrate` are not recorded. Changed backups remain blocked; unrecorded backups remain protected unless
 explicitly selected as described below; cleanup never infers permission
 to delete from their filenames. Keep these files with your pre-upgrade backups
 while you still need to restore the matching database generation.

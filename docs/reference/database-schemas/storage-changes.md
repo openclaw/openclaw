@@ -145,6 +145,88 @@ fragment activation/dependencies and the expected catalog for the state owner;
 it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
 
+### Local workspace manifest storage
+
+Shared-state schema 35 stores each directory's sibling treap as one immutable
+pack in `local_workspace_tree_packs`. An ordinary rowid table keeps the large
+JSON TEXT payloads outside its unique 32-byte digest index. The BLOB primary key
+also gives database ports their existing keyset pagination.
+Each pack contains its records' existing entry facts, content and tree digests,
+and links, plus a small child-pack digest array and sweep epoch. It contains no
+filesystem stat identities. The treap shape and digest definitions remain
+unchanged: a pack uses its sibling root's existing tree digest.
+`local_workspace_projections.tree_root_digest`
+selects the accepted tree, and `baseline_ref` retains its existing meaning.
+`local_workspace_source_path_sets` shares digest-keyed, zstd-compressed source
+path arrays through `source_paths_digest` on each projection. Both tables remain
+in the existing shared-state database.
+
+Tree reads fetch packs level by level with batched digest lookups inside the
+existing read snapshot. Both engines return the stored record text and small
+child-pack arrays; loading never recomputes digests. Missing roots or child packs
+retain the reconstruction handoff. Reads reconstruct their own Maps without a
+root cache.
+
+`canonical_fingerprints` and `projection_fingerprints` are nullable BLOB columns
+on the projection row. Each zstd format-v1 blob holds the target filesystem's
+device, aligned tree digest, and file count, followed by fixed-width inode and
+nanosecond ctime records in deterministic path order. Directories have no record.
+A scan reuses a baseline file hash only when the entire blob validates against
+the current tree, the device and path's inode/ctime match, and the size matches
+the shared entry. A missing, malformed, stale, or misaligned blob supplies no
+reuse. Inode comparison is necessary because renaming an ancestor directory can
+leave its files' ctimes unchanged. The fingerprint and in-process hash memo share
+a two-second racy-clean margin: ctime must predate scan or hash start by more than
+two seconds. Recent fingerprint entries carry an unusable ctime sentinel, and
+recent hashes do not enter the memo. A later scan hashes those files again before
+recording reusable timestamps; a backwards clock step only increases hashing.
+A scan shares its sorted path order between reuse and encoding. When the root
+and every exact reusable fingerprint remain unchanged, it retains the stored
+blob without encoding or compressing it again.
+
+The read worker prepares the immutable tree before acceptance. The writer
+inserts new packs and stamps reused packs in bounded short transactions.
+Incremental edits prepare the edited directory pack and each ancestor pack;
+replacing a tree already present inserts no packs. A large flat directory
+rewrites its complete pack on an edit. Acceptance retains the
+existing revision, baseline, lease, and registry checks, then publishes the root,
+changed target fingerprint, and receipt together. Checkpoints retain the previous
+and resulting roots needed by the existing reconciliation owner. No filesystem
+work or full-tree replacement runs inside that acceptance transaction.
+
+The schema migration performs DDL only. The reconciliation owner converts v31
+rows and legacy full-document baselines online, one projection at a time, and
+keeps the old inputs until root publication succeeds. Pending legacy receipts
+retain their original identities through settlement. The v31 table stays until a
+later schema bump can drop it after it is empty. The PostgreSQL generator derives
+the same tables, columns, and first-use fragments from the canonical SQLite
+schema; its state port descriptor retains the legacy conversion inputs.
+
+Stored baseline decoding and materialization preserve the accepted inventory,
+including directories now excluded from new workspace captures. Conversion
+rebuilds and compares the saved reference before preparing immutable content.
+A mismatch preserves the original rows and JSON, warns, and requests the existing
+full-scan baseline repair. Recovery first rolls back any interrupted filesystem
+apply. The repair replaces storage only when a workspace reproduces the exact
+saved baseline reference; otherwise both workspaces and conversion inputs remain
+intact for recovery.
+
+DDL-only does not mean constant-time admission: SQLite validates existing rows
+after adding a column to a STRICT table. The four nullable additions therefore
+each scan the projection table. Migration keeps that validation and the declared
+backup of changed schema and retained conversion inputs; older binaries refusing
+schema 35 does not remove the rollback requirement.
+
+Workspace maintenance advances `workspace.manifest.sweepEpoch` in the existing
+`config_machine_state` owner, marks every accepted and pending checkpoint root
+in one read snapshot, and deletes unreachable packs and path sets older than the
+preceding epoch in bounded batches. Writers stamp the current epoch when
+preparing or reusing content. A writer stalled for more than an epoch can lose
+unaccepted packs. A missing-pack load reconstructs the saved root from the
+projection or canonical copy; if neither reproduces its digest, reconciliation
+reports an error and preserves files rather than changing the accepted baseline.
+This recoverable case uses no reference counts or cross-thread handshake.
+
 ### PostgreSQL index ordering migrations
 
 Explicit PostgreSQL index keys use native ordering for canonical NOT NULL and

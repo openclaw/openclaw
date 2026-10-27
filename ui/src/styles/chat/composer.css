@@ -930,7 +930,9 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .chat-talk-control:hover:not(.chat-talk-control--holding):not(:has(:focus-visible))
+  .chat-talk-control:hover:not(.chat-talk-control--holding):not(:has(:focus-visible)):not(
+      :has(.chat-send-btn:disabled)
+    )
     .chat-talk-input-picker:not([open]) {
     width: var(--chat-microphone-picker-width);
     transition-delay: var(--chat-microphone-reveal-delay);
@@ -988,7 +990,9 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .chat-talk-control:hover:not(.chat-talk-control--holding):not(:has(:focus-visible))
+  .chat-talk-control:hover:not(.chat-talk-control--holding):not(:has(:focus-visible)):not(
+      :has(.chat-send-btn:disabled)
+    )
     .chat-talk-input-picker:not([open])
     .chat-talk-input-picker__trigger {
     opacity: 1;
