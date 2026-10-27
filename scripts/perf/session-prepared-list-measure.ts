@@ -552,18 +552,6 @@ try {
           sample.calls++;
           sample.cpuMicros += used.user + used.system;
           sample.maxCpuMicros = Math.max(sample.maxCpuMicros, used.user + used.system);
-          const prepared = lists.prepareSessionRowSelection(projection!, query, {
-            now: clock,
-            metadataPrepared: true,
-          });
-          const filterBefore = process.threadCpuUsage();
-          filterSessionEntries({ ...prepared, identityNames: searchIdentities?.names });
-          const filterUsed = process.threadCpuUsage(filterBefore);
-          sample.filterCpuMicros += filterUsed.user + filterUsed.system;
-          sample.maxFilterCpuMicros = Math.max(
-            sample.maxFilterCpuMicros,
-            filterUsed.user + filterUsed.system,
-          );
           bySearch.set(query.search!, sample);
         }
       }
@@ -597,6 +585,25 @@ try {
       ? (await inspector.post("HeapProfiler.stopSampling")).profile
       : undefined;
   const cpu = values["cpu-profile"] ? (await inspector.post("Profiler.stop")).profile : undefined;
+  // Owner probes allocate full result arrays; keep them out of subsequent list samples.
+  if (values["search-workload"]) {
+    for (let index = sequence - iterations; index < sequence; index++) {
+      const query = cases[index % cases.length]!;
+      const sample = bySearch.get(query.search!)!;
+      const prepared = lists.prepareSessionRowSelection(projection, query, {
+        now: clock,
+        metadataPrepared: true,
+      });
+      const filterBefore = process.threadCpuUsage();
+      filterSessionEntries({ ...prepared, identityNames: searchIdentities?.names });
+      const filterUsed = process.threadCpuUsage(filterBefore);
+      sample.filterCpuMicros += filterUsed.user + filterUsed.system;
+      sample.maxFilterCpuMicros = Math.max(
+        sample.maxFilterCpuMicros,
+        filterUsed.user + filterUsed.system,
+      );
+    }
+  }
   if (allocation) {
     writeFileSync(path.join(root, "allocation.heapprofile"), JSON.stringify(allocation));
   }
