@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement as awaitGate } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import * as configEnv from "../../config/config-env-vars.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -179,7 +178,12 @@ function pauseRead(
     release: () => release.resolve(),
     restore: () => spy.mockRestore(),
     wait: (pending: Promise<unknown>, message: string) =>
-      awaitGate(entered.promise, pending, message),
+      Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error(message);
+        }),
+      ]),
   };
 }
 
@@ -235,7 +239,8 @@ it.each(["canonical", "shared"])(
         detached.appendMessage(makeUserMessage("detached only", 20));
         expect(probes.flatMap((probe) => probe.mock.calls)).toEqual([]);
         // Warm admission must use the requested lane, not the cold reader's reserved-lane fallback.
-        openOpenClawAgentDatabase({ agentId: database.agentId, path: database.path });
+        const warm = openOpenClawAgentDatabase({ agentId: database.agentId, path: database.path });
+        expect(warm.db.isOpen).toBe(true);
         probes.forEach((probe) => probe.mockClear());
         const retirementEntered = createDeferredCore();
         const releaseRetirement = createDeferredCore();
@@ -257,11 +262,12 @@ it.each(["canonical", "shared"])(
           () => cold.reloadPersistedTranscriptAsync(),
         );
         try {
-          await awaitGate(
+          await Promise.race([
             reloading,
-            retirementEntered.promise,
-            "Manager reload cleanup waits on its own queued writer",
-          );
+            retirementEntered.promise.then(() => {
+              throw new Error("Manager reload cleanup waits on its own queued writer");
+            }),
+          ]);
         } finally {
           releaseRetirement.resolve();
           await Promise.allSettled([reloading, following]);
@@ -451,11 +457,12 @@ it.each(["hydration", "current-turn"] as const)(
       const predecessors = Promise.all(predecessorReads);
       const reads: Promise<unknown>[] = [...predecessorReads, predecessors];
       try {
-        await awaitGate(
+        await Promise.race([
           entered.promise,
-          predecessors,
-          "Hydration predecessors settled before filling the worker pool",
-        );
+          predecessors.then(() => {
+            throw new Error("Hydration predecessors settled before filling the worker pool");
+          }),
+        ]);
         expectQueue();
         const controller = new AbortController();
         const reason = new Error("queued hydration cancelled");
@@ -535,7 +542,8 @@ it.each(["abort", "database-close"] as const)(
         }
         gate.release();
         await refused;
-        expectMessages(await SessionManager.openAsync(target), makeUserMessage("retained", 1));
+        const reopened = await SessionManager.openAsync(target);
+        expectMessages(reopened, makeUserMessage("retained", 1));
       } finally {
         gate.release();
         gate.restore();
@@ -580,6 +588,7 @@ it.each([
           await waitForSessionTranscriptProjection(target);
           await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
         }
+        const originalEnvironment = process.env.OPENCLAW_STATE_DIR;
         const env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: state.stateDir };
         const input = environment === "explicit" ? { ...target, env } : target;
         const detached = SessionManager.inMemory();
@@ -620,6 +629,14 @@ it.each([
             expect(SessionManager.open(original).buildSessionContext().thinkingLevel).toBe("high");
           }
         } finally {
+          if (originalEnvironment === undefined) {
+            delete process.env.OPENCLAW_STATE_DIR;
+          } else {
+            process.env.OPENCLAW_STATE_DIR = originalEnvironment;
+          }
+          if (!privateStorage) {
+            delete process.env.OPENCLAW_SUPERVISOR_MODE;
+          }
           await Promise.allSettled([pending]);
           if (privateStorage) {
             memorySessionActorOwners.closeDatabase({
@@ -713,6 +730,7 @@ it.each(["canonical", "custom"])(
         target.storePath = state.path("windows-shared.sqlite");
       }
       await seedHistory(target, "captured store");
+      const hostPlatform = process.platform;
       const env = { ...state.env };
       for (const key of Object.keys(env)) {
         if (
@@ -725,6 +743,9 @@ it.each(["canonical", "custom"])(
       env.OpenClaw_State_Dir = state.stateDir;
       env.OpenClaw_Supervisor_Mode = "external";
       const cloneEnv = configEnv.cloneEnvWithPlatformSemantics;
+      expect(withMockedPlatform("win32", () => cloneEnv(env)).OPENCLAW_STATE_DIR).toBe(
+        state.stateDir,
+      );
       const clone = vi
         .spyOn(configEnv, "cloneEnvWithPlatformSemantics")
         .mockImplementation((input) =>
@@ -739,12 +760,14 @@ it.each(["canonical", "custom"])(
           transferred = request;
         },
       );
-      const pending = SessionManager.openAsync({ ...target, env });
+      const inputTarget = { ...target, env };
+      const pending = SessionManager.openAsync(inputTarget);
       const result = expect(pending).resolves.toBeInstanceOf(SessionManager);
       try {
         await gate.wait(result, "Hydration settled before the intercepted environment transfer");
         env.OpenClaw_State_Dir = state.path("later-state");
         env.OpenClaw_Supervisor_Mode = "changed-after-capture";
+        expect(process.platform).toBe(hostPlatform);
         gate.release();
         await result;
         expectMessages(await pending, makeUserMessage("captured store", 1));

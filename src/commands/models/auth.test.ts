@@ -230,7 +230,10 @@ function createOpenAISetupProvider(
   ]);
 }
 
-function oauthProfile(profileId = "openai:user@example.com"): ProviderAuthProfile {
+function oauthProfile(
+  profileId = "openai:user@example.com",
+  credential: Partial<Extract<ProviderAuthProfile["credential"], { type: "oauth" }>> = {},
+): ProviderAuthProfile {
   return {
     profileId,
     credential: {
@@ -240,6 +243,7 @@ function oauthProfile(profileId = "openai:user@example.com"): ProviderAuthProfil
       refresh: "refresh-token",
       expires: Date.now() + 60_000,
       email: "user@example.com",
+      ...credential,
     },
   };
 }

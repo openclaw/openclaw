@@ -10,7 +10,6 @@ import type {
   UsersListModelAccountsResult,
   UsersSelfResult,
 } from "../../../packages/gateway-protocol/src/schema/users.js";
-import { createCliTtyMock } from "../../cli/test-runtime-capture.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildMinimalGatewayHelloOkPayload,
@@ -74,10 +73,6 @@ const self = {
     hasAvatar: false,
   },
 } satisfies UsersSelfResult;
-const defaultResponses: Record<string, unknown> = {
-  "users.self": self,
-  "users.authConnect.catalog": catalog,
-};
 
 type Request = {
   method: string;
@@ -143,9 +138,15 @@ async function withGateway(
                   sendMinimalGatewayResponse(
                     socket,
                     id,
-                    payload ?? defaultResponses[request.method] ?? {},
+                    payload ??
+                      (request.method === "users.self"
+                        ? self
+                        : request.method === "users.authConnect.catalog"
+                          ? catalog
+                          : {}),
                   );
                 }
+                return undefined;
               },
               () => {
                 if (socket.readyState === WebSocket.OPEN) {
@@ -158,6 +159,7 @@ async function withGateway(
                     }),
                   );
                 }
+                return undefined;
               },
             );
         });
@@ -252,16 +254,26 @@ function waitForPromptAbort(): void {
   );
 }
 
-const tty = createCliTtyMock([process.stdin, process.stderr]);
+const ttyDescriptors = [process.stdin, process.stderr].map(
+  (stream) => [stream, Object.getOwnPropertyDescriptor(stream, "isTTY")] as const,
+);
 beforeEach(() => {
-  tty.set(true);
+  for (const [stream] of ttyDescriptors) {
+    Object.defineProperty(stream, "isTTY", { configurable: true, value: true });
+  }
   mocks.password.mockReset();
   mocks.autocomplete.mockReset();
   mocks.openUrl.mockClear();
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  tty.restore();
+  for (const [stream, descriptor] of ttyDescriptors) {
+    if (descriptor) {
+      Object.defineProperty(stream, "isTTY", descriptor);
+    } else {
+      Reflect.deleteProperty(stream, "isTTY");
+    }
+  }
 });
 
 describe("personal model account CLI over an identified Gateway connection", () => {

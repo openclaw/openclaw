@@ -10,6 +10,7 @@ import { testing as acpRuntimeRegistryTesting } from "../../../acp/runtime/regis
 import { createExecutionIdentityAdmissionToken } from "../../../audit/execution-identity-admission.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import { getLoadedChannelPluginForRead } from "../../../channels/plugins/registry-loaded.js";
+import type { ChannelPlugin } from "../../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../../../config/types.agent-defaults.js";
 import type { AgentEntryConfig } from "../../../config/types.agents.js";
@@ -169,12 +170,12 @@ function replaceSpawnConfig(next: OpenClawConfig): void {
   Object.assign(current, next);
 }
 
-function configureSubagentDefaults(subagents: AgentDefaultsConfig["subagents"]): void {
-  const defaults = ((hoisted.state.cfg.agents ??= {}).defaults ??= {});
+function configureSubagentDefaults(
+  subagents: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["subagents"],
+): void {
+  const agents = (hoisted.state.cfg.agents ??= {});
+  const defaults = (agents.defaults ??= {});
   Object.assign((defaults.subagents ??= {}), subagents);
-}
-function configureAcp(options: NonNullable<OpenClawConfig["acp"]>) {
-  Object.assign((hoisted.state.cfg.acp ??= {}), options);
 }
 
 const acpAgent = (agent = "codex", backend?: string): AgentEntryConfig => ({
@@ -187,7 +188,7 @@ type RuntimeCase = [
   string,
   Partial<AgentEntryConfig>,
   Partial<AgentDefaultsConfig>,
-  { model?: string; thinking?: ThinkLevel; timeoutSeconds?: number },
+  { model?: string; thinking?: ThinkLevel },
   ThinkLevel?,
 ];
 
@@ -251,14 +252,10 @@ function spawn(
 ) {
   return spawnAcpDirect({ task: "Investigate flaky tests", agentId: "codex", ...request }, context);
 }
-async function expectRefused(
-  request: Partial<SpawnRequest>,
-  expected: Record<string, unknown>,
-  context?: SpawnContext,
-) {
-  expect(await spawn(request, context)).toMatchObject(expected);
-  expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
-  expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+function mockAgentDispatch(dispatch: () => unknown) {
+  hoisted.callGatewayMock.mockImplementation(async ({ method }: { method?: string }) =>
+    method === "agent" ? dispatch() : gatewayResponse(method),
+  );
 }
 function configureAgents(entries: NonNullable<OpenClawConfig["agents"]>["entries"]) {
   hoisted.state.cfg.agents = { ...hoisted.state.cfg.agents, entries };
@@ -284,7 +281,6 @@ const requesterContext: SpawnContext = {
   agentTo: "telegram:6098642967",
   agentThreadId: "1",
 };
-const subagentContext = { ...requesterContext, agentSessionKey: "agent:main:subagent:parent" };
 
 async function workspaceFixture(agent = "claude-code", exists = true) {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-spawn-"));
@@ -294,7 +290,10 @@ async function workspaceFixture(agent = "claude-code", exists = true) {
   if (exists) {
     await fs.mkdir(targetWorkspace, { recursive: true });
   }
-  configureAcp({ allowedAgents: agent === "codex" ? [agent] : ["codex", agent] });
+  hoisted.state.cfg.acp = {
+    ...hoisted.state.cfg.acp,
+    allowedAgents: agent === "codex" ? [agent] : ["codex", agent],
+  };
   hoisted.state.cfg.agents = {
     entries: {
       main: { workspace: mainWorkspace },
@@ -354,6 +353,16 @@ function configureChannelBindings(channel: string, accountId?: string, defaultAc
       ...(accountId ? { accounts: { [accountId]: { threadBindings } } } : {}),
     },
   };
+}
+
+function installBindingPlugin(plugin: ChannelPlugin, placements?: SessionBindingPlacement[]) {
+  setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]));
+  registerBindingAdapter(plugin.id, "default", placements);
+}
+
+function enableLineCurrentConversationBindings(): void {
+  configureChannelBindings("line");
+  installBindingPlugin(createChannelTestPluginBase({ id: "line" }), ["current"]);
 }
 
 function mockSessionStore(entries: Record<string, SessionEntry> = {}) {
@@ -491,9 +500,11 @@ describe("spawnAcpDirect", () => {
         sessionId: patch.sessionId ?? "sess-123",
         updatedAt: patch.updatedAt ?? Date.now(),
       }));
+
     hoisted.callGatewayMock
       .mockReset()
-      .mockImplementation(async ({ method }: { method?: string }) => gatewayResponse(method));
+      .mockImplementation(async (args: { method?: string }) => gatewayResponse(args.method));
+
     hoisted.initializeSessionMock
       .mockReset()
       .mockImplementation(async (args: AcpInitializeSessionInput) => ({
@@ -588,69 +599,40 @@ describe("spawnAcpDirect", () => {
     }
   });
 
-  it.each<[string, Partial<SpawnRequest>, Record<string, unknown>, SpawnContext?]>([
-    [
-      "unknown resume",
-      { resumeSessionId: "unknown" },
-      { status: "forbidden", errorCode: "resume_forbidden" },
-    ],
-    [
-      "explicit auth profile",
-      { model: "openai/gpt-5.6-luna@openai:test-profile" },
-      {
-        status: "error",
-        error:
-          "ACP model overrides cannot select OpenClaw auth profiles; configure credentials in the ACP runtime instead.",
-      },
-    ],
-    [
-      "maximum depth",
-      { mode: "run" },
-      {
-        status: "forbidden",
-        errorCode: "subagent_policy",
-        error: expect.stringContaining("current depth: 2, max: 2"),
-      },
-      { ...requesterContext, agentSessionKey: "agent:main:subagent:parent:subagent:leaf" },
-    ],
-  ])("rejects %s before initialization or dispatch", async (_name, request, expected, context) =>
-    expectRefused(request, expected, context),
-  );
+  it("refuses an unknown resume ID before creating a child", async () => {
+    const result = await spawn({ resumeSessionId: "unknown" });
+    expect(result).toMatchObject({ status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+  });
 
-  it("rejects native config agents before initialization or dispatch", async () => {
-    configureAgents({ pleres: {} });
-    configureSubagentDefaults({ allowAgents: ["*"] });
-    await expectRefused(
-      { agentId: "pleres" },
-      {
-        status: "error",
-        errorCode: "runtime_agent_mismatch",
-        error:
-          'agentId "pleres" is an OpenClaw config agent, not an ACP harness. Use runtime="subagent" or omit runtime for OpenClaw config agents. Use runtime="acp" only with external ACP harness ids such as codex, claude, droid, gemini, or opencode, or configure agents.entries.*.runtime.type="acp" with runtime.acp.agent.',
-      },
+  it("strips an inherited OpenClaw auth profile before ACP initialization", async () => {
+    configureSubagentDefaults({ model: "openai/gpt-5.6-luna@openai:test-profile" });
+    expectAcceptedSpawn(await spawn());
+    const initInput = expectInitializeSessionFields({ agent: "codex" });
+    expect(initInput.runtimeOptions).toEqual(
+      expect.objectContaining({ model: "openai/gpt-5.6-luna" }),
     );
   });
 
-  it("rejects ACP self-targets excluded by the subagent allowlist", async () => {
-    configureAcp({ allowedAgents: ["codex", "writer"] });
-    configureSubagentDefaults({ allowAgents: ["writer"] });
-    await expectRefused(
-      { mode: "run", agentId: "codex" },
-      {
-        status: "forbidden",
-        errorCode: "subagent_policy",
-        error: expect.stringContaining("agentId is not allowed"),
-      },
-      { ...requesterContext, agentSessionKey: "agent:codex:subagent:parent" },
-    );
-  });
+  it("rejects an explicit OpenClaw auth profile for ACP runtimes", async () => {
+    const result = await spawn({ model: "openai/gpt-5.6-luna@openai:test-profile" });
 
-  it("rejects disallowed ACP agents", async () => {
-    configureAcp({ allowedAgents: ["claudecode"] });
-    await expectRefused({}, { status: "forbidden" });
+    expect(result.status).toBe("error");
+    expect(result).toHaveProperty(
+      "error",
+      "ACP model overrides cannot select OpenClaw auth profiles; configure credentials in the ACP runtime instead.",
+    );
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
   it.each<RuntimeCase>([
+    [
+      "target-provider alias",
+      { model: sonnet, subagents: { model: "opus", thinking: "low" } },
+      { models: { "claude-opus-4-6": { alias: "opus" } } },
+      { model: "anthropic/claude-opus-4-6", thinking: "low" },
+    ],
     ["explicit max", {}, { subagents: { thinking: "low" } }, { thinking: "max" }, "max"],
     [
       "configured model with global thinking default",
@@ -658,12 +640,7 @@ describe("spawnAcpDirect", () => {
       { thinkingDefault: "off" },
       { model: sonnet, thinking: "off" },
     ],
-    [
-      "opaque harness model and owner subagent thinking",
-      { model: opaqueModel, subagents: { thinking: "low" } },
-      {},
-      { model: opaqueModel, thinking: "low" },
-    ],
+    ["opaque harness model", { model: opaqueModel }, {}, { model: opaqueModel }],
     [
       "owner thinking without model override",
       { thinkingDefault: "off" },
@@ -671,16 +648,10 @@ describe("spawnAcpDirect", () => {
       { thinking: "off" },
     ],
     [
-      "strips inherited auth profile",
-      {},
-      { subagents: { model: "openai/gpt-5.6-luna@openai:test-profile" } },
-      { model: "openai/gpt-5.6-luna" },
-    ],
-    [
-      "caps runtime timeout without shortening spawn tracking",
-      {},
-      { subagents: { runTimeoutSeconds: 172_800 } },
-      { timeoutSeconds: 86_400 },
+      "model-profile thinking default",
+      { model: gpt },
+      { models: { [gpt]: { params: { thinking: "high" } } } },
+      { model: gpt, thinking: "high" },
     ],
   ])("resolves ACP runtime options: %s", async (_name, agent, defaults, expected, thinking) => {
     hoisted.state.cfg.agents = {
@@ -695,17 +666,42 @@ describe("spawnAcpDirect", () => {
         },
       },
     };
-    const result = expectAcceptedSpawn(await spawn({ agentId: "codex-acp", thinking }));
+    expectAcceptedSpawn(await spawn({ agentId: "codex-acp", thinking }));
     expectInitializeSessionFields({
       agent: "codex",
       backendId: "acpx",
       thinkingExplicit: thinking !== undefined,
       runtimeOptions: expected,
     });
-    if (defaults.subagents?.runTimeoutSeconds !== undefined) {
-      expect(result.runTimeoutSeconds).toBe(defaults.subagents.runTimeoutSeconds);
-      expect(gatewayRequest("agent").params?.timeout).toBe(defaults.subagents.runTimeoutSeconds);
-    }
+  });
+
+  it("caps configured ACP runtime timeout without shortening spawn tracking", async () => {
+    configureSubagentDefaults({ runTimeoutSeconds: 172_800 });
+
+    const result = await spawn({});
+
+    expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 172_800);
+    expectInitializeSessionFields({ agent: "codex", runtimeOptions: { timeoutSeconds: 86_400 } });
+    const agentCall = gatewayRequest("agent");
+    expect(agentCall?.params?.timeout).toBe(172_800);
+  });
+
+  it("rejects OpenClaw config agent ids when runtime=acp targets a native agent", async () => {
+    hoisted.state.cfg.agents = {
+      entries: { pleres: {} },
+      defaults: { subagents: { allowAgents: ["*"], maxSpawnDepth: 2 } },
+    };
+
+    const result = await spawn({ agentId: "pleres" });
+
+    expectRecordFields(result, { status: "error", errorCode: "runtime_agent_mismatch" });
+    expect(result).toHaveProperty(
+      "error",
+      'agentId "pleres" is an OpenClaw config agent, not an ACP harness. Use runtime="subagent" or omit runtime for OpenClaw config agents. Use runtime="acp" only with external ACP harness ids such as codex, claude, droid, gemini, or opencode, or configure agents.entries.*.runtime.type="acp" with runtime.acp.agent.',
+    );
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+    expectGatewayMethodNotCalled("agent");
   });
 
   it("forwards prepared image attachments through the gateway agent call", async () => {
@@ -717,6 +713,17 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.attachments).toEqual([
       { type: "image", source: { type: "base64", media_type: "image/png", data: imageBase64 } },
     ]);
+  });
+
+  it("rejects ACP spawns that exceed subagent max depth", async () => {
+    const result = await spawn(
+      { mode: "run" },
+      { ...requesterContext, agentSessionKey: "agent:main:subagent:parent:subagent:leaf" },
+    );
+
+    const failed = expectFailedSpawn(result, "forbidden");
+    expect(failed.errorCode).toBe("subagent_policy");
+    expect(failed.error).toContain("current depth: 2, max: 2");
   });
 
   it.each([1, 2])("counts a pending dispatch exactly once against cap %s", async (cap) => {
@@ -736,7 +743,8 @@ describe("spawnAcpDirect", () => {
     const entered = createDeferred();
     const release = createDeferred();
     const context = {
-      ...subagentContext,
+      ...requesterContext,
+      agentSessionKey: "agent:main:subagent:parent",
       ...(cap === 1 ? { completionOwnerKey: "agent:main:main" } : {}),
     };
     let dispatchedRuns = 0;
@@ -792,7 +800,10 @@ describe("spawnAcpDirect", () => {
     }
 
     try {
-      const rejected = await spawn({ mode: "run" }, subagentContext);
+      const rejected = await spawn(
+        { mode: "run" },
+        { ...requesterContext, agentSessionKey: controllerSessionKey },
+      );
 
       expect(expectFailedSpawn(rejected, "forbidden")).toMatchObject({
         errorCode: "subagent_policy",
@@ -807,8 +818,10 @@ describe("spawnAcpDirect", () => {
   it("returns ACP child capacity after run registration fails", async () => {
     configureSubagentDefaults({ maxChildrenPerAgent: 1 });
     hoisted.registerSubagentRunMock.mockRejectedValueOnce(new Error("registry unavailable"));
-    const failed = await spawn({ mode: "run" }, subagentContext);
-    const replacement = await spawn({ mode: "run" }, subagentContext);
+    const context = { ...requesterContext, agentSessionKey: "agent:main:subagent:parent" };
+
+    const failed = await spawn({ mode: "run" }, context);
+    const replacement = await spawn({ mode: "run" }, context);
 
     expect(expectFailedSpawn(failed, "error")).toMatchObject({
       errorCode: "spawn_failed",
@@ -823,9 +836,18 @@ describe("spawnAcpDirect", () => {
   it.each([true, false])(
     "enforces the registry with wildcard allowlist (configured=%s)",
     async (configured) => {
-      configureAcp({ allowedAgents: configured ? ["codex", "writer"] : [] });
-      configureAgents({ main: { subagents: { allowAgents: ["*"] } } });
-      const result = await spawn({ mode: "run", agentId: "writer" }, subagentContext);
+      hoisted.state.cfg.acp = {
+        ...hoisted.state.cfg.acp,
+        allowedAgents: configured ? ["codex", "writer"] : [],
+      };
+      hoisted.state.cfg.agents = {
+        ...hoisted.state.cfg.agents,
+        entries: { main: { subagents: { allowAgents: ["*"] } } },
+      };
+      const result = await spawn(
+        { mode: "run", agentId: "writer" },
+        { ...requesterContext, agentSessionKey: "agent:main:subagent:parent" },
+      );
       if (configured) {
         expectAcceptedSpawn(result);
       } else {
@@ -837,11 +859,22 @@ describe("spawnAcpDirect", () => {
     },
   );
 
+  it("rejects explicit ACP self-targets when the subagent allowlist excludes the requester", async () => {
+    hoisted.state.cfg.acp = { ...hoisted.state.cfg.acp, allowedAgents: ["codex", "writer"] };
+    configureSubagentDefaults({ allowAgents: ["writer"] });
+
+    const result = await spawn(
+      { mode: "run", agentId: "codex" },
+      { ...requesterContext, agentSessionKey: "agent:codex:subagent:parent" },
+    );
+
+    const failed = expectFailedSpawn(result, "forbidden");
+    expect(failed.errorCode).toBe("subagent_policy");
+    expect(failed.error).toContain("agentId is not allowed");
+  });
+
   it("refuses to hand the current conversation to a spawned worker", async () => {
-    configureChannelBindings("line");
-    const plugin = createChannelTestPluginBase({ id: "line" });
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "line", plugin, source: "test" }]));
-    registerBindingAdapter("line", "default", ["current"]);
+    enableLineCurrentConversationBindings();
     const result = await spawn(
       { mode: "session", thread: true },
       channelContext("line", "U1234567890abcdef1234567890abcdef", {
@@ -884,7 +917,11 @@ describe("spawnAcpDirect", () => {
           accounts: { "bot-alpha": {}, "bot-beta": {} },
         },
       };
-      configureAcp({ defaultAgent: "reviewer", allowedAgents: ["codex", "bot-alpha"] });
+      hoisted.state.cfg.acp = {
+        ...hoisted.state.cfg.acp,
+        defaultAgent: "reviewer",
+        allowedAgents: ["codex", "bot-alpha"],
+      };
       configureAgents({
         main: {},
         "bot-alpha": {},
@@ -931,6 +968,11 @@ describe("spawnAcpDirect", () => {
       });
     },
   );
+
+  it("rejects disallowed ACP agents", async () => {
+    hoisted.state.cfg.acp = { enabled: true, backend: "acpx", allowedAgents: ["claudecode"] };
+    expectRecordFields(await spawn(), { status: "forbidden" });
+  });
 
   it("implicitly streams mode=run ACP spawns for subagent requesters without heartbeat configuration", async () => {
     const context = configureParentDelivery("agent:main:subagent:parent");
@@ -1020,11 +1062,8 @@ describe("spawnAcpDirect", () => {
   it("disposes pre-registered parent relay when initial ACP dispatch fails", async () => {
     const relayHandle = createRelayHandle();
     hoisted.startAcpSpawnParentStreamRelayMock.mockReturnValueOnce(relayHandle);
-    hoisted.callGatewayMock.mockImplementation(async ({ method }: { method?: string }) => {
-      if (method === "agent") {
-        throw new Error("agent dispatch failed");
-      }
-      return gatewayResponse(method);
+    mockAgentDispatch(() => {
+      throw new Error("agent dispatch failed");
     });
 
     const result = await spawn({ streamTo: "parent" });
