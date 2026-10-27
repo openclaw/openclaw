@@ -417,9 +417,9 @@ it.each<
       baseUrl,
       ...configured,
     });
-    expect(await provider?.prepareRuntimeAuthV2?.(runtimeContext(providerConfig, sourceKey))).toEqual(
-      { apiKey: runtimeKey },
-    );
+    expect(
+      await provider?.prepareRuntimeAuthV2?.(runtimeContext(providerConfig, sourceKey)),
+    ).toEqual({ apiKey: runtimeKey });
   },
 );
 

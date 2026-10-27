@@ -821,6 +821,7 @@ describe("applyLocalNoAuthHeaderOverride", () => {
   it("marks synthetic local OpenAI-compatible auth so SDK request headers clear Authorization", () => {
     const headers = Object.freeze({
       "X-Test": "1",
+      "X-Removed": null,
       Authorization: "synthetic",
       authorization: "synthetic",
       AUTHORIZATION: "synthetic",
@@ -842,6 +843,7 @@ describe("applyLocalNoAuthHeaderOverride", () => {
 
     expect(model.headers).toEqual({
       "X-Test": "1",
+      "X-Removed": null,
       Authorization: null,
       authorization: null,
       AUTHORIZATION: null,
@@ -1030,13 +1032,17 @@ describe("applyAuthHeaderOverride", () => {
 
   it("strips existing authorization header case-insensitively before injection", () => {
     const result = applyAuthHeaderOverride(
-      { provider: "google", headers: { authorization: "old-value", "X-Custom": "keep" } },
+      {
+        provider: "google",
+        headers: { authorization: "old-value", "X-Custom": "keep", "X-Removed": null },
+      },
       { apiKey: "test-api-key", source: "env", mode: "api-key" },
       enabledConfig,
     );
 
     expect(result.headers).toEqual({
       "X-Custom": "keep",
+      "X-Removed": null,
       Authorization: "Bearer test-api-key",
     });
   });
