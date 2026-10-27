@@ -275,7 +275,11 @@ describe("cloud turn media boundary", () => {
     } = await parseMessageWithAttachments("compare in order", [
       { content: small.toString("base64"), mimeType: "image/png", fileName: "inline.png" },
     ]);
-    expect(inline?.sourceIndex).toBe(0);
+    expect(inline).toEqual({
+      type: "image",
+      data: small.toString("base64"),
+      mimeType: "image/png",
+    });
     if (!inline) {
       throw new Error("missing parsed inline image");
     }

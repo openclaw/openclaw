@@ -325,3 +325,71 @@ it("a pass that leaves private claims unlinked queues the review automation once
   expect(Check(contract.operations.maintenance_status.output, status)).toBeTruthy();
   expect(status.reviewJobId).toBe("review-job");
 });
+
+it("without reviewJobId, the pass queues the review scribe's automation found by declaration key", async () => {
+  const f = await fixture(),
+    host = f.host,
+    scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
+  const calls: any[] = [];
+  let jobs: any[] = [{ id: "other", declarationKey: "knowledge:scribe:conversations" }];
+  const cron = {
+    list: async (opts: any) => {
+      expect(opts, "a paused scribe is found so the pass can report it").toStrictEqual({
+        includeDisabled: true,
+      });
+      return jobs;
+    },
+    enqueueRun: async (id: any, mode: any) => {
+      calls.push([id, mode]);
+      return id === "paused"
+        ? { ok: true, ran: false, reason: "disabled" }
+        : { ok: true, enqueued: true, runId: "run-1" };
+    },
+  };
+  const service = await f.boot(scheduler, { getCron: () => cron });
+  const review = async () => {
+    await scheduler.fire("knowledge-maintenance");
+    return (await service.maintenance_status({}, operatorContext(host.api))).lastRun!.review;
+  };
+  await remember(service, toolContext(host.api, "main"), "I prefer short replies.");
+
+  expect(await review(), "No scribe job: no review, as when nothing is configured").toBe(undefined);
+  expect(calls).toStrictEqual([]);
+
+  jobs = [
+    ...jobs,
+    { id: "paused", declarationKey: "knowledge:scribe:unlinked-review", enabled: false },
+    { id: "scribe", declarationKey: "knowledge:scribe:unlinked-review", enabled: true },
+  ];
+  expect(await review(), "The enabled scribe job is preferred").toStrictEqual({
+    jobId: "scribe",
+    pending: 1,
+    outcome: "enqueued",
+    runId: "run-1",
+  });
+  jobs = jobs.filter((job) => job.id !== "scribe");
+  expect((await review())!.outcome, "A paused scribe job is reported, not forced").toBe("skipped");
+  expect(calls).toStrictEqual([
+    ["scribe", "if-enabled"],
+    ["paused", "if-enabled"],
+  ]);
+  const status = await service.maintenance_status({}, operatorContext(host.api));
+  expect(status.reviewJobId, "Status reports only the configured job").toBe(null);
+});
+
+it("a configured reviewJobId wins over the review scribe's automation", async () => {
+  const f = await fixture({ reviewJobId: "review-job" }),
+    scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
+  const calls: any[] = [];
+  const cron = {
+    list: async () => expect.unreachable("the configured job needs no lookup"),
+    enqueueRun: async (id: any) => {
+      calls.push(id);
+      return { ok: true, enqueued: true, runId: "run-1" };
+    },
+  };
+  const service = await f.boot(scheduler, { getCron: () => cron });
+  await remember(service, toolContext(f.host.api, "main"), "I prefer short replies.");
+  await scheduler.fire("knowledge-maintenance");
+  expect(calls).toStrictEqual(["review-job"]);
+});

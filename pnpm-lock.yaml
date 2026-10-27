@@ -998,8 +998,8 @@ importers:
   extensions/code-mode-quickjs:
     dependencies:
       quickjs-wasi:
-        specifier: 3.6.2
-        version: 3.6.2
+        specifier: 3.6.3
+        version: 3.6.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1573,6 +1573,12 @@ importers:
       zod:
         specifier: 4.6.7
         version: 4.6.7
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/liquid-ai:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -10042,8 +10048,8 @@ packages:
   quick-format-unescaped@4.0.4:
     resolution: {integrity: sha512-tYC1Q1hgyRuHgloV/YXs2w15unPVh8qfu/qCTfhTYamaw7fyhumKa2yGpdSo87vY32rIclj+4fWYQXUMs9EHvg==}
 
-  quickjs-wasi@3.6.2:
-    resolution: {integrity: sha512-FCqGtGOrMgzUiIrMNMA2YnsOxCNwo31dzqXvclXUC6xeT35NJLKXQJsvbeCTjvoFAwZgEAPg8U6+KAPDGXn8Mg==}
+  quickjs-wasi@3.6.3:
+    resolution: {integrity: sha512-gDXhV2yi6oyVcGPYnACIzVbMNsmMlwjryhh3vAk8K589Xk/J06fb2SGbx8GJQnxyJv43pdrNbfP815dTkSYb9g==}
 
   range-parser@1.3.0:
     resolution: {integrity: sha512-hek2mFQpPuI4E1BBKrSto+BU3e3x4xuarsbiwr3+lf7p44juvFMV0XFWQAP3xUyqXA4RrXLIoaSUGbSt056ZMw==}
@@ -18556,7 +18562,7 @@ snapshots:
 
   quick-format-unescaped@4.0.4: {}
 
-  quickjs-wasi@3.6.2: {}
+  quickjs-wasi@3.6.3: {}
 
   range-parser@1.3.0: {}
 

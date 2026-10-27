@@ -27,9 +27,11 @@ describe("image ops Rastermill adapter", () => {
       vi.resetModules();
     });
 
-    it("does not load Photon for Rastermill-backed operations", async () => {
+    it("configures Rastermill without eagerly loading Photon", async () => {
       const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
       const encode = vi.fn(async () => ({ data: Buffer.from("jpeg") }));
+      const createRastermill = vi.fn((_options: unknown) => ({ encode }));
+      const resolveSystemBin = vi.fn(() => "/usr/bin/tool");
       const photonModuleFactory = vi.fn(() => {
         throw new Error("Photon loaded eagerly");
       });
@@ -37,30 +39,7 @@ describe("image ops Rastermill adapter", () => {
       vi.doMock("@silvia-odwyer/photon-node", photonModuleFactory);
       vi.doMock("rastermill", () => ({
         ...actualRastermill,
-        createRastermill: vi.fn(() => ({ encode })),
-        readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-        readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "jpeg" })),
-      }));
-
-      const { createLocalImageProcessor } = await import("./image-processor-config.js");
-
-      await expect(
-        createLocalImageProcessor("auto").encode(Buffer.from("input"), { format: "jpeg" }),
-      ).resolves.toEqual({ data: Buffer.from("jpeg") });
-      expect(photonModuleFactory).not.toHaveBeenCalled();
-    });
-
-    it("configures Rastermill with OpenClaw limits, temp root, and command resolution", async () => {
-      const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
-      const encode = vi.fn(async () => ({ data: Buffer.from("jpeg") }));
-      const createRastermill = vi.fn((_options: unknown) => ({ encode }));
-      const resolveSystemBin = vi.fn(() => "/usr/bin/tool");
-
-      vi.doMock("rastermill", () => ({
-        ...actualRastermill,
         createRastermill,
-        readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-        readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "png" })),
       }));
       vi.doMock("../infra/resolve-system-bin.js", () => ({
         resolveSystemBin,
@@ -91,6 +70,7 @@ describe("image ops Rastermill adapter", () => {
       expect(options.env).toBeUndefined();
       expect(options.commandResolver("powershell")).toBe("/usr/bin/tool");
       expect(resolveSystemBin).toHaveBeenLastCalledWith("powershell", { trust: "strict" });
+      expect(photonModuleFactory).not.toHaveBeenCalled();
     });
 
     it("scopes the larger source admission to media understanding", async () => {

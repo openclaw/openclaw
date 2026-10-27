@@ -185,6 +185,7 @@ describe("production lint suppressions", () => {
         // The copy-count probe restores the native method after measurement.
         "scripts/perf/agent-fresh-array-copy-measure.ts|no-extend-native|2",
         // The owner probe executes its selected trusted source expression rather than a copied implementation.
+        "scripts/perf/attempt-prompt-context-measure.ts|typescript/no-implied-eval|1",
         "scripts/perf/attempt-stream-options-measure.ts|typescript/no-implied-eval|1",
         // The avatar dispatch probe forwards the original pool receiver and restores the method.
         "scripts/perf/avatar-inline-measure.ts|typescript/unbound-method|1",
@@ -196,6 +197,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
+        // The stack probe compares V8's formatter callback identity without invoking it.
+        "scripts/perf/jiti-stack-format.ts|typescript/unbound-method|1",
         "scripts/perf/lease-main-thread-renewal.mjs|typescript/unbound-method|3",
         // The counts-only probe restores the native copying sort in finally.
         "scripts/perf/memory-prompt-copy-measure.ts|no-extend-native|2",
@@ -213,6 +216,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/plugin-transform-preload.mjs|typescript/unbound-method|1",
         // The provider probe forwards native methods with their original receivers.
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
+        // Native transaction timing forwards the live receiver and restores the original method.
+        "scripts/perf/session-cold-selection.ts|typescript/unbound-method|1",
         // Node worker ports have no browser target origin.
         "scripts/perf/session-entry-patch-payload.ts|unicorn/require-post-message-target-origin|1",
         // The setup probe executes an expression from the same trusted source input it imports.
@@ -267,6 +272,9 @@ describe("production lint suppressions", () => {
         "src/commands/backup-restore.ts|preserve-caught-error|2",
         // Sort only freshly materialized private arrays, preserving source order and ownership.
         "src/config/channel-config-activation.ts|unicorn/no-array-sort|1",
+        // Active-tail readers reorder only their fresh private selection and visitor arrays.
+        "src/config/sessions/session-accessor.sqlite-active-events-read.ts|unicorn/no-array-sort|1",
+        "src/config/sessions/session-accessor.sqlite-active-events.ts|unicorn/no-array-reverse|1",
         "src/config/sessions/session-accessor.sqlite-schema-probes.test-support.ts|typescript/unbound-method|2",
         "src/config/sessions/session-accessor.sqlite-worker-request.ts|no-warning-comments|1",
         "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
@@ -331,6 +339,8 @@ describe("production lint suppressions", () => {
         "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/installed-plugin-index-policy.ts|unicorn/no-array-sort|2",
+        // Compiler scope saves/restores V8's formatter callback by identity without calling it.
+        "src/plugins/jiti-factory.ts|typescript/unbound-method|1",
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
         // Prompt preparation sorts only fresh private tool and supplement arrays.
         "src/plugins/memory-state.ts|unicorn/no-array-sort|2",

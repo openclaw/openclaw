@@ -163,7 +163,10 @@ until the history is restored.
 Low-level synchronous transcript APIs instead return a
 restore-required error while a transcript is cold; their callers must await
 asynchronous restoration first. Storage and usage inventory can count cold
-transcripts without restoring them. Text search excludes cold transcript contents and
+transcripts without restoring them. Usage refreshes and exact-range reports read
+verified archive chunks directly when existing rollups cannot answer the request;
+they keep transcript payloads cold and store results in the existing usage cache.
+Text search excludes cold transcript contents and
 reports how many archived transcripts it excluded; restored transcripts become
 searchable again. Import and cross-store repair refuse cold transcripts that
 have not been restored, rather than copying an incomplete history.
@@ -174,8 +177,17 @@ to the process and resets when it restarts. Large transcript windows use ordered
 independently checksummed chunks. Each uncompressed JSONL file, including its
 restoration metadata, is bounded to 64 MiB. Reads and restores process one chunk
 at a time; the window leaves SQLite only after every chunk is durable and verified.
+Restore preparation verifies the chunk manifest and compressed hashes before write
+admission. The transaction decodes each chunk once, consuming one record at a time;
+invalid records or mismatched totals roll back the entire restoration. Restore
+requests share the existing archive-worker queue across agent stores.
 One large window can exceed the normal background byte budget because its removal
 is atomic; the worker yields between windows.
+
+Selection reads window metadata and transcript endpoints. The worker checks event sizes
+only when preparation reaches that window within the pass's byte budget, outside the
+batch selection transaction. Commit protection reads selected window owners and
+cross-generation references; unrelated canonical entries stay encoded.
 
 Before building an archive, the worker checks the largest original event. An event above
 64 MiB skips envelope preparation and leaves the transcript in SQLite, while

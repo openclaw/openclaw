@@ -349,9 +349,10 @@ async function ensureSandboxContainerLifecycle(
         });
       }
       params.assertCurrent?.();
+      readyEntry.lastUsedAtMs = Date.now();
       if (needsSetupReservation) {
         await completeSandboxRegistryReservation(readyEntry);
-      } else if (params.workspaceSource !== "managed-worktree") {
+      } else {
         await updateRegistry(readyEntry);
       }
       params.assertCurrent?.();
@@ -402,6 +403,7 @@ async function ensureSandboxContainerLifecycle(
   }
   await updateRegistry({
     ...readyEntry,
+    lastUsedAtMs: Date.now(),
     configHash: hashMismatch ? (currentHash ?? undefined) : expectedHash,
   });
   params.assertCurrent?.();

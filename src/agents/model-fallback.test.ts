@@ -11,7 +11,6 @@ import {
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { GatewayDrainingError } from "../process/gateway-work-admission.js";
-import { resolveEffectiveModelFallbacks } from "./agent-scope.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import {
@@ -51,6 +50,7 @@ import { isFallbackSummaryError } from "./model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { runWithModelFallback as runWithModelFallbackBase } from "./model-fallback-runner.js";
+import { resolveEffectiveModelFallbacks } from "./model-selection-config.js";
 import {
   createAgentRunRestartAbortError,
   resolveAgentRunErrorLifecycleFields,

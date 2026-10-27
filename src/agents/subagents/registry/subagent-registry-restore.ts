@@ -32,6 +32,7 @@ import {
   resolveSubagentChildAuthority,
   warnLegacySubagentAuthority,
 } from "./subagent-child-owner-match.js";
+import { retainRestoredCompletionReservation } from "./subagent-controller-inputs.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { callSubagentRegistryGateway } from "./subagent-registry-deps.js";
 import {
@@ -45,7 +46,6 @@ import {
 } from "./subagent-registry-persistence.js";
 import type { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
 import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
-import { isRetiredSubagentSessionOwner } from "./subagent-registry-restart-recovery-helpers.js";
 import { restoreSubagentRunMetadata } from "./subagent-registry-restore-metadata.js";
 import { createRestoredRequesterActivator } from "./subagent-registry-restore-requester.js";
 import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
@@ -214,16 +214,8 @@ export function createSubagentRegistryRestorer(config: {
     try {
       for (const snapshot of capturedRuns) {
         const runId = snapshot.runId;
-        const selected = getCurrentSubagentRunOwner(runs, snapshot);
-        // Recovery and cancellation prepare their own session reads.
-        if (
-          !selected ||
-          selected.runId !== runId ||
-          resolveSubagentChildAuthority(selected).status === "mismatch" ||
-          selected.execution.restartRecovery ||
-          selected.killIntent ||
-          selected.killReconciliation
-        ) {
+        const selected = retainRestoredCompletionReservation(runs, snapshot)?.entry;
+        if (!selected) {
           continue;
         }
         assertReadCurrent();
@@ -242,18 +234,11 @@ export function createSubagentRegistryRestorer(config: {
           }
         }
         assertReadCurrent();
-        const entry = getCurrentSubagentRunOwner(runs, snapshot);
-        if (!entry || entry.runId !== runId) {
+        const retained = retainRestoredCompletionReservation(runs, snapshot, sessionEntry);
+        if (!retained) {
           continue;
         }
-        // Restart recovery and accepted cancellation own their rows independently.
-        if (entry.execution.restartRecovery || entry.killIntent || entry.killReconciliation) {
-          continue;
-        }
-        const authority = resolveSubagentChildAuthority(entry, sessionEntry);
-        if (authority.status === "mismatch") {
-          continue;
-        }
+        const { entry, authority } = retained;
         if (entry.collect && entry.execution.status === "queued") {
           const { childSessionIdentity: cleanupSessionEntry, queuedLaunch: launch } = entry;
           if (!launch || authority.status === "legacy-unverified") {
@@ -501,14 +486,6 @@ export function createSubagentRegistryRestorer(config: {
               }
             },
           );
-          continue;
-        }
-        // Orphan recovery owns aborted sessions and exact still-running retired
-        // executions. Completed sessions must resume normal settlement and delivery.
-        if (
-          sessionEntry?.abortedLastRun === true ||
-          isRetiredSubagentSessionOwner(entry, sessionEntry)
-        ) {
           continue;
         }
         resumeRun(runId);

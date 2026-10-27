@@ -70,7 +70,7 @@ function placementSnapshot(reconciling: readonly string[]): WorkerSessionPlaceme
 }
 
 it.each(["gateway:rpc:sessions.list", "scheduler:maintenance:session-refresh"])(
-  "attributes prepared-row work after readiness waits to %s",
+  "attributes prepared-row work after readiness waits without relabeling roster consumers: %s",
   async (task) => {
     const { read, query } = placementReadView();
     let now = 0;
@@ -123,8 +123,8 @@ it.each(["gateway:rpc:sessions.list", "scheduler:maintenance:session-refresh"])(
         },
         {
           elapsedMs: 900,
-          task: `${task}:agent-roster`,
-          taskMs: 500,
+          task: `${task}:session-rows:consume`,
+          taskMs: 900,
           startedAt: 5_650,
           endedAt: 6_550,
         },

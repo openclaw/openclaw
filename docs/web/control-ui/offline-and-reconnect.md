@@ -138,8 +138,11 @@ discovery; the Gateway revalidates the established session after connecting.
 Unique display-name links use the same cached route resolution, including the
 `/dashboard` namespace. Missing or ambiguous names still wait for the Gateway.
 
-Exact conversation links also wait for the scoped cached roster before presenting
-their header. Dashboard layouts restore before the pane renders, and embedded
+Exact conversation links can restore their scoped transcript without waiting for
+the sidebar roster or the socket to open. A prepared snapshot supplies the header,
+transcript, and composer in the first pane frame. The existing header connection
+indicator remains visible until live history and route confirmation finish; cached
+content stays visible while those checks run. Dashboard layouts restore before the pane renders, and embedded
 HTML widgets restore their last board metadata from the same scoped conversation
 cache and start loading the isolated sandbox while connecting. Document requests
 still require the current Gateway connection and overlap the live board refresh.

@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { resolveBundleMcpServerInstructions } from "../agents/agent-bundle-mcp-instructions.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
-import { acknowledgeInternalToolResult } from "../agents/runtime/internal-hooks.js";
 import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
 import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";

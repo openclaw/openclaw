@@ -103,7 +103,6 @@ export type ChatProps = Omit<
     historyState?: ChatState;
     /** Session access presentation for dismissing retired inputs; independent of model availability. */
     canDismissPendingInputs?: boolean;
-    awaitingActivity?: boolean;
     environmentStartStatus?: import("../../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
     providerPolicyNotice?: ProviderPolicyNotice | null;
     // Resolve after the first pane frame prepares the Solid owner's permission facts.
@@ -264,17 +263,8 @@ export function createChatViewFrame(
   }
   // Placement is visible work, but does not own an abortable model run yet.
   const runWorking = Boolean(placementStartup) || isChatRunWorking(props);
-  // Stream text changes whether a label is needed, not the label on every delta.
   const startupLabel = createMemo(() =>
-    chatStartupStatusLabel(
-      props.startupStatus,
-      placementStartup,
-      props.environmentStartStatus,
-      (runWorking || props.stream !== null) &&
-        props.awaitingActivity !== false &&
-        !props.stream?.trim() &&
-        props.toolMessages.length === 0,
-    ),
+    chatStartupStatusLabel(props.startupStatus, placementStartup, props.environmentStartStatus),
   );
   const threadProps: ChatThreadProps = merge(props, {
     asyncQuestions,

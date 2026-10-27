@@ -68,12 +68,12 @@ function installEngineBootReadiness() {
   requestAnimationFrame(sample);
 }
 
-export function engineProbeInitScript(streaming = false) {
+export function engineProbeInitScript(streaming = false, gatewayLatencyMs = 0) {
   return `;if (window === window.top && location.protocol !== "about:") {
     ${createColdLoadProbeInitScript({
       ownerProbes: false,
       sidebarCounters: false,
-      latencyMs: 0,
+      latencyMs: gatewayLatencyMs,
       frameGapMs: 0,
       events: [],
     })}
@@ -174,6 +174,13 @@ export async function waitForEngineTranscript(
         }
       }
     }
+    const approvalReplay = rpcs
+      .filter((entry) => entry.method === "sessions.messages.subscribe")
+      .at(1);
+    if (approvalReplay) {
+      phases.approvalReplayRequestMs = approvalReplay.requestMs;
+      phases.approvalReplayResponseMs = approvalReplay.responseMs;
+    }
     return {
       ...milestones,
       ...phases,
@@ -214,10 +221,13 @@ async function persistTranscript(page: Page) {
   });
 }
 
-export function createEngineBootScenarios(baseUrl: string): readonly EngineScenario[] {
+export function createEngineBootScenarios(
+  baseUrl: string,
+  gatewayLatencyMs = 0,
+): readonly EngineScenario[] {
   const route = controlUiSessionPath(sessionKey);
   const url = new URL(route, baseUrl).href;
-  const bootScript = engineProbeInitScript();
+  const bootScript = engineProbeInitScript(false, gatewayLatencyMs);
   return [
     {
       id: "cold-boot",

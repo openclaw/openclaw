@@ -30,6 +30,7 @@ import type {
 } from "./server-methods/types.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { mayMatchSessionRowModelSearch } from "./session-row-model-facts.js";
 import {
   create as createSessionRow,
   selectionRow,
@@ -335,6 +336,8 @@ export function createSessionRowProjectionFixture(params: {
     ancestorRows: () => undefined,
     setArchivePageSize: () => {},
     modelFacts: (query) => describe(query)!.materialized.source,
+    modelSearchMayMatch: (search) =>
+      mayMatchSessionRowModelSearch({ cfg, modelCatalog, rowContext, rows: rows.values() }, search),
     withPreparedExactRows: async (queries, consume) => {
       queries(cfg);
       return consume(projection);

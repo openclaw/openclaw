@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { codeModeGcAttribution, logCodeModeFailure } from "../logging/code-mode-diagnostic.js";
 import type { AgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
@@ -274,6 +275,19 @@ function dispatchCodeModeRequests(
   );
 }
 
+function codeModeDiagnosticError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+  // Worker notifications serialize Errors. Only native names may select a diagnostic category.
+  const name = isRecord(error) ? error.name : undefined;
+  const Constructor =
+    [EvalError, RangeError, ReferenceError, SyntaxError, TypeError, URIError].find(
+      (candidate) => candidate.name === name,
+    ) ?? Error;
+  return new Constructor(codeModeFailureMessage(error));
+}
+
 function createInlineHost(
   params: Omit<CodeModeSettlementContext, "result">,
   pending: PendingBridgeState[],
@@ -290,7 +304,7 @@ function createInlineHost(
       if (failurePhase === "bridge") {
         return;
       }
-      logCodeModeFailure(error, {
+      logCodeModeFailure(codeModeDiagnosticError(error), {
         sessionId: params.ctx.sessionId,
         sessionKey: params.ctx.sessionKey,
         runId: params.ctx.runId,

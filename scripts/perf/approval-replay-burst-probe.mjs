@@ -12,6 +12,14 @@ if (isMainThread && process.send) {
   let startedAt = 0;
   let cpu;
   let inspector;
+  let pendingReplies = 0;
+  const reply = (message) => {
+    process.send(message, () => {
+      if (--pendingReplies === 0) {
+        process.channel?.unref();
+      }
+    });
+  };
   const samplingIntervalBytes = 16384;
   channel("openclaw.gateway.rpc").subscribe((event) => {
     if (!active || event.method !== "sessions.messages.subscribe") {
@@ -42,7 +50,7 @@ if (isMainThread && process.send) {
       cpu = process.threadCpuUsage();
       startedAt = performance.now();
       active = true;
-      process.send({ started: true });
+      reply({ started: true });
     } else if (message?.approvalBurst === "stop") {
       active = false;
       if (inspector) {
@@ -50,7 +58,7 @@ if (isMainThread && process.send) {
         inspector.disconnect();
         inspector = undefined;
         const mainThreadSampledBytes = profile.samples.reduce((sum, entry) => sum + entry.size, 0);
-        process.send({
+        reply({
           handlerCount: handlerMs.length,
           mainThreadSampledBytes,
           mainThreadSampledBytesPerSubscribe: mainThreadSampledBytes / handlerMs.length,
@@ -60,7 +68,7 @@ if (isMainThread && process.send) {
         });
         return;
       }
-      process.send({
+      reply({
         handlerCount: handlerMs.length,
         handlerMs,
         admissionMs,
@@ -72,8 +80,14 @@ if (isMainThread && process.send) {
     }
   }
   process.on("message", (message) => {
+    if (message?.approvalBurst !== "start" && message?.approvalBurst !== "stop") {
+      return;
+    }
+    pendingReplies++;
+    process.channel?.ref();
     void control(message).catch((/** @type {unknown} */ error) => {
-      process.send({ error: String(error) });
+      reply({ error: String(error) });
     });
   });
+  process.channel?.unref();
 }

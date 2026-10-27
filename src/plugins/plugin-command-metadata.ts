@@ -4,15 +4,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
 
-type PluginCommandNativeMetadata = Readonly<{
-  name: string;
-  description: string;
-  descriptionLocalizations?: Readonly<Record<string, string>>;
-  acceptsArgs: boolean;
-  requireAuth: boolean;
-  progressMessage?: string;
-}>;
-
 export function pluginCommandSupportsChannel(
   command: OpenClawPluginCommandDefinition,
   channel?: string,
@@ -30,7 +21,7 @@ export function pluginCommandSupportsChannel(
 export function projectPluginCommandNativeMetadata(
   command: OpenClawPluginCommandDefinition,
   provider?: string,
-): PluginCommandNativeMetadata {
+) {
   const normalizedProvider = normalizeOptionalLowercaseString(provider);
   const providerName = normalizedProvider ? command.nativeNames?.[normalizedProvider] : undefined;
   const defaultName = command.nativeNames?.default;
@@ -54,5 +45,5 @@ export function projectPluginCommandNativeMetadata(
     acceptsArgs: command.acceptsArgs ?? false,
     requireAuth: command.requireAuth !== false,
     ...(progressMessage ? { progressMessage } : {}),
-  };
+  } as const;
 }

@@ -17,6 +17,8 @@ import { areDiagnosticsEnabledForProcess } from "../../../infra/diagnostic-event
 import { toErrorObject } from "../../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../../llm/types.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
+import { SESSION_WATCHDOG_WARNING_MS } from "../../../sessions/session-controller.watchdog-state.js";
+import type { SessionControllerWatchdogAttempt } from "../../../sessions/session-controller.watchdog.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
 import { getLastToolActivityMs, onToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
@@ -240,7 +242,11 @@ export function streamWithIdleTimeout(
   baseFn: StreamFn,
   timeoutMs: number,
   onIdleTimeout?: (error: Error) => void,
-  opts?: { runId?: string; scope?: "creation-and-gaps" | "creation-only" },
+  opts?: {
+    runId?: string;
+    scope?: "creation-and-gaps" | "creation-only";
+    watchdogAttempt?: Pick<SessionControllerWatchdogAttempt, "beginRequest">;
+  },
 ): StreamFn {
   const guardIterationGaps = opts?.scope !== "creation-only";
   const runId = opts?.runId;
@@ -249,6 +255,14 @@ export function streamWithIdleTimeout(
     const trackCleanup = captureAsyncWorkTracker();
     const streamAbortController = new AbortController();
     const firstEventTimeoutMs = clampTimeoutMs(getFirstStreamEventTimeoutMs(options) ?? timeoutMs);
+    let watchdogDeadlineAtMs: number | undefined = Date.now() + firstEventTimeoutMs;
+    const endWatchdogRequest = opts?.watchdogAttempt?.beginRequest({
+      get deadlineAtMs() {
+        return watchdogDeadlineAtMs === undefined
+          ? undefined
+          : watchdogDeadlineAtMs + SESSION_WATCHDOG_WARNING_MS;
+      },
+    });
     const startTimer = (
       delay: number,
       reject: (error: Error) => void,
@@ -257,6 +271,8 @@ export function streamWithIdleTimeout(
       name = "LlmIdleTimeoutError",
     ) => {
       return setTimeout(() => {
+        // The request fails first; retain time for attempt cleanup and retry admission.
+        endWatchdogRequest?.(Date.now() + SESSION_WATCHDOG_WARNING_MS);
         if (requestDeadline?.reject === reject) {
           requestTimedOut = true;
         }
@@ -287,6 +303,9 @@ export function streamWithIdleTimeout(
     const clearRequestDeadline = () => {
       clearTimeout(requestDeadline?.timer);
       requestDeadline = undefined;
+      if (!iterationWatchdogActive) {
+        watchdogDeadlineAtMs = undefined;
+      }
       if (!requestTimedOut) {
         requestTimeout = undefined;
       }
@@ -300,6 +319,7 @@ export function streamWithIdleTimeout(
       unsubscribeCreationActivity();
       // Acceptance can precede factory resolution and iterator admission.
       if (guardIterationGaps && !iterationWatchdogActive) {
+        watchdogDeadlineAtMs = Date.now() + timeoutMs;
         if (firstEventTimeoutMs === timeoutMs) {
           requestDeadline.timer.refresh();
         } else {
@@ -337,6 +357,7 @@ export function streamWithIdleTimeout(
       sourceSignal?.addEventListener("abort", abortFromSourceSignal, { once: true });
     }
     const cleanupSourceSignal = () => {
+      endWatchdogRequest?.();
       clearRequestDeadline();
       sourceSignal?.removeEventListener("abort", abortFromSourceSignal);
     };
@@ -404,6 +425,7 @@ export function streamWithIdleTimeout(
           clearTimeout(idleTimer);
           clearTimeout(progressTimer);
           idleTimer = progressTimer = undefined;
+          watchdogDeadlineAtMs = undefined;
         };
         const rejectTimeout = (error: Error) => {
           clearTimers();
@@ -437,6 +459,10 @@ export function streamWithIdleTimeout(
           if (progress) {
             lastProgressAt = now;
           }
+          watchdogDeadlineAtMs = Math.min(
+            now + effectiveTimeout,
+            lastProgressAt + progressTimeoutMs,
+          );
           // Heartbeats preserve the progress deadline; only real progress resets it.
           if (
             progress &&

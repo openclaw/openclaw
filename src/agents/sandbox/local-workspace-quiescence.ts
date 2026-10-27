@@ -33,27 +33,23 @@ export async function readLocalWorkspaceRuntimes(
     assertCurrent: custody.assertCurrent,
   };
   const [containers, browsers, streams] = await Promise.all([
-    readRegistry(database),
-    readBrowserRegistry(database),
+    readRegistry({ ...database, workspaceDir }),
+    readBrowserRegistry({ ...database, workspaceDir }),
     custody.list(),
   ]);
   return [
-    ...containers.entries
-      .filter((entry) => entry.workspaceDir === workspaceDir)
-      .map((entry) => ({
-        kind: "container" as const,
-        entry,
-        database,
-        assertCurrent: () => assertSandboxRegistryRetirementCurrent("container", entry, database),
-      })),
-    ...browsers.entries
-      .filter((entry) => entry.workspaceDir === workspaceDir)
-      .map((entry) => ({
-        kind: "browser" as const,
-        entry,
-        database,
-        assertCurrent: () => assertSandboxRegistryRetirementCurrent("browser", entry, database),
-      })),
+    ...containers.entries.map((entry) => ({
+      kind: "container" as const,
+      entry,
+      database,
+      assertCurrent: () => assertSandboxRegistryRetirementCurrent("container", entry, database),
+    })),
+    ...browsers.entries.map((entry) => ({
+      kind: "browser" as const,
+      entry,
+      database,
+      assertCurrent: () => assertSandboxRegistryRetirementCurrent("browser", entry, database),
+    })),
     ...streams.flatMap((record) => {
       const receipt = record.receipt;
       // Preparation and START share the projection lease. Without a published
@@ -205,6 +201,7 @@ export async function quiesceLocalWorkspace(params: {
   );
   params.assertCurrent();
   let paused = [...params.retained];
+  let retired = false;
   const releases: Array<() => Promise<void>> = [];
   const retirements: Array<() => Promise<void>> = [];
   for (const { runtime, bridges } of selected) {
@@ -323,6 +320,9 @@ export async function quiesceLocalWorkspace(params: {
     });
   }
   return {
+    get retired() {
+      return retired;
+    },
     retire: async () => {
       params.assertCurrent();
       // Retirement settles persistent writers before acquiring this projection
@@ -337,8 +337,17 @@ export async function quiesceLocalWorkspace(params: {
         await retire();
       }
       params.assertCurrent();
+      // Finish receipt cleanup before the caller removes the workspace binding.
+      if (paused.length) {
+        await params.persist([]);
+        paused = [];
+      }
+      retired = true;
     },
     resume: async () => {
+      if (retired) {
+        return;
+      }
       params.assertCurrent();
       for (const release of releases.toReversed()) {
         await release();

@@ -62,6 +62,12 @@ are reported by the scheduler without restarting the Gateway.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
+During overlapping Gateway restarts, config recovery reads health facts through
+the same isolated read-only transaction used for startup plugin metadata while
+the previous database owner is verified alive. It avoids copying unrelated
+shared state. Offline recovery, retained snapshots, and schema maintenance keep
+their private snapshot path; config repair still completes before admission.
+
 Update inspection and snapshot workers bind plugin metadata discovery to the
 selected installation's state directory, including requests from older installed
 updaters. A different profile's database version must not block that inspection.
@@ -87,6 +93,16 @@ identity and committed contents still match and the index contains no write
 evidence. This preserves the installed updater's original fingerprint format.
 Changed committed data or write evidence still refuses migration and automatic
 restoration. The candidate must contain this repair.
+
+The post-plugin Doctor runs for plugin changes, deferred model retirement, and
+pending deferred plugin migrations. Before each Doctor, the updater observes its
+own state database after ledger writes; Doctor then publishes the settled
+postimage of captured SQLite databases it opened. These receipts keep automatic
+rollback bound to the update's database generations. As with native Doctor close
+receipts, raw non-OpenClaw writes during the update window can be absorbed for
+those databases. Changes to untouched captured databases still block automatic
+restoration. Both the installed updater and candidate Doctor must contain this
+repair; a fixed candidate cannot repair an older updater's missing attribution.
 
 Direct updates from extended-stable 2026.9.33 and 2026.9.34 are supported when
 the candidate contains the legacy database-generation adapter. Under maintenance
@@ -929,6 +945,11 @@ prepared runtime result into completion. Already-current repairs reuse the admit
 ownership; promoted runtime outputs do not need regeneration. Published updaters
 that pass the source build-cache location, including 2026.9.6, also receive the
 installed-checkout check during candidate builds.
+
+Git updates support a `.artifacts` directory redirected by a symlink, including
+to another volume. Database snapshots use its physical directory so the backup's
+parent-directory durability check can complete. The installed updater must
+contain this fix; a newer candidate cannot repair an older updater's capture.
 
 The canary uses a temporary loopback Gateway port and suppresses background
 listeners, including the MCP Apps sandbox, browser control, and channel services.

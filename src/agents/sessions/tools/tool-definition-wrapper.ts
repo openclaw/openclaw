@@ -1,7 +1,7 @@
 import type { TSchema } from "typebox";
+import { copyInternalToolExecutionPreparer } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { copyCodeModeControlToolIdentity } from "../../code-mode-control-tools.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { copyInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { copyAgentToolReplaySafety } from "../../tool-replay-safety.js";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";
 

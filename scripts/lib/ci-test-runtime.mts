@@ -101,6 +101,8 @@ const nodeRequiredFiles = new Set([
   "src/infra/worker-heap-flag.test.ts",
   "src/logging/diagnostic-heap-profile.test.ts",
   "src/gateway/server-methods/diagnostics.heap-snapshot.test.ts",
+  // Consumed async-loader retention is specific to V8's suspended frames.
+  "src/agents/harness/lifecycle-hook-helpers.test.ts",
   // JavaScriptCore's conservative stack scanning cannot prove forced WeakRef collection.
   "src/config/sessions/session-accessor.pending-input-retention.test.ts",
   "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",

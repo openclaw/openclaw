@@ -15,23 +15,6 @@ const markAmbiguousThreadReply = (message: SlackMessageEvent): SlackMessageEvent
   _ambiguousThreadReply: true,
 });
 
-async function resolveThreadTsFromHistory(params: {
-  client: SlackWebClient;
-  channelId: string;
-  messageTs: string;
-}) {
-  const response = await params.client.conversations.history({
-    channel: params.channelId,
-    latest: params.messageTs,
-    oldest: params.messageTs,
-    inclusive: true,
-    limit: 1,
-  });
-  const message =
-    response.messages?.find((entry) => entry.ts === params.messageTs) ?? response.messages?.[0];
-  return normalizeThreadTs(message?.thread_ts);
-}
-
 export function createSlackThreadTsResolver(params: { client: SlackWebClient }) {
   const cache = createStaleWhileRevalidateCache<string | null>({
     maxEntries: DEFAULT_THREAD_TS_CACHE_MAX,
@@ -64,13 +47,17 @@ export function createSlackThreadTsResolver(params: { client: SlackWebClient }) 
               );
             }
             try {
-              return (
-                (await resolveThreadTsFromHistory({
-                  client: params.client,
-                  channelId: message.channel,
-                  messageTs,
-                })) ?? null
-              );
+              const response = await params.client.conversations.history({
+                channel: message.channel,
+                latest: messageTs,
+                oldest: messageTs,
+                inclusive: true,
+                limit: 1,
+              });
+              const historyMessage =
+                response.messages?.find((entry) => entry.ts === messageTs) ??
+                response.messages?.[0];
+              return normalizeThreadTs(historyMessage?.thread_ts) ?? null;
             } catch (err) {
               if (shouldLogVerbose()) {
                 logVerbose(

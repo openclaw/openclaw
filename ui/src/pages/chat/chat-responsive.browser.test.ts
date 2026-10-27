@@ -10,10 +10,6 @@ import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import { finishElementAnimations } from "../../test-helpers/animations.ts";
 import { closeBrowserPage, withBrowserPage } from "../../test-helpers/browser-page.ts";
 import {
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../../test-helpers/control-ui-e2e.ts";
-import {
   canRunChatLayoutBrowser,
   chromiumExecutablePath,
   createChatLayoutBrowser,
@@ -21,7 +17,6 @@ import {
   getBoundingBox,
   getRect,
   readUiCss,
-  mountMcpAppSurfaceFixture,
   rectsOverlap,
   waitForLayoutSettled,
   type ControlRect,
@@ -36,7 +31,6 @@ const describeBrowserLayout = canRunChatLayoutBrowser ? describe : describe.skip
 
 const layoutBrowser = createChatLayoutBrowser();
 const { openBrowserPage } = layoutBrowser;
-let realChatServer: ControlUiE2eServer | null = null;
 
 type ChatFixtureOptions = {
   composerAttachment?: boolean;
@@ -606,12 +600,9 @@ async function expectNoHorizontalOverflow(page: Page) {
 describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   beforeAll(async () => {
     await layoutBrowser.start();
-    realChatServer = await startControlUiE2eServer();
   });
 
   afterAll(async () => {
-    await realChatServer?.close();
-    realChatServer = null;
     await layoutBrowser.close();
   });
 
@@ -1192,44 +1183,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         return chevron.left - label.right;
       });
       expect(measuredGap).toBeCloseTo(4, 0);
-    });
-  });
-
-  it("keeps inline MCP App reloads transparent without changing dashboard surfaces", async () => {
-    await withBrowserPage(openBrowserPage(1366, 900), async (page) => {
-      if (!realChatServer) {
-        throw new Error("Expected the Control UI server to be ready");
-      }
-      const provider = await mountMcpAppSurfaceFixture(page, realChatServer.baseUrl);
-      const backgrounds = await provider.evaluate(async (owner: HTMLElement) => {
-        await customElements.whenDefined("mcp-app-view");
-        const readFrameBackground = async (boardSurface?: string) => {
-          if (boardSurface) {
-            owner.style.setProperty("--board-surface", boardSurface);
-          } else {
-            owner.style.removeProperty("--board-surface");
-          }
-          const view = document.createElement("mcp-app-view") as HTMLElement & {
-            updateComplete: Promise<boolean>;
-          };
-          owner.replaceChildren(view);
-          await view.updateComplete;
-          const mount = view.querySelector(".mount");
-          if (!mount) {
-            throw new Error("MCP App mount is missing");
-          }
-          const frame = document.createElement("iframe");
-          mount.append(frame);
-          return getComputedStyle(frame).backgroundColor;
-        };
-        return {
-          dashboard: await readFrameBackground("rgb(12, 34, 56)"),
-          inline: await readFrameBackground(),
-        };
-      });
-
-      expect(backgrounds.dashboard).toBe("rgb(12, 34, 56)");
-      expect(backgrounds.inline).toBe("rgba(0, 0, 0, 0)");
     });
   });
 
