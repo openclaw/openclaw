@@ -122,6 +122,34 @@ async function summarize(messages: AgentMessage[], model: Model, previousSummary
 }
 
 describe("summary request input budget", () => {
+  it("sends terminal facts from long ordinary tool results to the summarizer", async () => {
+    const output = `REPORT-START\n${"ordinary observation\n".repeat(600)}RESULT_CODE=STUDY-01-OK`;
+    const messages = [
+      user("Remember the result code from the report."),
+      toolCallMessage([{ id: "read-report", name: "read", cmd: "report.txt" }]),
+      toolResultMessage("read-report", "read", output),
+    ];
+    const original = structuredClone(messages);
+
+    const prompt = await summarize(messages, createModel(32_768));
+    const projected = conversationOf(prompt).split("[Tool result]: ")[1] ?? "";
+
+    expect(projected).toContain("REPORT-START\n");
+    expect(projected).toContain("RESULT_CODE=STUDY-01-OK");
+    expect(projected).toMatch(/\[\.\.\. \d+ .*characters (?:truncated|omitted)/u);
+    expect(projected.length).toBeLessThanOrEqual(2_000);
+    expect(messages).toEqual(original);
+  });
+
+  it.each(["short result\r\n🚀", "x".repeat(1_999), "x".repeat(2_000)])(
+    "keeps short tool results byte-identical in summary requests (%#)",
+    async (output) => {
+      const prompt = await summarize([toolResult(output)], createModel(32_768));
+
+      expect(conversationOf(prompt)).toBe(`[Tool result]: ${output}`);
+    },
+  );
+
   it("sends a small history unchanged", async () => {
     const messages = createLongSession(3);
     const prompt = await summarize(messages, createModel(1_000_000));

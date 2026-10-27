@@ -218,14 +218,15 @@ describe("serializeConversation", () => {
   });
 
   it("keeps truncated tool results UTF-16 safe and reports the exact omitted count", () => {
-    const prefix = "a".repeat(1_999);
-    const content = `${prefix}🚀tail`;
+    const prefix = "a".repeat(1_335);
+    const tail = "t".repeat(599);
+    const content = `${prefix}🚀${"m".repeat(2_000)}🚀${tail}`;
     const messages = [
       { role: "toolResult", content: [{ type: "toolResult", content }] },
     ] as unknown as Message[];
 
     expect(serializeConversation(messages)).toBe(
-      `[Tool result]: ${prefix}\n\n[... 6 more characters truncated]`,
+      `[Tool result]: ${prefix}\n\n[... 2004 more characters truncated]\n\n${tail}`,
     );
   });
 
@@ -257,7 +258,8 @@ describe("serializeConversation", () => {
 
     const serialized = serializeToolResult(output);
     expect(serialized.split("ERROR: early failure")).toHaveLength(2);
-    expect(serialized).toContain(`[... ${output.length - 2000} more characters truncated]`);
+    expect(serialized).toContain("more characters truncated]");
+    expect(serialized.length).toBeLessThanOrEqual(2_000 + "[Tool result]: ".length);
   });
 });
 

@@ -169,29 +169,27 @@ function truncateForSummary(text: string, maxChars: number): string {
     diagnosticMatches.findLast((match) =>
       /^(error|exception|fatal|panic|errno)$/i.test(match[0]),
     ) ?? diagnosticMatches.at(-1);
-  if (diagnosticMatch) {
-    const head = truncateUtf16Safe(text, maxChars - tailChars);
-    const displacedHead = sliceUtf16Safe(text, Math.max(0, head.length - 32), maxChars);
-    // A routine footer can match failure words. Never shorten the original
-    // retained head when doing so would discard an existing diagnostic.
-    if (!IMPORTANT_TOOL_RESULT_TAIL.test(displacedHead)) {
-      const diagnosticOffset = text.length - diagnosticSearch.length + (diagnosticMatch.index ?? 0);
-      const tailStart = Math.min(diagnosticOffset, text.length - tailChars);
-      // An early diagnostic already lives in the retained prefix; reusing it
-      // as a tail would overlap the head and miscount omitted characters.
-      if (tailStart >= head.length) {
-        const tail = sliceUtf16Safe(text, tailStart, tailStart + tailChars);
-        const truncatedChars = text.length - head.length - tail.length;
-        const omissionPosition = tailStart + tail.length < text.length ? "middle/trailing" : "more";
-        // Commands usually report their actual failure last; preserve that tail
-        // so branch and ordinary compaction summaries can explain what failed.
-        return `${head}\n\n[... ${truncatedChars} ${omissionPosition} characters truncated]\n\n${tail}`;
-      }
+  const contentBudget = maxChars - ELISION_MARKER_RESERVE_CHARS;
+  let head = truncateUtf16Safe(text, contentBudget - tailChars);
+  let tailStart = text.length - tailChars;
+  const displacedHead = sliceUtf16Safe(text, Math.max(0, head.length - 32), maxChars);
+  // Prefer an existing diagnostic over a routine footer, but otherwise retain
+  // ordinary terminal facts too. The marker shares the same result budget.
+  if (diagnosticMatch && IMPORTANT_TOOL_RESULT_TAIL.test(displacedHead)) {
+    head = truncateUtf16Safe(text, contentBudget);
+    tailStart = text.length;
+  } else if (diagnosticMatch) {
+    const diagnosticOffset = text.length - diagnosticSearch.length + (diagnosticMatch.index ?? 0);
+    const diagnosticStart = Math.min(diagnosticOffset, tailStart);
+    // An early diagnostic already in the head must not be duplicated in the tail.
+    if (diagnosticStart >= head.length) {
+      tailStart = diagnosticStart;
     }
   }
-  const sliced = truncateUtf16Safe(text, maxChars);
-  const truncatedChars = text.length - sliced.length;
-  return `${sliced}\n\n[... ${truncatedChars} more characters truncated]`;
+  const tail = sliceUtf16Safe(text, tailStart, tailStart + tailChars);
+  const truncatedChars = text.length - head.length - tail.length;
+  const omissionPosition = tailStart + tailChars < text.length ? "middle/trailing" : "more";
+  return `${head}\n\n[... ${truncatedChars} ${omissionPosition} characters truncated]\n\n${tail}`;
 }
 
 /** Project summary content once so rendering and token accounting share omission facts. */
@@ -376,7 +374,7 @@ export const MAX_SUMMARY_INPUT_CHARS = 160_000;
 const MAX_SAMPLED_ENTRY_CHARS = 6_000;
 const MIN_TRIMMED_ENTRY_CHARS = 200;
 const TRIMMED_ENTRY_HEAD_SHARE = 0.7;
-// Covers "\n\n[... N characters omitted ...]\n\n" for any UTF-16 length.
+// Covers truncation and elision markers for any UTF-16 length.
 const ELISION_MARKER_RESERVE_CHARS = 64;
 const SUMMARY_INPUT_TAIL_SHARE = 0.5;
 const SUMMARY_INPUT_USER_SHARE = 0.25;
