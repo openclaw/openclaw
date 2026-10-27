@@ -29,7 +29,9 @@ function childWithPreload(name: string, source: string, env: NodeJS.ProcessEnv =
   const deadline = setTimeout(() => child.kill("SIGKILL"), 5_000);
   void closed.finally(() => clearTimeout(deadline));
   onTestFinished(async () => {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
     await closed;
   });
   return { child, closed, stderr: () => stderr };
