@@ -23,11 +23,11 @@ import {
 import type {
   LocalWorkspaceBaselineDocument,
   LocalWorkspaceManifestAction,
-  LocalWorkspaceManifestValue,
 } from "./local-workspace-manifest-scan.js";
 import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceManifestMutation,
+  LocalWorkspaceManifestValue,
   LocalWorkspaceMutation,
   LocalWorkspacePreparedUpdate,
   LocalWorkspaceProjection,

@@ -1,4 +1,4 @@
-import type { LocalWorkspaceManifestValue } from "./local-workspace-manifest-scan.js";
+import type { LocalWorkspaceManifestValue } from "./local-workspace-store.types.js";
 import type {
   readActualWorkspaceManifestImpl,
   readWorkspaceFileSnapshotWithLimit,
