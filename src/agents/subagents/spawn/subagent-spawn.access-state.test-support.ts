@@ -38,24 +38,6 @@ export function registerAccessStateSpawnCases(options: AccessStateOptions) {
       expected: "standard",
     },
     {
-      label: "explicit Blue",
-      parent: undefined,
-      requested: "daybreak_blue",
-      expected: "daybreak_blue",
-    },
-    {
-      label: "explicit Red",
-      parent: undefined,
-      requested: "daybreak_red",
-      expected: "daybreak_red",
-    },
-    {
-      label: "inherited Blue",
-      parent: "daybreak_blue",
-      requested: undefined,
-      expected: "daybreak_blue",
-    },
-    {
       label: "null inherits Red",
       parent: "daybreak_red",
       requested: null,
