@@ -5,6 +5,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { SessionTranscriptWriteContext } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSessionCatalogContinuationStore } from "../test-support/session-catalog-continuation.test-support.js";
 
@@ -372,7 +373,11 @@ function restoreEnv(name: string, value: string | undefined) {
   }
 }
 
+let cleanupHeldListing: (() => Promise<void>) | undefined;
 afterEach(async () => {
+  // Timeout teardown must join the fixture before resetting its mocks and environment.
+  await cleanupHeldListing?.();
+  cleanupHeldListing = undefined;
   acpRuntimeMocks.resolveAcpSessionAvailability.mockReset().mockReturnValue({ available: true });
   nodeHostMocks.runNodePtyCommand.mockClear();
   processRuntimeMocks.runCommandBuffered.mockClear();
@@ -977,7 +982,7 @@ describe("OpenCode session catalog", () => {
     );
   });
 
-  it("fans out paired-node listing instead of blocking later hosts", async () => {
+  it("fans out paired-node listing instead of blocking later hosts", async (context) => {
     const { promise: slow, resolve: releaseSlow } = Promise.withResolvers<unknown>();
     const page = (threadId: string) => pairedNodeSessionPage(pairedNodeSession({ threadId }));
     const invoke = vi.fn(({ nodeId }: { nodeId: string }) =>
@@ -991,8 +996,21 @@ describe("OpenCode session catalog", () => {
     );
 
     const listing = provider!.list({ hostIds: ["node:node-a", "node:node-b"] });
-    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
-    releaseSlow?.(page("session-a"));
+    const fanOut = vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+    const settledWork = Promise.allSettled([listing, fanOut]);
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        // The held mock ignores cancellation; join both node tasks and the polling assertion.
+        releaseSlow(page("session-a"));
+        await settledWork;
+      })());
+    cleanupHeldListing = cleanup;
+    try {
+      await withinTest(fanOut, context.signal);
+    } finally {
+      await cleanup();
+    }
     await expect(listing).resolves.toEqual([
       expect.objectContaining({ nodeId: "node-a", sessions: [expect.any(Object)] }),
       expect.objectContaining({ nodeId: "node-b", sessions: [expect.any(Object)] }),

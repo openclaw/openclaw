@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeHomeDirValue } from "@openclaw/normalization-core/home-dir";
+import { terminalText } from "../packages/terminal-core/src/safe-text.js";
 import { resolveConfigDir } from "./infra/config-dir.js";
 import { resolveEffectiveHomeDir, resolveUserPath } from "./infra/home-dir.js";
 import { shortenPathWithHome } from "./infra/home-display.js";
@@ -112,9 +113,9 @@ export function shortenHomeInString(input: string): string {
   return input.replace(homePattern, display.prefix);
 }
 
-/** Shortens a path for display without changing non-home paths. */
+/** Shortens and escapes a path for human-readable terminal output. */
 export function displayPath(input: string): string {
-  return shortenHomePath(input);
+  return terminalText`${shortenHomePath(input)}`;
 }
 
 /** Shortens home paths embedded in arbitrary display text. */

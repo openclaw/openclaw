@@ -116,7 +116,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       // Hydration refines scope without replacing operator intent or drafts.
       cron.cronAgentId = scopeId;
       void refreshCron();
-      void presentation.loadModels(cron);
       if ((cron.cronEditingJob || cron.cronCreateOpen) && !cron.cronForm.agentId.trim()) {
         void deliveryDirectory.load();
       }
@@ -207,7 +206,8 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       observeAgentScope(currentContext.agentSelection),
       watchSelectedAgent(currentContext.agentSelection, (agentId) => {
         if (presentation.modelRequest?.agentId !== agentId) {
-          void presentation.loadModels(cron);
+          presentation.resetModels();
+          publish();
         }
       }),
       currentContext.gateway.subscribeEvents((event) => {
@@ -260,6 +260,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     // The state writer owns route admission; its DOM requests follow this publication's commit.
     onSettled(() => {
       if (active) {
+        ensureEditorModels();
         afterRender();
       }
     });
@@ -308,7 +309,26 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     } else if (!cron.cronRuns.length && !cron.cronRunsLoadingMore) {
       void presentation.runTask(loadCronRuns);
     }
-    if (forceRefresh || presentation.modelRequest?.state !== cron) {
+    onSettled(() => ensureEditorModels(forceRefresh));
+  }
+
+  function ensureEditorModels(forceRefresh = false) {
+    if (!active) {
+      return;
+    }
+    // The settled tab is authoritative; setters may still expose the previous tab.
+    if (!cron.cronCreateOpen && (!cron.cronEditingJob || detailTab() === "history")) {
+      if (presentation.modelRequest) {
+        presentation.resetModels();
+      }
+      return;
+    }
+    const agentId = context().agentSelection.state.selectedId;
+    if (!canRefreshCron() || !cron.connected || !cron.client || !agentId) {
+      return;
+    }
+    const request = presentation.modelRequest;
+    if (forceRefresh || request?.state !== cron || request.agentId !== agentId) {
       void presentation.loadModels(cron);
     }
   }
@@ -633,7 +653,10 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
 
   const actions = {
     onListTabChange: setListTab,
-    onDetailTabChange: setDetailTab,
+    onDetailTabChange: (tab: CronDetailTab) => {
+      setDetailTab(tab);
+      onSettled(() => ensureEditorModels());
+    },
     onFormChange: patchForm,
     onRefresh: () => void refreshCron({ refresh: true }),
     onSubmit: () => submitForm(),

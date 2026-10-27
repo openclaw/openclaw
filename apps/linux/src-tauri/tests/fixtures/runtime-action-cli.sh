@@ -3,12 +3,17 @@ case "$0" in
   */tools/node/bin/node) root=${0%/tools/node/bin/node} ;;
   */bin/openclaw) root=${0%/bin/openclaw} ;;
   */operator-cli) root=${0%/operator-cli} ;;
-  */bun) root=${0%/bun} ;;
+  */bun|*/second-bun|*/third-bun|*/aot-openclaw|*/aot-next-openclaw) root=${0%/*} ;;
   *) printf 'unexpected fixture launcher\n' >&2; exit 8 ;;
 esac
 printf '%s\n' "$0" >> "$root/executables"
 case "$*" in
   *--version*) printf 'OpenClaw 2026.10.1\n' ;;
+  *'setup --baseline --json'*)
+    printf 'setup\n' >> "$root/setup-calls"
+    if test -f "$root/setup-reject"; then printf 'baseline setup failed\n' >&2; exit 1; fi
+    if test -f "$root/setup-state.json"; then /bin/cp "$root/setup-state.json" "$root/state.json"; fi
+    printf '{"ok":true}\n' ;;
   *'gateway status'*)
     /bin/cat "$root/state.json"
     if test -f "$root/next.json"; then /bin/mv "$root/next.json" "$root/state.json"; fi ;;

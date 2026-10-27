@@ -380,14 +380,18 @@ describe("authenticated profile avatar cache", () => {
       .spyOn(globalThis, "fetch")
       .mockImplementation(async () => avatarResponse());
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:current-profile");
+    const timers = vi.spyOn(globalThis, "setTimeout");
     const path = "/api/users/profile-ada/avatar?v=7";
     const retired = resolveAvatarImageUrl(path);
+    const otherRetired = resolveAvatarImageUrl("/avatar/research?v=7");
     expect(resolveAvatarImageUrl(path)).toBe(retired);
     expect(fetchAvatar).not.toHaveBeenCalled();
+    expect(timers.mock.calls.filter(([, delay]) => delay === 0)).toHaveLength(1);
 
     setAvatarGatewayOrigin("https://gateway.example.test", ["current-token"]);
     const current = resolveAvatarImageUrl(path);
     await expect(retired).resolves.toBeNull();
+    await expect(otherRetired).resolves.toBeNull();
     await expect(current).resolves.toBe("blob:current-profile");
     expect(fetchAvatar).toHaveBeenCalledExactlyOnceWith(
       `https://gateway.example.test${path}`,

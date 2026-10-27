@@ -698,6 +698,7 @@ src/config/runtime-write-application.ts
 src/config/schema.field-metadata.ts
 src/config/schema.shared.ts
 src/config/schema.walk.ts
+src/config/security-presets.ts
 src/config/sensitive-paths.ts
 src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
@@ -711,6 +712,7 @@ src/config/sessions/migration-required.ts
 src/config/sessions/model-override-provenance.ts
 src/config/sessions/paths.ts
 src/config/sessions/session-accessor.sqlite-entry-inventory.ts
+src/config/sessions/session-accessor.sqlite-entry-equality.ts
 src/config/sessions/session-accessor.sqlite-conversation-publication.ts
 src/config/sessions/session-accessor.sqlite-owner-projection.ts
 src/config/sessions/session-accessor.sqlite-scope-helpers.ts
@@ -1655,6 +1657,7 @@ src/plugins/plugin-return-value.ts
 src/plugins/plugin-tool-execution.ts
 src/plugins/plugin-runtime-artifact-identity.ts
 src/plugins/plugin-runtime-artifact-resolution.ts
+src/plugins/plugin-runtime-artifact-binding.ts
 src/plugins/plugin-runtime-artifact-selection.ts
 src/plugins/plugin-safety-inspected-files.ts
 src/plugins/plugin-scope.ts
