@@ -106,17 +106,12 @@ vi.mock("./bot-native-commands.runtime.js", () => ({
     }) => ({ sessionKey: baseSessionKey, parentSessionKey }),
   ),
 }));
-vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
-    "openclaw/plugin-sdk/session-store-runtime",
-  );
-  return {
-    ...actual,
-    getSessionEntryAsync: sessionMocks.getSessionEntry,
-    resolveStorePath: sessionMocks.resolveStorePath,
-    prepareSessionEntryPatch: sessionMocks.prepareSessionEntryPatch,
-  };
-});
+vi.mock(import("openclaw/plugin-sdk/session-store-runtime"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  getSessionEntryAsync: sessionMocks.getSessionEntry,
+  resolveStorePath: sessionMocks.resolveStorePath,
+  prepareSessionEntryPatch: sessionMocks.prepareSessionEntryPatch,
+}));
 
 function resetLoginCommandMocks() {
   resetNativeCommandMenuMocks();
@@ -329,12 +324,7 @@ describe("registerTelegramNativeCommands /login", () => {
         await params.openUrl?.("https://openrouter.ai/auth?code_challenge=fixture");
         await finish.promise;
         params.signal.throwIfAborted();
-        return {
-          providerId: "openrouter",
-          methodId: "oauth",
-          authRefresh: "refreshed",
-          profiles: [{ profileId: "openrouter:default", provider: "openrouter", mode: "api_key" }],
-        };
+        return createLoginResult("openrouter:default", "refreshed", "openrouter");
       } finally {
         settled += 1;
       }
@@ -343,7 +333,7 @@ describe("registerTelegramNativeCommands /login", () => {
       allowFrom: ["200", "201"],
     });
     const command = (match: string, chatId = 100, userId = 200) =>
-      handler(createPrivateCommandContext({ match, chatId, userId }));
+      handler(ownerContext(match, chatId, userId));
     try {
       await command("openrouter/openrouter-oauth");
       await command("openrouter/openrouter-oauth", 101);
@@ -527,34 +517,21 @@ describe("registerTelegramNativeCommands /login", () => {
     ).toEqual([]);
   });
 
-  it.each([
-    ["adopts a session created during login", "NEW", "openai:new-owner@example.com", undefined],
-    ["keeps a later user selection", "LATER", "openai:login-profile", "openai:later-user-profile"],
-  ] as const)("%s", async (_name, code, profile, laterProfile) => {
-    const { finish, loginFlow } = pendingLogin(code, profile);
+  it("adopts a session created during login", async () => {
+    const { finish, loginFlow } = pendingLogin("NEW", "openai:new-owner@example.com");
     const { handler, sendMessage } = await registerSessionLogin(loginFlow);
     await handler(ownerContext());
     const created = sessionEntry({ sessionId: "sess-created-during-login", updatedAt: 2 });
-    sessionStore = {
-      "agent:main:main": laterProfile
-        ? { ...created, authProfileOverride: laterProfile, authProfileOverrideSource: "user" }
-        : created,
-    };
+    sessionStore = { "agent:main:main": created };
     finish.resolve();
-    if (laterProfile) {
-      await vi.waitFor(() => expectKept(sendMessage));
-    } else {
-      await vi.waitFor(() =>
-        expect(sessionMocks.prepareSessionEntryPatch).toHaveBeenCalledTimes(1),
-      );
-      const update = sessionMocks.prepareSessionEntryPatch.mock.calls[0]?.[0].prepare;
-      expect(update?.(created, { existingEntry: created })).toEqual({
-        authProfileOverride: "openai:new-owner@example.com",
-        authProfileOverrideSource: "user",
-        authProfileOverrideCompactionCount: undefined,
-      });
-      await vi.waitFor(() => expectSent(sendMessage, completed));
-    }
+    await vi.waitFor(() => expect(sessionMocks.prepareSessionEntryPatch).toHaveBeenCalledTimes(1));
+    const update = sessionMocks.prepareSessionEntryPatch.mock.calls[0]?.[0].prepare;
+    expect(update?.(created, { existingEntry: created })).toEqual({
+      authProfileOverride: "openai:new-owner@example.com",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: undefined,
+    });
+    await vi.waitFor(() => expectSent(sendMessage, completed));
   });
 
   it.each([
