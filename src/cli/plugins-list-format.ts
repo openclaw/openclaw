@@ -29,14 +29,17 @@ export function formatPluginStatus(
 }
 
 export function formatPluginLine(plugin: PluginRecord): string {
-  const name = theme.command(plugin.name || plugin.id);
-  const idSuffix = plugin.name && plugin.name !== plugin.id ? theme.muted(` (${plugin.id})`) : "";
+  const name = theme.command(sanitizeTerminalText(plugin.name || plugin.id));
+  const idSuffix =
+    plugin.name && plugin.name !== plugin.id
+      ? theme.muted(` (${sanitizeTerminalText(plugin.id)})`)
+      : "";
   const format = plugin.format ?? "openclaw";
 
   const parts = [
     `${name}${idSuffix} ${formatPluginStatus(plugin)}`,
     `  format: ${format}`,
-    `  source: ${theme.muted(shortenHomePath(plugin.source))}`,
+    `  source: ${theme.muted(sanitizeTerminalText(shortenHomePath(plugin.source)))}`,
     `  origin: ${plugin.origin}`,
   ];
   if (plugin.bundleFormat) {
@@ -46,7 +49,7 @@ export function formatPluginLine(plugin: PluginRecord): string {
     parts.push(`  bundle capabilities: ${plugin.bundleCapabilities.join(", ")}`);
   }
   if (plugin.version) {
-    parts.push(`  version: ${plugin.version}`);
+    parts.push(`  version: ${sanitizeTerminalText(plugin.version)}`);
   }
   const trustLabel = formatPluginTrustLabel(plugin);
   if (trustLabel) {
@@ -68,7 +71,7 @@ export function formatPluginLine(plugin: PluginRecord): string {
     parts.push(`  activation reason: ${sanitizeTerminalText(plugin.activationReason)}`);
   }
   if (plugin.providerIds.length > 0) {
-    parts.push(`  providers: ${plugin.providerIds.join(", ")}`);
+    parts.push(`  providers: ${plugin.providerIds.map(sanitizeTerminalText).join(", ")}`);
   }
   if (plugin.activated !== undefined || plugin.activationSource || plugin.activationReason) {
     const activationSummary =
@@ -78,7 +81,7 @@ export function formatPluginLine(plugin: PluginRecord): string {
     parts.push(`  activation: ${activationSummary}`);
   }
   if (plugin.status === "error" && plugin.error) {
-    parts.push(theme.error(`  error: ${plugin.error}`));
+    parts.push(theme.error(`  error: ${sanitizeTerminalText(plugin.error)}`));
   }
   return parts.join("\n");
 }

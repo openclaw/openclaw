@@ -1,4 +1,5 @@
 // `openclaw plugins list`: builds registry reports and defers terminal-only formatting modules.
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
@@ -64,7 +65,9 @@ export async function runPluginsListCommand(
   );
   for (const { level, message } of diagnostics) {
     const format = level === "error" ? theme.error : theme.warn;
-    runtime.log(format(`${level === "error" ? "Error" : "Warning"}: ${message}`));
+    runtime.log(
+      format(`${level === "error" ? "Error" : "Warning"}: ${sanitizeTerminalText(message)}`),
+    );
   }
   if (diagnostics.length > 0) {
     runtime.log("");
@@ -95,18 +98,22 @@ export async function runPluginsListCommand(
     const usedRoots = new Set<keyof typeof sourceRoots>();
     const rows = list.map((plugin) => {
       const error = plugin.status === "error" && plugin.error;
-      const desc = error ? theme.error(error) : theme.muted(plugin.description ?? "");
+      const desc = error
+        ? theme.error(sanitizeTerminalText(error))
+        : theme.muted(sanitizeTerminalText(plugin.description ?? ""));
       const formattedSource = formatPluginSourceForTable(plugin, sourceRoots);
       if (formattedSource.rootKey) {
         usedRoots.add(formattedSource.rootKey);
       }
       return {
-        Name: plugin.name || plugin.id,
-        ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
+        Name: sanitizeTerminalText(plugin.name || plugin.id),
+        ID: plugin.name && plugin.name !== plugin.id ? sanitizeTerminalText(plugin.id) : "",
         Format: plugin.format ?? "openclaw",
         Status: formatPluginStatus(plugin),
-        Source: desc ? `${formattedSource.value}\n${desc}` : formattedSource.value,
-        Version: plugin.version ?? "",
+        Source: desc
+          ? `${sanitizeTerminalText(formattedSource.value)}\n${desc}`
+          : sanitizeTerminalText(formattedSource.value),
+        Version: sanitizeTerminalText(plugin.version ?? ""),
         Trust: formatPluginTrustLabel(plugin),
       };
     });
@@ -121,7 +128,7 @@ export async function runPluginsListCommand(
         if (!dir) {
           continue;
         }
-        runtime.log(`  ${theme.command(`${key}:`)} ${theme.muted(dir)}`);
+        runtime.log(`  ${theme.command(`${key}:`)} ${theme.muted(sanitizeTerminalText(dir))}`);
       }
       runtime.log("");
     }
