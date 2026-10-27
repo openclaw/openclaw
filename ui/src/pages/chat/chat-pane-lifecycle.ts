@@ -49,7 +49,6 @@ import { focusChatComposerFromKeydown } from "./chat-pane-shared.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
 import type { ChatPaneInputChanges } from "./chat-pane-state-owner.ts";
-import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { cancelChatModelRecovery } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -71,7 +70,6 @@ import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts
 import { resetThreadPresentation } from "./components/chat-thread-interactions.ts";
 import { retainCreatedIncognitoComposerScope } from "./composer-persistence-state.ts";
 import { connectCreatedComposerQueue } from "./creation-composer-recovery.ts";
-import { admitChatSubmission } from "./history-merge.ts";
 import {
   admitInitialChatTurn,
   admitInitialTurnHandoff,
@@ -302,10 +300,13 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       this.presented && document.visibilityState !== "hidden";
     const refreshPresentedReads = () => {
       if (pageState.chatMetadataIsPresented?.()) {
+        this.resumeTranscriptReads();
         void refreshChatMetadata(pageState);
         this.resumeDeferredSessionHydration();
         this.markSessionRead(selectedChatSessionRow(pageState));
         void this.refreshTaskSuggestions({ automatic: true });
+      } else {
+        this.retireTranscriptReads(true);
       }
     };
     chatState.addCleanup(listen(document, "visibilitychange", refreshPresentedReads));
@@ -520,13 +521,18 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         const state = this.state;
         if (state) {
           // Admit each accepted initial turn before waking followers parked behind recovery.
-          const admitted = admitChatSubmission(state, getChatPendingInputs(state)?.page.items);
+          const admitted = admitInitialChatTurn(state, readAcknowledgedInitialRun(state));
           if (!parseCatalogSessionKey(state.sessionKey)) {
-            // A replay ACK may refer to collected input already outside the loaded user rows.
+            // Fresh history settles replayed runs before their queued followers resume.
             if (admitted) {
-              void loadChatHistory(state);
+              void loadChatHistory(state).then(() => {
+                if (this.state === state) {
+                  void resumeStoredChatOutboxes(state);
+                }
+              });
+            } else {
+              void resumeStoredChatOutboxes(state);
             }
-            void resumeStoredChatOutboxes(state);
           }
         }
       }),
@@ -574,6 +580,15 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       const nextSessionKey = catalogKey
         ? this.sessionKey
         : resolveSessionKey(this.sessionKey, this.context.gateway.snapshot.hello);
+      // Route canonicalization keeps the same transcript owner and startup read.
+      // Only a different conversation retires that scope's resumable intent.
+      if (
+        nextSessionKey &&
+        resolveSessionKey(this.state.sessionKey, this.context.gateway.snapshot.hello) !==
+          nextSessionKey
+      ) {
+        this.retireTranscriptReads();
+      }
       if (nextSessionKey) {
         // Availability belongs to one activation. The replacement probe starts
         // after its transcript commit in deferSessionHydrationUntilTranscript.
@@ -675,6 +690,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
   }
 
   override dispose() {
+    this.retireTranscriptReads();
     this.panelActions = undefined;
     this.activeSessionResources.sync(null);
     this.syncSessionCompanionPresentation(false);

@@ -67,6 +67,9 @@ const repositoryScriptEntries = [
   // Its header documents the paired operator-role currency-check benchmark.
   "scripts/perf/operator-role-source-policy-measure.mjs!",
   "scripts/perf/access-authority-callback-measure.mjs!",
+  "scripts/perf/plugin-registry-binding-measure.mjs!",
+  // Its header documents the config-wide admission metadata benchmark.
+  "scripts/perf/config-wide-metadata-measure.ts!",
   // Its header documents the sandbox/workspace ownership assertion benchmark.
   "scripts/perf/workspace-assertion-measure.mjs!",
   // Its header documents the paired workspace reconciliation benchmark.
@@ -75,6 +78,8 @@ const repositoryScriptEntries = [
   // Its header documents the full transcript-pairing repair benchmark.
   "scripts/perf/tool-result-pairing-measure.ts!",
   "scripts/perf/assistant-thinking-measure.ts!",
+  // Its header documents leaf SELF-byte attribution of sampled survivor profiles.
+  "scripts/perf/survivor-leaf-rank.mjs!",
   // db:postgres:gen/check invoke this generator through the source loader.
   "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
@@ -140,13 +145,20 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-blob-registration-measure.ts!",
   "scripts/perf/session-reaction-quota-measure.ts!",
   // Maintained guides, source headers, and paired drivers invoke these roots by path.
+  "scripts/perf/audit-batch-write-measure.ts!",
+  "scripts/perf/prompt-suffix-turn-context-measure.ts!",
+  "scripts/perf/audit-context-write-measure.ts!",
   "scripts/perf/node-worker-journal-measure.ts!",
   "scripts/perf/orphan-recovery-observer.mjs!",
   "scripts/perf/pairing-channel-attribution.mts!",
   "scripts/perf/session-actor-residency-snapshot.mjs!",
   "scripts/perf/session-actor-retention-seed.ts!",
+  "scripts/perf/session-cold-selection.ts!",
+  "scripts/perf/session-entry-projection-measure.ts!",
+  "scripts/perf/session-row-index-measure.ts!",
   "scripts/perf/session-row-materialization-measure.ts!",
   "scripts/perf/session-row-refresh-measure.ts!",
+  "scripts/perf/session-row-consume-measure.ts!",
   "scripts/perf/session-row-lineage-measure.ts!",
   "scripts/perf/session-event-ancestors-measure.ts!",
   "scripts/perf/tool-result-hash-measure.ts!",
@@ -196,8 +208,18 @@ const repositoryScriptEntries = [
   "scripts/perf/session-tool-surface-measure.ts!",
   "scripts/perf/subagent-maintenance-capture-measure.ts!",
   "scripts/perf/subagent-sweep-measure.ts!",
+  // Its source header documents the shutdown workload; the literal URL links its preload.
+  "scripts/perf/gateway-shutdown-sweep-measure.ts!",
   "scripts/perf/tool-schema-preparation-measure.ts!",
   "scripts/perf/terminal-assistant-snapshot-measure.ts!",
+  // Their source headers and retained guide document standalone Node commands.
+  "scripts/perf/cheaper-retry-logging.ts!",
+  "scripts/perf/hook-message-loader-retention.ts!",
+  "scripts/perf/jiti-stack-format.ts!",
+  "scripts/perf/pr-restore-memory.mjs!",
+  "scripts/perf/session-cold-restore-memory.ts!",
+  "scripts/perf/subagent-custody-abort-retention.ts!",
+  "scripts/perf/worker-lifecycle-message-measure.ts!",
   // Retained source commands and selectable preloads execute directly by exact path.
   "scripts/perf/after-turn-context-measure.ts!",
   "scripts/perf/agent-runtime-dispatch-measure.ts!",
@@ -213,6 +235,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-history-prewarm-measure.mjs!",
   "scripts/perf/session-prepared-list-measure.ts!",
   "scripts/perf/session-list-search-measure.ts!",
+  "scripts/perf/session-list-transmit-measure.mjs!",
   "scripts/perf/transcript-boot-preload.mjs!",
   "scripts/perf/worker-pool-churn-preload.mjs!",
   "scripts/perf/worktree-prompt-native-measure.ts!",
@@ -280,6 +303,7 @@ const repositoryScriptEntries = [
   "scripts/perf/cron-delivery-gateway-entry.ts!",
   "scripts/perf/plugin-policy-read-measure.mjs!",
   "scripts/perf/prompt-cache-observation-measure.ts!",
+  "scripts/perf/live-history-observation-measure.ts!",
   "scripts/perf/reconnect-read-wave-measure.ts!",
   "scripts/perf/session-actor-receipt-measure.ts!",
   "scripts/perf/session-actor-retention-measure.ts!",
@@ -408,6 +432,7 @@ const repositoryScriptEntries = [
   "scripts/perf/cron-history-plan-measure.ts!",
   "scripts/perf/cron-list-projection-measure.mjs!",
   "scripts/perf/cron-list-revision-measure.ts!",
+  "scripts/perf/cron-delivery-context-measure.mjs!",
   "scripts/perf/cron-refresh-measure.ts!",
   "scripts/perf/cron-session-bindings-measure.ts!",
   "scripts/perf/embedded-runner-array-copies.ts!",
@@ -450,6 +475,7 @@ const repositoryScriptEntries = [
   "scripts/perf/stream-dispatch-scope-measure.ts!",
   "scripts/perf/subagent-mutation-clone-measure.ts!",
   "scripts/perf/telegram-entity-sort-measure.mjs!",
+  "scripts/perf/telegram-token-owner-measure.mjs!",
   "scripts/perf/tool-result-owned-freeze-measure.ts!",
   "scripts/perf/tool-search-allowlist-measure.ts!",
   "scripts/perf/tools-catalog-copy-measure.ts!",
@@ -481,6 +507,7 @@ const repositoryScriptEntries = [
   "scripts/perf/host-cpu-sample-measure.mjs!",
   "scripts/perf/identifier-renormalization-measure.ts!",
   "scripts/perf/ingress-ip-measure.ts!",
+  "scripts/perf/inter-session-steering-measure.ts!",
   "scripts/perf/memory-ranking-copies.ts!",
   "scripts/perf/memory-prompt-copy-measure.ts!",
   "scripts/perf/misc-fresh-array-copies-measure.mjs!",
@@ -495,6 +522,7 @@ const repositoryScriptEntries = [
   "scripts/perf/reef-device-sign-measure.ts!",
   "scripts/perf/session-actor-admission-measure.ts!",
   "scripts/perf/session-input-custody-measure.ts!",
+  "scripts/perf/chat-send-persist-measure.ts!",
   "scripts/perf/session-pin-policy-measure.ts!",
   "scripts/perf/session-prompt-begin-measure.ts!",
   "scripts/perf/session-store-target-inventory-measure.ts!",
@@ -531,12 +559,14 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-preparation-boot.mjs!",
   "scripts/perf/plugin-preparation-boot-preload.mjs!",
   "scripts/perf/plugin-relative-path-measure.ts!",
+  "scripts/perf/plugin-capture-stat-measure.ts!",
   "scripts/perf/plugin-source-preparation.ts!",
   "scripts/perf/plugin-transform-preload.mjs!",
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/sandbox-skills-sync-measure.ts!",
   "scripts/perf/sandbox-start-measure.ts!",
+  "scripts/perf/sandbox-status-measure.ts!",
   "scripts/perf/session-projection-stream-measure.ts!",
   "scripts/perf/session-sharing-key-measure.ts!",
   "scripts/perf/session-store-key-measure.ts!",
@@ -563,6 +593,7 @@ const repositoryScriptEntries = [
   "scripts/perf/knowledge-worker-heap-measure.mjs!",
   // These source headers document standalone measurement commands.
   "scripts/perf/agent-deletion-blocked-measure.ts!",
+  "scripts/perf/agent-list-read-measure.ts!",
   "scripts/perf/chat-history-response-page-measure.mjs!",
   "scripts/perf/chat-metadata-auth-check-measure.ts!",
   "scripts/perf/config-schema-retention-measure.ts!",
@@ -581,8 +612,10 @@ const repositoryScriptEntries = [
   "scripts/perf/placement-identity-recovery-bench.ts!",
   "scripts/perf/provider-tool-normalization-measure.ts!",
   "scripts/perf/session-entry-patch-prepare-measure.ts!",
+  "scripts/perf/session-lifecycle-prepare-measure.ts!",
   "scripts/perf/session-replacement-write-measure.ts!",
   "scripts/perf/session-patch-label-owner-measure.ts!",
+  "scripts/perf/session-patch-result-measure.mjs!",
   "scripts/perf/session-event-audience-measure.ts!",
   "scripts/perf/transcript-snapshot-copy-measure.ts!",
   "scripts/perf/turn-start-phases.ts!",
@@ -597,6 +630,7 @@ const repositoryScriptEntries = [
   "scripts/perf/codex-catalog-lines.ts!",
   "scripts/perf/codex-request-imports.ts!",
   "scripts/perf/empty-checkout-diff-measure.ts!",
+  "scripts/perf/project-checkout-options-measure.ts!",
   "scripts/perf/main-module-census-report.mjs!",
   "scripts/perf/module-import-measure.mjs!",
   "scripts/perf/plugin-resolve-hooks-measure.ts!",
@@ -641,6 +675,7 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-object-copy-measure.ts!",
   "scripts/perf/plugin-recovery-transport-measure.ts!",
   "scripts/perf/plugin-startup-install-records.ts!",
+  "scripts/perf/plugin-metadata-read-measure.ts!",
   "scripts/perf/plugins-list-measure.ts!",
   "scripts/perf/plugins-list-owner-measure.ts!",
   "scripts/perf/provider-prompt-worker-bytes-measure.mjs!",
@@ -744,6 +779,7 @@ const repositoryScriptEntries = [
   "scripts/bench-team-reports-snapshots.mts!",
   "scripts/perf/async-work-scope-measure.ts!",
   "scripts/perf/local-workspace-callers-measure.ts!",
+  "scripts/perf/local-workspace-checkpoint-measure.ts!",
   "scripts/perf/local-workspace-retention.ts!",
   "scripts/perf/plugin-iterator-membrane-measure.ts!",
   "scripts/perf/plugin-generation-retention.ts!",
@@ -796,6 +832,20 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-scope-attribution-preload.mjs!",
   // The documented placement shutdown reproduction is invoked as a standalone CLI.
   "scripts/perf/worker-placement-reconcile-shutdown-measure.ts!",
+  // Their headers document these standalone measurement CLIs by path.
+  "scripts/perf/agent-db-inspection-close-measure.mjs!",
+  "scripts/perf/agent-prepare-write-measure.mjs!",
+  "scripts/perf/config-health-restart-measure.ts!",
+  "scripts/perf/connect-tail-measure.ts!",
+  "scripts/perf/device-token-snapshot-measure.ts!",
+  "scripts/perf/paired-row-encoding-measure.ts!",
+  "scripts/perf/session-patch-projection-measure.ts!",
+  "scripts/perf/session-actor-writer-append-measure.ts!",
+  "scripts/perf/session-cost-usage-cold-read.ts!",
+  "scripts/perf/worker-warm-floor-measure.mjs!",
+  "scripts/perf/worktree-branches-measure.ts!",
+  // connect-tail-measure.ts loads this diagnostics preload through --gateway-preload.
+  "scripts/perf/connect-tail-preload.mjs!",
   // The standalone build guide invokes this builder by path.
   "scripts/build-bun-standalone.mjs!",
   // Maintainers invoke the isolated macOS standalone Doctor proof by path.
@@ -865,8 +915,9 @@ const repositoryScriptEntries = [
   // The Docker custody shell copies the server and mounts the scenario by path.
   "scripts/e2e/lib/mcp-docker-custody/scenario.mjs!",
   "scripts/e2e/lib/mcp-docker-custody/server.cjs!",
-  // Muse Docker shells invoke auth directly and select deterministic/live by mode.
+  // Muse Docker shells invoke auth directly and select deterministic/consent/live by mode.
   "scripts/e2e/lib/muse-runtime/auth.mjs!",
+  "scripts/e2e/lib/muse-runtime/consent.mjs!",
   "scripts/e2e/lib/muse-runtime/deterministic.mjs!",
   "scripts/e2e/lib/muse-runtime/live.mjs!",
   // test:e2e:node-auto-update runs the installed-package proof against a frozen tarball.
@@ -927,6 +978,8 @@ const repositoryScriptEntries = [
   // The compiler below exposes the runner's inline Node imports.
   "scripts/e2e/lib/upgrade-survivor/run.sh!",
   "scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs!",
+  // The upgrade-survivor runner invokes the session-share baseline and checks by path.
+  "scripts/e2e/lib/upgrade-survivor/session-share.mjs!",
   // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
   "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
   // The first-hop shell executes the packaged admission entry probe by path.
@@ -1682,6 +1735,8 @@ const config = {
     // production uses them through their owning module/controller.
     "ui/src/pages/chat/chat-state-refresh.{ts,tsx}": ["exports"],
     "ui/src/pages/chat/composer-persistence.{ts,tsx}": ["exports"],
+    // Focused link tests build the resolver directly; production reaches it through projectSubagentStatus.
+    "ui/src/pages/chat/chat-subagent-wait.ts": ["exports"],
     // The presentation fixture and focused UI tests consume these seams;
     // the full-tree companion scan continues to audit their actual consumers.
     "ui/src/components/terminal/terminal-panel.ts": ["types"],
@@ -1901,6 +1956,11 @@ const config = {
     "packages/net-policy": workspacePackage("net-policy"),
     "packages/markdown-core": workspacePackage("markdown-core"),
     "packages/media-core": workspacePackage("media-core"),
+    "packages/mermaid-renderer": {
+      // Vite selects the native adapter and classic compiler by file path, not imports.
+      entry: ["src/renderer.ts!", "src/native.ts!", "src/pele.min.ts!"],
+      project: ["src/**/*.ts!"],
+    },
     "packages/acp-core": workspacePackage("acp-core"),
     "packages/terminal-core": workspacePackage("terminal-core"),
     "packages/retry": workspacePackage("retry"),

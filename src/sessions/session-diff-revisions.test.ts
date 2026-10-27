@@ -1,13 +1,17 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runGit, type GitResult } from "../agents/worktrees/git.js";
+import { readCheckoutDiffRevision } from "../gateway/control-ui-session-diff-revision.js";
 import { onTrustedInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import type { DiffReadTiming } from "../infra/diff-read-timing.js";
+import * as gitWorkerContext from "../infra/git-worker-context.js";
 import { runGitWorkerOperation } from "../infra/git-worker.js";
 import * as execRunner from "../process/exec-runner.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
@@ -26,20 +30,23 @@ vi.mock("../agents/worktrees/git.js", async (importOriginal) => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const execute = promisify(execFile);
+const gitIdentity = [
+  "user.name=Test",
+  "user.email=test@example.invalid",
+  "commit.gpgsign=false",
+].flatMap((setting) => ["-c", setting]);
 const gitIn = async (cwd: string, ...args: string[]) =>
-  (
-    await execute("git", [
-      "-C",
-      cwd,
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.invalid",
-      "-c",
-      "commit.gpgsign=false",
-      ...args,
-    ])
-  ).stdout;
+  (await execute("git", ["-C", cwd, ...gitIdentity, ...args])).stdout;
+
+async function seedRepository(root: string, files: Record<string, string>) {
+  await gitIn(root, "init", "-b", "main");
+  for (const [file, content] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+    await fs.writeFile(path.join(root, file), content);
+  }
+  await gitIn(root, "add", ".");
+  await gitIn(root, "commit", "-m", "base");
+}
 
 async function withCheckout(
   prefix: string,
@@ -79,110 +86,120 @@ function gitResult(stdout: string, code = 0): GitResult {
   return { ...createCommandResult({ stdout, code }), timeoutMs: 120_000 };
 }
 
-describe("empty-tree preparation", () => {
-  beforeEach(() => vi.mocked(runGit).mockReset());
-
-  it.each([undefined, "--show-object-format", "unknown-format"])(
-    "reads Git's empty tree for format %s without retaining failures",
-    async (objectFormat) => {
-      vi.mocked(runGit).mockResolvedValueOnce(gitResult("", 128));
-      await expect(resolveSessionDiffEmptyTree("repo", objectFormat)).resolves.toBeNull();
-      vi.mocked(runGit).mockResolvedValueOnce(gitResult("format-specific-empty-tree\n"));
-      await expect(resolveSessionDiffEmptyTree("repo", objectFormat)).resolves.toEqual({
-        base: "format-specific-empty-tree",
-      });
-    },
-  );
-});
-
-describe("branch base resolution", () => {
-  it.each([
-    ["origin/trunk", ["origin/trunk", "main", "master", "origin/main", "origin/master"], "trunk"],
-    [null, ["main", "master", "origin/main", "origin/master"], "main"],
-    [null, ["master", "origin/main", "origin/master"], "master"],
-    [null, ["origin/main", "origin/master"], "origin/main"],
-  ] as const)("prefers %s / %j", async (symbolicDefault, refs, baseRef) => {
-    const gitOut = async (_root: string, args: string[]) => {
-      if (args[0] === "symbolic-ref") {
-        return symbolicDefault;
+it.skipIf(process.platform === "win32").each([false, true])(
+  "validates large-index diffs with sparse checkout %s",
+  (sparse) =>
+    withCheckout("openclaw-large-index-diff-", async ({ root, git, write }) => {
+      await seedRepository(root, { "tracked.txt": "before\n" });
+      if (sparse) {
+        await git("sparse-checkout", "set", "--no-cone", "tracked.txt");
       }
-      return refs.some((ref) => ref === args[1]) ? `${args[1]}-base\n` : null;
-    };
-
-    await expect(
-      resolveSessionDiffBase({ branch: "feature", gitOut, head: "captured-head", root: "/repo" }),
-    ).resolves.toEqual({ base: `${refs[0]}-base`, baseRef });
-  });
-
-  it.each([undefined, "main", "master"])(
-    "keeps HEAD for branch %s even when remote defaults exist",
-    async (branch) => {
-      const gitOut = async (_root: string, args: string[]) => {
-        if (args[0] === "symbolic-ref") {
-          return null;
+      await write("tracked.txt", "after\n");
+      const actual = await vi.importActual<typeof import("../agents/worktrees/git.js")>(
+        "../agents/worktrees/git.js",
+      );
+      vi.mocked(runGit).mockReset().mockImplementation(actual.runGit);
+      const environment = Object.entries(process.env)
+        .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
+        .toSorted(([left], [right]) => left.localeCompare(right));
+      vi.spyOn(gitWorkerContext, "gitFilesystemEnvironmentRevision").mockReturnValue(
+        createHash("sha256").update(JSON.stringify(environment)).digest("hex"),
+      );
+      // Only the admission heuristic is synthetic; Git reads the real index and files.
+      const lstat = fsSync.lstatSync;
+      vi.spyOn(fsSync, "lstatSync").mockImplementation((file, options) => {
+        const stat = lstat(file, options);
+        if (file === path.join(root, ".git/index") && stat) {
+          Object.defineProperty(stat, "size", { value: 2_000_000n });
         }
-        if (args[0] === "merge-base" && args[1]?.startsWith("origin/")) {
-          return "remote-base\n";
-        }
-        return null;
-      };
-
-      await expect(
-        resolveSessionDiffBase({ branch, gitOut, head: "captured-head", root: "/repo" }),
-      ).resolves.toEqual({
-        base: "captured-head",
-        baseRef: "HEAD",
+        return stat;
       });
-    },
-  );
+      const directories = vi.spyOn(fsSync, "opendirSync");
+      const first = await readCheckoutDiffRevision(root);
+      expect(first).not.toBeNull();
+      expect(await readCheckoutDiffRevision(root)).toEqual(first);
+      expect(directories.mock.calls.filter(([directory]) => directory === root)).toHaveLength(
+        sparse ? 2 : 0,
+      );
+      expect(
+        vi.mocked(runGit).mock.calls.filter(([, args]) => args.includes("status")),
+      ).toHaveLength(sparse ? 1 : 2);
+      await write("tracked.txt", "later\n");
+      const changed = await readCheckoutDiffRevision(root);
+      expect(changed).not.toEqual(first);
+      await write("untracked.txt", "new\n");
+      expect(await readCheckoutDiffRevision(root)).not.toEqual(changed);
+    }),
+);
 
-  it("keeps HEAD when no default ref resolves", async () => {
-    await expect(
-      resolveSessionDiffBase({
-        branch: "feature",
-        gitOut: async () => null,
-        head: "captured-head",
-        root: "/repo",
-      }),
-    ).resolves.toEqual({ base: "captured-head", baseRef: "HEAD" });
-  });
-});
-
-describe("captured session history", () => {
-  it("does not admit commits added after the checkout revision was captured", async () => {
-    const root = tempDirs.make("openclaw-captured-history-");
-    const git = (...args: string[]) => gitIn(root, ...args);
-    await git("init", "-b", "main");
-    await fs.writeFile(path.join(root, "file.txt"), "base\n");
-    await git("add", "file.txt");
-    await git("commit", "-m", "base");
-    const base = (await git("rev-parse", "HEAD")).trim();
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "file.txt"), "captured\n");
-    await git("commit", "-am", "captured change");
-    const head = (await git("rev-parse", "HEAD")).trim();
-    await fs.appendFile(path.join(root, "file.txt"), "later\n");
-    await git("commit", "-am", "later change");
-    const metadata = await loadSessionDiffBranchMetadata({
-      root,
-      base,
-      head,
-      gitOut: async (_root, args) => git(...args),
+it.each([undefined, "--show-object-format", "unknown-format"])(
+  "reads Git's empty tree for format %s without retaining failures",
+  async (objectFormat) => {
+    vi.mocked(runGit).mockReset().mockResolvedValueOnce(gitResult("", 128));
+    await expect(resolveSessionDiffEmptyTree("repo", objectFormat)).resolves.toBeNull();
+    vi.mocked(runGit).mockResolvedValueOnce(gitResult("format-specific-empty-tree\n"));
+    await expect(resolveSessionDiffEmptyTree("repo", objectFormat)).resolves.toEqual({
+      base: "format-specific-empty-tree",
     });
-    expect(metadata.aheadCount).toBe(1);
-    expect(metadata.commits?.map((commit) => commit.subject)).toEqual(["captured change"]);
-    expect(metadata.mergeBase?.subject).toBe("base");
+  },
+);
+
+it.each([
+  [
+    "feature",
+    "origin/trunk",
+    ["origin/trunk", "main", "master", "origin/main", "origin/master"],
+    "trunk",
+  ],
+  ["feature", null, ["main", "master", "origin/main", "origin/master"], "main"],
+  ["feature", null, ["master", "origin/main", "origin/master"], "master"],
+  ["feature", null, ["origin/main", "origin/master"], "origin/main"],
+  [undefined, null, ["origin/main", "origin/master"], "HEAD"],
+  ["main", null, ["origin/main", "origin/master"], "HEAD"],
+  ["master", null, ["origin/main", "origin/master"], "HEAD"],
+  ["feature", null, [], "HEAD"],
+] as const)(
+  "resolves branch %s with default %s and refs %j to %s",
+  async (branch, symbolicDefault, refs, baseRef) => {
+    const gitOut = async (_root: string, args: string[]) =>
+      args[0] === "symbolic-ref"
+        ? symbolicDefault
+        : refs.some((ref) => ref === args[1])
+          ? `${args[1]}-base\n`
+          : null;
+    await expect(
+      resolveSessionDiffBase({ branch, gitOut, head: "captured-head", root: "/repo" }),
+    ).resolves.toEqual({ base: baseRef === "HEAD" ? "captured-head" : `${refs[0]}-base`, baseRef });
+  },
+);
+
+it("does not admit commits added after the checkout revision was captured", async () => {
+  const root = tempDirs.make("openclaw-captured-history-");
+  const git = (...args: string[]) => gitIn(root, ...args);
+  await seedRepository(root, { "file.txt": "base\n" });
+  const base = (await git("rev-parse", "HEAD")).trim();
+  await git("checkout", "-b", "feature");
+  await fs.appendFile(path.join(root, "file.txt"), "captured\n");
+  await git("commit", "-am", "captured change");
+  const head = (await git("rev-parse", "HEAD")).trim();
+  await fs.appendFile(path.join(root, "file.txt"), "later\n");
+  await git("commit", "-am", "later change");
+  const metadata = await loadSessionDiffBranchMetadata({
+    root,
+    base,
+    head,
+    gitOut: async (_root, args) => git(...args),
   });
+  expect(metadata.aheadCount).toBe(1);
+  expect(metadata.commits?.map((commit) => commit.subject)).toEqual(["captured change"]);
+  expect(metadata.mergeBase?.subject).toBe("base");
 });
 
 it.skipIf(process.platform === "win32")(
   "reuses a clean status inventory and still observes later edits",
   () =>
-    withCheckout("openclaw-diff-index-refresh-", async ({ root, git, write }) => {
-      await git("init", "-b", "main");
-      await write("file.txt", "original\n");
-      await git("add", "file.txt");
-      await git("commit", "-m", "base");
+    withCheckout("openclaw-diff-index-refresh-", async ({ root, write }) => {
+      await seedRepository(root, { "file.txt": "original\n" });
       const indexPath = path.join(root, ".git", "index");
       const originalIndex = await fs.readFile(indexPath);
       await fs.utimes(path.join(root, "file.txt"), new Date(0), new Date(0));
@@ -200,24 +217,16 @@ it.skipIf(process.platform === "win32")(
       await write("file.txt", "changed\n");
       await write("new.txt", "new\n");
       const changed = await read();
-      expect(changed.files).toEqual([
-        expect.objectContaining({
-          path: "file.txt",
-          status: "modified",
-          additions: 1,
-          deletions: 1,
-        }),
-        expect.objectContaining({ path: "new.txt", untracked: true, additions: 1 }),
+      expect(changed.files).toMatchObject([
+        { path: "file.txt", status: "modified", additions: 1, deletions: 1 },
+        { path: "new.txt", untracked: true, additions: 1 },
       ]);
     }),
 );
 
 it("binds a clean inventory to its checkout, HEAD, and uncommitted scope", () =>
   withCheckout("openclaw-clean-diff-scope-", async ({ root, git, write }) => {
-    await git("init", "-b", "main");
-    await write("file.txt", "base\n");
-    await git("add", "file.txt");
-    await git("commit", "-m", "base");
+    await seedRepository(root, { "file.txt": "base\n" });
     const base = (await git("rev-parse", "HEAD")).trim();
     await git("checkout", "-b", "feature");
     await write("file.txt", "feature\n");
@@ -266,8 +275,7 @@ it.skipIf(process.platform === "win32")(
       await fs.mkdir(cwd);
       await promisify(execFile)("git", ["-C", cwd, "init", "-b", "main"]);
       await fs.writeFile(path.join(cwd, "created.txt"), "created\n");
-      const now = Date.now();
-      vi.spyOn(Date, "now").mockReturnValue(now + 1_001);
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1_001);
       const recreated = await read();
       expect(recreated.unavailableReason).toBeUndefined();
       expect(recreated.files).toEqual([
@@ -284,22 +292,22 @@ it.skipIf(process.platform === "win32")(
       const checkout = path.join(root, "checkout");
       const git = (...args: string[]) => gitIn(origin, ...args);
       await fs.mkdir(origin);
-      await git("init", "-b", "main");
-      await fs.writeFile(path.join(origin, "tracked.txt"), "before\n");
-      await fs.writeFile(path.join(origin, ".gitignore"), "ignored/\n");
-      await git("add", ".");
-      await git("commit", "-m", "base");
+      await seedRepository(origin, { "tracked.txt": "before\n", ".gitignore": "ignored/\n" });
       await git("worktree", "add", "--detach", checkout, "HEAD");
       await fs.mkdir(path.join(checkout, "nested"));
       await fs.mkdir(path.join(checkout, "ignored"));
       await fs.symlink(checkout, path.join(root, "alias"));
       await fs.appendFile(path.join(checkout, "tracked.txt"), "after\n");
       await fs.writeFile(path.join(origin, ".git/worktrees/checkout/index.lock"), "writer\n");
+      const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
       for (const cwd of [path.join(checkout, "nested"), path.join(root, "alias")]) {
         const timing: DiffReadTiming = { durations: {} };
         const read = () => loadCheckoutDiff({ cwd, sessionKey: "fixture" }, timing);
         const first = await read();
         expect(first.files[0]?.patch).toContain("+after");
+        expect(commands.mock.calls.filter(([argv]) => argv.includes("symbolic-ref"))).toHaveLength(
+          0,
+        );
         await fs.writeFile(path.join(checkout, "ignored/build.txt"), "rebuilt\n");
         expect(await read()).toEqual(first);
         expect(timing.outcome).toBe("cache-hit");
@@ -343,12 +351,8 @@ it.skipIf(process.platform === "win32")(
       await git(root, "init", "-b", "main");
       await git(root, "commit", "--allow-empty", "-m", "base");
       await fs.mkdir(nested);
-      await git(nested, "init", "-b", "main");
-      await fs.mkdir(path.join(nested, "content"));
       const nestedFile = path.join(nested, "content/file.txt");
-      await fs.writeFile(nestedFile, "before\n");
-      await git(nested, "add", ".");
-      await git(nested, "commit", "-m", "nested base");
+      await seedRepository(nested, { "content/file.txt": "before\n" });
       for (const summaryOnly of [false, true]) {
         const timing: DiffReadTiming = { durations: {} };
         const read = () =>
@@ -377,18 +381,17 @@ it.skipIf(process.platform === "win32")(
       const nestedBase = (await git(nested, "rev-parse", "HEAD")).trim();
       const timing: DiffReadTiming = { durations: {} };
       const read = () => loadCheckoutDiff({ cwd: root, sessionKey: "fixture" }, timing);
+      const gitlink = { path: "clone", status: "modified", truncated: true };
+      const dirtyGitlink = [{ ...gitlink, additions: 0, deletions: 0 }];
+      const changedGitlink = [{ ...gitlink, additions: 1, deletions: 1 }];
       expect((await read()).files).toEqual([]);
       await fs.appendFile(nestedFile, "dirty gitlink\n");
       const dirty = await read();
-      expect(dirty.files).toEqual([
-        { path: "clone", status: "modified", additions: 0, deletions: 0, truncated: true },
-      ]);
+      expect(dirty.files).toEqual(dirtyGitlink);
       expect(await read()).toEqual(dirty);
       expect(timing.outcome).toBe("cache-hit");
       await git(nested, "commit", "-am", "new gitlink head");
-      expect((await read()).files).toEqual([
-        { path: "clone", status: "modified", additions: 1, deletions: 1, truncated: true },
-      ]);
+      expect((await read()).files).toEqual(changedGitlink);
       await git(root, "add", "clone");
       await git(root, "commit", "-m", "updated gitlink");
       expect((await read()).files).toEqual([]);
@@ -399,15 +402,11 @@ it.skipIf(process.platform === "win32")(
       const readFromBase = () =>
         loadCheckoutDiff({ cwd: root, sessionKey: "fixture", baseCommit }, timing);
       const atBase = await readFromBase();
-      expect(atBase.files).toEqual([
-        { path: "clone", status: "modified", additions: 0, deletions: 0, truncated: true },
-      ]);
+      expect(atBase.files).toEqual(dirtyGitlink);
       expect(await readFromBase()).toEqual(atBase);
       expect(timing.outcome).toBe("cache-hit");
       await git(nested, "checkout", "--detach", nestedThird);
-      expect((await readFromBase()).files).toEqual([
-        { path: "clone", status: "modified", additions: 1, deletions: 1, truncated: true },
-      ]);
+      expect((await readFromBase()).files).toEqual(changedGitlink);
     }),
 );
 
@@ -415,12 +414,10 @@ it.skipIf(process.platform === "win32")(
   "reuses committed diffs across ignored and index churn but refreshes patch eligibility and attributes",
   () =>
     withCheckout("openclaw-diff-cache-", async ({ root, git, write, timing, read }) => {
-      await git("init", "-b", "main");
-      await fs.mkdir(path.join(root, "nested"));
-      await write("nested/tracked.txt", "before\n");
-      await write(".gitignore", ".gitattributes\nignored.txt\n");
-      await git("add", ".");
-      await git("commit", "-m", "base");
+      await seedRepository(root, {
+        "nested/tracked.txt": "before\n",
+        ".gitignore": ".gitattributes\nignored.txt\n",
+      });
       await git("checkout", "-b", "feature");
       await write("nested/tracked.txt", "before\nafter\n");
       await git("commit", "-am", "feature change");

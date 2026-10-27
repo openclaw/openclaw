@@ -18,7 +18,10 @@ import {
 import { retainSessionListBaseMiss } from "./session-list-diagnostics.js";
 import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
 import type { SessionListView } from "./session-list-view-cache.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "./session-request-agent.js";
 import {
   sessionRowId,
   sessionRowsRevision,
@@ -26,6 +29,8 @@ import {
 } from "./session-row-identity.js";
 import {
   projectPreparedSessionRunState,
+  toProjectedSessionSharingTarget,
+  prepareLinkedSessionEntryFilter,
   type SessionRowReadView,
 } from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
@@ -76,17 +81,6 @@ function sameFacts(previous: readonly unknown[] | undefined, current: readonly u
     }
   }
   return true;
-}
-
-function toProjectedSessionSharingTarget(record: records.MaterializedRow): SessionSharingTarget {
-  return {
-    agentId: record.agentId,
-    canonicalKey: record.key,
-    entry: record.entry,
-    storeKey: record.key,
-    storeKeys: [record.key],
-    storePath: record.storeTarget.storePath,
-  };
 }
 
 /** Immutable row identities own field preparation; fact indexes stay response-local. */
@@ -333,6 +327,11 @@ export function prepareProjectedSessionPresentation(
   const profileId = profile
     ? projectSessionParticipant({ type: "profile", id: profile.id }, profiles).identity.id
     : undefined;
+  const canReadLinkedEntry = prepareLinkedSessionEntryFilter(
+    projection,
+    sharing.entryFilter,
+    sharing.identity?.id,
+  );
   const listView = (opts: SessionsListParams, selection = false): SessionListView => {
     const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
     if (selection) {
@@ -345,7 +344,8 @@ export function prepareProjectedSessionPresentation(
       client === undefined,
       sharing.getCacheKey(),
       presentFastMode("ultrafast"),
-      Object.entries(query).toSorted(([left], [right]) => left.localeCompare(right)),
+      // oxlint-disable-next-line unicorn/no-array-sort -- Object.entries creates a private array.
+      Object.entries(query).sort(([left], [right]) => left.localeCompare(right)),
     ]);
     return publicationState?.lists.get(key) ?? { key, refs: 0, bytes: 0, historyRefs: 0 };
   };
@@ -414,17 +414,24 @@ export function prepareProjectedSessionPresentation(
     let excludedChildKeys = options.excludedChildKeys;
     if (!excludedChildKeys && entryFilter) {
       let excluded: Set<string> | undefined;
-      for (const { key, entry } of record.materialized.source.childLinks ?? []) {
-        if (!entryFilter(key, entry)) {
+      for (const { key, entry, agentId, storePath } of record.materialized.source.childLinks ??
+        []) {
+        const owner = agentId ? undefined : resolveRequestedSessionAgentId(cfg, key);
+        if (
+          !canReadLinkedEntry(
+            key,
+            entry,
+            agentId ?? (owner?.ok ? owner.agentId : undefined),
+            storePath,
+          )
+        ) {
           (excluded ??= new Set()).add(key);
         }
       }
       excludedChildKeys = excluded;
     }
-    const sourceSwarm =
-      options.rowMode === "sidebar" || options.rowMode === "dashboard"
-        ? undefined
-        : record.materialized.row.swarm;
+    const fullRow = options.rowMode !== "sidebar" && options.rowMode !== "dashboard";
+    const sourceSwarm = fullRow ? record.materialized.row.swarm : undefined;
     let excludedSwarmKeys: Set<string> | undefined;
     for (const group of sourceSwarm?.groups ?? []) {
       for (const { sessionKey } of group.children ?? []) {
@@ -433,7 +440,15 @@ export function prepareProjectedSessionPresentation(
           (entryFilter &&
             projection
               .selectEntries({ key: sessionKey })
-              .some((child) => !entryFilter(child.key, child.entry)))
+              .some(
+                (child) =>
+                  !canReadLinkedEntry(
+                    child.key,
+                    child.entry,
+                    child.agentId,
+                    child.storeTarget.storePath,
+                  ),
+              ))
         ) {
           (excludedSwarmKeys ??= new Set()).add(sessionKey);
         }
@@ -511,10 +526,7 @@ export function prepareProjectedSessionPresentation(
     const views = published?.views;
     const value = published?.target ?? toProjectedSessionSharingTarget(record);
     const recipientView = client === undefined ? undefined : viewer(value, options.rowMode);
-    const includeActivitySummary =
-      options.includeActivitySummary !== false &&
-      options.rowMode !== "sidebar" &&
-      options.rowMode !== "dashboard";
+    const includeActivitySummary = options.includeActivitySummary !== false && fullRow;
     const canEnsure =
       includeActivitySummary && client !== undefined && preparedFacts?.activitySummary
         ? !authorizeIncognitoSessionTarget({
@@ -561,7 +573,7 @@ export function prepareProjectedSessionPresentation(
     row.childOwnerSessionKeys = [...childOwnerSessionKeys];
     row.fastMode = presentFastMode(row.fastMode);
     row.effectiveFastMode = presentFastMode(row.effectiveFastMode);
-    if (sourceSwarm) {
+    if (sourceSwarm && excludedSwarmKeys) {
       row.swarm = { ...sourceSwarm, groups: [] };
       for (const group of sourceSwarm.groups) {
         row.swarm.groups.push({
@@ -636,8 +648,9 @@ export function prepareProjectedSessionPresentation(
       opts: SessionsListParams,
       select: (retained?: WeakMap<object, SessionListFilteredEntries>) => SessionEntrySelection,
     ) {
-      // These queries consume clock or transient run facts independently of row publications.
-      if (opts.search || opts.spawnedBy || opts.activeOnly || opts.activityPulseBoundaries) {
+      // Membership, clocks, and transient runs are not owned by metadata partitions.
+      const live = opts.activeOnly || opts.activityPulseBoundaries;
+      if (sharing.sessionCap === "invited" || opts.search || opts.spawnedBy || live) {
         return select();
       }
       const view = listView(opts, true);

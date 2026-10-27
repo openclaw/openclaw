@@ -173,6 +173,7 @@ function projectMessageItems(
 /** Reads conversation text without joining the source Gateway's writer lifecycle. */
 export async function readSessionTranscriptCatalogPage(
   params: CatalogReadParams,
+  captureActorCurrent?: (assertCurrent: () => void) => void,
 ): Promise<SessionTranscriptCatalogPage> {
   const cursor = decodeCursor(params.cursor);
   if (!Number.isSafeInteger(params.limit) || params.limit < 1 || params.limit > MAX_CATALOG_ITEMS) {
@@ -194,6 +195,7 @@ export async function readSessionTranscriptCatalogPage(
         read.value,
         cursor,
         owner.assertCurrent,
+        captureActorCurrent,
       );
     },
   );
@@ -204,6 +206,7 @@ async function readCatalogPageFromEntry(
   entry: SessionEntry,
   cursor: CatalogCursor | undefined,
   assertSourceCurrent: () => void,
+  captureActorCurrent?: (assertCurrent: () => void) => void,
 ): Promise<SessionTranscriptCatalogPage> {
   const storePath = params.storePath;
   const scope = {
@@ -340,6 +343,13 @@ async function readCatalogPageFromEntry(
           } satisfies CatalogCursor),
         ).toString("base64url")
       : undefined;
+  const assertActorsCurrent = () => {
+    for (const projector of senderProjectors.values()) {
+      projector.assertCurrent();
+    }
+  };
+  assertActorsCurrent();
+  captureActorCurrent?.(assertActorsCurrent);
   return { items, ...(nextCursor ? { nextCursor } : {}) };
 }
 

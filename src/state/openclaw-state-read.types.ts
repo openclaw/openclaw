@@ -13,10 +13,7 @@ import type { CronRunReceiptCurrentReadCommand } from "../cron/store/run-receipt
 import type { PlacementGrantReadInput } from "../gateway/operator-approval-placement-grants.read.worker.js";
 import type { CronStandingGrantLookupInput } from "../gateway/operator-approval-standing-grants.types.js";
 import type { ListTerminalOperatorApprovalsInput } from "../gateway/operator-approval-store.types.js";
-import type {
-  LocalWorkspaceManifestInput,
-  LocalWorkspaceManifestValue,
-} from "../gateway/worker-environments/local-workspace-manifest-scan.js";
+import type { LocalWorkspaceManifestInput } from "../gateway/worker-environments/local-workspace-manifest-scan.js";
 import type { WorkerPlacementConflictBinding } from "../gateway/worker-environments/placement-read-projection.types.js";
 import type { WorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import type { DevicePairingReadCommand } from "../infra/device-pairing-read.types.js";
@@ -145,6 +142,7 @@ export type OpenClawStateReadCommand =
   | { type: "sessionGroups.members"; cfg: OpenClawConfig }
   | { type: "onboardingRecommendations.read"; configKey: string }
   | { type: "userProfiles.reconcile"; profileId: string }
+  | { type: "userProfiles.identity"; profileId: string }
   | UserBackgroundReadCommand
   | UserProfileAvatarReadCommand
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
@@ -208,10 +206,10 @@ export type OpenClawStateReadCommand =
       }[];
     }
   | { type: "workspace.snapshot"; workspaceDir: string }
-  | { type: "sandboxRegistry.list" }
+  | { type: "sandboxRegistry.list"; workspaceDir?: string }
   | { type: "sandboxRegistry.get"; containerName: string }
   | { type: "sandboxRegistry.runtimeIds"; backendId: string; scopeKey: string }
-  | { type: "sandboxRegistry.browsers" }
+  | { type: "sandboxRegistry.browsers"; workspaceDir?: string }
   | WorkspaceJournalReadCommand
   | { type: "workers.placementRecoveryCandidates" }
   | { type: "workers.placementPreservation" }
@@ -244,7 +242,7 @@ export type OpenClawStateReadResult =
     >
   | { type: "meetingTranscripts.export"; result: TranscriptExportResult }
   | RegisteredStateReadResult
-  | { type: "localWorkspace.manifest"; value: LocalWorkspaceManifestValue }
+  | { type: "localWorkspace.manifest"; snapshot: Uint8Array<ArrayBuffer> }
   | { type: "gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
   | {
       type: "subagents.sessionList";

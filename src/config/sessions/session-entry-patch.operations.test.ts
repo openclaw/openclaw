@@ -406,10 +406,14 @@ it("reuses unchanged resident entry fields across patches without losing result 
     expect(result).toMatchObject({ label: "changed", skillsSnapshot: { prompt, skills } });
     expect(result?.pinnedAt).toBeUndefined();
     expect(deliveredBytes.at(-1)).toBeLessThan(prompt.length / 4);
-    result!.skillsSnapshot!.prompt = "caller-owned";
-    result!.skillsSnapshot!.skills[0]!.name = "caller-mutated";
-    result!.skillsSnapshot!.skills[0]!.requiredEnv!.push("CALLER_ADDED");
-    result!.skillsSnapshot!.skills.push({ name: "caller-added" });
+    const resident = await readSessionEntryInWorker(f.scope);
+    expect(result!.skillsSnapshot).toBe(resident!.skillsSnapshot);
+    result!.label = "caller-owned";
+    expect(Reflect.set(result!.skillsSnapshot!, "prompt", "caller-owned")).toBe(false);
+    expect(Reflect.set(result!.skillsSnapshot!.skills[0]!, "name", "caller-mutated")).toBe(false);
+    expect(() => result!.skillsSnapshot!.skills[0]!.requiredEnv!.push("CALLER_ADDED")).toThrow();
+    expect(() => result!.skillsSnapshot!.skills.push({ name: "caller-added" })).toThrow();
+    expect((await readSessionEntryInWorker(f.scope))?.label).toBe("changed");
     const next = await applySessionEntryOperation(
       f.scope,
       { kind: "fields", patch: { label: "next" } },

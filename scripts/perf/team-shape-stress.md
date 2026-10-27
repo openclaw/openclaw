@@ -37,7 +37,7 @@ that dozens of synthetic external plugins would introduce.
 
 The seeded mix is 4,300 finished unarchived subagents, 4,400 archived dashboards,
 400 active dashboards, 200 explicit sessions, and 1,500 other sessions including
-small channel/cron cohorts. Four agents are configured; retained rows initially
+small channel/cron cohorts. Four agents are configured by default (`--agents 8` selects eight); retained rows initially
 belong to `main`. Transcripts contain 128 MiB of deterministic, incompressible
 message content with a skewed size distribution. This reproduces session shape,
 not a byte-for-byte copy of a production database. Retained runs are settled collectors
@@ -175,7 +175,8 @@ Missing array-buffer details alone do not invalidate a complete heap census.
 
 For a separate worker-retention diagnostic pass, add `--worker-heap-snapshot`.
 This forwards the workload's existing retained-worker instrumentation and captures
-the largest SQLite-store, model-catalog, and Git-operation worker after the measured window.
+the largest SQLite-store, model-catalog, Git-operation, shared-state read, and
+session-archive worker after the measured window.
 The worker profiler and explicit collections make this diagnostic evidence;
 use an ordinary timing pass for latency and GC acceptance.
 
@@ -254,6 +255,15 @@ primary model; the configured fallback uses the approved live model. Both routes
 forward to that model. Three real upstream 429s within one minute stop the campaign.
 The proxy does not persist headers or request/response bodies.
 
+The injected response advertises the remaining window in both `Retry-After` and
+its error text. After observing the first injected 429, the controller creates a
+fresh newcomer session through `sessions.create`. Invariant 9 records its first
+streamed request: it must use fallback or have a recorded rate-limit wait before
+using primary after reset. Preparation or queueing delays alone prove nothing.
+Title/utility calls are excluded. A newcomer created after reset, or one with no
+observed request or wait evidence, leaves shared knowledge unknown. Both mock and
+live modes use a 30-second window so preparation can finish before reset.
+
 Concurrency is bounded to 8–24 sessions and the campaign deadline to 1–18 minutes.
 Each wave asks for coding tools, subagents, a background process, steering, and
 queued follow-ups. A completed idle session is the negative control. The recovery
@@ -262,6 +272,19 @@ drain and immediately after return. Dry mode uses synthetic provider responses
 and real local exec tools; it checks harness plumbing, not real-model compliance
 with the complete scenario mix. Check recorded tool events before claiming that
 any requested behavior was actually exercised.
+
+After the final injection, the controller polls every input's public history until
+accepted inputs settle and their sessions are inactive, or ten minutes pass.
+The overall campaign deadline remains a hard bound and may shorten this wait;
+`settlement` records the effective deadline and observed finish. Still-unresolved
+accepted inputs become `timed-out`, never implicitly successful or silently active
+at cutoff. Safety aborts retain the reason and available evidence.
+
+Completion sentinels count only when `DONE_<input>` is alone on the final line of
+a final assistant message. Quoted markers, commentary, and promises do not count.
+Subagent prompts ask for independent, self-contained checks without specifying
+tool arguments or requesting checkouts; successful child launches still require
+recorded evidence.
 
 Use `--candidate /path/to/reviewed-checkout` to replay this tooling against another
 revision. Prepare that checkout's build first; `dist/entry.js` is required, matching
@@ -281,7 +304,7 @@ so mock and live campaigns use the same tool surface.
 
 `report.json` retains accepted/uncertain sends, events, restart exit outcomes,
 input receipts, projected transcripts, provider metadata, effect markers, and
-individual invariant verdicts. `summary.md` summarizes all eight invariants;
+individual invariant verdicts. `summary.md` summarizes all nine invariants;
 `gateway.log`, `isolated-state/`, and `workspaces/` retain synthetic failure evidence.
 Reports remain local: inspect and sanitize before sharing. Failed setup is a
 harness failure, never a product verdict. Missing evidence is reported as unknown;

@@ -96,6 +96,10 @@ type RetainedNativeEsmTarget = Pick<
 > & { registry: PluginRegistry | undefined };
 
 function retainedNativeEsmLocation(target: RetainedNativeEsmTarget) {
+  // Bundled modules use the shared host loader; embedded entries may have no disk file.
+  if (target.origin === "bundled") {
+    return undefined;
+  }
   // Explicit recovery keeps its own source custody and must not join an installed entry.
   if (target.nativeRecovery || target.recoverySourceMap) {
     return undefined;

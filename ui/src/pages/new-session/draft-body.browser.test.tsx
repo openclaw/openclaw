@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, onTestFinished } from "vitest";
 import { page } from "vitest/browser";
 import { syncControlUiSystemChrome } from "../../app/control-ui-presentation.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -23,6 +23,15 @@ it.each([
   { width: 1280, text: "" },
 ])("keeps submitted files outside the painted text at $width px", async ({ width, text }) => {
   await page.viewport(width, 800);
+  const root = document.documentElement;
+  for (const name of ["data-theme", "data-theme-mode"]) {
+    const previous = root.getAttribute(name);
+    root.setAttribute(name, "dark");
+    onTestFinished(() => {
+      if (previous === null) root.removeAttribute(name);
+      else root.setAttribute(name, previous);
+    });
+  }
   styles.textContent = baseStyles;
   document.head.append(styles);
   syncControlUiSystemChrome(true);

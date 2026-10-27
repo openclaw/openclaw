@@ -6,6 +6,7 @@
  * benchmark loader; preserve the baseline replacement-state.ts at its source path.
  * Defaults: 10,000 sessions, 1,000 changed rows per transaction, five transactions
  * per timing/allocation pass. Preparation and durable readback are outside timing.
+ * --snapshot-repeats controls saved prompt size (128 by default; 2048 is 62 KiB).
  * This runs the native writer owner in this isolate, including COMMIT; it excludes
  * worker transport, Gateway activity and queue wait. Five transaction samples do
  * not qualify a latency percentile. Allocation sampling is a separate pass.
@@ -31,6 +32,7 @@ const { values } = parseArgs({
     sessions: { type: "string", default: "10000" },
     batch: { type: "string", default: "1000" },
     passes: { type: "string", default: "5" },
+    "snapshot-repeats": { type: "string", default: "128" },
     profile: { type: "boolean", default: false },
     mode: { type: "string", default: "owner" },
   },
@@ -39,7 +41,8 @@ assert(values.output, "--output is required");
 const sessions = Number(values.sessions);
 const batch = Number(values.batch);
 const passes = Number(values.passes);
-assert([sessions, batch, passes].every((n) => Number.isSafeInteger(n) && n > 0));
+const snapshotRepeats = Number(values["snapshot-repeats"]);
+assert([sessions, batch, passes, snapshotRepeats].every((n) => Number.isSafeInteger(n) && n > 0));
 assert(batch <= sessions);
 assert(values.mode === "owner" || values.mode === "worker");
 const output = path.resolve(values.output);
@@ -85,7 +88,10 @@ try {
       updatedAt: 1000,
       label: `Synthetic completed task ${index}`,
       delivery: { kind: "none" },
-      skillsSnapshot: { prompt: "Synthetic saved skill context. ".repeat(128), skills: [] },
+      skillsSnapshot: {
+        prompt: "Synthetic saved skill context. ".repeat(snapshotRepeats),
+        skills: [],
+      },
       pluginExtensions: { synthetic: { payload: "Synthetic plugin state. ".repeat(32) } },
     });
     agent.runOpenClawAgentWriteTransaction((current) => {
@@ -237,6 +243,7 @@ try {
       ownerSha256,
       sessions,
       batch,
+      snapshotRepeats,
       passes,
       changedRowsPerMeasurement: passes * batch,
       timing,

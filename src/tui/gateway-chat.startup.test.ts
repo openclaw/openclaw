@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GatewayClient } from "../../packages/gateway-client/src/client.js";
-import type { GatewayProtocolSocket } from "../../packages/gateway-client/src/protocol-client.js";
+import {
+  GatewayProtocolClient,
+  type GatewayProtocolSocket,
+  type GatewayProtocolSocketHandlers,
+} from "../../packages/gateway-client/src/protocol-client.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { RequestFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
@@ -21,22 +25,31 @@ vi.mock("../gateway/client.js", async (importOriginal) => ({
   GatewayClient: (await import("../../packages/gateway-client/src/client.js")).GatewayClient,
 }));
 
-type ProtocolHarness = {
-  handleMessage(socket: GatewayProtocolSocket, generation: number, raw: string): void;
-};
-
 const clients: GatewayChatClient[] = [];
 const legacyCreationError = {
   code: "INVALID_REQUEST",
   message: "invalid sessions.create params: unexpected property 'succeedsParent'",
 };
 
-function createFixture(delayWrites = false) {
+async function createFixture(delayWrites = false) {
   const replies: Array<(error?: { code: string; message: string }) => void> = [];
   const client = new GatewayChatClient({ url: "ws://tui-startup.invalid" });
   clients.push(client);
   const gateway = (client as unknown as { client: GatewayClient }).client;
-  const protocol = (gateway as unknown as { protocol: ProtocolHarness }).protocol;
+  let handlers: GatewayProtocolSocketHandlers | undefined;
+  const protocol = new GatewayProtocolClient({
+    createSocket: (next) => {
+      handlers = next;
+      return socket;
+    },
+    createRequestId: () => "tui-request",
+    createRequestError: (error) => new GatewayClientRequestError(error),
+    buildConnectPlan: () => ({}),
+    buildConnectParams: (plan) => plan,
+    resolveClose: () => ({ retry: false, notify: false }),
+    handshake: { mode: "require-challenge", timeoutMs: 100 },
+    reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
+  });
   let ready = delayWrites;
   const attempts: string[] = [];
   const writes: RequestFrame[] = [];
@@ -54,6 +67,7 @@ function createFixture(delayWrites = false) {
         }
       }
       const payloads = new Map<string, () => unknown>([
+        ["connect", () => ({ type: "hello-ok" })],
         [
           "sessions.create",
           () => {
@@ -84,9 +98,7 @@ function createFixture(delayWrites = false) {
             }
           : undefined;
       const reply = (error: { code: string; message: string } | undefined = startupError) =>
-        protocol.handleMessage(
-          socket,
-          1,
+        handlers?.message(
           JSON.stringify({
             type: "res",
             id: req.id,
@@ -101,7 +113,15 @@ function createFixture(delayWrites = false) {
       }
     },
   };
-  Object.assign(protocol, { socket, stopped: false, generation: 1 });
+  Object.assign(gateway, { protocol });
+  protocol.start();
+  assert(handlers);
+  handlers.open();
+  handlers.message(
+    JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "fixture" } }),
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  expect(protocol.connecting).toBe(false);
   const state = createBaseState({ historyLoaded: true });
   const chatLog = makeChatLog({ addSystem: vi.fn() });
   const tui = makeTui();
@@ -153,7 +173,7 @@ it.each([
 ] as const)(
   "retains a dispatched %s through %s and a repeated submit",
   async (action, stopCommand) => {
-    const f = createFixture(true);
+    const f = await createFixture(true);
     const submit = () => f.submit(action);
     const settled = vi.fn();
     const operation = submit().then(settled);
@@ -189,7 +209,7 @@ it.each([
 );
 
 it.each([false, true])("fences legacy creation retries (aborted=%s)", async (aborted) => {
-  const f = createFixture(true);
+  const f = await createFixture(true);
   f.state.currentSessionId = "original-session";
   const originalKey = f.state.currentSessionKey;
   const settled = vi.fn();
@@ -217,7 +237,7 @@ it.each([false, true])("fences legacy creation retries (aborted=%s)", async (abo
 });
 
 it.each(["send", "new"] as const)("%s waits through startup and writes once", async (action) => {
-  const f = createFixture();
+  const f = await createFixture();
   const settled = vi.fn();
   const operation = f.submit(action).then(settled);
   await vi.advanceTimersByTimeAsync(240_000);
@@ -238,7 +258,7 @@ it.each([
   ["send", "navigation"],
   ["new", "navigation"],
 ] as const)("pending %s is canceled by %s", async (action, stopCommand) => {
-  const f = createFixture();
+  const f = await createFixture();
   const operation = f.submit(action);
   await vi.advanceTimersByTimeAsync(35_000);
   if (stopCommand === "navigation") {

@@ -141,6 +141,7 @@ function createFixture() {
     order,
     sessionManager: {
       getBranch: () => [activeMarker],
+      getBoundaryCount: () => 0,
       getToolResultProjectionEntries: () => [activeMarker],
     },
     activeSession: {

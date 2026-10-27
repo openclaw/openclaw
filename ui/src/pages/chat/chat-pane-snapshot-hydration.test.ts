@@ -39,6 +39,7 @@ import {
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 import "./chat-pane.tsx";
 
@@ -111,7 +112,8 @@ describe("stored chat snapshot hydration", () => {
     messages: ReturnType<typeof nativeHistoryMessage>[],
   ) {
     const writer = new SessionSnapshotStore();
-    writer.write(
+    writeSnapshotFixture(
+      writer,
       resolveChatSnapshotKey(
         { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
         { sessionKey: targetSessionKey },

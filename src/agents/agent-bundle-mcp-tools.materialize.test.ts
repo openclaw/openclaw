@@ -4,7 +4,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
@@ -174,12 +174,12 @@ describe("createBundleMcpToolRuntime", () => {
     expect(dispose).not.toHaveBeenCalled();
   });
 
-  it.each([
+  it.for([
     { catalogOutcome: "resolve", cleanupFault: "dispose" },
     { catalogOutcome: "reject", cleanupFault: "join" },
   ] as const)(
     "preserves private $cleanupFault failure when a cancelled catalog will $catalogOutcome",
-    async ({ catalogOutcome, cleanupFault }) => {
+    async ({ catalogOutcome, cleanupFault }, { signal }) => {
       const runtime = makeToolRuntime();
       const readCatalog = runtime.getCatalog;
       const entered = createDeferred();
@@ -225,7 +225,7 @@ describe("createBundleMcpToolRuntime", () => {
       try {
         await entered.promise;
         work.beginClose(new Error("private MCP acquisition cancelled"));
-        await withTestTimeout(cleanupStarted.promise, 1_000, "Private MCP cleanup did not start");
+        await withinTest(cleanupStarted.promise, signal);
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });

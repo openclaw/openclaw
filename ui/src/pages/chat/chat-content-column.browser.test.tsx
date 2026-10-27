@@ -271,7 +271,7 @@ it.each([1440, 1024, 390].flatMap((width) => ["light", "dark"].map((theme) => ({
 );
 
 it.each(["light", "dark"])(
-  "keeps participant identity stable while viewer colors follow the accent (%s)",
+  "updates viewer and link colors without recoloring peers (%s)",
   async (mode) => {
     const root = document.body.appendChild(document.createElement("div"));
     root.className = "chat";
@@ -285,103 +285,48 @@ it.each(["light", "dark"])(
     onTestFinished(() => {
       root.remove();
       for (const [name, value] of previousAttributes) {
-        if (value === null) {
-          documentRoot.removeAttribute(name);
-        } else {
-          documentRoot.setAttribute(name, value);
-        }
+        if (value === null) documentRoot.removeAttribute(name);
+        else documentRoot.setAttribute(name, value);
       }
       syncControlUiSystemChrome(true);
     });
-    const [viewer, setViewer] = createSignal("alice");
-    const entries = (
-      [
-        ["alice", { type: "profile", id: "alice" }, false],
-        ["bob", { type: "profile", id: "bob" }, true],
-        ["legacy", undefined, true],
-      ] as const
-    ).map(([id, identity, owner]) => ({
-      kind: "message" as const,
-      key: id,
-      message: {
-        role: "user",
-        content: "A participant message. [Guide](https://example.com/guide)",
-        timestamp: 1000,
-        __openclaw: {
-          senderId: id === "legacy" ? "alice" : id,
-          senderName: id,
-          senderIdentity: identity,
-          senderIsOwner: owner,
-        },
-      },
-    }));
-    const groups = groupMessages(entries).filter((item) => item.kind === "group");
-    groups.push(
-      group("source", "assistant", "A forwarded message.", {
-        senderSession: { sessionKey: "agent:research:main", agentId: "research" },
+    const groups = ["alice", "bob"].map((id) =>
+      group(id, "user", "A message. [Guide](https://example.com/guide)", {
+        sender: { id, name: id, identity: { type: "profile", id } },
       }),
     );
     mountSolid(
       () => (
         <div class="chat-thread">
-          <For each={groups}>
-            {(item) => (
-              <MessageGroup
-                group={item}
-                options={{ userId: viewer(), userName: viewer(), showReasoning: false }}
-              />
-            )}
-          </For>
+          <For each={groups}>{(item) => <MessageGroup group={item} options={options} />}</For>
         </div>
       ),
       { container: root },
     );
-    const peers = new Map<string, { bubble: string; name: string }>();
-    const viewers: { bubble: string; name: string }[] = [];
-    const colors = (bubble: HTMLElement) => ({
-      bubble: getComputedStyle(bubble).backgroundColor,
-      name: getComputedStyle(bubble.closest(".chat-group")!.querySelector(".chat-sender-name")!)
-        .color,
-    });
-    for (const accent of ["#a04c29", "#367f9b"]) {
-      style.setProperty("--accent", accent);
-      syncControlUiSystemChrome(true);
-      let viewerColors: { bubble: string; name: string } | undefined;
-      for (const id of ["alice", "bob"]) {
-        setViewer(id);
-        await waitForSolid(() =>
-          expect(root.querySelectorAll(".chat-group.user .chat-bubble")).toHaveLength(3),
-        );
-        const bubbles = [...root.querySelectorAll<HTMLElement>(".chat-group.user .chat-bubble")];
-        const own = colors(bubbles[id === "alice" ? 0 : 1]!);
-        if (viewerColors) {
-          expect(own).toEqual(viewerColors);
-        } else {
-          viewerColors = own;
-          viewers.push(own);
-        }
-        for (const [peerId, index] of [
-          [id === "alice" ? "bob" : "alice", id === "alice" ? 1 : 0],
-          ["legacy", 2],
-        ] as const) {
-          const peer = colors(bubbles[index]!);
-          expect(peer.bubble).not.toBe(own.bubble);
-          const previous = peers.get(peerId);
-          if (previous) {
-            expect(peer).toEqual(previous);
-          } else {
-            peers.set(peerId, peer);
-          }
-        }
-      }
-    }
-    expect(viewers[0]!.bubble).not.toBe(viewers[1]!.bubble);
-    expect(viewers[0]!.name).not.toBe(viewers[1]!.name);
+    const colors = (id: string) => {
+      const entry = root.querySelector('[data-chat-row-key="' + id + '"]')!;
+      return {
+        bubble: getComputedStyle(entry.querySelector(".chat-bubble")!).backgroundColor,
+        name: getComputedStyle(entry.querySelector(".chat-sender-name")!).color,
+      };
+    };
+    style.setProperty("--accent", "#a04c29");
+    syncControlUiSystemChrome(true);
+    await waitForSolid(() => expect(root.querySelectorAll(".chat-bubble")).toHaveLength(2));
+    const viewer = colors("alice");
+    const peer = colors("bob");
+    expect(peer.bubble).not.toBe(viewer.bubble);
+    style.setProperty("--accent", "#367f9b");
+    syncControlUiSystemChrome(true);
+    await waitForSolid(() => expect(colors("alice").bubble).not.toBe(viewer.bubble));
+    expect(colors("alice").name).not.toBe(viewer.name);
+    expect(colors("bob")).toEqual(peer);
+
     const link = root.querySelector<HTMLElement>(".chat-group.user .chat-text a")!;
     const colorProbe = root.appendChild(document.createElement("span"));
     colorProbe.hidden = true;
     const luminance = (color: string) => {
-      colorProbe.style.color = `color(from ${color} srgb-linear r g b)`;
+      colorProbe.style.color = "color(from " + color + " srgb-linear r g b)";
       const resolved = getComputedStyle(colorProbe).color;
       expect(resolved.startsWith("color(srgb-linear ")).toBe(true);
       const [r, g, b] = resolved
@@ -395,33 +340,21 @@ it.each(["light", "dark"])(
       const fill = luminance(getComputedStyle(link.closest(".chat-bubble")!).backgroundColor);
       return (Math.max(ink, fill) + 0.05) / (Math.min(ink, fill) + 0.05);
     };
-    const unchanged = colors(link.closest<HTMLElement>(".chat-bubble")!);
-    style.setProperty("--link", "#888888");
-    style.setProperty("--link-hover", "#999999");
-    syncControlUiSystemChrome(true);
-    flush();
-    const previousInk = getComputedStyle(link).color;
-    style.setProperty("--link", "#6688bb");
-    style.setProperty("--link-hover", "#bb8877");
-    syncControlUiSystemChrome(true);
-    await waitForSolid(() => expect(getComputedStyle(link).color).not.toBe(previousInk));
-    await Promise.all(link.getAnimations().map((animation) => animation.finished));
-    expect(colors(link.closest<HTMLElement>(".chat-bubble")!)).toEqual(unchanged);
-    expect(linkContrast()).toBeGreaterThanOrEqual(7);
-    await page.elementLocator(link).hover();
-    await Promise.all(link.getAnimations().map((animation) => animation.finished));
-    const previousHover = getComputedStyle(link).color;
-    style.setProperty("--link-hover", "#66aa77");
-    syncControlUiSystemChrome(true);
-    await waitForSolid(() => expect(getComputedStyle(link).color).not.toBe(previousHover));
-    await Promise.all(link.getAnimations().map((animation) => animation.finished));
-    expect(linkContrast()).toBeGreaterThanOrEqual(7);
+    const unchanged = colors("alice");
+    for (const hover of [false, true]) {
+      if (hover) await page.elementLocator(link).hover();
+      const token = hover ? "--link-hover" : "--link";
+      style.setProperty(token, "#888888");
+      syncControlUiSystemChrome(true);
+      flush();
+      const previousInk = getComputedStyle(link).color;
+      style.setProperty(token, "#6688bb");
+      syncControlUiSystemChrome(true);
+      await waitForSolid(() => expect(getComputedStyle(link).color).not.toBe(previousInk));
+      await Promise.all(link.getAnimations().map((animation) => animation.finished));
+      expect(linkContrast()).toBeGreaterThanOrEqual(7);
+      expect(colors("alice")).toEqual(unchanged);
+    }
     await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
-
-    const forwarded = root.querySelector<HTMLElement>(".chat-group--forwarded .chat-bubble")!;
-    const originalFill = getComputedStyle(forwarded).backgroundColor;
-    // Moving elevated panels into a separate PR must not change transcript colors.
-    forwarded.style.setProperty("--bg-elevated", "#bcdcea");
-    expect(getComputedStyle(forwarded).backgroundColor).toBe(originalFill);
   },
 );

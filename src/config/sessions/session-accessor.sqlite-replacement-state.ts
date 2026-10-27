@@ -22,7 +22,6 @@ import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revi
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import {
   deleteLegacySessionEntryRows,
-  readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { captureSessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
@@ -243,8 +242,16 @@ export function commitSessionEntryReplacementsInDatabase(
   const transactionRows = new Map<string, ResolvedSessionEntryRow>();
   const windows = new Map<string, SessionEntryWindowRow | null>();
   const writtenPostimages: SessionEntryWritePostimages = postimages ?? new Map();
+  let readValidation: ReturnType<typeof prepareExactSessionEntryRowReads> | undefined;
   for (const sessionKey of input.validationKeys) {
-    const transactionRow = readExactSessionEntryRow(database, sessionKey, "full", undefined, true);
+    readValidation ??= prepareExactSessionEntryRowReads(
+      database,
+      input.validationKeys,
+      "full",
+      undefined,
+      { includeWindowFacts: true, includeBoardPresence: true, includeMembership: true },
+    );
+    const transactionRow = readValidation(sessionKey);
     const expectedRow = input.expectedRows.get(sessionKey);
     if (
       transactionRow?.row.entry_json !== expectedRow?.row.entry_json ||
@@ -294,7 +301,7 @@ export function commitSessionEntryReplacementsInDatabase(
     const written = writeSessionEntry(
       database,
       replacement.sessionKey,
-      structuredClone(replacement.entry),
+      { ...replacement.entry },
       {
         ...(input.consumePendingReset ? { consumePendingReset: true } : {}),
         previousEntry: selectedBefore ?? null,

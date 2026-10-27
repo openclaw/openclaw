@@ -5,7 +5,6 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { AgentsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import * as runtimeMetadata from "../../agents/agent-runtime-metadata.js";
 import * as avatarRuntime from "../../agents/identity-avatar-file-runtime.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -519,6 +518,8 @@ test("searches rich displayed fields before selecting a page across visible agen
       label: "Quasar label",
       category: "Nebula category",
       displayName: "Stored comet",
+      agentHarnessId: "custom-harness",
+      modelSelectionLocked: true,
       status: "done",
       goal: createSessionGoalFixture("goal-target", "Map distant galaxies", {
         tokensUsed: 12000,
@@ -532,13 +533,6 @@ test("searches rich displayed fields before selecting a page across visible agen
       createdActor: { type: "human", source: "profile", id: "restricted-owner@example.com" },
     });
     await put("work", "archived-target", { label: "Vault Orchid", archivedAt: 1 });
-    const runtime = runtimeMetadata.resolveCurrentSessionAgentRuntimeMetadata;
-    vi.spyOn(runtimeMetadata, "resolveCurrentSessionAgentRuntimeMetadata").mockImplementation(
-      (params) =>
-        params.sessionKey === "agent:work:target"
-          ? { id: "custom-harness", source: "session", fallback: "portable-mode" }
-          : runtime(params),
-    );
     for (let index = 0; index < 55; index++) {
       await put("main", `filler-${index}`, {});
     }
@@ -553,7 +547,7 @@ test("searches rich displayed fields before selecting a page across visible agen
       "Pursuing goal (12k/50k)",
       "Telescope calibrated",
       "Orchid Navigator",
-      "custom-harness (fallback portable-mode)",
+      "custom-harness",
     ]) {
       const result = await list({ search, limit: 50 });
       expect

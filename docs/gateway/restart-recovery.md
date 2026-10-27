@@ -104,13 +104,22 @@ agents continue loading. Startup preparation failures still report an error.
 
 Startup orphan marking runs after plugin loading and startup completion. It uses
 the existing active-session index to exclude archived rows before inspecting
-recovery metadata, without reading full transcripts. Client connections, channels,
-startup-gated RPCs, startup hooks, and saved-input replay still wait for marking; chat readiness stays
-gated until saved-input recovery finishes. Marking failures produce a warning
-without aborting startup,
-and the existing recovery sweep retries failed stores. Main-session recovery and
-queued deliveries still wait for subagent source restoration before resuming
-interrupted work.
+recovery metadata, without reading full transcripts. Authenticated clients can
+connect and read available sessions once the request runtime is ready, while
+orphan marking and database preparation continue. Pending database preparation
+remains recorded in agent admission and health diagnostics; affected session reads
+report a retryable recovery condition. The Control UI keeps the selected chat in
+its existing **Restoring** state while those reads retry; sessions in an unreadable
+database appear after that database becomes available. Channel transports can start independently,
+but incoming turns still wait for their agent's database and saved-input recovery.
+Startup-gated RPCs, startup hooks, and saved-input replay wait for marking; chat
+readiness stays gated until saved-input recovery finishes. Health probes continue
+to report pending recovery even while client connections are available. Marking
+failures produce a warning without aborting startup, and the existing recovery
+sweep retries failed stores. Main-session recovery waits for the initial input
+restoration pass, then resumes healthy agents independently. A pending agent or
+cross-agent recovery group still waits for its own saved-input and subagent source
+restoration before interrupted work resumes.
 
 ## What survives a restart
 
@@ -364,6 +373,11 @@ a restart, or a gateway update) does not kill in-flight work immediately. The
 gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
+
+A plain stop (`SIGTERM` or `SIGINT`, such as a service stop) that arrives while
+a restart drains turns that restart into a stop: the Gateway exits after the
+drain instead of starting again. Managed update handoffs keep their own stop
+handling.
 
 A confirmed unavailable child Node runtime follows this same graceful drain when
 the effective native service command's Node can still start. The lifecycle owner

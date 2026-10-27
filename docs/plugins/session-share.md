@@ -7,7 +7,7 @@ read_when:
 title: "Session Share plugin"
 ---
 
-The bundled `session-share` plugin lets teammates read selected sessions from another OpenClaw Gateway in the Control UI. The source operator chooses session groups to publish. A node host on the source machine reads those sessions and connects to the receiver Gateway as a paired device.
+The bundled `session-share` plugin lets teammates read selected sessions from another OpenClaw Gateway in the Control UI. The source operator chooses session groups to publish and can narrow them by person. A node host on the source machine reads those sessions and connects to the receiver Gateway as a paired device.
 
 Session Share is disabled by default. It publishes a read-only **OpenClaw sessions** catalog, not a second way to run agents on the source machine. For sanitized snapshots of external coding sessions without a paired node, see [Beam](/plugins/beam).
 
@@ -36,9 +36,28 @@ Enable the plugin on the source and choose the exact session group names to publ
 }
 ```
 
-In the source Control UI, move the sessions you want to share into the **Team** group. Group names match the session category exactly. An omitted or empty `share.groups` publishes nothing. Subagents, incognito sessions, drafts, and adopted rows from other session catalogs are never published, even when they belong to a selected group. This also excludes named or resumed sessions with recorded spawn lineage; a user-created fork remains eligible.
+In the source Control UI, move the sessions you want to share into the **Team** group. Group names match the session category exactly. To narrow those groups to sessions owned by or including a person as a participant, add the person's **full source-local profile ID**:
 
-With the default hybrid reload mode, the source Gateway applies plugin configuration automatically. Start or restart the source node host after changing plugin configuration. Moving a session out of a shared group revokes new transcript reads immediately; a receiver that already read text may retain that text.
+```json5
+{
+  plugins: {
+    entries: {
+      "session-share": {
+        enabled: true,
+        config: { share: { groups: ["Team"], involvingProfileId: "<source-profile-id>" } },
+      },
+    },
+  },
+}
+```
+
+`share.involvingProfileId` matches the canonical human owner (including a trusted creator only when no owner is assigned) or a profile participant. A recorded mention alone never qualifies. This publication filter is distinct from Activity filters. Merged profile IDs resolve to the same person; personal hide/show choices do not change this selection. Names, email addresses, GitHub logins, shortened Activity URL IDs, remote attribution IDs, and unqualified channel sender IDs do not select a person. Unknown profile IDs publish nothing. There is no `involvingMe`: a source node has no authenticated viewer to bind it to.
+
+A valid, nonempty `share.groups` selection is always required. The optional person selector combines with groups using **AND**: the session must be in one of the exact `groups` **and** match the selected owner or participant. Group names within `groups` combine with **OR**. Missing, empty, or malformed groups publish nothing, including with a person selector. Removing `involvingProfileId` while retaining groups intentionally returns to group-only publication; an empty or malformed person value publishes nothing.
+
+Subagents, incognito sessions, drafts, and adopted rows from other session catalogs are never published, even when they belong to a selected group. This also excludes named or resumed sessions with recorded spawn lineage; a user-created fork remains eligible.
+
+With the default hybrid reload mode, the source Gateway applies plugin configuration automatically. Start or restart the source node host after changing plugin configuration. Changing filters or removing a session's matching group or person involvement revokes new and in-flight transcript reads; a receiver that already read text may retain that text.
 
 ## Enable the receiver and pair the source
 
@@ -120,7 +139,7 @@ The source chooses what to publish; the receiver trusts the paired device for th
 
 With the two-command allowlist, the node exposes no shell execution, filesystem browsing, terminal uploads, plugin tools, MCP servers, skills, worker hosting, or computer use. Both commands are read-only, and every transcript read rechecks whether the session is still shared. The receiver does not need access to the source Gateway's HTTP endpoint or authentication credentials.
 
-Sharing a session exposes its user and assistant conversation text and catalog metadata, which may include workspace paths or branch names. Included text is not secret-masked. Review credentials and other sensitive content before publishing. Choose groups deliberately and treat received transcripts as untrusted text.
+Sharing a session exposes its user and assistant conversation text and catalog metadata, which may include workspace paths or branch names. Included text is not secret-masked. Review credentials and other sensitive content before publishing. Choose publication filters deliberately and treat received transcripts as untrusted text.
 
 ## Troubleshooting
 
@@ -128,7 +147,7 @@ To undo the sessions-only setup, use `openclaw node run --all-commands` in the f
 
 **The source node fails with no allowed commands**
 
-Enable `session-share` on the source, set a non-empty `share.groups`, restart the node host, and check the exact command IDs. Unknown or unavailable commands are not advertised.
+Enable `session-share` on the source, set a non-empty `share.groups` and optionally an exact `share.involvingProfileId`, restart the node host, and check the exact command IDs. Unknown or unavailable commands are not advertised.
 
 **The node connects but no OpenClaw sessions host appears**
 
@@ -138,11 +157,11 @@ If node discovery fails, the catalog reports the error instead of an empty listi
 
 **The host appears but a session is missing**
 
-Check its group on the source, the exact `share.groups` spelling, and whether it is a subagent, incognito, a draft, or adopted from another catalog. Subagent keys and recorded spawn lineage stay excluded even if the session was previously visible. Verify that the source node uses the same user and state directory as the source Gateway. On a role-restricted receiver, check the viewer's profile and permission to view others' sessions.
+Check its group and canonical person involvement on the source, the exact selector values, and whether it is a subagent, incognito, a draft, or adopted from another catalog. Subagent keys and recorded spawn lineage stay excluded even if the session was previously visible. Verify that the source node uses the same user and state directory as the source Gateway. On a role-restricted receiver, check the viewer's profile and permission to view others' sessions.
 
 **A transcript read fails after a row was visible**
 
-Refresh the catalog. The source may be offline, the session may have been deleted, or its group may no longer be shared. Reconnect the source node for an offline-host error; do not broaden its command allowlist.
+Refresh the catalog. The source may be offline, the session may have been deleted, or it may no longer match the publication filters. Reconnect the source node for an offline-host error; do not broaden its command allowlist.
 
 **Catalog refreshes sometimes take 30 seconds**
 

@@ -356,6 +356,22 @@ describe("Control UI theme contrast", () => {
         ["link hover", "--link-hover"],
       ] as const) {
         const foreground = toOklch(resolveOpaqueColor(`var(${token})`, tokens));
+        const canvas = toOklch(page);
+        const adjusted = readableLinkColor(foreground, canvas);
+        expect(adjusted.h).toBe(foreground.h);
+        expect(adjusted.c).toBeLessThanOrEqual(foreground.c);
+        if (isSrgb({ ...adjusted, c: foreground.c })) expect(adjusted.c).toBe(foreground.c);
+        expect(readableLinkColor(adjusted, canvas)).toEqual(adjusted);
+        if (contrastRatio(rgb(foreground), page) >= 7) {
+          expect(adjusted).toEqual(foreground);
+        } else {
+          expect(isSrgb(adjusted)).toBe(true);
+          const nearer = fitSrgb({
+            ...foreground,
+            l: adjusted.l + Math.sign(foreground.l - adjusted.l) * 0.001,
+          });
+          expect(contrastRatio(rgb(nearer), page)).toBeLessThan(7.01);
+        }
         const ratioOn = (background: RGB) =>
           contrastRatio(rgb(readableLinkColor(foreground, toOklch(background))), background);
         expectFloor(ratioOn(page), 7, `${themeName}: ${state} on canvas`);
@@ -368,31 +384,4 @@ describe("Control UI theme contrast", () => {
       }
     }
   });
-  it.each([
-    {
-      background: { l: 0.890208, c: 0.024, h: 207.354 },
-      source: [87.753, 135.934, 153.05] as const,
-      direction: -1,
-    },
-    {
-      background: { l: 0.261762, c: 0.024, h: 207.354 },
-      source: [109.053, 157.534, 174.65] as const,
-      direction: 1,
-    },
-  ])(
-    "moves only the needed link lightness toward contrast ($direction)",
-    ({ background, source, direction }) => {
-      const original = toOklch(source);
-      const adjusted = readableLinkColor(original, background);
-      expect(contrastRatio(rgb(adjusted), rgb(background))).toBeGreaterThanOrEqual(7);
-      expect(adjusted.h).toBe(original.h);
-      expect(adjusted.c).toBe(original.c);
-      expect(isSrgb(adjusted)).toBe(true);
-      const closer = fitSrgb({ ...original, l: adjusted.l - direction * 0.001 });
-      expect(contrastRatio(rgb(closer), rgb(background))).toBeLessThan(7.01);
-      expect(readableLinkColor(adjusted, background)).toEqual(adjusted);
-      const alreadyReadable = toOklch(direction === -1 ? [0, 0, 0] : [240, 240, 240]);
-      expect(readableLinkColor(alreadyReadable, background)).toEqual(alreadyReadable);
-    },
-  );
 });

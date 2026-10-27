@@ -282,10 +282,19 @@ export function createRuntimeConfigCapability(
     }
     const result = invoke((loaded) => {
       // Hand the module-loading flag to the read before its coalesced publication.
-      if (!currentConfigRead(state)) {
+      const inheritedRead = currentConfigRead(state);
+      if (!inheritedRead) {
         state.configLoading = false;
+        return task(loaded);
       }
-      return task(loaded);
+      // Read receipts remain current after settlement. Retire only this module-loading
+      // flag once its task joins the receipt, unless a successor read replaced it.
+      return task(loaded).finally(() => {
+        if (state.configLoading && currentConfigRead(state) === inheritedRead) {
+          state.configLoading = false;
+          publish();
+        }
+      });
     }, undefined);
     if (
       !background &&

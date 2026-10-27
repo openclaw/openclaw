@@ -1630,7 +1630,6 @@ src/plugins/plugin-metadata-snapshot-required.ts
 src/plugins/plugin-metadata-snapshot.runtime.ts
 src/plugins/plugin-metadata-snapshot.ts
 src/plugins/plugin-metadata-state-worker.ts
-src/plugins/plugin-metadata-live-read.worker.ts
 src/plugins/plugin-metadata-state.read.worker.ts
 src/plugins/plugin-metadata-state.kernel.ts
 src/plugins/plugin-module-loader-cache.ts
@@ -1656,6 +1655,7 @@ src/plugins/plugin-return-value.ts
 src/plugins/plugin-tool-execution.ts
 src/plugins/plugin-runtime-artifact-identity.ts
 src/plugins/plugin-runtime-artifact-resolution.ts
+src/plugins/plugin-runtime-artifact-binding.ts
 src/plugins/plugin-runtime-artifact-selection.ts
 src/plugins/plugin-safety-inspected-files.ts
 src/plugins/plugin-scope.ts
@@ -2675,6 +2675,7 @@ src/config/sessions/session-lifecycle-worker-publication.ts
 src/config/sessions/session-native-binding.ts
 src/plugin-state/plugin-state-publication.ts
 src/config/sessions/transcript-recent-text.ts
+src/state/startup-metadata-live-read.worker.ts
 src/state/state-domain-publication.ts
 src/state/user-model-account-authority.ts
 src/state/user-model-account-id.ts

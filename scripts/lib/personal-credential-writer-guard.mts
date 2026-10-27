@@ -51,8 +51,8 @@ const guardedTables = new Set([
   "session_members",
 ]);
 
-// The startup fixture owns a newly created root before any Gateway runs; its one
-// historical shared receipt has no requester authority and cannot publish.
+// Offline benchmark roots are synthetic and owned before any Gateway runs.
+// Historical startup receipts lack requester authority and can only reconcile reads.
 const publicationWriters = new Map<string, readonly string[]>([
   [
     key(publicationLifecycle, "insertGitHubPublicationSessionLifecycle"),
@@ -71,7 +71,12 @@ const publicationWriters = new Map<string, readonly string[]>([
     key(file, name),
     [
       key(publicationRequestWorker, "githubPublications.insert/write"),
-      ...(file === sharedPublication ? [offlinePublicationFixture] : []),
+      ...(file === sharedPublication
+        ? [
+            offlinePublicationFixture,
+            key("scripts/perf/publication-empty-recovery-measure.ts", "seedPublicationRequests"),
+          ]
+        : []),
     ],
   ]),
   ...[
@@ -81,7 +86,10 @@ const publicationWriters = new Map<string, readonly string[]>([
     "bindAcceptedGitHubPublicationClaimSnapshotInDatabase",
   ].map((name): [string, string[]] => [
     key(sharedPublication, name),
-    [key(publicationWorker, "sharedMutation")],
+    [
+      key(publicationWorker, "sharedMutation"),
+      ...(name === "claimGitHubPublicationExecutionInDatabase" ? [offlinePublicationFixture] : []),
+    ],
   ]),
   [
     key(sharedPublication, "writeGitHubPublicationExecutionInDatabase"),
@@ -592,7 +600,7 @@ const callers = new Map<string, readonly string[]>([
   ]),
   [
     key(sharedPublication, "createGitHubPublicationExecutionStoreInDatabase"),
-    [key(publicationWorker, "sharedMutation")],
+    [key(publicationWorker, "sharedMutation"), offlinePublicationFixture],
   ],
   [
     key(publicationDeletion, "deletePersonalGitHubSessionReceiptsInDatabase"),
@@ -1316,7 +1324,7 @@ export function inspectPersonalCredentialWriters(
             node.parent.expression.name.text === "prepare" &&
             node.parent.arguments.length === 1 &&
             node.parent.arguments[0] === node &&
-            /^UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id = 'startup-publication'$/u.test(
+            /^UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id IN \('startup-publication', 'startup-publication-0', 'startup-publication-1', 'startup-publication-2', 'startup-publication-3'\)$/u.test(
               node.text,
             )
           ) {

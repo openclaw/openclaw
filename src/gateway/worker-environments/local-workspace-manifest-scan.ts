@@ -34,6 +34,8 @@ import {
 } from "./local-workspace-manifest-tree.js";
 import type {
   LocalWorkspaceManifestMutation,
+  LocalWorkspaceManifestScan,
+  LocalWorkspaceManifestValue,
   LocalWorkspaceMutation,
   LocalWorkspacePreparedUpdate,
 } from "./local-workspace-store.types.js";
@@ -69,36 +71,10 @@ export type LocalWorkspaceManifestAction =
       patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"];
     });
 
-export type LocalWorkspaceManifestScan = {
-  version: 1;
-  kind: "scan";
-  previousRoot: string | null;
-  resultingRoot: string;
-  treeRoot?: string;
-  previousTreeRoot?: string | null;
-  fingerprints?: { target: "canonical" | "projection"; blob: string };
-  preparations?: Uint8Array[];
-  records: LocalWorkspaceManifestRecord[];
-  observation?: LocalWorkspacePreparedUpdate;
-  removed: string[];
-  replace?: true;
-  baseManifestRaw: string;
-  baseManifestRef: string;
-  currentManifestRaw: string;
-  currentManifestRef: string;
-  buildCacheInputs: string[];
-};
-
 export type LocalWorkspaceManifestCheckpoint = Omit<
   LocalWorkspaceManifestScan,
   "observation" | "preparations"
 >;
-
-export type LocalWorkspaceManifestValue =
-  | LocalWorkspaceManifestScan
-  | { kind: "rescan" }
-  | { kind: "materialize"; rawManifest: string; manifestRef: string }
-  | { kind: "replace"; update: LocalWorkspacePreparedUpdate };
 
 export type LocalWorkspaceManifestInput = {
   id: string;
@@ -435,11 +411,16 @@ export async function executeLocalWorkspaceManifestRead(
     assertCurrent: () => undefined,
   });
   const retained = [...buildCacheInputPaths(canonicalPaths)];
-  if (action.target === "projection") {
-    for (const entryPath of records.keys()) {
-      if (entryPath !== "") {
-        canonicalPaths.add(entryPath);
-      }
+  const preserveDirectories = new Set<string>();
+  for (const [entryPath, { node }] of records) {
+    if (entryPath === "") {
+      continue;
+    }
+    if (node.type === "directory") {
+      preserveDirectories.add(entryPath);
+    }
+    if (action.target === "projection") {
+      canonicalPaths.add(entryPath);
     }
   }
   const fingerprintTarget = action.target === "canonical" ? "projection" : "canonical";
@@ -461,6 +442,7 @@ export async function executeLocalWorkspaceManifestRead(
     root: action.target === "canonical" ? row.projection_path : action.canonicalRoot,
     baseCommit: row.base_commit,
     includePaths: action.target === "projection" ? canonicalPaths : undefined,
+    preserveDirectories,
     buildCacheInputs: new Set(retained),
     reuseFile: fingerprintScan.reuseFile,
     onEntry(node, identity) {

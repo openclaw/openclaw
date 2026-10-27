@@ -35,6 +35,12 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   // Keep rejection ownership in the snapshot so a handler attached after wait
   // can clear it; an unawaited failure must not become a successful cell.
   const unhandledRejections = new Set();
+  // Rejection callbacks cross the VM boundary. Guest prototype changes must not
+  // make them throw into the dependency's eager, uncapped exception formatter.
+  const addUnhandledRejection = unhandledRejections.add.bind(unhandledRejections);
+  const deleteUnhandledRejection = unhandledRejections.delete.bind(unhandledRejections);
+  const unhandledRejectionValues = unhandledRejections.values.bind(unhandledRejections);
+  const nextUnhandledRejection = Function.prototype.call.bind(unhandledRejections.values().next);
   // Maps each host-rejected bridge error to its terminal failure code. Guest
   // writes to error.code never reach the cell result; only this record does.
   const bridgeErrors = new WeakMap();
@@ -47,8 +53,36 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   const GuestTypeError = TypeError;
   const GuestRangeError = RangeError;
   const stringifyJson = JSON.stringify;
+  const string = String;
+  const sliceString = Function.prototype.call.bind(String.prototype.slice);
+  const maxErrorUnits = Math.min(globalThis.__openclawMaxOutputBytes ?? 16_384, 16_384);
+  delete globalThis.__openclawMaxOutputBytes;
   // Bridge payloads carry trusted failure codes; guest JSON replacements must not rewrite them.
   const parseJson = JSON.parse;
+  function encodeError(error) {
+    // Recover provenance before diagnostic getters can fail. Only bounded primitive
+    // strings cross to the host; thrown arrays/objects must never be recursively dumped.
+    const bridgeCode = bridgeFailureCode(error) ?? null;
+    const diagnostic = (read, fallback) => {
+      try {
+        const value = read();
+        const text = value !== null && (typeof value === "object" || typeof value === "function")
+          ? "[Thrown object]" : string(value);
+        return text.length <= maxErrorUnits ? text
+          : sliceString(text, 0, maxErrorUnits) + " [error truncated]";
+      } catch { return fallback; }
+    };
+    return stringifyJson({
+      __proto__: null,
+      bridgeCode,
+      name: diagnostic(() => error?.name ?? "Error", "Error"),
+      message: diagnostic(() => error?.message ?? error, "Error"),
+      stack: diagnostic(() => {
+        const stack = error?.stack;
+        return typeof stack === "string" ? stack : "";
+      }, ""),
+    });
+  }
   function emitOutput(entry) {
     if (hostOutput) return hostOutput(encodeFinalValue(entry));
     return output.push(entry);
@@ -350,7 +384,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       }
       rememberBridgeError(
         error,
-        code === "invalid_input" || code === "input_contract" ? "invalid_input" : "internal_error",
+        code === "invalid_input" || code === "input_contract" || code === "store_range" || code === "store_type"
+          ? "invalid_input" : "internal_error",
       );
       entry.reject(error);
     }
@@ -416,6 +451,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
         : error.code === "store_type" ? GuestTypeError : undefined;
       if (!Constructor) throw error;
       const typed = new Constructor(error.message);
+      typed.code = error.code;
       typed.stack = error.stack;
       const bridgeCode = bridgeFailureCode(error);
       if (bridgeCode) rememberBridgeError(typed, bridgeCode);
@@ -654,6 +690,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
     __openclawSettleBridge: { value: settleHostReplies },
     __openclawBridgeFailureCode: { value: bridgeFailureCode },
+    __openclawEncodeError: { value: encodeError },
     __openclawDrainQueuedRequests: { value: drainQueuedRequests },
     __openclawAdmissionError: { value: () => admissionError },
     // Final getters must run before the worker drains output and settles host work.
@@ -661,11 +698,11 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     __openclawTakeOutputJson: { value: () => encodeFinalValue(output.splice(0)) },
     __openclawTrackRejection: {
       value: (promise, _reason, handled) => {
-        if (handled) unhandledRejections.delete(promise);
-        else unhandledRejections.add(promise);
+        if (handled) deleteUnhandledRejection(promise);
+        else addUnhandledRejection(promise);
       },
     },
-    __openclawUnhandledRejection: { value: () => unhandledRejections.values().next().value },
+    __openclawUnhandledRejection: { value: () => nextUnhandledRejection(unhandledRejectionValues()).value },
   });
 })();
 `;

@@ -66,6 +66,7 @@ import {
   renderChatView,
   getComposerTextarea,
   requireElement,
+  waitForElement,
   stubAnimationFrames,
   createDragEvent,
   getChatModelSelect,
@@ -357,7 +358,7 @@ describe("chat run error", () => {
         onRetrySessionPlacementStartup,
       });
 
-      const alert = requireElement(container, ".chat-error", "chat run error");
+      const alert = await waitForElement(container, ".chat-error", "chat run error");
       expect(alert.getAttribute("role")).toBe("alert");
       const details = requireElement(alert, "details", "error disclosure");
       expect(details.hasAttribute("open")).toBe(false);
@@ -410,7 +411,7 @@ describe("chat run error", () => {
       },
       onRetrySessionPlacementStartup,
     });
-    const alert = requireElement(container, ".chat-error", "startup error");
+    const alert = await waitForElement(container, ".chat-error", "startup error");
     expect(requireElement(alert, "pre", "startup diagnostic").textContent).toBe(
       "The session was created, but startup needs attention:  Provisioning failed\n  Final diagnostic line  ",
     );
@@ -463,11 +464,7 @@ describe("cloud workspace conflict notice", () => {
       onDismissWorkspaceConflict,
     });
 
-    const notice = requireElement(
-      container,
-      ".chat-workspace-conflict-notice",
-      "workspace conflict notice",
-    );
+    const notice = await waitForElement(container, ".chat-workspace-conflict-notice");
     expect(notice.closest(".agent-chat__composer-notices")).not.toBeNull();
     expect(notice.textContent).toContain("9 cloud workspace conflicts");
     expect(notice.querySelectorAll(".chat-workspace-conflict-paths li")).toHaveLength(5);
@@ -507,7 +504,7 @@ describe("cloud workspace conflict notice", () => {
 
   it.each(["\u0085"])(
     "keeps terminal-control paths visible without building copyable commands (%j)",
-    (controlSequence) => {
+    async (controlSequence) => {
       const entryPath = `src/${controlSequence}unsafe.ts`;
       const normalizedConflict = workspaceResultConflictFromTranscript({
         role: "custom",
@@ -519,8 +516,10 @@ describe("cloud workspace conflict notice", () => {
       });
       expect(normalizedConflict).toBeDefined();
       const container = renderChatView({ workspaceConflict: normalizedConflict });
-      expect(container.querySelector(".chat-workspace-conflict-paths code")?.textContent).toBe(
-        workspaceConflictPathForDisplay(entryPath),
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-workspace-conflict-paths code")?.textContent).toBe(
+          workspaceConflictPathForDisplay(entryPath),
+        ),
       );
       expect(container.querySelector(".chat-workspace-conflict-commands")).toBeNull();
       expect(container.textContent).toContain("will not build a copyable shell command");
@@ -529,12 +528,12 @@ describe("cloud workspace conflict notice", () => {
 });
 
 describe("cloud worker disk-space notice", () => {
-  it("updates persistent disk guidance and clears it after recovery", () => {
+  it("updates persistent disk guidance and clears it after recovery", async () => {
     const container = createComposerContainer();
     renderChatInto(container, {
       diskSpace: { status: "warning", availableBytes: 400, totalBytes: 1_000, observedAtMs: 1 },
     });
-    expect(container.querySelector(".chat-cloud-disk-space-notice")).not.toBeNull();
+    await waitForElement(container, ".chat-cloud-disk-space-notice", "disk-space notice");
     renderChatInto(container, {
       diskSpace: {
         status: "critical",
@@ -2045,11 +2044,8 @@ describe("chat slash menu accessibility", () => {
   });
 
   it("executes an inline command separately and removes only its token from the draft", async () => {
-    let draft = "";
     const onTypingChange = vi.fn();
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
+    const onDraftChange = vi.fn();
     const onSend = vi.fn();
     const onSlashCommand = vi.fn(() => {
       expect(onTypingChange).toHaveBeenLastCalledWith(true, "hello ");
@@ -2063,13 +2059,14 @@ describe("chat slash menu accessibility", () => {
 
     inputDraftAtEnd(container, "hello /statu");
 
+    await import("./components/chat-composer-slash-menu.tsx");
     await waitForSolid(() => expect(container.querySelector(".slash-menu")).not.toBeNull());
     expect(container.querySelector(".slash-menu-name")?.textContent?.trim()).toBe("/status");
     keydownComposer(container, "Enter");
 
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/status");
-    expect(draft).toBe("hello ");
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(onDraftChange).toHaveBeenLastCalledWith("hello ");
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("hello ");
     expect(onTypingChange).toHaveBeenLastCalledWith(true, "hello ");
     expect(onSend).not.toHaveBeenCalled();
   });
@@ -2350,16 +2347,15 @@ describe("chat slash menu accessibility", () => {
   it("does not submit an incomplete skill reference while the catalog is loading", async () => {
     replaceSlashCommands(buildFallbackSlashCommands());
     const refresh = createDeferred();
-    let draft = "";
+    const onDraftChange = vi.fn();
     const onSend = vi.fn();
     const { container } = createReactiveDraftHarness({
-      onDraftChange: (next) => {
-        draft = next;
-      },
+      onDraftChange,
       onSend,
       onSlashIntent: () => refresh.promise,
     });
     inputDraftAtEnd(container, "Use $pro");
+    await import("./components/chat-composer-skill-menu.tsx");
     await waitForSolid(() =>
       expect(container.querySelector(".skill-menu")?.textContent).toContain("Loading skills"),
     );
@@ -2370,7 +2366,7 @@ describe("chat slash menu accessibility", () => {
     send?.click();
 
     expect(onSend).not.toHaveBeenCalled();
-    expect(draft).toBe("Use $pro");
+    expect(onDraftChange).toHaveBeenLastCalledWith("Use $pro");
   });
 
   it("scrolls the keyboard-active skill inside the nested menu viewport", async () => {

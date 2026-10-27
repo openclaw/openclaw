@@ -73,6 +73,7 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
   (scenario) =>
     scenario !== "abandoned-update" &&
     scenario !== "backup-schedule" &&
+    scenario !== "session-share" &&
     scenario !== "missing-configured-plugin-migration" &&
     scenario !== "missing-load-path" &&
     scenario !== "projects-doctor" &&
@@ -243,6 +244,9 @@ export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec
   }
   if (scenario === "backup-schedule") {
     return baselineSpec === "openclaw@2026.9.7";
+  }
+  if (scenario === "session-share") {
+    return baselineSpec === "openclaw@2026.10.7";
   }
   if (scenario === "missing-load-path") {
     const release = parseReleaseVersion((baselineSpec ?? "").replace(/^openclaw@/u, ""));
