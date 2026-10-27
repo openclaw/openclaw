@@ -2,6 +2,7 @@
 
 import { beforeEach, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { buildModelProviderCards } from "./data.ts";
 import { card, mount, props, text } from "./view.test-support.tsx";
 
 beforeEach(() => i18n.setLocale("en"));
@@ -29,7 +30,7 @@ it("uses catalog evidence for short-lived OAuth without treating expiry alone as
   mount({ ...viewProps, cards: [{ ...providerCard, catalogStatus: undefined }] }, container);
   expect(status()).toBe("Credentials configured");
   mount({ ...viewProps, cards: [{ ...providerCard, catalogStatus: "auth-rejected" }] }, container);
-  expect(status()).toBe("Credentials rejected · Sign in again");
+  expect(status()).toBe("Credentials rejected");
   mount(
     {
       ...viewProps,
@@ -85,4 +86,39 @@ it("uses catalog evidence for short-lived OAuth without treating expiry alone as
     container,
   );
   expect(status()).toBe("Ready");
+});
+
+it("does not prescribe OAuth sign-in for a rejected API key with excluded OAuth inventory", () => {
+  const cards = buildModelProviderCards({
+    authStatus: {
+      ts: 1,
+      providers: [
+        {
+          provider: "example",
+          displayName: "Example",
+          status: "static",
+          profileOrder: ["example:api-key"],
+          profiles: [
+            { profileId: "example:api-key", type: "api_key", status: "static" },
+            {
+              profileId: "example:excluded",
+              type: "oauth",
+              status: "expired",
+              reasonCode: "expired",
+            },
+          ],
+        },
+      ],
+    },
+    models: [],
+    providerUsage: null,
+    providerOutcomes: [
+      { provider: "example", profileId: "example:api-key", status: "auth-rejected" },
+    ],
+  });
+  const container = mount(props({ cards, configuredModels: [] }));
+  expect(text(container.querySelector(".provider-row__status"))).toBe("Credentials rejected");
+  const excluded = container.querySelector('[data-profile-id="example:excluded"]');
+  expect(text(excluded)).toContain("Sign-in unavailable");
+  expect(text(excluded)).not.toContain("Sign in again");
 });

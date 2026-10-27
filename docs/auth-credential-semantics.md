@@ -22,10 +22,12 @@ refresh support from OAuth alone. **Ready** requires a ready catalog result;
 without that evidence, an account reporting only access-token expiry remains
 **Credentials configured**.
 
-An OAuth authentication rejection or missing credential shows **Sign in again**.
-A refresh marker whose outcome is not distinguished by the status response shows
-**Sign-in unavailable**, not a claim that another login is required. A provider
-authentication rejection takes precedence over expiry information. Static token
+A missing OAuth credential shows **Sign in again**. A refresh marker whose outcome
+is not distinguished by the status response shows **Sign-in unavailable**, not a
+claim that another login is required. A provider authentication rejection shows
+**Credentials rejected** and takes precedence over expiry information. The card-wide
+result does not identify the rejected credential, so it does not prescribe OAuth
+sign-in or change recovery advice for an unrelated saved account. Static token
 expiry keeps its warning. Externally managed credentials remain identified as
 such, rather than being declared healthy just because another tool manages them.
 Provider-reported quota exhaustion and temporary rate-limit errors remain usage

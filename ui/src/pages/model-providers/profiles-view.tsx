@@ -118,12 +118,7 @@ function profileInitials(identity: string): string {
 function profileStatus(profile: ProviderProfile, providerAuthRejected: boolean, quiet = false) {
   const problem = profileAuthProblem(profile);
   if (problem) {
-    return (
-      <SettingsStatus
-        kind="danger"
-        label={t(providerAuthRejected ? "modelProviders.status.signInAgain" : problem)}
-      />
-    );
+    return <SettingsStatus kind="danger" label={t(problem)} />;
   }
   if (
     isAccessTokenExpiry(profile) ||

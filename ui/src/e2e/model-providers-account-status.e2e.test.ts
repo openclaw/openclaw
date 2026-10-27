@@ -77,6 +77,22 @@ suite.define(() => {
             ],
           },
           {
+            provider: "example-mixed",
+            displayName: "Example mixed credentials",
+            status: "static",
+            profileOrder: ["example-mixed:api-key"],
+            profiles: [
+              { profileId: "example-mixed:api-key", type: "api_key", status: "static" },
+              {
+                profileId: "example-mixed:excluded",
+                displayName: "Excluded account",
+                type: "oauth",
+                status: "expired",
+                reasonCode: "expired",
+              },
+            ],
+          },
+          {
             provider: "example-token",
             displayName: "Example static token",
             status: "expired",
@@ -106,6 +122,11 @@ suite.define(() => {
               providerOutcomes: [
                 { provider: "example-oauth", status: "ready" },
                 { provider: "example-reauth", status: "auth-rejected" },
+                {
+                  provider: "example-mixed",
+                  profileId: "example-mixed:api-key",
+                  status: "auth-rejected",
+                },
                 { provider: "example-quota", status: "unavailable" },
                 { provider: "example-rate", status: "unavailable" },
               ],
@@ -135,7 +156,7 @@ suite.define(() => {
             const frame = await takeControlUiScreenshotFrame(
               page,
               row,
-              [row.locator(".model-providers__profile-copy")],
+              [row.locator(".model-providers__profile-copy").first()],
               {
                 animations: "disabled",
                 elements: [row],
@@ -148,6 +169,13 @@ suite.define(() => {
             );
           }
         }
+        const mixed = page.locator('[data-provider-id="example-mixed"]');
+        expect((await mixed.locator(".provider-row__status").textContent())?.trim()).toBe(
+          "Credentials rejected",
+        );
+        const excluded = mixed.locator('[data-profile-id="example-mixed:excluded"]');
+        expect(await excluded.textContent()).toContain("Sign-in unavailable");
+        expect(await excluded.textContent()).not.toContain("Sign in again");
         const oauth = page.locator('[data-provider-id="example-oauth"]');
         expect((await oauth.locator(".provider-row__status").textContent())?.trim()).toBe("Ready");
         expect(await oauth.textContent()).toContain("Access token expires in 1h");
@@ -156,8 +184,11 @@ suite.define(() => {
         );
         const reauth = page.locator('[data-provider-id="example-reauth"]');
         expect(await reauth.locator(".provider-row__status").textContent()).toContain(
-          "Sign in again",
+          "Credentials rejected",
         );
+        expect(
+          await reauth.locator('[data-profile-id="example-reauth:account"]').textContent(),
+        ).toContain("Sign-in unavailable");
         const quota = page.locator('[data-provider-id="example-quota"]');
         expect(await quota.textContent()).toContain("Monthly quota is used up");
         expect(await quota.textContent()).not.toContain("Sign in again");

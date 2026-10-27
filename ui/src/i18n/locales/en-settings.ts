@@ -1089,7 +1089,6 @@ const enSettings = {
       missing: "Not signed in",
       apiKey: "API key",
       denied: "Credentials rejected",
-      deniedSignIn: "Credentials rejected · Sign in again",
       signInAgain: "Sign in again",
       signInUnavailable: "Sign-in unavailable",
       managedExternally: "Managed externally",

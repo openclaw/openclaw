@@ -108,16 +108,8 @@ export function renderProviderStatus(card: ModelProviderCard) {
     );
   }
   if (card.catalogStatus === "auth-rejected") {
-    return (
-      <SettingsStatus
-        kind="danger"
-        label={t(
-          card.profiles.some((profile) => profile.type === "oauth")
-            ? "modelProviders.status.deniedSignIn"
-            : "modelProviders.status.denied",
-        )}
-      />
-    );
+    // The card-wide outcome does not identify which saved credential was rejected.
+    return <SettingsStatus kind="danger" label={t("modelProviders.status.denied")} />;
   }
   if (needsAuthAttention(card)) {
     return renderAuthStatus(card);
