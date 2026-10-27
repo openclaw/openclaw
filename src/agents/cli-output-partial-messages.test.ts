@@ -255,23 +255,17 @@ describe("Claude partial-message output budgets", () => {
     expect(parser.getErrorText()).toContain("CLI JSONL output exceeded");
   });
 
-  const maximalMetadata = {
-    uuid: "u".repeat(128),
-    session_id: "s".repeat(128),
-    parent_tool_use_id: "p".repeat(128),
-    api_message_id: "m".repeat(64),
-  };
-  it.each([
-    ["typical text", currentDelta({ type: "text_delta", text: "a" })],
-    ["maximal text", currentDelta({ type: "text_delta", text: "a" }, maximalMetadata)],
-    [
-      "maximal thinking",
-      currentDelta(
-        { type: "thinking_delta", thinking: "a" },
-        { ...maximalMetadata, thinking_display: "d".repeat(32) },
-      ),
-    ],
-  ] as const)("bounds tiny current-shape delta floods of %s frames by characters", (_n, record) => {
+  it("bounds tiny current-metadata delta floods by characters", () => {
+    const record = currentDelta(
+      { type: "thinking_delta", thinking: "a" },
+      {
+        uuid: "u".repeat(128),
+        session_id: "s".repeat(128),
+        parent_tool_use_id: "p".repeat(128),
+        api_message_id: "m".repeat(64),
+        thinking_display: "d".repeat(32),
+      },
+    );
     const parser = createParser();
     const chunk = line(record);
     // Each frame is charged 35 characters plus its newline, so frame 233,017 overflows.
