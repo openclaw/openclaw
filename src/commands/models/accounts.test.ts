@@ -73,6 +73,10 @@ const self = {
     hasAvatar: false,
   },
 } satisfies UsersSelfResult;
+const defaultResponses: Record<string, unknown> = {
+  "users.self": self,
+  "users.authConnect.catalog": catalog,
+};
 
 type Request = {
   method: string;
@@ -138,15 +142,9 @@ async function withGateway(
                   sendMinimalGatewayResponse(
                     socket,
                     id,
-                    payload ??
-                      (request.method === "users.self"
-                        ? self
-                        : request.method === "users.authConnect.catalog"
-                          ? catalog
-                          : {}),
+                    payload ?? defaultResponses[request.method] ?? {},
                   );
                 }
-                return undefined;
               },
               () => {
                 if (socket.readyState === WebSocket.OPEN) {
@@ -159,7 +157,6 @@ async function withGateway(
                     }),
                   );
                 }
-                return undefined;
               },
             );
         });
