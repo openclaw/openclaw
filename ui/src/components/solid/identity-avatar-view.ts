@@ -27,7 +27,7 @@ export function useIdentityAvatarView(identity: Accessor<IdentityAvatarInput>) {
     gateway();
     const input = identity();
     return resolveIdentityAvatarView(
-      input.identity?.type === "profile" && directory
+      input.identity?.type === "profile" && !input.profileAvatarUrl?.trim() && directory
         ? directory.read().avatarIdentity(input)
         : input,
     );
