@@ -258,6 +258,7 @@ scripts/lib/vitest-worker-descriptor.mts
 scripts/lib/vitest-worker-run.mts
 scripts/lib/tooling-dependencies.mjs
 scripts/lib/watch-pr-ci-rollup.mts
+scripts/lib/watch-pr-ci-run.mts
 scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
 scripts/pr-crabbox-gate-publisher.mjs
