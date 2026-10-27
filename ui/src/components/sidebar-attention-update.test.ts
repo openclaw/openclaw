@@ -69,37 +69,13 @@ it("keeps explicit dev update progress and errors visible", () => {
 });
 
 it.each([
-  {
-    name: "installed package ahead of serving Gateway",
-    installed: "2026.10.1",
-    serving: "2026.9.4",
-    recorded: "2026.9.4",
-    historical: false,
-  },
-  {
-    name: "serving Gateway moved past the failure",
-    installed: "2026.9.4",
-    serving: "2026.10.1",
-    recorded: "2026.9.4",
-    historical: true,
-  },
-  {
-    name: "installed package ahead without a saved observation",
-    installed: "2026.10.1",
-    serving: "2026.9.4",
-    recorded: undefined,
-    historical: false,
-  },
-  {
-    name: "newer Gateway without a saved observation",
-    installed: "2026.9.4",
-    serving: "2026.10.1",
-    recorded: undefined,
-    historical: false,
-  },
-])(
-  "keeps only current failed-run attention: $name",
-  ({ installed, serving: version, recorded, historical }) => {
+  ["installed ahead", "2026.10.1", "2026.9.4", "2026.9.4", false],
+  ["serving moved", "2026.9.4", "2026.10.1", "2026.9.4", true],
+  ["installed ahead, no observation", "2026.10.1", "2026.9.4", undefined, false],
+  ["newer Gateway, no observation", "2026.9.4", "2026.10.1", undefined, false],
+] as const)(
+  "keeps only current failed-run attention: %s",
+  (_name, installed, version, recorded, historical) => {
     const context = contextWithGitStatus("current");
     context.overlays.snapshot.updateRun = createUpdateRunFixture({
       status: "failed",
@@ -111,6 +87,7 @@ it.each([
       type: "hello-ok",
       protocol: 1,
       server: { version },
+      auth: { role: "operator", scopes: ["operator.admin"] },
       features: { methods: [] },
     };
     expect(resolveSidebarUpdateAttention(context) !== null).toBe(!historical);

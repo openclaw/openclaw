@@ -16,37 +16,13 @@ function text(root: Page | Locator, value: string, exact = true) {
 
 suite.define(() => {
   it.each([
-    {
-      name: "installed package ahead of serving Gateway",
-      installed: "2026.10.1",
-      serving: "2026.9.4",
-      recorded: "2026.9.4",
-      historical: false,
-    },
-    {
-      name: "serving Gateway moved past the failure",
-      installed: "2026.9.4",
-      serving: "2026.10.1",
-      recorded: "2026.9.4",
-      historical: true,
-    },
-    {
-      name: "installed package ahead without a saved observation",
-      installed: "2026.10.1",
-      serving: "2026.9.4",
-      recorded: undefined,
-      historical: false,
-    },
-    {
-      name: "newer Gateway without a saved observation",
-      installed: "2026.9.4",
-      serving: "2026.10.1",
-      recorded: undefined,
-      historical: false,
-    },
-  ])(
-    "projects saved update failures: $name",
-    async ({ installed, serving: serverVersion, recorded, historical }) => {
+    ["installed ahead", "2026.10.1", "2026.9.4", "2026.9.4", false],
+    ["serving moved", "2026.9.4", "2026.10.1", "2026.9.4", true],
+    ["installed ahead, no observation", "2026.10.1", "2026.9.4", undefined, false],
+    ["newer Gateway, no observation", "2026.9.4", "2026.10.1", undefined, false],
+  ] as const)(
+    "projects saved update failures: %s",
+    async (_name, installed, serverVersion, recorded, historical) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { height: 1200, width: 1440 } },
         async ({ page }) => {

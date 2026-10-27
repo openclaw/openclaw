@@ -18,66 +18,6 @@ beforeEach(async () => {
 });
 
 describe("running update status", () => {
-  it.each([
-    {
-      name: "installed package ahead of serving Gateway",
-      installed: "2026.10.1",
-      serving: "2026.9.4",
-      recorded: "2026.9.4",
-      historical: false,
-    },
-    {
-      name: "serving Gateway moved past the failure",
-      installed: "2026.9.4",
-      serving: "2026.10.1",
-      recorded: "2026.9.4",
-      historical: true,
-    },
-    {
-      name: "installed package ahead without a saved observation",
-      installed: "2026.10.1",
-      serving: "2026.9.4",
-      recorded: undefined,
-      historical: false,
-    },
-    {
-      name: "newer Gateway without a saved observation",
-      installed: "2026.9.4",
-      serving: "2026.10.1",
-      recorded: undefined,
-      historical: false,
-    },
-  ])(
-    "projects past failures: $name",
-    ({ installed, serving: gatewayVersion, recorded, historical }) => {
-      mountUpdates(
-        createProps({
-          gatewayVersion,
-          update: {
-            updateRun: createUpdateRunFixture({
-              status: "failed",
-              phase: "finished",
-              reason: "preflight-no-good-commit",
-              target: { kind: "git", channel: "dev" },
-              before: { version: installed },
-              verification: recorded ? { serviceRunning: true, runningVersion: recorded } : {},
-              origin: { nextAction: "Run openclaw update." },
-            }),
-          },
-        }),
-      );
-      if (historical) {
-        expect(container.textContent).toContain(
-          "Last update run failed (preflight-no-good-commit)",
-        );
-        expect(container.textContent).not.toContain("Retry update");
-        expect(container.textContent).not.toContain("Run openclaw update.");
-      } else {
-        expect(container.textContent).toContain("Retry update");
-      }
-    },
-  );
-
   it.each(["read error", "separate campaign", "same campaign"] as const)(
     "keeps executing run status distinct from %s",
     (scenario) => {

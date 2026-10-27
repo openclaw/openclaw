@@ -54,11 +54,7 @@ function setToggle(title: string, checked: boolean) {
 }
 
 function failedRun() {
-  return createUpdateRunFixture({
-    status: "failed",
-    phase: "finished",
-    reason: "build-failed",
-  });
+  return createUpdateRunFixture({ status: "failed", phase: "finished", reason: "build-failed" });
 }
 
 const checkFailure = {
