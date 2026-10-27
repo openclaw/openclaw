@@ -598,6 +598,8 @@ environment, not only an SSH shell. On Btrfs, inspect metadata allocation and
 retained snapshots as well as `df`: snapshots can pin space after files are
 deleted. Retire only known disposable data and completed recovery points.
 
+For rootless Podman sandboxes, budget one kernel session keyring per running container under the Gateway service user's per-user quota. On a busy host, set `kernel.keys.maxkeys=2000` and `kernel.keys.maxbytes=200000` with `sudo sysctl -w kernel.keys.maxkeys=2000 kernel.keys.maxbytes=200000`, and persist both values in `/etc/sysctl.d/61-openclaw-keyring-quota.conf`. A `create keyring: Disk quota exceeded` error can mean this quota is exhausted even when the filesystem has space; inspect `sysctl kernel.keys.maxkeys kernel.keys.maxbytes` on the container engine host.
+
 Monitor process restarts, readiness, channel connectivity, storage, and real
 session/model failures. Keep incident alerts outside the Gateway that might be
 down. A green HTTP root, a quiet bot, or a successful Access login is not enough

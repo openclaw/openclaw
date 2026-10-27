@@ -17,7 +17,8 @@ export type ToastOptions = {
   /** Agent identity shown for session notifications, using the shared avatar loader. */
   avatar?: AgentIdentity;
   actionLabel?: string;
-  onAction?: () => void;
+  actionHref?: string;
+  onAction?: (event?: MouseEvent) => void;
   onDismiss?: (reason: ToastDismissReason) => void;
   durationMs?: number;
   /** Wait behind the active toast instead of replacing it. */
