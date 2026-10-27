@@ -225,6 +225,33 @@ it("retries a failed setup send in the conversation it already created", async (
   expect(sends.map(([, params]) => params?.sessionKey)).toEqual(["agent:main:dock:new"]);
 });
 
+it("keeps one idempotency key per dialog and gives each dialog its own", async () => {
+  const { render, request, calls, page } = fixture({});
+  const view = await render();
+  const sendKeys = () =>
+    calls.filter(([method]) => method === "chat.send").map(([, params]) => params?.idempotencyKey);
+  buttonNamed(view, "Set up…").click();
+  const first = page.querySelector("dialog")!;
+  // The first send is rejected after it reaches the Gateway; the retry must reuse its key.
+  request.mockImplementationOnce(async (method: string, params?: Record<string, unknown>) => {
+    calls.push([method, params]);
+    throw new Error("Gateway restarting");
+  });
+  buttonNamed(first, "Start").click();
+  await vi.waitFor(() => expect(first.querySelector(".knowledge-error")).not.toBeNull());
+  buttonNamed(first, "Start").click();
+  await vi.waitFor(() => expect(first.open).toBe(false));
+  buttonNamed(view, "Set up…").click();
+  buttonNamed(page.querySelector("dialog")!, "Start").click();
+  await vi.waitFor(() => expect(sendKeys()).toHaveLength(3));
+  const [failed, retried, again] = sendKeys();
+  expect(retried).toBe(failed);
+  expect(again).not.toBe(failed);
+  expect(String(again)).toMatch(
+    /^knowledge:scribe:conversations:agent:main:dock:new:[0-9a-f-]{36}$/,
+  );
+});
+
 it("disables starting without write access", async () => {
   const { render, page } = fixture({ canWrite: false });
   const view = await render();
