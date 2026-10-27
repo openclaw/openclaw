@@ -481,9 +481,9 @@
 
   @supports not (overflow-clip-margin: 12rem) {
     .chat-virtual-row:has(.chat-group.assistant .chat-bubble > .chat-text > .markdown-table) {
-      /* WebKit supports content-visibility without an adjustable paint clip.
-         Keep mounted wide-table rows visible; transcript virtualization remains. */
-      content-visibility: visible;
+      /* WebKit lacks an adjustable paint clip. Let wide tables extend beyond
+         the row; transcript virtualization still bounds mounted content. */
+      contain: none;
     }
   }
 }
