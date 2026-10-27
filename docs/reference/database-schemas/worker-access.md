@@ -76,6 +76,11 @@ caller label. A reservation includes worker queueing, preparation, and result
 delivery; its duration alone does not establish a slow SQL transaction.
 Schemas, stored data, live commit authority, and update behavior are unchanged.
 
+Entry reclamation derives each surviving row's transcript references once per
+synchronous deletion, even when several retained generations need a new owner.
+Those reference lists expire with the deletion; direct current-generation matches
+and the first matching successor in session-key order retain their existing behavior.
+
 Refused ordered session reads include the conflicting admission's shortened,
 bounded database path, operation, thread, age, and any recorded caller or worker
 operation labels in the error itself. They never include request payloads.
