@@ -783,7 +783,7 @@ export class SqliteWorkerBroker {
   }
 
   close(): Promise<void> {
-    this.sqliteWorkerIdleSweepTimer.clear();
+    clearInterval(this.sqliteWorkerIdleSweepTimer);
     this.draining ??= this.lifecycle
       .closeHost({
         inputAdmission: this.inputAdmission,
