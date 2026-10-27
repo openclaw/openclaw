@@ -1,16 +1,20 @@
-import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { createInterface } from "node:readline";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import * as gatewayBenchChild from "../../scripts/lib/gateway-bench-child.js";
 import { createGatewayWsClient } from "../../scripts/lib/gateway-ws-client.js";
+import {
+  BUILD_STAMP_FILE,
+  RUNTIME_POSTBUILD_STAMP_FILE,
+} from "../../scripts/lib/local-build-metadata-paths.mts";
 import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
-import { verifyBuiltGatewayHead } from "../../test/helpers/gateway-built-fixture.js";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import {
   createOpenClawTestInstance,
@@ -43,9 +47,9 @@ function runConcurrentStreamFixture<T>(
 ): Promise<T> {
   return testLifetime.run(() =>
     runQaGatewayFixture(
-      () => {
+      async () => {
         context.signal.throwIfAborted();
-        return body({
+        return await body({
           signal: context.signal,
           verifyCleanup: testLifetime.verifyCleanup,
         });
@@ -200,34 +204,52 @@ async function stopMockProcess(
   });
 }
 
-async function resourceCleanup(
-  gateway: OpenClawTestInstance | undefined,
-  mock: MockProcessOwner | undefined,
-  options: {
-    closeClient?: () => Promise<void>;
-    settleStreams?: () => Promise<unknown>;
-    cleanupGateway?: () => Promise<void>;
-    verifyMissingClose?: boolean;
-  } = {},
-): Promise<void> {
+async function cleanupConcurrentStreamResources(owners: {
+  closeClient: () => Promise<void>;
+  stopGateway: () => Promise<void>;
+  stopMock: () => Promise<void>;
+  settleStreams: () => Promise<unknown>;
+  cleanupGateway: () => Promise<void>;
+}): Promise<void> {
   let mockStopped = false;
   await runQaGatewayFixture(
-    options.closeClient ?? (async () => {}),
-    async () => gateway?.stopGateway(),
+    owners.closeClient,
+    owners.stopGateway,
     async () => {
-      if (mock) {
-        await stopMockProcess(mock, options);
-      }
+      await owners.stopMock();
       mockStopped = true;
     },
-    options.settleStreams ?? (async () => {}),
+    owners.settleStreams,
     async () => {
       // The mock reads control files and appends request logs inside Gateway state.
       if (mockStopped) {
-        await (options.cleanupGateway ? options.cleanupGateway() : gateway?.cleanup());
+        await owners.cleanupGateway();
       }
     },
   );
+}
+
+function resourceCleanup(
+  gateway: OpenClawTestInstance | undefined,
+  mock: MockProcessOwner | undefined,
+  closeClient: () => Promise<void> = async () => {},
+  settleStreams: () => Promise<unknown> = async () => {},
+) {
+  return cleanupConcurrentStreamResources({
+    closeClient,
+    stopGateway: async () => {
+      await gateway?.stopGateway();
+    },
+    stopMock: async () => {
+      if (mock) {
+        await stopMockProcess(mock);
+      }
+    },
+    settleStreams,
+    cleanupGateway: async () => {
+      await gateway?.cleanup();
+    },
+  });
 }
 
 const cases = [
@@ -269,6 +291,7 @@ describe("Gateway concurrent HTTP streams", () => {
         mock = processOwner;
         await mockPort(processOwner, signal);
         const closeClient = vi.fn(async () => {});
+        const stopGateway = vi.fn(() => stateOwner.stopGateway());
         const settleStreams = vi.fn(async () => {});
         const cleanupGateway = vi.fn(() => stateOwner.cleanup());
         const reportedStop = vi.spyOn(gatewayBenchChild, "stopChild").mockResolvedValue({
@@ -278,16 +301,18 @@ describe("Gateway concurrent HTTP streams", () => {
         });
         try {
           await expect(
-            resourceCleanup(stateOwner, processOwner, {
+            cleanupConcurrentStreamResources({
               closeClient,
+              stopGateway,
+              stopMock: () => stopMockProcess(processOwner, { verifyMissingClose: true }),
               settleStreams,
               cleanupGateway,
-              verifyMissingClose: true,
             }),
           ).rejects.toMatchObject({
             message: "Mock provider shutdown unverified; Gateway state retained",
           });
           expect(closeClient).toHaveBeenCalledOnce();
+          expect(stopGateway).toHaveBeenCalledOnce();
           expect(settleStreams).toHaveBeenCalledOnce();
           expect(processOwner.closeObserved).toBe(false);
           expect(() => process.kill(processOwner.child.pid!, 0)).not.toThrow();
@@ -331,7 +356,24 @@ describe("Gateway concurrent HTTP streams", () => {
       async ({ verifyCleanup }) => {
         signal.throwIfAborted();
         const cwd = process.cwd();
-        await verifyBuiltGatewayHead(cwd, signal);
+        const checkoutSha = execFileSync("git", ["rev-parse", "HEAD"], {
+          cwd,
+          encoding: "utf8",
+        }).trim();
+        // Require this checkout's complete runtime before the shared helper can
+        // prepare a source fallback. The child must own one coherent built graph.
+        await fs.access(path.join(cwd, "dist/index.js"));
+        signal.throwIfAborted();
+        for (const stamp of [BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE]) {
+          const metadata = JSON.parse(await fs.readFile(path.join(cwd, "dist", stamp), "utf8"));
+          signal.throwIfAborted();
+          expect(metadata.head, stamp).toBe(checkoutSha);
+        }
+        const buildInfo = JSON.parse(
+          await fs.readFile(path.join(cwd, "dist/build-info.json"), "utf8"),
+        );
+        expect(buildInfo.commit).toBe(checkoutSha);
+        signal.throwIfAborted();
         const token = `fanout-${randomUUID()}`;
         const gateway = await createOpenClawTestInstance({
           name: "concurrent-streams",
@@ -583,15 +625,17 @@ describe("Gateway concurrent HTTP streams", () => {
       async () => {
         abort.abort();
         try {
-          await resourceCleanup(ownedGateway, mock, {
-            closeClient: async () => {
+          await resourceCleanup(
+            ownedGateway,
+            mock,
+            async () => {
               if (client) {
                 client.close();
                 await closeGatewayTestWebSocket(client.ws);
               }
             },
-            settleStreams: () => Promise.all(streams.map((stream) => stream.settled)),
-          });
+            () => Promise.all(streams.map((stream) => stream.settled)),
+          );
         } finally {
           signal.removeEventListener("abort", cancel);
         }

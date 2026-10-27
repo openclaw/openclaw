@@ -11,7 +11,6 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
-  createEmbeddedRunHandle,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
   testing as embeddedRunTesting,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
@@ -71,12 +70,14 @@ const abort = vi.fn();
 let handle: EmbeddedAgentQueueHandle;
 let operation: ReplyOperation;
 
-function activateHandle(next = handle, target = operation) {
-  setActiveEmbeddedRun(ref.sessionId, next, ref.sessionKey, undefined, undefined, target);
-}
-
 beforeEach(async () => {
-  handle = createEmbeddedRunHandle({ runId: ref.runId, abort });
+  handle = {
+    runId: ref.runId,
+    queueMessage: async () => {},
+    isStreaming: () => true,
+    isCompacting: () => false,
+    abort,
+  };
   vi.useFakeTimers();
   vi.setSystemTime(Date.parse("2026-08-20T12:00:00Z"));
   setDiagnosticsEnabledForProcess(true);
@@ -147,7 +148,8 @@ beforeEach(async () => {
         },
       }),
     },
-    () => activateHandle(),
+    () =>
+      setActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey, undefined, undefined, operation),
   );
 });
 
@@ -232,6 +234,9 @@ it("keeps an accepted one-hour question alive through default diagnostic recover
     const id = await request();
     await vi.advanceTimersByTimeAsync(920_000);
     expect(recovery).not.toHaveBeenCalled();
+    expect(operation.watchdog.snapshot().waits).toContainEqual(
+      expect.objectContaining({ kind: "human_question" }),
+    );
     expect(abort).not.toHaveBeenCalled();
     expect(manager.get(id)?.status).toBe("pending");
     const answer = manager.waitAnswer(id);
@@ -337,6 +342,7 @@ it("keeps resumed question work alive when attention reporting settles the quest
     });
     try {
       await vi.advanceTimersByTimeAsync(900_000);
+      expect(manager.observe(id)?.record.status).toBe("cancelled");
       await Promise.all(recovery.mock.results.map((result) => result.value));
 
       await expect(answer).resolves.toEqual({ status: "cancelled" });
@@ -380,6 +386,7 @@ it.each(["signal", "current client"] as const)(
     const observer = new AsyncWorkScope();
     const controller = new AbortController();
     let current = true;
+    const registered = vi.spyOn(manager, "waitAnswer");
     const waiting = observer.track(() =>
       call("question.waitAnswer", { id }, false, {
         signal: controller.signal,
@@ -388,6 +395,7 @@ it.each(["signal", "current client"] as const)(
     );
     const result = Promise.allSettled([waiting]);
     try {
+      expect(registered).toHaveBeenCalledExactlyOnceWith(id, undefined, undefined);
       observer.beginClose();
       if (source === "signal") {
         controller.abort(new Error("Question request source closed"));
@@ -411,6 +419,7 @@ it.each(["signal", "current client"] as const)(
       observer.beginClose();
       await result;
       await observer.drain();
+      registered.mockRestore();
     }
   },
 );
@@ -424,6 +433,9 @@ it("does not let operator questions or public diagnostic text suppress unrelated
 
 it("keeps explicit user abort authoritative during human input", async () => {
   const id = await request();
+  expect(operation.watchdog.snapshot().waits).toContainEqual(
+    expect.objectContaining({ kind: "human_question" }),
+  );
   await expect(recover()).resolves.toMatchObject({ reason: "active_reply_work" });
   await expect(
     abortAndDrainEmbeddedAgentRun({ ...ref, reason: "user_abort" }),
@@ -485,7 +497,7 @@ it("does not transfer a pending question to a replacement handle with the same r
       operation.complete();
     }),
   };
-  activateHandle(replacement);
+  setActiveEmbeddedRun(ref.sessionId, replacement, ref.sessionKey, undefined, undefined, operation);
   await expect(recover()).resolves.toMatchObject({ status: "aborted" });
   expect(replacement.abort).toHaveBeenCalledTimes(1);
   expect(abort).not.toHaveBeenCalled();
@@ -545,6 +557,9 @@ it.each(["pending", "requester-inactive"] as const)(
     });
     expect(recovery).toHaveBeenCalledOnce();
     await request();
+    expect(operation.watchdog.snapshot().waits).toContainEqual(
+      expect.objectContaining({ kind: "human_question" }),
+    );
     if (terminal === "requester-inactive") {
       // Worker placement or turn capability can close while the local run claim survives.
       requesterActive = false;
@@ -557,7 +572,10 @@ it.each(["pending", "requester-inactive"] as const)(
       expect(abort).toHaveBeenCalledOnce();
       return;
     }
-    expect(outcome).toMatchObject({ status: "skipped", reason: "active_reply_work" });
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      reason: "active_reply_work",
+    });
     expect(abort).not.toHaveBeenCalled();
   },
 );
@@ -566,6 +584,9 @@ it("keeps the run protected until its last pending human question settles", asyn
   const first = await request();
   const second = await request(true, 3_600_000, "second-question");
   manager.cancel(first);
+  expect(operation.watchdog.snapshot().waits).toContainEqual(
+    expect.objectContaining({ kind: "human_question" }),
+  );
   await expect(recover()).resolves.toMatchObject({ reason: "active_reply_work" });
   manager.cancel(second);
   await expect(recover()).resolves.toMatchObject({ status: "aborted" });
@@ -579,7 +600,14 @@ it("does not abort a replacement installed synchronously by question expiry", as
     if (operation === expiringOperation) {
       expiringOperation.complete();
       operation = createReplyOperation({ ...ref, resetTriggered: false });
-      activateHandle(replacement);
+      setActiveEmbeddedRun(
+        ref.sessionId,
+        replacement,
+        ref.sessionKey,
+        undefined,
+        undefined,
+        operation,
+      );
     }
   };
   onBroadcast = (event) => {
