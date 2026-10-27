@@ -134,8 +134,11 @@ it.each(["diary", "daily", "context"] as const)(
       daily: writePhase,
       diary: writeBackfill,
     }[kind]();
-    if (kind === "context") await expect(operation).resolves.toEqual([]);
-    else await expect(operation).rejects.toThrow(/must be valid UTF-8/);
+    if (kind === "context") {
+      await expect(operation).resolves.toEqual([]);
+    } else {
+      await expect(operation).rejects.toThrow(/must be valid UTF-8/);
+    }
     expect(await fs.readFile(file)).toEqual(bytes);
   },
 );
