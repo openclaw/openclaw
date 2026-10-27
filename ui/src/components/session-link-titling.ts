@@ -115,6 +115,8 @@ export class SessionLinkTitler {
         this.context && { ...this.context.gateway.snapshot, client },
         method,
         "operator.read",
+        // Route resolution is an internal, deliberately unadvertised method.
+        { requireAdvertisement: method !== "sessions.resolve" },
       )
     );
   }

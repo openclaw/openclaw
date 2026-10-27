@@ -87,7 +87,7 @@ function sessionContext(rows: GatewaySessionRow[] = [], origin?: string): Applic
     gateway: {
       connectionRevision: 0,
       snapshot: {
-        hello: gatewayHelloForMethods(["controlUi.sessionPreview", "sessions.resolve"]),
+        hello: gatewayHelloForMethods(["controlUi.sessionPreview"]),
         phase: "connected",
         selfUser: { id: "first-profile" },
       },
@@ -323,46 +323,53 @@ describe("SessionLinkTitler", () => {
     });
   });
 
-  it.each([true, false])("titles unloaded URLs (full key: %s)", async (fullKey) => {
-    const displayName = fullKey ? "Peter's plan" : undefined;
-    const source = fullKey
-      ? "`https://chat.example/chat/main/dashboard/d0effac9-3211-4641-b993-10f619f124e6`"
-      : "[Plan](/chat/main/d0effac9?view=details)";
-    const params = fullKey
-      ? {
-          reference: { key: DASHBOARD_KEY },
-          agentId: "main",
-          includeGlobal: true,
-          includeUnknown: true,
-          allowMissing: true,
-        }
-      : { shortId: "d0effac9", agentId: "main", allowMissing: true };
-    const key = DASHBOARD_KEY;
-    const request = vi.fn(async (method: string) =>
-      method === "sessions.resolve"
-        ? { ok: true, key, agentId: "main", ...(displayName ? { displayName } : {}) }
-        : previewResponse({ sessionKey: key, title: undefined, derivedTitle: "Derived plan" }),
-    );
-    const { host, titler } = createTitler([], request);
-    titler.context = sessionContext([], "https://chat.example");
-    const getLink = renderMarkdown(titler, host, source);
-    await refresh(titler);
-    const link = getLink();
+  it.each([true, false])(
+    "titles unloaded URLs without advertised resolution (full key: %s)",
+    async (fullKey) => {
+      const displayName = fullKey ? "Peter's plan" : undefined;
+      const source = fullKey
+        ? "`https://chat.example/chat/main/dashboard/d0effac9-3211-4641-b993-10f619f124e6`"
+        : "[Plan](/chat/main/d0effac9?view=details)";
+      const params = fullKey
+        ? {
+            reference: { key: DASHBOARD_KEY },
+            agentId: "main",
+            includeGlobal: true,
+            includeUnknown: true,
+            allowMissing: true,
+          }
+        : { shortId: "d0effac9", agentId: "main", allowMissing: true };
+      const key = DASHBOARD_KEY;
+      const request = vi.fn(async (method: string) =>
+        method === "sessions.resolve"
+          ? { ok: true, key, agentId: "main", ...(displayName ? { displayName } : {}) }
+          : previewResponse({ sessionKey: key, title: undefined, derivedTitle: "Derived plan" }),
+      );
+      const { host, titler } = createTitler([], request);
+      titler.context = sessionContext([], "https://chat.example");
+      titler.context.gateway.snapshot.phase = "connecting";
+      const getLink = renderMarkdown(titler, host, source);
+      await refresh(titler);
+      expect(request).not.toHaveBeenCalled();
+      titler.context.gateway.snapshot.phase = "connected";
+      await refresh(titler);
+      const link = getLink();
 
-    expect(link).toMatchObject({
-      textContent: displayName ?? "Derived plan",
-      dataset: { sessionKey: key },
-    });
-    expect(link.hasAttribute("title")).toBe(false);
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.resolve", params);
-    expect(request).toHaveBeenCalledTimes(displayName ? 1 : 2);
+      expect(link).toMatchObject({
+        textContent: displayName ?? "Derived plan",
+        dataset: { sessionKey: key },
+      });
+      expect(link.hasAttribute("title")).toBe(false);
+      expect(request).toHaveBeenNthCalledWith(1, "sessions.resolve", params);
+      expect(request).toHaveBeenCalledTimes(displayName ? 1 : 2);
 
-    const observer = observe(host);
-    await refresh(titler);
-    expect(observer.takeRecords()).toEqual([]);
-    observer.disconnect();
-    expect(request).toHaveBeenCalledTimes(displayName ? 1 : 2);
-  });
+      const observer = observe(host);
+      await refresh(titler);
+      expect(observer.takeRecords()).toEqual([]);
+      observer.disconnect();
+      expect(request).toHaveBeenCalledTimes(displayName ? 1 : 2);
+    },
+  );
 
   it.each([
     ["bare URL", `${location.origin}/chat/main/d0effac9?view=details#latest`],
