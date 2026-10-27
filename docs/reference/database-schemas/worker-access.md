@@ -580,8 +580,8 @@ and only while the entry object remains unchanged. Cold or mismatched revisions
 and replaced entries carry the complete entry. Main resolves references within
 that command; live policy and revocation checks still run at every admission.
 
-Plain transcript append receipts use the same command-local reference when the
-entry is unchanged and initialization does not also expose it. Main restores the
+Plain transcript append and bookkeeping patch receipts use the same command-local
+reference when the entry is unchanged and initialization does not also expose it. Main restores the
 entry by reference to its deeply frozen replica preimage, without cloning it.
 Settlement, publication, and commit observers only read that entry; changed or
 unavailable preimages still transfer the complete entry. A missing or mismatched
