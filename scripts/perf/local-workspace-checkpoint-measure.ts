@@ -28,6 +28,8 @@
  * --instrument retention samples memory after collecting the main isolate and
  * observed direct workers, outside timing/GC measurements. Use identical-code controls
  * to separate retained memory from different natural-GC/worker-idle schedules.
+ * --retention-ms 120000 gives both revisions the same minimum elapsed time
+ * after warmup before collection, including their normal idle-worker retirement.
  * These modes report 16 operations per simulated minute, not production rates.
  */
 import assert from "node:assert/strict";
@@ -67,6 +69,7 @@ const { values } = parseArgs({
     absent: { type: "boolean", default: false },
     "lease-sources": { type: "boolean", default: false },
     worktrees: { type: "string", default: "64" },
+    "retention-ms": { type: "string", default: "0" },
   },
 });
 assert(
@@ -84,6 +87,8 @@ for (const value of [requests, burst, files, port, worktrees]) {
 }
 assert(port >= 40000 && port <= 65535);
 assert(["timing", "allocation", "retention"].includes(values.instrument!));
+const retentionMs = Number(values["retention-ms"]);
+assert(Number.isSafeInteger(retentionMs) && retentionMs >= 0);
 const workers = new Set<Worker>();
 const observeWorker = (worker: Worker) => {
   workers.add(worker);
@@ -598,6 +603,12 @@ try {
   }
   let retainedMemory;
   if (values.instrument === "retention") {
+    const remainingMs = start + retentionMs - performance.now();
+    if (remainingMs > 0) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, remainingMs);
+      });
+    }
     const heaps = [];
     for (const worker of workers) {
       const workerProfile = await worker.startHeapProfile({ forceGC: true });
@@ -605,7 +616,12 @@ try {
       heaps.push(await worker.getHeapStatistics());
     }
     globalThis.gc!();
-    retainedMemory = { ...process.memoryUsage(), workerHeaps: heaps };
+    retainedMemory = {
+      ...process.memoryUsage(),
+      workerHeaps: heaps,
+      elapsedMs: performance.now() - start,
+      minimumElapsedMs: retentionMs,
+    };
   }
   const verified = {
     ...report,
