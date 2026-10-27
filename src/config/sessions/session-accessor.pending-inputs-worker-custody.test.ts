@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
 import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
@@ -157,7 +157,11 @@ describe("accepted input worker custody", () => {
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog({ env })).release };
         client.connect.scopes = ["operator.admin"];
         const authorization = await authorize(scope, client, cfg);
-        const input = authorizedInput(authorization, "incognito-memory", "Continue in memory");
+        const input = {
+          ...authorizedInput(authorization, "incognito-memory", "Continue in memory"),
+          assertFreshInputCurrent: authorization.assertCurrent,
+          prepareMessageAfterIdempotencyCheck: (prepared: PersistedUserTurnMessage) => prepared,
+        };
         try {
           receipt = await stageInput(scope, input);
           const admitted = receipt;
@@ -303,16 +307,23 @@ it.each(["turn", "locked"] as const)(
       let admitted: SessionPendingInputReceipt | undefined;
       let unsettled: SessionPendingInputReceipt | undefined;
       try {
-        admitted = await stageInput(
-          scope,
-          authorizedInput(
+        const authority = authorization.admittedInputAuthority!;
+        const authorityReads = vi.spyOn(authority, "withCurrent");
+        setUserProfileRole(profileId, "suggest");
+        admitted = await stageInput(scope, {
+          ...authorizedInput(
             authorization,
             "prepared-custody",
             "Continue with captured custody",
             assertCurrent,
           ),
-        );
+          assertFreshInputCurrent: authorization.assertCurrent,
+          prepareMessageAfterIdempotencyCheck: (input) => input,
+        });
         expect(admitted?.state).toBe("queued");
+        expect(authorityReads).toHaveBeenCalledTimes(1);
+        authorityReads.mockRestore();
+        setUserProfileRole(profileId, "view");
         unsettled = await stageInput(scope, {
           runId: "pending-settlement",
           message: { ...admitted!.message, idempotencyKey: "pending-settlement:user" },
