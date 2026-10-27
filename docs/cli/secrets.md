@@ -12,13 +12,13 @@ title: "Secrets CLI"
 
 Manage SecretRefs and keep the active runtime snapshot healthy.
 
-| Command     | Role                                                                                                                                                                                         |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `reload`    | Gateway RPC (`secrets.reload`): re-resolves refs and atomically publishes the owner-aware runtime snapshot (no config writes); eligible owner failures may publish as cold or stale warnings |
-| `store`     | Manages team-scoped secret and environment values in the local shared state SQLite database                                                                                                  |
-| `audit`     | Read-only scan of config/auth/generated-model stores and legacy residues for plaintext, unresolved refs, and precedence drift (exec refs skipped unless `--allow-exec`)                      |
-| `configure` | Interactive planner for provider setup, target mapping, and preflight (requires a TTY)                                                                                                       |
-| `apply`     | Executes a saved plan (`--dry-run` validates only and skips exec checks by default; write mode rejects exec-containing plans unless `--allow-exec`), then scrubs targeted plaintext residues |
+| Command     | Role                                                                                                                                                                                                                                                               |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `reload`    | Gateway RPC (`secrets.reload`): re-resolves refs and atomically publishes the owner-aware runtime snapshot (no config writes); eligible owner failures may publish as cold or stale warnings                                                                       |
+| `store`     | Manages team-scoped secret and environment values in the local shared state SQLite database                                                                                                                                                                        |
+| `audit`     | Read-only scan of config/auth/generated-model stores and legacy residues for plaintext, unresolved refs, and precedence drift (exec refs skipped unless `--allow-exec`; a run that skips exec checks reports `UNMEASURED` in the header and is not a healthy gate) |
+| `configure` | Interactive planner for provider setup, target mapping, and preflight (requires a TTY)                                                                                                                                                                             |
+| `apply`     | Executes a saved plan (`--dry-run` validates only and skips exec checks by default; write mode rejects exec-containing plans unless `--allow-exec`), then scrubs targeted plaintext residues                                                                       |
 
 Recommended operator loop:
 
@@ -32,6 +32,8 @@ openclaw secrets reload
 ```
 
 If your plan includes `exec` SecretRefs/providers, pass `--allow-exec` on both the dry-run and write `apply` commands. If the closing `audit --check` still reports plaintext findings, update the remaining reported target paths and rerun the audit.
+
+Complete-audit gating: without `--allow-exec`, the audit header reads `UNMEASURED — N exec resolvability check(s) skipped` and the JSON reports `resolution.resolvabilityComplete: false` with `resolution.skippedExecRefs: N`. Treat that run as unmeasured, not healthy: re-run with `--allow-exec` before using the result as a CI gate or a restart readiness signal. Exit codes are unchanged (`1` on findings, `2` on unresolved refs).
 
 Exit codes for CI/gates:
 
