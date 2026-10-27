@@ -62,14 +62,18 @@ function sessionEntry(lifecycleRevision?: string) {
   };
 }
 
-function holdMessageRead() {
+function holdMessageRead(messageId = "executing") {
   const entered = createDeferred();
   const release = createDeferred<ReturnType<typeof storedMessage>>();
   readSessionMessageByIdAsyncMock.mockImplementationOnce(() => {
     entered.resolve();
     return release.promise;
   });
-  return { entered: entered.promise, release: () => release.resolve(storedMessage("executing")) };
+  return { entered: entered.promise, release: () => release.resolve(storedMessage(messageId)) };
+}
+
+function expectMessageIds(broadcast: ReturnType<typeof vi.fn>, ids: string[]) {
+  expect(broadcast.mock.calls.map((call) => call[1]?.messageId)).toEqual(ids);
 }
 
 describe("createTranscriptUpdateBroadcastHandler", () => {
@@ -291,8 +295,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         entry: sessionEntry("revision-before-reset"),
         storePath: "/tmp/default-lifecycle-sessions.json",
       });
-      const read = createDeferred<ReturnType<typeof storedMessage>>();
-      readSessionMessageByIdAsyncMock.mockImplementation(() => read.promise);
+      const read = holdMessageRead("message-before-reset");
       const { broadcastToConnIds, handler } = createHandler(false);
 
       const pendingBroadcast = handler({
@@ -301,7 +304,8 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         ...messageUpdate("message-before-reset", "deleted by reset", "user"),
       });
 
-      await vi.waitFor(() => expect(readSessionMessageByIdAsyncMock).toHaveBeenCalledOnce());
+      await read.entered;
+      expect(readSessionMessageByIdAsyncMock).toHaveBeenCalledOnce();
       if (ownerChange === "deleted") {
         currentEntry = undefined;
       } else if (ownerChange === "rebound") {
@@ -309,7 +313,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       } else {
         currentEntry.lifecycleRevision = "revision-after-reset";
       }
-      read.resolve(storedMessage("message-before-reset"));
+      read.release();
 
       await pendingBroadcast;
       expect(loadGatewaySessionEntryReadOnlyMock).not.toHaveBeenCalled();
@@ -364,9 +368,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   );
 
   it("carries terminal assistant run ownership while plugin finalization keeps the run active", async () => {
-    // before_agent_finalize hooks run after the assistant transcript write but
-    // before terminal delivery. The active-run registry remains authoritative
-    // during that interval even when the persisted session row says done.
+    // Finalization runs after persistence, before terminal delivery; the live run still owns status.
     const { broadcastToConnIds, handler } = createHandler(true);
 
     await handler({
@@ -581,8 +583,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         await Promise.allSettled([slowTask, fastTask]);
       }
 
-      expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
-      expect(broadcastToConnIds.mock.calls[1]?.[1]).toMatchObject({ messageId: "slow-1" });
+      expectMessageIds(broadcastToConnIds, ["fast-1", "slow-1"]);
     },
   );
 
@@ -638,10 +639,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         releaseFirstCount(1);
         await Promise.allSettled([firstTask, secondTask]);
       }
-      expect(broadcastToConnIds.mock.calls.map((call) => call[1]?.messageId)).toEqual([
-        "ordered-1",
-        "ordered-2",
-      ]);
+      expectMessageIds(broadcastToConnIds, ["ordered-1", "ordered-2"]);
     },
   );
 });

@@ -47,9 +47,9 @@ function runConcurrentStreamFixture<T>(
 ): Promise<T> {
   return testLifetime.run(() =>
     runQaGatewayFixture(
-      async () => {
+      () => {
         context.signal.throwIfAborted();
-        return await body({
+        return body({
           signal: context.signal,
           verifyCleanup: testLifetime.verifyCleanup,
         });
@@ -237,18 +237,14 @@ function resourceCleanup(
 ) {
   return cleanupConcurrentStreamResources({
     closeClient,
-    stopGateway: async () => {
-      await gateway?.stopGateway();
-    },
+    stopGateway: async () => gateway?.stopGateway(),
     stopMock: async () => {
       if (mock) {
         await stopMockProcess(mock);
       }
     },
     settleStreams,
-    cleanupGateway: async () => {
-      await gateway?.cleanup();
-    },
+    cleanupGateway: async () => gateway?.cleanup(),
   });
 }
 

@@ -625,7 +625,10 @@ test("preserves subscriptions for an exact live pairing generation promotion", a
   expect(frames).toHaveLength(1);
 });
 
-test("uses explicit Talk capability instead of platform names", async () => {
+test.each([
+  { platform: "linux", caps: ["talk"], commands: [] },
+  { platform: "custom", caps: [], commands: ["talk.ptt.start"] },
+])("detects Talk support from capabilities or commands, not $platform", async (surface) => {
   const runtime = createRuntime();
   registerNode(runtime, "conn-android", "generation-a", "node-a", {
     platform: "android",
@@ -633,20 +636,6 @@ test("uses explicit Talk capability instead of platform names", async () => {
     commands: [],
   });
   await expect(runtime.hasTalkNodeConnected()).resolves.toBe(false);
-  registerNode(runtime, "conn-linux", "generation-a", "node-a", {
-    platform: "linux",
-    caps: ["talk"],
-    commands: [],
-  });
-  await expect(runtime.hasTalkNodeConnected()).resolves.toBe(true);
-});
-
-test("accepts nodes that declare Talk command support", async () => {
-  const runtime = createRuntime();
-  registerNode(runtime, "conn-talk", "generation-a", "node-a", {
-    platform: "custom",
-    caps: [],
-    commands: ["talk.ptt.start"],
-  });
+  registerNode(runtime, "conn-talk", "generation-a", "node-a", surface);
   await expect(runtime.hasTalkNodeConnected()).resolves.toBe(true);
 });
