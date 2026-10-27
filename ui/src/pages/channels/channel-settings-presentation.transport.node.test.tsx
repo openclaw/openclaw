@@ -89,6 +89,7 @@ async function transportFixture(scopes: string[], firstStatus: number, signal: A
     });
     const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
     const retained = createDeferred<ControlUiChannelSettingsContext>();
+    const channels = {};
     const application = {
       gateway: {
         snapshot,
@@ -98,7 +99,7 @@ async function transportFixture(scopes: string[], firstStatus: number, signal: A
           return () => listeners.delete(listener);
         },
       },
-      channels: {},
+      acquireChannels: () => channels,
       runtimeConfig: {},
       plugins: {
         async loadSettingsView(_placement: unknown, mountSignal: AbortSignal) {

@@ -43,6 +43,7 @@ async function readSnapshot(
     source,
     lists: [],
     readJobs: new WeakMap<CronJob, CronJob>(),
+    searchText: new WeakMap<CronJob, string>(),
     status: Object.freeze({
       enabled: state.deps.cronEnabled,
       triggersEnabled: state.deps.cronConfig?.triggers?.enabled !== false,
@@ -242,15 +243,19 @@ export async function listPage(
             return false;
           }
           if (query) {
-            const haystack = normalizeLowercaseStringOrEmpty(
-              [
-                job.id,
-                job.name,
-                job.description ?? "",
-                job.agentId ?? "",
-                ...(job.displayName ? [job.displayName] : []),
-              ].join(" "),
-            );
+            let haystack = read.searchText.get(job);
+            if (haystack === undefined) {
+              haystack = normalizeLowercaseStringOrEmpty(
+                [
+                  job.id,
+                  job.name,
+                  job.description ?? "",
+                  job.agentId ?? "",
+                  ...(job.displayName ? [job.displayName] : []),
+                ].join(" "),
+              );
+              read.searchText.set(job, haystack);
+            }
             if (!haystack.includes(query)) {
               return false;
             }

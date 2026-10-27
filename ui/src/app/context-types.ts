@@ -5,7 +5,7 @@ import type { AgentsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
-import type { ChannelCapability } from "../lib/channels/index.ts";
+import type { ChannelCapability, createChannelCapability } from "../lib/channels/index.ts";
 import type {
   ChatAttachment,
   ChatComposerMemoryFallback,
@@ -138,7 +138,8 @@ export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly agentSelection: AgentSelectionCapability;
   /** Configured agent targeted by Settings, independent of chat/session selection. */
   readonly settingsAgentSelection: AgentSelectionCapability;
-  readonly channels: ChannelCapability;
+  /** Lazy routes provide the constructor; the application retains and disposes one owner. */
+  readonly acquireChannels: (create: typeof createChannelCapability) => ChannelCapability;
   readonly config: ApplicationConfigCapability;
   readonly scopeUpgrade: ScopeUpgradeCapability;
   readonly sidebarAttention: SidebarAttentionStore;

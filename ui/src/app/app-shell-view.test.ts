@@ -886,3 +886,12 @@ it("restores the delegated shell after a pending update and can select another w
   expectShell();
   expect(shell?.isConnected).toBe(true);
 });
+
+it("does not discover a fallback Home while the route shows a session recovery notice", async () => {
+  const { owner } = await mountShell();
+  owner.activeSessionKey = "agent:main:main";
+  owner.routeState = { routeId: "chat", sessionRouteNotice: true };
+  expect(readShellView(owner).sidebarProperties.sessionKey).toBe("");
+  owner.routeState = { routeId: "chat", committedSessionKey: "agent:main:main" };
+  expect(readShellView(owner).sidebarProperties.sessionKey).toBe("agent:main:main");
+});

@@ -312,9 +312,13 @@ export function hydrateSessionActorState(
   const entryRows: SessionActorStoredState["entryRows"] = new Map(
     keys.map((key) => [key, undefined]),
   );
+  let participants: SessionActorHotState["participants"] = [];
   for (const row of rows) {
     const entry = parseReadableSessionEntryData(database, row, "full");
-    const participants = decodeJsonProjection(row.actor_participants).map(readParticipantRecord);
+    const records = decodeJsonProjection(row.actor_participants).map(readParticipantRecord);
+    if (row === selected) {
+      participants = records;
+    }
     // Snapshot comparisons use decoded entries; only node columns need exact persisted bytes.
     const {
       skills_snapshot_json: _skills,
@@ -340,15 +344,12 @@ export function hydrateSessionActorState(
       entry
         ? {
             row: entryRow,
-            entry: withProjectedParticipants(entry, participants),
+            entry: withProjectedParticipants(entry, records),
           }
         : undefined,
     );
   }
   const entry = entryRows.get(target.sessionKey)?.entry;
-  const participants = selected
-    ? decodeJsonProjection(selected.actor_participants).map(readParticipantRecord)
-    : [];
   const members = selected
     ? decodeJsonProjection(selected.actor_members).map((member) => ({
         identityId: member.identity_id,

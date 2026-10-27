@@ -351,15 +351,14 @@
   white-space: nowrap;
 }
 
-.chat-queue__action,
-.chat-queue__retry {
+.chat-queue__action {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   min-height: 28px;
   padding: 4px 7px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: none;
   color: var(--accent);
   font-size: 11px;
@@ -368,24 +367,22 @@
   cursor: var(--cursor-action);
 }
 
-.chat-queue__action svg,
-.chat-queue__retry svg {
+.chat-queue__action svg {
   width: 12px;
   height: 12px;
   stroke-width: 1.75px;
 }
 
-.chat-queue__action:hover:not(:disabled),
-.chat-queue__retry:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+.chat-queue__retry svg {
+  width: 14px;
+  height: 14px;
 }
 
-.chat-queue__steer {
-  border-radius: var(--radius-full);
+.chat-queue__action:hover:not(:disabled) {
+  background: var(--surface-hover);
 }
 
 .chat-queue__steer:hover:not(:disabled) {
-  background: transparent;
   color: color-mix(in srgb, var(--accent) 84%, var(--text));
 }
 
@@ -417,7 +414,17 @@
 .chat-queue__edit-submit:hover:not(:disabled),
 .chat-queue__edit-cancel:hover:not(:disabled) {
   color: var(--text);
-  background: color-mix(in srgb, var(--text) 10%, transparent);
+  background: var(--surface-hover);
+}
+
+/* Keep the menu trigger's inline baseline out of the action row alignment. */
+.chat-queue__overflow {
+  display: flex;
+  align-items: center;
+}
+
+.chat-queue__more > .oc-menu-item__label {
+  display: contents;
 }
 
 .chat-queue__more svg {
@@ -454,6 +461,9 @@
   }
 
   .chat-queue__text {
-    -webkit-line-clamp: 1;
+    display: block;
+    white-space: nowrap;
+    text-overflow: clip;
+    -webkit-line-clamp: unset;
   }
 }

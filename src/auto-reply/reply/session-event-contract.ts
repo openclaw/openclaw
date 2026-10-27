@@ -78,7 +78,18 @@ export type SessionEventTarget = {
 export type SessionEventOptions = {
   agentId: string;
   sessionKey: string;
-  source: "exec" | "node" | "task" | "hook" | "restart" | "session" | "device" | "plugin" | "cron";
+  source:
+    | "exec"
+    | "node"
+    | "task"
+    | "hook"
+    | "restart"
+    | "session"
+    | "device"
+    | "plugin"
+    // A yielded tool's result resuming its own conversation; hidden from chat display.
+    | "tool_handoff"
+    | "cron";
   contextKey?: string;
   /** Stable identity for durable host producers across restart handoffs. */
   sourceTurnId?: string;

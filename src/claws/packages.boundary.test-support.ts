@@ -58,6 +58,7 @@ export function testPackageLease(onRelease: () => void = () => {}) {
       owner: "test-owner",
     },
     assertCurrent: () => {},
+    assertOwned: async () => {},
     release: onRelease,
   };
 }

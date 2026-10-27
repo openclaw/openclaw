@@ -1123,7 +1123,7 @@
 }
 
 .chat-activity-group__label.chat-activity-group__label--live {
-  color: var(--text);
+  color: inherit;
   text-overflow: ellipsis;
 }
 

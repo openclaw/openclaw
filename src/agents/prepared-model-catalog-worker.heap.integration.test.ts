@@ -16,6 +16,7 @@ import {
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import {
   createCatalogFixture,
@@ -50,6 +51,7 @@ function createCatalogPool(env: NodeJS.ProcessEnv) {
 
 function catalogTask(value: PreparedModelCatalogWorkerInput): PreparedModelCatalogWorkerTask {
   return {
+    context: prepareModelCatalogWorkerContext(value),
     value,
     request: {
       kind: "catalog",

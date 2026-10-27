@@ -79,7 +79,12 @@ function diffRevisionMissReason(previous: string, current: string): DiffReadCach
 }
 
 function createReadCache<Input, Output>(
-  load: (input: Input, signal: AbortSignal, timing?: DiffReadTiming) => Promise<Output>,
+  load: (
+    input: Input,
+    signal: AbortSignal,
+    timing?: DiffReadTiming,
+    preparedRevision?: GitReadOperations["checkout.revision"]["output"],
+  ) => Promise<Output>,
   freshness: number | { milliseconds: number; joinPending?: true },
   revision?: (input: Input, previous?: Output) => GitReadOperations["checkout.revision"]["input"],
   snapshot?: { empty: () => Output },
@@ -98,7 +103,11 @@ function createReadCache<Input, Output>(
   const pending = new Set<ReadEntry<Output>>();
   const revisions = new Map<
     string,
-    { controller: AbortController; promise: Promise<string | null>; timing?: DiffReadTiming }
+    {
+      controller: AbortController;
+      promise: Promise<GitReadOperations["checkout.revision"]["output"]>;
+      timing?: DiffReadTiming;
+    }
   >();
   let refreshTail: Promise<unknown> = Promise.resolve();
   let closed = false;
@@ -132,6 +141,7 @@ function createReadCache<Input, Output>(
     let entry = entries.get(key)?.entry;
     const waitingToRetry = !options.refresh && (entry?.retryAt ?? 0) > Date.now();
     let currentRevision: string | null | undefined;
+    let preparedRevision: GitReadOperations["checkout.revision"]["output"] | undefined;
     if (revision && !waitingToRetry) {
       // Share only overlapping checks of identical inputs, never a settled revision.
       const revisionInput = revision(input, entry?.value);
@@ -149,9 +159,10 @@ function createReadCache<Input, Output>(
         check = { controller, promise, timing: revisionTiming };
         revisions.set(revisionKey, check);
       }
-      currentRevision = await racePromiseWithAbortSignal(check.promise, options.signal, (signal) =>
+      preparedRevision = await racePromiseWithAbortSignal(check.promise, options.signal, (signal) =>
         toErrorObject(signal.reason, "Git read aborted"),
       );
+      currentRevision = preparedRevision?.key ?? null;
       if (timing && check.timing) {
         addDiffReadDurations(timing, check.timing);
         timing.revisionUnavailableReason = check.timing.revisionUnavailableReason;
@@ -205,9 +216,9 @@ function createReadCache<Input, Output>(
                 // Serialize display batches; the worker probes four checkouts concurrently.
                 await previousRefresh;
                 controller.signal.throwIfAborted();
-                return load(input, controller.signal, loadTiming);
+                return load(input, controller.signal, loadTiming, preparedRevision);
               }, "runtime:project-discovery")
-            : load(input, controller.signal, loadTiming),
+            : load(input, controller.signal, loadTiming, preparedRevision),
         ),
       };
       pending.add(next);
@@ -433,8 +444,19 @@ function createDiffReadCache(
     GitReadOperations["checkout.diff"]["input"],
     GitReadOperations["checkout.diff"]["output"]
   >(
-    (input: GitReadOperations["checkout.diff"]["input"], signal, diffTiming) =>
-      runGitWorkerOperation({ type: "checkout.diff", input }, { signal, diffTiming }),
+    (input, signal, diffTiming, preparedRevision) =>
+      runGitWorkerOperation(
+        {
+          type: "checkout.diff",
+          input: {
+            ...input,
+            ...(preparedRevision?.cleanWorktree
+              ? { cleanWorktree: preparedRevision.cleanWorktree }
+              : {}),
+          },
+        },
+        { signal, diffTiming },
+      ),
     freshness,
     revisionInput,
     undefined,
