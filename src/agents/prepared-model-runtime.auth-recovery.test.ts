@@ -580,6 +580,9 @@ describe("auth publication generation recovery", () => {
     async (exhausted) => {
       const { input, snapshot } = await publishOwner();
       const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot)!;
+      mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(
+        (params) => params.reusableRegistry ?? createEmptyPluginRegistry(),
+      );
       const superseded = new PreparedModelRuntimePublicationSupersededError(
         "Accepted model catalog changed during runtime preparation",
       );
