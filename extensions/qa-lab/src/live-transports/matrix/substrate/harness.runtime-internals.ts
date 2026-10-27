@@ -13,8 +13,6 @@ export const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
 export const MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
 const MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
 
-export type MatrixQaHarnessFiles = Awaited<ReturnType<typeof writeMatrixQaHarnessFiles>>;
-
 function buildVersionsUrl(baseUrl: string) {
   return `${baseUrl}_matrix/client/versions`;
 }
