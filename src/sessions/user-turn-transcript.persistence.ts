@@ -125,6 +125,12 @@ export async function persistUserTurnTranscript(
           idempotencyLookup: "scan",
           workerPreparation: {
             beforeFreshMessageCommit: params.beforeFreshMessageCommit,
+            prepareMentionInvitation: params.prepareMentionInvitation
+              ? (candidate) =>
+                  isUserMessage(candidate)
+                    ? params.prepareMentionInvitation?.(candidate)
+                    : undefined
+              : undefined,
             prepareMessageAfterIdempotencyCheck: (candidate) =>
               preparePersistedUserTurnMessageForTranscriptWrite(
                 // SAFETY: Preparation receives the typed user message above; goal preparation only adds metadata.

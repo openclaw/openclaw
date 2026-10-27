@@ -25,6 +25,7 @@ import {
   withOwnedSessionTranscriptWriterFence,
   withSessionTranscriptWriteAssertion,
 } from "../../config/sessions/transcript-write-context.js";
+import { readUserTurnMentionInvitation } from "../../sessions/user-turn-transcript-admission.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -195,6 +196,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           cwd: message.cwd,
           validateTurn: message.validateTurn,
           idempotencyLookup: message.idempotencyLookup,
+          mentionInvitation: message.mentionInvitation,
         }
       : undefined;
     const projectAppend = (
@@ -599,6 +601,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
                 cwd: this.cwd,
                 validateTurn: false,
                 idempotencyLookup: options?.idempotencyLookup,
+                mentionInvitation: readUserTurnMentionInvitation(options?.beforeFreshMessageCommit),
               }
             : undefined;
         const committed = await this.persistWorkerRecord(

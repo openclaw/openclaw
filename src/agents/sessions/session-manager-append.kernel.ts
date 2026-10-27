@@ -102,6 +102,7 @@ export function applySessionMetadataAppendInTransaction(
         now: Date.parse(event.timestamp),
         cwd: message.cwd,
         idempotencyLookup: message.idempotencyLookup,
+        mentionInvitation: message.mentionInvitation,
         ...(message.freshMessageCheck ? { beforeFreshMessageCommit } : {}),
       },
       prepared,
@@ -168,6 +169,7 @@ export function applySessionDirectMessageInTransaction(
     {
       message,
       cwd: input.cwd,
+      mentionInvitation: input.mentionInvitation,
       ...(input.freshMessageCheck && beforeFreshMessageCommit ? { beforeFreshMessageCommit } : {}),
     },
     { messageJson: input.messageJson, persistedMessage: message },

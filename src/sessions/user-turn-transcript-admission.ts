@@ -1,6 +1,13 @@
+import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
+import { createMessageInjectionAuthority } from "../auto-reply/reply/message-injection-authority.js";
 import type { SessionPendingInputReceipt } from "../config/sessions/session-pending-input-receipt.types.js";
 import type { SessionReactionWrite } from "../config/sessions/session-reaction-store.types.js";
+import type {
+  PreparedSessionMentionInvitation,
+  SessionMentionInvitation,
+} from "../config/sessions/session-sharing-authority.types.js";
+import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptAdmissionReceipt,
@@ -24,6 +31,10 @@ export type UserTurnPromptReactionSource = Readonly<{
 }>;
 
 type AdmissionOwner = {
+  onOriginalInputCommitted?: (anchor: TranscriptEntryAnchor) => void;
+  prepareMentionInvitation?: (
+    message: PersistedUserTurnMessage,
+  ) => PreparedSessionMentionInvitation | undefined;
   requesterOrigin: () => RequesterOrigin | undefined;
   promptReactionSource?: UserTurnPromptReactionSource;
   pendingInput: () => SessionPendingInputReceipt | undefined;
@@ -52,6 +63,43 @@ export function getUserTurnTranscriptAdmissionOwner(
   recorder: UserTurnTranscriptRecorder,
 ): AdmissionOwner | undefined {
   return admissionOwners.get(recorder);
+}
+
+// Invitation plans travel with the exact host-owned guard, never SDK append options.
+const mentionCommitInvitations = new WeakMap<() => void, SessionMentionInvitation>();
+
+export function prepareUserTurnMessageCommit(
+  recorder: UserTurnTranscriptRecorder | undefined,
+  message: AgentMessage,
+): (() => void) | undefined {
+  const owner = recorder && admissionOwners.get(recorder);
+  const prepared =
+    message.role === "user" &&
+    owner &&
+    !owner.blocked() &&
+    !owner.pendingInput() &&
+    !owner.receipt()
+      ? owner.prepareMentionInvitation?.(message)
+      : undefined;
+  const assertCommit = recorder?.assertOriginalInputCommit;
+  if (!assertCommit && !prepared) {
+    return undefined;
+  }
+  const assertCurrent = createMessageInjectionAuthority(() => {
+    assertCommit?.();
+    prepared?.assertCurrent();
+    return true;
+  });
+  if (prepared) {
+    mentionCommitInvitations.set(assertCurrent, prepared.invitation);
+  }
+  return assertCurrent;
+}
+
+export function readUserTurnMentionInvitation(
+  assertCurrent: (() => void) | undefined,
+): SessionMentionInvitation | undefined {
+  return assertCurrent && mentionCommitInvitations.get(assertCurrent);
 }
 
 /** Preserve prepared producer facts; accepted input takes precedence after durable custody. */
@@ -127,4 +175,24 @@ export function readPendingUserTurnTranscriptAdmission(
   }
   const receipt = owner.receipt();
   return receipt ? { ...receipt } : undefined;
+}
+
+/** Only producer facts or exact accepted custody may supply fresh write identity. */
+export function projectUserTurnRequesterOrigin<T extends PersistedUserTurnMessage | undefined>(
+  candidate: T,
+  requesterOrigin: RequesterOrigin | undefined,
+): T {
+  if (!candidate) {
+    return candidate;
+  }
+  const { requesterOrigin: _previousOrigin, ...metadata } = candidate["__openclaw"] ?? {};
+  if (requesterOrigin) {
+    metadata.requesterOrigin = requesterOrigin;
+  }
+  const next = { ...candidate };
+  delete next["__openclaw"];
+  if (Object.keys(metadata).length > 0) {
+    next["__openclaw"] = metadata;
+  }
+  return next;
 }
