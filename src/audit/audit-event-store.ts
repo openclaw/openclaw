@@ -9,6 +9,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -639,6 +640,11 @@ function pruneAfterInsert(
       (normalizeSqliteNumber(oldest?.oldest ?? null) ?? Number.POSITIVE_INFINITY) +
       AUDIT_EVENT_RETENTION_MS;
   }
+  stageSqliteTransactionState(db, {
+    commit: () => {},
+    rollback: () => auditEventRetention.delete(db),
+    invalidate: () => auditEventRetention.delete(db),
+  });
   auditEventRetention.set(db, { ...retention, nextSequence });
 }
 
@@ -662,24 +668,15 @@ export function recordAuditEventInDatabase(
       options,
     );
   }
-  const nested = db.isTransaction;
   try {
-    const retention = auditEventRetention.get(db);
-    const currentTime = Date.now();
-    const expiry = input.occurredAt + AUDIT_EVENT_RETENTION_MS;
-    if (
-      input.kind !== "message" &&
-      !nested &&
-      !isPostgresSqlConnection(db) &&
-      retention &&
-      retention.rowCount < AUDIT_EVENT_MAX_ROWS &&
-      retention.nextExpiryAt >= currentTime &&
-      expiry >= currentTime &&
-      Number.isSafeInteger(retention.nextSequence)
-    ) {
+    const retention =
+      input.kind !== "message"
+        ? getAuditAutocommitRetention(db, Date.now(), input.occurredAt, 1)
+        : undefined;
+    if (retention) {
       const values = bindAuditEvent(db, input, eventId);
-      // This is the only runtime inserter. Validate the complete result before
-      // autocommit; even a duplicate source consumes an AUTOINCREMENT sequence.
+      // Validate the complete result before autocommit; even a duplicate
+      // source consumes an AUTOINCREMENT sequence.
       const record = rowToAuditEvent({ ...values, sequence: retention.nextSequence });
       const queries = getAuditEventQueries(db);
       const inserted = runOpenClawStateWriteTransaction(() => queries.insert(values), options, {
@@ -688,7 +685,10 @@ export function recordAuditEventInDatabase(
       retention.nextSequence += 1;
       if (inserted) {
         retention.rowCount += 1;
-        retention.nextExpiryAt = Math.min(retention.nextExpiryAt, expiry);
+        retention.nextExpiryAt = Math.min(
+          retention.nextExpiryAt,
+          input.occurredAt + AUDIT_EVENT_RETENTION_MS,
+        );
       }
       return inserted ? record : undefined;
     }
@@ -702,10 +702,7 @@ export function recordAuditEventInDatabase(
         auditEventRetention.delete(db);
         return undefined;
       }
-      const insertedSequence = Number(insert.sequence);
-      if (!Number.isSafeInteger(insertedSequence) || insertedSequence < 1) {
-        throw new Error("audit event sequence is outside the supported integer range");
-      }
+      const insertedSequence = parseInsertedAuditSequence(insert.sequence);
       const now = Date.now();
       pruneAfterInsert(db, now, values.occurred_at, 1, insertedSequence + 1);
       // Current events cannot be removed by retention: sequence allocation puts
@@ -718,9 +715,6 @@ export function recordAuditEventInDatabase(
         eventId: row?.event_id,
         token: executionToken,
       });
-      if (nested) {
-        auditEventRetention.delete(db);
-      }
       return row ? rowToAuditEvent(row) : undefined;
     }, options);
   } catch (error) {
@@ -760,7 +754,6 @@ export function recordAuditRunInDatabase(
   eventIds: readonly [string, string],
 ): void {
   const { db } = options.database;
-  const nested = db.isTransaction;
   const values = [
     bindAuditEvent(db, start, eventIds[0]),
     bindAuditEvent(db, finish, eventIds[1]),
@@ -813,9 +806,6 @@ export function recordAuditRunInDatabase(
         // Both VALUES attempts consume a sequence, including either replay conflict.
         Math.max(...inserted.map((row) => row.sequence + (row.values === values[0] ? 2 : 1))),
       );
-      if (nested) {
-        auditEventRetention.delete(db);
-      }
     }, options);
   } catch (error) {
     auditEventRetention.delete(db);

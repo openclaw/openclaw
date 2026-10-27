@@ -8,7 +8,16 @@
  * --reuse-fixture reopens a successfully completed fixture without reseeding or augmentation;
  * runs sharing a directory must be serial. --base-filter <adjacent baseline .ts copy>
  * compares both filter owners in one process, with --pairs 5 alternating AB/BA.
- * Compare identical scripts on pinned revisions in alternating AB/BA launch order.
+ * --base-model-facts <adjacent baseline .ts copy> compares the model vocabulary owner
+ * over identical resident rows and catalog/context inputs; --candidate-model-facts
+ * optionally pins its candidate copy. Other selection and model-facts reads stay current.
+ * For CPU/allocation comparisons, run one revision per fresh process: pass the SAME
+ * owner paths to both internal roles, then counterbalance revision processes AB/BA.
+ * Inspect their same-function controls. Duplicate owner instances in one process showed
+ * large identical-source CPU arm bias, even with shared dispatch; use that mode for
+ * equivalence/work counts, not causal timings. Keep scripts identical across revisions.
+ * --query '<no-search>' measures only that exact workload name; other names are the
+ * search text, or selection-workload names such as 'roster:viewer-0'.
  * Acceptance: identical response digests and fewer target reads, lower CPU or allocation
  * without a reproducible adverse sibling-query result. Record host load for each arm.
  * The canonical Team fixture supplies owners, ancestry, archived rows and real worktrees;
@@ -54,8 +63,11 @@ const { values } = parseArgs({
     "candidate-filter": { type: "string" },
     "base-list": { type: "string" },
     "candidate-list": { type: "string" },
+    "base-model-facts": { type: "string" },
+    "candidate-model-facts": { type: "string" },
     pairs: { type: "string", default: "5" },
     "selection-workload": { type: "boolean", default: false },
+    query: { type: "string" },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -66,6 +78,10 @@ assert(
 );
 assert(!values["candidate-list"] || values["base-list"], "--candidate-list requires --base-list");
 assert(
+  !values["candidate-model-facts"] || values["base-model-facts"],
+  "--candidate-model-facts requires --base-model-facts",
+);
+assert(
   !values["base-list"] || values["selection-workload"],
   "--base-list requires --selection-workload",
 );
@@ -75,7 +91,8 @@ const integer = (name: "sessions" | "iterations" | "warmup" | "pairs", min = 1) 
 const sessions = integer("sessions", 100);
 const iterations = integer("iterations");
 const warmup = integer("warmup");
-const pairs = values["base-filter"] || values["base-list"] ? integer("pairs") : 1;
+const pairs =
+  values["base-filter"] || values["base-list"] || values["base-model-facts"] ? integer("pairs") : 1;
 assert(iterations >= pairs && iterations % pairs === 0, "iterations must divide into pairs");
 const root = path.resolve(values["state-dir"]);
 const anchor = Date.UTC(2026, 9, 25);
@@ -84,10 +101,13 @@ const sourceSha256 = createHash("sha256")
     readFileSync(
       values["candidate-list"] ??
         values["candidate-filter"] ??
+        values["candidate-model-facts"] ??
         new URL(
           values["base-list"]
             ? "../../src/gateway/session-utils-list.ts"
-            : "../../src/gateway/session-list-filters.ts",
+            : values["base-model-facts"] && !values["base-filter"]
+              ? "../../src/gateway/session-row-model-facts.ts"
+              : "../../src/gateway/session-list-filters.ts",
           import.meta.url,
         ),
     ),
@@ -335,6 +355,15 @@ try {
   const baseLists: typeof lists | undefined = values["base-list"]
     ? await import(pathToFileURL(path.resolve(values["base-list"])).href)
     : undefined;
+  const currentModelFacts: typeof import("../../src/gateway/session-row-model-facts.js") =
+    await import(
+      values["candidate-model-facts"]
+        ? pathToFileURL(path.resolve(values["candidate-model-facts"])).href
+        : "../../src/gateway/session-row-model-facts.js"
+    );
+  const baseModelFacts: typeof currentModelFacts | undefined = values["base-model-facts"]
+    ? await import(pathToFileURL(path.resolve(values["base-model-facts"])).href)
+    : undefined;
   inspector.connect();
   connected = true;
   const workloads = values["selection-workload"]
@@ -350,7 +379,12 @@ try {
         opts: { search },
         client: undefined,
       }));
-  for (const workload of workloads) {
+  const selectedWorkloads =
+    values.query === undefined
+      ? workloads
+      : workloads.filter((workload) => workload.name === values.query);
+  assert(selectedWorkloads.length > 0, `Unknown workload: ${values.query}`);
+  for (const workload of selectedWorkloads) {
     const { name, client } = workload;
     const search = workload.opts.search;
     const opts: SessionsListParams = {
@@ -398,21 +432,39 @@ try {
       };
     };
     const window = { offset: 0, limit: 50, ownerLimit: 0 };
+    // Keep owner dispatch call shapes identical between arms.
+    const createArm = (
+      armName: string,
+      listOwner: typeof lists,
+      filterOwner: typeof currentFilters,
+      modelOwner: typeof currentModelFacts,
+    ) => ({
+      name: armName,
+      prepare: () => {
+        const prepared = prepare(listOwner);
+        if (baseModelFacts) {
+          const { cfg: modelConfig, modelCatalog, rowContext } = projection!.state;
+          prepared.modelSearchMayMatch = (query) =>
+            modelOwner.mayMatchSessionRowModelSearch(
+              { cfg: modelConfig, modelCatalog, rowContext, rows: shapeRows },
+              query,
+            );
+        }
+        return prepared;
+      },
+      select: (params: ReturnType<typeof prepare>) =>
+        filterOwner.filterSessionEntries(params, window),
+    });
     const arms =
-      baseFilters || baseLists
+      baseFilters || baseLists || baseModelFacts
         ? [
-            {
-              name: "base",
-              prepare: () => prepare(baseLists ?? lists),
-              select: (params: ReturnType<typeof prepare>) =>
-                (baseFilters ?? currentFilters).filterSessionEntries(params, window),
-            },
-            {
-              name: "candidate",
-              prepare: () => prepare(candidateLists),
-              select: (params: ReturnType<typeof prepare>) =>
-                currentFilters.filterSessionEntries(params, window),
-            },
+            createArm(
+              "base",
+              baseLists ?? lists,
+              baseFilters ?? currentFilters,
+              baseModelFacts ?? currentModelFacts,
+            ),
+            createArm("candidate", candidateLists, currentFilters, currentModelFacts),
           ]
         : [{ name: "selection", prepare, select: lists.selectSessionEntries }];
     for (const arm of arms) {
@@ -555,10 +607,21 @@ try {
   const result = {
     node: process.version,
     sourceSha256,
+    modelFactsSourceSha256: values["base-model-facts"]
+      ? [
+          values["base-model-facts"],
+          values["candidate-model-facts"] ??
+            new URL("../../src/gateway/session-row-model-facts.ts", import.meta.url),
+        ].map((source) => createHash("sha256").update(readFileSync(source)).digest("hex"))
+      : undefined,
     baseSourceSha256:
-      values["base-list"] || values["base-filter"]
+      values["base-list"] || values["base-filter"] || values["base-model-facts"]
         ? createHash("sha256")
-            .update(readFileSync((values["base-list"] ?? values["base-filter"])!))
+            .update(
+              readFileSync(
+                (values["base-list"] ?? values["base-filter"] ?? values["base-model-facts"])!,
+              ),
+            )
             .digest("hex")
         : undefined,
     mode: values.mode,

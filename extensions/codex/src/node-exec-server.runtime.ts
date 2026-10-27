@@ -294,6 +294,13 @@ export async function runCodexNodeExecServer(params: {
             stderr,
             next.subarray(-MAX_CODEX_EXEC_SERVER_STDERR_BYTES),
           ]).subarray(-MAX_CODEX_EXEC_SERVER_STDERR_BYTES);
+          // The byte tail may split a multi-byte UTF-8 sequence; walk past its
+          // continuation bytes so the diagnostic decodes without a leading U+FFFD.
+          let start = 0;
+          while (start < stderr.length && (stderr[start]! & 0xc0) === 0x80) {
+            start++;
+          }
+          stderr = stderr.subarray(start);
           if (pendingLine === undefined) {
             return;
           }
