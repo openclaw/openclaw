@@ -844,8 +844,6 @@ const repositoryScriptEntries = [
   "scripts/perf/agent-prepare-write-measure.mjs!",
   "scripts/perf/config-health-restart-measure.ts!",
   "scripts/perf/connect-tail-measure.ts!",
-  "scripts/perf/chat-send-slow-attribution.ts!",
-  "scripts/perf/chat-send-command-payload-measure.ts!",
   "scripts/perf/device-token-snapshot-measure.ts!",
   "scripts/perf/paired-row-encoding-measure.ts!",
   "scripts/perf/session-patch-projection-measure.ts!",
