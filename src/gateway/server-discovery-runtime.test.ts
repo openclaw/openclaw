@@ -228,42 +228,6 @@ describe("startGatewayDiscovery", () => {
     expect(calls.every((call) => call.runtime === runtime)).toBe(true);
   });
 
-  it("starts registered local discovery services with gateway advertisement context", async () => {
-    process.env.OPENCLAW_SSH_PORT = "2222";
-
-    const stopped: string[] = [];
-    const service = (id: string) =>
-      makeDiscoveryService(id, {
-        stop: () => {
-          stopped.push(id);
-        },
-      });
-    const bonjour = service("bonjour");
-    const peer = service("peer");
-    const result = await startDiscovery([bonjour, peer], {
-      discovery: { mdns: { mode: "full" } },
-      gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
-      gatewayDirectReachable: true,
-    });
-
-    expect(bonjour.advertise).toHaveBeenCalledWith({
-      machineDisplayName: "Lab Mac",
-      gatewayPort: 18789,
-      gatewayTlsEnabled: true,
-      gatewayTlsFingerprintSha256: "abc123",
-      gatewayDirectReachable: true,
-      sshPort: 2222,
-      tailnetDns: "gateway.tailnet.example.ts.net",
-      cliPath: "/usr/local/bin/openclaw",
-      minimal: false,
-    });
-    expect(peer.advertise).toHaveBeenCalledTimes(1);
-    expect(logs.warn).not.toHaveBeenCalled();
-
-    await result.stop();
-    expect(stopped).toEqual(["peer", "bonjour"]);
-  });
-
   it("omits invalid SSH discovery ports", async () => {
     process.env.OPENCLAW_SSH_PORT = "2222abc";
     const service = makeDiscoveryService("bonjour");
@@ -346,16 +310,39 @@ describe("startGatewayDiscovery", () => {
 
   it("replaces advertisements and wide-area metadata across live mode and registry changes", async () => {
     process.env.OPENCLAW_SSH_PORT = "2222";
-    const stop = vi.fn();
+    const stopped: string[] = [];
+    const stop = vi.fn(() => {
+      stopped.push("bonjour");
+    });
     const service = makeDiscoveryService("bonjour", { stop });
-    const discovery = await startDiscovery([service], {
+    const peer = makeDiscoveryService("peer", {
+      stop: () => {
+        stopped.push("peer");
+      },
+    });
+    const discovery = await startDiscovery([service, peer], {
       discovery: { mdns: { mode: "full" }, wideArea: { domain: "openclaw.internal." } },
       gatewayTls: { enabled: true, fingerprintSha256: "fingerprint" },
       gatewayDirectReachable: true,
     });
-
-    for (const mode of ["minimal", "full", "minimal", "off"] as const) {
+    expect(service.advertise).toHaveBeenCalledWith({
+      machineDisplayName: "Lab Mac",
+      gatewayPort: 18789,
+      gatewayTlsEnabled: true,
+      gatewayTlsFingerprintSha256: "fingerprint",
+      gatewayDirectReachable: true,
+      sshPort: 2222,
+      tailnetDns: "gateway.tailnet.example.ts.net",
+      cliPath: "/usr/local/bin/openclaw",
+      minimal: false,
+    });
+    expect(peer.advertise).toHaveBeenCalledOnce();
+    expect(logs.warn).not.toHaveBeenCalled();
+    for (const [index, mode] of (["minimal", "full", "minimal", "off"] as const).entries()) {
       await discovery.update({ mdnsMode: mode });
+      if (index === 0) {
+        expect(stopped).toEqual(["peer", "bonjour"]);
+      }
       const full = mode === "full";
       expect(latestZoneParams()).toMatchObject({
         domain: "openclaw.internal.",

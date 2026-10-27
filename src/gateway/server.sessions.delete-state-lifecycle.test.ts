@@ -329,7 +329,6 @@ test.each(["owner grant", "retained placeholder", "folded sibling", "malformed r
       await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
       expect(readRow()).toEqual({ entry_json: "{}" });
     } else {
-      await expect(deletion).rejects.toBeInstanceOf(Error);
       await expect(deletion).rejects.toThrow(
         ownerGrant
           ? "Session currency changed while awaiting its native grant"
@@ -533,22 +532,16 @@ async function createCompanion(runModel?: () => Promise<string>) {
     sessionObserver: { getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }) },
   });
   companions.add(service);
-  return { service, run: runLoop };
+  return service;
 }
 
-async function ask(
-  service: SessionCompanionService,
-  sessionKey: string,
-  question: string,
-  agentId = "main",
-) {
-  return service.ask({ agentId, sessionKey, question, connId: `conn-${agentId}` });
-}
+const ask = (service: SessionCompanionService, sessionKey: string, question: string) =>
+  service.ask({ agentId: "main", sessionKey, question, connId: "conn-main" });
 
-async function readState(service: SessionCompanionService, sessionKey: string, agentId = "main") {
+async function readState(service: SessionCompanionService, sessionKey: string) {
   const response = await directSessionReq<SessionsCompanionStateResult>(
     "sessions.companion.state",
-    { sessionKey, agentId },
+    { sessionKey, agentId: "main" },
     { context: { sessionCompanion: service } },
   );
   expect(response.ok, response.error?.message).toBe(true);
@@ -579,7 +572,7 @@ test("sessions.delete isolates Side chat for the same global key and session ID 
 
 test("a delayed deletion event cannot erase Side chat for a newer generation", async () => {
   const { sessionKey } = await createStoredSession("old-generation");
-  const { service } = await createCompanion();
+  const service = await createCompanion();
   await ask(service, sessionKey, "Old generation question?");
   let deletion: Extract<SessionIdentityMutation, { kind: "delete" }> | undefined;
   const stop = onSessionIdentityMutation((event) => {
@@ -616,7 +609,7 @@ test("sessions.delete cancels a prepared Side chat ask before its late answer", 
   const { sessionKey } = await createStoredSession("active-generation");
   const pending = createDeferred<string>();
   const started = createDeferred();
-  const { service, run } = await createCompanion(() => {
+  const service = await createCompanion(() => {
     started.resolve();
     return pending.promise;
   });
@@ -630,9 +623,8 @@ test("sessions.delete cancels a prepared Side chat ask before its late answer", 
     awaitGateBeforeSettlement(started.promise, active, "Side chat settled before model start"),
     signal,
   );
-  expect(run).toHaveBeenCalledOnce();
   await deleteSession(sessionKey);
-  expect(run.mock.calls[0]?.[1].runParams.abortSignal?.aborted).toBe(true);
+  expect(runLoop.mock.calls[0]?.[1].runParams.abortSignal?.aborted).toBe(true);
   pending.resolve("Late answer from the deleted session.");
   await expect(failure).resolves.toMatchObject({ reason: "context-unavailable" });
   expect((await readState(service, sessionKey)).exchanges).toEqual([]);
