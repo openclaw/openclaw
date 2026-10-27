@@ -1,8 +1,12 @@
+import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
+import { t } from "../../i18n/index.ts";
 import type {
   ChatSelectionAnnotation,
   DurableComposerDraftScope,
 } from "../../lib/chat/chat-types.ts";
 import { nextDraftRevision } from "../../lib/chat/outbox-store-draft-state.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { showToast } from "../../lib/toast.ts";
 
 const store = () => import("../../lib/chat/composer-draft-store.runtime.ts");
 
@@ -17,6 +21,8 @@ export class ChatSessionCompanionComments {
   private failed = false;
   private invalidated = false;
   private write = Promise.resolve();
+  private stopReloadGuard: (() => void) | undefined;
+  private stopBeforeUnload: (() => void) | undefined;
   readonly restoration: Promise<void>;
 
   constructor(
@@ -24,12 +30,25 @@ export class ChatSessionCompanionComments {
     private readonly isCurrent: () => boolean,
     private readonly restore: (comments: ChatSelectionAnnotation[]) => void,
     private readonly onError: () => void,
+    private readonly onChange: () => void,
   ) {
     this.restoration = this.read().catch(() => this.reportError());
   }
 
   dispose() {
     this.invalidated = true;
+    this.releaseSaveGuard();
+  }
+
+  get saving(): boolean {
+    return this.stopReloadGuard !== undefined;
+  }
+
+  private releaseSaveGuard() {
+    this.stopReloadGuard?.();
+    this.stopReloadGuard = undefined;
+    this.stopBeforeUnload?.();
+    this.stopBeforeUnload = undefined;
   }
 
   get editRevision() {
@@ -82,10 +101,29 @@ export class ChatSessionCompanionComments {
   }
 
   save(comments: ChatSelectionAnnotation[]) {
+    if (!this.current()) {
+      return;
+    }
+    // An accepted edit is visible before its async IDB write commits. Protect
+    // that interval, including queued writes and a still-opening draft store.
+    if (!this.stopReloadGuard) {
+      this.stopReloadGuard = registerControlUiReloadGuard(
+        () => !this.current(),
+        () => showToast({ message: t("common.saving") }),
+      );
+      if (typeof window !== "undefined") {
+        this.stopBeforeUnload = listen(window, "beforeunload", (event) => {
+          if (this.current()) {
+            event.preventDefault();
+            event.returnValue = "";
+          }
+        });
+      }
+    }
     const intentRevision = nextDraftRevision(Math.max(this.intentRevision, this.revision));
     this.intentRevision = intentRevision;
     const signature = JSON.stringify(comments);
-    this.write = this.write
+    const operation = this.write
       .then(async () => {
         await this.restoration;
         if (
@@ -118,5 +156,15 @@ export class ChatSessionCompanionComments {
         }
       })
       .catch(() => this.reportError());
+    const settled: Promise<void> = operation.finally(() => {
+      // An earlier save must not unlock a later edit still in the queue.
+      if (this.write === settled) {
+        this.releaseSaveGuard();
+        if (this.current()) {
+          this.onChange();
+        }
+      }
+    });
+    this.write = settled;
   }
 }

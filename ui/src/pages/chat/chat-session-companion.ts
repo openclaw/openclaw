@@ -73,6 +73,8 @@ export type ChatSessionCompanionThread = {
   loading: boolean;
   draft: string;
   attachments?: ChatAttachment[];
+  /** A pending browser draft write, not an unanswered Side chat question. */
+  commentsSaving?: boolean;
   attachmentReads?: ChatAttachmentReadLifecycle;
   /** Model the Gateway answers with when no model is chosen; absent until hydrated. */
   defaultModel?: string;
@@ -519,6 +521,9 @@ export class ChatSessionCompanionThreads {
         loading: false,
         draft: "",
         attachments: [],
+        get commentsSaving() {
+          return thread?.comments?.saving ?? false;
+        },
         attachmentReads: new ChatAttachmentReadLifecycle(this.notify),
         modelSelection: this.modelSelections.get(key.slice(0, key.indexOf("\0"))) ?? {},
         revision: 0,
@@ -577,6 +582,7 @@ export class ChatSessionCompanionThreads {
         this.notify();
       },
       this.commentStorage.onError,
+      this.notify,
     );
     if (thread.attachments?.some((item) => item.selectionAnnotation)) {
       this.persistComments(thread);

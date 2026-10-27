@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, nextEventLoopTurn } from "../../../../test/helpers/promise.ts";
+import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
 import type {
   ChatSelectionAnnotation,
   DurableComposerDraftScope,
@@ -52,9 +53,17 @@ beforeEach(async () => {
   // work, rather than racing asynchronous module I/O or polling a wall clock.
   await import("../../lib/chat/composer-draft-store.runtime.ts");
 });
+const owners = new Set<ChatSessionCompanionThreads>();
+afterEach(() => {
+  for (const threads of owners) {
+    threads.retire();
+  }
+  owners.clear();
+});
 function owner(resolve: () => DurableComposerDraftScope | null = () => scope) {
   const error = vi.fn();
   const threads = new ChatSessionCompanionThreads({ scope: resolve, onError: error });
+  owners.add(threads);
   return { threads, error, view: () => threads.view(annotation.sessionKey, "main") };
 }
 
@@ -332,4 +341,46 @@ it("still cancels a stale account's submission after falling back to memory-only
   expect(ask).not.toHaveBeenCalled();
   expect(previous.draft).toBe("Keep my local input");
   expect(storage.write).not.toHaveBeenCalled();
+});
+
+it.each(["persisted", "storage-failed"] as const)(
+  "protects edited comments until the durable save settles as %s",
+  async (status) => {
+    const write = createDeferred<{ status: "persisted" | "storage-failed" }>();
+    storage.write.mockReturnValue(write.promise);
+    const current = owner();
+    current.threads.setAttachments(annotation.sessionKey, [attachment("new edit")], "main");
+    expect(canReloadControlUiDocument()).toBe(false);
+    const unloading = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(unloading);
+    expect(unloading.defaultPrevented).toBe(true);
+    await nextEventLoopTurn();
+    expect(storage.write).toHaveBeenCalledTimes(1);
+    expect(current.view().commentsSaving).toBe(true);
+    write.resolve({ status });
+    await nextEventLoopTurn();
+    expect(canReloadControlUiDocument()).toBe(true);
+    expect(current.view().commentsSaving).toBe(false);
+    const settledUnload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(settledUnload);
+    expect(settledUnload.defaultPrevented).toBe(false);
+    expect(current.error).toHaveBeenCalledTimes(status === "persisted" ? 0 : 1);
+  },
+);
+
+it("keeps reload protection across queued edits until the newest save settles", async () => {
+  const first = createDeferred<{ status: "persisted" }>();
+  const second = createDeferred<{ status: "persisted" }>();
+  storage.write.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+  const current = owner();
+  current.threads.setAttachments(annotation.sessionKey, [attachment()], "main");
+  await nextEventLoopTurn();
+  current.threads.setAttachments(annotation.sessionKey, [attachment("newest edit")], "main");
+  first.resolve({ status: "persisted" });
+  await nextEventLoopTurn();
+  expect(storage.write).toHaveBeenCalledTimes(2);
+  expect(canReloadControlUiDocument()).toBe(false);
+  second.resolve({ status: "persisted" });
+  await nextEventLoopTurn();
+  expect(canReloadControlUiDocument()).toBe(true);
 });
