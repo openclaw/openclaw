@@ -33,27 +33,23 @@ export async function readLocalWorkspaceRuntimes(
     assertCurrent: custody.assertCurrent,
   };
   const [containers, browsers, streams] = await Promise.all([
-    readRegistry(database),
-    readBrowserRegistry(database),
+    readRegistry({ ...database, workspaceDir }),
+    readBrowserRegistry({ ...database, workspaceDir }),
     custody.list(),
   ]);
   return [
-    ...containers.entries
-      .filter((entry) => entry.workspaceDir === workspaceDir)
-      .map((entry) => ({
-        kind: "container" as const,
-        entry,
-        database,
-        assertCurrent: () => assertSandboxRegistryRetirementCurrent("container", entry, database),
-      })),
-    ...browsers.entries
-      .filter((entry) => entry.workspaceDir === workspaceDir)
-      .map((entry) => ({
-        kind: "browser" as const,
-        entry,
-        database,
-        assertCurrent: () => assertSandboxRegistryRetirementCurrent("browser", entry, database),
-      })),
+    ...containers.entries.map((entry) => ({
+      kind: "container" as const,
+      entry,
+      database,
+      assertCurrent: () => assertSandboxRegistryRetirementCurrent("container", entry, database),
+    })),
+    ...browsers.entries.map((entry) => ({
+      kind: "browser" as const,
+      entry,
+      database,
+      assertCurrent: () => assertSandboxRegistryRetirementCurrent("browser", entry, database),
+    })),
     ...streams.flatMap((record) => {
       const receipt = record.receipt;
       // Preparation and START share the projection lease. Without a published

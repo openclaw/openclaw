@@ -564,7 +564,7 @@ export function readOpenClawStateDatabaseCommand(
     return { type: command.type, agentIds: readRetainedAgentDeletionIds(db) };
   }
   if (command.type === "sandboxRegistry.list") {
-    return { type: command.type, entries: readSandboxRegistryInDatabase(db) };
+    return { type: command.type, entries: readSandboxRegistryInDatabase(db, command.workspaceDir) };
   }
   if (command.type === "sandboxRegistry.get") {
     return {
@@ -579,7 +579,10 @@ export function readOpenClawStateDatabaseCommand(
     };
   }
   if (command.type === "sandboxRegistry.browsers") {
-    return { type: command.type, entries: readSandboxBrowserRegistryInDatabase(db) };
+    return {
+      type: command.type,
+      entries: readSandboxBrowserRegistryInDatabase(db, command.workspaceDir),
+    };
   }
   return {
     type: command.type,

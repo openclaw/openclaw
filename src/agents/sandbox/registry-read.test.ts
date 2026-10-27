@@ -83,6 +83,41 @@ const expectAbsent = (name: string) => expect(readRegistryEntry(name)).resolves.
 const writeNative = (write: Parameters<typeof writeSandboxRegistryInDatabase>[1]) =>
   runOpenClawStateWriteTransaction(({ db }) => writeSandboxRegistryInDatabase(db, write));
 
+it.each(["container", "browser"] as const)(
+  "selects only the requested workspace's %s runtimes, including changed bindings",
+  async (kind) => {
+    const write = (containerName: string, workspaceDir?: string) =>
+      writeNative(
+        kind === "container"
+          ? { operation: "update", entry: containerEntry({ containerName, workspaceDir }) }
+          : { operation: "updateBrowser", entry: browserEntry({ containerName, workspaceDir }) },
+      );
+    write("selected", "/projection/selected");
+    write("other", "/projection/other");
+    write("unbound");
+    const read = kind === "container" ? readRegistry : readBrowserRegistry;
+    const selected = async () =>
+      (await read({ workspaceDir: "/projection/selected" })).entries.map(
+        (entry) => entry.containerName,
+      );
+    expect(await selected()).toEqual(["selected"]);
+    writeNative(
+      kind === "container"
+        ? { operation: "remove", containerName: "selected" }
+        : { operation: "removeBrowser", containerName: "selected" },
+    );
+    writeNative(
+      kind === "container"
+        ? { operation: "remove", containerName: "other" }
+        : { operation: "removeBrowser", containerName: "other" },
+    );
+    write("selected", "/projection/other");
+    write("other", "/projection/selected");
+    expect(await selected()).toEqual(["other"]);
+    expect((await read()).entries).toHaveLength(3);
+  },
+);
+
 type RegistryReceipt = Extract<
   Parameters<Parameters<typeof sandboxRegistryPublication.subscribeFacts>[0]>[0],
   { facts: unknown }

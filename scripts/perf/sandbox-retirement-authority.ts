@@ -12,6 +12,16 @@
  * --registry-module selects a baseline registry module placed beside its original
  * dependencies when those dependencies are unchanged by the measured operation.
  * --output must be new; temporary synthetic state is removed after worker close.
+ *
+ * --operation workspace-selection measures the two worker-backed registry reads
+ * used by readLocalWorkspaceRuntimes, then selects the exact workspace. The default
+ * fixture has 256 containers and 64 browsers across 40 agents. An older registry
+ * module ignores workspaceDir and returns the whole fleet; the caller filter keeps
+ * selected results identical. Reported rows count the decoded/transferred entries,
+ * not SQLite pages scanned. This excludes persistent streams, custody acquisition,
+ * filesystem synchronization, Docker latency, and full Gateway startup. The registry
+ * owner issues no Git commands or child-process operations; database I/O is included
+ * in elapsed/CPU measurements but filesystem syscall counts are not instrumented.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -31,21 +41,28 @@ const { values } = parseArgs({
   options: {
     output: { type: "string" },
     mode: { type: "string", default: "timing" },
+    operation: { type: "string", default: "retirement-authority" },
     iterations: { type: "string", default: "2000" },
     containers: { type: "string", default: "256" },
     browsers: { type: "string", default: "64" },
+    agents: { type: "string", default: "40" },
     "registry-module": { type: "string" },
   },
 });
 assert(values.output, "--output is required");
 assert(values.mode === "timing" || values.mode === "allocation", "Invalid --mode");
+assert(
+  values.operation === "retirement-authority" || values.operation === "workspace-selection",
+  "Invalid --operation",
+);
 assert(global.gc, "Run with --expose-gc");
 assert(!process.execArgv.some((arg) => arg.startsWith("--trace-gc")), "Use untraced runs");
-const integer = (label: "iterations" | "containers" | "browsers", fallback: number) =>
+const integer = (label: "iterations" | "containers" | "browsers" | "agents", fallback: number) =>
   parseStrictIntegerOption({ raw: values[label], label: `--${label}`, min: 1, fallback });
 const iterations = integer("iterations", 2000);
 const containers = integer("containers", 256);
 const browsers = integer("browsers", 64);
+const agents = integer("agents", 40);
 const output = path.resolve(values.output);
 await mkdir(path.dirname(output), { recursive: true });
 await mkdir(output);
@@ -85,7 +102,7 @@ const observer = new PerformanceObserver((list) => {
 const entry = (index: number) => ({
   containerName: `synthetic-runtime-${index}`,
   backendId: "docker",
-  sessionKey: `agent:main:synthetic-${index}`,
+  sessionKey: `agent:synthetic-${index % agents}:synthetic-${index}`,
   workspaceDir: path.join(stateDir, "projections", String(index)),
   createdAtMs: 1_800_000_000_000,
   lastUsedAtMs: 1_800_000_000_001,
@@ -107,16 +124,38 @@ try {
   const container = (await registry.readRegistry(database)).entries[0];
   const browser = (await registry.readBrowserRegistry(database)).entries[0];
   assert(container && browser, "Registry fixtures were not published");
-  const cycle = async () => {
+  const authorityCycle = async () => {
     for (let check = 0; check < 4; check++) {
       await registry.assertSandboxRegistryRetirementCurrent("container", container, database);
       await registry.assertSandboxRegistryRetirementCurrent("browser", browser, database);
     }
   };
+  const workspaceDir = entry(0).workspaceDir;
+  let returnedRows = 0;
+  const selectionCycle = async () => {
+    const options = { ...database, workspaceDir };
+    const [selectedContainers, selectedBrowsers] = await Promise.all([
+      registry.readRegistry(options),
+      registry.readBrowserRegistry(options),
+    ]);
+    returnedRows += selectedContainers.entries.length + selectedBrowsers.entries.length;
+    const containersInWorkspace = selectedContainers.entries.filter(
+      (selected) => selected.workspaceDir === workspaceDir,
+    );
+    const browsersInWorkspace = selectedBrowsers.entries.filter(
+      (selected) => selected.workspaceDir === workspaceDir,
+    );
+    assert.equal(containersInWorkspace.length, 1);
+    assert.equal(containersInWorkspace[0]?.containerName, "synthetic-runtime-0");
+    assert.equal(browsersInWorkspace.length, 1);
+    assert.equal(browsersInWorkspace[0]?.containerName, "synthetic-browser-0");
+  };
+  const cycle = values.operation === "workspace-selection" ? selectionCycle : authorityCycle;
   const warmup = 25;
   for (let index = 0; index < warmup; index++) {
     await cycle();
   }
+  returnedRows = 0;
   global.gc();
   await nextTurn();
   await nextTurn();
@@ -140,9 +179,12 @@ try {
   memoryTimer = setInterval(sampleMemory, 100);
   const cpuBefore = process.cpuUsage();
   const threadBefore = process.threadCpuUsage();
+  const cycleDurationsMs: number[] = [];
   const startTime = performance.now();
   for (let index = 0; index < iterations; index++) {
+    const cycleStart = performance.now();
     await cycle();
+    cycleDurationsMs.push(performance.now() - cycleStart);
   }
   const endTime = performance.now();
   const cpu = process.cpuUsage(cpuBefore);
@@ -164,7 +206,7 @@ try {
   const allocationBytes = profile ? sampledBytes(profile.head) : undefined;
   const wallMs = endTime - startTime;
   const sourceHashes: Record<string, string> = {};
-  for (const module of ["registry.ts", "registry-currentness.ts"]) {
+  for (const module of ["registry.ts", "registry-currentness.ts", "registry.kernel.ts"]) {
     sourceHashes[module] = createHash("sha256")
       .update(
         await readFile(
@@ -175,19 +217,43 @@ try {
       )
       .digest("hex");
   }
+  cycleDurationsMs.sort((left, right) => left - right);
+  const percentile = (fraction: number) =>
+    cycleDurationsMs[Math.min(iterations - 1, Math.ceil(iterations * fraction) - 1)];
   const report = {
-    scope: "Real retirement authority: four checks each for a container and browser per cycle",
+    scope:
+      values.operation === "workspace-selection"
+        ? "Registry portion of workspace selection: container and browser reads, exact workspace filter"
+        : "Real retirement authority: four checks each for a container and browser per cycle",
+    operation: values.operation,
     mode: values.mode,
     node: process.version,
     registryModule: registryModuleUrl.href,
     sourceHashes,
     iterations,
-    checks: iterations * 8,
+    checks: values.operation === "retirement-authority" ? iterations * 8 : undefined,
+    work:
+      values.operation === "workspace-selection"
+        ? {
+            registryReads: iterations * 2,
+            returnedRows,
+            returnedRowsPerCycle: returnedRows / iterations,
+            selectedRowsPerCycle: 2,
+          }
+        : undefined,
     warmup,
-    fixture: { containers, browsers },
+    fixture: { containers, browsers, agents },
     hostLoad: { before: loadBefore, after: loadavg() },
     wallMs,
     wallUsPerCycle: (wallMs * 1000) / iterations,
+    cycleWallMs: {
+      samples: iterations,
+      min: cycleDurationsMs[0],
+      median: percentile(0.5),
+      p95: percentile(0.95),
+      p99: percentile(0.99),
+      max: cycleDurationsMs.at(-1),
+    },
     processCpuMs: (cpu.user + cpu.system) / 1000,
     processCpuUsPerCycle: (cpu.user + cpu.system) / iterations,
     mainThreadCpuMs: (threadCpu.user + threadCpu.system) / 1000,
