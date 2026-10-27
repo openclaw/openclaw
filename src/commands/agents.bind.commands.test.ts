@@ -120,6 +120,27 @@ describe("agents bind/unbind commands", () => {
     expect(writeConfigFileMock).toHaveBeenLastCalledWith({ ...config, bindings: undefined });
   });
 
+  it("matches normalized channel identities for conflicts, repeats, and removal", async () => {
+    const config = { agents: explicitAgents, bindings: [route("Telegram", undefined, "ops")] };
+    setConfig(config);
+    // Routing lowercases the channel id, so a differently-cased spec is the same scope:
+    // binding it for another agent must conflict instead of writing a second dead route.
+    await update("bind", { agent: "main", bind: ["telegram"], json: true });
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(json.mock.lastCall).toEqual([
+      expect.objectContaining({ conflicts: ["telegram (agent=ops)"] }),
+      2,
+    ]);
+
+    await update("bind", { agent: "ops", bind: ["TELEGRAM"] });
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+
+    // Unbinding the owning agent must remove the stored binding whatever its casing.
+    await update("unbind", { agent: "ops", bind: ["telegram"] });
+    expect(writeConfigFileMock).toHaveBeenLastCalledWith({ ...config, bindings: undefined });
+  });
+
   it("binds a mixed batch using one manifest inventory per invocation", async () => {
     await update("bind", {
       bind: ["telegram", "whatsapp", "signal", "external-chat:work", "external-chat:home"],
