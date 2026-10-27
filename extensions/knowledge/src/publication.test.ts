@@ -281,16 +281,17 @@ it("returns a resume receipt without loading the retained publication plan twice
       const prepare = db.prepare.bind(db);
       db.prepare = (sql) => {
         const statement = prepare(sql);
-        const get = statement.get.bind(statement);
-        statement.get = (...args) => {
-          const row = get(...args);
-          for (const value of Object.values(row ?? {})) {
-            if (typeof value === "string") {
-              returnedBytes += Buffer.byteLength(value);
+        statement.get = new Proxy(statement.get.bind(statement), {
+          apply(get, receiver, args) {
+            const row: ReturnType<typeof get> = Reflect.apply(get, receiver, args);
+            for (const value of Object.values(row ?? {})) {
+              if (typeof value === "string") {
+                returnedBytes += Buffer.byteLength(value);
+              }
             }
-          }
-          return row;
-        };
+            return row;
+          },
+        });
         return statement;
       };
       return run(db);
