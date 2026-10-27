@@ -101,6 +101,11 @@ it.each([...renameScenarios, "activation-transient", "activation-persistent"] as
         step: { failureFacts: [expect.objectContaining({ code: "EPERM" })] },
       });
       expect(result.step.stderrTail).toContain(packageRoot);
+      expect(attempts).toBe(16);
+      // The denied object stays in place: the live package, or the exact activation stage.
+      await expect(fs.readFile(path.join(denied, "package.json"), "utf8")).resolves.toContain(
+        scenario === "persistent" ? `"version":"1.0.0"` : `"version":"2.0.0"`,
+      );
     }
     await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
       `"version":"${transient ? "2.0.0" : "1.0.0"}"`,
