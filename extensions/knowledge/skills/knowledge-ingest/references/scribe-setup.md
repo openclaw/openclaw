@@ -56,19 +56,23 @@ owns exactly one automation, found by its declaration key. Call the
 - Do not pass `enabled`. Adding with an existing declaration key updates that
   job in place, so a job the owner paused stays paused.
 
-Then start one test run: `automations` `{"action": "run", "jobId": "<id>",
-"runMode": "force", "timeoutMs": 1000}`. The run is a turn in this
-conversation, so it starts after this turn ends; do not wait for it. Report the
-returned run ID. The test run is the first real run and ends with its own
-result line.
+Before adding, `automations` `list` with `includeDisabled: true`. Declaration
+keys are unique per owning conversation, so a scribe set up again from a new
+conversation would leave the old job behind: `remove` every job with this key
+that targets another session, so exactly one remains.
+
+Do not start a run yourself: a run started from this turn is skipped once the
+turn ends. The first scheduled run is the test; for the review scribe, the next
+maintenance pass that leaves claims unlinked queues it. Report the job ID and
+its next run time.
 
 ## 3. Repair
 
 Repair re-checks the setup; it does not do the scribe's work. Run step 1. For
 an ongoing scribe, `automations` `list` with `includeDisabled: true` and find
-the job with declaration key `knowledge:scribe:<id>`. If it is missing or
-targets another session, run step 2 (without the test run when the job
-existed). Report whether the job is enabled; never enable a paused job.
+the job with declaration key `knowledge:scribe:<id>`. If it is missing,
+targets another session or has duplicates, run step 2. Report whether the job
+is enabled; never enable a paused job.
 
 ## 4. Scheduled runs
 
