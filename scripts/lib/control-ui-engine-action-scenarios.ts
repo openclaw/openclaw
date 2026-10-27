@@ -1,4 +1,3 @@
-import type { SelectPicker } from "../../ui/src/components/select-picker.ts";
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
 import { interactionScenarios } from "./control-ui-interaction-scenarios.ts";
@@ -10,53 +9,11 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
     throw new Error("Missing shared held Cron scenario");
   }
   const cycles = 8;
-  const picker = interactionScenarios.find(({ id }) => id === "provider-model-picker-open");
-  if (!picker) {
-    throw new Error("Missing shared provider picker scenario");
+  const chatPicker = interactionScenarios.find(({ id }) => id === "model-picker-first-open-search");
+  const sessions = interactionScenarios.find(({ id }) => id === "sessions-sort");
+  if (!chatPicker || !sessions) {
+    throw new Error("Missing shared chat picker or Sessions scenario");
   }
-  const pickerNavigation: EngineScenario = {
-    ...picker,
-    id: "provider-model-picker-navigate",
-    explicitOnly: true,
-    expected: "Twenty keyboard moves retain a visible active model choice.",
-    prepare: async (page, gateway) => {
-      await picker.prepare(page, gateway);
-      await picker.run(page, gateway);
-    },
-    run: async (page) => {
-      const search = page
-        .locator(".model-providers__defaults openclaw-select-picker")
-        .first()
-        .locator(".picker-select__search");
-      const before = await search.getAttribute("aria-activedescendant");
-      const initialValue = before
-        ? await page.locator(`[id="${before}"]`).getAttribute("data-value")
-        : null;
-      const initialIndex = initialValue ? Number(initialValue.replace("example/model-", "")) : -1;
-      for (let move = 0; move < 20; move++) {
-        await search.press("ArrowDown");
-      }
-      await frames(page);
-      const active = await search.getAttribute("aria-activedescendant");
-      if (!active || active === before) {
-        throw new Error("Picker keyboard navigation did not advance its active choice");
-      }
-      await page.waitForFunction(
-        ({ id, value }) => {
-          const choice = document.getElementById(id);
-          const viewport = choice?.closest(".picker-select__options");
-          if (!choice || !viewport || choice.getAttribute("data-value") !== value) {
-            return false;
-          }
-          const bounds = choice.getBoundingClientRect();
-          const clip = viewport.getBoundingClientRect();
-          return bounds.top >= clip.top - 1 && bounds.bottom <= clip.bottom + 1;
-        },
-        { id: active, value: `example/model-${initialIndex + 20}` },
-      );
-      return { keyboardMoves: 20 };
-    },
-  };
   const repeated = (
     [
       [
@@ -95,38 +52,72 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
   });
   return [
     ...repeated,
-    pickerNavigation,
     {
-      ...pickerNavigation,
-      id: "provider-model-picker-navigation-work",
+      ...chatPicker,
+      id: "model-picker-navigation-cycles",
       explicitOnly: true,
-      diagnostic: "Model value getter counters measure catalog work, not uninstrumented latency.",
       expected:
-        "Twenty keyboard moves retain a visible active choice without rescanning model keys.",
-      run: async (page, gateway) => {
-        const selector = ".model-providers__defaults openclaw-select-picker";
-        await page.evaluate((pickerSelector) => {
-          const host = document.querySelector<SelectPicker>(pickerSelector)!;
-          const count = { reads: 0 };
-          // SAFETY: This fresh benchmark document owns the counter and instrumented catalog.
-          Reflect.set(window, "__enginePickerKeyReads", count);
-          for (const option of host.params.options) {
-            const value = option.value;
-            Object.defineProperty(option, "value", {
-              configurable: true,
-              get() {
-                count.reads += 1;
-                return value;
-              },
-            });
-          }
-        }, selector);
-        await pickerNavigation.run(page, gateway);
-        const catalogKeyReads = await page.evaluate(() => {
-          // SAFETY: The counter is installed above in this benchmark document.
-          return (Reflect.get(window, "__enginePickerKeyReads") as { reads: number }).reads;
-        });
-        return { keyboardMoves: 20, catalogKeyReads };
+        "Eighty keyboard moves advance the chat picker while retaining a visible active row.",
+      prepare: async (page, gateway) => {
+        await chatPicker.prepare(page, gateway);
+        const trigger = page.locator(".chat-pane-cache__pane--active [data-chat-model-select]");
+        if ((page.viewportSize()?.width ?? 1440) < 600) {
+          await trigger.tap();
+        } else {
+          await trigger.click();
+        }
+        const search = page.locator("[data-chat-model-search]");
+        await search.fill("Warm model");
+        await frames(page);
+      },
+      run: async (page) => {
+        const search = page.locator("[data-chat-model-search]");
+        const initial = await search.getAttribute("aria-activedescendant");
+        const value = initial
+          ? await page.locator(`[id="${initial}"]`).getAttribute("data-chat-model-option")
+          : null;
+        const index = Number(value?.replace("example/model-", ""));
+        for (let move = 0; move < 80; move++) {
+          await search.press("ArrowDown");
+        }
+        await page.waitForFunction(
+          (expected) => {
+            const id = document
+              .querySelector("[data-chat-model-search]")
+              ?.getAttribute("aria-activedescendant");
+            const row = id ? document.getElementById(id) : null;
+            const viewport = row?.closest("[data-chat-model-window]");
+            if (!row || !viewport || row.getAttribute("data-chat-model-option") !== expected) {
+              return false;
+            }
+            const bounds = row.getBoundingClientRect();
+            const clip = viewport.getBoundingClientRect();
+            return bounds.top >= clip.top - 1 && bounds.bottom <= clip.bottom + 1;
+          },
+          `example/model-${index + 80}`,
+        );
+        return { keyboardMoves: 80 };
+      },
+    },
+    {
+      ...sessions,
+      id: "sessions-sort-cycles",
+      explicitOnly: true,
+      expected: "Sixteen Updated sorts reverse the visible session order each time.",
+      run: async (page) => {
+        const first = page.locator(".sessions-table tbody .session-data-row").first();
+        for (let cycle = 0; cycle < 16; cycle++) {
+          const previous = await first.textContent();
+          await page
+            .locator(".sessions-table")
+            .getByRole("button", { name: "Updated", exact: true })
+            .click();
+          await page.waitForFunction((before) => {
+            const row = document.querySelector(".sessions-table tbody .session-data-row");
+            return row !== null && row.textContent !== before;
+          }, previous);
+        }
+        return { sorts: 16 };
       },
     },
     {

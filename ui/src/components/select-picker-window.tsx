@@ -37,10 +37,6 @@ export default function PickerWindow<Option extends PickerOption>(props: {
     rows: PickerWindowRow<Option>[];
     height: number;
   }>({ source: [], rows: [], height: 0 });
-  const itemKey = createMemo(() => {
-    const rows = props.options;
-    return (index: number) => rows[index]!.value;
-  });
   const publish = () =>
     setWindow({
       source: current,
@@ -68,7 +64,7 @@ export default function PickerWindow<Option extends PickerOption>(props: {
     return mount();
   });
   createLayoutMeasurement(
-    () => ({ rows: props.options, active: props.active, itemKey: itemKey() }),
+    () => ({ rows: props.options, active: props.active }),
     (next) => {
       if (!next) {
         return;
@@ -78,7 +74,7 @@ export default function PickerWindow<Option extends PickerOption>(props: {
       virtualizer.setOptions({
         ...virtualizer.options,
         count: current.length,
-        getItemKey: next.itemKey,
+        getItemKey: (index) => current[index]!.value,
         rangeExtractor: (range) =>
           [
             ...new Set([
