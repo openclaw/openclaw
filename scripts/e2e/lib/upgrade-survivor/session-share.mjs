@@ -64,11 +64,16 @@ function assertConfig() {
   return plugin.config.share;
 }
 async function inspectRows(before) {
-  const { getSessionEntryAsync } = await sdk("session-store-runtime");
+  const { getSessionEntryAsync, resolveStorePath } = await sdk("session-store-runtime");
   const { readVisibleSessionTranscriptMessageEntries } = await sdk("session-transcript-runtime");
+  // Bind the fixture store without config loading that could repair the first-hop result.
+  const storePath = resolveStorePath(readJson(configPath).session?.store, {
+    agentId: "main",
+    env: process.env,
+  });
   const rows = [];
   for (const expected of before.sessions) {
-    const scope = { agentId: "main", sessionKey: expected.key };
+    const scope = { agentId: "main", sessionKey: expected.key, storePath };
     const entry = await getSessionEntryAsync(scope);
     assert.equal(entry?.sessionId, expected.sessionId, "Upgrade changed stored session identity");
     assert.equal(entry?.category, expected.category, "Upgrade changed stored group");
