@@ -103,9 +103,29 @@ suite.define(() => {
             const pane = document.querySelector(".chat-pane-cache__pane--active");
             await Reflect.get(pane!, "sessionSnapshotStore").flush();
           });
+          await page.addInitScript(() => {
+            const inspect = () => {
+              const header = document.querySelector(".chat-pane__header");
+              if (!header?.getBoundingClientRect().height) {
+                requestAnimationFrame(inspect);
+                return;
+              }
+              Reflect.set(
+                window,
+                "firstHeaderViewerCount",
+                header
+                  .querySelector(".chat-pane__presence .viewer-facepile")
+                  ?.getAttribute("data-viewer-count") ?? null,
+              );
+            };
+            requestAnimationFrame(inspect);
+          });
           await page.reload();
           await gateway.waitForRequest("connect");
           await page.getByText("Synthetic cached conversation.", { exact: true }).waitFor();
+          expect(await page.evaluate(() => Reflect.get(window, "firstHeaderViewerCount"))).toBe(
+            "5",
+          );
           expect(await header.locator(".chat-pane__presence .viewer-facepile").count()).toBe(1);
           expect(
             await header
