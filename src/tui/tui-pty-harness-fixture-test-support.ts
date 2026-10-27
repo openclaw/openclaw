@@ -219,15 +219,11 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
         onDisconnected?: TuiBackend["onDisconnected"];
         onGap?: TuiBackend["onGap"];
 
-        emit(event: string, payload: unknown) {
-          this.onEvent?.({ event, payload });
-        }
-
         ${TUI_PTY_RECONNECT_FIXTURE.disconnect}
 
         start() {
           if (pendingPluginApproval) {
-            this.emit("plugin.approval.requested", pendingPluginApproval);
+            this.onEvent?.({ event: "plugin.approval.requested", payload: pendingPluginApproval });
           }
           queueMicrotask(() => this.onConnected?.());
         }
@@ -241,8 +237,6 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
         async sendChat(opts: Parameters<TuiBackend["sendChat"]>[0]) {
           record("sendChat", opts);
           const runId = opts.runId ?? "run-pty-fixture";
-          const emitChat = (payload: Record<string, unknown>) =>
-            this.emit("chat", { runId, sessionKey: opts.sessionKey, ...payload });
           ${TUI_PTY_RECONNECT_FIXTURE.sendChat}
           ${TUI_PTY_FALLBACK_FIXTURE.sendChat}
           if (opts.message.startsWith("live reply dedupe proof: ")) {
@@ -265,22 +259,48 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
             };
             liveReplyHistory.push(userMessage, assistantMessage);
             queueMicrotask(() => {
-              this.emit("session.message", {
-                sessionKey: opts.sessionKey,
-                message: userMessage,
-                messageId: userMessage.__openclaw.id,
-                messageSeq: userSequence,
+              this.onEvent?.({
+                event: "session.message",
+                payload: {
+                  sessionKey: opts.sessionKey,
+                  message: userMessage,
+                  messageId: userMessage.__openclaw.id,
+                  messageSeq: userSequence,
+                },
               });
-              const message = () => ({ role: "assistant", content: [{ type: "text", text: reply }] });
-              emitChat({ seq: assistantSequence, state: "delta", message: message() });
-              emitChat({ seq: assistantSequence + 1, state: "final", message: message() });
-              this.emit("session.message", {
-                sessionKey: opts.sessionKey,
-                message: assistantMessage,
-                messageId: assistantMessage.__openclaw.id,
-                messageSeq: assistantSequence,
+              this.onEvent?.({
+                event: "chat",
+                payload: {
+                  runId,
+                  sessionKey: opts.sessionKey,
+                  seq: assistantSequence,
+                  state: "delta",
+                  message: { role: "assistant", content: [{ type: "text", text: reply }] },
+                },
               });
-              this.emit("sessions.changed", { sessionKey: opts.sessionKey, runId, phase: "end" });
+              this.onEvent?.({
+                event: "chat",
+                payload: {
+                  runId,
+                  sessionKey: opts.sessionKey,
+                  seq: assistantSequence + 1,
+                  state: "final",
+                  message: { role: "assistant", content: [{ type: "text", text: reply }] },
+                },
+              });
+              this.onEvent?.({
+                event: "session.message",
+                payload: {
+                  sessionKey: opts.sessionKey,
+                  message: assistantMessage,
+                  messageId: assistantMessage.__openclaw.id,
+                  messageSeq: assistantSequence,
+                },
+              });
+              this.onEvent?.({
+                event: "sessions.changed",
+                payload: { sessionKey: opts.sessionKey, runId, phase: "end" },
+              });
             });
             return { runId };
           }
@@ -294,14 +314,20 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
           if (opts.message === "/btw picker focus proof") {
             queueMicrotask(() => {
               record("pickerSideResult", { runId, sessionKey: opts.sessionKey });
-              this.emit("chat.side_result", {
-                kind: "btw",
-                runId,
-                sessionKey: opts.sessionKey,
-                question: process.env.OPENCLAW_TUI_PTY_BTW_QUESTION ?? "picker focus proof",
-                text: "PTY_SIDE_OK",
+              this.onEvent?.({
+                event: "chat.side_result",
+                payload: {
+                  kind: "btw",
+                  runId,
+                  sessionKey: opts.sessionKey,
+                  question: process.env.OPENCLAW_TUI_PTY_BTW_QUESTION ?? "picker focus proof",
+                  text: "PTY_SIDE_OK",
+                },
               });
-              emitChat({ state: "final" });
+              this.onEvent?.({
+                event: "chat",
+                payload: { runId, sessionKey: opts.sessionKey, state: "final" },
+              });
             });
             return { runId };
           }
@@ -312,12 +338,17 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
             ] as const) {
               setTimeout(() => {
                 record("lateSessionEvent", { sessionKey: opts.sessionKey, state });
-                emitChat({
-                  state,
-                  message: {
-                    role: "assistant",
-                    content: [{ type: "text", text }],
-                    timestamp: Date.now(),
+                this.onEvent?.({
+                  event: "chat",
+                  payload: {
+                    runId,
+                    sessionKey: opts.sessionKey,
+                    state,
+                    message: {
+                      role: "assistant",
+                      content: [{ type: "text", text }],
+                      timestamp: Date.now(),
+                    },
                   },
                 });
               }, delayMs);
@@ -332,7 +363,10 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
               if (opts.message === "skill approval gap proof") {
                 this.onGap?.({ expected: 4, received: 5 });
               } else {
-                this.emit("plugin.approval.requested", pendingPluginApproval);
+                this.onEvent?.({
+                  event: "plugin.approval.requested",
+                  payload: pendingPluginApproval,
+                });
               }
             });
             return { runId };
@@ -349,7 +383,10 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
               createdAt: Date.now(),
             };
             queueMicrotask(() => {
-              this.emit("task.suggestion", { action: "created", suggestion: pendingTaskSuggestion });
+              this.onEvent?.({
+                event: "task.suggestion",
+                payload: { action: "created", suggestion: pendingTaskSuggestion },
+              });
             });
             return { runId };
           }
@@ -362,12 +399,17 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
               : 20;
           if (opts.message === "streaming prompt") {
             setTimeout(() => {
-              emitChat({
-                state: "delta",
-                message: {
-                  role: "assistant",
-                  content: [{ type: "text", text: "PTY_STREAMING: streaming prompt" }],
-                  timestamp: Date.now(),
+              this.onEvent?.({
+                event: "chat",
+                payload: {
+                  runId,
+                  sessionKey: opts.sessionKey,
+                  state: "delta",
+                  message: {
+                    role: "assistant",
+                    content: [{ type: "text", text: "PTY_STREAMING: streaming prompt" }],
+                    timestamp: Date.now(),
+                  },
                 },
               });
             }, 5);
@@ -375,10 +417,15 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
           const isSourceReplyProof = opts.message === "message tool only source reply proof";
           setTimeout(() => {
             if (opts.message === "xai limit proof" || opts.message === "provider failure proof") {
-              emitChat({
-                seq: 0,
-                state: "error",
-                errorMessage: opts.message === "xai limit proof" ? xaiLimitError : "fixture provider failed",
+              this.onEvent?.({
+                event: "chat",
+                payload: {
+                  runId,
+                  sessionKey: opts.sessionKey,
+                  seq: 0,
+                  state: "error",
+                  errorMessage: opts.message === "xai limit proof" ? xaiLimitError : "fixture provider failed",
+                },
               });
               return;
             }
@@ -404,7 +451,15 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
                   content: [{ type: "text", text: "PTY_RESPONSE: " + opts.message }],
                   timestamp: Date.now(),
                 });
-            emitChat({ state: "final", message });
+            this.onEvent?.({
+              event: "chat",
+              payload: {
+                runId,
+                sessionKey: opts.sessionKey,
+                state: "final",
+                message,
+              },
+            });
           }, responseDelayMs);
           return { runId };
         }
@@ -590,15 +645,21 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
           const pendingRun = pendingPluginApprovalRun;
           pendingPluginApproval = null;
           pendingPluginApprovalRun = null;
-          this.emit("plugin.approval.resolved", { id, decision });
-          this.emit("chat", {
-            runId: pendingRun?.runId ?? "run-pty-fixture",
-            sessionKey: pendingRun?.sessionKey ?? "agent:main:main",
-            state: "final",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "PTY_SKILL_APPROVAL_RESOLVED: " + decision }],
-              timestamp: Date.now(),
+          this.onEvent?.({
+            event: "plugin.approval.resolved",
+            payload: { id, decision },
+          });
+          this.onEvent?.({
+            event: "chat",
+            payload: {
+              runId: pendingRun?.runId ?? "run-pty-fixture",
+              sessionKey: pendingRun?.sessionKey ?? "agent:main:main",
+              state: "final",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "PTY_SKILL_APPROVAL_RESOLVED: " + decision }],
+                timestamp: Date.now(),
+              },
             },
           });
           return { ok: true };
