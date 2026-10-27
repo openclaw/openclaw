@@ -294,6 +294,7 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
           agents: { entries: { main: {} } },
         };
         let config = initialConfig;
+        let configHash = "initial-config";
         const application = createRuntimeConfigWriteApplication();
         const builder = createTestPluginRegistry();
         const record = createPluginRecord({ id: "codex", source: "/synthetic/codex.ts" });
@@ -306,7 +307,7 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
         const releaseWork = instance.retainWork();
         const cleanup = createDeferredCore();
         let cleanupCall: Promise<void> | undefined;
-        const harness = createReloaderHarness(async () => snapshotOf(config), {
+        const harness = createReloaderHarness(async () => snapshotOf(config, configHash), {
           initialConfig,
           // Stands in for the reload owner's 60s pre-stop drain expiring on the held work.
           onHotReload: async (plan) => {
@@ -329,16 +330,16 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
         try {
           await harness.reloader.ready;
           config = { ...initialConfig, ...codexConfig("workspace-write") };
+          configHash = "pending-plugin-config";
           application.recordConfigChange(initialConfig, config);
-          const snapshot = snapshotOf(config);
-          assert(snapshot.hash);
           harness.emitWrite(
-            attachRuntimeConfigWriteApplication(makeWrite(config, snapshot.hash), application),
+            attachRuntimeConfigWriteApplication(makeWrite(config, configHash), application),
           );
           await flushReload(harness.reloader);
           // Release a waiting writer so its own admitted plugin work can finish.
           await expect(application.result).resolves.toBe("failed");
           config = { ...config, agents: { entries: { main: { skills: [] } } } };
+          configHash = "pending-plugin-and-skills-config";
           await flushWatcherChange(harness);
           expect(harness.onHotReload).toHaveBeenCalledTimes(2);
           expectCalls(
