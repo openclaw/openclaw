@@ -17,25 +17,10 @@ import {
   ownedAgentsContext,
   snapshot,
 } from "./agents-page.test-support.ts";
-import { createBaseParams } from "./panels-tools-skills.test-support.ts";
+import { createBaseParams, createReadToolCatalog } from "./panels-tools-skills.test-support.ts";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 afterEach(cleanupSolid);
-
-function catalog(agentId: string, label: string): ToolsCatalogResult {
-  return {
-    agentId,
-    profiles: [],
-    groups: [
-      {
-        id: "test",
-        label: "Test tools",
-        source: "core",
-        tools: [{ id: label, label, description: label, source: "core", defaultProfiles: [] }],
-      },
-    ],
-  };
-}
 
 async function mountCatalog(
   readCatalog: () => Promise<ToolsCatalogResult>,
@@ -55,28 +40,17 @@ async function mountCatalog(
       return readCatalog();
     }
     if (method === "tools.effective") {
-      return {
-        profile: "full",
-        groups: [
-          {
-            id: "core",
-            label: "Built-in tools",
-            source: "core",
-            tools: [{ id: "read", label: "read", description: "Read", source: "core" }],
-          },
-        ],
-      };
+      return { profile: "full", groups: createReadToolCatalog().groups };
     }
     throw new Error(`Unexpected gateway method: ${method}`);
   });
   const client = createTestGatewayClient(request);
   const currentGateway = gateway(snapshot(client));
   const context = await ownedAgentsContext(currentGateway);
-  const agents = context.agents;
   const route = (nextPanel: AgentsPanel) => ({
     ...agentsRouteData(
       currentGateway,
-      agents.state.agentsList,
+      context.agents.state.agentsList,
       context.settingsAgentSelection.state.selectedId,
       context.settingsAgentSelection,
     ),
@@ -100,6 +74,8 @@ async function mountCatalog(
     client,
     currentGateway,
     request,
+    preview: () =>
+      mounted.container.querySelector(".agent-tools-group__preview .mono")?.textContent?.trim(),
     setPanel(nextPanel: AgentsPanel) {
       page.setRouteData(route(nextPanel));
     },
@@ -176,12 +152,10 @@ describe("Agents tools catalog read", () => {
       ).toBe(true);
     });
     expect(view.container.querySelector("openclaw-github-identity")).toBe(identityHost);
-    second.resolve(catalog("main", "read"));
+    second.resolve(createReadToolCatalog("main", "read"));
     await waitForSolid(() => {
       expect(view.container.textContent).not.toContain("Showing built-in fallback list instead.");
-      expect(
-        view.container.querySelector(".agent-tools-group__preview .mono")?.textContent?.trim(),
-      ).toBe("read");
+      expect(view.preview()).toBe("read");
     });
     expect(view.container.querySelector("openclaw-github-identity")).toBe(identityHost);
     const previewLink = view.container.querySelector<HTMLAnchorElement>(
@@ -199,22 +173,16 @@ describe("Agents tools catalog read", () => {
   });
 
   it("retains a successful catalog across a same-client reconnect", async () => {
-    const read = vi.fn(async () => catalog("main", "cached-tool"));
+    const read = vi.fn(async () => createReadToolCatalog("main", "cached-tool"));
     const view = await mountCatalog(read);
-    await waitForSolid(() =>
-      expect(
-        view.container.querySelector(".agent-tools-group__preview .mono")?.textContent?.trim(),
-      ).toBe("cached-tool"),
-    );
+    await waitForSolid(() => expect(view.preview()).toBe("cached-tool"));
 
     emitGatewaySnapshot(view.currentGateway, snapshot(view.client, false));
     emitGatewaySnapshot(view.currentGateway, snapshot(view.client));
     view.context.settingsAgentSelection.set("main");
     await waitForSolid(() => {
       expect(view.catalogCalls()).toHaveLength(1);
-      expect(
-        view.container.querySelector(".agent-tools-group__preview .mono")?.textContent?.trim(),
-      ).toBe("cached-tool");
+      expect(view.preview()).toBe("cached-tool");
     });
   });
 
@@ -234,11 +202,9 @@ describe("Agents tools catalog read", () => {
 
     view.context.settingsAgentSelection.set("main");
     await waitForSolid(() => expect(view.catalogCalls()).toHaveLength(2));
-    second.resolve(catalog("main", "recovered-tool"));
+    second.resolve(createReadToolCatalog("main", "recovered-tool"));
     await waitForSolid(() => {
-      expect(
-        view.container.querySelector(".agent-tools-group__preview .mono")?.textContent?.trim(),
-      ).toBe("recovered-tool");
+      expect(view.preview()).toBe("recovered-tool");
       expect(view.container.textContent).not.toContain("Showing built-in fallback list instead.");
     });
   });
@@ -265,22 +231,16 @@ describe("Agents tools catalog read", () => {
       emitGatewaySnapshot(view.currentGateway, snapshot(view.client));
     }
     await waitForSolid(() => expect(view.catalogCalls()).toHaveLength(2));
-    current.resolve(catalog("main", "current-tool"));
-    await waitForSolid(() =>
-      expect(
-        view.container.querySelector(".agent-tools-group__preview .mono")?.textContent?.trim(),
-      ).toBe("current-tool"),
-    );
+    current.resolve(createReadToolCatalog("main", "current-tool"));
+    await waitForSolid(() => expect(view.preview()).toBe("current-tool"));
     if (outcome === "success") {
-      old.resolve(catalog("main", "stale-tool"));
+      old.resolve(createReadToolCatalog("main", "stale-tool"));
     } else {
       old.reject(new Error("retired request failed"));
     }
     await old.promise.catch(() => {});
     await waitForSolid(() => {
-      expect(
-        view.container.querySelector(".agent-tools-group__preview .mono")?.textContent?.trim(),
-      ).toBe("current-tool");
+      expect(view.preview()).toBe("current-tool");
       expect(view.container.textContent).not.toContain("stale-tool");
       expect(view.container.textContent).not.toContain("Showing built-in fallback list instead.");
     });

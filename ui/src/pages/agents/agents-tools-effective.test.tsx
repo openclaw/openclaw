@@ -20,7 +20,11 @@ import {
   ownedAgentsContext,
   snapshot,
 } from "./agents-page.test-support.ts";
-import { createBaseParams, openToolGroups } from "./panels-tools-skills.test-support.ts";
+import {
+  createBaseParams,
+  createReadToolCatalog,
+  openToolGroups,
+} from "./panels-tools-skills.test-support.ts";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 afterEach(cleanupSolid);
@@ -55,18 +59,7 @@ async function mountEffective(
       return read();
     }
     if (method === "tools.catalog") {
-      return {
-        agentId: "main",
-        profiles: [],
-        groups: [
-          {
-            id: "core",
-            label: "Built-in tools",
-            source: "core",
-            tools: [{ id: "read", label: "Read", description: "Read", source: "core" }],
-          },
-        ],
-      };
+      return createReadToolCatalog();
     }
     throw new Error(`Unexpected gateway method: ${method}`);
   });
@@ -85,13 +78,12 @@ async function mountEffective(
     },
   } as unknown as ApplicationContext["sessions"];
   const context = await ownedAgentsContext(currentGateway, { sessions });
-  const agents = context.agents;
   const save = vi.fn(async () => true);
   Object.assign(context.runtimeConfig, { save, state: {} });
   const route = (next: AgentsPanel) => ({
     ...agentsRouteData(
       currentGateway,
-      agents.state.agentsList,
+      context.agents.state.agentsList,
       context.settingsAgentSelection.state.selectedId,
       context.settingsAgentSelection,
     ),
