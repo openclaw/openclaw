@@ -106,6 +106,30 @@ describe("managed mount plan", () => {
     expect(plan.binds).toContain(skillsBind);
   });
 
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "explains how to repair an inaccessible existing skills mountpoint",
+    async () => {
+      const blocked = path.join(root, "agent/.openclaw");
+      fs.mkdirSync(blocked, { mode: 0o700 });
+      fs.chmodSync(blocked, 0o000);
+      try {
+        const error = await prepare("rw", { workspaceSource: "managed-worktree" }).catch(
+          (failure: unknown) => failure,
+        );
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toContain(
+          `Cannot prepare sandbox skills mountpoint "${path.join(blocked, "sandbox-skills/skills")}"`,
+        );
+        expect((error as Error).message).toMatch(/ownership.*search.*write/);
+        expect((error as Error).cause).toBeInstanceOf(Error);
+        expect(fs.statSync(blocked).mode & 0o777).toBe(0);
+      } finally {
+        fs.chmodSync(blocked, 0o700);
+      }
+      expect(fs.readdirSync(blocked)).toEqual([]);
+    },
+  );
+
   it("rechecks the workspace owner after namespace lookup before creating scaffold directories", async () => {
     const authority = new AbortController();
     vi.mocked(resolveDockerSourceNamespace).mockImplementationOnce(async () => {
