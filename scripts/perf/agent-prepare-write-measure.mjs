@@ -379,9 +379,10 @@ try {
         sourceSha256: createHash("sha256").update(source).digest("hex"),
         workload: values.workload,
         mode: values.mode,
-        admissionMessages: afterMessages
-          .filter((metric) => metric.kind === "admission")
+        workerMessages: afterMessages
+          .filter((metric) => metric.kind === "admission" || metric.kind === "authority")
           .map((metric) => ({
+            kind: metric.kind,
             direction: metric.direction,
             messages:
               metric.messages -
