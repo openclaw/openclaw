@@ -101,8 +101,12 @@ const repositoryScriptEntries = [
   "apps/android/scripts/build-release-artifacts.ts!",
   // scripts/README.md invokes this warm-interaction benchmark CLI by path.
   "scripts/bench-control-ui-interactions.ts!",
+  // scripts/README.md invokes the Chromium/WebKit companion with shared scenarios.
+  "scripts/bench-control-ui-engines.ts!",
   // The opt-in projection benchmark builds its browser fixture through this CLI.
   "scripts/build-control-ui-projection-fixture.mts!",
+  // The reactive graph guide invokes this isolated diagnostic build by path.
+  "scripts/build-control-ui-reactive-graph.mts!",
   // scripts/README.md invokes these exact memory-search benchmarks by path.
   "scripts/bench-memory-search.mjs!",
   "scripts/bench-memory-search-sqlite.mjs!",
@@ -452,6 +456,8 @@ const repositoryScriptEntries = [
   "scripts/perf/agent-object-copy-measure.ts!",
   "scripts/perf/agent-stream-update-measure.ts!",
   "scripts/perf/agent-turn-taint-measure.ts!",
+  "scripts/perf/auth-availability-invalidation-measure.ts!",
+  "scripts/perf/chat-admission-freshness-measure.ts!",
   "scripts/perf/chat-display-admission-measure.mjs!",
   "scripts/perf/core-fresh-array-copies-measure.mjs!",
   "scripts/perf/delivery-info-measure.ts!",
@@ -467,6 +473,7 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-fresh-arrays-measure.mjs!",
   "scripts/perf/placement-session-evidence-measure.ts!",
   "scripts/perf/plugin-registry-normalizer-measure.ts!",
+  "scripts/perf/prompt-image-sanitation-measure.ts!",
   "scripts/perf/provider-auth-lookup-maps-measure.ts!",
   "scripts/perf/provider-request-preparation-measure.ts!",
   "scripts/perf/quadratic-report-measure.ts!",
@@ -480,6 +487,8 @@ const repositoryScriptEntries = [
   "scripts/perf/subagent-runtime-registry-measure.ts!",
   "scripts/perf/transcript-resident-hydration-measure.ts!",
   "scripts/perf/worker-task-input-measure.mjs!",
+  "scripts/perf/worktree-provisioning-gateway-measure.ts!",
+  "scripts/perf/worktree-provisioning-measure.ts!",
   // Maintained source headers and a dedicated guide invoke these standalone commands by exact path.
   "scripts/perf/attempt-tool-context-measure.ts!",
   "scripts/perf/catalog-retained-data-measure.ts!",
@@ -504,6 +513,7 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-transform-preload.mjs!",
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
   "scripts/perf/sandbox-paths-measure.ts!",
+  "scripts/perf/sandbox-skills-sync-measure.ts!",
   "scripts/perf/sandbox-start-measure.ts!",
   "scripts/perf/session-projection-stream-measure.ts!",
   "scripts/perf/session-sharing-key-measure.ts!",
@@ -521,6 +531,14 @@ const repositoryScriptEntries = [
   "scripts/perf/trajectory-tool-parameters-measure.ts!",
   "scripts/perf/transcript-projection-receipt-measure.ts!",
   "scripts/perf/ui-streaming-render-measure.ts!",
+  // Their source headers document these standalone performance commands.
+  "scripts/perf/active-run-projector-measure.ts!",
+  "scripts/perf/cron-store-context-measure.ts!",
+  "scripts/perf/diagnostic-frozen-trace-measure.ts!",
+  "scripts/perf/image-worker-buffers-measure.mjs!",
+  "scripts/perf/installed-plugin-index-fingerprint-measure.ts!",
+  "scripts/perf/knowledge-worker-diagnostics-measure.mjs!",
+  "scripts/perf/knowledge-worker-heap-measure.mjs!",
   // Maintained source headers invoke these standalone commands by exact path.
   "scripts/perf/archive-worker-startup-measure.mjs!",
   "scripts/perf/archive-canonical-worker-measure.ts!",
@@ -542,6 +560,7 @@ const repositoryScriptEntries = [
   "scripts/perf/agent-directory-recovery-measure.ts!",
   "scripts/perf/agent-event-frame-census-preload.mjs!",
   "scripts/perf/chat-send-attachments-measure.ts!",
+  "scripts/perf/stage-media-measure.ts!",
   "scripts/perf/codex-catalog-lines.ts!",
   "scripts/perf/codex-request-imports.ts!",
   "scripts/perf/empty-checkout-diff-measure.ts!",
@@ -687,6 +706,7 @@ const repositoryScriptEntries = [
   "scripts/bench-team-reports-snapshots.mts!",
   "scripts/perf/async-work-scope-measure.ts!",
   "scripts/perf/local-workspace-callers-measure.ts!",
+  "scripts/perf/local-workspace-retention.ts!",
   "scripts/perf/plugin-iterator-membrane-measure.ts!",
   "scripts/perf/plugin-generation-retention.ts!",
   "scripts/perf/placement-startup-wake-measure.ts!",
@@ -972,6 +992,8 @@ const repositoryScriptEntries = [
   "scripts/github/security-review.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
+  // The artifact producer invokes this shared test compiler owner by path.
+  "scripts/test-built-source-verifiers.mts",
   // CI launches the desktop resize proof through its bootstrap path.
   "scripts/test-desktop-resize-real.mts!",
   // Native shell UI tests connect to this manually launched loopback Gateway fixture.
@@ -1624,7 +1646,6 @@ const config = {
     "ui/src/components/terminal/terminal-panel.ts": ["types"],
     "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
     "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],
-    "ui/src/pages/chat/components/chat-child-attention.tsx": ["types"],
     "ui/src/pages/chat/components/chat-ci-automation-control.tsx": ["types"],
     "ui/src/pages/chat/components/chat-ci-details.tsx": ["types"],
     "ui/src/pages/chat/components/chat-clawhub-card.tsx": ["exports"],

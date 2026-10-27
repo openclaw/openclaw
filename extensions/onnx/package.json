@@ -9,7 +9,7 @@
   "type": "module",
   "dependencies": {
     "@huggingface/tokenizers": "0.2.0",
-    "typebox": "1.4.1"
+    "typebox": "1.4.2"
   },
   "optionalDependencies": {
     "onnxruntime-node": "1.30.0"

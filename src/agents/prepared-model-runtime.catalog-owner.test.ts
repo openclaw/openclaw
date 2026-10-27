@@ -295,20 +295,15 @@ describe("prepared build candidate lifetime", () => {
       const input = { config: {}, agentDir: fixture.state.agentDir("timeout") };
       const started = createDeferred();
       const finish = createDeferred();
-      const wait = async () => {
+      const pausedBuild = async () => {
         started.resolve();
         await finish.promise;
+        return {};
       };
       if (admission) {
-        mocks.resolveAmbientCredentials.mockImplementationOnce(async () => {
-          await wait();
-          return {};
-        });
+        mocks.resolveAmbientCredentials.mockImplementationOnce(pausedBuild);
       } else {
-        mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
-          await wait();
-          return {};
-        });
+        mocks.ensureOpenClawModelsJson.mockImplementationOnce(pausedBuild);
       }
       using builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
       const first = admission
@@ -386,11 +381,7 @@ describe("prepared build candidate lifetime", () => {
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
       if (workspace) {
         expect(await reader).toBe(initial);
-        expect(mocks.ensureOpenClawModelsJson).toHaveBeenLastCalledWith(
-          firstInput.config,
-          agentDir,
-          expect.objectContaining({ workspaceDir: "/tmp/workspace-new" }),
-        );
+        expect(next?.workspaceDir).toBe("/tmp/workspace-new");
         expect(await prepareModelRuntimeSnapshot(nextInput)).toBe(next);
       } else {
         expect(initial?.config).toBe(firstInput.config);

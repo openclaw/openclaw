@@ -55,10 +55,9 @@ Reloading or leaving the app does not preserve this in-memory draft.
 
 ## Automatic session names
 
-New Dashboard conversations receive a title from their opening task. After six more
-user messages, the Gateway makes one attempt to refine that title using recent
-conversation context. A failed attempt keeps the existing title. Manually named
-sessions and conversations created before this feature keep their names.
+New Dashboard conversations receive a title from their opening task. Later messages
+keep that title. Only an explicit rename by you or the agent through `sessions.patch`
+changes it.
 
 ## Temporary disconnections
 

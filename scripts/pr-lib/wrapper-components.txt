@@ -2718,7 +2718,6 @@ src/agents/agent-bundle-mcp-runtime-shared.ts
 src/infra/client-credential-migration-data.ts
 src/infra/client-credential-migration.ts
 src/infra/client-credential-native-bootstrap.ts
-src/infra/client-credential-native-tokens.ts
 src/infra/client-credential-operations.ts
 src/infra/client-credential-paths.ts
 src/infra/client-credential-readiness.ts
@@ -2767,3 +2766,7 @@ src/process/spawn-broker/worker.ts
 src/state/openclaw-agent-schema-inspection.worker.ts
 src/state/openclaw-state-ownership.worker.ts
 src/infra/schema-migration-diagnostics.ts
+src/canvas/wrap.ts
+src/plugin-sdk/widget-html.ts
+src/shared/html-escape.ts
+src/shared/widget-media.ts

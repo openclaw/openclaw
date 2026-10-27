@@ -128,11 +128,8 @@ function activePlacement(
   return makeActivePlacement(`${sessionKey}-id`, {
     sessionKey,
     generation: 1,
-    updatedAtMs: 2,
-    stateChangedAtMs: 2,
     environmentId: "worker-first",
     activeOwnerEpoch: 1,
-    workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
     turnClaim: {
       owner: "worker",
       claimId: "private-turn-claim",
@@ -577,53 +574,41 @@ describe("sessions.changed coalescing", () => {
     });
   });
 
-  it("does not adopt the compatibility owner's ownerless run for another agent", async () => {
-    const config: OpenClawConfig = retainLegacyDefaultAgentId(
-      {
-        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-      } satisfies OpenClawConfig,
-      "ops",
-    );
-    const context = await contextWithRun(config, "compat-owner-run", {
-      sessionId: "agent:research:shared-session-id",
-      sessionKey: "legacy-unscoped",
-      storeScope: resolveSessionStorePathCore(config.session?.store, { agentId: "ops" }),
-    });
-
-    await emitAndSettleLeading(context, {
-      reason: "update",
-      sessionKey: "agent:research:shared-session",
-    });
-
-    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-      "sessions.changed",
-      expect.objectContaining({ hasActiveRun: false, activeRunIds: [] }),
-      expect.anything(),
-      expect.anything(),
-    );
-  });
-
-  it("projects active bare-global runs through the persisted fixed-store owner", async () => {
-    const config = fixedStoreConfig();
-    const context = await contextWithRun(config, "ops-global-run", {
-      agentId: "ops",
-      storeScope: resolveSessionStorePathCore(config.session?.store, { agentId: "ops" }),
-      sessionId: "global-id",
-      sessionKey: "global",
-    });
-
-    await emitAndSettleLeading(context, { reason: "update", sessionKey: "global" });
-
-    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-      "sessions.changed",
-      expect.objectContaining({ activeRunIds: ["ops-global-run"], hasActiveRun: true }),
-      expect.anything(),
-      expect.objectContaining({ agentId: "ops", sessionKeys: ["global"] }),
-    );
-    const payload = broadcasts(context)[0]?.[1];
-    expect(payload).not.toHaveProperty("agentId");
-    expect(payload).not.toHaveProperty("goal");
-  });
+  it.each([false, true])(
+    "binds active runs to their physical owner (fixed store=%s)",
+    async (fixed) => {
+      const config: OpenClawConfig = fixed
+        ? fixedStoreConfig()
+        : retainLegacyDefaultAgentId(
+            {
+              agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+            },
+            "ops",
+          );
+      const sessionKey = fixed ? "global" : "agent:research:shared-session";
+      const runId = fixed ? "ops-global-run" : "compat-owner-run";
+      const context = await contextWithRun(config, runId, {
+        ...(fixed ? { agentId: "ops" } : {}),
+        storeScope: resolveSessionStorePathCore(config.session?.store, { agentId: "ops" }),
+        sessionId: fixed ? "global-id" : "agent:research:shared-session-id",
+        sessionKey: fixed ? "global" : "legacy-unscoped",
+      });
+      await emitAndSettleLeading(context, { reason: "update", sessionKey });
+      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({ hasActiveRun: fixed, activeRunIds: fixed ? [runId] : [] }),
+        expect.anything(),
+        fixed
+          ? expect.objectContaining({ agentId: "ops", sessionKeys: ["global"] })
+          : expect.anything(),
+      );
+      if (fixed) {
+        const payload = broadcasts(context)[0]?.[1];
+        expect(payload).not.toHaveProperty("agentId");
+        expect(payload).not.toHaveProperty("goal");
+      }
+    },
+  );
 
   it("keeps a retired fixed-store owner private after the mutation commits", async () => {
     const config = fixedStoreConfig(true);

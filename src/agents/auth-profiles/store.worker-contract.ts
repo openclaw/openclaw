@@ -39,6 +39,7 @@ export type AuthProfileUsageReceipt = {
     profileSetChanged: boolean;
     stateChanged: boolean;
     selectionChanged: boolean;
+    availabilityOnly?: boolean;
     profileIds: string[];
   };
 };

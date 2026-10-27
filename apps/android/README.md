@@ -21,6 +21,14 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Manage installed skills and Gateway-verified ClawHub releases, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
 
+## Certificate-pinned Gateways
+
+Use the app's native screens when a Gateway connection uses a stored TLS
+certificate fingerprint. Embedded Control UI pages, including terminal, desktop,
+dashboard, and browser previews, are unavailable on that connection because
+Android WebView cannot enforce the same pin for every page and WebSocket
+connection. The native Gateway connection and native chat retain their pin.
+
 ## Open in Android Studio
 
 - Open the folder `apps/android`.

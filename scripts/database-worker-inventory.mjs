@@ -42,14 +42,6 @@ const reviewed = new Map([
     },
   ],
   [
-    "src/infra/client-credential-native-tokens.ts",
-    {
-      tier: "T3",
-      evidence:
-        "Only client-credential-operations.ts calls scoped-token claim/clear. Runtime operations enter client-credential.worker.ts; synchronous consumers are offline Doctor/CLI migration and verified restore.",
-    },
-  ],
-  [
     "src/infra/client-credential-operations.ts",
     {
       tier: "T3",

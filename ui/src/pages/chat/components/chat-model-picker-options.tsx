@@ -51,7 +51,7 @@ function optionPresentation(options: ModelPresentationProps) {
     options.selectedAgentRuntime,
   );
   const modelLabel = formatModelLabel(options.entry);
-  const runtime = formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId);
+  const runtime = formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId, t);
   const runtimeLabel = runtime?.label ?? "";
   const routeDetail = runtime?.detail ?? "";
   const chatOnlyHelp =
@@ -65,7 +65,7 @@ function optionPresentation(options: ModelPresentationProps) {
     ? runtime?.detail !== undefined
       ? runtimeLabel
       : ""
-    : [formatModelContextMeta(options.entry), runtimeLabel].filter(Boolean).join(" · ");
+    : [formatModelContextMeta(options.entry, t), runtimeLabel].filter(Boolean).join(" · ");
   const accessibleStatus = needsAuth
     ? t("modelSetup.candidates.signInNeeded")
     : options.entry.unavailableReason === "unsupported-runtime"
@@ -89,7 +89,10 @@ function createOptionPresentation(props: ChatModelPickerOptionProps) {
   return createMemo(() => optionPresentation(props));
 }
 
-export function modelOptionSearchRow(options: ModelPresentationProps): ChatModelSearchRow {
+export function modelOptionSearchRow(
+  options: ModelPresentationProps,
+  defaultLabel: string,
+): ChatModelSearchRow {
   const selected = isModelPickerOptionSelected(
     options.entry,
     options.selectedModelValue,
@@ -102,7 +105,7 @@ export function modelOptionSearchRow(options: ModelPresentationProps): ChatModel
   return {
     key: modelPickerOptionKey(options.entry),
     name: formatModelLabel(options.entry).toLocaleLowerCase(),
-    keywords: [options.entry.isDefault ? t("chat.modelControls.default") : "", runtimeLabel]
+    keywords: [options.entry.isDefault ? defaultLabel : "", runtimeLabel]
       .join(" ")
       .toLocaleLowerCase(),
     providerLabel: providerDisplayLabel(options.entry.provider).toLocaleLowerCase(),
@@ -119,11 +122,14 @@ function ModelOptionButton(
   props: ChatModelPickerOptionProps & { presentation: OptionPresentation },
 ) {
   const search = useContext(ChatModelSearchContext);
+  const defaultLabel = createMemo(() =>
+    props.entry.isDefault ? t("chat.modelControls.default") : "",
+  );
   const key = createMemo(() => modelPickerOptionKey(props.entry));
   // Query changes should reach only rows whose displayed search facts changed.
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
-  const highlighted = createMemo(() => search?.highlighted() === key());
+  const highlighted = createMemo(() => search?.isHighlighted(key()));
   return (
     <button
       ref={search?.rowRef(key)}
@@ -142,10 +148,7 @@ function ModelOptionButton(
       data-chat-model-runtime={props.entry.agentRuntime ?? undefined}
       data-chat-model-default={props.entry.isDefault ? "true" : undefined}
       data-chat-model-index={props.index}
-      data-chat-model-keywords={[
-        props.entry.isDefault ? t("chat.modelControls.default") : "",
-        props.presentation.runtimeLabel,
-      ]
+      data-chat-model-keywords={[defaultLabel(), props.presentation.runtimeLabel]
         .filter(Boolean)
         .join(" ")
         .toLocaleLowerCase()}
@@ -194,7 +197,7 @@ function ModelOptionButton(
           <span class="chat-controls__model-option-name">{props.presentation.modelLabel}</span>
           <Show when={props.entry.isDefault}>
             <span class="chat-controls__model-state-label chat-controls__model-state-label--default">
-              {t("chat.modelControls.default")}
+              {defaultLabel()}
             </span>
           </Show>
           <Show when={props.presentation.modelMeta}>
@@ -243,7 +246,7 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
   const key = createMemo(() => `target:${props.groupId}:${props.entry.value}`);
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
-  const highlighted = createMemo(() => search?.highlighted() === key());
+  const highlighted = createMemo(() => search?.isHighlighted(key()));
   return (
     <button
       ref={search?.rowRef(key)}

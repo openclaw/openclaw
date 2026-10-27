@@ -420,35 +420,10 @@ describe("published installed update progress", () => {
     mode: "npm",
     steps: candidateCheckNames.map((name) => ({ name, exitCode: 0, durationMs: 12 })),
   };
-  const input: Awaited<ReturnType<typeof installedPackage.readInput>> = {
-    sourceSha: "a".repeat(40),
-    toolingSha: "b".repeat(40),
+  const input = {
     tarball: "C:\\synthetic-candidate.tgz",
-    candidate: {
-      name: "openclaw",
-      packageSourceSha: "a".repeat(40),
-      version: "2026.9.26",
-      sha256: "c".repeat(64),
-    },
     installRoot: "C:\\synthetic-update\\prefix",
     stateRoot: "C:\\synthetic-update\\state",
-    runtime: { version: "v24.0.0", sha256: "d".repeat(64) },
-    artifact: {
-      id: 1,
-      runId: 2,
-      runAttempt: 1,
-      workflowSha: "b".repeat(40),
-      digest: `sha256:${"e".repeat(64)}`,
-    },
-    published: ["2026.9.3", "2026.9.4"].map((version) => ({
-      source: "npm-registry",
-      version,
-      commit: "f".repeat(40),
-      tarball: `C:\\synthetic-${version}.tgz`,
-      metadata: `C:\\synthetic-${version}.json`,
-      sha256: "a".repeat(64),
-      integrity: "sha512-synthetic",
-    })),
   };
   const active: UpdateRunRecord = createUpdateRunRecordFixture(
     "00000000-0000-0000-0000-000000000000",
@@ -551,23 +526,18 @@ describe("published installed update progress", () => {
       const diagnostic = failed
         ? { unavailable: expect.stringContaining("observation failed") }
         : { processes: [expect.objectContaining(processFacts)] };
-      expect(fixture.observations.updateSettlementProcesses).toMatchObject([
-        {
-          runId: active.runId,
-          capturedAtMs: invokedAt + 300_000,
-          phase: "verifying",
-          status: "running",
-          reason: "elapsed-300s",
-          ...diagnostic,
-        },
-        {
-          capturedAtMs: invokedAt + 315_000,
-          phase: "verifying",
-          status: "running",
-          reason: "follow-up",
-          ...diagnostic,
-        },
-      ]);
+      expect(fixture.observations.updateSettlementProcesses).toMatchObject(
+        [
+          { capturedAtMs: invokedAt + 300_000, reason: "elapsed-300s" },
+          { capturedAtMs: invokedAt + 315_000, reason: "follow-up" },
+        ].map((sample) =>
+          Object.assign(
+            sample,
+            { runId: active.runId, phase: "verifying", status: "running" },
+            diagnostic,
+          ),
+        ),
+      );
       const retained = JSON.stringify(fixture.observations.updateSettlementProcesses);
       expect(retained).not.toContain(secret);
       expect(retained.length).toBeLessThan(5000);
