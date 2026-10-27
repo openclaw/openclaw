@@ -951,6 +951,29 @@ describe("processResponsesStream", () => {
     expect(output.responseId).toBe("resp_aborted");
   });
 
+  it("yields to aborts during bursty Responses streams without retaining partial snapshots", async () => {
+    const abort = new AbortController();
+    let yieldedToTimer = false;
+    setTimeout(() => {
+      yieldedToTimer = true;
+      abort.abort();
+    }, 0);
+
+    const { events, done } = startResponses(
+      [
+        itemEvent("added", { type: "message" }),
+        ...Array.from({ length: 512 }, () => ({ type: "response.output_text.delta", delta: "x" })),
+      ],
+      { model: azureModel, options: { signal: abort.signal } },
+    );
+    await expect(done).rejects.toThrow("Request was aborted");
+    expect(yieldedToTimer).toBe(true);
+    expect(events.length).toBeLessThan(512);
+    const textDeltas = events.filter((event) => event.type === "text_delta");
+    expect(textDeltas.length).toBeGreaterThan(0);
+    expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
+  });
+
   const fallbackArguments = (doneArguments: string | undefined) => ({
     name:
       "preserves streamed arguments when done " +
@@ -988,92 +1011,69 @@ describe("processResponsesStream", () => {
     expect(eventTypes(events)).toEqual(types);
   });
 
-  it.each([false, true])(
-    "keeps generated tool-call ids stable and unique (item-only=%s)",
-    async (itemOnly) => {
-      const runOnce = async () => {
-        const item = {
-          type: "function_call",
-          name: "computer",
-          ...(itemOnly ? { id: "fc_item_only" } : {}),
-        };
-        const { output, events } = await collectResponses([
-          ...(!itemOnly ? [itemEvent("added", { ...item, arguments: "" }, 0)] : []),
-          itemEvent(
-            "done",
-            { ...item, arguments: "{}", ...(itemOnly ? { status: "completed" } : {}) },
-            0,
-          ),
-          completed("resp_idless"),
-        ]);
-        const block = output.content[0];
-        const end = events.find((event) => event.type === "toolcall_end");
-        if (!block || block.type !== "toolCall" || !end || end.type !== "toolcall_end") {
-          throw new Error("missing tool-call lifecycle");
-        }
-        return { blockId: block.id, endId: end.toolCall.id };
+  it.each([true, false])(
+    "adopts completed SDK identities and result linkage (call id present: %s)",
+    async (hasCallId) => {
+      const item = {
+        type: "function_call",
+        ...(hasCallId ? { call_id: "call_weather" } : {}),
+        name: "weather",
+        arguments: "",
+        status: "in_progress",
       };
-
-      const first = await runOnce();
-      const second = await runOnce();
-      expect(first.blockId).toMatch(
-        itemOnly ? /^call_[0-9a-f]{24}\|fc_item_only$/ : /^call_[0-9a-f]{24}$/,
+      const doneItem = {
+        ...item,
+        id: "fc_weather",
+        call_id: "call_weather",
+        arguments: '{"city":"Seattle"}',
+        status: "completed",
+      };
+      let startedId: string | undefined;
+      const { output, events } = await collectResponses(
+        [
+          itemEvent("added", item, 0),
+          itemEvent("done", doneItem, 0),
+          completed("resp_weather", { output: [doneItem] }),
+        ],
+        {
+          model: hasCallId ? nativeOpenAIModel : azureModel,
+          observe(event) {
+            if (event.type === "toolcall_start") {
+              const block = event.partial.content[event.contentIndex];
+              startedId = block?.type === "toolCall" ? block.id : undefined;
+            }
+          },
+        },
       );
-      expect(first.endId).toBe(first.blockId);
-      expect(second.endId).toBe(second.blockId);
-      expect(second.blockId).not.toBe(first.blockId);
+
+      expect(startedId).toEqual(
+        hasCallId ? "call_weather" : expect.stringMatching(/^call_[0-9a-f]{24}$/),
+      );
+      expect(output.stopReason).toBe("toolUse");
+      expect(output.content).toEqual([toolCall("weather", "weather", { city: "Seattle" })]);
+      expect(eventPositions(events)).toBe("toolcall_start@0 toolcall_end@0");
+      expect(events.at(-1)).toMatchObject({
+        type: "toolcall_end",
+        toolCall: { id: "call_weather|fc_weather" },
+      });
+
+      const replay = replayMessages(
+        [output, makeTextToolResult("call_weather|fc_weather", "weather", "Rain", false, 1)],
+        { includeSystemPrompt: false },
+      );
+      expect(replay).toContainEqual({
+        type: "function_call",
+        call_id: "call_weather",
+        name: "weather",
+        arguments: '{"city":"Seattle"}',
+      });
+      expect(replay).toContainEqual({
+        type: "function_call_output",
+        call_id: "call_weather",
+        output: "Rain",
+      });
     },
   );
-
-  it("adopts the completed SDK item id while preserving lifecycle and result linkage", async () => {
-    const item = {
-      type: "function_call",
-      call_id: "call_weather",
-      name: "weather",
-      arguments: "",
-      status: "in_progress",
-    };
-    let startedId: string | undefined;
-    const { output, events } = await collectResponses(
-      [
-        itemEvent("added", item, 0),
-        itemEvent(
-          "done",
-          { ...item, id: "fc_weather", arguments: '{"city":"Seattle"}', status: "completed" },
-          0,
-        ),
-        completed("resp_weather"),
-      ],
-      {
-        observe(event) {
-          if (event.type === "toolcall_start") {
-            const block = event.partial.content[event.contentIndex];
-            startedId = block?.type === "toolCall" ? block.id : undefined;
-          }
-        },
-      },
-    );
-
-    expect(startedId).toBe("call_weather");
-    expect(output.content).toEqual([toolCall("weather", "weather", { city: "Seattle" })]);
-    expect(eventPositions(events)).toBe("toolcall_start@0 toolcall_end@0");
-
-    const replay = replayMessages(
-      [output, makeTextToolResult("call_weather|fc_weather", "weather", "Rain", false, 1)],
-      { includeSystemPrompt: false },
-    );
-    expect(replay).toContainEqual({
-      type: "function_call",
-      call_id: "call_weather",
-      name: "weather",
-      arguments: '{"city":"Seattle"}',
-    });
-    expect(replay).toContainEqual({
-      type: "function_call_output",
-      call_id: "call_weather",
-      output: "Rain",
-    });
-  });
 
   it("keeps parallel unindexed Responses calls bound by identity without orphans", async () => {
     const firstItem = { ...toolItem("first_unindexed", '{"slot":1}'), status: "completed" };

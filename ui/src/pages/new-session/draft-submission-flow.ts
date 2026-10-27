@@ -502,7 +502,6 @@ export class DraftSubmissionFlow {
           message: input.message,
           mentions: input.mentions,
           displayName: preparedTitle,
-          ...(preparedTitle ? { displayNameGenerated: true } : {}),
           visibility:
             this.visibilityValue === "draft" &&
             !this.capabilities.canStartAsDraft(this.read().context)

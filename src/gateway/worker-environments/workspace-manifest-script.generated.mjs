@@ -62,13 +62,6 @@ export async function runWorkspaceManifestProgram(
       relativePath.startsWith(MATERIALIZED_SANDBOX_SKILLS_WORKSPACE + "/")
     );
   }
-  const DERIVED_WORKSPACE_DIRECTORY_NAMES = new Set([
-    "__pycache__",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-    "node_modules",
-  ]);
   const DERIVED_WORKSPACE_ROOT_PATHS = [
     ".cache/vitest",
     ".cache/bun-transpiler",
@@ -96,10 +89,8 @@ export async function runWorkspaceManifestProgram(
     return retained;
   }
   const RUNTIME_WORKSPACE_ROOT_PATHS = [".artifacts/dist-artifacts.lock", ".openclaw/tmp"];
-  const DERIVED_WORKSPACE_FILE_NAMES = new Set([".DS_Store"]);
-  const DERIVED_WORKSPACE_FILE_SUFFIXES = [".pyc", ".pyo"];
-  const WORKER_ATTACHMENT_DIRECTORY_RE = new RegExp(
-    "^openclaw-inbound-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]$",
+  const DERIVED_WORKSPACE_SEGMENT_RE = new RegExp(
+    "(?:^|/)(?:__pycache__|\\.pytest_cache|\\.mypy_cache|\\.ruff_cache|node_modules|\\.DS_Store|[^/]*\\.pyc|[^/]*\\.pyo|openclaw-inbound-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])(?![^/])",
   );
   function isRuntimeOwnedWorkspacePath(relativePath) {
     return (
@@ -124,15 +115,7 @@ export async function runWorkspaceManifestProgram(
     ) {
       return true;
     }
-    const segments = relativePath.split("/");
-    // "$" can match before a final newline; require the entire path segment.
-    return segments.some(
-      (segment) =>
-        WORKER_ATTACHMENT_DIRECTORY_RE.exec(segment)?.[0] === segment ||
-        DERIVED_WORKSPACE_DIRECTORY_NAMES.has(segment) ||
-        DERIVED_WORKSPACE_FILE_NAMES.has(segment) ||
-        DERIVED_WORKSPACE_FILE_SUFFIXES.some((suffix) => segment.endsWith(suffix)),
-    );
+    return DERIVED_WORKSPACE_SEGMENT_RE.test(relativePath);
   }
   function projectWorkspaceEntries(entries, isRetainedInput, excludeBuildCaches = false) {
     const nonemptyDirectories = new Set();
@@ -157,6 +140,13 @@ export async function runWorkspaceManifestProgram(
     return eligible.toReversed();
   }
 
+  const WORKSPACE_CTIME_SAFETY_MARGIN_MS = 2000;
+  function workspaceCtimeIsReusable(ctimeNs, startedAtMs) {
+    // Recent files cost another hash; a backwards clock keeps them outside the reuse window.
+    return (
+      ctimeNs >= 0n && ctimeNs < BigInt(startedAtMs - WORKSPACE_CTIME_SAFETY_MARGIN_MS) * 1000000n
+    );
+  }
   function workspaceStatIdentity(owner, stats) {
     return [owner, stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].join(":");
   }
@@ -565,6 +555,7 @@ export async function runWorkspaceManifestProgram(
           continue;
         }
         const absolute = path.join(root, entry.path);
+        const startedAtMs = Date.now();
         let handle;
         try {
           assertManifestCurrent();
@@ -582,7 +573,8 @@ export async function runWorkspaceManifestProgram(
             fail("worker workspace manifest exceeds its eligible byte limit");
           }
           const identity = workspaceStatIdentity("worker", before);
-          let sha256 = hashMemo.get(identity);
+          const reusable = workspaceCtimeIsReusable(before.ctimeNs, startedAtMs);
+          let sha256 = reusable ? hashMemo.get(identity) : undefined;
           if (sha256) {
             metrics.memoHitCount += 1;
           } else {
@@ -604,7 +596,7 @@ export async function runWorkspaceManifestProgram(
           entry.mode = Number(after.mode & 0o777n);
           entry.size = Number(after.size);
           entry.sha256 = sha256;
-          usedHashMemo.set(identity, sha256);
+          if (reusable) usedHashMemo.set(identity, sha256);
         } catch (error) {
           stop(error);
         } finally {

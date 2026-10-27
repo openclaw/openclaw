@@ -10,12 +10,15 @@ const entries = {
     "pages/new-session/creation-composer-render.tsx",
   ],
   claws: ["pages/claws/page.tsx"],
+  // Catalog search and detail are already loaded; avoid warming unrelated New Session code.
+  "claws-next": ["pages/claws/page.tsx"],
   dashboards: ["pages/dashboards/dashboards-page.tsx", "components/board/board-document.tsx"],
   usage: ["pages/usage/usage-page.tsx", "pages/usage/route-loader.ts"],
   cron: ["pages/cron/cron-page-entry.tsx", "pages/cron/cron-page.tsx"],
   sessions: ["pages/sessions/sessions-page.tsx"],
   systems: ["pages/systems/systems-route-view.tsx"],
   activity: ["pages/activity/activity-route.tsx"],
+  "activity-next": ["components/image-lightbox-content.tsx"],
   meetings: ["pages/meetings/meetings-page.tsx"],
   plugins: ["pages/plugins/plugins-page.tsx"],
   apps: ["pages/apps/apps-page.tsx"],
@@ -28,6 +31,7 @@ const entries = {
     "app/theme-catalog.ts",
   ],
   "advanced-next": ["pages/config/security.tsx"],
+  "roster-next": ["pages/chat/route-entry.ts"],
   shortcuts: ["components/keyboard-shortcuts-dialog.tsx"],
   debug: [
     "pages/debug/debug-overlay.ts",

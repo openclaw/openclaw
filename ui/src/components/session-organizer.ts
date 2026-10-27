@@ -413,15 +413,13 @@ export class SessionOrganizer {
     if (sectionId === "pinned") {
       return true;
     }
-    if (
-      this.deps.sessionsGrouping === "category" &&
-      (sectionId === "ungrouped" || Boolean(category))
-    ) {
+    // Match the rendered sections, including the saved Person preference fallback.
+    const grouping = this.deps.effectiveSessionsGrouping();
+    if (grouping === "category" && (sectionId === "ungrouped" || Boolean(category))) {
       return true;
     }
     return (
-      sectionId === "groups" &&
-      Boolean(session && categoryClearReturnsToGroups(session, this.deps.sessionsGrouping))
+      sectionId === "groups" && Boolean(session && categoryClearReturnsToGroups(session, grouping))
     );
   }
 

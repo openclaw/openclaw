@@ -61,6 +61,7 @@ import {
   readTrackedText,
   readWorkflow,
   readWorkflowOutputs,
+  runControlUiE2eWorkflow,
   runGit,
   runWorkflowShellScript,
   testNodeExecPath,
@@ -521,9 +522,7 @@ function runCandidateTrustClassification(options: {
   checkoutRevision: string;
   defaultRevision?: string;
   eventName: "pull_request" | "push" | "schedule" | "workflow_dispatch";
-  historicalTarget?: boolean;
   ref?: string;
-  releaseCandidateTarget?: boolean;
   releaseGate?: boolean;
   targetContextTarget?: boolean;
   targetRef?: string;
@@ -558,10 +557,10 @@ function runCandidateTrustClassification(options: {
       GITHUB_EVENT_NAME: options.eventName,
       GITHUB_OUTPUT: outputPath,
       GITHUB_REF: options.ref ?? "",
-      HISTORICAL_TARGET: String(options.historicalTarget ?? false),
+      HISTORICAL_TARGET: "false",
       RUNNER_TEMP: root,
       PATH: `${binPath}:${process.env.PATH ?? ""}`,
-      RELEASE_CANDIDATE_TARGET: String(options.releaseCandidateTarget ?? false),
+      RELEASE_CANDIDATE_TARGET: "false",
       RELEASE_GATE: String(options.releaseGate ?? false),
       TARGET_CONTEXT_TARGET: String(options.targetContextTarget ?? false),
       TARGET_REF: options.targetRef ?? "",
@@ -2468,7 +2467,7 @@ describe("ci workflow guards", () => {
           "test/vitest/vitest.ui-e2e.config.ts",
           "ui_e2e_test_groups_gzip_base64",
           "checks-ui-e2e",
-          "Test Control UI end-to-end",
+          "Decode Control UI E2E selection",
         ],
       ] as const) {
         const packed = expectDefined(manifest.outputs[output], `${name} packed test selection`);
@@ -4066,6 +4065,62 @@ describe("ci workflow guards", () => {
         name,
       );
       expect(evaluateCondition(expectDefined(step.if, name)), name).toBe(fixture.proof);
+    }
+  });
+
+  it.each([
+    { file: "scripts/test-built-source-verifiers.mts", selected: true },
+    { file: "scripts/run-vitest.mjs", selected: false },
+  ])("selects shared source verifier ownership for $file", ({ file, selected }) => {
+    const boundary = "test/extension-import-boundaries.test.ts";
+    const planner = pathToFileURL(path.resolve("scripts/lib/ci-changed-node-test-plan.mts")).href;
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      eventName: "pull_request",
+      changedPaths: [file, boundary],
+      selectedTestTargets: [boundary],
+      targetFiles: [boundary, "test/vitest/vitest.boundary.config.ts"],
+      changedPlannerSource: `export {
+        createChangedNodeTestShards,
+        hasBuildArtifactAffectingChange,
+        hasSqliteSessionLifecycleAffectingChange,
+      } from ${JSON.stringify(planner)};`,
+      scopeEnv: {
+        OPENCLAW_CI_RUN_WINDOWS: "false",
+        OPENCLAW_CI_RUN_UI_TESTS: "false",
+        OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
+      },
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(manifest.outputs.run_built_source_verifiers).toBe(String(selected));
+    expect(manifest.outputs.run_build_artifacts).toBe(String(selected));
+    expect(manifest.outputs.run_proof_tier).toBe("false");
+    expect(manifest.outputs.run_checks_node_core_dist).toBe("false");
+    const rows = JSON.parse(
+      expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "source test matrix"),
+    ).include;
+    expect(rows.map((row: { check_name: string }) => row.check_name)).toEqual(
+      selected ? [] : ["checks-node-changed-boundary"],
+    );
+    const workflow = readCiWorkflow();
+    expect(workflow.jobs.preflight.outputs.run_built_source_verifiers).toBe(
+      "${{ steps.manifest.outputs.run_built_source_verifiers }}",
+    );
+    const verifiers = expectDefined(
+      workflow.jobs["build-artifacts"].steps.find(
+        (step: WorkflowStep) => step.name === "Run built artifact checks",
+      ),
+      "built verifier command",
+    );
+    const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+      eventName: "pull_request",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      preflightOutputs: manifest.outputs,
+    };
+    for (const flag of ["RUN_CHANNELS", "RUN_CORE_SUPPORT_BOUNDARY"]) {
+      expect(evaluateWorkflowExpression(verifiers.env[flag], context), flag).toBe(selected);
     }
   });
 
@@ -10281,7 +10336,7 @@ describe("ci workflow guards", () => {
       'printf "%s" "${VITEST_MAX_WORKERS:-}" > "$UI_E2E_COMMAND_NATIVE_WORKERS"',
     ]);
     const runCommand = (env: Record<string, string>) => {
-      const result = runWorkflowShellScript(expectDefined(scenario.run, "UI E2E command"), {
+      const result = runControlUiE2eWorkflow({
         cwd: commandRoot,
         env: {
           ...process.env,
@@ -10783,6 +10838,7 @@ describe("ci workflow guards", () => {
         ),
         "public-build browser proof",
       );
+      expect(browserProof.env?.OPENCLAW_VITEST_WORKER_CACHE).toBe("1");
       for (const [buildOutcome, cacheHit, chromiumOutcome, expected] of [
         ["success", "false", "success", reuse],
         ["skipped", "true", "success", reuse],
@@ -10826,22 +10882,94 @@ describe("ci workflow guards", () => {
       const receipt = path.join(root, "invocation.json");
       writeFileSync(
         path.join(root, "scripts/run-vitest.mjs"),
-        `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(receipt)}, JSON.stringify(process.argv.slice(2)));`,
+        `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ args: process.argv.slice(2), cache: process.env.OPENCLAW_VITEST_WORKER_CACHE }));`,
       );
-      const result = runWorkflowShellScript(step.run, { cwd: root });
+      const result = runWorkflowShellScript(step.run, {
+        cwd: root,
+        env: { ...process.env, ...step.env },
+      });
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(existsSync(receipt)).toBe(supported);
       if (supported) {
-        expect(JSON.parse(readFileSync(receipt, "utf8"))).toEqual([
+        expect(JSON.parse(readFileSync(receipt, "utf8"))).toEqual({
+          cache: "1",
+          args: [
+            "run",
+            "--config",
+            "test/vitest/vitest.ui-e2e.config.ts",
+            "--configLoader",
+            "runner",
+            "--maxWorkers",
+            "2",
+          ],
+        });
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "caches Discord workers while validating its proof report (passed: %s)",
+    (passed) => {
+      const run = expectDefined(
+        readCiWorkflow().jobs["build-artifacts"].steps.find(
+          (step: WorkflowStep) => step.name === "Run built artifact checks",
+        ),
+        "built verifier command",
+      ).run;
+      const start = run.indexOf("run_discord_component_attachments() {");
+      const end = run.indexOf("\n# A missing startup asset", start);
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      const root = tempDirs.make("openclaw-discord-cache-command-");
+      mkdirSync(path.join(root, "scripts"), { recursive: true });
+      const file = "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts";
+      const fullName =
+        "Discord show_widget contextual presenter process proof preserves component attachment filenames through the public Gateway message action";
+      const report = {
+        success: passed,
+        numFailedTestSuites: passed ? 0 : 1,
+        numFailedTests: passed ? 0 : 1,
+        numPassedTests: passed ? 1 : 0,
+        testResults: [
+          {
+            name: path.join(root, file),
+            status: passed ? "passed" : "failed",
+            assertionResults: [{ fullName, status: passed ? "passed" : "failed" }],
+          },
+        ],
+      };
+      writeFileSync(
+        path.join(root, "scripts/run-vitest.mjs"),
+        `
+      import { writeFileSync } from "node:fs";
+      const args = process.argv.slice(2);
+      writeFileSync("invocation.json", JSON.stringify({ args, cache: process.env.OPENCLAW_VITEST_WORKER_CACHE }));
+      writeFileSync(args[args.indexOf("--outputFile.json") + 1], ${JSON.stringify(JSON.stringify(report))});
+    `,
+      );
+      const result = runWorkflowShellScript(
+        `${run.slice(start, end)}\nrun_discord_component_attachments`,
+        {
+          cwd: root,
+          env: { ...process.env, RUNNER_TEMP: root, FROZEN_TARGET: "false" },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(passed ? 0 : 1);
+      expect(JSON.parse(readFileSync(path.join(root, "invocation.json"), "utf8"))).toEqual({
+        cache: "1",
+        args: [
           "run",
           "--config",
-          "test/vitest/vitest.ui-e2e.config.ts",
-          "--configLoader",
-          "runner",
-          "--maxWorkers",
-          "2",
-        ]);
-      }
+          "test/vitest/vitest.e2e.config.ts",
+          file,
+          "--testNamePattern",
+          fullName.replace("Discord show_widget contextual presenter process proof ", ""),
+          "--reporter=default",
+          "--reporter=json",
+          "--outputFile.json",
+          path.join(root, "discord-component-attachments.json"),
+        ],
+      });
     },
   );
 
@@ -10938,6 +11066,7 @@ describe("ci workflow guards", () => {
       OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1",
       OPENCLAW_BROWSER_EXTENSION_E2E: "1",
       OPENCLAW_E2E_WORKERS: "1",
+      OPENCLAW_VITEST_WORKER_CACHE: "1",
     });
     const productionScenario = expectDefined(
       artifactSteps.find(
@@ -10947,6 +11076,7 @@ describe("ci workflow guards", () => {
     );
     expect(productionScenario.env).toMatchObject({
       OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1",
+      OPENCLAW_VITEST_WORKER_CACHE: "1",
       OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT: "${{ github.workspace }}/dist/control-ui",
     });
     expect(productionScenario.run).toContain("ui-e2e-production-artifact-contract-v1");
@@ -11026,7 +11156,10 @@ describe("ci workflow guards", () => {
       uses: uiE2eSetup.uses,
       with: expectedSharedUiE2eSetup,
     });
-    expect(realGatewaySetup.with).toEqual(expectedSharedUiE2eSetup);
+    expect(realGatewaySetup.with).toEqual({
+      ...expectedSharedUiE2eSetup,
+      "build-all-cache-scope": "full",
+    });
 
     // Failed-job retries can retain an earlier eight-shard plan while live routing
     // selects hosted runners. Both widths retain the cache and contributor boundaries.
@@ -11211,15 +11344,31 @@ describe("ci workflow guards", () => {
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
       "Control UI E2E suite",
     );
+    const selection = expectDefined(
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Decode Control UI E2E selection"),
+      "Control UI E2E selection",
+    );
+    expect(selection.if).toBe("matrix.task == 'control-ui'");
+    expect(selection.env).toEqual({
+      OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:
+        "${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}",
+    });
+    const discovery = expectDefined(
+      uiE2e.steps.find(
+        (step: WorkflowStep) => step.name === "Discover Control UI E2E requirements",
+      ),
+      "Control UI E2E discovery",
+    );
+    expect(discovery["timeout-minutes"]).toBe(20);
     expect(scenario.if).toBe("matrix.task == 'control-ui'");
+    expect(scenario["timeout-minutes"]).toBe(20);
+    expect(uiE2e["timeout-minutes"]).toBeGreaterThan(scenario["timeout-minutes"]);
     expect(scenario.env).toEqual({
       OPENCLAW_UI_E2E_DIAGNOSTIC_DIR:
         ".artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}",
       VITEST_SHARD_INDEX: "${{ matrix.shard }}",
       VITEST_SHARD_COUNT: "${{ matrix.vitest_shard_count }}",
       OPENCLAW_VITEST_MAX_WORKERS: "${{ matrix.vitest_max_workers || 2 }}",
-      OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:
-        "${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}",
     });
     expect(scenario.run).not.toContain("--project");
     const timeoutDiagnostics = expectDefined(
@@ -11752,7 +11901,7 @@ describe("ci workflow guards", () => {
       uses: SETUP_GO_V6,
       with: {
         cache: false,
-        "go-version": "1.27.2",
+        "go-version": "1.27.3",
       },
     });
     expect(setupGoStep.with).not.toHaveProperty("go-version-file");
@@ -11775,12 +11924,12 @@ describe("ci workflow guards", () => {
     });
     expect(verifyGoStep).toMatchObject({
       if: "matrix.requires_go == true",
-      run: 'test "$(go env GOVERSION)" = "go1.27.2"',
+      run: 'test "$(go env GOVERSION)" = "go1.27.3"',
     });
 
     const goMod = readTrackedText("scripts/docs-i18n/go.mod");
     expect(goMod).toMatch(/^go 1\.26\.0$/mu);
-    expect(goMod).toMatch(/^toolchain go1\.27\.2$/mu);
+    expect(goMod).toMatch(/^toolchain go1\.27\.3$/mu);
 
     const tooling = {
       configs: ["test/vitest/vitest.tooling.config.ts"],

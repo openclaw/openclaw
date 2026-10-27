@@ -252,6 +252,33 @@ describe("Workboard gateway lifecycle sync", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
+  it.each([-60_000, 60_000])(
+    "keeps the board debounce at 60 seconds after a %s ms wall-clock step",
+    async (wallClockStepMs) => {
+      const request = vi.fn(async () => {
+        vi.setSystemTime(Date.now() + wallClockStepMs);
+        return { ok: true, ran: true };
+      });
+      const { card, service } = await nudgeFixture(request);
+      const boards = await store.listBoards();
+      using lookup = vi.spyOn(store, "listBoards");
+      lookup.mockResolvedValue(boards);
+      vi.useFakeTimers();
+      try {
+        await service.nudge({ cards: [card] });
+        await vi.advanceTimersByTimeAsync(59_999);
+        await service.nudge({ cards: [card] });
+        expect(request).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(1);
+        await service.nudge({ cards: [card] });
+        expect(request).toHaveBeenCalledTimes(2);
+      } finally {
+        service.stop();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each(["failure", "disabled"] as const)(
     "handles %s automation without affecting lifecycle sync",
     async (outcome) => {

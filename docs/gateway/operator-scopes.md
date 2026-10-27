@@ -119,7 +119,8 @@ conversations and unbound documents remain denied. Broad `operator.read` callers
 retain document-ID-only access.
 
 In the Control UI, session writers can use **New Session**, send messages in
-their own conversations, and stop their own active runs. Their model, effort,
+their own conversations, fork from a persisted user message in an owned settled
+conversation, and stop their own active runs. Their model, effort,
 fast-mode, and non-full permission choices use the same session grant and the
 Gateway's allowed model catalog. Full permission mode, sandbox changes, and
 changes to an existing session's context window still require administrator access.
@@ -129,6 +130,14 @@ Own-work methods, including message sending, ordinary session creation,
 recovery, and forks, accept `operator.sessions.write` where their parameters
 do not require administrator access. Session ownership, current authority,
 agent access, and runtime and sandbox requirements still apply.
+
+Session readers can read visible dashboards and receive their updates and focus
+commands. Session writers can arrange tabs and put widgets on their own
+dashboards without general Gateway read or write access. Core report, progress,
+and website widgets are discoverable with session-read access; plugin-specific
+scopes and widget approvals remain unchanged. Canvas imports require a saved widget
+receipt in the dashboard conversation, with source access retained through the write.
+Broad readers keep their existing document-ID-only access.
 
 Session readers can also use `artifacts.list`, `artifacts.get`, and
 `artifacts.download` for artifacts in a conversation they can currently read.

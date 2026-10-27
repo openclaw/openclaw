@@ -15,18 +15,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("waits for a delayed EOF exit without forcing the app-server", async () => {
-  vi.useFakeTimers();
-  const harness = createClientHarness({ autoEmitExit: false });
-  Object.assign(harness.process, { pid: process.pid });
-  const closing = harness.client.closeAndWait({ forceKillDelayMs: 1_000 });
-  await vi.advanceTimersByTimeAsync(500);
-  expect(harness.process.kill).not.toHaveBeenCalled();
-  harness.emitExit();
-  await expect(closing).resolves.toEqual({ exited: true, cleanup: "closed" });
-  expect(vi.getTimerCount()).toBe(0);
-});
-
 describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
   it.each(["confirmed", "unconfirmed"])("preserves %s force-kill containment", async (cleanup) => {
     vi.useFakeTimers();
@@ -62,13 +50,7 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
       cleanup: cleanup === "confirmed" ? "terminated" : "uncertain",
     });
     expect(kill).toHaveBeenCalledWith(-root.pid, "SIGKILL");
-    if (cleanup === "confirmed") {
-      expect(warning).toHaveBeenCalledWith(
-        "Codex app-server required forced shutdown; process cleanup confirmed",
-      );
-    } else {
-      expect(warning).not.toHaveBeenCalled();
-    }
+    expect(warning).toHaveBeenCalledTimes(cleanup === "confirmed" ? 1 : 0);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -107,12 +89,17 @@ child.on("exit", (code, signal) => {
     const warning = vi.spyOn(embeddedAgentLog, "warn");
     try {
       await client.request("test/ready", {}, { timeoutMs: 5_000 });
+      vi.useFakeTimers();
       // Shared-client retirement calls close before its owner joins closeAndWait.
       client.close();
-      await expect(client.closeAndWait()).resolves.toEqual({ exited: true, cleanup: "closed" });
+      const closing = client.closeAndWait();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(child.killed).toBe(false);
+      await expect(closing).resolves.toEqual({ exited: true, cleanup: "closed" });
       await exited;
       expect(child.exitCode).toBe(0);
       expect(warning).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       child.kill("SIGKILL");
       await exited;

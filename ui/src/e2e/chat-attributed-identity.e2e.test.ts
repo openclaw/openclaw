@@ -14,7 +14,11 @@ import {
   readFooterGeometry,
   sampleMetadataReveal,
 } from "./chat-attributed-identity.test-support.ts";
-import { requireRecord, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import {
+  requireRecord,
+  scrollChatThreadToTop,
+  waitForChatScrollIdle,
+} from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -318,6 +322,11 @@ suite.define(() => {
                 Date.now(),
               ),
             });
+            // Fixture delivery does not wait for the new row's presentation.
+            await expect(
+              transcript.getByText("Riley joined this conversation."),
+              label,
+            ).toBeVisible();
             if (profiled) {
               const peer = pane.locator(".chat-group--peer", {
                 hasText: "Riley joined this conversation.",
@@ -329,11 +338,7 @@ suite.define(() => {
             if (height === 430) {
               // The first message can leave the virtual window after new turns.
               // Return to it before checking its attributed identity.
-              await waitForChatScrollIdle(page);
-              await thread.focus();
-              await thread.press("Home");
-              // Chromium drops a keyboard scroll that lands in the tail of the
-              // previous smooth one, so End must wait for Home to settle.
+              await scrollChatThreadToTop(page);
               await waitForChatScrollIdle(page);
               expect(await thread.evaluate((element) => element.scrollTop), label).toBe(0);
             }
@@ -851,6 +856,7 @@ suite.define(() => {
       await expect(userGroup.locator("img.chat-avatar.user[src]")).toHaveCount(0);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
+      const originalImage = (await image.elementHandles())[0] ?? null;
 
       await userGroup.hover();
       await userGroup.getByRole("button", { name: "Reply to message" }).click();
@@ -865,7 +871,15 @@ suite.define(() => {
       );
 
       expect(avatarRequests).toHaveLength(1);
-      await expect(image).toHaveCount(0);
+      await expect(userGroup.locator("img.chat-avatar.user[src]")).toHaveCount(0);
+      await expect(image).toBeHidden();
+      // A settled miss may retain its first frame, but rerenders must not create more images.
+      expect(
+        await image.evaluateAll(
+          (images, original) => images.every((candidate) => candidate === original),
+          originalImage,
+        ),
+      ).toBe(true);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
     });

@@ -782,12 +782,7 @@
 }
 
 .chat-pane__sharing-menu--desktop
-  > .btn.chat-pane__sharing-trigger:not(
-    :hover,
-    :focus-visible,
-    [aria-expanded="true"],
-    [data-public="true"]
-  )
+  > .btn.chat-pane__sharing-trigger:not(:hover, :focus-visible, [aria-expanded="true"])
   svg {
   color: var(--icon-interactive, inherit);
 }
@@ -797,7 +792,6 @@
     > .btn.chat-pane__sharing-trigger:not(
       :focus-visible,
       [aria-expanded="true"],
-      [data-public="true"],
       :disabled,
       [aria-disabled="true"]
     )
@@ -821,12 +815,6 @@
 /* Size the disclosure glyph without attenuating its shared foreground again. */
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-trigger .chat-pane__sharing-chevron {
   transform: scale(0.875);
-}
-
-.chat-pane__sharing-menu--desktop
-  .chat-pane__sharing-trigger[data-public="true"]
-  .chat-pane__sharing-trigger-state {
-  color: var(--warn);
 }
 
 .chat-pane__sharing-menu--desktop
@@ -917,10 +905,6 @@
 
   & .chat-pane__sharing-access-option > .oc-menu-item__check {
     display: none;
-  }
-
-  & .chat-pane__sharing-access-option[aria-checked="true"] {
-    background: var(--menu-selected);
   }
 
   & .chat-pane__sharing-back {

@@ -789,6 +789,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   immutable Actions caches; the main-push/daily/dispatch warmer is their sole
   writer. Build, QA and test orchestration consume its shared Node compile seed.
   PRs create no runtime-cache archives.
+- Full compiled-worker seeds retain separate prebuild and postbuild archives.
+  The existing protected warmer publishes its already-prepared postbuild full
+  generation; only selected artifact-producer source verifiers restore it.
+  Runtime workers use separate live/cache slots so they cannot replace that
+  full seed. Keep byte, topology, runtime and exact output-path validation, the
+  uncached path when no archive arrives, and existing job/worker limits.
 
 When changing one knob, update `docs/ci.md` and the guard test in the same PR.
 

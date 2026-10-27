@@ -14,6 +14,7 @@ import {
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -120,7 +121,7 @@ it("preserves shared ancestor references across staggered roster reads and first
   });
 });
 
-it("shares recipient encodings only for matching authority and delivered baselines", async () => {
+it("shares producer envelopes across matching authority and divergent baselines", async () => {
   using _ = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
@@ -183,6 +184,12 @@ it("shares recipient encodings only for matching authority and delivered baselin
           ["__proto__"]: { fixture: "own-data-property" },
         },
         new Set(ids),
+        {
+          prepareSessionProjection: prepareSessionEventProjection(projection, undefined, {
+            ancestors: [],
+            reuseEnvelope: true,
+          }),
+        },
       );
     const decodeLast = (peer: (typeof peers)[number]) => {
       const frame = JSON.parse(peer.send.mock.lastCall![0]) as EventFrame;
@@ -222,6 +229,50 @@ it("shares recipient encodings only for matching authority and delivered baselin
       const previousSends = peers.map((peer) => peer.send.mock.calls.length);
       const fieldEnumerations = new Map<object, number>();
       let envelopeEnumerations = 0;
+      const envelopeTuples = new Set<unknown>();
+      let envelopeMaxFields = 0;
+      let filteredEnvelopes = 0;
+      let fieldNameInsertions = 0;
+      let stagedFieldIndexTuples = 0;
+      const MapConstructor = globalThis.Map;
+      globalThis.Map = new Proxy(MapConstructor, {
+        construct(target, args) {
+          const entries: unknown = args[0];
+          if (
+            Array.isArray(entries) &&
+            entries.some(
+              (entry: unknown) =>
+                Array.isArray(entry) && entry[0] === "sharingRole" && typeof entry[1] === "number",
+            )
+          ) {
+            stagedFieldIndexTuples += entries.length;
+          }
+          return Reflect.construct(target, args);
+        },
+      });
+      // oxlint-disable-next-line typescript/unbound-method -- The observer calls add with its original Set receiver.
+      const add = Set.prototype.add;
+      const adding = vi.spyOn(Set.prototype, "add").mockImplementation(function (
+        this: Set<unknown>,
+        value: unknown,
+      ) {
+        if (value === "sharingRole") {
+          fieldNameInsertions++;
+        }
+        return add.call(this, value);
+      });
+      const fromEntries = Object.fromEntries;
+      const copying = vi.spyOn(Object, "fromEntries").mockImplementation((entries) => {
+        const result = fromEntries(entries);
+        if (result.sessionKey === key && isRecord(result.session) && Array.isArray(entries)) {
+          filteredEnvelopes++;
+          envelopeMaxFields = Math.max(envelopeMaxFields, entries.length);
+          for (const entry of entries) {
+            envelopeTuples.add(entry);
+          }
+        }
+        return result;
+      });
       const entries = Object.entries;
       const enumerating = vi.spyOn(Object, "entries").mockImplementation((value) => {
         if (isRecord(value) && value.sessionKey === key && isRecord(value.session)) {
@@ -236,8 +287,16 @@ it("shares recipient encodings only for matching authority and delivered baselin
       let rowEncodings = 0;
       let envelopeEncodings = 0;
       let sharingKeyEncodings = 0;
+      let ancestorFieldEncodings = 0;
       const encoding = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
         const value: unknown = args[0];
+        if (
+          isRecord(value) &&
+          Object.keys(value).length === 1 &&
+          (Object.hasOwn(value, "ancestorSessions") || Object.hasOwn(value, "ancestorSessionRefs"))
+        ) {
+          ancestorFieldEncodings++;
+        }
         if (
           Array.isArray(value) &&
           value.length === 10 &&
@@ -257,8 +316,11 @@ it("shares recipient encodings only for matching authority and delivered baselin
       try {
         publish(peers.map((peer) => peer.client.connId));
       } finally {
+        globalThis.Map = MapConstructor;
         encoding.mockRestore();
         enumerating.mockRestore();
+        adding.mockRestore();
+        copying.mockRestore();
       }
       const decodedPayloads: unknown[] = [];
       for (const [index, peer] of peers.entries()) {
@@ -312,16 +374,26 @@ it("shares recipient encodings only for matching authority and delivered baselin
           });
         }
       }
-      // The full row's field ordering is shared even when delivery baselines differ.
-      expect([...fieldEnumerations.values()]).toEqual([1, 1]);
+      // Field order needs only names, never a temporary tuple for every row value.
+      expect([...fieldEnumerations.values()]).toEqual([]);
       // Referenced fields must not allocate entry tuples just to discard them.
       expect(envelopeEnumerations).toBe(0);
+      // Interleaved histories and audiences share only synchronous copy scratch space.
+      expect(envelopeTuples.size).toBe(envelopeMaxFields);
+      // A producer-owned envelope is filtered once per authority, even with divergent baselines.
+      expect(filteredEnvelopes).toBe(2);
+      // Field names are indexed once per audience, not inserted into a Set per history.
+      expect(fieldNameInsertions).toBe(0);
+      // Index construction must not stage a tuple for every field before inserting it.
+      expect(stagedFieldIndexTuples).toBe(0);
       // Eight current delta recipients were primed at this revision; sixteen were not.
       expect(sharingKeyEncodings).toBe(16);
       // Four authority/baseline groups share row planning across both delta capabilities.
       expect(rowEncodings).toBeLessThanOrEqual(16);
       // Two wire capabilities per group, plus one legacy envelope per authority.
       expect(envelopeEncodings).toBeLessThanOrEqual(10);
+      // Empty ancestor fields are constant across divergent connection histories.
+      expect(ancestorFieldEncodings).toBe(0);
     } finally {
       detach();
       await connection.mentionInbox.dispose();

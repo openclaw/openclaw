@@ -117,6 +117,31 @@ function compressedRecord(bytes: Uint8Array, rawBytes = bytes.byteLength): Paylo
 }
 
 describe("transcript payload storage boundary", () => {
+  it("prepares UTF-8 frames without decoding a duplicate event string", () => {
+    using database = openNodeSqliteDatabase(":memory:");
+    admitSqliteSchema(database);
+    const original = JSON.stringify({
+      type: "message",
+      message: { role: "assistant", content: "café 雪 🦞 \ufeff ".repeat(512) },
+    });
+    const decode = vi.spyOn(TextDecoder.prototype, "decode");
+    let prepared: TranscriptPayloadRecord;
+    try {
+      prepared = prepareTranscriptPayload(database, original);
+      expect(decode).not.toHaveBeenCalled();
+    } finally {
+      decode.mockRestore();
+    }
+    expect(prepared.event_zstd).not.toBeNull();
+    expect(readTranscriptPayload(prepared)).toBe(original);
+    for (const surrogate of ["\ud800", "\udfff"]) {
+      const malformed = `{"type":"custom","data":"${"x".repeat(2048)}${surrogate}"}`;
+      const identity = prepareTranscriptPayload(database, malformed);
+      expect(identity.event_json).toBe(malformed);
+      expect(identity.event_zstd).toBeNull();
+    }
+  });
+
   it("reads legacy predicates lazily and uses the next payload write without JSON work", () => {
     using database = openNodeSqliteDatabase(":memory:");
     createTable(database);
@@ -517,6 +542,28 @@ describe("transcript payload storage boundary", () => {
       }
     },
   );
+
+  it("bounds retained backing storage across small payload decompressions", () => {
+    const original = Buffer.from(`{"type":"custom","data":"${"x".repeat(2048)}雪🦞"}`);
+    const codec = resolveZstdCodec();
+    const compressed = codec.compress(original);
+    const decoded = Array.from({ length: 64 }, () =>
+      codec.decompress(compressed, original.byteLength),
+    );
+
+    for (const payload of decoded) {
+      expect(payload).toEqual(original);
+    }
+    const backingStores = new Set(decoded.map((payload) => payload.buffer));
+    const retainedBytes = [...backingStores].reduce(
+      (total, backing) => total + backing.byteLength,
+      0,
+    );
+    // Allow pool alignment and partially filled first/last slabs, without pinning 16 KiB per row.
+    expect(retainedBytes).toBeLessThanOrEqual(
+      2 * original.byteLength * decoded.length + 2 * Buffer.poolSize,
+    );
+  });
 
   it("bounds malformed frames and rejects size, checksum and UTF-8 corruption", () => {
     const database = openNodeSqliteDatabase(":memory:");

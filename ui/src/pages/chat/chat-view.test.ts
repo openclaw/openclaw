@@ -738,6 +738,7 @@ describe("retained input navigation", () => {
       onQueueMove,
     });
 
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(container.querySelectorAll(".chat-queue__item")).toHaveLength(2),
     );
@@ -1776,7 +1777,7 @@ describe("chat voice controls", () => {
     const visualizer = stopVoiceButton?.querySelector<HTMLElement>(
       `.agent-chat__voice-activity[data-status="${status}"]`,
     );
-    expect(visualizer?.getAttribute("data-level")).toBe("0.64");
+    expect(visualizer?.getAttribute("data-level")).toBe(status === "connecting" ? "0" : "0.64");
     expect(visualizer?.getAttribute("data-source")).toBe("microphone");
     expect(visualizer?.getAttribute("aria-hidden")).toBe("true");
     expect(visualizer?.querySelectorAll(".agent-chat__voice-activity-bar")).toHaveLength(7);
@@ -1817,7 +1818,43 @@ describe("chat voice controls", () => {
     expect(container.querySelector(".agent-chat__voice-status")).toBeNull();
   });
 
-  it("updates microphone bars without rerendering the chat", () => {
+  it("keeps the fallback meter and Stop usable when decorative canvas is unavailable", async () => {
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    const inputLevel = new RealtimeTalkLevelSignal();
+    const onToggleRealtimeTalk = vi.fn();
+    const container = renderChatView({
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "listening",
+      realtimeTalkInputLevel: inputLevel,
+      onToggleRealtimeTalk,
+    });
+    try {
+      const host = requireElement(container, "openclaw-microphone-activity", "voice meter");
+      const bars = Array.from(host.querySelectorAll(".agent-chat__voice-activity-bar"));
+      const canvas = await waitForSolid(() => requireElement(host, "canvas", "decorative canvas"));
+      expect(bars).toHaveLength(7);
+      expect(canvas.hasAttribute("data-ready")).toBe(false);
+
+      inputLevel.set(0.8);
+      flush();
+      await waitForSolid(() => expect(getContext.mock.contexts).toContain(canvas));
+      expect(container.querySelector("openclaw-microphone-activity")).toBe(host);
+      expect(Array.from(host.querySelectorAll(".agent-chat__voice-activity-bar"))).toEqual(bars);
+      expect(host.getAttribute("data-level")).toBe("0.8");
+      expect(canvas.hasAttribute("data-ready")).toBe(false);
+      expectDefined(
+        container.querySelector<HTMLButtonElement>('[aria-label="Stop voice input"]'),
+        "Stop voice input",
+      ).click();
+      expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
+    } finally {
+      disposeChatView(container);
+      container.remove();
+      getContext.mockRestore();
+    }
+  });
+
+  it("updates microphone activity without rerendering the chat", () => {
     const inputLevel = new RealtimeTalkLevelSignal();
     inputLevel.set(0.2);
     const container = renderChatView({
@@ -1831,13 +1868,11 @@ describe("chat voice controls", () => {
       const centerBar = visualizer?.querySelector<HTMLElement>(
         ".agent-chat__voice-activity-bar:nth-child(4)",
       );
-      const initialScale = centerBar?.style.getPropertyValue("--talk-bar-scale");
 
       inputLevel.set(0.8);
       flush();
 
       expect(visualizer?.getAttribute("data-level")).toBe("0.8");
-      expect(centerBar?.style.getPropertyValue("--talk-bar-scale")).not.toBe(initialScale);
       expect(visualizer?.querySelector(".agent-chat__voice-activity-bar:nth-child(4)")).toBe(
         centerBar,
       );
@@ -2770,7 +2805,7 @@ describe("chat attachment picker", () => {
     if (!camera) {
       throw new Error("Missing camera capture dialog");
     }
-    const cameraButton = await getAttachmentMenuOption(container, t("chat.composer.takePhoto"));
+    const cameraButton = await getAttachmentMenuOption(container, t("chat.composer.cameraInput"));
     const show = vi.spyOn(camera, "show").mockImplementation(() => undefined);
     const fileClick = vi.spyOn(HTMLInputElement.prototype, "click");
     expect(container.querySelector(".agent-chat__camera-input")).not.toBeNull();

@@ -30,6 +30,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -71,9 +72,7 @@ import {
   createEmbeddedRunHandle,
   steerTestSessionTurn,
 } from "../embedded-agent-runner/runs.test-support.js";
-import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../internal-event-contract.js";
-import { RUNTIME_EVENT_USER_PROMPT } from "../internal-runtime-context.js";
-import { configFor } from "../model-auth.fixtures.test-support.js";
+import { configFor, createPlatformAuthRoute } from "../model-auth.fixtures.test-support.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { createOpenClawOnlyToolConstructionPlan } from "../test-helpers/tool-construction-plan.js";
@@ -93,6 +92,7 @@ import {
   registerAgentHarness,
 } from "./registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./runtime-plugin.js";
+import { registerSelectionContextCases } from "./selection.context.cases.js";
 import {
   resolveAvailableAgentHarnessPolicy,
   runAgentHarnessAttempt,
@@ -247,13 +247,7 @@ beforeEach(async () => {
     .mockResolvedValue(undefined);
   mockCallGatewayTool.mockReset();
   cliBackendsTesting.setDepsForTest({
-    resolvePluginSetupRegistry: () => ({
-      providers: [],
-      cliBackends: [],
-      configMigrations: [],
-      autoEnableProbes: [],
-      diagnostics: [],
-    }),
+    resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
     resolveRuntimeCliBackends: () => [
       {
         id: "claude-cli",
@@ -427,14 +421,7 @@ const maybeCompactAgentHarnessSession = createHarnessCompactionFixture(() => ({
 
 type CompactSessionParams = Parameters<typeof maybeCompactAgentHarnessSession>[0];
 
-const OPENAI_PLATFORM_ROUTE = {
-  provider: "openai",
-  modelId: "gpt-5.5",
-  api: "openai-responses",
-  baseUrl: "https://api.openai.com/v1",
-  authRequirement: "api-key",
-  requestTransportOverrides: "none",
-} as const;
+const OPENAI_PLATFORM_ROUTE = createPlatformAuthRoute();
 
 const OPENAI_CHATGPT_ROUTE = {
   provider: "openai",
@@ -492,6 +479,7 @@ function registerTestCompactor(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  registerSelectionContextCases({ createAttemptParams, registerHarness });
   registerSelectionQueueInputCases({ createAttemptParams });
 
   it.each(["close", "abort", "lifecycle replacement"] as const)(
@@ -575,47 +563,6 @@ describe("runAgentHarnessAttempt", () => {
       expect(result.settledTurnFinalizationContext).toBeUndefined();
     },
   );
-
-  it("carries a runtime-event completion result into the plugin harness inbound context", async () => {
-    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("native"));
-    registerHarness({ runAttempt });
-    const params = {
-      ...createAttemptParams(),
-      agentHarnessId: "codex",
-      prompt: RUNTIME_EVENT_USER_PROMPT,
-      internalEvents: [
-        {
-          type: AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
-          source: "subagent" as const,
-          childSessionKey: "agent:main:subagent:child-a",
-          announceType: "subagent task",
-          taskLabel: "child A",
-          status: "ok" as const,
-          statusLabel: "completed successfully",
-          result: "CHILD_RESULT_A_DONE",
-          replyInstruction: "Summarize the child result for the user.",
-        },
-      ],
-      runtimeContextFragments: [
-        { kind: "runtime-instruction" as const, text: "SUPPLEMENTAL_RUNTIME_NOTE" },
-      ],
-    };
-
-    await runAgentHarnessAttempt(params);
-
-    const received = runAttempt.mock.calls.at(-1)?.[0];
-    expect(received?.prompt).toBe(RUNTIME_EVENT_USER_PROMPT);
-    const text = received?.currentInboundContext?.text ?? "";
-    expect(text.match(/CHILD_RESULT_A_DONE/g)).toHaveLength(1);
-    expect(text).toContain("Summarize the child result for the user.");
-    expect(text.indexOf("CHILD_RESULT_A_DONE")).toBeLessThan(
-      text.indexOf("SUPPLEMENTAL_RUNTIME_NOTE"),
-    );
-    expect(received?.currentInboundContext?.fragments).toContainEqual({
-      kind: "conversation-data",
-      text: expect.stringContaining("CHILD_RESULT_A_DONE"),
-    });
-  });
 
   it.each(["workspace", "explicit cwd"] as const)(
     "binds native provenance to staged input before dispatch and preserves it on a suppressed retry (%s)",
@@ -1608,15 +1555,13 @@ describe("runAgentHarnessAttempt", () => {
       }).map((tool) => tool.name);
       return createAttemptResult("openclaw");
     });
-    const params = createAttemptParams(
-      providerRuntimeConfig("codex", "openclaw"),
-    ) as EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions };
-    params.toolsAllow = ["openclaw"];
-    params.systemAgentTool = { surface: "gateway", proposalRef: {}, directiveRef: {} };
     const onContextAccountingEvent = vi.fn();
     const onCompactionRequestBudget = vi.fn();
-    Object.assign(params, {
-      compactionCountOwner: "caller",
+    const params = Object.freeze({
+      ...createAttemptParams(providerRuntimeConfig("codex", "openclaw")),
+      toolsAllow: ["openclaw"],
+      systemAgentTool: { surface: "gateway" as const, proposalRef: {}, directiveRef: {} },
+      compactionCountOwner: "caller" as const,
       onContextAccountingEvent,
       onCompactionRequestBudget,
     });
@@ -1624,13 +1569,15 @@ describe("runAgentHarnessAttempt", () => {
     const result = await runAgentHarnessAttempt(params);
 
     expect(result.sessionIdUsed).toBe("openclaw");
-    expect(agentRunAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        compactionCountOwner: "caller",
-        onContextAccountingEvent,
-        onCompactionRequestBudget,
-      }),
-    );
+    const attempt = agentRunAttempt.mock.calls[0]?.[0];
+    expect(attempt).toMatchObject({
+      compactionCountOwner: "caller",
+      onContextAccountingEvent,
+      onCompactionRequestBudget,
+      operationalRunInstance: selectionAdmittedRunContext.operationalRunInstance,
+    });
+    expect(params).not.toHaveProperty("operationalRunInstance");
+    expect(attempt).not.toHaveProperty("systemAgentTool");
     expect(toolNames).toEqual(["openclaw"]);
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });

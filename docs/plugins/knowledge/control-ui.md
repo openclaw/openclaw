@@ -12,8 +12,9 @@ The Knowledge page and chat panel. Part of the
 [Knowledge plugin](/plugins/knowledge) guide.
 
 The Knowledge UI is a read-only inspector, even when agent writes are enabled.
-Change requests are handed to chat with the exact observed record ID, revision,
-and hash; nothing is sent automatically. Native UI from an enabled bundled plugin
+**Ask** starts a new chat with the selected agent and sends your request as its
+first message, with the exact observed record ID, revision, and hash attached.
+The dialog shows only the editable request. Native UI from an enabled bundled plugin
 does not need the **Custom plugin UI** Labs setting.
 
 ## Knowledge page
@@ -60,7 +61,7 @@ The page stores its navigation in Control UI `p.*` query parameters:
   defaults.
 
 Refresh and browser back/forward restore the addressed view. Expansion state,
-scroll position, and unsent chat handoffs are not part of the address.
+scroll position, and unsent Ask requests are not part of the address.
 
 ## Links in chat
 

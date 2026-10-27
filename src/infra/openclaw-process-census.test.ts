@@ -16,6 +16,7 @@ const {
   darwinCommand,
   nativeDarwinCensus,
   rosetta,
+  ancestry,
   fixturePath,
 } = vi.hoisted(() => ({
   census: vi.fn(),
@@ -29,6 +30,7 @@ const {
   darwinCommand: vi.fn(),
   nativeDarwinCensus: vi.fn(),
   rosetta: vi.fn(),
+  ancestry: vi.fn(),
   fixturePath: (file: string) => file.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""),
 }));
 vi.mock("node:child_process", () => ({ spawnSync: census }));
@@ -54,6 +56,8 @@ vi.mock("../process/darwin-process-inspection.js", () => ({
 vi.mock("../process/supervisor/darwin-process-command.js", () => ({
   readDarwinProcessCommand: darwinCommand,
 }));
+// mock-isolation: Native ancestry would otherwise read real host PIDs behind the synthetic table.
+vi.mock("@openclaw/proc-safe/identity", () => ({ readProcessAncestry: ancestry }));
 import { inspectOtherOpenClawProcesses } from "./openclaw-process-census.js";
 
 const self = process.pid;
@@ -106,6 +110,7 @@ beforeEach(() => {
     })),
   );
   rosetta.mockReset().mockReturnValue(false);
+  ancestry.mockReset().mockReturnValue(null);
   realpath.mockReset().mockImplementation((file: string) => file);
   stat.mockReset().mockReturnValue({ isDirectory: () => false });
   readlink.mockReset().mockImplementation((file: string) => {
@@ -476,6 +481,19 @@ it.each([
 
 const references = { runId: "update-run-123", artifactPaths: ["/tmp/retained runtime"] };
 const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });
+function expectReferences(
+  matchingPids: number[],
+  unverifiedPids: number[] = [],
+  handoff: typeof references & { sharedRoots?: string[]; familyDeadline?: number } = references,
+) {
+  expect(inspectOtherOpenClawProcesses(handoff)).toEqual({
+    matchingPids,
+    unverifiedPids,
+    ...(unverifiedPids.length
+      ? { warnings: unverifiedPids.map((pid) => expect.stringContaining(`PID ${pid}`)) }
+      : {}),
+  });
+}
 
 it.each([
   ["/usr/lib/systemd/systemd", "--user"],
@@ -489,24 +507,14 @@ it.each([
     artifactPaths: ["/tmp/openclaw-update-runtime-Ab1234"],
   };
   expectPids([]);
-  expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
-    matchingPids: [],
-    unverifiedPids: [],
-  });
+  expectReferences([], [], handoffRefs);
   rows.get(peer + 1)!.cwd = handoffRefs.artifactPaths[0];
   expectPids([peer + 1]);
-  expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
-    matchingPids: [peer + 1],
-    unverifiedPids: [],
-  });
+  expectReferences([peer + 1], [], handoffRefs);
   rows.get(peer + 1)!.cwd = denied();
   rows.get(peer + 1)!.ppid = 1;
   expectPids([]);
-  expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
-    matchingPids: [],
-    unverifiedPids: [peer + 1],
-    warnings: [expect.stringContaining(`PID ${peer + 1}`)],
-  });
+  expectReferences([], [peer + 1], handoffRefs);
 });
 
 it.each([0, 1000])(
@@ -534,10 +542,7 @@ it("finds orphaned handoff references while excluding only its verified updater 
     "--eval",
     'import("file:///tmp/retained%20runtime/tree/worker.js")',
   ]);
-  expect(inspectOtherOpenClawProcesses(references)).toEqual({
-    matchingPids: [peer, peer + 1, peer + 2, peer + 5],
-    unverifiedPids: [],
-  });
+  expectReferences([peer, peer + 1, peer + 2, peer + 5]);
   processRow(launcher, ["openclaw-update", references.runId]);
   expect(inspectOtherOpenClawProcesses(references).matchingPids).toContain(launcher);
 });
@@ -571,11 +576,7 @@ it.each(["linux", "darwin"] as const)(
           : { argv: rows.get(pid)!.argv },
       );
     }
-    expect(inspectOtherOpenClawProcesses(references)).toEqual({
-      matchingPids: [peer + 2, peer + 3],
-      unverifiedPids: [peer],
-      warnings: [expect.stringContaining(`PID ${peer}`)],
-    });
+    expectReferences([peer + 2, peer + 3], [peer]);
   },
 );
 
@@ -602,11 +603,7 @@ it.each([
     read.mockImplementation((file: string) =>
       file === `/proc/${peer}/status` ? `Uid:\t${uids}\n` : readFile(file),
     );
-    expect(inspectOtherOpenClawProcesses(references)).toEqual({
-      matchingPids: [],
-      unverifiedPids: foreign ? [] : [peer],
-      ...(!foreign ? { warnings: [expect.stringContaining(`PID ${peer}`)] } : {}),
-    });
+    expectReferences([], foreign ? [] : [peer]);
   },
 );
 
@@ -634,4 +631,97 @@ it("retains known matching PIDs when later inspection exhausts the census budget
     matchingPids: [peer],
     error: expect.stringContaining("census is incomplete"),
   });
+});
+
+type Lineage = [pid: number, startedAtMs: number][];
+function setLineage(stoppedBy: "root" | "through-pid" | "unreadable-parent", ...chains: Lineage[]) {
+  const known = new Map(chains.map((chain) => [chain[0]![0], chain]));
+  ancestry.mockImplementation((pid: number) => {
+    const chain = known.get(pid);
+    return chain
+      ? {
+          chain: chain.map(([member, startedAtMs], index) => ({
+            pid: member,
+            parentPid: chain[index + 1]?.[0] ?? 1,
+            startTimeMicros: startedAtMs * 1000,
+            startTimeResolutionMicros: 1,
+            exited: false,
+          })),
+          complete: stoppedBy !== "unreadable-parent",
+          stoppedBy,
+        }
+      : null;
+  });
+}
+
+it("does not report the inspector's own descendants as handoff work", () => {
+  processRow(peer, ["node", "/tmp/retained runtime/worker.js"], { ppid: self });
+  processRow(peer + 1, ["node", "worker.js"], { ppid: peer, cwd: denied() });
+  processRow(peer + 2, ["node", "/tmp/retained runtime/worker.js"]);
+  processRow(peer + 3, ["node", "worker.js"], { cwd: denied() });
+  setLineage(
+    "through-pid",
+    [
+      [peer, 0],
+      [self, 0],
+    ],
+    [
+      [peer + 1, 0],
+      [peer, 0],
+      [self, 0],
+    ],
+  );
+  expectReferences([peer + 2], [peer + 3]);
+});
+
+it("reports shared-root work unless its whole ancestry began after the family deadline", () => {
+  const familyDeadline = 1_000_000;
+  const after = familyDeadline + 1;
+  const before = familyDeadline - 1;
+  const installation = "/srv/openclaw";
+  const candidate = `${installation}/.openclaw-update-child-candidate`;
+  const manager = peer + 20;
+  const shell = peer + 21;
+  const gateway = ["node", `${installation}/openclaw.mjs`, "gateway", "run"];
+  processRow(manager, ["/usr/lib/systemd/systemd", "--user"], { uid: 1000, cwd: "/" });
+  processRow(shell, ["/usr/bin/tmux"], { cwd: "/home/operator" });
+  processRow(peer, gateway);
+  processRow(peer + 1, gateway);
+  processRow(peer + 2, ["node", `${installation}/openclaw.mjs`, "--run-id=update-run-123"]);
+  processRow(peer + 3, gateway, { ppid: shell });
+  processRow(peer + 4, gateway, { ppid: manager });
+  processRow(peer + 5, ["node", `${candidate}/openclaw.mjs`]);
+  setLineage(
+    "root",
+    [[peer, after]],
+    [[peer + 1, before]],
+    [[peer + 2, after]],
+    [
+      [peer + 3, after],
+      [shell, before],
+    ],
+    [
+      [peer + 4, after],
+      [manager, before],
+    ],
+    [[peer + 5, after]],
+  );
+  const handoff = {
+    runId: references.runId,
+    artifactPaths: [installation, candidate],
+    sharedRoots: [`${installation}/`],
+  };
+
+  expectReferences([peer + 1, peer + 2, peer + 3, peer + 5], [], { ...handoff, familyDeadline });
+  // Without a recorded deadline, or with an incomplete ancestry, every holder remains.
+  const holders = [peer, peer + 1, peer + 2, peer + 3, peer + 4, peer + 5];
+  expect(inspectOtherOpenClawProcesses(handoff).matchingPids).toEqual(holders);
+  const complete = ancestry.getMockImplementation()!;
+  ancestry.mockImplementation((pid: number) => ({
+    ...complete(pid),
+    stoppedBy: "unreadable-parent",
+  }));
+  expect(inspectOtherOpenClawProcesses({ ...handoff, familyDeadline }).matchingPids).toEqual(
+    holders,
+  );
 });

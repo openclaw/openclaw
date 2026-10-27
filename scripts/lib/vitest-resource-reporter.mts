@@ -175,7 +175,7 @@ export default class VitestResourceReporter implements Reporter {
 
   onTestCaseReady(test: TestCase) {
     const active = this.active.get(moduleKey(test.module.toTestSpecification()));
-    if (active?.pool === "browser") {
+    if (active) {
       active.cases.push({ id: test.id, location: test.location });
       this.writeDiagnostic();
     }
@@ -183,7 +183,7 @@ export default class VitestResourceReporter implements Reporter {
 
   onTestCaseResult(test: TestCase) {
     const active = this.active.get(moduleKey(test.module.toTestSpecification()));
-    if (active?.pool === "browser") {
+    if (active) {
       active.cases = active.cases.filter((entry) => entry.id !== test.id);
       this.writeDiagnostic();
     }

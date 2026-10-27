@@ -139,14 +139,14 @@ flow:
                     async: true
                     expr: "(await readNativeQaSubagentRuns(env)).find((run) => run.label === `qa-terminal-${caseName}` && run.execution.status === 'terminal' && run.execution.outcome?.status === 'ok' && run.delivery?.status === 'delivered')"
               # The channel payload alone could also come from the completion model.
-              # Match the fallback owner's persisted mirror to this exact child run.
+              # Match the destination history row recorded for this exact child run.
               - set: readDirectFallbackReceipts
                 value:
                   lambda:
                     params:
                       - run
                     async: true
-                    expr: "(await env.gateway.call('chat.history', { agentId: 'qa', sessionKey: run.requesterSessionKey, limit: 100, maxChars: 20000 }, { timeoutMs: 10000 })).messages?.filter((message) => message.role === 'assistant' && message.provider === 'openclaw' && message.model === 'delivery-mirror' && message.__openclaw?.idempotencyKey === `announce:v1:${run.childSessionKey}:${run.runId}:text-direct`) ?? []"
+                    expr: "(await env.gateway.call('chat.history', { agentId: 'qa', sessionKey: run.requesterSessionKey, limit: 100, maxChars: 20000 }, { timeoutMs: 10000 })).messages?.filter((message) => message.role === 'assistant' && message.provider === 'openclaw' && message.model === 'automation-result' && String(message.__openclaw?.idempotencyKey ?? '').startsWith(`outbound-delivery:announce:v1:${run.childSessionKey}:${run.runId}:text-direct:`)) ?? []"
               - forEach:
                   items:
                     expr: config.cases

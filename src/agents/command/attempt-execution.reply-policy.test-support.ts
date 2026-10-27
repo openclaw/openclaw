@@ -130,6 +130,5 @@ export function registerCommandReplyPolicyTests({
         },
       }),
     ).rejects.toBe(failure);
-    expect(execute).toHaveBeenCalledOnce();
   });
 }

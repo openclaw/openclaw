@@ -1,6 +1,5 @@
 import type {
   SessionCatalogHost,
-  SessionCatalogSession,
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -40,10 +39,7 @@ export async function lookupCatalogSession(params: {
   key: CatalogSessionKey;
   agentId: string;
   isCurrent: () => boolean;
-}): Promise<{
-  host: SessionCatalogHost | null;
-  session: SessionCatalogSession | null;
-} | null> {
+}) {
   const { agentId, client, key } = params;
   let cursor: string | undefined;
   const seenCursors = new Set<string>();

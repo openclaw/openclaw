@@ -1,14 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import { createDispatchEnvironmentFixtures, REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
 import { createWorkerPlacementReclaim } from "./placement-reclaim.js";
-import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { usePlacementStoreFixture } from "./placement-store-fixture.test-support.js";
 import { placementClaim, sessionIdentity } from "./placement-suite.test-support.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
@@ -18,12 +16,10 @@ import {
   reconcileWorkspaceAfterTurn,
 } from "./workspace-result-finalize.js";
 
-const dirs = useStateDatabaseTempDirs();
+const storeFixture = usePlacementStoreFixture();
 
 async function fixture(folderPlacement = false) {
-  const root = dirs.make("device-folder-lifecycle-");
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  const placements = createWorkerSessionPlacementStore({ database, now: () => 1000 });
+  const { root, database, store: placements } = storeFixture;
   const harness = await createHarness(database, placements, { workspacePath: root });
   const { environmentId } = createDispatchEnvironmentFixtures();
   const placement = await advancePlacementFixtureToActive(placements, database, REQUEST, {
@@ -41,7 +37,7 @@ async function fixture(folderPlacement = false) {
   return { root, placements, placement, harness, folder, workspace };
 }
 
-test("device-folder results release the turn without capture, transfer, reconciliation, or quiescence", async () => {
+test("device-folder turn settlement and reclaim release ownership without synchronizing user data", async () => {
   const f = await fixture();
   const { placement } = f;
   const claim = await f.placements.claimTurn(placementClaim(placement, "folder-turn"));
@@ -65,7 +61,11 @@ test("device-folder results release the turn without capture, transfer, reconcil
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     workspace: f.workspace,
   };
-  await recoverWorkspaceBeforeTurn(result);
+  await recoverWorkspaceBeforeTurn({
+    ...result,
+    tunnel,
+    turn: sessionIdentity(REQUEST.sessionId),
+  });
   await reconcileWorkspaceAfterTurn({
     ...result,
     tunnel,
@@ -78,10 +78,6 @@ test("device-folder results release the turn without capture, transfer, reconcil
   expect(f.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
   expect(await f.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
   expect(await fs.readdir(f.folder)).toEqual(["keep.txt"]);
-});
-
-test("device-folder reclaim stops its environment without touching user data", async () => {
-  const f = await fixture();
   const reclaimPlacement = createWorkerPlacementReclaim({
     placements: f.placements,
     environments: f.harness.environments,

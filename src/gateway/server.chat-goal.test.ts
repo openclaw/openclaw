@@ -48,6 +48,7 @@ import { registerGoalAutomaticContinuationCases } from "./server.chat-goal-conti
 import { registerGoalReplacementCases } from "./server.chat-goal-replacement.test-support.js";
 import { registerWorkerGoalChatCases } from "./server.chat-goal-workers.test-support.js";
 import {
+  goalAgentResult,
   createGoalChatStartRequest,
   expectGoalChatRetryResponses,
   installReplyDispatchHook,
@@ -124,18 +125,7 @@ beforeEach(async () => {
   runEmbeddedAgent.mockImplementation(async (params) => {
     modelStarted.resolve(undefined);
     await modelRelease;
-    return {
-      payloads: [{ text: "Goal work continued." }],
-      meta: {
-        durationMs: 0,
-        agentMeta: {
-          sessionId: params.sessionId,
-          provider: "test",
-          model: "test",
-          usage: { input: 1, output: 1 },
-        },
-      },
-    };
+    return goalAgentResult(params.sessionId, "Goal work continued.");
   });
 });
 

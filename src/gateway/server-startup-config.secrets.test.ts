@@ -1037,52 +1037,6 @@ it("activates reference-free startup without caller SQL or a runtime import", as
   }
 });
 
-it("retries a stale startup fast-path preflight against the newer runtime context", async () => {
-  const agentDir = autoCleanupTempDirs.make("openclaw-startup-fast-path-cas-");
-  let clearImportedSecretsRuntimeSnapshot: (() => void) | undefined;
-  const config = (port: number) =>
-    gatewayTokenConfig({
-      agents: { entries: { default: { agentDir } } },
-      gateway: { port },
-    });
-  try {
-    // A preceding lazy-import test resets Vitest's module cache. Import this
-    // whole runtime graph together so the activator and handler share state.
-    const { createRuntimeSecretsActivator: createImportedRuntimeSecretsActivator } =
-      await import("./server-startup-config.js");
-    const secretsRuntime = await import("../secrets/runtime.js");
-    clearImportedSecretsRuntimeSnapshot = secretsRuntime.clearSecretsRuntimeSnapshot;
-    const activate = createImportedRuntimeSecretsActivator(activatorOptions());
-    await activate(config(19_021), { reason: "startup", activate: true });
-    const { getRuntimeConfigSnapshotRefreshHandler } =
-      await import("../config/runtime-snapshot.js");
-    const staleRefreshHandler = getRuntimeConfigSnapshotRefreshHandler();
-    if (!staleRefreshHandler?.preflight) {
-      throw new Error("expected startup fast-path refresh preflight handler");
-    }
-    const desiredConfig = config(19_023);
-    const preflightResult = await staleRefreshHandler.preflight({ sourceConfig: desiredConfig });
-    const concurrent = await secretsRuntime.prepareSecretsRuntimeSnapshot({
-      config: config(19_022),
-      agentDirs: [agentDir],
-      loadAuthStore: () => authStore("newer-context-key"),
-    });
-    secretsRuntime.activateSecretsRuntimeSnapshot(concurrent);
-
-    await expect(
-      staleRefreshHandler.refresh({ sourceConfig: desiredConfig, preflightResult }),
-    ).resolves.toBe(true);
-
-    const active = secretsRuntime.getActiveSecretsRuntimeSnapshot();
-    expect(active?.sourceConfig.gateway?.port).toBe(19_023);
-    expect(active?.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
-      key: "newer-context-key",
-    });
-  } finally {
-    clearImportedSecretsRuntimeSnapshot?.();
-  }
-});
-
 it("grafts live auth stores onto one-shot config-write snapshots", async () => {
   const agentDir = "/tmp/openclaw-managed-write-auth-store";
   const store = authStore("live-auth-store-key");

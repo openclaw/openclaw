@@ -238,6 +238,34 @@ describe("chat delivery watermark preparation", () => {
 });
 
 describe("buildAssistantReplyContentFromInputs", () => {
+  it.each([false, true])("preserves typed fallback status (with answer=%s)", async (withAnswer) => {
+    const notice = "Model Fallback: backup/model";
+    const fallbackNotice = setReplyPayloadMetadata(
+      { text: notice, isFallbackNotice: true },
+      { modelFallbackNotice: true },
+    );
+    const inputs: ReplyDispatchOperation[] = createStructuredOutboundPayloadPlan([
+      fallbackNotice,
+      ...(withAnswer ? [{ text: "Done." }] : []),
+    ]).map((plan) => ({ kind: "prepared", plan }));
+    const content = [
+      { type: "text", text: notice, openclawStatusNotice: true, openclawFallback: true },
+      ...(withAnswer ? [textBlock("Done.")] : []),
+    ];
+    expect(
+      await buildAssistantReplyContentFromInputs({
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        transcriptMediaMessage: {
+          content: [],
+          transcriptText: "",
+          payloadTexts: [notice, "Done."],
+        },
+        inputs,
+      }),
+    ).toEqual({ assistantContent: content, persistedAssistantContent: content });
+  });
+
   it.each([false, true])("projects visible content (reasoning only=%s)", async (reasoningOnly) => {
     const notice = "Model Fallback: backup/model";
     const payloads = [

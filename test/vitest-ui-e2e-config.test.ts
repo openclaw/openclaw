@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.ts";
+import type { PreparedNativeControlUiPluginBuild } from "../ui/src/test-helpers/control-ui-e2e-shared-preview.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -32,11 +33,12 @@ const qaLabFiles = [
   "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
-const serialGatewayFiles = `chat-daybreak chat-steer-deferred-custody deepseek-search desktop-resize
-  peer-followup-restart plugin-inline-view quiet-automations`
+const serialGatewayFiles = `chat-daybreak chat-session-companion-private chat-steer-deferred-custody
+  deepseek-search desktop-resize peer-followup-restart plugin-inline-view quiet-automations`
   .split(/\s+/u)
   .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
   .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
+const sharedSerialGatewayFile = "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts";
 const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecycle.real-gateway
   background-work.real-gateway chat-collaborator-scroll.real-gateway chat-html-publication.real-gateway
   chat-agent-avatar.real-gateway chat-composer-websearch-kill-switch.real-gateway
@@ -56,7 +58,7 @@ const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecyc
   usage-sessions-owner-attribution worker-initial-setup.real-gateway`
   .split(/\s+/u)
   .map((name) => `ui/src/e2e/${name}.e2e.test.ts`)
-  .concat(qaLabFiles, serialGatewayFiles, workboardFile);
+  .concat(qaLabFiles, serialGatewayFiles, sharedSerialGatewayFile, workboardFile);
 const mcpFile = "ui/src/e2e/mcp-app-conformance.e2e.test.ts";
 const builtGatewayFile = "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts";
 const prebuiltBuildInfo = { buildId: "prepared-ui-build", version: "2026.9.23" };
@@ -78,6 +80,7 @@ type OwnershipProbe = {
     name: string;
     url?: string | null;
     buildInfo?: typeof prebuiltBuildInfo | null;
+    nativePluginBuilds?: PreparedNativeControlUiPluginBuild[];
     bridge: boolean;
     productionRoot?: string;
   }>;
@@ -138,8 +141,13 @@ function probeOwnership(
     export const assertUiE2ePreflight = async () => {
       if (${JSON.stringify(options.failure)} === "preflight") throw new Error("fixture preflight failed");
     };
-    export async function prepareNativeControlUiPluginFixtures() {
-      return { catalog: { revision: "fixture", plugins: [], diagnostics: [] }, assets: new Map() };
+    export async function prepareNativeControlUiPluginFixtures(fixtures) {
+      return {
+        catalog: { revision: "fixture", plugins: [], diagnostics: [] }, assets: new Map(),
+        preparedBuilds: fixtures.map(({ rootDir, source }) => ({
+          rootDir, source, declaration: { entry: "dist/control-ui/fixture/index.js" },
+        })),
+      };
     }
     export default function admission(project) {
       fs.appendFileSync(${JSON.stringify(admissionsFile)}, JSON.stringify(project.name) + "\\n");
@@ -252,6 +260,7 @@ function probeOwnership(
         contexts: [...new Set(specs.map(spec => spec.project))].map(project => ({ name: project.name,
           url: project.getProvidedContext().controlUiE2eServerBaseUrl,
           buildInfo: project.getProvidedContext().controlUiE2eServerBuildInfo,
+          nativePluginBuilds: project.getProvidedContext().controlUiE2eNativePluginBuilds,
           productionRoot: project.getProvidedContext().controlUiE2ePrebuiltAssets?.root,
           bridge: project.config.setupFiles.some(file => file.endsWith("/vitest.ui-e2e.setup.ts")),
         })), shards, steps, setupError, rootWorkers: ctx.config.maxWorkers,
@@ -313,6 +322,11 @@ describe("Control UI E2E resource ownership", () => {
       expect(result.setupError).toBeUndefined();
       expect(result.steps).toEqual(resourceSteps([0, Number(available), Number(available)], true));
       expect(result.leases).toEqual(available ? lease(true) : []);
+      for (const context of result.contexts.filter((entry) => entry.bridge)) {
+        expect(context.nativePluginBuilds?.map((build) => build.source) ?? []).toEqual(
+          available ? ["browser/index.ts"] : [],
+        );
+      }
       expect(
         result.contexts.filter((context) => context.bridge).map((context) => context.url),
       ).toEqual([
@@ -442,13 +456,22 @@ describe("Control UI E2E resource ownership", () => {
         expect(result.rootWorkers).toBe(workers);
       }
       expect(result.files.filter((entry) => entry.phase === 1)).toEqual(
-        serialGatewayFiles.toSorted().map((file) => ({
-          file,
-          project: "ui-e2e-serial-standalone",
-          phase: 1,
-          workers: 1,
-          fileParallelism: false,
-        })),
+        [
+          ...serialGatewayFiles.map((file) => ({
+            file,
+            project: "ui-e2e-serial-standalone",
+            phase: 1,
+            workers: 1,
+            fileParallelism: false,
+          })),
+          {
+            file: sharedSerialGatewayFile,
+            project: "ui-e2e-serial",
+            phase: 1,
+            workers: 1,
+            fileParallelism: false,
+          },
+        ].toSorted((left, right) => left.file.localeCompare(right.file)),
       );
       const parallel = result.files.filter((entry) => entry.phase === 2);
       expect(parallel).toHaveLength(44);
@@ -485,6 +508,9 @@ describe("Control UI E2E resource ownership", () => {
     expect(result.admissions).toHaveLength(3);
     expect(new Set(result.admissions).size).toBe(3);
     expect(result.leases).toEqual(lease(false));
+    for (const context of result.contexts.filter((entry) => entry.bridge)) {
+      expect(context.nativePluginBuilds).toEqual([]);
+    }
     expect(result.canonicalAssetsIntact).toBe(true);
   });
 

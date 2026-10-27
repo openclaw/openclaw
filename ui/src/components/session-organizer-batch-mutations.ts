@@ -40,6 +40,8 @@ export type SessionActionRow = Pick<
   pinnable?: boolean;
   sidebarRoot?: boolean;
   hasArchiveDescendants?: boolean;
+  /** An enabled automation is bound to this conversation; archive and delete pause it. */
+  hasAutomation?: boolean;
   archiveGuard?: Pick<
     SessionsPatchManyParams["targets"][number],
     "expectedSidebarRoot" | "expectedCategory" | "expectedArchived" | "expectedSidebarAncestors"

@@ -501,6 +501,11 @@ function installColdLoadProbes(
               ms: performance.now() - request.at,
               requestMs: request.at,
               responseMs: performance.now(),
+              responseOk: frame.ok === true,
+              ...(request.method === "sessions.messages.subscribe" &&
+              typeof frame.payload?.initialHistory?.ok === "boolean"
+                ? { initialHistoryOk: frame.payload.initialHistory.ok }
+                : {}),
               ...(liveStartedAt ? { responseAtMs: performance.now() - liveStartedAt } : {}),
             });
           }

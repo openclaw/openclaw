@@ -174,6 +174,7 @@ export function enqueueFollowupRun(
         throw new Error("Dedupe source was not submitted to its mailbox");
       }
       const mailbox = recentInput.mailbox;
+      const inputInstance = recentInput.instance;
       for (const [alias, record] of mailbox.recentSources) {
         if (record.expires <= now) {
           mailbox.recentSources.delete(alias);
@@ -183,14 +184,14 @@ export function enqueueFollowupRun(
         mailbox.recentSources.delete(mailbox.recentSources.keys().next().value!);
       }
       mailbox.recentSources.set(recentMessageIdKey, {
-        input: recentInput,
+        inputInstance,
         expires: now + RECENT_MESSAGE_ID_TTL,
       });
       const lifecycle = run.turnAdoptionLifecycle;
       if (lifecycle) {
         const onAbandoned = lifecycle.onAbandoned;
         lifecycle.onAbandoned = () => {
-          if (mailbox.recentSources.get(recentMessageIdKey)?.input === recentInput) {
+          if (mailbox.recentSources.get(recentMessageIdKey)?.inputInstance === inputInstance) {
             mailbox.recentSources.delete(recentMessageIdKey);
           }
           return onAbandoned?.();

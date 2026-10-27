@@ -37,6 +37,7 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import {
   patchSessionEntryCore as patchInternalSessionEntry,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
@@ -94,6 +95,18 @@ it("prepares callback patches from complete current owner facts without another 
       skillsSnapshot: { prompt },
     });
     expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
+    expect(f.read()).toEqual(result);
+  });
+});
+
+it("patches a replaced entry whose retained fields have a different insertion order", async () => {
+  await withFixture(async (f) => {
+    const identity = { sessionId: f.scope.sessionId };
+    const writer = { ...identity, activeWriterRunId: "current-writer" };
+    await replaceSessionEntry(f.scope, { ...identity, updatedAt: 1 });
+    await replaceSessionEntry(f.scope, { ...writer, updatedAt: 1, totalTokens: 0 });
+    const result = await patchSessionEntryCore(f.scope, () => ({ totalTokens: 13_357 }));
+    expect(result).toMatchObject({ ...writer, totalTokens: 13_357, delivery: { kind: "none" } });
     expect(f.read()).toEqual(result);
   });
 });

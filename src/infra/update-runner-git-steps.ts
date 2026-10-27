@@ -2,6 +2,7 @@ import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { DEV_BRANCH } from "./update-channels.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
+import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import type { RunStepOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -90,6 +91,52 @@ export async function runGitActivationBranchCheckStep(stepOptions: RunStepOption
         : sanitized;
     },
   });
+}
+
+/**
+ * Immediate rollback resets and cleans the checkout. Activation admitted a clean tree,
+ * so changes seen before runtime restoration belong to the operator. Returns a failed
+ * step that refuses the destructive restore to keep them, or undefined when clean.
+ */
+export async function readGitRollbackPreservation(params: {
+  beforeSha: string | null;
+  branch: string | null;
+  gitRoot: string;
+  sourceTreeStagingPaths: string[] | undefined;
+  recoveryStep: (name: string, argv: string[], cwd: string) => RunStepOptions;
+  assertCurrent: () => void;
+}): Promise<UpdateStepResult | undefined> {
+  const { beforeSha, branch, gitRoot } = params;
+  const argv = gitCleanCheckArgs(gitRoot, params.sourceTreeStagingPaths);
+  const { runCommand, cwd, timeoutMs } = params.recoveryStep(
+    "git-rollback-preserve",
+    argv,
+    gitRoot,
+  );
+  params.assertCurrent();
+  const status = await runCommand(argv, { cwd, timeoutMs });
+  params.assertCurrent();
+  const changes = status.code === 0 ? status.stdout.trim() : "Could not read the checkout status.";
+  if (!changes) {
+    return undefined;
+  }
+  const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+  const git = `git -C ${quote(gitRoot)}`;
+  // Activation can move the original branch (checkout -B), so reset it back to beforeSha;
+  // --keep moves the branch only when that does not discard local changes.
+  const restore =
+    branch && branch !== "HEAD"
+      ? `${git} checkout ${quote(branch)}, then ${git} reset --keep ${beforeSha}`
+      : `${git} checkout --detach ${beforeSha}`;
+  return {
+    name: "git-rollback-preserve",
+    command: argv.join(" "),
+    cwd: gitRoot,
+    durationMs: 0,
+    exitCode: 1,
+    stderrTail: `${changes}
+Source rollback was refused so these changes are kept; the previous runtime is still restored. After saving your changes, restore the checkout with: ${restore}`,
+  };
 }
 
 export async function runGitRollbackSteps({

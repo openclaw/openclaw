@@ -19,6 +19,7 @@ import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixture
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { transformTransportMessages } from "../transport-message-transform.js";
 import { log } from "./logger.js";
+import { fingerprintMessage, messageFingerprints } from "./prompt-cache-history.js";
 import {
   completePromptCacheObservation,
   declarePromptHistoryRewrite,
@@ -321,6 +322,18 @@ describe("prompt cache history fingerprints", () => {
     });
   });
 
+  it("does not republish cached fingerprints when an unchanged history is observed again", () => {
+    const messages = Array.from({ length: 200 }, (_, timestamp) => {
+      const entry = { message: { role: "user" as const, content: "fixture", timestamp } };
+      normalizeTranscriptJsonValue(entry, "entry");
+      return entry.message;
+    });
+    const tracker = history("cached-history", messages);
+    const writes = vi.spyOn(messageFingerprints, "set");
+    expect(tracker.read()).toMatchObject(unchangedPrefix);
+    expect(writes).not.toHaveBeenCalled();
+  });
+
   it("reuses owned content under mutable append envelopes across observers", async () => {
     const args = { options: { path: "before-append" } };
     const message = makeAgentAssistantMessage({
@@ -366,6 +379,52 @@ describe("prompt cache history fingerprints", () => {
       });
     }
   });
+
+  it.each(["string", "blocks"] as const)(
+    "reuses unchanged mutable envelopes with immutable %s content across readers",
+    (kind) => {
+      const messages = [1, 2].map((timestamp) => {
+        const message = makeAgentAssistantMessage({
+          content: [{ type: "text", text: `fixture-${timestamp}` }],
+          timestamp,
+        });
+        const prepared: Message =
+          kind === "string" ? { role: "user", content: "fixture", timestamp } : message;
+        normalizeTranscriptJsonValue(prepared, "");
+        return prepared;
+      });
+      const fingerprints = messages.map((message) => fingerprintMessage(message));
+      for (let read = 0; read < 3; read++) {
+        for (const [index, message] of messages.entries()) {
+          expect(fingerprintMessage(message)).toBe(fingerprints[index]);
+        }
+      }
+      const message = messages[0]!;
+      message.timestamp++;
+      const changed = fingerprintMessage(message, fingerprints[0]);
+      expect(changed.packed).not.toBe(fingerprints[0]!.packed);
+      expect(fingerprintMessage(message)).toBe(changed);
+      if (message.role === "assistant") {
+        message.usage = structuredClone(message.usage);
+        expect(fingerprintMessage(message)).toBe(changed);
+        message.usage.input++;
+        expect(fingerprintMessage(message, changed).packed).not.toBe(changed.packed);
+      }
+      const content: TextContent[] = [{ type: "text", text: "replacement" }];
+      message.content = content;
+      const replaced = fingerprintMessage(message, changed);
+      expect(replaced.packed).not.toBe(changed.packed);
+      content[0]!.text = "edited in place";
+      expect(fingerprintMessage(message, replaced).packed).not.toBe(replaced.packed);
+      normalizeTranscriptJsonValue(message, "");
+      fingerprintMessage(message);
+      Object.freeze(message);
+      fingerprintMessage(message);
+      const entries = vi.spyOn(Object, "entries");
+      fingerprintMessage(message);
+      expect(entries).not.toHaveBeenCalledWith(message);
+    },
+  );
 
   it.each([false, true])(
     "ignores internal tool-result envelopes but detects content rewrites (sealed=%s)",

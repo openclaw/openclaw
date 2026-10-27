@@ -302,10 +302,7 @@ function createResponsesTransportExecutor(config: {
             request: params,
             options: responsesOptions,
           });
-          output.usage.input = compacted.usage.input_tokens;
-          output.usage.output = compacted.usage.output_tokens;
-          output.usage.totalTokens = compacted.usage.input_tokens + compacted.usage.output_tokens;
-          output.usage.usageReport = { state: "available" };
+          output.usage = compacted.modelUsage;
           compactRequest.resolve(compacted);
           finalizeTransportStream({ stream, output, signal: options?.signal });
           return;
@@ -340,10 +337,7 @@ function createResponsesTransportExecutor(config: {
           // SAFETY: Restoration preserves SDK parameters and adds validated reasoning input controls.
           params = (continuationClaim?.fullRequest ?? restoreRequest()) as typeof params;
         }
-        const observePrompt = createResponsesPromptEgressObserver(
-          responsesOptions,
-          context.systemPrompt,
-        );
+        const observePrompt = createResponsesPromptEgressObserver(responsesOptions, context);
         const requestStartedAt = Date.now();
         let started = false;
         const startStream = () => {

@@ -170,8 +170,8 @@ Markdown-only or Git-only copy is not a complete backup.
   step.
 - Corrections, withdrawals, and identity merges are explicit agent operations
   that preserve history. See [Corrections and merges](/plugins/knowledge/corrections).
-- The Control UI is read-only. It hands change requests to chat instead of
-  editing records.
+- The Control UI is read-only. **Ask** sends change requests to the agent in a
+  new chat instead of editing records.
 - Operators cannot save knowledge through operator read access. Changing store
   assignments needs `operator.admin`.
 
