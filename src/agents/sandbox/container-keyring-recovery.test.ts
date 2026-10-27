@@ -18,7 +18,9 @@ vi.mock("./registry.js", () => ({
   readRegistry: async () => ({ entries }),
   assertSandboxRegistryEntryCurrent: () => {},
 }));
+// mock-isolation: registry snapshots do not acquire a real Gateway state root.
 vi.mock("./state-owner.js", () => ({ captureSandboxStateOwner: async () => () => {} }));
+// mock-isolation: synthetic targets avoid probing an operator's actual Podman connection.
 vi.mock("./podman-runtime.js", () => ({
   validateSandboxContainerEngineTarget: async () => {},
 }));
@@ -58,13 +60,11 @@ it.each([false, true])(
     } else {
       await expect(start).resolves.toMatchObject({ code: 0 });
     }
-    expect(fixture.calls.filter(([verb]) => verb !== "inspect")).toEqual([
+    expect(fixture.calls).toEqual([
       ["start", id("c")],
+      ["inspect", "-f", expect.any(String), "old"],
       ["stop", "--time", "10", id("a")],
       ["start", id("c")],
     ]);
-    expect(fixture.calls.filter(([verb]) => verb === "inspect").map((args) => args.at(-1))).toEqual(
-      ["old"],
-    );
   },
 );
