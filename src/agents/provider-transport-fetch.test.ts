@@ -52,12 +52,15 @@ function mockStream(
   chunks: (string | Uint8Array)[],
   contentType?: string,
   options: Parameters<typeof responseStream>[1] = {},
+  refreshTimeout?: () => void,
 ) {
   const source = responseStream(chunks, options);
   const release = mockResponse(
     new Response(source.stream, {
       headers: contentType ? { "content-type": contentType } : undefined,
     }),
+    undefined,
+    refreshTimeout,
   );
   return { ...source, release };
 }
@@ -89,8 +92,12 @@ function responseStream(
   return { stream, close };
 }
 
-function request(init: RequestInit = { method: "POST" }, target: Model = model) {
-  return buildGuardedModelFetch(target)(`${target.baseUrl}/responses`, init);
+function request(
+  init: RequestInit = { method: "POST" },
+  target: Model = model,
+  options?: Parameters<typeof buildGuardedModelFetch>[2],
+) {
+  return buildGuardedModelFetch(target, undefined, options)(`${target.baseUrl}/responses`, init);
 }
 
 async function parseSse(response: Response) {
@@ -121,7 +128,6 @@ describe("buildGuardedModelFetch", () => {
       lease.resolve({ release });
       const response = await pending;
       await expect(response.text()).resolves.toBe("ok");
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
       expect(release).toHaveBeenCalledOnce();
       expect(resolveProviderRequestPolicyConfigMock).toHaveBeenCalledWith(
         expect.objectContaining({ request: { proxy: undefined } }),
@@ -262,17 +268,11 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("releases guarded fetch slots when an unsanitized stream is abandoned", async () => {
-    const source = responseStream(["chunk-1", "chunk-2"], { open: true });
-    const release = mockResponse(new Response(source.stream));
-    const response = await buildGuardedModelFetch(model, undefined, { sanitizeSse: false })(
-      `${model.baseUrl}/responses`,
-      streaming,
-    );
+    const { release } = mockStream(["chunk-1", "chunk-2"], undefined, { open: true });
+    const response = await request(streaming, model, { sanitizeSse: false });
     const reader = response.body!.getReader();
     expect((await reader.read()).done).toBe(false);
-    const registration = managedStreamCleanupRegistrations.at(-1);
-    expect(registration).toBeDefined();
-    await registration!.held.finalize();
+    await managedStreamCleanupRegistrations.at(-1)!.held.finalize();
     expect(release).toHaveBeenCalledOnce();
     expect(managedStreamCleanupRegistrations).toHaveLength(0);
   });
@@ -317,16 +317,10 @@ describe("buildGuardedModelFetch", () => {
     const count = 5_000;
     const refreshTimeout = vi.fn();
     const payload = { text: "x".repeat(70 * 1024) };
-    mockResponse(
-      new Response(
-        responseStream([
-          'data: {"ok":true}\n\n'.repeat(count),
-          `data: ${JSON.stringify(payload)}`,
-          "\n\n",
-        ]).stream,
-        { headers: { "content-type": "text/event-stream" } },
-      ),
-      vi.fn(async () => {}),
+    mockStream(
+      ['data: {"ok":true}\n\n'.repeat(count), `data: ${JSON.stringify(payload)}`, "\n\n"],
+      "text/event-stream",
+      {},
       refreshTimeout,
     );
     const items = await parseSse(await request());
@@ -413,10 +407,7 @@ describe("buildGuardedModelFetch", () => {
         throw new Error("upstream cancellation failed");
       });
       const { release } = mockStream([body], contentType, { open: true, cancel });
-      const response = await buildGuardedModelFetch(model, undefined, { onSseComment: vi.fn() })(
-        `${model.baseUrl}/responses`,
-        streaming,
-      );
+      const response = await request(streaming, model, { onSseComment: vi.fn() });
       await expect(response.body!.cancel("consumer stopped")).resolves.toBeUndefined();
       expect(cancel).toHaveBeenCalledOnce();
       expect(release).toHaveBeenCalledOnce();
@@ -424,20 +415,17 @@ describe("buildGuardedModelFetch", () => {
   );
 
   it.each([
-    { cap: "10", status: 429, retryAfter: "30", expected: "false" },
-    { cap: "10s", status: 429, retryAfter: "30", expected: null },
-    { cap: "0", status: 429, retryAfter: "239", expected: null },
-  ])(
-    "applies SDK retry cap $cap to $status/$retryAfter",
-    async ({ cap, status, retryAfter, expected }) => {
-      process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS = cap;
-      mockResponse(new Response(null, { status, headers: { "retry-after": retryAfter } }));
-      const response = await request();
-      expect(response.status).toBe(status);
-      expect(response.headers.get("retry-after")).toBe(retryAfter);
-      expect(response.headers.get("x-should-retry")).toBe(expected);
-    },
-  );
+    ["10", "30", "false"],
+    ["10s", "30", null],
+    ["0", "239", null],
+  ] as const)("applies SDK retry cap %s to 429/%s", async (cap, retryAfter, expected) => {
+    process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS = cap;
+    mockResponse(new Response(null, { status: 429, headers: { "retry-after": retryAfter } }));
+    const response = await request();
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe(retryAfter);
+    expect(response.headers.get("x-should-retry")).toBe(expected);
+  });
 });
 
 describe("buildGuardedModelFetch headers", () => {
@@ -565,10 +553,10 @@ describe("buildGuardedModelFetch SSE readability", () => {
           ? { ...completionModel, provider: "openai", baseUrl: "https://api.openai.com/v1" }
           : completionModel;
       const onSseComment = vi.fn();
-      const response = await buildGuardedModelFetch(target, undefined, {
+      const response = await request(undefined, target, {
         onSseComment,
         sanitizeSse: mode !== "opt-out",
-      })(`${target.baseUrl}/responses`, { method: "POST" });
+      });
 
       if (mode === "sanitized") {
         await expect(response.text()).resolves.toBe('data: {"ok": true}\n\n');

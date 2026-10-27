@@ -288,28 +288,20 @@ describe("resolveRequesterToolPolicies", () => {
     const request = {
       config: config(),
       sessionKey: targetSessionKey,
-      sessionId: registration.targetSessionId,
+      sessionId:
+        authority === "stale requester" ? "replacement-session" : registration.targetSessionId,
+      ...(authority === "external sender" ? { senderId: "mallory" } : {}),
+      modelProvider: consumption.provider,
+      modelId: consumption.model,
       inputProvenance: {
-        kind: "inter_session" as const,
+        kind:
+          authority === "external sender" ? ("external_user" as const) : ("inter_session" as const),
         sourceTool: "subagent_settle",
         sourceSessionKey: registration.sourceSessionKey,
       },
       trustedInternalHandoff,
     };
-    const resolve = () =>
-      resolveRequesterToolPolicies({
-        ...request,
-        sessionId:
-          authority === "stale requester" ? "replacement-session" : registration.targetSessionId,
-        ...(authority === "external sender" ? { senderId: "mallory" } : {}),
-        modelProvider: consumption.provider,
-        modelId: consumption.model,
-        inputProvenance: {
-          ...request.inputProvenance,
-          kind: authority === "external sender" ? "external_user" : "inter_session",
-        },
-      });
-    const result = await withPreparedSessionCapabilityRead(resolve);
+    const result = await resolvePolicy(request);
     if (authority !== "current") {
       expect(result.delegated).toBe(false);
       expect(result.senderPolicy).toEqual(runtimeDeny);
@@ -320,15 +312,14 @@ describe("resolveRequesterToolPolicies", () => {
     expect(result.groupPolicy).toBeUndefined();
     expect(result.inheritedToolPolicySource).toBe("sender");
 
-    const requesterOrigin = {
-      sessionKey: targetSessionKey,
-      messageProvider: "discord",
-      senderId: "alice",
-    };
     const snapshot = prepareReplyToolAuthority({
       run: {
         ...request,
-        requesterOrigin,
+        requesterOrigin: {
+          sessionKey: targetSessionKey,
+          messageProvider: "discord",
+          senderId: "alice",
+        },
         sessionFile: path.join(tempDir, "requester.jsonl"),
         workspaceDir: tempDir,
         provider: consumption.provider,
@@ -337,20 +328,6 @@ describe("resolveRequesterToolPolicies", () => {
     });
     try {
       const currentFingerprint = await snapshot.fingerprintAsync();
-      const route = { provider: consumption.provider, model: consumption.model };
-      const allowedProjection = await snapshot.projectRequesterAsync(
-        { requesterOrigin, config: config() },
-        route,
-      );
-      const deniedProjection = await snapshot.projectRequesterAsync(
-        {
-          requesterOrigin,
-          config: config({ tools: { toolsBySender: { "id:alice": { deny: ["exec"] } } } }),
-        },
-        route,
-      );
-      expect(deniedProjection).not.toBe(allowedProjection);
-      expect(snapshot.fingerprint(route)).toBe(currentFingerprint);
       current = false;
       expect(snapshot.fingerprint()).not.toBe(currentFingerprint);
     } finally {

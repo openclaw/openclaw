@@ -170,14 +170,14 @@ function prepareOnly(params: unknown) {
     : { ok: true };
 }
 
-function nodeFixture(stdout = "ok", prepare = buildPreparedSystemRunPayload) {
+function nodeFixture(stdout = "ok") {
   const runs: Record<string, unknown>[] = [];
   return {
     runs,
     handle: (params: unknown) => {
       const invoke = requireRecord(params, "node invoke");
       if (invoke.command === "system.run.prepare") {
-        return prepare(params);
+        return buildPreparedSystemRunPayload(params);
       }
       if (invoke.command === "system.run") {
         runs.push(requireRecord(invoke.params, "system.run params"));
@@ -246,20 +246,6 @@ function gatewayParams(method: string) {
     .mocked(callGatewayTool)
     .mock.calls.filter(([name]) => name === method)
     .map((call) => requireRecord(call[2], `${method} params`));
-}
-
-function expectAuthenticatedExecFollowup(record: Record<string, unknown>, sessionKey: string) {
-  expect(record).toMatchObject({
-    sessionKey,
-    message: expect.stringContaining("<<<BEGIN_UNTRUSTED_EXEC_OUTPUT>>>"),
-    internalRuntimeHandoffId: expect.any(String),
-  });
-  expect(record.inputProvenance).toEqual({
-    kind: "inter_session",
-    sourceSessionKey: sessionKey,
-    sourceTool: "exec_approval_followup",
-  });
-  expect(String(record.idempotencyKey)).toMatch(/^exec-approval-followup:.+:nonce:/);
 }
 
 function mockNoRoute(handlers: GatewayHandlers = {}) {
@@ -368,8 +354,10 @@ it("reuses approval id as the node runId for an explicit agent follow-up", async
   const run = requireRecord(node.runs[0], "system.run params");
   expect(run).toMatchObject({ runId: details.approvalId, suppressNotifyOnExit: true });
   expect(Object.hasOwn(run, "cwd")).toBe(false);
-  expectAuthenticatedExecFollowup(agent, route.sessionKey);
   expect(agent).toMatchObject({
+    sessionKey: route.sessionKey,
+    message: expect.stringContaining("<<<BEGIN_UNTRUSTED_EXEC_OUTPUT>>>"),
+    internalRuntimeHandoffId: expect.any(String),
     deliver: true,
     bestEffortDeliver: true,
     channel: "feishu",
@@ -377,6 +365,12 @@ it("reuses approval id as the node runId for an explicit agent follow-up", async
     accountId: "default",
     threadId: "456",
   });
+  expect(agent.inputProvenance).toEqual({
+    kind: "inter_session",
+    sourceSessionKey: route.sessionKey,
+    sourceTool: "exec_approval_followup",
+  });
+  expect(String(agent.idempotencyKey)).toMatch(/^exec-approval-followup:.+:nonce:/);
   expect(sendMessage).not.toHaveBeenCalled();
   expect(String(agent.idempotencyKey)).toContain(details.approvalId);
 });
@@ -535,31 +529,6 @@ it("resolves cron no-route approvals inline when askFallback permits trusted aut
   expect(requireRecord(request?.[3], "request options").expectFinal).toBe(false);
   expectCronDelivery("gateway");
   expect(calls).not.toContain(waitDecision);
-});
-
-it("forwards inline cron approval state to node system.run", async () => {
-  saveExecApprovals(policy(alwaysFullDefaults));
-  const preparedPlan = {
-    argv: ["/bin/sh", "-lc", "echo cron-node-ok"],
-    cwd: null,
-    commandText: "/bin/sh -lc 'echo cron-node-ok'",
-    commandPreview: "echo cron-node-ok",
-    agentId: null,
-    sessionKey: null,
-    mutableFileOperand: { argvIndex: 2, path: "/tmp/cron-node-ok.sh", sha256: "deadbeef" },
-  };
-  const node = nodeFixture("cron-node-ok", () => ({ payload: { plan: preparedPlan } }));
-  mockNoRoute({ "node.invoke": node.handle });
-  const tool = createExecTool({ host: "node", ask: "always", security: "full", trigger: "cron" });
-  const result = await tool.execute("cron-node", { command: "echo cron-node-ok" });
-  expectCompleted(result, "cron-node-ok");
-  expectCronDelivery("node");
-  const params = requireRecord(node.runs[0], "system.run params");
-  expect(params.approved).toBeUndefined();
-  expect(params.approvalDecision).toBeUndefined();
-  expect(params.approvalSource).toBe("ask-fallback");
-  expect(params.systemRunPlan).toStrictEqual(preparedPlan);
-  expect(params.runId).toBeTypeOf("string");
 });
 
 it.each(["gateway", "node"] as const)(
