@@ -92,7 +92,7 @@ describe("session message cache", () => {
       target,
       widgetSnapshot(messages, "session-1", {
         rowDisplay: Object.fromEntries(
-          messages.map((message) => [message.__openclaw.id, { images: { source: image } }]),
+          messages.map((_, index) => [`image-${index}`, { images: { source: image } }]),
         ),
       }),
     );
