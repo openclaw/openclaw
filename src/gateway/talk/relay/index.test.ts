@@ -1477,9 +1477,9 @@ describe("talk realtime gateway relay", () => {
               [Symbol.for("openclaw.internal.realtime-voice-provider.v1")]: {
                 isBrowserSessionConfigured: () => true,
                 projectPublicProjection: ({ config }: { config: Record<string, unknown> }) => {
- const { model: _model, ...publicConfig } = config;
- return { config: publicConfig };
- },
+                  const { model: _model, ...publicConfig } = config;
+                  return { config: publicConfig };
+                },
               },
             }
           : {}),
