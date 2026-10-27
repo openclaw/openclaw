@@ -121,11 +121,13 @@ try {
       { captureOpenClawStateWorkerContext },
       diagnostics,
       metrics,
+      { writeConfigMachineStateAsync },
     ] = await Promise.all([
       import("../../src/state/openclaw-state-worker-store.js"),
       import("../../src/state/openclaw-state-worker-context.js"),
       import("../../src/infra/diagnostic-events.js"),
       import("../../src/infra/worker-request-diagnostics.js"),
+      import("../../src/state/config-machine-state-async.js"),
     ]);
     diagnostics.setDiagnosticsEnabledForProcess(true);
     const context = captureOpenClawStateWorkerContext({ env: options.env });
@@ -140,10 +142,7 @@ try {
         );
       });
     const otherWrite = (index: number) =>
-      execute(context, {
-        type: "machineState.write",
-        input: { key: "perf.audit-context-write", value: { index } },
-      });
+      writeConfigMachineStateAsync("perf.audit-context-write", { index }, { env: options.env });
     for (let index = 0; index < 64; index += 8) {
       await audit(
         Array.from({ length: 8 }, (_, offset) => ({
