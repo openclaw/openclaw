@@ -11,7 +11,6 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { observeSqliteWalPeriodicWork } from "../infra/sqlite-wal-scheduler.test-support.js";
-import * as splitBrain from "../infra/sqlite-wal-split-brain.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   agentDatabaseBorrowers,
@@ -347,41 +346,8 @@ describe("openclaw agent database handle cache", () => {
     expect(database.db.isOpen).toBe(false);
   });
 
-  it("settles a worker close after WAL inspection without revoking reader validation", async () => {
-    vi.useRealTimers();
-    openOpenClawStateDatabase({ env });
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const scheduled = observeSqliteWalPeriodicWork();
-    const database = openOpenClawAgentDatabase({ agentId: "worker-inspection", env });
-    platform.mockRestore();
-    scheduled.restore();
-    const validation = getOpenClawAgentDatabaseValidation(database);
-    expect(validation).toBeDefined();
-    const inspecting = createDeferredCore();
-    const inspected = createDeferredCore<splitBrain.SqliteWalSplitBrainEvent | undefined>();
-    vi.spyOn(splitBrain, "detectSqliteWalSplitBrain").mockImplementation(() => {
-      inspecting.resolve();
-      return inspected.promise;
-    });
-    const running = scheduled.periodic();
-    await inspecting.promise;
-    const closing = Promise.resolve(settleOpenClawAgentDatabaseWorkerClose(database.path));
-    try {
-      expect(database.db.isOpen).toBe(true);
-      expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).toHaveLength(1);
-    } finally {
-      inspected.resolve(undefined);
-      await running;
-    }
-    expect(await closing).toEqual({ errors: [], settled: true });
-    expect(database.db.isOpen).toBe(false);
-    expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).toEqual([]);
-    // A healthy inspection must not send the next reader through integrity re-admission.
-    expect(Atomics.load(new Int32Array(validation!.valid), 0)).toBe(1);
-  });
-
   it.each([false, true])(
-    "defers idle eviction during sidecar inspection (replaced: %s)",
+    "defers idle eviction and settles worker close after sidecar inspection (replaced: %s)",
     async (replaced) => {
       vi.useRealTimers();
       openOpenClawStateDatabase({ env });
@@ -402,8 +368,7 @@ describe("openclaw agent database handle cache", () => {
       timer.mockRestore();
       scheduled.restore();
       expect(evict).toBeDefined();
-      const originalLease = readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })[0];
-      expect(originalLease).toBeDefined();
+      const validation = getOpenClawAgentDatabaseValidation(database)!;
       const revision = readSqliteDatabaseWriteRevision(database.db);
       expect(revision).toBeDefined();
       const inspecting = createDeferredCore();
@@ -443,8 +408,9 @@ describe("openclaw agent database handle cache", () => {
         throw new Error("process abort intercepted");
       });
       const running = scheduled.periodic();
+      await inspecting.promise;
+      const closing = replaced ? undefined : settleOpenClawAgentDatabaseWorkerClose(database.path);
       try {
-        await inspecting.promise;
         evict?.();
         expect(database.db.isOpen).toBe(true);
         expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).toHaveLength(1);
@@ -462,12 +428,11 @@ describe("openclaw agent database handle cache", () => {
       if (replaced) {
         expect(kill).toHaveBeenCalledWith(process.pid, "SIGKILL");
       } else {
-        evict?.();
+        expect(await closing).toEqual({ errors: [], settled: true });
+        expect(Atomics.load(new Int32Array(validation.valid), 0)).toBe(1);
         expect(kill).not.toHaveBeenCalledWith(process.pid, "SIGKILL");
         expect(database.db.isOpen).toBe(false);
-        expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).not.toContainEqual(
-          originalLease,
-        );
+        expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).toEqual([]);
       }
     },
   );
