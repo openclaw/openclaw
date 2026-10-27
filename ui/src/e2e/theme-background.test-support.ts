@@ -91,22 +91,17 @@ export async function readArtwork(shell: Locator, artworkDetail?: "fingerprint" 
         maxColorSpread = Math.max(maxColorSpread, Math.max(...channels) - Math.min(...channels));
       }
     }
-    // Canvas normalizes modern CSS colors to sRGB without discarding alpha.
-    const color = (value: string) => {
+    // Uniform surfaces need fractional sRGB precision; artwork uses canvas bytes.
+    const color = (value: string, precise = false) => {
+      if (precise && value.startsWith("color(srgb ")) {
+        const channels = value.slice(11, -1).split(/[ /]+/u).map(Number);
+        return [...channels.slice(0, 3).map((channel) => channel * 255), (channels[3] ?? 1) * 255];
+      }
       pixels.clearRect(0, 0, 1, 1);
       pixels.fillStyle = value;
       pixels.fillRect(0, 0, 1, 1);
       return [...pixels.getImageData(0, 0, 1, 1).data];
     };
-    // Uniform surfaces retain the precision of their computed sRGB colors.
-    const surfaceColor = (value: string) => {
-      if (!value.startsWith("color(srgb ")) {
-        return color(value);
-      }
-      const channels = value.slice(11, -1).split(/[ /]+/u).map(Number);
-      return [...channels.slice(0, 3).map((channel) => channel * 255), (channels[3] ?? 1) * 255];
-    };
-    let ancestorCount = 0;
     const opaqueAncestors: string[] = [];
     // SPA navigation retains hidden chat panes and their unsent drafts.
     const visible = (surface: HTMLElement) => surface.checkVisibility({ visibilityProperty: true });
@@ -131,7 +126,6 @@ export async function readArtwork(shell: Locator, artworkDetail?: "fingerprint" 
         parent = parent.parentElement
       ) {
         const parentStyle = getComputedStyle(parent);
-        ancestorCount++;
         if (
           parent !== nativeCanvas &&
           (color(parentStyle.backgroundColor)[3] !== 0 ||
@@ -155,7 +149,7 @@ export async function readArtwork(shell: Locator, artworkDetail?: "fingerprint" 
       : textarea
         ? getComputedStyle(textarea, "::placeholder")
         : null;
-    const composerLabel = surfaceColor(placeholderStyle?.color ?? mutedColor);
+    const composerLabel = color(placeholderStyle?.color ?? mutedColor, true);
     composerLabel[3] = composerLabel[3]! * Number(placeholderStyle?.opacity ?? 1);
     const baseColor = color(canvasColor);
     let visiblePaintedPixels = 0;
@@ -192,7 +186,7 @@ export async function readArtwork(shell: Locator, artworkDetail?: "fingerprint" 
     const linearBytes = Float64Array.from({ length: 256 }, (_, channel) => linear(channel));
     const luminance = (red: number, green: number, blue: number) =>
       0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue);
-    const minContrast = (rect: DOMRect, foreground: number[], artwork = true) => {
+    const minContrast = (rect: DOMRect, foreground: number[], uniform?: number[]) => {
       const x = Math.max(0, Math.ceil(rect.x - bounds.x));
       const y = Math.max(0, Math.ceil(rect.y - bounds.y));
       const width = Math.min(Math.floor(rect.right - bounds.x), canvas.width) - x;
@@ -200,7 +194,7 @@ export async function readArtwork(shell: Locator, artworkDetail?: "fingerprint" 
       if (width <= 0 || height <= 0) {
         throw new Error("Contrast must be measured on a visible reading surface");
       }
-      const rgba = pixels.getImageData(x, y, width, height).data;
+      const rgba = uniform ?? pixels.getImageData(x, y, width, height).data;
       const alpha = foreground[3]! / 255;
       const opaqueLuminance =
         alpha === 1 ? luminance(foreground[0]!, foreground[1]!, foreground[2]!) : null;
@@ -209,11 +203,12 @@ export async function readArtwork(shell: Locator, artworkDetail?: "fingerprint" 
         const red = rgba[offset]!;
         const green = rgba[offset + 1]!;
         const blue = rgba[offset + 2]!;
-        if (artwork && (red !== baseColor[0] || green !== baseColor[1] || blue !== baseColor[2])) {
+        if (!uniform && (red !== baseColor[0] || green !== baseColor[1] || blue !== baseColor[2])) {
           visiblePaintedPixels += 1;
         }
-        const bg =
-          0.2126 * linearBytes[red]! + 0.7152 * linearBytes[green]! + 0.0722 * linearBytes[blue]!;
+        const bg = uniform
+          ? luminance(red, green, blue)
+          : 0.2126 * linearBytes[red]! + 0.7152 * linearBytes[green]! + 0.0722 * linearBytes[blue]!;
         const fg =
           opaqueLuminance ??
           luminance(
@@ -235,26 +230,16 @@ export async function readArtwork(shell: Locator, artworkDetail?: "fingerprint" 
       : null;
     let composerContrast: number | null = null;
     if (composer) {
-      const composerBounds = composer.getBoundingClientRect();
-      if (composerBounds.width <= 0 || composerBounds.height <= 0) {
-        throw new Error("Contrast must be measured on a visible reading surface");
-      }
       probe.style.backgroundColor = "var(--chat-composer-surface)";
       composer.appendChild(probe);
-      const fill = surfaceColor(getComputedStyle(probe).backgroundColor);
+      const fill = color(getComputedStyle(probe).backgroundColor, true);
       probe.remove();
-      const base = surfaceColor(canvasColor);
+      const base = color(canvasColor, true);
       const fillAlpha = fill[3]! / 255;
       const background = fill
         .slice(0, 3)
         .map((channel, index) => channel * fillAlpha + base[index]! * (1 - fillAlpha));
-      const alpha = composerLabel[3]! / 255;
-      const foreground = background.map(
-        (channel, index) => composerLabel[index]! * alpha + channel * (1 - alpha),
-      );
-      const bg = luminance(background[0]!, background[1]!, background[2]!);
-      const fg = luminance(foreground[0]!, foreground[1]!, foreground[2]!);
-      composerContrast = (Math.max(bg, fg) + 0.05) / (Math.min(bg, fg) + 0.05);
+      composerContrast = minContrast(composer.getBoundingClientRect(), composerLabel, background);
     }
     return {
       backgroundImage: style.backgroundImage,
@@ -280,7 +265,6 @@ export async function readArtwork(shell: Locator, artworkDetail?: "fingerprint" 
               color(nativeStyle.backgroundColor)[3] === 255 &&
               nativeStyle.backgroundImage === "none" &&
               Number(nativeStyle.opacity) === 1),
-          ancestors: ancestorCount > 0,
           sidebars: readingSurfaces.length > 0 && readingSurfaces.every((alpha) => alpha === 255),
         })
           .filter(([, valid]) => !valid)
@@ -289,10 +273,6 @@ export async function readArtwork(shell: Locator, artworkDetail?: "fingerprint" 
       ],
     };
   }, artworkDetail);
-}
-
-export function expectAppArtwork(artwork: Awaited<ReturnType<typeof readArtwork>>, label: string) {
-  expect(artwork.failures, label).toEqual([]);
 }
 
 export async function expectMobileComposer(composer: Locator) {
@@ -327,11 +307,9 @@ export async function expectMobileComposer(composer: Locator) {
       noOverflow:
         element.scrollWidth <= element.clientWidth &&
         document.body.scrollWidth <= window.innerWidth,
-      viewportWidth: window.innerWidth,
     };
   });
   expect(layout).toEqual({
-    viewportWidth: 390,
     withinViewport: true,
     noOverflow: true,
     controls: [

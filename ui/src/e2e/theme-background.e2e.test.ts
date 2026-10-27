@@ -13,7 +13,6 @@ import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installMockGateway } from "./new-session-page.test-support.ts";
 import {
-  expectAppArtwork,
   expectComposerSurface,
   expectMobileComposer,
   readArtwork,
@@ -131,7 +130,7 @@ suite.define(() => {
             const label = `${resolved}-${route.replace("/", "-")}-${viewport}`;
             const fingerprint = route === "new" && viewport === "desktop";
             const artwork = await readArtwork(shell, fingerprint ? "fingerprint" : undefined);
-            expectAppArtwork(artwork, label);
+            expect(artwork.failures, label).toEqual([]);
             expect(artwork.canvasOwner, label).toBe(
               route === "chat" && viewport === "mobile" ? "native-mobile" : "shell-artwork",
             );
@@ -235,7 +234,7 @@ suite.define(() => {
         const resolved = mode === "dark" ? "custom" : "custom-light";
         await changeTheme(page, gateway, { family: "custom", mode }, resolved);
         const artwork = await readArtwork(page.locator(".shell"), "color-spread");
-        expectAppArtwork(artwork, `custom ${mode}`);
+        expect(artwork.failures, `custom ${mode}`).toEqual([]);
         await expectComposerSurface(composer);
         expect(artwork.maxColorSpread).toBeLessThanOrEqual(32);
         images.add(artwork.backgroundImage);
