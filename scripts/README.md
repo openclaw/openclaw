@@ -163,6 +163,22 @@ triples provide 20 observations per role and phase. Keep A and C separate when
 reporting the cold baseline controls. Neither this native/localhost comparison
 nor reused later cells establish cold 4× or 100 ms RTT performance.
 
+For the backend's first full-range read, add `--cold-backend`. It starts fresh
+baseline/candidate/baseline Gateways and makes each one's first `sessions.usage`
+RPC request all 180 days through the canonical Usage request helper. No browser
+or default 30-day request warms this path. The three observations retain actual
+request parameters, complete response payloads, Gateway process/main-thread and
+worker CPU snapshots, aggregation dispatches, and post-request resources. The
+client must run with `TZ=UTC`; it asserts the resolved timezone and offset before
+starting Gateways. The canonical helper then emits the browser fixture's exact
+date parameters (`mode: "specific"`, `timeZone: "UTC"`, `utcOffset: "UTC+0"`),
+with family grouping and the usual overview/cost-descending defaults.
+Each client has a fresh in-memory device identity and no saved credential writes.
+The resource capture forces main-isolate GC after timing; worker heaps are cached
+samples with their original coverage and age, not forced-GC retained memory.
+This single triple screens cold backend behavior. It does not qualify browser
+readiness or establish repeated cold performance.
+
 For attribution, add `--diagnostic`. It runs only 1× at localhost and 100 ms RTT,
 prepares the normal page, runs an untraced model00/model01 pair, then traces
 model00 from model01. The six traced actions retain full synthetic Usage response
@@ -172,7 +188,7 @@ Marks distinguish action, response observed by the page, visible readiness,
 the two animation frames, and process-probe bounds. Paint, raster, compositor
 and GC events remain in the raw artifacts; overlapping trace slice durations
 must not be summed as CPU. These traced actions are diagnostic evidence, never
-samples for the untraced timing acceptance table. Both narrow modes are mutually
+samples for the untraced timing acceptance table. The narrow modes are mutually
 exclusive with `--smoke` and each other.
 
 ### Synthetic Gateway interactions

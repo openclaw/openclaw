@@ -60,13 +60,14 @@ const { values } = parseArgs({
     sessions: { type: "string", default: "12000" },
     smoke: { type: "boolean", default: false },
     cold: { type: "boolean", default: false },
+    "cold-backend": { type: "boolean", default: false },
     diagnostic: { type: "boolean", default: false },
     help: { type: "boolean", default: false },
   },
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--sessions 12000] [--pairs 20] [--smoke | --cold | --diagnostic]",
+    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--sessions 12000] [--pairs 20] [--smoke | --cold | --cold-backend | --diagnostic]",
   );
   process.exit(0);
 }
@@ -98,8 +99,9 @@ const population = Number(values.sessions);
 assert(Number.isInteger(pairs) && pairs > 0);
 assert(Number.isInteger(population) && population > 0);
 assert(
-  [values.smoke, values.cold, values.diagnostic].filter(Boolean).length <= 1,
-  "Choose at most one of --smoke, --cold and --diagnostic",
+  [values.smoke, values.cold, values["cold-backend"], values.diagnostic].filter(Boolean).length <=
+    1,
+  "Choose at most one of --smoke, --cold, --cold-backend and --diagnostic",
 );
 await mkdir(out, { recursive: false });
 
@@ -127,7 +129,7 @@ type PageEntry = {
 const owners: Owner[] = [];
 const fixtureTokens: string[] = [];
 const samples: Array<
-  Record<string, unknown> & { browserResources: ReturnType<typeof browserResources> }
+  Record<string, unknown> & { browserResources?: ReturnType<typeof browserResources> }
 > = [];
 const browsers = new Set<Browser>();
 const failures: string[] = [];
@@ -687,6 +689,11 @@ async function startUsageDiagnostic(entry: PageEntry, prefix: string) {
 }
 
 try {
+  if (values["cold-backend"]) {
+    assert.equal(process.env.TZ, "UTC", "Run the cold backend client with TZ=UTC");
+    assert.equal(Intl.DateTimeFormat().resolvedOptions().timeZone, "UTC");
+    assert.equal(new Date().getTimezoneOffset(), 0);
+  }
   for (const [role, root] of [
     ["base-a", base],
     ["head", head],
@@ -694,7 +701,129 @@ try {
   ] as const) {
     owners.push(await start(root, role));
   }
-  for (const cpu of values.cold || values.diagnostic ? [1] : values.smoke ? [4] : [1, 4]) {
+  if (values["cold-backend"]) {
+    const [
+      { GatewayClient },
+      { generateStoredDeviceIdentity },
+      { requestSessionUsage },
+      { DEFAULT_USAGE_SESSION_SORT },
+    ] = await Promise.all([
+      import("../src/gateway/client.ts"),
+      import("../src/infra/device-identity-material.ts"),
+      import("../ui/src/lib/sessions/usage.ts"),
+      import("../ui/src/pages/usage/helpers.ts"),
+    ]);
+    for (const owner of owners) {
+      const url = `ws://127.0.0.1:${owner.ready.port}`;
+      const connected = Promise.withResolvers<void>();
+      const connectionTimer = setTimeout(
+        () => connected.reject(new Error(`${owner.role} cold client connection timed out`)),
+        30_000,
+      );
+      const peer = new GatewayClient({
+        url,
+        origin: `http://127.0.0.1:${owner.ready.port}`,
+        token: owner.ready.token,
+        clientName: "openclaw-control-ui",
+        mode: "webchat",
+        platform: "MacIntel",
+        // Match Control UI scopes; the ephemeral device never uses saved credentials.
+        scopes: [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.approvals",
+          "operator.questions",
+          "operator.pairing",
+        ],
+        deviceIdentity: generateStoredDeviceIdentity(),
+        deviceAuthScope: gatewayOriginScope(url),
+        sharedStateMode: "read-only",
+        requestTimeoutMs: 60_000,
+        onHelloOk: () => connected.resolve(),
+        onConnectError: connected.reject,
+      });
+      try {
+        peer.start();
+        await connected.promise;
+        clearTimeout(connectionTimer);
+        assert.deepEqual(await owner.snapshot(), [], "No Usage aggregation before the first RPC");
+        const query = {
+          startDate: owner.ready.startDate,
+          endDate: owner.ready.endDate,
+          scope: "family" as const,
+          timeZone: "local" as const,
+          ...DEFAULT_USAGE_SESSION_SORT,
+        };
+        const before = await readGatewayCpuUsage(owner.child, { includeWorkers: true });
+        const started = performance.now();
+        const requests: Array<{ method: string; params: unknown }> = [];
+        const response = await requestSessionUsage(
+          {
+            request<T>(
+              method: string,
+              params: unknown,
+              options?: Parameters<typeof peer.request>[2],
+            ) {
+              requests.push({ method, params });
+              return peer.request<T>(method, params, options);
+            },
+          },
+          query,
+          {
+            projection: "overview",
+            signal: AbortSignal.timeout(60_000),
+          },
+        );
+        const finished = performance.now();
+        const after = await readGatewayCpuUsage(owner.child, { includeWorkers: true });
+        assert.equal(requests.length, 1, "Exactly one cold Usage RPC");
+        assert.equal(response.partial, undefined, "Complete first full-range response");
+        assert.equal(response.overview?.total, population);
+        assert.equal(response.totals.totalTokens, owner.ready.allTokens);
+        const dispatches = await owner.snapshot();
+        assert(dispatches.length > 0, "First request aggregated the cold snapshot");
+        const resourcesFile = `${owner.role}-cold-backend-resources.json`;
+        await writeFile(
+          path.join(out, resourcesFile),
+          JSON.stringify(
+            await readGatewayResources(owner.child, {
+              includeWorkers: true,
+              collectGarbage: true,
+            }),
+            null,
+            2,
+          ),
+        );
+        samples.push({
+          role: owner.role,
+          phase: "first-full-range-rpc",
+          cpu: 1,
+          rtt: 0,
+          query,
+          requests,
+          wallMs: finished - started,
+          actionInterval: { startedMs: started, finishedMs: finished },
+          gatewayCpu: measureGatewayCpuUsage(before, after),
+          gatewayCpuSnapshots: { before, after },
+          dispatches,
+          response,
+          resourcesFile,
+          load: os.loadavg(),
+        });
+      } finally {
+        clearTimeout(connectionTimer);
+        await peer.stopAndWait();
+      }
+    }
+  }
+  for (const cpu of values["cold-backend"]
+    ? []
+    : values.cold || values.diagnostic
+      ? [1]
+      : values.smoke
+        ? [4]
+        : [1, 4]) {
     for (const rtt of values.cold ? [0] : [0, 100]) {
       const pages: PageEntry[] = [];
       try {
@@ -1048,18 +1177,36 @@ try {
       {
         failures,
         samples: samples.length,
-        browserResourceSamples: samples.filter((sample) => sample.browserResources.complete).length,
-        mode: values.cold ? "fresh-cold-triple" : values.diagnostic ? "attribution-only" : "warm",
-        pairsPerQuery: values.cold ? 0 : values.diagnostic ? null : values.smoke ? 1 : pairs,
-        queries: values.cold ? [] : ["model:fixture-model-00-end", "model:fixture-model-01-end"],
-        limitations:
-          "Backend runs at native CPU; 1x/4x applies only to Chromium. Non-navigation browser metrics use threadTicks; default-readiness document CPU is unavailable because navigation resets those counters. Each role owns an isolated browser. Whole-renderer CPU and RSS probes bracket each action; their recorded bounds include collection overhead outside wall/main-thread intervals. Heap and RSS are sampled endpoints, not retained heap, peaks, or GPU memory. Same frozen UI for all roles. Population has one/two actual turns per session spread over180days. Durable source seeding and compiled startup recorded separately; no source server or report prewarming. Setup logs retained. No provider calls. " +
-          (values.cold
-            ? "One fresh, independently seeded Gateway/browser per role, measuring default then first full-range request at native CPU and localhost. One invocation is one triple, not repeated cold qualification."
-            : "Gateway reused across CPU/RTT cells; default/readiness and population-range phases are not independent cold-process samples.") +
-          (values.diagnostic
-            ? " Traced actions are attribution only, never timing acceptance."
-            : ""),
+        browserResourceSamples: samples.filter((sample) => sample.browserResources?.complete)
+          .length,
+        mode: values["cold-backend"]
+          ? "fresh-backend-cold-triple"
+          : values.cold
+            ? "fresh-cold-triple"
+            : values.diagnostic
+              ? "attribution-only"
+              : "warm",
+        pairsPerQuery:
+          values.cold || values["cold-backend"]
+            ? 0
+            : values.diagnostic
+              ? null
+              : values.smoke
+                ? 1
+                : pairs,
+        queries:
+          values.cold || values["cold-backend"]
+            ? []
+            : ["model:fixture-model-00-end", "model:fixture-model-01-end"],
+        limitations: values["cold-backend"]
+          ? "Backend-only at native CPU and localhost: the first sessions.usage RPC requests the full 180 days with the browser's specific-UTC date mode and ordinary overview/sort options; no preceding browser/default-range request. One fresh triple, fixed A/H/C order, not repeated qualification. Worker CPU snapshots include newly observed or retired workers without claiming complete interval coverage. Resources follow the response with main-only forced GC and asynchronously cached worker heaps. No browser measurements."
+          : "Backend runs at native CPU; 1x/4x applies only to Chromium. Non-navigation browser metrics use threadTicks; default-readiness document CPU is unavailable because navigation resets those counters. Each role owns an isolated browser. Whole-renderer CPU and RSS probes bracket each action; their recorded bounds include collection overhead outside wall/main-thread intervals. Heap and RSS are sampled endpoints, not retained heap, peaks, or GPU memory. Same frozen UI for all roles. Population has one/two actual turns per session spread over180days. Durable source seeding and compiled startup recorded separately; no source server or report prewarming. Setup logs retained. No provider calls. " +
+            (values.cold
+              ? "One fresh, independently seeded Gateway/browser per role, measuring default then first full-range request at native CPU and localhost. One invocation is one triple, not repeated cold qualification."
+              : "Gateway reused across CPU/RTT cells; default/readiness and population-range phases are not independent cold-process samples.") +
+            (values.diagnostic
+              ? " Traced actions are attribution only, never timing acceptance."
+              : ""),
       },
       null,
       2,
