@@ -46,7 +46,6 @@ import {
   createSessionFilesHandlerInvoker,
   createSessionFilesClient,
   createSessionFileDownloadClient,
-  fetchSessionFileDownload,
   openSessionFileDownload,
   createWorkspaceFixture,
   hashContent,
@@ -279,13 +278,11 @@ it("keeps incognito repository downloads alive after their RPC planning borrow e
     },
   );
   const download = await files.ok("download", "README", undefined, connection);
-  const fetched = await fetchSessionFileDownload(connection.client, download.url);
+  const fetched = await connection.fetch(download.url);
   expect(fetched.response.statusCode).toBe(200);
   expect(Buffer.from(fetched.body as Uint8Array).toString()).toBe("untouched source\n");
   memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
-  expect(
-    (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
-  ).toBe(404);
+  expect((await connection.fetch(download.url)).response.statusCode).toBe(404);
 });
 
 it("downloads original live repository bytes in bounded windows and rejects stale placement", async () => {
@@ -332,9 +329,7 @@ it("downloads original live repository bytes in bounded windows and rejects stal
   onResult = () => {
     generation++;
   };
-  expect(
-    (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
-  ).toBe(404);
+  expect((await connection.fetch(download.url)).response.statusCode).toBe(404);
   expect(mocks.workspace).not.toHaveBeenCalled();
 });
 
@@ -440,7 +435,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   const blobsRead = () => hostReads.mock.calls.filter(([, args]) => args[1] === "--batch").length;
   using connection = createSessionFileDownloadClient();
   const download = await files.ok("download", "oversized.txt", undefined, connection);
-  const fetched = await fetchSessionFileDownload(connection.client, download.url);
+  const fetched = await connection.fetch(download.url);
   expect(fetched.response.statusCode).toBe(200);
   expect(Buffer.from(fetched.body as Uint8Array).equals(oversizedBytes)).toBe(true);
   await files.error("download", "README", undefined, connection);

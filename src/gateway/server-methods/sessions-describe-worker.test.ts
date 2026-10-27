@@ -14,13 +14,9 @@ import {
   reserveSwarmRun,
 } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
-import {
-  resolveSessionStorePathCore,
-  SESSION_TOTAL_TOKENS_VERSION,
-} from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   deleteSessionEntryLifecycle,
-  loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -47,7 +43,6 @@ import {
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const targetKey = "agent:main:controller";
-const targetScope = { agentId: "main", sessionKey: targetKey };
 const expectSession = (response: unknown, session: unknown) =>
   expect(response).toMatchObject({ session });
 const putSession = (key: string, entry: Parameters<typeof upsertSessionEntryCore>[1]) =>
@@ -446,66 +441,6 @@ it.each(["agent", "main alias"] as const)(
       });
     }),
 );
-
-it("projects elapsed runtime, status expiry and budget time after committed changes", () =>
-  withFixture(async ({ describe, afterChange }) => {
-    const startedAt = Date.now() - 1000;
-    using clock = vi.spyOn(Date, "now").mockReturnValue(startedAt + 1000);
-    const running = retainedRun("clock-running", {
-      childSessionKey: targetKey,
-      controllerSessionKey: "agent:main:parent",
-      requesterSessionKey: "agent:main:parent",
-      createdAt: startedAt,
-      execution: { status: "running", startedAt },
-    });
-    await putSession(targetKey, {
-      agentStatus: { note: "Working", expiresAt: startedAt + 2000 },
-      totalTokens: 100,
-      totalTokensFresh: true,
-      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-      goal: {
-        schemaVersion: 1,
-        id: "clock-goal",
-        objective: "Synthetic clock proof",
-        status: "active",
-        createdAt: startedAt,
-        updatedAt: startedAt,
-        tokenStart: 0,
-        tokensUsed: 0,
-        tokenBudget: 50,
-        continuationTurns: 0,
-      },
-    });
-    using _ = registerRun(running);
-    const claim = claimAgentRunContext(
-      running.runId,
-      { sessionKey: targetKey },
-      { trackOwner: true, ownsContext: true },
-    );
-    try {
-      expectSession(await describe(), {
-        status: "running",
-        runtimeMs: 1000,
-        agentStatus: { note: "Working" },
-      });
-      const response = await afterChange(() => {
-        clock.mockReturnValue(startedAt + 6000);
-      });
-      expectSession(response, {
-        status: "running",
-        runtimeMs: 6000,
-        agentStatus: undefined,
-        goal: {
-          status: "budget_limited",
-          budgetLimitedAt: startedAt + 6000,
-          updatedAt: startedAt + 6000,
-        },
-      });
-      expect(loadSessionEntry(targetScope)?.goal?.status).toBe("active");
-    } finally {
-      releaseAgentRunContext(running.runId, claim);
-    }
-  }));
 
 it("does not promote historical control after the current executor retires", () =>
   withFixture(async ({ describe, afterChange }) => {

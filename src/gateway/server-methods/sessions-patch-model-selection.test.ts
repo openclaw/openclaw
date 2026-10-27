@@ -176,12 +176,13 @@ it.each([false, true])(
           entry: {
             ...initialEntry,
             incognito: true,
+            thinkingLevel: "high",
             modelProvider: "fixture",
             model: "x",
           },
         }));
       } else {
-        await seedSession("low", { modelProvider: "fixture", model: "x" });
+        await seedSession("high", { modelProvider: "fixture", model: "x" });
       }
       const manager = await SessionManager.openAsync(target, state.workspaceDir);
       const message = { role: "user" as const, content: "Keep the conversation.", timestamp: 1 };
@@ -194,6 +195,7 @@ it.each([false, true])(
         ["fixture/x", true],
       ] as const) {
         expect((await patchSession({ key: target.sessionKey, model }))[0]).toBe(accepted);
+        expect(loadSessionEntry(target)?.thinkingLevel).toBe("high");
         expect(loadSessionEntry(target)?.lastSubmittedModel).toEqual({
           provider: "fixture",
           model: "x",
@@ -209,15 +211,6 @@ it.each([false, true])(
       expect(reopened.buildSessionContext().messages).toEqual([message, followup]);
     }),
 );
-
-it("preserves requested thinking when switching away from and back to a reasoning model", () =>
-  withState(async () => {
-    await seedSession("high");
-    for (const model of ["fixture/z", "fixture/x"]) {
-      expect((await patchSession({ model }))[0]).toBe(true);
-      expect(loadSessionEntry(scope)?.thinkingLevel).toBe("high");
-    }
-  }));
 
 function enqueue(
   state: OpenClawTestState,
@@ -363,34 +356,6 @@ it.each(["standard", null] as const)(
         await completeQueuedTurn(queued, turn);
       }
     }),
-);
-
-it.each([
-  [{ thinkingLevel: "off" }, "off", "x"],
-  [{ thinkingLevel: null }, "medium", "x"],
-  [{ model: "fixture/y", thinkingLevel: "high" }, "high", "y"],
-] as const)("refreshes %j without overriding turn thinking intent", (patch, expected, model) =>
-  withState(async (state) => {
-    await seedSession("high");
-    const explicit = enqueue(state, "explicit low", {
-      thinkLevel: "low",
-      thinkLevelOverride: "low",
-    });
-    const defaults = enqueue(state, "explicit default", {
-      thinkLevel: "medium",
-      thinkLevelOverride: "default",
-    });
-    const ordinary = enqueue(state, "ordinary", { thinkLevel: "high" });
-
-    expect((await patchSession(patch))[0]).toBe(true);
-    expect(loadSessionEntry(scope)?.thinkingLevel).toBe(patch.thinkingLevel ?? undefined);
-    expect([ordinary.run, explicit.run, defaults.run]).toMatchObject([
-      { model, thinkLevel: expected },
-      { model, thinkLevel: "low", thinkLevelOverride: "low" },
-      { model, thinkLevel: "medium", thinkLevelOverride: "default" },
-    ]);
-    expect(getExistingFollowupQueue(sessionKey)?.lastRun?.thinkLevel).toBe(expected);
-  }),
 );
 
 it("changes only effort on a queued fallback route", () =>

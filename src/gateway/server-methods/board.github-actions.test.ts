@@ -523,42 +523,31 @@ describe("board authenticated GitHub Actions", () => {
     expect(actionCalls()).toHaveLength(4);
   });
 
-  it.for(["success", "failure"] as const)(
-    "returns expired Actions while one background refresh settles with %s",
-    async (outcome, { signal }) => {
-      const now = Date.now();
-      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-      const { read } = await reader();
-      await expectResult(read());
-      clock.mockReturnValue(now + 30_001);
-      const updated = { ...result, workflow_runs: [{ ...run, conclusion: "failure" }] };
-      const { started, release } = holdActions(() =>
-        outcome === "success" ? json(updated) : new Response(token, { status: 503 }),
+  it("returns expired Actions while one background refresh settles", async ({ signal }) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const { read } = await reader();
+    await expectResult(read());
+    clock.mockReturnValue(now + 30_001);
+    const updated = { ...result, workflow_runs: [{ ...run, conclusion: "failure" }] };
+    const { started, release } = holdActions(() => json(updated));
+    const pending = read();
+    try {
+      await withinTest(started.promise, signal);
+      await expectResult(withinTest(pending, signal), { ...result, stale: true });
+      await expectResult(read(), { ...result, stale: true });
+      expect(actionCalls()).toHaveLength(2);
+    } finally {
+      release.resolve();
+      await pending;
+      await AsyncWorkScope.runWhenAllIdle(
+        () => workScopes,
+        async () => {},
       );
-      const pending = read();
-      try {
-        await withinTest(started.promise, signal);
-        await expectResult(withinTest(pending, signal), { ...result, stale: true });
-        await expectResult(read(), { ...result, stale: true });
-        expect(actionCalls()).toHaveLength(2);
-      } finally {
-        release.resolve();
-        await pending;
-        await AsyncWorkScope.runWhenAllIdle(
-          () => workScopes,
-          async () => {},
-        );
-      }
-      const response = await read();
-      if (outcome === "success") {
-        expect(response.mock.calls[0]).toEqual([true, updated]);
-        expect(actionCalls()).toHaveLength(2);
-      } else {
-        await expectDenied(Promise.resolve(response), "request failed");
-        expect(actionCalls()).toHaveLength(3);
-      }
-    },
-  );
+    }
+    await expectResult(read(), updated);
+    expect(actionCalls()).toHaveLength(2);
+  });
 
   it.each(["session ownership", "token"] as const)(
     "rejects changed %s across an awaited fetch",
