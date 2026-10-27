@@ -24,6 +24,7 @@ import {
 import {
   normalizeRecoveryDiagnosticMarker,
   printRecoveryFailureDiagnostics,
+  readRecoveryLogProjection,
   RECOVERY_PROBE_ID,
   type RecoveryDiagnosticMarker,
   writeRecoveryDiagnosticProbe,
@@ -75,8 +76,6 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
       let providerObservationCount = 0;
       let omittedProviderObservations = 0;
       let restartObservedAt: number | undefined;
-      let restartLogOffset = 0;
-      let failureLogOffset = 0;
       let restartEpoch: 0 | 1 | 2 = 0;
       let failureRestartStartedAtMs: number | undefined;
       let startupAwaitCompleted = false;
@@ -399,8 +398,22 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         });
       const archivedSource = "agent:main:dashboard:archived-source";
       let restarting: Promise<void> | undefined;
-      const captureProviderDiagnostics = () => {
-        const restartedLogs = gateway.logs().slice(restartLogOffset);
+      const readSettlementProjection = async () => {
+        if (failureRestartStartedAtMs === undefined) {
+          return { atLimit: false, events: [] as string[], unavailable: false };
+        }
+        try {
+          const projection = await readRecoveryLogProjection({
+            logPath: gateway.state.path("gateway.log"),
+            sinceMs: failureRestartStartedAtMs,
+          });
+          return { ...projection, unavailable: false };
+        } catch {
+          return { atLimit: false, events: [] as string[], unavailable: true };
+        }
+      };
+      const captureProviderDiagnostics = async () => {
+        const logProjection = await readSettlementProjection();
         return {
           shutdownSignal,
           restartEpoch,
@@ -408,21 +421,24 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           entries: providerObservations,
           omittedEntries: omittedProviderObservations,
           settlement: {
-            sessionLifecycleQueueWaits: Math.max(
-              0,
-              restartedLogs.split("session lifecycle queue waiting").length - 1,
+            logProjectionAtLimit: logProjection.atLimit,
+            logProjectionUnavailable: logProjection.unavailable,
+            sessionLifecycleQueueWaits: logProjection.events.filter((event) =>
+              event.includes("session lifecycle queue waiting"),
+            ).length,
+            deliveryNotices: logProjection.events.some((event) =>
+              event.includes("startup trace: sidecars.delivery-notices"),
             ),
-            deliveryNotices: restartedLogs.includes("startup trace: sidecars.delivery-notices"),
-            deliveryRecovery: restartedLogs.includes("startup trace: sidecars.delivery-recovery"),
+            deliveryRecovery: logProjection.events.some((event) =>
+              event.includes("startup trace: sidecars.delivery-recovery"),
+            ),
             startupAwaitCompleted,
           },
         };
       };
-      let providerDiagnostics: ReturnType<typeof captureProviderDiagnostics> | undefined;
+      let providerDiagnostics: Awaited<ReturnType<typeof captureProviderDiagnostics>> | undefined;
       const printProviderDiagnostics = () =>
-        console.error(
-          `[session-recovery-provider] ${JSON.stringify(providerDiagnostics ?? captureProviderDiagnostics())}`,
-        );
+        console.error(`[session-recovery-provider] ${JSON.stringify(providerDiagnostics)}`);
       const recoveryDiagnosticMarkers = () => {
         const markers: Record<string, RecoveryDiagnosticMarker> = {
           [cancelledChatId]: "CANCELLED_CHAT",
@@ -603,8 +619,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           expect(oldProcess?.signalCode).not.toBe("SIGKILL");
         }
         hold = false;
-        restartLogOffset = gateway.logs().length;
-        failureLogOffset = restartLogOffset;
+        const beforeRestartLogs = gateway.logs().length;
         restartEpoch = 1;
         failureRestartStartedAtMs = Date.now();
         restartObservedAt = performance.now();
@@ -625,7 +640,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         const recoveryTrace = () =>
           gateway
             .logs()
-            .slice(restartLogOffset)
+            .slice(beforeRestartLogs)
             .match(/startup (?:trace|phase): sidecars\.subagent-recovery ([0-9.]+)ms/u);
         await awaitRecovery(waitFor(() => expect(recoveryTrace()).not.toBeNull(), 10_000));
         for (const response of parallelResponses.values()) {
@@ -685,7 +700,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           ["cancelled", accepted.get("ARCHIVED_SOURCE_UPDATE")],
           ["cancelled", cancelledChatId],
         ]);
-        providerDiagnostics = captureProviderDiagnostics();
+        providerDiagnostics = await captureProviderDiagnostics();
         restartObservedAt = undefined;
         await client.stopAndWait();
         client = undefined;
@@ -697,7 +712,6 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         const previousReplacementWarnings = gateway
           .logs()
           .split("Session delivery endpoint was replaced").length;
-        failureLogOffset = gateway.logs().length;
         restartEpoch = 2;
         failureRestartStartedAtMs = Date.now();
         await gateway.startGateway();
@@ -722,13 +736,14 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         expect(observed).toEqual(expectedDelivery);
         expect(parallelObserved).toEqual(expectedParallel);
       } catch (error) {
+        providerDiagnostics ??= await captureProviderDiagnostics();
         await printRecoveryFailureDiagnostics({
           client,
           databasePath: path.join(gateway.state.agentDir("main"), "openclaw-agent.sqlite"),
           sessionKey: target,
           runId: chatRequests.at(-1)?.idempotencyKey,
           frames: [],
-          restartedLogs: gateway.logs().slice(failureLogOffset),
+          restartedLogs: "",
           startupSnapshot: undefined,
           logPath: gateway.state.path("gateway.log"),
           markers: recoveryDiagnosticMarkers(),
@@ -737,6 +752,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         }).catch(() => console.error("[session-recovery-failure] diagnostics unavailable"));
         throw error;
       } finally {
+        providerDiagnostics ??= await captureProviderDiagnostics();
         printProviderDiagnostics();
         for (const response of parallelResponses.values()) {
           releaseHeldResponse(response);

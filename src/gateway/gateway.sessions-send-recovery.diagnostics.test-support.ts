@@ -292,6 +292,17 @@ function recoveryLogTail(logs: string, sinceMs?: number): string[] {
     .slice(-40);
 }
 
+export async function readRecoveryLogProjection(params: {
+  logPath: string;
+  sinceMs: number;
+}): Promise<{ atLimit: boolean; events: string[] }> {
+  const fileLog = await readLogTail(params.logPath);
+  return {
+    atLimit: Buffer.byteLength(fileLog) >= RECOVERY_LOG_BYTES,
+    events: recoveryLogTail(fileLog, params.sinceMs),
+  };
+}
+
 export async function printRecoveryFailureDiagnostics(params: {
   client: GatewayClient | undefined;
   databasePath: string;
@@ -345,7 +356,9 @@ export async function printRecoveryFailureDiagnostics(params: {
   for (const row of startupRows ?? []) {
     console.error(`[session-recovery-row] ${JSON.stringify({ phase: "before-startup", row })}`);
   }
+  const consoleLog =
+    params.restartStartedAtMs === undefined ? recoveryLogTail(params.restartedLogs) : [];
   console.error(
-    `[session-recovery-child-log] ${JSON.stringify({ console: recoveryLogTail(params.restartedLogs), file: recoveryLogTail(fileLog, params.restartStartedAtMs) })}`,
+    `[session-recovery-child-log] ${JSON.stringify({ console: consoleLog, file: recoveryLogTail(fileLog, params.restartStartedAtMs) })}`,
   );
 }
