@@ -59,6 +59,14 @@ vi.mock("../../auto-reply/reply/agent-runner-utils.js", () => ({
 const withState = setupSessionMutationState();
 const sessionKey = "agent:main:direct:queued-selection";
 const sessionId = "queued-selection";
+const initialEntry = {
+  sessionId,
+  updatedAt: 1,
+  providerOverride: "fixture",
+  modelOverride: "x",
+  modelOverrideSource: "user" as const,
+};
+const initialAccess = { cyberAccessProgram: "daybreak_blue" } as const;
 const catalog: ModelCatalogEntry[] = ["configured", "x", "y", "z"].map((id) => ({
   provider: "fixture",
   id,
@@ -121,11 +129,7 @@ afterEach(() => {
 
 async function seedSession(thinkingLevel = "low", overrides: Partial<SessionEntry> = {}) {
   await upsertSessionEntryCore(scope, {
-    sessionId,
-    updatedAt: 1,
-    providerOverride: "fixture",
-    modelOverride: "x",
-    modelOverrideSource: "user",
+    ...initialEntry,
     thinkingLevel,
     ...overrides,
   });
@@ -170,12 +174,8 @@ it.each([false, true])(
         await createSessionEntryWithTranscript(target, () => ({
           ok: true,
           entry: {
-            sessionId,
-            updatedAt: 1,
+            ...initialEntry,
             incognito: true,
-            providerOverride: "fixture",
-            modelOverride: "x",
-            modelOverrideSource: "user",
             modelProvider: "fixture",
             model: "x",
           },
@@ -247,18 +247,27 @@ function enqueue(
   return queued;
 }
 
+async function completeQueuedTurn(queued: FollowupRun, turn?: AdmittedFollowupTurn) {
+  turn?.operation.complete();
+  const claim = queued.controllerInput?.claim;
+  if (claim) {
+    sessionMailbox.releaseSessionControllerClaim(claim);
+    await claim.settlement.promise;
+  }
+}
+
 it.each(["standard", null] as const)(
   "refreshes queued Access to %s without changing admitted turns",
   (program) =>
     withState(async (state) => {
-      await seedSession("low", { cyberAccessProgram: "daybreak_blue" });
+      await seedSession("low", initialAccess);
       const entered = [0, 1, 2].map(() => createDeferredCore<AdmittedFollowupTurn>());
       const release = [0, 1, 2].map(() => createDeferredCore());
       const finished = createDeferredCore();
       let index = 0;
-      enqueue(state, "A", { cyberAccessProgram: "daybreak_blue" });
-      const b = enqueue(state, "B", { cyberAccessProgram: "daybreak_blue" });
-      const c = enqueue(state, "C", { cyberAccessProgram: "daybreak_blue" });
+      enqueue(state, "A", initialAccess);
+      const b = enqueue(state, "B", initialAccess);
+      const c = enqueue(state, "C", initialAccess);
       // Observe errors even if an earlier assertion transfers control to cleanup.
       void finished.promise.catch(() => {});
       for (const gate of entered) {
@@ -326,10 +335,8 @@ it.each(["standard", null] as const)(
   "captures Access %s when its claimed source waits for reply admission",
   (program) =>
     withState(async (state) => {
-      await seedSession("low", { cyberAccessProgram: "daybreak_blue" });
-      const queued = enqueue(state, "waiting for admission", {
-        cyberAccessProgram: "daybreak_blue",
-      });
+      await seedSession("low", initialAccess);
+      const queued = enqueue(state, "waiting for admission", initialAccess);
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const admit = replyAdmission.admitReplyTurn;
@@ -353,12 +360,7 @@ it.each(["standard", null] as const)(
       } finally {
         release.resolve();
         turn ??= await starting;
-        turn.operation.complete();
-        const claim = queued.controllerInput?.claim;
-        if (claim) {
-          sessionMailbox.releaseSessionControllerClaim(claim);
-          await claim.settlement.promise;
-        }
+        await completeQueuedTurn(queued, turn);
       }
     }),
 );
@@ -535,7 +537,7 @@ it.each([
   (patch, selected, later, next, probe) =>
     withState(async (state) => {
       await seedSession("low", {
-        cyberAccessProgram: "daybreak_blue",
+        ...initialAccess,
         ...(probe
           ? {
               modelOverride: "configured",
@@ -546,7 +548,7 @@ it.each([
           : {}),
       });
       const b = enqueue(state, "B waiting for settings", {
-        cyberAccessProgram: "daybreak_blue",
+        ...initialAccess,
         autoFallbackPrimaryProbe: probe
           ? {
               provider: "fixture",
@@ -556,7 +558,7 @@ it.each([
             }
           : undefined,
       });
-      const c = enqueue(state, "C still waiting", { cyberAccessProgram: "daybreak_blue" });
+      const c = enqueue(state, "C still waiting", initialAccess);
       const committed = createDeferredCore();
       const releaseRefresh = createDeferredCore();
       const requestingClaim = createDeferredCore();
@@ -617,12 +619,7 @@ it.each([
         releaseRefresh.resolve();
         await changing;
         turn ??= await starting;
-        turn?.operation.complete();
-        const claim = b.controllerInput?.claim;
-        if (claim) {
-          sessionMailbox.releaseSessionControllerClaim(claim);
-          await claim.settlement.promise;
-        }
+        await completeQueuedTurn(b, turn);
       }
     }),
 );

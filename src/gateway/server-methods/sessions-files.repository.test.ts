@@ -124,29 +124,6 @@ const edit = (content = "saved\n", expectedHash = hashContent("before\n")) => ({
   content,
   expectedHash,
 });
-const repositoryEntry = () => ({
-  sessionId,
-  repositoryWorkspaceId: source.workspaceId,
-  lifecycleRevision,
-  archivedAt,
-});
-const environmentRecord = () => ({
-  ...environment(),
-  environmentId: identity.environmentId,
-  ownerEpoch: identity.generation,
-  attachedSessionIds: [identity.sessionId],
-});
-
-function checkpointData(base: Awaited<ReturnType<typeof capture>>, current = base) {
-  return {
-    stagingRoot: workspace,
-    baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-    currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
-    baseManifestRef: base.manifestRef,
-    currentManifestRef: current.manifestRef,
-  };
-}
-
 const createRepository = (url: string) =>
   store.create({ agentId: "main", sessionKey, url, assertCurrent() {} });
 async function publishCheckpoint(base: Awaited<ReturnType<typeof capture>>, current = base) {
@@ -154,7 +131,11 @@ async function publishCheckpoint(base: Awaited<ReturnType<typeof capture>>, curr
     store,
     workspaceId: source.workspaceId,
     expectedRevision: source.revision,
-    ...checkpointData(base, current),
+    stagingRoot: workspace,
+    baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+    currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
+    baseManifestRef: base.manifestRef,
+    currentManifestRef: current.manifestRef,
     assertCurrent() {},
   });
   source = await staged.publish();
@@ -266,7 +247,13 @@ afterEach(async () => {
 async function persistSessionEntry() {
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
-    { ...repositoryEntry(), updatedAt: Date.now() },
+    {
+      sessionId,
+      repositoryWorkspaceId: source.workspaceId,
+      lifecycleRevision,
+      archivedAt,
+      updatedAt: Date.now(),
+    },
   );
 }
 
@@ -538,7 +525,12 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     return await realRename(...args);
   });
   onTestFinished(() => renameSpy.mockRestore());
-  const record = environmentRecord();
+  const record = {
+    ...environment(),
+    environmentId: identity.environmentId,
+    ownerEpoch: identity.generation,
+    attachedSessionIds: [identity.sessionId],
+  };
   const nodeTransport = transport();
   let physicalWrite: Promise<unknown> | undefined;
   nodeTransport.invoke = async (request) => {

@@ -178,6 +178,9 @@ describe("board authenticated GitHub Actions", () => {
     config = next;
     setRuntimeConfigSnapshot(config);
   }
+  function publishAgents(entries: NonNullable<OpenClawConfig["agents"]>["entries"]) {
+    publishConfig({ ...config, agents: { ...config.agents, entries } });
+  }
   afterEach(async () => {
     await Promise.all(workScopes.splice(0).map((work) => work.drain()));
     clearRuntimeConfigSnapshot();
@@ -342,10 +345,7 @@ describe("board authenticated GitHub Actions", () => {
           controller.abort();
         }
         if (changed === "agent") {
-          publishConfig({
-            ...config,
-            agents: { ...config.agents, entries: { other: {} } },
-          });
+          publishAgents({ other: {} });
         }
         if (changed === "routing") {
           config.session = { scope: "global", mainKey: `runs-${caseNumber}` };
@@ -488,10 +488,7 @@ describe("board authenticated GitHub Actions", () => {
     const { started, release } = holdActions();
     const harness = createGitHubBoardHarness();
     const { read } = await reader(harness);
-    publishConfig({
-      ...config,
-      agents: { ...config.agents, entries: { ...config.agents?.entries, other: {} } },
-    });
+    publishAgents({ ...config.agents?.entries, other: {} });
     const otherSession = await reader(harness, "runs", "other");
     const sharedSecond = otherSession.read();
     const first = read();
@@ -573,10 +570,7 @@ describe("board authenticated GitHub Actions", () => {
       if (changed === "token") {
         await writeCredential("synthetic-rotated-token");
       } else {
-        publishConfig({
-          ...config,
-          agents: { ...config.agents, entries: { other: {} } },
-        });
+        publishAgents({ other: {} });
       }
       release.resolve();
       await expectDenied(pending);
