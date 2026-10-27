@@ -88,6 +88,39 @@ function chunksOf(text: string, size: number) {
 }
 
 describe("normalizePlainTextToolCallStreamEvents", () => {
+  it("adds only one async iterator boundary for ordinary streamed text", async () => {
+    const events = Array.from({ length: 128 }, () => textEvent("ordinary prose "));
+    async function* source() {
+      for (const event of events) {
+        yield event;
+      }
+    }
+    async function countTicks(stream: AsyncIterable<unknown>) {
+      let ticks = 0;
+      let running = true;
+      const tick = () => {
+        if (running) {
+          ticks++;
+          queueMicrotask(tick);
+        }
+      };
+      const output: unknown[] = [];
+      queueMicrotask(tick);
+      try {
+        for await (const event of stream) {
+          output.push(event);
+        }
+      } finally {
+        running = false;
+      }
+      expect(output).toEqual(events);
+      return ticks;
+    }
+    const direct = await countTicks(source());
+    const normalized = await countTicks(normalizeStream(source(), streamOptions));
+    // One async-generator hop adds two microtask turns per event, plus completion.
+    expect(normalized - direct).toBeLessThanOrEqual(2 * (events.length + 1));
+  });
   const falseMarker = cumulativeDeltas(aggregate + "[tool:re", " nope");
   const optionalWhitespace = streamDeltas(
     `[tool:read] {"path":"${oversized}`,

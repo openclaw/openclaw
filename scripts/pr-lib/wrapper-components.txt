@@ -2418,6 +2418,7 @@ packages/gateway-protocol/src/schema/sessions-sharing-constants.ts
 packages/gateway-protocol/src/schema/sessions-sharing-values.ts
 packages/gateway-protocol/src/schema/setup-inference.ts
 packages/gateway-protocol/src/schema/skill-detail.ts
+packages/gateway-protocol/src/schema/skill-workshop-drafts.ts
 packages/gateway-protocol/src/schema/skills-search.ts
 packages/gateway-protocol/src/schema/tab-icon.ts
 packages/gateway-protocol/src/schema/ui-appearance-preferences.ts

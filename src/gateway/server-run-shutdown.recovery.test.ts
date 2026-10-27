@@ -109,10 +109,15 @@ function recoveryTarget(
 function recoveryFixture(sessionKey: string, sessionId: string) {
   const resolveGatewayContext = () => undefined;
   const runId = `${sessionId}-run`;
+  const target = { storePath, sessionKey };
   return {
-    target: { storePath, sessionKey },
+    target,
     runId,
     resolveGatewayContext,
+    seed: (entry: Partial<Parameters<typeof replaceSessionEntry>[1]> = {}) =>
+      replaceSessionEntry(target, { sessionId, updatedAt: 1, ...entry }),
+    read: () => loadSessionEntry(target),
+    transcript: async () => JSON.stringify(await loadTranscriptEvents({ ...target, sessionId })),
     admit: (overrides: Partial<Parameters<typeof beginSessionEffect>[0]> = {}) =>
       beginSessionEffect({
         scope: storePath,
@@ -130,6 +135,14 @@ function recoveryFixture(sessionKey: string, sessionId: string) {
         ...overrides,
       }),
   };
+}
+
+function expectRecoveryMarker(entry: ReturnType<typeof loadSessionEntry>) {
+  expect(entry).toMatchObject({
+    status: "interrupted",
+    abortedLastRun: true,
+    mainRestartRecovery: { cycleId: expect.any(String) },
+  });
 }
 
 function registerRecoveryRun(
@@ -194,7 +207,7 @@ it.each([
   const sessionId = `released-${releaseAt}`;
   const f = recoveryFixture(sessionKey, sessionId);
   const { runId, target, resolveGatewayContext } = f;
-  await replaceSessionEntry(target, { sessionId, updatedAt: 1, lifecycleRunId: runId });
+  await f.seed({ lifecycleRunId: runId });
   const admission = await f.admit({ assertAllowed: () => {} });
   const registration = f.register();
   const releaseClaim = await claimRpcSourceForTest(registration.entry);
@@ -267,14 +280,12 @@ it.each([
         await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
       },
     });
-    const saved = loadSessionEntry(target);
+    const saved = f.read();
     if (shouldMark) {
-      expect(saved).toMatchObject({
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: { cycleId: expect.any(String) },
-        restartRecoveryRuns: [{ runId, lifecycleGeneration: getAgentEventLifecycleGeneration() }],
-      });
+      expectRecoveryMarker(saved);
+      expect(saved?.restartRecoveryRuns).toMatchObject([
+        { runId, lifecycleGeneration: getAgentEventLifecycleGeneration() },
+      ]);
     } else {
       expect(saved?.mainRestartRecovery).toBeUndefined();
       expect(saved?.abortedLastRun).not.toBe(true);
@@ -303,8 +314,7 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
     const f = recoveryFixture(sessionKey, sessionId);
     const { target, resolveGatewayContext } = f;
     const runId = `restart-${kind}-run`;
-    await replaceSessionEntry(target, {
-      sessionId,
+    await f.seed({
       updatedAt: 1_000,
       restartRecoveryDeliveryRunId: sourceOnly ? undefined : runId,
       restartRecoveryDeliverySourceRunId: runId,
@@ -357,11 +367,7 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
     try {
       const harness = createAgentEventTestHarness();
       await shutdown(harness, resolveGatewayContext);
-      expect(loadSessionEntry(target)).toMatchObject({
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: { cycleId: expect.any(String) },
-      });
+      expectRecoveryMarker(f.read());
       if (kind === "queue") {
         expect(queued?.controller.signal.reason).toMatchObject({ code: "OPENCLAW_RESTART_ABORT" });
         expect(getRpcSource(runId)).toBeUndefined();
@@ -385,7 +391,7 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
       await recover();
       if (delegated) {
         expect(gatewayRuntime.dispatchAgent).not.toHaveBeenCalled();
-        const settled = loadSessionEntry(target);
+        const settled = f.read();
         expect(settled).toMatchObject({
           sessionId,
           status: "interrupted",
@@ -396,7 +402,7 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
         expect(settled?.restartRecoveryDeliveryRunId).toBeUndefined();
         expect(settled?.restartRecoveryRuns).toBeUndefined();
         expect(settled?.restartRecoveryTerminalDeliveryEvidence).toBeUndefined();
-        const transcript = JSON.stringify(await loadTranscriptEvents({ ...target, sessionId }));
+        const transcript = await f.transcript();
         expect(transcript).toContain("delegated recovery sender authority is unavailable");
         expect(transcript.match(/Send a new authenticated message to continue/g)).toHaveLength(1);
         expect(recoveryLog).toHaveBeenCalledWith(
@@ -407,13 +413,11 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
           await markOrphanedMainSessionForRecovery({ target, expectedSessionId: sessionId, cfg }),
         ).toEqual({ marked: 0, skipped: 0 });
         await recover();
-        expect(JSON.stringify(await loadTranscriptEvents({ ...target, sessionId }))).toBe(
-          transcript,
-        );
+        expect(await f.transcript()).toBe(transcript);
         expect(gatewayRuntime.dispatchAgent).not.toHaveBeenCalled();
       } else {
         expect(gatewayRuntime.dispatchAgent).toHaveBeenCalledTimes(1);
-        expect(loadSessionEntry(target)).toMatchObject({ status: "done", abortedLastRun: false });
+        expect(f.read()).toMatchObject({ status: "done", abortedLastRun: false });
       }
     } finally {
       reply?.complete();
@@ -443,9 +447,7 @@ it.each(["none", "active", "pending"] as const)(
     const finalSessionKey = `${sessionKey}-final`;
     const finalSessionId = `${sessionId}-final`;
     const finalTarget = { storePath, sessionKey: finalSessionKey, sessionId: finalSessionId };
-    await replaceSessionEntry(target, {
-      sessionId,
-      updatedAt: 1,
+    await f.seed({
       restartRecoveryDeliveryRunId: `${sessionId}-run`,
       restartRecoverySourceIngress: "control-ui",
     });
@@ -462,7 +464,7 @@ it.each(["none", "active", "pending"] as const)(
     const admission = await f.admit({
       owner,
       onInterrupt: (reason) => {
-        recoveryMarkedBeforeInterruption = Boolean(loadSessionEntry(target)?.mainRestartRecovery);
+        recoveryMarkedBeforeInterruption = Boolean(f.read()?.mainRestartRecovery);
         controller.abort(reason);
         interrupted.resolve();
         if (callbackFailure === "active") {
@@ -630,30 +632,36 @@ it.each(
     const completed = outcome === "completed" || outcome === "completed while retired";
     const retireWhilePersisting =
       outcome === "retired while persisting" || outcome === "completed while retired";
-    const sessionKey = `agent:main:dashboard:persisted-terminal-${outcome}-${aliased}`;
     const sessionId = `persisted-terminal-${outcome}-${aliased}`;
+    const sessionKey = `agent:main:dashboard:${sessionId}`;
     const runId = `${sessionId}-run`;
     const clientRunId = aliased ? `${runId}-client` : runId;
     const identity = { sessionKey, sessionId, agentId: "main" };
-    const target = { storePath, sessionKey };
+    const f = recoveryFixture(sessionKey, sessionId);
+    const { resolveGatewayContext } = f;
     const subscriptionConfig = { ...cfg, logging: { audit: { enabled: false } } };
     setRuntimeConfigSnapshot(subscriptionConfig, subscriptionConfig);
-    await replaceSessionEntry(target, { sessionId, updatedAt: 1, lifecycleRunId: runId });
-    const resolveGatewayContext = () => undefined;
+    await f.seed({ lifecycleRunId: runId });
     const params = {
       ...createSubscriptionTestFixture().createParams(),
       resolveGatewayContext,
     };
     params.chatRunState.registry.add(runId, { sessionKey, clientRunId });
-    const registration = registerSubscriptionChatRun(params, {
-      ...identity,
-      runId: clientRunId,
-      target: recoveryTarget(sessionKey, sessionId),
-    });
-    bindGatewayContextResolver(registration.entry.input, resolveGatewayContext);
-    const releaseClaim = await claimRpcSourceForTest(registration.entry);
-    registration.markExecutionStarted();
-    registerAgentRunContext(runId, identity);
+    const register = async (sourceRunId: string, lifecycleRunId: string) => {
+      const registration = registerSubscriptionChatRun(params, {
+        ...identity,
+        runId: sourceRunId,
+        target: recoveryTarget(sessionKey, sessionId),
+      });
+      bindGatewayContextResolver(registration.entry.input, resolveGatewayContext);
+      const release = await claimRpcSourceForTest(registration.entry);
+      registration.markExecutionStarted();
+      registerAgentRunContext(lifecycleRunId, identity);
+      return { registration, release };
+    };
+    const emit = (eventRunId: string, data: Record<string, unknown>) =>
+      emitAgentEvent({ ...identity, runId: eventRunId, stream: "lifecycle", data });
+    const { registration, release: releaseClaim } = await register(clientRunId, runId);
     const unsubs = startGatewayEventSubscriptions(params);
     let unsubscribeAgent: Promise<void> | undefined;
     const drain = () => (unsubscribeAgent ??= unsubs.agentUnsub());
@@ -676,14 +684,9 @@ it.each(
       if (!completed) {
         registration.controller.abort(createAgentRunRestartAbortError());
       }
-      emitAgentEvent({
-        ...identity,
-        runId,
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          ...(!completed ? { aborted: true, stopReason: "restart" } : {}),
-        },
+      emit(runId, {
+        phase: "end",
+        ...(!completed ? { aborted: true, stopReason: "restart" } : {}),
       });
       registration.cleanup();
       if (heldWrite) {
@@ -699,7 +702,7 @@ it.each(
       registration.cleanup();
       await registration.entry.input.settlement.promise;
       expect(getRpcSource(clientRunId)).toBeUndefined();
-      expect(loadSessionEntry(target)).toMatchObject({
+      expect(f.read()).toMatchObject({
         status: completed ? "done" : "interrupted",
         abortedLastRun: !completed,
         lastRunId: clientRunId,
@@ -710,33 +713,20 @@ it.each(
         markMainSessionsAbortedForRestart: async (captured) => {
           if (outcome === "replacement") {
             // The old terminal is already durable; a newer turn wins before its marker writes.
-            replacement = registerSubscriptionChatRun(params, {
-              ...identity,
-              runId: replacementRunId,
-              target: recoveryTarget(sessionKey, sessionId),
-            });
-            bindGatewayContextResolver(replacement.entry.input, resolveGatewayContext);
-            releaseReplacementClaim = await claimRpcSourceForTest(replacement.entry);
-            replacement.markExecutionStarted();
-            registerAgentRunContext(replacementRunId, identity);
-            emitAgentEvent({
-              ...identity,
-              runId: replacementRunId,
-              stream: "lifecycle",
-              data: { phase: "start", startedAt: Date.now() },
-            });
+            ({ registration: replacement, release: releaseReplacementClaim } = await register(
+              replacementRunId,
+              replacementRunId,
+            ));
+            emit(replacementRunId, { phase: "start", startedAt: Date.now() });
           }
           await drain();
           await markRestartAbortedMainSessions({ ...captured, cfg, stateDir: state.stateDir });
         },
       });
-      const saved = loadSessionEntry(target);
+      const saved = f.read();
       if (outcome === "interrupted" || outcome === "retired while persisting") {
-        expect(saved).toMatchObject({
-          status: "interrupted",
-          abortedLastRun: true,
-          mainRestartRecovery: { cycleId: expect.any(String), revision: expect.any(Number) },
-        });
+        expectRecoveryMarker(saved);
+        expect(saved?.mainRestartRecovery?.revision).toEqual(expect.any(Number));
         expect(saved?.restartRecoveryRuns).toEqual([
           { runId, lifecycleGeneration: getAgentEventLifecycleGeneration() },
           ...(aliased

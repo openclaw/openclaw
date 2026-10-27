@@ -252,7 +252,9 @@ to reuse short bursts, then retains one for up to five minutes since its last
 completion. The combined nominal warm-heap budget is 512 MiB with the default
 64 MiB per worker, or 8 GiB at the maximum 1 GiB per-worker configuration;
 external allocations are excluded, so this is not an RSS limit.
-Reuse requires the same runtime entry and heap limit.
+Reuse requires the same runtime entry and heap limit. Serial work reuses the
+most recently completed matching worker so surplus workers from an earlier burst
+can expire instead of having their idle deadlines repeatedly reset.
 Reuse stays within the creating Gateway or CLI command lifetime; closing that
 host joins worker retirement. Standalone executor calls without a host close
 their completed worker immediately. Each new cell still gets a fresh VM context.

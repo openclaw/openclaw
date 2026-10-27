@@ -51,7 +51,12 @@ and outcomes available. Completed group summaries retain their operation counts.
 Tool Search calls use the called tool's name, icon, and input details in tool rows
 and activity summaries. Built-in tools use semantic icons, including an envelope
 for messages, a calendar clock for scheduled jobs, and an image for image generation.
-Unknown tools use a puzzle icon unless their plugin supplies an activity icon.
+Shared tools keep their semantic icons regardless of the provider. Tools owned by
+installed third-party plugins may show the plugin logo when the Gateway has
+confirmed a non-OpenClaw ClawHub publisher. Bundled and OpenClaw-published plugins
+keep their monochrome activity icons. Missing or unreadable logos fall back to
+the plugin activity icon, then the normal tool glyph; unknown tools use a puzzle
+icon. Unknown publisher metadata does not enable branding.
 
 A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,

@@ -703,7 +703,9 @@ describe("legacy provider catalog retention", () => {
 });
 
 it("preserves the primary publication error when terminal generation cleanup also fails", async () => {
-  const primary = new Error("plugin generation retired before publication");
+  const primary = new Error("plugin generation retired before publication", {
+    cause: { generation: "superseded" },
+  });
   const cleanup = new Error("registration cleanup failed");
   let failedOwner: PreparedModelRuntimeOwner | undefined;
   vi.spyOn(pluginLifetime, "publishPreparedPluginGeneration").mockImplementationOnce((owner) => {
@@ -732,7 +734,12 @@ it("preserves the primary publication error when terminal generation cleanup als
   ).catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(SuppressedError);
   expect(failure).toMatchObject({ error: cleanup, suppressed: primary });
-  expect(failedOwner?.refreshError).toBe(primary);
+  expect(failedOwner?.refreshError).not.toBe(primary);
+  expect(failedOwner?.refreshError).toMatchObject({
+    message: primary.message,
+    stack: primary.stack,
+  });
+  expect(failedOwner?.refreshError?.cause).toBeUndefined();
   expect(failedOwner?.pending).toBeUndefined();
 });
 

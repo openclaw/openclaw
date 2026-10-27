@@ -1,5 +1,7 @@
+import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import * as p from "./index.js";
+import { PluginCatalogEntrySchema } from "./schema/plugins.js";
 import { validation } from "./schema/protocol-validation.test-support.js";
 
 const install = validation(p.validatePluginsInstallParams);
@@ -15,6 +17,20 @@ const consent = { reviewToken: "surface-sha256" };
 const invalidConsent = [true, {}, { reviewToken: "" }, { ...consent, unexpected: true }];
 
 describe("plugin lifecycle protocol validators", () => {
+  it("keeps server-owned tool branding eligibility optional and boolean", () => {
+    const catalogEntry = Compile(PluginCatalogEntrySchema);
+    const plugin = {
+      id: "community-tool",
+      name: "Community Tool",
+      installed: true,
+      enabled: true,
+      state: "enabled",
+    };
+    for (const fields of [{}, { hasToolBrandIcon: true }, { hasToolBrandIcon: false }]) {
+      expect(catalogEntry.Check({ ...plugin, ...fields })).toBe(true);
+    }
+    expect(catalogEntry.Check({ ...plugin, hasToolBrandIcon: "true" })).toBe(false);
+  });
   it("accepts bounded activation report batches while retaining per-plugin receipts", () => {
     const receipt = { pluginId: "review", revision: "one", status: "activated" };
     const batch = (length: number) => Array.from({ length }, () => ({ ...receipt }));

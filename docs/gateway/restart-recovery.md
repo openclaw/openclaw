@@ -22,6 +22,14 @@ tomorrow, without a new user message. Shutdown uses the same interruption and
 recovery marking as a managed restart, with the existing drain deadlines.
 Explicit session Stop/cancel remains terminal. The crash-loop breaker, recovery
 retry budgets, current-authority checks, and archived/reset exclusions still apply.
+Startup prepares and reconciles interrupted sessions independently of its FIFO
+dispatch queue. A session waiting for execution capacity or execution start does
+not block reconciliation of later sessions or already-delivered replies. Recovery
+uses `agents.defaults.maxConcurrent` for its separate execution lane, leaving
+interactive reply slots available. Queued recovery does not charge an attempt
+before capacity is available. Stopping the Gateway cancels and joins the dispatch
+queue while preserving unfinished claims for the next process.
+
 Ordinary session interruptions and timeouts retain their original cancellation
 cause; they do not create Gateway-restart recovery custody. Chat admission uses
 the cancellation owner's recorded cause, including when interrupted before execution.
@@ -60,8 +68,9 @@ internal inputs: recovery does not inherit a sender's channel delivery rights,
 and a follow-up without an authenticated operator source cannot reconstruct
 authority from its transcript.
 
-Automatic goal continuations retain that same authenticated operator source,
-including continuations after subagent announcements or requester-settle yields.
+Automatic goal continuations and tool-result handoffs retain that same authenticated
+operator source, including continuations after subagent announcements or
+requester-settle yields.
 If interrupted mid-tool, they resume through normal startup recovery under current
 permissions. The saved goal and its transcript do not grant authority on their own.
 
