@@ -12,6 +12,7 @@ import {
   sessionStoreMocks,
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
@@ -56,6 +57,15 @@ import * as turnAdmission from "./reply-turn-admission.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const handledReply = { handled: true, queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+function dispatch(options: Partial<Parameters<typeof dispatchReplyFromConfig>[0]>) {
+  return dispatchReplyFromConfig({
+    ctx: createHookCtx(),
+    cfg: emptyConfig,
+    dispatcher: createDispatcher(),
+    ...options,
+  });
+}
+
 function discordCtx(SessionKey: string, overrides: Parameters<typeof buildTestCtx>[0] = {}) {
   return buildTestCtx({
     Body: "hello",
@@ -152,10 +162,8 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
       sourceKey,
       !bound ? { CommandSource: "native", CommandTargetSessionKey: targetKey } : {},
     );
-    const result = await dispatchReplyFromConfig({
+    const result = await dispatch({
       ctx,
-      cfg: emptyConfig,
-      dispatcher: createDispatcher(),
       replyResolver,
       replyOptions: {
         ...(prepared ? { onPreparedAgentRunStart } : { onAgentRunStart }),
@@ -192,9 +200,8 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     const replyResolver = vi.fn<InternalGetReplyFromConfig>();
     const guarded = { permissionMode: "guarded" as const, toolOverrides: { webSearch: false } };
 
-    const result = await dispatchReplyFromConfig({
+    const result = await dispatch({
       ctx: discordCtx(sessionKey),
-      cfg: emptyConfig,
       dispatcher,
       replyResolver,
       replyOptions: { admittedSessionSettings: guarded },
@@ -246,15 +253,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     resetDeliverySettlementFixture();
   });
 
-  function dispatch(options: Partial<Parameters<typeof dispatchReplyFromConfig>[0]>) {
-    return dispatchReplyFromConfig({
-      ctx: createHookCtx(),
-      cfg: emptyConfig,
-      dispatcher: createDispatcher(),
-      ...options,
-    });
-  }
-
   async function dispatchFinals(replies: ReplyPayload | ReplyPayload[]) {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     const dispatcher = createDispatcher();
@@ -263,13 +261,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     return dispatcher;
   }
 
-  function activeOperation() {
-    const operation = getSessionControllerOperation("agent:test:session");
-    if (!operation) {
-      throw new Error("expected dispatch reply operation");
-    }
-    return operation;
-  }
+  const activeOperation = () =>
+    expectDefined(getSessionControllerOperation("agent:test:session"), "dispatch reply operation");
 
   function dispatchInMemory(
     memory: Awaited<ReturnType<typeof createDispatchMemorySession>>,
