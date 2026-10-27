@@ -86,7 +86,7 @@ it("persists offline CLI plugin policy without loading Gateway RPC or heavy plug
   };
   await writeConfigFile({ plugins: { entries: { [pluginId]: { enabled: false } } } });
   const { runPluginsEnableCommand, runPluginsDisableCommand } =
-    await import("../cli/plugins-cli.runtime.js");
+    await import("../cli/plugins-cli.enable.js");
   await runPluginsEnableCommand(pluginId);
   const firstPlugin = await expectPolicy(pluginId, true, "1.0.0");
   await runPluginsDisableCommand(pluginId);

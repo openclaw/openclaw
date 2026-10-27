@@ -4,11 +4,7 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { collectConfiguredRuntimePluginIds } from "../commands/doctor/shared/configured-runtime-plugin-owners.js";
-import {
-  assertConfigWriteAllowedInCurrentMode,
-  captureRuntimeConfigAsyncReader,
-  readConfigFileSnapshot,
-} from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, readConfigFileSnapshot } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitDiagnosticsTimelineEvent } from "../infra/diagnostics-timeline.js";
@@ -28,7 +24,6 @@ import { displayPath, shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
-import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import type {
   PluginDoctorOptions,
   PluginMarketplaceEntriesOptions,
@@ -138,7 +133,6 @@ async function runPluginPolicyCommand(
     });
   });
 }
-
 export async function runPluginsInstallAction(
   raw: string,
   opts: PluginInstallActionOptions,

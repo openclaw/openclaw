@@ -184,6 +184,51 @@ it.each([
   },
 );
 
+it("escapes terminal controls in online enable reports", async () => {
+  resolveGateway.mockResolvedValue(gateway);
+  gateway.mockImplementationOnce(async (...args: unknown[]) => {
+    await acceptReview(args[2], consentReview("alpha"));
+    return {
+      plugin: { id: "alpha\u001b[31m\nforged-row" },
+      warnings: ["lifecycle \u001b[31mred\u0007 warning"],
+      runtime: { generation: 2 },
+    };
+  });
+
+  await runPluginCli("enable", "alpha", "--accept-capabilities");
+
+  const human = logs.join("\n");
+  expect(human).not.toContain("\u001b");
+  expect(human).not.toContain("\u0007");
+  expect(human).toContain('Enabled plugin "alpha\\nforged-row"');
+  expect(human).toContain("lifecycle red warning");
+  expect(runtimeErrors).toEqual([]);
+});
+
+it("escapes terminal controls in local enable and blocked reports", async () => {
+  resolveGateway.mockResolvedValue(null);
+  const evilId = "alpha\u001b[31m\nforged-row";
+  const deniedId = "beta\u001b[31m\nforged-row";
+  mockCurrentConfig({
+    plugins: { entries: disabled(evilId, deniedId), deny: [deniedId] },
+  });
+  mockPluginRegistry([evilId, deniedId]);
+
+  await runPluginCli("enable", evilId);
+  const success = logs.join("\n");
+  expect(success).not.toContain("\u001b");
+  expect(success).toContain("Enabled plugin");
+  expect(success).toContain("alpha\\nforged-row");
+  expect(success).toContain("Saved for the next Gateway start.");
+  logs.length = 0;
+  runtimeErrors.length = 0;
+
+  await expect(runPluginCli("enable", deniedId)).rejects.toThrow("__exit__:1");
+  const blocked = runtimeErrors.join("\n");
+  expect(blocked).not.toContain("\u001b");
+  expect(blocked).toContain('Plugin "beta\\nforged-row" could not be enabled');
+});
+
 it.each([
   { mode: undefined, json: false, acceptCapabilities: true, ids: ["alpha"], wait: true },
   { ids: ["alpha"], restartRequired: true },
