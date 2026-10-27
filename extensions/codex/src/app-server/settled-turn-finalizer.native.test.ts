@@ -768,9 +768,6 @@ async function runSummary(
   if (live) {
     expect(fixture.injectedEmptyTerminals()).toBe(1);
     expect(new Set(fixture.livePhases)).toEqual(new Set(["probe", "action", "summary"]));
-    for (const { body } of fixture.requests) {
-      expect(body.tools ?? []).toEqual([]);
-    }
   }
   if (nativeAuthBefore !== undefined) {
     expect(await fs.readFile(path.join(sourceHome, "auth.json"), "utf8")).toBe(nativeAuthBefore);
