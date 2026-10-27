@@ -1612,6 +1612,7 @@
   .chat-selection-annotations__chip.chat-attachment-thumb {
     height: 56px;
     min-width: 0;
+    max-width: min(216px, 100%);
     border-color: var(--border);
   }
 
@@ -1741,7 +1742,8 @@
   white-space: nowrap;
 }
 
-.chat-attachment-file__type {
+.chat-attachment-file__type,
+.chat-browser-annotation-card__meta {
   color: var(--muted);
 }
 

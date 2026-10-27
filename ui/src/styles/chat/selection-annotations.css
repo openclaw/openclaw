@@ -30,7 +30,7 @@
   outline: none;
 }
 
-.chat-selection-annotations__chip svg,
+.chat-selection-annotations__chip .chat-attachment-preview-icon svg,
 .chat-comment-pin svg {
   display: block;
   width: 16px;
