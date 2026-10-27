@@ -37,7 +37,13 @@ function stringifyProgressEvent(event: AgentEventPayload): string {
     if (typeof value === "string" && value.length + 2 > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES - bytes) {
       throw new RangeError("Progress event exceeds replay budget");
     }
-    charge(Buffer.byteLength(JSON.stringify(value), "utf8"));
+    charge(
+      value === null || value === true
+        ? 4
+        : value === false
+          ? 5
+          : Buffer.byteLength(JSON.stringify(value), "utf8"),
+    );
   };
 
   // Native traversal owns getters and toJSON. Only already-observed primitives
