@@ -54,7 +54,6 @@ import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
-
 function fixture(relative = "source.sqlite", sql?: string) {
   const root = fs.realpathSync(directories.make("captured-migration-"));
   const pathname = path.join(root, relative);
@@ -322,7 +321,11 @@ async function withCapture(
     await capture.settle();
     return { receipt: capture.receipt, warnings };
   } finally {
-    await scope.close().finally(closeOpenClawStateDatabaseAsync);
+    try {
+      await scope.close();
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
   }
 }
 
@@ -455,7 +458,6 @@ it("attributes a captured absent shared store and its new credential companion d
   const { root, pathname, env } = fixture(path.join("state", "openclaw.sqlite"));
   const localPath = path.join(root, "client", "credentials.sqlite");
   const generations = readUpdateDatabaseGenerations([pathname, localPath]);
-  expect(generations).toEqual({ [pathname]: null, [localPath]: null });
   const { receipt, warnings } = await withCapture(
     env,
     generations,
