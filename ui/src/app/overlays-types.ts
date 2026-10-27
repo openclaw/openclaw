@@ -1,4 +1,6 @@
+import type { SessionApprovalEvent } from "../../../packages/gateway-protocol/src/index.js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { DevicePairSetupAccess, DevicePairSetupLifecycle } from "../lib/device-pair-setup.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "./exec-approval.ts";
@@ -39,6 +41,7 @@ export type ApplicationOverlaySnapshot = ApplicationUpdateOverlaySnapshot & {
   approvalBusy: boolean;
   approvalCanGrant: boolean;
   approvalErrors: ReadonlyMap<string, string>;
+  approvalNodeNames?: ReadonlyMap<string, string>;
   devicePairSetupOpen: boolean;
   devicePairSetupLifecycle: DevicePairSetupLifecycle;
   devicePairPendingCount: number;
@@ -54,6 +57,10 @@ export type ApplicationOverlays = {
   holdUpdate: () => Promise<boolean>;
   diagnoseUpdateFailure: (attemptId: string) => void;
   reportUpdateFailure: (attemptId: string) => Promise<void>;
+  reconcileApprovalTerminals: (
+    client: GatewayBrowserClient,
+    events: readonly Extract<SessionApprovalEvent, { phase: "terminal" }>[],
+  ) => void;
   decideApproval: (
     decision: ExecApprovalDecision,
     approvalId?: string,

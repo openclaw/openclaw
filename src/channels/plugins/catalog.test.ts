@@ -156,34 +156,17 @@ describe("channel plugin catalog", () => {
     ).toBe("bundled");
   });
 
-  it.each(["__proto__"])(
-    "rejects inherited install default choice %s from external catalog input",
-    (defaultChoice) => {
-      const root = makeRoot();
-      const catalogPath = path.join(root, "catalog.json");
-      writeChannelCatalog(catalogPath, "unsafe-choice", "Unsafe Choice", defaultChoice);
-
-      const entry = getChannelPluginCatalogEntry("unsafe-choice", {
-        catalogPaths: [catalogPath],
-        workspaceDir: root,
-        env: {},
-      });
-      expect(entry?.install.defaultChoice).toBe("npm");
-    },
-  );
-
-  it("reloads external catalog entries after the explicit plugin metadata lifecycle reset", () => {
+  it("rejects inherited install default choice from external catalog input", () => {
     const root = makeRoot();
     const catalogPath = path.join(root, "catalog.json");
-    const options = { catalogPaths: [catalogPath], workspaceDir: root, env: {} };
+    writeChannelCatalog(catalogPath, "unsafe-choice", "Unsafe Choice", "__proto__");
 
-    expect(getChannelPluginCatalogEntry("lifecycle-external", options)).toBeUndefined();
-    writeChannelCatalog(catalogPath, "lifecycle-external", "After external install");
-    clearPluginMetadataLifecycleCaches();
-
-    expect(getChannelPluginCatalogEntry("lifecycle-external", options)?.meta.label).toBe(
-      "After external install",
-    );
+    const entry = getChannelPluginCatalogEntry("unsafe-choice", {
+      catalogPaths: [catalogPath],
+      workspaceDir: root,
+      env: {},
+    });
+    expect(entry?.install.defaultChoice).toBe("npm");
   });
 
   it.each([

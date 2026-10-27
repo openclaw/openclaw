@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { getMediaDir } from "../media/store.js";
+import { authorizationClient } from "./server-methods.authorization.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
@@ -27,6 +28,21 @@ const handlers: Record<string, GatewayRequestHandler> = {
 const fixture = installAgentAuthorityProofFixture();
 const uploadsDisabled = { code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } };
 const cached = expect.objectContaining({ cached: true });
+const attachment = (kind = "inline-image") => ({
+  mimeType: kind === "document" ? "text/plain" : "image/png",
+  fileName: kind === "document" ? "proof.txt" : "proof.png",
+  content: (kind === "document"
+    ? Buffer.from("late upload policy proof")
+    : Buffer.concat([
+        Buffer.from(PNG, "base64"),
+        Buffer.alloc(kind === "offloaded-image" ? 2_000_001 : 0),
+      ])
+  ).toString("base64"),
+});
+function expectDenied(respond: ReturnType<typeof vi.fn<RespondFn>>) {
+  expect(respond.mock.calls.some(([ok]) => ok)).toBe(false);
+  expect(respond.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);
+}
 async function prepare() {
   const f = await fixture({ imageCapable: true });
   const original = f.context.getCommittedRuntimeConfig;
@@ -41,7 +57,7 @@ async function prepare() {
     disable: () => {
       enabled = false;
     },
-    cleanup: async () => {
+    [Symbol.asyncDispose]: async () => {
       f.context.getCommittedRuntimeConfig = original;
       await f.cleanup();
     },
@@ -56,27 +72,23 @@ function request(
   return {
     req: { type: "req", id: receipt ? "receipt-wire-id" : f.runId, method, params },
     params,
-    client: {
-      connId: receipt ? "upload-receipt-proof" : "upload-policy-proof",
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: ["operator.admin"],
+    client: authorizationClient(
+      receipt ? "upload-receipt-proof" : "upload-policy-proof",
+      ["operator.admin"],
+      {},
+      {
         client: { id: "cli", mode: "cli", platform: "test", version: "test" },
-        ...(receipt
+        device: receipt
           ? {
-              device: {
-                id: "upload-receipt-device",
-                publicKey: "synthetic",
-                signature: "synthetic",
-                signedAt: 1,
-                nonce: "synthetic",
-              },
+              id: "upload-receipt-device",
+              publicKey: "synthetic",
+              signature: "synthetic",
+              signedAt: 1,
+              nonce: "synthetic",
             }
-          : {}),
+          : undefined,
       },
-    },
+    ),
     context: f.context,
     isWebchatConnect: () => false,
   } satisfies Omit<Parameters<GatewayRequestHandler>[0], "respond">;
@@ -91,7 +103,7 @@ async function invoke(options: ReturnType<typeof request>, req = options.req) {
 it.each(["chat.send", "sessions.send", "sessions.steer", "sessions.create"] as const)(
   "replays accepted %s uploads after disable without admitting fresh bytes",
   async (method) => {
-    const f = await prepare();
+    await using f = await prepare();
     const params = {
       agentId: "main",
       ...(method === "chat.send"
@@ -99,32 +111,28 @@ it.each(["chat.send", "sessions.send", "sessions.steer", "sessions.create"] as c
         : { key: method === "sessions.create" ? f.sessionKey + "-created" : f.sessionKey }),
       message: "Accepted upload receipt",
       idempotencyKey: f.runId,
-      attachments: [{ mimeType: "image/png", fileName: "proof.png", content: PNG }],
+      attachments: [attachment()],
     };
     const send = (requestParams = params) => invoke(request(f, method, requestParams, true));
-    try {
-      const accepted = await send();
-      expect(accepted.mock.calls.at(-1)?.[0]).toBe(true);
-      await f.drain();
-      const baseline = await send();
-      const receipt = baseline.mock.calls.at(-1)!;
-      expect(receipt[0]).toBe(true);
-      expect(receipt[3]).toMatchObject({ cached: true });
-      const mediaDir = path.join(getMediaDir(), "inbound");
-      const files = await fs.readdir(mediaDir);
-      const dispatches = dispatchInboundMessageMock.mock.calls.length;
-      f.disable();
-      const replay = await send();
-      expect(replay).toHaveBeenCalledExactlyOnceWith(receipt[0], receipt[1], receipt[2], cached);
-      const freshRunId = randomUUID();
-      const denied = await send({ ...params, idempotencyKey: freshRunId });
-      expect(denied.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);
-      expect(f.context.dedupe.has("chat:" + freshRunId)).toBe(false);
-      expect(await fs.readdir(mediaDir)).toEqual(files);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatches);
-    } finally {
-      await f.cleanup();
-    }
+    const accepted = await send();
+    expect(accepted.mock.calls.at(-1)?.[0]).toBe(true);
+    await f.drain();
+    const baseline = await send();
+    const receipt = baseline.mock.calls.at(-1)!;
+    expect(receipt[0]).toBe(true);
+    expect(receipt[3]).toMatchObject({ cached: true });
+    const mediaDir = path.join(getMediaDir(), "inbound");
+    const files = await fs.readdir(mediaDir);
+    const dispatches = dispatchInboundMessageMock.mock.calls.length;
+    f.disable();
+    const replay = await send();
+    expect(replay).toHaveBeenCalledExactlyOnceWith(receipt[0], receipt[1], receipt[2], cached);
+    const freshRunId = randomUUID();
+    const denied = await send({ ...params, idempotencyKey: freshRunId });
+    expect(denied.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);
+    expect(f.context.dedupe.has("chat:" + freshRunId)).toBe(false);
+    expect(await fs.readdir(mediaDir)).toEqual(files);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatches);
   },
 );
 
@@ -141,7 +149,7 @@ it.each([
 ] as const)(
   "settles %s %s when %s interrupts the real media writer",
   async (method, kind, interruption) => {
-    const f = await prepare();
+    await using f = await prepare();
     const mediaDir = path.join(getMediaDir(), "inbound");
     const before = await fs.readdir(mediaDir).catch(() => [] as string[]);
     const entered = createDeferred();
@@ -157,13 +165,6 @@ it.each([
       }
       return result;
     });
-    const content =
-      kind === "document"
-        ? Buffer.from("late upload policy proof")
-        : Buffer.concat([
-            Buffer.from(PNG, "base64"),
-            Buffer.alloc(kind === "offloaded-image" ? 2_000_001 : 0),
-          ]);
     const requestParams = {
       agentId: "main",
       ...(method === "sessions.create"
@@ -173,13 +174,7 @@ it.each([
           : { sessionKey: f.sessionKey }),
       message: "Inspect this attachment",
       ...(method === "sessions.create" ? {} : { idempotencyKey: f.runId }),
-      attachments: [
-        {
-          mimeType: kind === "document" ? "text/plain" : "image/png",
-          fileName: kind === "document" ? "proof.txt" : "proof.png",
-          content: content.toString("base64"),
-        },
-      ],
+      attachments: [attachment(kind)],
     };
     const respond = vi.fn<RespondFn>();
     const handlerOptions = { ...request(f, method, requestParams), respond };
@@ -231,8 +226,7 @@ it.each([
             id: f.runId + "-fresh",
             params: freshParams,
           });
-          expect(freshRespond.mock.calls.some(([ok]) => ok)).toBe(false);
-          expect(freshRespond.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);
+          expectDenied(freshRespond);
           expect(f.context.dedupe.has(`agent:${f.runId}-fresh`)).toBe(false);
         }
       } else if (method === "sessions.create") {
@@ -242,8 +236,7 @@ it.each([
           runError: uploadsDisabled,
         });
       } else {
-        expect(respond.mock.calls.some(([ok]) => ok)).toBe(false);
-        expect(respond.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);
+        expectDenied(respond);
       }
       expect(await fs.readdir(mediaDir)).toEqual(before);
       expect(agentCommandMock).not.toHaveBeenCalled();
@@ -252,7 +245,6 @@ it.each([
       resume.resolve();
       await Promise.allSettled([pending]);
       pause.mockRestore();
-      await f.cleanup();
     }
   },
 );

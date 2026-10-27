@@ -256,7 +256,9 @@ async function replay(
           ? { homedir: () => home }
           : name === "node:child_process"
             ? { spawn, spawnSync }
-            : require(name),
+            : name === "node:perf_hooks"
+              ? { performance: { now: () => 0 } }
+              : require(name),
     process: processFixture,
     console: { error: (line: string) => output.push(line) },
   });
@@ -314,7 +316,7 @@ describe.each(["linux", "darwin"] as const)("%s node enrollment replay", (platfo
     expect(await replay(platform, variant)).toEqual({
       code: 0,
       output:
-        "CRABBOX_PHASE:openclaw-bootstrap-preparation\nCRABBOX_PHASE:openclaw-bootstrap-complete",
+        "CRABBOX_PHASE:openclaw-bootstrap-preparation\nCRABBOX_TIMING:openclaw-bootstrap-preparation:0\nCRABBOX_PHASE:openclaw-bootstrap-complete",
     });
   });
   it.each(["argv", "cwd", "state", "unavailable"])(

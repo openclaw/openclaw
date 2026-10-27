@@ -77,13 +77,15 @@ function makeExhaustedCredentialFailureInput() {
 function setAttempt(
   input: AssistantFailureInput,
   assistant: AssistantMessage,
-  attempt = makeEmbeddedRunnerAttempt({
-    assistantTexts: [],
+  overrides: Parameters<typeof makeEmbeddedRunnerAttempt>[0] = {
+    currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+  },
+) {
+  const attempt = makeEmbeddedRunnerAttempt({
     lastAssistant: assistant,
     currentAttemptAssistant: assistant,
-    currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-  }),
-) {
+    ...overrides,
+  });
   Object.assign(input.normalizedAttempt, {
     attempt,
     attemptAssistant: assistant,
@@ -134,15 +136,12 @@ function makeIdleTimeoutFailureInput(options?: { replaySafe?: boolean }) {
     hadPotentialSideEffects: !replaySafe,
     replaySafe,
   };
-  const attempt = makeEmbeddedRunnerAttempt({
+  setAttempt(fixture.input, assistant, {
     terminal: { kind: "timeout", phase: "prompt", source: "idle" },
-    lastAssistant: assistant,
-    currentAttemptAssistant: assistant,
     toolMetas: replaySafe ? [] : [{ toolName: "write", replaySafe: false }],
     replayMetadata,
     currentAttemptReplayMetadata: replayMetadata,
   });
-  setAttempt(fixture.input, assistant, attempt);
   fixture.input.emptyErrorRetries = 0;
   fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
   return fixture;
@@ -151,16 +150,10 @@ function makeIdleTimeoutFailureInput(options?: { replaySafe?: boolean }) {
 function makeTerminalStreamFailureInput(assistant: AssistantMessage) {
   const fixture = makeExhaustedCredentialFailureInput();
   const assistantText = assistant.content.find((part) => part.type === "text")?.text;
-  setAttempt(
-    fixture.input,
-    assistant,
-    makeEmbeddedRunnerAttempt({
-      assistantTexts: assistantText ? [assistantText] : [],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    }),
-  );
+  setAttempt(fixture.input, assistant, {
+    assistantTexts: assistantText ? [assistantText] : [],
+    currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+  });
   setRuntimeModel(fixture.input, assistant.provider, assistant.model);
   fixture.input.runtime.lastProfileId = undefined;
   fixture.input.emptyErrorRetries = 0;
@@ -313,11 +306,7 @@ describe("handleEmbeddedAssistantFailure", () => {
       errorMessage: "server_error: provider failed",
       errorCode: "server_error",
     });
-    setAttempt(
-      fixture.input,
-      assistant,
-      makeEmbeddedRunnerAttempt({ lastAssistant: assistant, currentAttemptAssistant: assistant }),
-    );
+    setAttempt(fixture.input, assistant, {});
     setRuntimeModel(fixture.input, "openai", "gpt-5.6-luna");
     fixture.input.providerOwner = {
       id: "openai",
@@ -467,13 +456,10 @@ describe("handleEmbeddedAssistantFailure", () => {
         stopReason: "error",
         errorMessage,
       });
-      const attempt = makeEmbeddedRunnerAttempt({
+      setAttempt(fixture.input, assistant, {
         terminal: { kind: "timeout", phase: "prompt", source: "external" },
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
         currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
       });
-      setAttempt(fixture.input, assistant, attempt);
       fixture.input.emptyErrorRetries = 0;
       fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
 
@@ -523,12 +509,7 @@ describe("handleEmbeddedAssistantFailure", () => {
       content: [{ type: "text", text: "" }],
       usage: createMockUsage(0, 0),
     });
-    const attempt = makeEmbeddedRunnerAttempt({
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-    setAttempt(fixture.input, assistant, attempt);
+    setAttempt(fixture.input, assistant);
     fixture.input.emptyErrorRetries = 0;
 
     await expect(handleEmbeddedAssistantFailure(fixture.input)).resolves.toMatchObject({

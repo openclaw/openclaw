@@ -31,7 +31,6 @@ export type SystemAgentOperationResult = {
 };
 
 export type SystemAgentCommandDeps = {
-  readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
   loadOverview?: typeof loadSystemAgentOverview;
   applyPluginRuntime?: import("../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
   gatewayHostLifecycle?: import("../gateway/server-public.js").GatewayHostLifecycle;

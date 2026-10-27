@@ -1,15 +1,6 @@
 import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
-class FeishuInboundMediaTimeoutError extends Error {
-  readonly chunkTimeoutMs: number;
-  constructor(chunkTimeoutMs: number) {
-    super(`Feishu media download stalled: no data received for ${chunkTimeoutMs}ms`);
-    this.name = "FeishuInboundMediaTimeoutError";
-    this.chunkTimeoutMs = chunkTimeoutMs;
-  }
-}
-
 function destroySource(source: unknown) {
   const s = source as { destroy?: () => void };
   if (typeof s.destroy === "function") {
@@ -35,7 +26,12 @@ function withChunkIdleTimeout<T>(
           let result: IteratorResult<T>;
           try {
             result = await raceWithTimeout(nextPromise, chunkTimeoutMs, () => {
-              throw new FeishuInboundMediaTimeoutError(chunkTimeoutMs);
+              throw Object.assign(
+                new Error(
+                  `Feishu media download stalled: no data received for ${chunkTimeoutMs}ms`,
+                ),
+                { name: "FeishuInboundMediaTimeoutError" },
+              );
             });
           } catch (error) {
             // Settle the timeout before teardown can synchronously finish next().

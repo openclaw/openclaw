@@ -1,5 +1,4 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
@@ -16,24 +15,15 @@ type TelegramPollingLeaseEntry = {
 
 type TelegramPollingLeaseRegistry = Map<string, TelegramPollingLeaseEntry>;
 
-type TelegramPollingLease = {
-  tokenFingerprint: string;
-  waitedForPrevious: boolean;
-  replacedStoppingPrevious: boolean;
-  release: () => void;
-};
-
 type AcquireTelegramPollingLeaseOpts = {
   token: string;
   accountId: string;
   abortSignal?: AbortSignal;
-  waitMs?: number;
 };
 
 type ReleaseStoppedTelegramPollingLeaseOpts = {
   token: string;
   accountId: string;
-  waitMs?: number;
 };
 
 type WaitForPreviousResult = "released" | "timeout" | "aborted";
@@ -49,29 +39,21 @@ function pollingLeaseRegistry(): TelegramPollingLeaseRegistry {
 async function waitForPreviousRelease(params: {
   done: Promise<void>;
   signal?: AbortSignal;
-  waitMs: number;
 }): Promise<WaitForPreviousResult> {
   if (params.signal?.aborted) {
     return "aborted";
   }
-  if (params.waitMs <= 0) {
-    return "timeout";
-  }
-
   return await raceWithTimeout(
     params.done.then(() => "released" as const),
-    resolveTimerTimeoutMs(params.waitMs, DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS, 0),
+    DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS,
     (): WaitForPreviousResult => "timeout",
     { ref: false, signal: params.signal, onAbort: () => "aborted" },
   );
 }
 
-export async function acquireTelegramPollingLease(
-  opts: AcquireTelegramPollingLeaseOpts,
-): Promise<TelegramPollingLease> {
+export async function acquireTelegramPollingLease(opts: AcquireTelegramPollingLeaseOpts) {
   const registry = pollingLeaseRegistry();
   const fingerprint = fingerprintTelegramBotToken(opts.token);
-  const waitMs = opts.waitMs ?? DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS;
   let waitedForPrevious = false;
   let replacedStoppingPrevious = false;
 
@@ -93,7 +75,6 @@ export async function acquireTelegramPollingLease(
     const waitResult = await waitForPreviousRelease({
       done: existing.done,
       signal: opts.abortSignal,
-      waitMs,
     });
     if (waitResult === "aborted") {
       throw new Error(
@@ -148,7 +129,6 @@ export async function releaseStoppedTelegramPollingLease(
 
   const waitResult = await waitForPreviousRelease({
     done: existing.done,
-    waitMs: opts.waitMs ?? DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS,
   });
   if (waitResult === "released" || registry.get(fingerprint) !== existing) {
     return false;

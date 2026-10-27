@@ -13,7 +13,10 @@ import {
 import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
-import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
+import {
+  emitDiagnosticsTimelineEvent,
+  withDiagnosticsTimelineObserver,
+} from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
@@ -36,12 +39,8 @@ import { readChatSendDiagnostics, startChatSendDiagnostics } from "./chat-send-d
 import { handleChatSendSetupError } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import { acknowledgeWorkerGoal } from "./chat-send-goal-ack.js";
-import {
-  createChatSendMessageInjectionStarter,
-  settleChatSendPreAckMessageInjection,
-} from "./chat-send-message-injection.js";
+import { createChatSendMessageInjectionStarter } from "./chat-send-message-injection.js";
 import type { ChatSendInternalOptions } from "./chat-send-options.js";
-import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import { createChatSendSessionInitialization } from "./chat-send-session-binding.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
@@ -109,7 +108,7 @@ export async function handleChatSendWithStorage(
       }
     },
   };
-  const { p, systemInputProvenance, reconnectResumeRequested } = request;
+  const { systemInputProvenance, reconnectResumeRequested } = request;
   const { clientRunId, cfg, storePath, entry, sessionKey, sessionRoutingChanged, selectedAgent } =
     session;
   const {
@@ -261,7 +260,10 @@ export async function handleChatSendWithStorage(
       );
     const persistGatewayUserTurnTranscript = (
       ...args: Parameters<typeof persistUserTurnTranscript>
-    ) => withUserTurnInputPublication(() => persistUserTurnTranscript(...args));
+    ) =>
+      withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+        withUserTurnInputPublication(() => persistUserTurnTranscript(...args)),
+      );
     const persistGatewayUserTurnTranscriptBestEffort = (
       ...args: Parameters<typeof userTurn.persistBestEffort>
     ) => withUserTurnInputPublication(() => userTurn.persistBestEffort(...args));
@@ -316,7 +318,7 @@ export async function handleChatSendWithStorage(
     });
     phase?.mark("persist");
     let approvedInput: PersistedUserTurnMessage | undefined;
-    let stageInput =
+    const stageInput =
       admission.workerGoalAdmission ||
       Boolean(
         entry?.sessionId &&
@@ -326,25 +328,10 @@ export async function handleChatSendWithStorage(
           options?.stageCreatedInput === true) &&
         !isInternalTextSlashCommandTurn &&
         !request.goalOperation &&
+        (!restartSafeAdmission || request.restartResume) &&
         !restartSafeAdmission?.retryExpectedState &&
         !commitInitialInput,
       );
-    if (stageInput && restartSafeAdmission && !request.restartResume) {
-      inputAdmissionAttempted = true;
-      const input = await admission.acquireInputActor();
-      if (input) {
-        const authority = {
-          assertCurrent: assertCustodyLifetimeCurrent,
-          authorize: assertCustodyLifetimeCurrent,
-        };
-        const state = input.actor.snapshot(authority) ?? (await input.actor.read(authority));
-        // Older Gateways can leave custody behind before committing the recovery
-        // claim. Recover that input; fresh idle sends commit transcript custody directly.
-        stageInput = state.pendingInputs.some(
-          (pending) => pending.idempotency_key === userTurn.baseInput.idempotencyKey,
-        );
-      }
-    }
     if (stageInput) {
       // ACK transfers input custody. Persist approved source bytes before
       // dispatch; a validated durable retry already owns its transcript input.
@@ -358,11 +345,13 @@ export async function handleChatSendWithStorage(
         assertCustodyLifetimeCurrent,
         assertClientUploadAllowed: admission.assertClientUploadAllowed,
       });
-      const staged = await userTurnRecorder.stageApproved?.({
-        ...pendingAdmission,
-        retryInterrupted: true,
-        ...(request.restartResume ? { lifecycleAdmission: request.restartResume } : {}),
-      });
+      const staged = await withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+        userTurnRecorder.stageApproved?.({
+          ...pendingAdmission,
+          retryInterrupted: true,
+          ...(request.restartResume ? { lifecycleAdmission: request.restartResume } : {}),
+        }),
+      );
       stagePhase?.finish();
       if (userTurnRecorder.isPendingInputConsumed?.()) {
         admission.cleanupAdmittedRun();
@@ -550,32 +539,6 @@ export async function handleChatSendWithStorage(
           ? undefined
           : assertInputAdmissionCurrent,
     });
-    const preAckReplyContextPromise =
-      messageInjectionTarget && !isInternalTextSlashCommandTurn
-        ? replyContextFieldsPromise
-        : undefined;
-    phase?.mark("replyContext");
-    if (preAckReplyContextPromise) {
-      applyChatSendReplyContextFields(ctx, await preAckReplyContextPromise);
-      if (settleInterruptedPreparation()) {
-        return;
-      }
-    }
-    assertInputAdmissionCurrent();
-    let messageInjectionAttempt =
-      !p.replyToId || preAckReplyContextPromise ? await beginCapturedMessageInjection() : undefined;
-    phase?.mark("runAdmission");
-    const preAckInjection = await settleChatSendPreAckMessageInjection({
-      attempt: messageInjectionAttempt,
-      isAborted: () => activeRunAbort.controller.signal.aborted,
-      sessionRoutingChanged: () => sessionRoutingChanged(context.getRuntimeConfig()),
-      onAborted: finishAbortedChatSend,
-      onSessionRoutingChanged: admission.rejectSessionRoutingChanged,
-    });
-    if (preAckInjection.status === "handled") {
-      return;
-    }
-    messageInjectionAttempt = preAckInjection.attempt;
     phase?.mark("effects");
     const { serverTiming, chatSendTiming, ackReadyEvent } = prepareChatSendAckTiming({
       client,
@@ -624,7 +587,7 @@ export async function handleChatSendWithStorage(
       respond(true, ackPayload, undefined, { runId: clientRunId });
     }
     phase?.finish();
-    diagnostics.acknowledge(messageInjectionAttempt ? "steer" : "startup");
+    diagnostics.acknowledge();
     context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     // Dispatch owns execution from this point, including deferred and collected turns.
@@ -666,9 +629,6 @@ export async function handleChatSendWithStorage(
       externalAuthorityAdmission,
       injection: {
         beginCapturedMessageInjection,
-        messageInjectionAttempt,
-        messageInjectionDisposition: preAckInjection.disposition,
-        preAckReplyContextPromise,
         replyContextFieldsPromise,
       },
       terminalizeRestartSafeAdmission,

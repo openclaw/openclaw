@@ -212,26 +212,6 @@ export function createReasoningFinalAnswerMessage(): AssistantMessage {
   } as AssistantMessage;
 }
 
-type LifecycleErrorAgentEvent = {
-  stream?: unknown;
-  data?: {
-    phase?: unknown;
-    error?: unknown;
-  };
-};
-
-export function findLifecycleErrorAgentEvent(
-  calls: Array<unknown[]>,
-): LifecycleErrorAgentEvent | undefined {
-  for (const call of calls) {
-    const event = call?.[0] as LifecycleErrorAgentEvent | undefined;
-    if (event?.stream === "lifecycle" && event?.data?.phase === "error") {
-      return event;
-    }
-  }
-  return undefined;
-}
-
 export function expectFencedChunks(calls: Array<unknown[]>, expectedPrefix: string): void {
   expect(calls.length).toBeGreaterThan(1);
   for (const call of calls) {

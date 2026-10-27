@@ -6,7 +6,9 @@ use std::collections::VecDeque;
 #[cfg(any(target_os = "windows", test))]
 use std::io::Write;
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+#[cfg(target_os = "windows")]
+use std::process::Command;
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::thread;
 #[cfg(not(target_os = "windows"))]
@@ -73,16 +75,6 @@ impl InstallChannel {
 struct InstallProgress<'a> {
     stream: &'a str,
     line: &'a str,
-}
-
-#[cfg(not(target_os = "windows"))]
-fn configure_installer_environment(command: &mut Command) {
-    // The AppImage runtime exports its bundled usr/lib (Ubuntu 22.04, OpenSSL 3.0)
-    // through LD_LIBRARY_PATH. The bundled installer drives host tools (curl, wget,
-    // tar, git, and the downloaded Node), so they must resolve against host
-    // libraries. Otherwise a newer host libcurl loads the older bundled libssl and
-    // aborts with "OPENSSL_3.2.0 not found" (issue #146088).
-    command.env_remove("LD_LIBRARY_PATH");
 }
 
 #[cfg(target_os = "windows")]
@@ -208,8 +200,7 @@ fn install_at(
             .path()
             .resolve("install-cli.sh", BaseDirectory::Resource)
             .map_err(|error| format!("Bundled installer is unavailable: {error}"))?;
-        let mut command = Command::new("bash");
-        configure_installer_environment(&mut command);
+        let mut command = crate::cli::host_command("bash");
         command
             .arg(script)
             .args(["--json", "--no-onboard", "--prefix"])
@@ -338,11 +329,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_os = "windows"))]
+    use super::managed_launcher_absent;
     use super::prepare_package_root;
-    #[cfg(not(target_os = "windows"))]
-    use super::{configure_installer_environment, managed_launcher_absent};
-    #[cfg(not(target_os = "windows"))]
-    use std::process::Command;
 
     #[test]
     fn private_package_root_prevents_ancestor_selection_and_preserves_retry_metadata() {
@@ -384,23 +373,5 @@ mod tests {
         assert!(!managed_launcher_absent(&prefix).unwrap());
         assert!(prefix.join("openclaw.json").is_file());
         std::fs::remove_dir_all(prefix).unwrap();
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn installer_child_does_not_inherit_the_appimage_library_path() {
-        let mut command = Command::new("sh");
-        command
-            .args(["-c", "printf '%s' \"${LD_LIBRARY_PATH-unset}\""])
-            .env("LD_LIBRARY_PATH", "/tmp/appimage/usr/lib");
-        configure_installer_environment(&mut command);
-
-        let output = command.output().expect("installer environment probe");
-        assert!(output.status.success(), "probe failed: {output:?}");
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout),
-            "unset",
-            "the installer child must not inherit the AppImage library path"
-        );
     }
 }

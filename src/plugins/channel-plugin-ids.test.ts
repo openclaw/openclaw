@@ -6,6 +6,7 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createInstalledPluginIndexFixture } from "./gateway-startup.test-helpers.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
 const listExplicitlyDisabledChannelIdsForConfig = vi.hoisted(() =>
@@ -89,18 +90,12 @@ import {
 function withManifestLoadPaths(
   plugin: Pick<PluginManifestRecord, "id"> & Partial<PluginManifestRecord>,
 ): PluginManifestRecord {
-  return {
-    channels: [],
-    origin: "bundled",
-    providers: [],
-    cliBackends: [],
+  return createPluginManifestRecordFixture({
     rootDir: `/tmp/plugins/${plugin.id}`,
     source: `/tmp/plugins/${plugin.id}/index.ts`,
     manifestPath: `/tmp/plugins/${plugin.id}/openclaw.plugin.json`,
-    skills: [],
-    hooks: [],
     ...plugin,
-  };
+  });
 }
 
 function createManifestRegistryFixture(): PluginManifestRegistry {
@@ -180,6 +175,11 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
     },
     { id: "amazon-bedrock", enabledByDefault: true, providers: ["amazon-bedrock"] },
     { id: "brave", origin: "global", contracts: { webSearchProviders: ["brave"] } },
+    {
+      id: "default-search",
+      enabledByDefault: true,
+      contracts: { webSearchProviders: ["default-search"] },
+    },
     { id: "codex", providers: ["codex"], activation: { onAgentHarnesses: ["codex"] } },
     {
       id: "activation-only-channel-plugin",
@@ -1013,6 +1013,38 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
     });
   });
 
+  it.each([
+    [
+      "starts explicitly enabled search owners for auto-detection",
+      undefined,
+      ["browser", "brave", "memory-core"],
+    ],
+    ["keeps search owners lazy behind a pinned provider", "tavily", ["browser", "memory-core"]],
+    ["keeps search owners lazy while web search is disabled", false, ["browser", "memory-core"]],
+  ] as const)("%s", (_name, search, expected) => {
+    expectStartupPluginIds({
+      config: {
+        channels: {},
+        ...(search === undefined
+          ? {}
+          : {
+              tools: {
+                web: { search: search === false ? { enabled: false } : { provider: search } },
+              },
+            }),
+        plugins: { entries: { brave: { enabled: true } } },
+      } as OpenClawConfig,
+      expected,
+    });
+  });
+
+  it("keeps default-enabled search owners lazy for auto-detection", () => {
+    expectStartupPluginIds({
+      config: { channels: {} } as OpenClawConfig,
+      expected: ["browser", "memory-core"],
+    });
+  });
+
   it("does not let runtime-default plugin entries bypass the authored startup allowlist", () => {
     const activationSourceConfig = {
       channels: {},
@@ -1766,7 +1798,6 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
           },
           plugins: { entries: { "demo-channel": { enabled: true } } },
         } as OpenClawConfig,
-        workspaceDir: "/tmp",
         env: { DEMO_FAKE_TEST_TRIGGER: "ambient" } as NodeJS.ProcessEnv,
       }),
     ).toStrictEqual([]);
@@ -1784,7 +1815,6 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
           channels: { "demo-other-channel": { token: "configured" } },
           plugins: { allow: ["demo-other-channel"] },
         } as OpenClawConfig,
-        workspaceDir: "/tmp",
         env: { DEMO_FAKE_TEST_TRIGGER: "ambient" } as NodeJS.ProcessEnv,
       }),
     ).toEqual(["demo-other-channel"]);
@@ -1794,7 +1824,6 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
     expect(
       listConfiguredAnnounceChannelIdsForConfig({
         config: { channels: { clickclack: { token: "configured" } } } as OpenClawConfig,
-        workspaceDir: "/tmp",
         env: {},
       }),
     ).toStrictEqual(["clickclack"]);
@@ -1815,7 +1844,6 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         expect(
           listConfiguredAnnounceChannelIdsForConfig({
             config: { channels: { [channelId]: { token: "configured" } }, plugins },
-            workspaceDir: "/tmp",
             env: {},
           }),
         ).toStrictEqual([]);
@@ -1824,6 +1852,12 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
   );
 
   it("keeps announce channels with another effective owner", () => {
+    useManifestRegistryFixture({
+      plugins: ["shared-good", "shared-disabled"].map((id) =>
+        withManifestLoadPaths({ id, channels: ["shared"], origin: "config" }),
+      ),
+      diagnostics: [],
+    });
     expect(
       listConfiguredAnnounceChannelIdsForConfig({
         config: {
@@ -1835,11 +1869,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
             },
           },
         } as OpenClawConfig,
-        workspaceDir: "/tmp",
         env: {},
-        manifestRecords: ["shared-good", "shared-disabled"].map((id) =>
-          withManifestLoadPaths({ id, channels: ["shared"], origin: "config" }),
-        ),
       }),
     ).toStrictEqual(["shared"]);
   });

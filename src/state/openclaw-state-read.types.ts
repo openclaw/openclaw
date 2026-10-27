@@ -13,6 +13,10 @@ import type { CronRunReceiptCurrentReadCommand } from "../cron/store/run-receipt
 import type { PlacementGrantReadInput } from "../gateway/operator-approval-placement-grants.read.worker.js";
 import type { CronStandingGrantLookupInput } from "../gateway/operator-approval-standing-grants.types.js";
 import type { ListTerminalOperatorApprovalsInput } from "../gateway/operator-approval-store.types.js";
+import type {
+  LocalWorkspaceManifestInput,
+  LocalWorkspaceManifestValue,
+} from "../gateway/worker-environments/local-workspace-manifest-scan.js";
 import type { WorkerPlacementConflictBinding } from "../gateway/worker-environments/placement-read-projection.types.js";
 import type { WorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import type { DevicePairingReadCommand } from "../infra/device-pairing-read.types.js";
@@ -34,7 +38,6 @@ import type {
 import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type { AgentDeletionJournalPurpose } from "./agent-deletion-journal.types.js";
 import type {
-  SharedGitHubPublicationReadInput,
   GitHubPublicationReceiptTarget,
   RepositoryGitHubPublicationReceiptTarget,
 } from "./github-publication-read.types.js";
@@ -70,6 +73,7 @@ export type OpenClawStateReadAuthority = {
 export type OpenClawStateReadCommand =
   | TranscriptExportCommand
   | RegisteredStateReadCommand
+  | { type: "localWorkspace.manifest"; input: LocalWorkspaceManifestInput }
   | { type: "admit" }
   | { type: "backup.runs" }
   | TuiLastSessionReadCommand
@@ -79,7 +83,6 @@ export type OpenClawStateReadCommand =
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
   | { type: "claws.inventory" }
-  | { type: "claws.packageOwnership"; agentId?: string; includeInstalls: boolean }
   | { type: "gatewayOwnerLease.read"; schemaMaintenance: boolean }
   | AcpSessionReadCommand
   | SqliteWorkerCommand<McpOAuthReadOnlyOperations>
@@ -88,6 +91,10 @@ export type OpenClawStateReadCommand =
   | {
       type: "operatorApprovals.history";
       input: ListTerminalOperatorApprovalsInput;
+    }
+  | {
+      type: "operatorApprovals.pendingSnapshot";
+      input: { cursor?: string };
     }
   | {
       type: "operatorApprovals.pending";
@@ -164,7 +171,6 @@ export type OpenClawStateReadCommand =
       publicationKind: "shared" | "personal";
       requestId: string;
     }
-  | { type: "githubPublication.sharedObservation"; input: SharedGitHubPublicationReadInput }
   | { type: "githubPublication.request"; requestId: string }
   | { type: "githubPublication.knownPullRequestUrls"; input: GitHubPublicationReceiptTarget }
   | {
@@ -237,6 +243,7 @@ export type OpenClawStateReadResult =
     >
   | { type: "meetingTranscripts.export"; result: TranscriptExportResult }
   | RegisteredStateReadResult
+  | { type: "localWorkspace.manifest"; value: LocalWorkspaceManifestValue }
   | { type: "gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
   | {
       type: "subagents.sessionList";

@@ -251,9 +251,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
     task.admitted = true;
     task.observation = this.observeTask?.(task.options.diagnosticOperation);
-    if (options.timeoutMs !== undefined) {
-      armWorkerTaskTimeout(task, options.timeoutMs, () => this.timeout(task));
-    }
+    armWorkerTaskTimeout(task, options.timeoutMs, this.timeout, "enqueue");
     options.signal?.addEventListener("abort", task.abort, { once: true });
     this.queue.push(task);
     if (options.signal?.aborted) {
@@ -398,6 +396,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.activeTasks++;
       task.slot = slot;
       task.startedAt = performance.now();
+      armWorkerTaskTimeout(task, task.options.timeoutMs, this.timeout, "dispatch");
       task.observation?.started();
       task.runInContext(() => {
         try {
@@ -408,7 +407,8 @@ export class WorkerTaskPoolCore<Input, Output> {
         }
         prepareWorkerTaskInput(
           task,
-          (input) =>
+          (input) => {
+            task.diagnosticLabel = this.host.describeTask?.(this.options.workerUrl, input);
             sendWorkerTaskInput({
               slot,
               task,
@@ -417,13 +417,10 @@ export class WorkerTaskPoolCore<Input, Output> {
               bootstrapError: this.bootstrap.error,
               createWorker: () => this.createWorker(slot),
               fail: (error, nativeFailure) =>
-                this.fail(
-                  slot,
-                  new WorkerTaskError(String(error), "unavailable", { cause: error }),
-                  nativeFailure,
-                ),
+                this.fail(slot, this.unavailableError(slot, String(error), error), nativeFailure),
               refuse: (error) => this.finish(task, error, undefined, true),
-            }),
+            });
+          },
           (error) => this.finish(task, toErrorObject(error, "worker task preparation failed")),
           !slot.worker && this.options.prepareWorker
             ? () => runInWorkerPoolContext(() => this.host.prepareResources())
@@ -431,6 +428,16 @@ export class WorkerTaskPoolCore<Input, Output> {
         );
       });
     }
+  }
+
+  private unavailableError(slot: Slot<Input, Output>, message: string, cause?: unknown): Error {
+    const task = slot.task;
+    const stage = slot.ready === false ? "startup" : task?.exchange ? "exchange" : "running";
+    // Reuse owned estimates/progress without sizing or retaining input.
+    const detail = task?.diagnosticLabel
+      ? ` [task=${task.diagnosticLabel} admittedInputBytes=${task.inputBytes} exchanges=${task.exchangeSequence} stage=${stage}]`
+      : "";
+    return new WorkerTaskError(message + detail, "unavailable", { cause });
   }
 
   // Worker listeners outlive tasks; their creation scope must not retain an async task frame.
@@ -444,7 +451,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       options: this.options,
       host: this.host,
       runInContext: runInWorkerPoolContext,
-      unavailableError: (message, cause) => new WorkerTaskError(message, "unavailable", { cause }),
+      unavailableError: (message, cause) => this.unavailableError(slot, message, cause),
       onStarted: (worker) => {
         this.workers++;
         this.workersCreated++;
@@ -456,7 +463,7 @@ export class WorkerTaskPoolCore<Input, Output> {
         if (counted) {
           this.workers--;
         }
-        const error = new WorkerTaskError(`worker exited with code ${code}`, "unavailable");
+        const error = this.unavailableError(slot, `worker exited with code ${code}`);
         this.fail(slot, error, true);
       },
     });
@@ -580,7 +587,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.finishHostWait(task);
       exchange.onConsumed = response.onConsumed;
       exchange.sent = true;
-      armWorkerTaskTimeout(task, response.timeoutMs, () => this.timeout(task));
+      armWorkerTaskTimeout(task, response.timeoutMs, this.timeout);
       try {
         slot.worker!.postMessage(
           {
@@ -605,12 +612,12 @@ export class WorkerTaskPoolCore<Input, Output> {
     });
   }
 
-  private timeout(task: Task<Input, Output>): void {
+  private readonly timeout = (task: Task<Input, Output>): void => {
     if (task.done) {
       return;
     }
     this.cancel(task, workerTaskTimeoutError(task.exchange, this.options.workerUrl));
-  }
+  };
 
   private cancel(task: Task<Input, Output>, error: Error): void {
     if (task.done) {

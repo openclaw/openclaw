@@ -1,7 +1,9 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
+import { inflateSync } from "node:zlib";
 import { Client } from "pg";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -15,6 +17,7 @@ import { recordUpdateDatabaseWrites } from "../cli/update-cli/update-command-dat
 import type { MutableUpdateExecutionParams } from "../cli/update-cli/update-command-execution.types.js";
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { restoreDoctorMigrationBackup } from "../commands/doctor-migration-backup-restore.js";
+import { backupDoctorMigrationDatabases } from "../commands/doctor-migration-backup.js";
 import { prepareDoctorDatabaseMigrations } from "../commands/doctor-schema-migrations.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { readBackupEngine, verifyMatchedPostgresBackup } from "../snapshot/database-backup.js";
@@ -57,6 +60,12 @@ const connection = typeof configured === "string" ? configured : undefined;
 const directories = useAutoCleanupTempDirTracker(afterAll);
 const namespaces = new Set<string>();
 const identity = generateStoredDeviceIdentity(12);
+const stat4Enabled = (() => {
+  using database = openNodeSqliteDatabase(":memory:");
+  return Boolean(
+    database.prepare("SELECT sqlite_compileoption_used('ENABLE_STAT4') AS enabled").get()!.enabled,
+  );
+})();
 const credentialTables = [
   "device_identities",
   "device_auth_tokens",
@@ -142,11 +151,24 @@ async function fixture(
   engine: "sqlite" | "postgres",
   native = false,
   sourceVersion: 25 | 26 | 27 | 28 = 25,
+  initialState: "seeded" | "legacy-statistics" | "empty" = "seeded",
 ) {
   const root = fs.realpathSync(directories.make("client-update-"));
   const stateDir = path.join(root, "state-root");
   const pathname = path.join(stateDir, "state", "openclaw.sqlite");
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
+  if (initialState === "legacy-statistics") {
+    // Empty SQLite database produced by ANALYZE sqlite_schema with ENABLE_STAT4.
+    fs.writeFileSync(
+      pathname,
+      inflateSync(
+        Buffer.from(
+          "eNoLDvTJLElVSMsvyk0sUTBmYGJgZGRwUFBgYGBgBGJmBgQA8VnQ+IQAI4PezA28QAYTYzgD42YgMTJAFBObuKoqY2VJYlJOanFhDjCM44tLEktMkNnMzkGujiGuCiGOTj6uCsgyGiVJOTqZKRU6eamFOnk5JTp5KUCiODG3ICdV05sRbHY0utmGyGwmXGYbws0G8TRBcQOM9FEwQsFo/I9sAADhwUKC",
+          "base64",
+        ),
+      ),
+    );
+  }
   const config =
     engine === "postgres"
       ? { database: { engine: "postgres", postgres: { connection: connection! } } }
@@ -204,7 +226,7 @@ async function fixture(
         source.close();
       }
     });
-  } else {
+  } else if (initialState !== "empty") {
     using db = openNodeSqliteDatabase(pathname);
     if (native) {
       db.exec(
@@ -409,8 +431,11 @@ function assertMigratedCredentials(f: Fixture) {
   });
   if (!f.native) {
     expect(
-      local.database.prepare("SELECT socket_token FROM native_exec_socket_credentials").get(),
+      local.database
+        .prepare("SELECT socket_path,socket_token FROM native_exec_socket_credentials")
+        .get(),
     ).toEqual({
+      socket_path: "/synthetic/native.sock",
       socket_token: "synthetic-socket-token",
     });
   }
@@ -452,9 +477,7 @@ async function rollback(f: Fixture, captured: Awaited<ReturnType<typeof capture>
 
 describe("client credential public update custody", () => {
   it("preserves a fresh installation through public capture, Doctor, and rollback", async () => {
-    const f = await fixture("sqlite");
-    await closeOpenClawStateDatabaseAsync();
-    fs.unlinkSync(f.pathname);
+    const f = await fixture("sqlite", false, 25, "empty");
     const captured = await capture(f, true);
     expect(captured.backup.sourceGenerations[resolveClientCredentialStorePath(f.env)]).toEqual(
       expect.any(String),
@@ -606,16 +629,22 @@ describe("client credential public update custody", () => {
     },
   );
 
-  it("captures SQLite before cutover, restores exact shared credentials, and rebuilds an orphan through Doctor", async () => {
+  it("migrates SQLite despite stale socket projections, restores exact credentials, and rebuilds an orphan through Doctor", async () => {
     const f = await fixture("sqlite");
+    const originalApprovals = (() => {
+      using source = openNodeSqliteDatabase(f.pathname);
+      source
+        .prepare("UPDATE exec_approvals_config SET socket_path=?,has_socket_token=0")
+        .run("/synthetic/stale.sock");
+      return source.prepare("SELECT * FROM exec_approvals_config").get();
+    })();
     const captured = await capture(f);
     await migrate(f, captured);
     {
       using shared = openNodeSqliteDatabase(f.pathname, { readOnly: true });
+      const findTable = shared.prepare("SELECT name FROM sqlite_schema WHERE name=?");
       for (const table of credentialTables) {
-        expect(
-          shared.prepare("SELECT name FROM sqlite_schema WHERE name=?").get(table),
-        ).toBeUndefined();
+        expect(findTable.get(table)).toBeUndefined();
       }
       expect(
         JSON.parse(
@@ -629,6 +658,12 @@ describe("client credential public update custody", () => {
     const localPath = resolveClientCredentialStorePath(f.env);
     const orphan = fs.readFileSync(localPath);
     await rollback(f, captured);
+    {
+      using restored = openNodeSqliteDatabase(f.pathname, { readOnly: true });
+      expect(restored.prepare("SELECT * FROM exec_approvals_config").get()).toEqual(
+        originalApprovals,
+      );
+    }
     expect(fs.existsSync(localPath)).toBe(false);
     // Released drivers leave this file behind when they restore shared state.
     fs.mkdirSync(path.dirname(localPath), { recursive: true });
@@ -677,6 +712,8 @@ describe("client credential public update custody", () => {
       [
         ...sourceTables,
         "config_machine_state",
+        "local_workspace_projections",
+        "local_workspace_manifest_nodes",
         "schema_meta",
         "sqlite_stat1",
         "sqlite_stat4",
@@ -722,6 +759,84 @@ describe("client credential public update custody", () => {
       restored.prepare("SELECT wr FROM pragma_table_list WHERE name='session_state_heads'").get(),
     ).toEqual({ wr: 1 });
   });
+
+  it.each([25, 28] as const)(
+    "migrates legacy STAT4 credentials from v%s while retaining their original rollback image",
+    async (version) => {
+      const f = await fixture("sqlite", false, version, "legacy-statistics");
+      await migrate(f);
+      const archives = fs
+        .readdirSync(path.dirname(f.pathname))
+        .filter((name) => name.endsWith(".bak"));
+      expect(archives).toHaveLength(stat4Enabled ? 2 : 1);
+      for (const archive of archives.filter((name) => !name.endsWith(".scoped.bak"))) {
+        const backupPath = path.join(path.dirname(f.pathname), archive);
+        using saved = openNodeSqliteDatabase(backupPath, { readOnly: true });
+        expect(saved.prepare("PRAGMA user_version").get()).toEqual({ user_version: version });
+        expect(saved.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
+          token: "synthetic-original-token",
+        });
+        expect(saved.prepare("SELECT count(*) AS count FROM sqlite_stat4").get()).toEqual({
+          count: 0,
+        });
+        using local = openClientCredentialCustody(f.env, { migration: true })!;
+        expect(readClientCredentialReceipt(local.database)?.receipt.source?.generation).toBe(
+          createHash("sha256").update(fs.readFileSync(backupPath)).digest("hex"),
+        );
+      }
+    },
+  );
+
+  it.skipIf(stat4Enabled).each([false, true])(
+    "reuses a legacy STAT4 retry image only while credentials match (changed=%s)",
+    async (changed) => {
+      const f = await fixture("sqlite", false, 28, "legacy-statistics");
+      const maintenance = await beginDoctorMaintenance({
+        root: null,
+        options: { repair: true, nonInteractive: true },
+        runtime: { log() {}, error() {}, exit() {} },
+      });
+      try {
+        await maintenance!.run(() =>
+          backupDoctorMigrationDatabases({
+            env: f.env,
+            databasePaths: [f.pathname],
+            pendingDatabasePaths: [f.pathname],
+            pendingMigrations: [
+              {
+                kind: "state",
+                path: f.pathname,
+                foundVersion: 28,
+                supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+              },
+            ],
+            versionMigrationsOnly: true,
+          }),
+        );
+      } finally {
+        await maintenance!.release();
+      }
+      const archive = fs
+        .readdirSync(path.dirname(f.pathname))
+        .find((name) => name.endsWith(".bak"))!;
+      const backupPath = path.join(path.dirname(f.pathname), archive);
+      const original = fs.readFileSync(backupPath);
+      if (changed) {
+        using source = openNodeSqliteDatabase(f.pathname);
+        source.prepare("UPDATE device_auth_tokens SET token=?").run("synthetic-rotated-token");
+      }
+      if (changed) {
+        await expect(migrate(f)).rejects.toThrow(/no longer contains current credentials/);
+        expect(await f.readShared()).toMatchObject({
+          version: 28,
+          token: "synthetic-rotated-token",
+        });
+      } else {
+        await migrate(f);
+      }
+      expect(fs.readFileSync(backupPath)).toEqual(original);
+    },
+  );
 
   it("preserves native bootstrap on updater refusal and migrates it through standalone Doctor", async () => {
     const f = await fixture("sqlite", true);

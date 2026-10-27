@@ -231,8 +231,16 @@ function prepareBlockedSubagentCompletion(
   } else {
     subagent.suppressCompletionDelivery = true;
   }
+  // A recovered requester already exhausted its turn. A system event would start
+  // another model turn just to report that failure; retain it on delivery instead.
+  const requesterRecoveryFailed =
+    (requesterOutcome?.reason === "visible_reply_missing" &&
+      requesterOutcome.disposition === "permanent_failure") ||
+    (subagent.delivery?.lastDropReason === "visible_reply_missing" &&
+      isCompletedRequesterDeliveryBlocked(subagent));
   const text =
     successful &&
+    !requesterRecoveryFailed &&
     !params.storeReplaced &&
     !params.operatorAuthorityUnavailable &&
     requesterOutcome?.reason !== "operator_authority_unavailable"
@@ -588,9 +596,11 @@ export function mutateSubagentCompletionInDatabase(
       if (endedAt === undefined || !marker) {
         return noMutation(null);
       }
-      if (!Number.isFinite(marker.killedAt) || marker.killedAt > endedAt) {
+      if (!Number.isFinite(marker.killedAt)) {
         return noMutation(false);
       }
+      // A cleanup kill may arrive after execution ended. The current generation,
+      // not timestamp ordering, owns reconciliation of that retired cancellation.
       const current = readSubagentRun(database, expected.runId);
       if (
         !current ||

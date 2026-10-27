@@ -1,27 +1,21 @@
-import {
-  buildChannelInboundEventContext,
-  createChannelInboundEnvelopeBuilderAsync,
-} from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import type { A2aTaskStore } from "./task-store.js";
 import type { ResolvedA2aChannelAccount } from "./types.js";
 
-type A2aInboundDispatchParams = {
+export async function dispatchA2aInbound(params: {
   account: ResolvedA2aChannelAccount;
   config: OpenClawConfig;
   channelRuntime: PluginRuntime["channel"];
-  buildContext: typeof buildChannelInboundEventContext;
   store: A2aTaskStore;
   taskId: string;
   contextId: string;
   messageId: string;
   peerName: string;
   text: string;
-};
-
-export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Promise<void> {
+}): Promise<void> {
   // Peer credentials admit tasks, never user commands (including plugin commands).
   if (params.text.trimStart().startsWith("/")) {
     params.store.reject(
@@ -74,7 +68,7 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
     timestamp,
     body: params.text,
   });
-  const ctxPayload = params.buildContext({
+  const ctxPayload = params.channelRuntime.inbound.buildContext({
     channel: "a2a",
     accountId: route.accountId ?? params.account.accountId,
     messageId: params.messageId,

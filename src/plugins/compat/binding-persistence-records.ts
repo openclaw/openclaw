@@ -5,7 +5,6 @@ export const BINDING_PERSISTENCE_COMPAT_RECORDS = [
     code: "conversation-binding-sync-persistence",
     status: "deprecated",
     owner: "sdk",
-    introduced: "2026-09-08",
     deprecated: "2026-10-09",
     warningStarts: "2026-10-09",
     removeAfter: "2026-12-31",
@@ -33,20 +32,11 @@ export const BINDING_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript @deprecated annotations and one shared runtime warning per plugin and capability family on legacy use",
     ],
-    tests: [
-      "test/type-contracts/state-binding.released-compat.ts",
-      "src/infra/outbound/session-binding-service.async-read.test.ts",
-      "src/infra/outbound/current-conversation-bindings.worker.test.ts",
-      "src/infra/outbound/account-scoped-conversation-bindings.test.ts",
-    ],
-    releaseNote:
-      "Bundled conversation bindings await worker-owned mutations and expiry reads. Released synchronous adapters remain compatible; storage formats, retention, and update behavior are unchanged.",
   },
   {
     code: "native-session-binding-sync-persistence",
     status: "deprecated",
     owner: "sdk",
-    introduced: "2026-09-08",
     deprecated: "2026-10-09",
     warningStarts: "2026-10-09",
     removeAfter: "2026-12-31",
@@ -62,19 +52,11 @@ export const BINDING_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript @deprecated annotations and the shared per-plugin capability-family warning budget",
     ],
-    tests: [
-      "extensions/codex/harness.test.ts",
-      "src/agents/embedded-agent-runner/run/model-setup.ownership.test.ts",
-      "src/gateway/session-row-projection.worker-read.test.ts",
-    ],
-    releaseNote:
-      "Native harness binding preparation and ordinary durable settlement use workers. Host-selected initialization, incognito, and mixed legacy deletion transactions retain their explicit native atomic settlement; no schema or update migration is required.",
   },
   {
     code: "approval-event-sync-publication",
     status: "deprecated",
     owner: "sdk",
-    introduced: "2026-09-08",
     deprecated: "2026-10-10",
     warningStarts: "2026-10-10",
     removeAfter: "2026-12-31",
@@ -83,11 +65,5 @@ export const BINDING_PERSISTENCE_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration/how-to-migrate#await-gateway-approval-publication",
     surfaces: ["GatewayRequestHandlerOptions.context.approvalEvents.publishRequested"],
     diagnostics: ["TypeScript @deprecated annotation and the shared capability-family warning"],
-    tests: [
-      "src/gateway/server-instance-runtime.test.ts",
-      "test/type-contracts/state-binding.released-compat.ts",
-    ],
-    releaseNote:
-      "Gateway approval publication awaits native eligibility while retaining the released synchronous publisher type and old publisher objects.",
   },
 ] as const satisfies readonly PluginCompatRecord[];

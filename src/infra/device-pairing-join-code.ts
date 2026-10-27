@@ -1,6 +1,6 @@
 // Stores short-lived device onboarding join codes through the pairing worker.
 import { DEVICE_PAIRING_JOIN_CODE_BYTES, isDevicePairingJoinCode } from "../pairing/join-code.js";
-import { decodePairingSetupCode, encodePairingSetupCode } from "../pairing/setup-code.js";
+import { decodePairingSetupCode } from "../pairing/setup-code.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { executeDevicePairingMutation } from "./device-pairing-worker.js";
 import { generateSecureToken } from "./secure-random.js";
@@ -28,9 +28,7 @@ export async function registerDevicePairingJoinCode(
     }
   };
   assertCurrent();
-  const payloadJson = JSON.stringify(
-    decodePairingSetupCode(encodePairingSetupCode(params.payload)),
-  );
+  const payloadJson = JSON.stringify(params.payload);
   const shortcode = generateSecureToken(DEVICE_PAIRING_JOIN_CODE_BYTES);
   await executeDevicePairingMutation(
     {

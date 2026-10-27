@@ -16,7 +16,7 @@ const themeMocks = vi.hoisted(() => ({
   isRich: vi.fn(() => false),
 }));
 
-const stdoutIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const ttyMock = createCliTtyMock([process.stdout]);
 const stdoutColumnsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "columns");
 const initialSuiteResizeListeners = process.stdout.listeners("resize");
 
@@ -24,9 +24,7 @@ afterAll(() => {
   expect(process.stdout.listeners("resize")).toEqual(initialSuiteResizeListeners);
 });
 
-function stubStdoutIsTTY(value: boolean): void {
-  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value });
-}
+const stubStdoutIsTTY = ttyMock.set;
 
 function stubStdoutColumns(value: number | undefined): void {
   Object.defineProperty(process.stdout, "columns", { configurable: true, value });
@@ -121,6 +119,7 @@ import {
   stylePromptMessage,
 } from "../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { createClackPrompter, tokenizedOptionFilter } from "./clack-prompter.js";
 import type { WizardSelectOption } from "./prompts.js";
 import { WizardCancelledError, WizardNavigationError } from "./prompts.js";
@@ -129,11 +128,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
   vi.unstubAllEnvs();
-  if (stdoutIsTTYDescriptor) {
-    Object.defineProperty(process.stdout, "isTTY", stdoutIsTTYDescriptor);
-  } else {
-    Reflect.deleteProperty(process.stdout, "isTTY");
-  }
+  ttyMock.restore();
   if (stdoutColumnsDescriptor) {
     Object.defineProperty(process.stdout, "columns", stdoutColumnsDescriptor);
   } else {

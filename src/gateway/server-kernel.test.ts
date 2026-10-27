@@ -1,11 +1,9 @@
-import fs from "node:fs/promises";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
 import * as deviceIdentity from "../infra/device-identity-async.js";
-import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -18,33 +16,74 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { getFreePort } from "../test-utils/ports.js";
+import { expectCallCount as expectCalls } from "../test-utils/mock-call-assertions.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
+import { closeKernelFixture, createKernelFixture } from "./server-kernel.fixture-test-support.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import type { GatewayHostLifecycle, GatewayServer } from "./server-public.js";
 import { createMaintenanceHandles } from "./server-runtime-services.test-harness.js";
 import { expectCoreAgentDatabaseReadiness } from "./server-startup-readiness.test-support.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
+
+function idleSidecar() {
+  return { stop: vi.fn(async () => {}) };
+}
+
+function dispatchOptions(kernel: Awaited<ReturnType<typeof createGatewayKernel>>) {
+  return {
+    client: createSyntheticPluginRuntimeClient({ scopes: [...CLI_DEFAULT_OPERATOR_SCOPES] }),
+    context: kernel.gatewayRequestContext,
+    methodRegistry: kernel.getAttachedGatewayMethodRegistry(),
+  };
+}
+
+function blockedSidecar(once = true) {
+  const entered = createDeferred();
+  const gate = createDeferred();
+  return {
+    entered: entered.promise,
+    release: gate.resolve,
+    stop: vi
+      .fn<() => Promise<void>>()
+      .mockImplementationOnce(async () => {
+        entered.resolve();
+        await gate.promise;
+      })
+      .mockImplementation(() => (once ? Promise.resolve() : gate.promise)),
+  };
+}
+
+function createRegisteredChannel(plugin: ChannelPlugin) {
+  const source = "gateway-kernel-test";
+  const registry = createTestRegistry([{ pluginId: plugin.id, plugin, source }]);
+  registry.plugins.push(
+    createPluginRecord({
+      id: plugin.id,
+      source,
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    }),
+  );
+  return registry;
+}
 
 describe("createGatewayKernel", () => {
   it.each([false, true])(
     "starts recovered channels only before close (closing=%s)",
     async (closing) => {
-      const port = await getFreePort();
-      const state = await createOpenClawTestState({
-        label: "gateway-kernel-breaker-recovery-close",
+      const fixture = await createKernelFixture("gateway-kernel-breaker-recovery-close", {
         env: {
-          ...KERNEL_TEST_ENV,
           OPENCLAW_SKIP_CHANNELS: undefined,
           OPENCLAW_SKIP_PROVIDERS: undefined,
         },
       });
+      const { state } = fixture;
       const originalPluginRegistry = captureActivePluginRegistrySnapshot();
       const started = createDeferred();
       const startAccount = vi.fn<
@@ -66,32 +105,11 @@ describe("createGatewayKernel", () => {
         }),
         gateway: { startAccount },
       };
-      const registry = createTestRegistry([
-        {
-          pluginId: channelPlugin.id,
-          plugin: channelPlugin,
-          source: "gateway-kernel-test",
-        },
-      ]);
-      registry.plugins.push(
-        createPluginRecord({
-          id: channelPlugin.id,
-          source: "gateway-kernel-test",
-          origin: "bundled",
-          enabled: true,
-          configSchema: false,
-        }),
-      );
+      const registry = createRegisteredChannel(channelPlugin);
       let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
       try {
         stageActivePluginRegistry(registry, null, "default");
-        const token = "gateway-kernel-breaker-recovery-token";
-        await state.writeConfig({
-          gateway: {
-            auth: { mode: "token", token },
-            controlUi: { enabled: false },
-            port,
-          },
+        await fixture.configure({
           channels: {
             telegram: {
               accounts: {
@@ -100,16 +118,11 @@ describe("createGatewayKernel", () => {
             },
           },
         });
-        state.applyEnv();
-        kernel = await createGatewayKernel(port, {
-          auth: { mode: "token", token },
-          bind: "loopback",
+        kernel = await fixture.open({
           channelAutostartSuppression: {
             reason: "crash-loop-breaker",
             message: "safe mode",
           },
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
           tryRecoverChannelAutostartSuppression: async () => undefined,
         });
 
@@ -125,12 +138,9 @@ describe("createGatewayKernel", () => {
         expect(startAccount).toHaveBeenCalledTimes(closing ? 0 : 1);
         expect(kernel.channelManager.isAutoRestartScheduled("telegram", "default")).toBe(false);
       } finally {
-        try {
-          await kernel?.closeOnStartupFailure();
-        } finally {
-          restoreActivePluginRegistrySnapshot(originalPluginRegistry);
-          await state.cleanup();
-        }
+        await closeKernelFixture(kernel, state, () =>
+          restoreActivePluginRegistrySnapshot(originalPluginRegistry),
+        );
       }
     },
   );
@@ -138,12 +148,8 @@ describe("createGatewayKernel", () => {
   it.for(["direct", "public"] as const)(
     "fences hosted authority and joins shutdown owners during %s close",
     async (entry, { signal }) => {
-      const port = await getFreePort();
-      const state = await createOpenClawTestState({
-        label: `gateway-kernel-${entry}-close-readiness`,
-        env: { ...KERNEL_TEST_ENV },
-      });
-      const token = "gateway-kernel-close-readiness-token";
+      const fixture = await createKernelFixture(`gateway-kernel-${entry}-close-readiness`);
+      const { state, port } = fixture;
       const bootId = `gateway-kernel-${entry}-close`;
       const configReloaderStop = createDeferred();
       const recoveryStop = createDeferred();
@@ -187,16 +193,10 @@ describe("createGatewayKernel", () => {
       let pendingStop: Promise<void> | undefined;
       let pendingPublication: Promise<void> | undefined;
       try {
-        await state.writeConfig({
-          gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
-        });
-        state.applyEnv();
+        await fixture.configure();
         const options = {
           bootId,
-          auth: { mode: "token" as const, token },
-          bind: "loopback" as const,
-          controlUiEnabled: false,
-          sidecarStartup: "defer" as const,
+          ...fixture.serverOptions,
           hostLifecycle,
         };
         if (entry === "public") {
@@ -257,24 +257,11 @@ describe("createGatewayKernel", () => {
         expect(getStartup()).toMatchObject({ ok: true, status: "started" });
         expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
         const reader = {
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            client: {
-              id: "openclaw-control-ui",
-              version: "test",
-              platform: "web",
-              mode: "webchat",
-            },
-            role: "operator",
-            scopes: ["operator.read"],
-          },
-          authenticatedUserProfile: {
-            profileId: ensureProfileForEmail("mention-reader@example.test").id,
-            displayName: "Reader",
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+          connect: gatewayConnect(["operator.read"], { platform: "web" }),
+          authenticatedUserProfile: gatewayProfile(
+            ensureProfileForEmail("mention-reader@example.test").id,
+            "Reader",
+          ),
         } satisfies GatewayClient;
         await kernel.gatewayRequestContext.mentionInbox?.listAsync(reader, (result) => {
           expect(result).toMatchObject({
@@ -297,7 +284,7 @@ describe("createGatewayKernel", () => {
           .mockReturnValue(reloadWork);
         const stopRecovery = vi.fn(() => recoveryWork);
         kernel.kernel.setScheduledServiceHandles({
-          heartbeatRunner: kernel.runtimeState.heartbeatRunner,
+          stopScheduledServices: kernel.runtimeState.stopScheduledServices,
           stopDeliveryRecovery: stopRecovery,
         });
         const stopUpdateCheck = vi
@@ -332,15 +319,13 @@ describe("createGatewayKernel", () => {
         await nextTurn();
         expect(startMaintenance).not.toHaveBeenCalled();
         expect(reloadStop).toHaveBeenCalledOnce();
-        expect(terminalDispose).not.toHaveBeenCalled();
-        expect(gatewayStop).not.toHaveBeenCalled();
+        expectCalls(0, terminalDispose, gatewayStop);
         configReloaderStop.resolve();
         await nextTurn();
         expect(reloadSettled).toHaveBeenCalledOnce();
         if (server) {
           // Finishing reload alone must not bypass the other admitted producer.
-          expect(terminalDispose).not.toHaveBeenCalled();
-          expect(gatewayStop).not.toHaveBeenCalled();
+          expectCalls(0, terminalDispose, gatewayStop);
         }
         recoveryStop.resolve();
         await nextTurn();
@@ -361,8 +346,7 @@ describe("createGatewayKernel", () => {
         expect(closeFirstStop).toHaveBeenCalledOnce();
         expect(kernel.runtimeState.discovery).toBeNull();
         if (server) {
-          expect(terminalDispose).toHaveBeenCalledOnce();
-          expect(gatewayStop).toHaveBeenCalledOnce();
+          expectCalls(1, terminalDispose, gatewayStop);
           for (const settled of [reloadSettled, recoverySettled, updateSettled]) {
             expect(settled).toHaveBeenCalledBefore(terminalDispose);
             expect(settled).toHaveBeenCalledBefore(gatewayStop);
@@ -387,48 +371,24 @@ describe("createGatewayKernel", () => {
   );
 
   it("keeps startup readiness and sidecar shutdown at their lifecycle boundaries", async () => {
-    const port = await getFreePort();
-    const state = await createOpenClawTestState({
-      label: "gateway-kernel-deferred-readiness",
-      env: {
-        ...KERNEL_TEST_ENV,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-      },
+    const fixture = await createKernelFixture("gateway-kernel-deferred-readiness", {
+      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: "0" },
     });
-    const token = "gateway-kernel-deferred-readiness-token";
-    const openKernel = () =>
-      createGatewayKernel(port, {
-        auth: { mode: "token", token },
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-      });
+    const { state, open: openKernel } = fixture;
     let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
     try {
-      await state.writeConfig({
-        gateway: {
-          auth: { mode: "token", token },
-          controlUi: { enabled: false },
-          port,
-        },
+      await fixture.configure({
         agents: {
           ownership: "explicit",
           defaults: { systemAgent: { agentId: "main" } },
           entries: { main: {}, worker: {} },
         },
       });
-      state.applyEnv();
       kernel = await openKernel();
       const activeKernel = kernel;
 
-      const client = createSyntheticPluginRuntimeClient({
-        scopes: [...CLI_DEFAULT_OPERATOR_SCOPES],
-      });
-      const dispatchOptions = {
-        client,
-        context: kernel.gatewayRequestContext,
-        methodRegistry: kernel.getAttachedGatewayMethodRegistry(),
-      };
+      const dispatch = (method: string, params: unknown) =>
+        dispatchGatewayRequestInProcess(method, params, dispatchOptions(activeKernel));
       const runId = "deferred-readiness-chat";
       const chatParams = {
         sessionKey: "agent:main:deferred-readiness",
@@ -437,34 +397,42 @@ describe("createGatewayKernel", () => {
       };
 
       const getReadiness = kernel.createHttpTransportOptions().getReadiness;
-      expect(getReadiness()).toMatchObject({
-        ready: false,
-        failing: ["startup-sidecars"],
-      });
-      await expect(
-        dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
-      ).rejects.toThrow("chat.send unavailable during gateway startup");
+      const notReady = { ready: false, failing: ["startup-sidecars"] };
+      expect(getReadiness()).toMatchObject(notReady);
+      await expect(dispatch("chat.send", chatParams)).rejects.toThrow(
+        "chat.send unavailable during gateway startup",
+      );
 
       kernel.dedupe.set(`chat:${runId}`, {
         ts: Date.now(),
         ok: true,
         payload: { runId, status: "ok" },
       });
-      kernel.kernel.unlockStartupMethods();
+      kernel.kernel.unlockStartupMethods({ keepChatSendUnavailable: true });
       kernel.kernel.markSidecarsReady();
 
+      expect(getReadiness()).toMatchObject(notReady);
+      kernel.kernel.setDispatchReady(true);
+      expect(kernel.createHttpTransportOptions().getStartup?.()).toMatchObject({
+        ok: true,
+        status: "started",
+      });
       expect(getReadiness()).toMatchObject({
         ready: false,
-        failing: ["startup-sidecars"],
+        coreReady: false,
+        failing: ["chat-recovery"],
       });
-      kernel.kernel.setDispatchReady(true);
+      await expect(dispatch("chat.send", chatParams)).rejects.toThrow(
+        "chat.send unavailable during gateway startup",
+      );
+
+      kernel.kernel.unlockStartupMethods();
+      kernel.kernel.unlockStartupMethods();
       expectCoreAgentDatabaseReadiness(getReadiness, state);
-      await expect(
-        dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
-      ).resolves.toEqual({ runId, status: "ok" });
+      await expect(dispatch("chat.send", chatParams)).resolves.toEqual({ runId, status: "ok" });
 
       const { promise: firstStop, resolve: releaseFirstStop } = createDeferred();
-      const reentrantSidecar = { stop: vi.fn(async () => {}) };
+      const reentrantSidecar = idleSidecar();
       let reentrantStop!: Promise<void>;
       const lifetimeSidecar = {
         stop: vi.fn<() => Promise<void>>().mockImplementationOnce(() => {
@@ -477,46 +445,28 @@ describe("createGatewayKernel", () => {
       const trailingSidecar = vi.fn(async () => {});
       kernel.registerGatewayLifetimeSidecars(lifetimeSidecar, { stop: trailingSidecar });
 
-      const { promise: firstPostReadyStop, resolve: releasePostReadyStop } = createDeferred();
-      const postReadySidecar = vi
-        .fn<() => Promise<void>>()
-        .mockImplementationOnce(() => firstPostReadyStop)
-        .mockResolvedValue(undefined);
-      kernel.registerPostReadySidecars({ stop: postReadySidecar });
-
-      const connectionStopEntered = createDeferred();
-      const releaseConnectionStop = createDeferred();
-      const releaseLateConnectionStop = createDeferred();
-      const connectionSidecar = {
-        stop: vi
-          .fn<() => Promise<void>>()
-          .mockImplementationOnce(async () => {
-            connectionStopEntered.resolve();
-            await releaseConnectionStop.promise;
-          })
-          .mockResolvedValue(undefined),
-      };
+      const postReadySidecar = blockedSidecar();
+      kernel.registerPostReadySidecars(postReadySidecar);
+      const connectionSidecar = blockedSidecar();
       kernel.registerConnectionDependentSidecars(connectionSidecar);
       const closeTransport = vi.fn(() => releaseConnection());
       const releaseConnection = kernel.connectionWork.registerConnection(closeTransport);
       const closePreludeReached = vi.spyOn(kernel.watchNodeHttpRuntime, "close");
       const closing = kernel.closeOnStartupFailure();
       void closing.catch(() => undefined);
-      await connectionStopEntered.promise;
-      const lateConnectionSidecar = { stop: vi.fn(() => releaseLateConnectionStop.promise) };
+      await connectionSidecar.entered;
+      const lateConnectionSidecar = blockedSidecar(false);
       kernel.registerConnectionDependentSidecars(lateConnectionSidecar);
-      const lateGeneralSidecar = { stop: vi.fn(async () => {}) };
-      const latePostReadySidecar = { stop: vi.fn(async () => {}) };
+      const lateGeneralSidecar = idleSidecar();
+      const latePostReadySidecar = idleSidecar();
       kernel.registerGatewayLifetimeSidecars(lateGeneralSidecar);
       kernel.registerPostReadySidecars(latePostReadySidecar);
       expect(closeTransport).not.toHaveBeenCalled();
-      releaseConnectionStop.resolve();
+      connectionSidecar.release();
       await vi.waitFor(() => expect(lateConnectionSidecar.stop).toHaveBeenCalledOnce());
       expect(closeTransport).not.toHaveBeenCalled();
-      expect(lifetimeSidecar.stop).not.toHaveBeenCalled();
-      expect(lateGeneralSidecar.stop).not.toHaveBeenCalled();
-      expect(latePostReadySidecar.stop).not.toHaveBeenCalled();
-      releaseLateConnectionStop.resolve();
+      expectCalls(0, lifetimeSidecar.stop, lateGeneralSidecar.stop, latePostReadySidecar.stop);
+      lateConnectionSidecar.release();
       await vi.waitFor(() => {
         expect(lifetimeSidecar.stop).toHaveBeenCalledOnce();
       });
@@ -525,7 +475,7 @@ describe("createGatewayKernel", () => {
       expect(() => kernel?.registerConnectionDependentSidecars(lateConnectionSidecar)).toThrow(
         "cannot publish a Gateway sidecar after shutdown sealed its owner",
       );
-      const lateSidecar = { stop: vi.fn(async () => {}) };
+      const lateSidecar = idleSidecar();
       kernel.registerGatewayLifetimeSidecars(lifetimeSidecar, lateSidecar);
       const lateStop = kernel.stopRegisteredGatewayLifetimeSidecars();
       releaseFirstStop();
@@ -533,42 +483,37 @@ describe("createGatewayKernel", () => {
       await expect(reentrantStop).resolves.toBeUndefined();
       await expect(lateStop).resolves.toBeUndefined();
       await vi.waitFor(() => {
-        expect(postReadySidecar).toHaveBeenCalledOnce();
+        expect(postReadySidecar.stop).toHaveBeenCalledOnce();
       });
-      const { promise: lateLifetimeStop, resolve: releaseLateLifetimeStop } = createDeferred();
-      const lateLifetimeSidecar = { stop: vi.fn(() => lateLifetimeStop) };
+      const lateLifetimeSidecar = blockedSidecar(false);
       kernel.registerGatewayLifetimeSidecars(lateLifetimeSidecar);
-      let closeSettled = false;
-      void closing.then(
-        () => {
-          closeSettled = true;
-        },
-        () => {
-          closeSettled = true;
-        },
-      );
-      releasePostReadyStop();
+      const markClosed = vi.fn();
+      void closing.then(markClosed, markClosed);
+      postReadySidecar.release();
       await vi.waitFor(() => {
         expect(closePreludeReached).toHaveBeenCalledOnce();
       });
-      expect(closeSettled).toBe(false);
-      const duringSealSidecar = { stop: vi.fn(async () => {}) };
+      expect(markClosed).not.toHaveBeenCalled();
+      const duringSealSidecar = idleSidecar();
       kernel.registerGatewayLifetimeSidecars(duringSealSidecar);
-      releaseLateLifetimeStop();
+      lateLifetimeSidecar.release();
       await expect(closing).resolves.toBeUndefined();
       closePreludeReached.mockRestore();
-      expect(lifetimeSidecar.stop).toHaveBeenCalledOnce();
-      expect(trailingSidecar).toHaveBeenCalledOnce();
-      expect(lateGeneralSidecar.stop).toHaveBeenCalledOnce();
-      expect(latePostReadySidecar.stop).toHaveBeenCalledOnce();
-      expect(reentrantSidecar.stop).toHaveBeenCalledOnce();
-      expect(lateSidecar.stop).toHaveBeenCalledOnce();
-      expect(duringSealSidecar.stop).toHaveBeenCalledOnce();
-      expect(postReadySidecar).toHaveBeenCalledOnce();
+      expectCalls(
+        1,
+        lifetimeSidecar.stop,
+        trailingSidecar,
+        lateGeneralSidecar.stop,
+        latePostReadySidecar.stop,
+        reentrantSidecar.stop,
+        lateSidecar.stop,
+        duringSealSidecar.stop,
+        postReadySidecar.stop,
+      );
       expect(kernel.runtimeState.gatewayLifetimeSidecars.snapshot()).toEqual([]);
       expect(kernel.runtimeState.postReadySidecars.snapshot()).toEqual([]);
 
-      const postSealSidecar = { stop: vi.fn(async () => {}) };
+      const postSealSidecar = idleSidecar();
       expect(() => activeKernel.registerGatewayLifetimeSidecars(postSealSidecar)).toThrow(
         "cannot publish a Gateway sidecar after shutdown sealed its owner",
       );
@@ -581,23 +526,15 @@ describe("createGatewayKernel", () => {
         .mockRejectedValueOnce(persistentError)
         .mockResolvedValue(undefined);
       const persistentSidecar = { stop: persistentStop };
-      const successfulPeer = { stop: vi.fn(async () => {}) };
+      const successfulPeer = idleSidecar();
       kernel = await openKernel();
       kernel.registerGatewayLifetimeSidecars(persistentSidecar, successfulPeer);
 
       await expect(kernel.closeOnStartupFailure()).rejects.toMatchObject({
-        errors: [
-          {
-            message:
-              "shutdown step failed (gateway lifetime sidecars): persistent sidecar cleanup failed",
-            cause: persistentError,
-          },
-          {
-            message:
-              "shutdown step failed (late sidecar cleanup): persistent sidecar cleanup failed",
-            cause: persistentError,
-          },
-        ],
+        errors: ["gateway lifetime sidecars", "late sidecar cleanup"].map((step) => ({
+          message: `shutdown step failed (${step}): ${persistentError.message}`,
+          cause: persistentError,
+        })),
       });
       expect(persistentStop).toHaveBeenCalledOnce();
       expect(successfulPeer.stop).toHaveBeenCalledOnce();
@@ -608,26 +545,15 @@ describe("createGatewayKernel", () => {
       expect(successfulPeer.stop).toHaveBeenCalledOnce();
       expect(kernel.runtimeState.gatewayLifetimeSidecars.snapshot()).toEqual([]);
     } finally {
-      try {
-        await kernel?.closeOnStartupFailure();
-      } finally {
-        await state.cleanup();
-      }
+      await closeKernelFixture(kernel, state);
     }
   });
 
   it("dispatches without a transport when optional chat identity bootstrap fails", async ({
     signal,
   }) => {
-    const port = await getFreePort();
-    const state = await createOpenClawTestState({
-      label: "gateway-kernel-no-transport",
-      env: {
-        OPENCLAW_DIAGNOSTICS: "1",
-        OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: undefined,
-        ...KERNEL_TEST_ENV,
-      },
-    });
+    const fixture = await createKernelFixture("gateway-kernel-no-transport");
+    const { state } = fixture;
     const originalPluginRegistry = captureActivePluginRegistrySnapshot();
     const inspectAccount = vi.fn(() => ({ enabled: true, configured: true }));
     const capturedRegistryCleanup = vi.fn();
@@ -635,22 +561,7 @@ describe("createGatewayKernel", () => {
       id: "telegram",
       config: { inspectAccount },
     });
-    const ambientRegistry = createTestRegistry([
-      {
-        pluginId: ambientPlugin.id,
-        plugin: ambientPlugin,
-        source: "gateway-kernel-test",
-      },
-    ]);
-    ambientRegistry.plugins.push(
-      createPluginRecord({
-        id: ambientPlugin.id,
-        source: "gateway-kernel-test",
-        origin: "bundled",
-        enabled: true,
-        configSchema: false,
-      }),
-    );
+    const ambientRegistry = createRegisteredChannel(ambientPlugin);
     ambientRegistry.runtimeLifecycles.push({
       pluginId: ambientPlugin.id,
       pluginName: ambientPlugin.meta.label,
@@ -671,25 +582,10 @@ describe("createGatewayKernel", () => {
     try {
       stageActivePluginRegistry(ambientRegistry, null, "default");
       capturedLoadedPluginRegistry = captureActivePluginRegistrySnapshot();
-      const timelinePath = state.path("kernel-startup.jsonl");
-      state.envVars.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
-      const token = "gateway-kernel-no-transport-token";
-      await state.writeConfig({
-        gateway: {
-          auth: { mode: "token", token },
-          controlUi: { enabled: false },
-          port,
-        },
-      });
-      state.applyEnv();
+      await fixture.configure();
       stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
 
-      kernel = await createGatewayKernel(port, {
-        auth: { mode: "token", token },
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-      });
+      kernel = await fixture.open();
       expect(loadIdentity).toHaveBeenCalledOnce();
       expect(kernel.transportBridge.current()).toBeUndefined();
       await expect(kernel.transportBridge.ensureSandboxHostPort()).rejects.toThrow(
@@ -697,19 +593,8 @@ describe("createGatewayKernel", () => {
       );
 
       kernel.kernel.setDispatchReady(true);
-      const client = createSyntheticPluginRuntimeClient({
-        scopes: [...CLI_DEFAULT_OPERATOR_SCOPES],
-      });
       await expect(
-        dispatchGatewayRequestInProcess(
-          "health",
-          {},
-          {
-            client,
-            context: kernel.gatewayRequestContext,
-            methodRegistry: kernel.getAttachedGatewayMethodRegistry(),
-          },
-        ),
+        dispatchGatewayRequestInProcess("health", {}, dispatchOptions(kernel)),
       ).resolves.toEqual(expect.objectContaining({ ok: true }));
 
       const idempotencyKey = "kernel-factory-agent";
@@ -725,89 +610,12 @@ describe("createGatewayKernel", () => {
         }),
       ).resolves.toEqual({ runId: "kernel-run", status: "ok", summary: "cached" });
       expect(getActiveGatewayRootWorkCount()).toBe(0);
-
-      flushDiagnosticsTimeline();
-      const measureNames = (await fs.readFile(timelinePath, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
-        .filter((event) => event.type === "span.start" && event.phase === "startup")
-        .map((event) => {
-          const attributes = event.attributes as { traceName?: string } | undefined;
-          return attributes?.traceName ?? event.name;
-        });
-      expect(measureNames).toEqual([
-        "config.snapshot.read",
-        "config.snapshot.read.file",
-        "config.snapshot.read.hash",
-        "config.snapshot.read.parse",
-        "config.snapshot.read.includes",
-        "config.snapshot.read.env",
-        "config.snapshot.read.validate",
-        "config.snapshot.read.materialize",
-        "config.snapshot.read.observe",
-        "plugins.metadata.scan",
-        "plugins.metadata.freeze",
-        "state.ownership",
-        "state.runtime-imports",
-        "state.schema-preflight",
-        "runtime.network-imports",
-        "runtime.network-bootstrap",
-        "config.runtime-imports",
-        "config.snapshot",
-        "config.auth",
-        "config.auth.snapshot-validate",
-        "config.auth.runtime-overrides",
-        "config.auth.startup-overrides",
-        "config.auth.secret-surface",
-        "config.auth.secret-preflight",
-        "config.auth.preflight-override",
-        "config.auth.ensure",
-        "config.auth.runtime-startup-overrides",
-        "config.auth.secrets-activate",
-        "agents.github-profile-cleanup",
-        "plugins.bootstrap-imports",
-        "cron.store-path",
-        "plugins.bootstrap",
-        "gateway.kernel-state",
-        "node-desktop.runtime-import",
-        "host-desktop.runtime-import",
-        "computer.runtime-import",
-        "device-identity",
-        "device-pairing",
-        "runtime.config",
-        "control-ui.root",
-        "terminal.launch-import",
-        "gateway.wizard-imports",
-        "tls.runtime",
-        "gateway.channel-manager-import",
-        "runtime.state",
-        "gateway.shutdown-runtime-import",
-        "gateway.lifecycle",
-        "gateway.core-runtime",
-        "runtime.post-early-imports",
-        "runtime.subscriptions",
-        "runtime.services",
-        "gateway.handlers",
-        "runtime.early",
-        "runtime.early.discovery",
-        "gateway.request-runtime",
-        "gateway.chat-metadata-lifecycle",
-        "gateway.config-revision-key",
-        "gateway.request-context",
-        "sessions.projection",
-        "gateway.instance-runtime-import",
-        "gateway.owner-profile",
-        "sessions.materialize",
-        "gateway.lifetime-sidecars",
-      ]);
     } finally {
       loadIdentity.mockRestore();
       try {
         await kernel?.closeOnStartupFailure();
       } finally {
         try {
-          flushDiagnosticsTimeline();
           if (capturedLoadedPluginRegistry) {
             restoreActivePluginRegistrySnapshot(capturedLoadedPluginRegistry);
           }
@@ -826,17 +634,10 @@ describe("createGatewayKernel", () => {
   });
 
   it("runs kernel teardown when required TLS material is unavailable", async () => {
-    const port = await getFreePort();
-    const state = await createOpenClawTestState({
-      label: "gateway-kernel-tls-failure",
-      env: { ...KERNEL_TEST_ENV },
-    });
-    const token = "gateway-kernel-tls-failure-token";
-    await state.writeConfig({
+    const fixture = await createKernelFixture("gateway-kernel-tls-failure");
+    const { state } = fixture;
+    await fixture.configure({
       gateway: {
-        auth: { mode: "token", token },
-        controlUi: { enabled: false },
-        port,
         tls: {
           enabled: true,
           autoGenerate: false,
@@ -845,16 +646,8 @@ describe("createGatewayKernel", () => {
         },
       },
     });
-    state.applyEnv();
     try {
-      await expect(
-        createGatewayKernel(port, {
-          auth: { mode: "token", token },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        }),
-      ).rejects.toThrow("gateway tls: cert/key missing");
+      await expect(fixture.open()).rejects.toThrow("gateway tls: cert/key missing");
       expect(getActiveSecretsRuntimeConfigSnapshot()).toBeNull();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {

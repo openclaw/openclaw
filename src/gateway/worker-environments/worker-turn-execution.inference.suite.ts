@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import {
   parseWorkerLaunchDescriptor,
   type WorkerLaunchPlan,
@@ -91,15 +92,11 @@ export function registerWorkerTurnInferenceTests(): void {
                     ...(!workerLocal ? { apiKey } : {}),
                     api: "openai-completions",
                     models: [
-                      {
-                        id: params.model,
-                        name: params.model,
+                      modelDefinition(params.model, {
                         reasoning: false,
-                        input: ["text"],
                         contextWindow: 8192,
                         maxTokens: 2048,
-                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                      },
+                      }),
                     ],
                   },
                 },

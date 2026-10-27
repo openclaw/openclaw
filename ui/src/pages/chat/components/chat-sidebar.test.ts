@@ -10,6 +10,9 @@ import {
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
 import "./chat-detail-panel.tsx";
+// Ownership tests start with preview code ready; chat-html-preview-loading.test.tsx covers cold imports.
+import "./chat-html-preview-element.tsx";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { setFileDraft } from "./chat-file-drafts.ts";
 import type { ChatHtmlPreviewElement } from "./chat-html-preview-element.tsx";
@@ -31,6 +34,8 @@ vi.mock("./file-editor-view.ts", () => ({
       getContent: () => text,
       setEditable() {},
       setLineWrapping() {},
+      setSyntaxHighlighting() {},
+      setScrollFades() {},
       setDecorations() {},
       scrollToLine() {},
       onDocChanged() {},
@@ -56,8 +61,9 @@ beforeEach(() => {
   container = createChatSidebarContainer();
   document.body.append(container);
 });
-afterEach(() => {
+afterEach(async () => {
   container.remove();
+  await vi.dynamicImportSettled();
   vi.unstubAllGlobals();
 });
 
@@ -95,6 +101,7 @@ describe("file sidebar editor locality", () => {
   it("removes editor controls when the native gateway switches to remote", async () => {
     setNativeGatewayTestState("local");
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+    Object.assign(panel, { filePresentation: "mobile" });
     panel.content = {
       kind: "file",
       path: "src/example.ts",
@@ -117,18 +124,13 @@ describe("file sidebar editor locality", () => {
 });
 
 describe("markdown sidebar", () => {
-  it.each([
-    { kind: "markdown", trailingNewline: false },
-    { kind: "file", trailingNewline: true },
-  ] as const)("keeps nested code literal when viewing raw $kind text", async (testCase) => {
-    const source =
-      ["Intro", "", "```ts", "const x = 1;", "```", "", "**literal after**"].join("\n") +
-      (testCase.trailingNewline ? "\n" : "");
+  it("keeps nested code literal when viewing raw markdown text", async () => {
+    const source = ["Intro", "", "```ts", "const x = 1;", "```", "", "**literal after**"].join(
+      "\n",
+    );
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
-    panel.content =
-      testCase.kind === "markdown"
-        ? { kind: "markdown", content: "Rendered summary", rawText: source }
-        : { kind: "file", path: "notes.md", name: "notes.md", language: "md", content: source };
+    Object.assign(panel, { filePresentation: "mobile" });
+    panel.content = { kind: "markdown", content: "Rendered summary", rawText: source };
     container.append(panel);
     const schedule = vi.spyOn(globalThis, "setTimeout");
     try {
@@ -185,6 +187,7 @@ describe("markdown sidebar", () => {
     "opens workspace files from markdown previews owned by %s",
     async (sessionKey) => {
       const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+      Object.assign(panel, { filePresentation: "mobile" });
       const onOpenWorkspaceFile = vi.fn();
       panel.content = {
         kind: "markdown",
@@ -209,6 +212,7 @@ describe("markdown sidebar", () => {
   it("opens focused markdown preview file links with Enter", async () => {
     const key = "Enter";
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+    Object.assign(panel, { filePresentation: "mobile" });
     const onOpenWorkspaceFile = vi.fn();
     panel.content = { kind: "markdown", content: "See `ui/src/pages/chat/chat-view.ts:362`" };
     panel.onOpenWorkspaceFile = onOpenWorkspaceFile;
@@ -232,6 +236,7 @@ describe("markdown sidebar", () => {
 
   it("handles markdown preview session links with click", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+    Object.assign(panel, { filePresentation: "mobile" });
     const onOpenSessionLink = vi.fn();
     const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
     panel.content = { kind: "markdown", content: `Open \`${sessionKey}\`` };
@@ -257,6 +262,7 @@ describe("markdown sidebar", () => {
     "SPA-routes markdown preview session hrefs with %s",
     async (action) => {
       const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+      Object.assign(panel, { filePresentation: "mobile" });
       const onOpenSessionLink = vi.fn();
       const literalUuid = "12345678-90ab-cdef-1234-567890abcdef";
       const href = `${window.location.origin}/control/dashboard/main/~key/${literalUuid}`;
@@ -284,6 +290,7 @@ describe("markdown sidebar", () => {
 
   it("activates Markdown images only when a chat owner opts in", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+    Object.assign(panel, { filePresentation: "mobile" });
     const onOpenImage = vi.fn();
     panel.content = { kind: "markdown", content: "![Preview](data:image/png;base64,cG5n)" };
     panel.onOpenImage = onOpenImage;
@@ -310,6 +317,7 @@ describe("markdown sidebar", () => {
 
   it("opens image artifacts through the shared lightbox callback", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+    Object.assign(panel, { filePresentation: "mobile" });
     const onOpenImage = vi.fn();
     panel.content = {
       kind: "image",
@@ -353,6 +361,7 @@ describe("markdown sidebar", () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+    Object.assign(panel, { filePresentation: "mobile" });
     panel.content = {
       kind: "attachment",
       title: "clip.mov",
@@ -378,22 +387,29 @@ describe("markdown sidebar", () => {
     panel.remove();
   });
 
-  it("plays normalized base64 audio from Files", async () => {
-    const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
-    panel.content = {
-      kind: "attachment",
-      attachmentKind: "audio",
-      title: "inline.wav",
-      src: "data:audio/wav;base64,UklGRg==",
-      mimeType: "audio/wav",
-    };
-    container.append(panel);
-    await panel.updateComplete;
+  it.each(["mobile", "desktop"] as const)(
+    "plays normalized base64 audio from Files on %s",
+    async (presentation) => {
+      const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+      Object.assign(panel, { filePresentation: presentation });
+      panel.content = {
+        kind: "attachment",
+        attachmentKind: "audio",
+        title: "inline.wav",
+        src: "data:audio/wav;base64,UklGRg==",
+        mimeType: "audio/wav",
+        ...(presentation === "desktop"
+          ? { file: { path: "", artifactId: "inline-audio", download: async () => null } }
+          : {}),
+      };
+      container.append(panel);
+      await panel.updateComplete;
 
-    const player = panel.querySelector("openclaw-chat-audio-player");
-    expect(player?.src).toBe("data:audio/wav;base64,UklGRg==");
-    panel.remove();
-  });
+      const player = panel.querySelector("openclaw-chat-audio-player");
+      expect(player?.src).toBe("data:audio/wav;base64,UklGRg==");
+      panel.remove();
+    },
+  );
 
   it.each([
     ["bundle.zip", "https://files.example/bundle.zip", "application/zip"],
@@ -405,6 +421,7 @@ describe("markdown sidebar", () => {
       const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
       const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+      Object.assign(panel, { filePresentation: "mobile" });
       panel.content = {
         kind: "attachment",
         attachmentKind: "document",
@@ -509,7 +526,7 @@ describe("markdown sidebar", () => {
     },
   );
 
-  it("releases pending preview requests when the source changes and the panel closes", async () => {
+  it("retains pending previews through notifications and retires replaced scopes", async () => {
     const requests: AbortSignal[] = [];
     vi.stubGlobal(
       "fetch",
@@ -525,12 +542,16 @@ describe("markdown sidebar", () => {
         });
       }),
     );
+    let sourceChanged!: () => void;
+    let resolutions = 0;
     const contentFor = (source: string): SidebarContent => ({
       kind: "attachment",
       attachmentKind: "image",
       title: "Pending preview",
       sourceIdentity: source,
       resolveSource: (onSourceChange, runtime) => {
+        sourceChanged = onSourceChange;
+        resolutions += 1;
         const availability = resolveAssistantAttachmentAvailability(source, {
           ...runtime,
           onMediaChange: onSourceChange,
@@ -541,15 +562,25 @@ describe("markdown sidebar", () => {
       },
     });
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+    Object.assign(panel, { filePresentation: "mobile" });
     panel.content = contentFor(`/tmp/sidebar-first-${crypto.randomUUID()}.png`);
     container.append(panel);
     await waitForSolid(() => expect(requests).toHaveLength(1));
+    const beforeNotification = resolutions;
+    sourceChanged();
+    await waitForSolid(() => expect(resolutions).toBeGreaterThan(beforeNotification));
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.aborted).toBe(false);
     panel.content = contentFor(`/tmp/sidebar-next-${crypto.randomUUID()}.png`);
     await waitForSolid(() => expect(requests).toHaveLength(2));
     expect(requests[0]!.aborted).toBe(true);
     expect(requests[1]!.aborted).toBe(false);
+    Object.assign(panel, { attachmentRuntime: { connectionEpoch: 1 } });
+    await waitForSolid(() => expect(requests).toHaveLength(3));
+    expect(requests[1]!.aborted).toBe(true);
+    expect(requests[2]!.aborted).toBe(false);
     panel.remove();
-    await waitForSolid(() => expect(requests[1]!.aborted).toBe(true));
+    await waitForSolid(() => expect(requests[2]!.aborted).toBe(true));
   });
 
   it.each(["error"] as const)(
@@ -618,6 +649,7 @@ describe("markdown sidebar", () => {
     "keeps external SVG attachments as Files cards with title $title and MIME $mimeType",
     async ({ title, mimeType, src }) => {
       const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+      Object.assign(panel, { filePresentation: "mobile" });
       panel.content = {
         kind: "attachment",
         attachmentKind: "image",
@@ -657,6 +689,7 @@ describe("markdown sidebar", () => {
     const canvasContainer = createChatSidebarContainer(gateway.gateway);
     container.append(canvasContainer);
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+    Object.assign(panel, { filePresentation: "mobile" });
     panel.embedSandboxMode = "trusted";
     panel.canvasPluginSurfaceUrl = "https://canvas.example";
     const content = {
@@ -718,6 +751,28 @@ describe("file sidebar clipboard feedback", () => {
     return button;
   }
 
+  async function openPathCopyAction(panel: FilePanel): Promise<HTMLButtonElement> {
+    const trigger = findCopyButton(panel, "File actions");
+    trigger.click();
+    await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+    const menu = expectDefined(
+      document.getElementById(trigger.getAttribute("aria-controls")!),
+      "File actions menu",
+    );
+    return expectDefined(
+      menu.querySelector<HTMLButtonElement>('[role="menuitem"][data-value="path"]'),
+      "Copy path action",
+    );
+  }
+
+  async function copyPathFromMenu(panel: FilePanel): Promise<HTMLButtonElement> {
+    const action = await openPathCopyAction(panel);
+    action.click();
+    const trigger = findCopyButton(panel, "File actions");
+    await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"));
+    return action;
+  }
+
   function denyClipboard() {
     const writeText = vi.fn().mockRejectedValue(new DOMException("Clipboard access denied"));
     const execCommand = vi.fn(() => false);
@@ -750,16 +805,11 @@ describe("file sidebar clipboard feedback", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    if (originalExecCommand) {
-      Object.defineProperty(document, "execCommand", originalExecCommand);
-    } else {
-      Reflect.deleteProperty(document, "execCommand");
-    }
+    restorePropertyDescriptor(document, "execCommand", originalExecCommand);
     document.body.replaceChildren();
   });
 
   it("ignores an older successful path copy after a failed retry", async () => {
-    const label = "Copy path";
     const { writeText } = denyClipboard();
     let finishFirstCopy = () => {};
     writeText.mockReturnValueOnce(
@@ -768,43 +818,47 @@ describe("file sidebar clipboard feedback", () => {
       }),
     );
     const panel = await mountFilePanel();
-    const button = findCopyButton(panel, label);
-
-    button.click();
-    button.click();
-    await vi.waitFor(() => expect(button.getAttribute("aria-label")).toBe("Copy failed"));
+    await copyPathFromMenu(panel);
+    await copyPathFromMenu(panel);
+    await vi.waitFor(() =>
+      expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed"),
+    );
+    const currentAction = await openPathCopyAction(panel);
+    expect(currentAction.getAttribute("aria-label")).toBe("Copy failed");
     finishFirstCopy();
     await Promise.resolve();
     await Promise.resolve();
     await panel.updateComplete;
 
     expect(writeText).toHaveBeenCalledTimes(2);
-    expect(button.getAttribute("aria-label")).toBe("Copy failed");
+    expect(currentAction.getAttribute("aria-label")).toBe("Copy failed");
     expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed");
   });
 
   it("keeps path and contents feedback reset timers independent", async () => {
     denyClipboard();
     const panel = await mountFilePanel();
-    const pathButton = findCopyButton(panel, "Copy path");
     const contentsButton = findCopyButton(panel, "Copy file contents");
     const timers = captureFeedbackTimers();
 
-    pathButton.click();
+    await copyPathFromMenu(panel);
     contentsButton.click();
     await vi.waitFor(() => {
-      expect(pathButton.getAttribute("aria-label")).toBe("Copy failed");
+      expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed");
       expect(contentsButton.getAttribute("aria-label")).toBe("Copy failed");
     });
+
+    const pathButton = await openPathCopyAction(panel);
+    expect(pathButton.getAttribute("aria-label")).toBe("Copy failed");
+    timers.run(2_000, 1);
+    await panel.updateComplete;
+    expect(pathButton.getAttribute("aria-label")).toBe("Copy failed");
+    expect(contentsButton.getAttribute("aria-label")).toBe("Copy file contents");
+    expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed");
 
     timers.run(2_000);
     await panel.updateComplete;
     expect(pathButton.getAttribute("aria-label")).toBe("Copy path");
-    expect(contentsButton.getAttribute("aria-label")).toBe("Copy failed");
-    expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed");
-
-    timers.run(2_000, 1);
-    await panel.updateComplete;
     expect(contentsButton.getAttribute("aria-label")).toBe("Copy file contents");
     expect(panel.querySelector('[role="alert"]')).toBeNull();
   });
@@ -898,6 +952,34 @@ describe("file sidebar clipboard feedback", () => {
   });
 });
 
+describe("file sidebar SVG preview", () => {
+  it("renders a desktop SVG without an optional lightbox callback", async () => {
+    const panel = document.createElement("openclaw-chat-detail-panel");
+    const source = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>';
+    panel.content = {
+      kind: "file",
+      path: "diagram.svg",
+      name: "diagram.svg",
+      mimeType: "image/svg+xml",
+      content: source,
+    };
+    container.append(panel);
+    await waitForSolid(() => {
+      const preview = expectDefined(
+        panel.querySelector<HTMLElement>(".sidebar-svg-file__view"),
+        "SVG preview",
+      );
+      expect(preview.hidden).toBe(false);
+      const image = expectDefined(preview.querySelector("img"), "SVG image");
+      expect(image.getAttribute("src")).toBe(
+        `data:image/svg+xml;charset=utf-8,${encodeURIComponent(source)}`,
+      );
+      expect(image.alt).toBe("diagram.svg");
+      expect(image.closest("button")).toBeNull();
+    });
+  });
+});
+
 describe("file sidebar HTML preview ownership", () => {
   it("restores preview mode on file replacement and source mode on line navigation", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel");
@@ -918,9 +1000,8 @@ describe("file sidebar HTML preview ownership", () => {
       expectDefined(panel.querySelector<HTMLElement>(".chat-html-preview"), "Preview container");
     const toggle = () =>
       expectDefined(
-        Array.from(panel.querySelectorAll("button")).find(
-          (button) =>
-            button.textContent?.trim() === "Source" || button.textContent?.trim() === "Preview",
+        panel.querySelector<HTMLButtonElement>(
+          'button[aria-label="Source"]:not([role="menuitem"]), button[aria-label="Preview"]:not([role="menuitem"])',
         ),
         "Preview toggle",
       );
@@ -929,10 +1010,21 @@ describe("file sidebar HTML preview ownership", () => {
     toggle().click();
     await waitForSolid(() => expect(previewContainer().hidden).toBe(true));
     const search = expectDefined(
-      panel.querySelector<HTMLButtonElement>(".sidebar-file-view__search-toggle"),
-      "Search toggle",
+      panel.querySelector<HTMLButtonElement>('button[aria-label="File actions"]'),
+      "File actions",
     );
     search.click();
+    await waitForSolid(() => expect(search.getAttribute("aria-expanded")).toBe("true"));
+    const searchMenu = expectDefined(
+      document.getElementById(search.getAttribute("aria-controls")!),
+      "File actions menu",
+    );
+    expectDefined(
+      searchMenu.querySelector<HTMLButtonElement>(
+        'button[role="menuitem"][aria-label="Search in file"]',
+      ),
+      "Search in file",
+    ).click();
     await waitForSolid(() =>
       expect(document.activeElement).toBe(panel.querySelector('input[type="search"]')),
     );

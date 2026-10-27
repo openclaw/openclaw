@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import {
   createComposerContainer,
@@ -71,98 +71,80 @@ function isPainted(element: HTMLElement) {
   );
 }
 
-describe("context usage popup geometry", () => {
-  it("paints the complete readout outside a clipped short split pane and dismisses it", async () => {
-    await page.viewport(1280, 720);
-    // Reproduce the bounded right conversation above Files; the renderer and
-    // its popup retain their production styles and event handlers.
-    container.style.cssText =
-      "position:fixed;left:772px;top:48px;width:508px;height:312px;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end";
-    const { trigger, popover } = drawComposer(false, true);
-    await page.elementLocator(trigger).click();
-    const readout = [
-      ...popover.querySelectorAll<HTMLElement>(".context-usage__title, strong, dt, dd"),
-    ];
-    expect(readout.map((element) => element.textContent?.trim())).toEqual([
-      "Context window",
-      "20.3k / 200k · 10%",
-      "Input",
-      "19.6k",
-      "Output",
-      "126",
-    ]);
-    const readoutPainted = () => {
-      const current = [
-        ...popover.querySelectorAll<HTMLElement>(".context-usage__title, strong, dt, dd"),
-      ];
-      return current.length === readout.length && current.every(isPainted);
-    };
-    await expect.poll(readoutPainted).toBe(true);
-    const box = popover.getBoundingClientRect();
-    expect(box.left).toBeGreaterThanOrEqual(0);
-    expect(box.right).toBeLessThanOrEqual(1280);
-    expect(box.top).toBeGreaterThanOrEqual(0);
-    await userEvent.keyboard("{Escape}");
-    await expect.poll(() => popover.checkVisibility()).toBe(false);
-    expect(document.activeElement).toBe(trigger);
-    await page.elementLocator(trigger).click();
-    await expect.poll(readoutPainted).toBe(true);
-    await page
-      .elementLocator(container)
-      .click({ position: { x: container.clientWidth - 2, y: 2 } });
-    await expect.poll(() => popover.checkVisibility()).toBe(false);
-  });
+async function expectBounds(element: HTMLElement, matches: (box: DOMRect) => boolean) {
+  await expect.poll(() => matches(element.getBoundingClientRect())).toBe(true);
+}
 
-  it.each([
-    [667, 375, false],
-    [320, 568, true],
-  ] as const)(
-    "keeps context usage above the mobile composer at %sx%s (attachment: %s)",
-    async (width, height, attachment) => {
-      await page.viewport(width, height);
-      container.style.cssText = "position:fixed;bottom:16px;left:16px;right:16px";
-      const { composer, trigger, popover } = drawComposer(attachment);
-      await page.elementLocator(trigger).click();
-      await expect
-        .poll(() => {
-          const box = popover.getBoundingClientRect();
-          return (
-            box.width > 0 &&
-            box.left >= 0 &&
-            box.right <= width + 1 &&
-            box.top >= 0 &&
-            box.bottom <= composer.getBoundingClientRect().top + 1
-          );
-        })
-        .toBe(true);
-      expect(trigger.getBoundingClientRect().bottom).toBeLessThanOrEqual(height + 1);
-    },
-  );
-
-  it("keeps context usage in a panned visual viewport", async () => {
-    await page.viewport(375, 812);
-    const actualViewport = window.visualViewport!;
-    vi.stubGlobal("visualViewport", {
-      width: 375,
-      height: 400,
-      offsetTop: 300,
-      offsetLeft: 0,
-      scale: 1,
-      addEventListener: actualViewport.addEventListener.bind(actualViewport),
-      removeEventListener: actualViewport.removeEventListener.bind(actualViewport),
-    });
-    container.style.cssText = "position:fixed;top:600px;left:16px;right:16px";
-    const { composer, trigger, popover } = drawComposer();
-    await page.elementLocator(trigger).click();
-    await expect
-      .poll(() => {
-        const box = popover.getBoundingClientRect();
-        return (
-          box.width > 0 &&
-          box.top >= 300 &&
-          Math.abs(box.bottom - (composer.getBoundingClientRect().top - 6)) <= 1
-        );
-      })
-      .toBe(true);
-  });
+it("paints the complete readout outside a clipped short split pane and dismisses it", async () => {
+  await page.viewport(1280, 720);
+  container.style.cssText =
+    "position:fixed;left:772px;top:48px;width:508px;height:312px;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end";
+  const { trigger, popover } = drawComposer(false, true);
+  await page.elementLocator(trigger).click();
+  const readout = () => [
+    ...popover.querySelectorAll<HTMLElement>(".context-usage__title, strong, dt, dd"),
+  ];
+  expect(readout().map((element) => element.textContent?.trim())).toEqual([
+    "Context window",
+    "20.3k / 200k · 10%",
+    "In",
+    "19.6k",
+    "Out",
+    "126",
+  ]);
+  const readoutPainted = () => readout().length === 6 && readout().every(isPainted);
+  await expect.poll(readoutPainted).toBe(true);
+  const box = popover.getBoundingClientRect();
+  expect(box.left).toBeGreaterThanOrEqual(0);
+  expect(box.right).toBeLessThanOrEqual(1280);
+  expect(box.top).toBeGreaterThanOrEqual(0);
+  await userEvent.keyboard("{Escape}");
+  await expect.poll(() => popover.checkVisibility()).toBe(false);
+  expect(document.activeElement).toBe(trigger);
+  await page.elementLocator(trigger).click();
+  await expect.poll(readoutPainted).toBe(true);
+  await page.elementLocator(container).click({ position: { x: container.clientWidth - 2, y: 2 } });
+  await expect.poll(() => popover.checkVisibility()).toBe(false);
 });
+
+it.each([
+  [667, 375, false, false],
+  [320, 568, true, false],
+  [375, 812, false, true],
+] as const)(
+  "fits context at %sx%s (attachment: %s, panned: %s)",
+  async (width, height, attachment, panned) => {
+    await page.viewport(width, height);
+    if (panned) {
+      const actual = window.visualViewport!;
+      vi.stubGlobal("visualViewport", {
+        width: 375,
+        height: 400,
+        offsetTop: 300,
+        offsetLeft: 0,
+        scale: 1,
+        addEventListener: actual.addEventListener.bind(actual),
+        removeEventListener: actual.removeEventListener.bind(actual),
+      });
+    }
+    container.style.cssText = panned
+      ? "position:fixed;top:600px;left:16px;right:16px"
+      : "position:fixed;bottom:16px;left:16px;right:16px";
+    const { composer, trigger, popover } = drawComposer(attachment);
+    await page.elementLocator(trigger).click();
+    await expectBounds(
+      popover,
+      (box) =>
+        box.width > 0 &&
+        box.top >= (panned ? 300 : 0) &&
+        (panned
+          ? Math.abs(box.bottom - (composer.getBoundingClientRect().top - 6)) <= 1
+          : box.left >= 0 &&
+            box.right <= width + 1 &&
+            box.bottom <= composer.getBoundingClientRect().top + 1),
+    );
+    if (!panned) {
+      expect(trigger.getBoundingClientRect().bottom).toBeLessThanOrEqual(height + 1);
+    }
+  },
+);

@@ -239,6 +239,15 @@ export function publishArtifactFiles(
   }
 }
 
+/** Private stages become visible only through their owner's final publication. */
+function copyArtifactFilesToStaging(sourceRoot: string, targetRoot: string, files: string[]) {
+  for (const file of files) {
+    const target = path.resolve(targetRoot, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.copyFileSync(path.resolve(sourceRoot, file), target, fs.constants.COPYFILE_FICLONE);
+  }
+}
+
 /** Hash the bundler and the checkout-owned native emitter, including its executable and API. */
 export function resolveTsdownCompilerFiles() {
   const require = createRequire(import.meta.url);
@@ -572,7 +581,7 @@ export function writeBuildStepCacheStamp(
     // This cache tree belongs entirely to the step. Replace it even when an old
     // or missing record cannot enumerate obsolete bytes for pruning.
     fsImpl.rmSync(cacheState.outputRoot, { force: true, recursive: true });
-    publishArtifactFiles(rootDir, cacheState.outputRoot, Object.keys(record.outputs));
+    copyArtifactFilesToStaging(rootDir, cacheState.outputRoot, Object.keys(record.outputs));
     if (
       artifactRecordMismatch(cacheState.outputRoot, record, cacheState.signature, requiredOutputs)
     ) {
@@ -605,7 +614,7 @@ export function resolveBuildStepCacheStampState(
 
 export function restoreBuildStepCacheOutputs(
   cacheState: BuildCacheState,
-  params: Pick<BuildCacheParams, "rootDir" | "artifactRoot" | "fs"> = {},
+  params: Pick<BuildCacheParams, "rootDir" | "artifactRoot" | "fs"> & { staging?: true } = {},
 ) {
   if (!cacheState.restorable || !cacheState.outputRoot || !cacheState.stampedOutputs?.length) {
     return false;
@@ -622,12 +631,17 @@ export function restoreBuildStepCacheOutputs(
     ) {
       return false;
     }
-    publishArtifactFiles(
-      cacheState.outputRoot,
-      params.artifactRoot ?? params.rootDir ?? process.cwd(),
-      cacheState.stampedOutputs,
-      cacheState.relativeOutputFiles,
-    );
+    const targetRoot = params.artifactRoot ?? params.rootDir ?? process.cwd();
+    if (params.staging) {
+      copyArtifactFilesToStaging(cacheState.outputRoot, targetRoot, cacheState.stampedOutputs);
+    } else {
+      publishArtifactFiles(
+        cacheState.outputRoot,
+        targetRoot,
+        cacheState.stampedOutputs,
+        cacheState.relativeOutputFiles,
+      );
+    }
     return true;
   } finally {
     lock.release();

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { PreparedEnvironmentSelection } from "./environment-record.js";
@@ -163,28 +163,24 @@ describe("prepared environment ownership", () => {
       const admission = vi
         .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
         .mockImplementationOnce((admit, attachment) =>
-          createAdmission((admissionRequest, grant) => {
-            if (admissionRequest.stage === stage) {
+          createAdmission((entry, grant) => {
+            if (entry.stage === stage) {
               revoked = true;
             }
-            admit(admissionRequest, grant);
+            admit(entry, grant);
           }, attachment),
         );
-      try {
-        await expect(
-          placements.bindPreparedEnvironment({
-            ...request,
-            assertCurrent: () => {
-              if (revoked) {
-                throw new Error("caller revoked");
-              }
-            },
-          }),
-        ).rejects.toThrow("caller revoked");
-      } finally {
-        admission.mockRestore();
-      }
-      expect(revoked).toBe(true);
+      onTestFinished(() => admission.mockRestore());
+      await expect(
+        placements.bindPreparedEnvironment({
+          ...request,
+          assertCurrent: () => {
+            if (revoked) {
+              throw new Error("caller revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("caller revoked");
       unconsumed(request.sessionId);
     },
   );

@@ -2,11 +2,12 @@ import type {
   SkillsWorkshopChangesResult,
   SkillsWorkshopListResult,
 } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
   decorativePrefix,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
@@ -20,16 +21,16 @@ import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
-import { formatCliRequirements, formatCliStatusTable } from "./skills-hooks-cli.format.js";
+import {
+  formatCliRequirements,
+  formatCliStatusTable,
+  sanitizeCliDescriptorText,
+} from "./skills-hooks-cli.format.js";
 
 type SkillsListOptions = {
   json?: boolean;
   eligible?: boolean;
   verbose?: boolean;
-};
-
-type SkillInfoOptions = {
-  json?: boolean;
 };
 
 type SkillsCheckOptions = {
@@ -62,40 +63,19 @@ function formatSkillStatus(skill: SkillStatusEntry, detailed = false): string {
 
 function normalizeSkillEmoji(emoji?: string): string {
   if (emoji) {
-    return emoji.replaceAll("\uFE0E", "\uFE0F");
+    return sanitizeForLog(emoji).replaceAll("\uFE0E", "\uFE0F");
   }
   return decorativeEmoji("📦");
-}
-
-const REMAINING_ESC_SEQUENCE_REGEX = new RegExp(
-  String.raw`\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])`,
-  "g",
-);
-// JSON escapes tabs and line endings; preserve their meaning in descriptions and paths.
-const JSON_CONTROL_CHAR_REGEX = new RegExp(
-  String.raw`[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]`,
-  "g",
-);
-
-function sanitizeJsonString(value: string): string {
-  return stripAnsi(value)
-    .replace(REMAINING_ESC_SEQUENCE_REGEX, "")
-    .replace(JSON_CONTROL_CHAR_REGEX, "");
 }
 
 function formatSkillsJson(value: unknown): string {
   return JSON.stringify(
     value,
-    (_key, entry: unknown) => (typeof entry === "string" ? sanitizeJsonString(entry) : entry),
+    (_key, entry: unknown) =>
+      typeof entry === "string" ? sanitizeCliDescriptorText(entry) : entry,
     2,
   );
 }
-function formatSkillName(skill: SkillStatusEntry): string {
-  const emoji = normalizeSkillEmoji(skill.emoji);
-  const name = theme.command(sanitizeForLog(skill.name));
-  return emoji ? `${emoji} ${name}` : name;
-}
-
 const SKILL_REQUIREMENT_GROUPS = [
   ["bins", "Binaries"],
   ["anyBins", "Any binaries"],
@@ -106,7 +86,7 @@ const SKILL_REQUIREMENT_GROUPS = [
 
 function formatSkillMissingSummary(skill: SkillStatusEntry): string {
   return SKILL_REQUIREMENT_GROUPS.filter(([key]) => skill.missing[key].length > 0)
-    .map(([key]) => `${key}: ${skill.missing[key].join(", ")}`)
+    .map(([key]) => `${key}: ${skill.missing[key].map(sanitizeTerminalText).join(", ")}`)
     .join("; ");
 }
 
@@ -171,13 +151,17 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
       nameColumn: { key: "Skill", header: "Skill", minWidth: 22 },
       sourceColumn: { key: "Source", header: "Source", minWidth: 10 },
       verbose: opts.verbose,
-      rows: skills.map((skill) => ({
-        Status: formatSkillStatus(skill),
-        Skill: formatSkillName(skill),
-        Description: theme.muted(skill.description),
-        Source: skill.source,
-        Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
-      })),
+      rows: skills.map((skill) => {
+        const emoji = normalizeSkillEmoji(skill.emoji);
+        const name = theme.command(sanitizeForLog(skill.name));
+        return {
+          Status: formatSkillStatus(skill),
+          Skill: emoji ? `${emoji} ${name}` : name,
+          Description: theme.muted(sanitizeCliDescriptorText(skill.description)),
+          Source: skill.source,
+          Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
+        };
+      }),
     }),
   );
 }
@@ -185,7 +169,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
 export function formatSkillInfo(
   report: SkillStatusReport,
   skillName: string,
-  opts: SkillInfoOptions,
+  opts: { json?: boolean },
 ): string {
   const requestedName = skillName.trim();
   const skill = resolveSkillStatusEntry(report.skills, requestedName);
@@ -197,7 +181,7 @@ export function formatSkillInfo(
         skill: requestedName,
       });
     }
-    const safeRequestedName = sanitizeJsonString(sanitizeForLog(requestedName));
+    const safeRequestedName = sanitizeForLog(requestedName);
     return appendClawHubHint(
       `Skill "${safeRequestedName}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
     );
@@ -218,7 +202,7 @@ export function formatSkillInfo(
     "",
     theme.heading("Details:"),
     `${theme.muted("  Source:")} ${sanitizeForLog(skill.source)}`,
-    `${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`,
+    `${theme.muted("  Path:")} ${sanitizeTerminalText(shortenHomePath(skill.filePath))}`,
   ];
   if (safeHomepage) {
     lines.push(`${theme.muted("  Homepage:")} ${safeHomepage}`);
@@ -233,7 +217,7 @@ export function formatSkillInfo(
     lines.push(`${theme.muted("  Agent allowlist:")} excludes this skill`);
   }
   if (skill.primaryEnv) {
-    lines.push(`${theme.muted("  Primary env:")} ${skill.primaryEnv}`);
+    lines.push(`${theme.muted("  Primary env:")} ${sanitizeTerminalText(skill.primaryEnv)}`);
   }
 
   lines.push(...formatCliRequirements(skill, SKILL_REQUIREMENT_GROUPS));
@@ -242,7 +226,7 @@ export function formatSkillInfo(
     lines.push("");
     lines.push(theme.heading("Install options:"));
     for (const inst of skill.install) {
-      lines.push(`  ${theme.warn("→")} ${inst.label}`);
+      lines.push(`  ${theme.warn("→")} ${sanitizeTerminalText(inst.label)}`);
     }
   }
 
@@ -407,6 +391,15 @@ export function formatSkillsWorkshopList(result: SkillsWorkshopListResult): stri
     lines.push("", theme.heading("Archived:"));
     for (const entry of archived) {
       lines.push(`${sanitizeForLog(entry.name)}  versions=${entry.versions.length}`);
+    }
+  }
+  const drafts = result.drafts ?? [];
+  if (drafts.length > 0) {
+    lines.push("", theme.heading("Drafts (review with /learn drafts):"));
+    for (const draft of drafts) {
+      lines.push(
+        `${sanitizeForLog(draft.id)}  for ${sanitizeForLog(draft.skillName)}  ${sanitizeForLog(draft.summary)}`,
+      );
     }
   }
   return `${lines.join("\n")}\n`;

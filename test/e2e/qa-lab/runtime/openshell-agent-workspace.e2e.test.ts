@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
@@ -14,6 +13,12 @@ import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
+import {
+  createNativeProvider,
+  listenNativeProvider,
+  nativeModel,
+  writeNativeCompletion,
+} from "./native-provider-proof-fixture.js";
 import {
   closeWireServer,
   connectWireClient,
@@ -40,17 +45,12 @@ const COMMANDS = [
 ];
 
 type FileStep = {
-  label: string;
   name: "file_fetch" | "file_write";
   path: string;
   expected: string;
   write?: string;
   denied?: true;
 };
-
-function writeProof(record: Record<string, unknown>) {
-  process.stdout.write("OPEN_SHELL_AUTHORITY_PROOF " + JSON.stringify(record) + "\n");
-}
 
 type ModelRequest = {
   messages: Array<{ role: string; content?: unknown; tool_call_id?: string }>;
@@ -109,63 +109,31 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
       ].join("\n"),
       { mode: 0o700 },
     );
+    const read = (target: string, expected: string, denied?: true): FileStep => ({
+      name: "file_fetch",
+      path: target,
+      expected,
+      denied,
+    });
+    const write = (target: string, expected: string, denied?: true): FileStep => ({
+      name: "file_write",
+      path: target,
+      expected,
+      denied,
+      write: denied ? undefined : expected,
+    });
     const plans: Record<"A" | "B" | "REVOKED", FileStep[]> = {
       A: [
-        { label: "allowed-document-read", name: "file_fetch", path: document, expected: ORIGINAL },
-        {
-          label: "allowed-document-write",
-          name: "file_write",
-          path: document,
-          write: UPDATED,
-          expected: UPDATED,
-        },
-        { label: "allowed-memory-read", name: "file_fetch", path: revocable, expected: PRIVATE },
-        {
-          label: "allowed-memory-write",
-          name: "file_write",
-          path: revocable,
-          write: REVOKED,
-          expected: REVOKED,
-        },
-        {
-          label: "forbidden-private-read",
-          name: "file_fetch",
-          path: privateFile,
-          expected: PRIVATE,
-          denied: true,
-        },
-        {
-          label: "forbidden-private-write",
-          name: "file_write",
-          path: privateFile,
-          expected: PRIVATE,
-          denied: true,
-        },
-        {
-          label: "ungranted-workspace-write",
-          name: "file_write",
-          path: ungranted,
-          expected: PRIVATE,
-          denied: true,
-        },
+        read(document, ORIGINAL),
+        write(document, UPDATED),
+        read(revocable, PRIVATE),
+        write(revocable, REVOKED),
+        read(privateFile, PRIVATE, true),
+        write(privateFile, PRIVATE, true),
+        write(ungranted, PRIVATE, true),
       ],
-      B: [{ label: "other-session-read", name: "file_fetch", path: document, expected: UPDATED }],
-      REVOKED: [
-        {
-          label: "revoked-memory-read",
-          name: "file_fetch",
-          path: revocable,
-          expected: REVOKED,
-          denied: true,
-        },
-        {
-          label: "revoked-memory-write",
-          name: "file_write",
-          path: revocable,
-          expected: REVOKED,
-          denied: true,
-        },
-      ],
+      B: [read(document, UPDATED)],
+      REVOKED: [read(revocable, REVOKED, true), write(revocable, REVOKED, true)],
     };
     const frameMarks = new Map<string, number>();
     const providerErrors: unknown[] = [];
@@ -174,13 +142,9 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
     void failed.promise.catch(() => {});
     const checked = <T>(promise: Promise<T>) =>
       withinTest(Promise.race([promise, failed.promise]), signal);
-    const provider = createServer((request, response) => {
-      void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.from(chunk));
-        }
-        const body = JSON.parse(Buffer.concat(chunks).toString()) as ModelRequest;
+    const provider = createNativeProvider(
+      async (request, response, rawBody) => {
+        const body = JSON.parse(rawBody) as ModelRequest;
         expect(request.url).toBe("/v1/chat/completions");
         expect(request.headers.authorization).toBe("Bearer synthetic-openshell-native-key");
         const userIndex = body.messages.findLastIndex(
@@ -233,16 +197,6 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
           }
           expect(await fs.readFile(previous.path, "utf8")).toBe(previous.expected);
           expect(await fs.readFile(localDocument, "utf8")).toBe(DECOY);
-          writeProof({
-            case: previous.label,
-            outcome: previous.denied ? "POLICY_DENIED" : "allowed",
-            nodeFrames: frames.length,
-            preflightFrames: frames.filter(
-              (frame) => JSON.parse(frame.paramsJSON!).preflightOnly === true,
-            ).length,
-            targetBytes: previous.denied ? "unchanged" : "verified",
-            localFallback: false,
-          });
         } else {
           const bootstrap = JSON.stringify(body.messages);
           expect(bootstrap).toContain(
@@ -290,30 +244,14 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
               ],
             }
           : { role: "assistant", content: marker + "-OK" };
-        response.writeHead(200, { "content-type": "text/event-stream" });
-        for (const [part, finish] of [
-          [delta, null],
-          [{}, name ? "tool_calls" : "stop"],
-        ]) {
-          response.write(
-            "data: " +
-              JSON.stringify({
-                id: marker,
-                object: "chat.completion.chunk",
-                created: 1,
-                model: modelId,
-                choices: [{ index: 0, delta: part, finish_reason: finish }],
-              }) +
-              "\n\n",
-          );
-        }
-        response.end("data: [DONE]\n\n");
-      })().catch((error: unknown) => {
+        writeNativeCompletion(response, marker, modelId!, delta, name ? "tool_calls" : "stop");
+      },
+      (error, response) => {
         providerErrors.push(error);
         failed.reject(error);
         response.destroy();
-      });
-    });
+      },
+    );
     const owner = createQaGatewayChild();
     let node: PairedNodeWorkerHost | undefined;
     let operator: Awaited<ReturnType<typeof connectWireClient>> | undefined;
@@ -321,14 +259,7 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
     let operatorConnections = 0;
     await runQaGatewayFixture(
       async () => {
-        await new Promise<void>((resolve, reject) => {
-          provider.once("error", reject);
-          provider.listen(0, "127.0.0.1", resolve);
-        });
-        const address = provider.address();
-        if (!address || typeof address === "string") {
-          throw new Error("native model listener unavailable");
-        }
+        const baseUrl = await listenNativeProvider(provider);
         const nodeConfig = validateConfigObject({
           agents: { defaults: { skipBootstrap: true }, entries: { qa: { workspace: remoteRoot } } },
           plugins: { allow: ["file-transfer"], entries: { "file-transfer": { enabled: true } } },
@@ -336,19 +267,9 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
             providers: {
               [providerId!]: {
                 api: "openai-completions",
-                baseUrl: "http://127.0.0.1:" + address.port + "/v1",
+                baseUrl,
                 apiKey: "synthetic-openshell-native-key",
-                models: [
-                  {
-                    id: modelId!,
-                    name: modelId!,
-                    contextWindow: 32768,
-                    maxTokens: 1024,
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  },
-                ],
+                models: [nativeModel(modelId!)],
               },
             },
           },
@@ -385,16 +306,8 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
               toolSearch: false,
               alsoAllow: ["file_fetch", "file_write"],
             };
-            config.gateway = {
-              ...config.gateway,
-              nodes: {
-                ...config.gateway?.nodes,
-                commands: {
-                  ...config.gateway?.nodes?.commands,
-                  allow: [...(config.gateway?.nodes?.commands?.allow ?? []), ...COMMANDS],
-                },
-              },
-            };
+            const commands = (((config.gateway ??= {}).nodes ??= {}).commands ??= {});
+            commands.allow = [...(commands.allow ?? []), ...COMMANDS];
             config.plugins = {
               ...config.plugins,
               allow: [...(config.plugins?.allow ?? []), "openshell", "file-transfer"],
@@ -460,7 +373,6 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
           nodeConfig: nodeConfig.config,
           pluginRuntime,
           capacity: 1,
-          capacityWaitMs: 0,
         });
         expect(node.identity.deviceId).toBe(identity.deviceId);
         const readConfig = async () =>
@@ -502,7 +414,6 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
               allowWritePaths: expect.arrayContaining([document, remoteRoot + "/memory/**"]),
             },
           });
-          writeProof({ case: "configure-empty-map", policy: "seeded-by-cli" });
         });
         await checked(operatorReady.promise);
         await node.connect();
@@ -606,12 +517,6 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
         expect(active.appliedConfigHash).toBe(active.configRevisionHash);
         expect(gateway.pid).toBe(processId);
         expect(operatorConnections).toBe(connections);
-        writeProof({
-          case: "revoke-memory-grant",
-          runtime: "applied",
-          sameGateway: true,
-          sameCaller: true,
-        });
         await runTurn("REVOKED");
         const lastLaunch = node.frames.findLast(
           (frame) => frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,

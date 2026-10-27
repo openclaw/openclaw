@@ -435,7 +435,7 @@ export function createSessionRowEntryReadAccess(
         },
         updateMembership() {
           membership.updateTargets(
-            [...sources.values()].map((source) => ({
+            Array.from(sources.values(), (source) => ({
               agentId: source.target.agentId,
               storePath: source.target.storePath,
               discoveryAgentId: source.discoveryAgentId,

@@ -1,10 +1,16 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../src/config/config.js";
+import type { GatewayClientOptions } from "../src/gateway/client.js";
 import type { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
+import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
+import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
+import { readRequestText, respondJson } from "./helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
+import type { OpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
 export const restartEnv = {
   OPENAI_API_KEY: undefined,
@@ -14,6 +20,49 @@ export const restartEnv = {
   OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
 };
 
+export function connectRestartClient(
+  instance: OpenClawTestInstance,
+  options: Omit<GatewayClientOptions, "url" | "token" | "onConnectError"> = {},
+  signal?: AbortSignal,
+  timeoutMs = 30_000,
+) {
+  return acquireGatewayTestClient(
+    {
+      url: instance.url,
+      token: instance.gatewayToken,
+      clientName: "gateway-client",
+      mode: "backend",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      deviceIdentity:
+        options.deviceIdentity === undefined
+          ? loadOrCreateDeviceIdentity({
+              path: instance.state.path("device", "client", "credentials.sqlite"),
+            })
+          : options.deviceIdentity,
+      ...options,
+    },
+    {
+      timeoutMs,
+      timeoutMessage: "restart client did not connect",
+      closeMessage: "restart client closed",
+      signal,
+    },
+  );
+}
+
+export async function writeRestartPlugin(
+  pluginDir: string,
+  manifest: object,
+  source: string,
+  entry = "index.mjs",
+) {
+  await mkdir(pluginDir, { recursive: true });
+  await Promise.all([
+    writeFile(path.join(pluginDir, "openclaw.plugin.json"), JSON.stringify(manifest)),
+    writeFile(path.join(pluginDir, entry), source),
+  ]);
+}
+
 export function restartProviderServer(
   failed: { reject(error: unknown): void },
   handle: (
@@ -21,27 +70,80 @@ export function restartProviderServer(
     response: ServerResponse,
     body: Record<string, unknown>,
   ) => Promise<void>,
+  options: { ignoreAborted?: boolean } = {},
 ) {
   return createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      await handle(request, response, asRecord(JSON.parse(Buffer.concat(chunks).toString("utf8"))));
+      await handle(request, response, asRecord(JSON.parse(await readRequestText(request))));
     })().catch((error: unknown) => {
-      failed.reject(error);
+      if (!options.ignoreAborted || !request.aborted) {
+        failed.reject(error);
+      }
       response.destroy(error instanceof Error ? error : undefined);
     });
   });
 }
 
 export function restartToolNames(body: Record<string, unknown>) {
-  return Array.isArray(body.tools)
-    ? body.tools.flatMap((tool) =>
-        isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
-      )
-    : [];
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  return tools.flatMap((tool) =>
+    isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
+  );
+}
+
+function completedResponse(id: string, output: object[]) {
+  return {
+    id,
+    status: "completed",
+    output,
+    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+  };
+}
+
+type ToolCall = {
+  type: string;
+  id: string;
+  call_id: string;
+  name: string;
+  arguments: string;
+  status?: string;
+};
+
+export function writeRestartToolCalls(
+  response: ServerResponse,
+  responseId: string,
+  items: ToolCall[],
+  options: {
+    argumentEvent?: "delta" | "done";
+    usage?: { input_tokens: number; output_tokens: number; total_tokens: number };
+  } = {},
+) {
+  const done = options.argumentEvent === "done";
+  writeOpenAiResponsesSse(response, [
+    ...items.flatMap((item, output_index) => [
+      {
+        type: "response.output_item.added",
+        output_index,
+        item: { ...item, ...(item.status ? { status: "in_progress" } : {}), arguments: "" },
+      },
+      {
+        type: done
+          ? "response.function_call_arguments.done"
+          : "response.function_call_arguments.delta",
+        output_index,
+        item_id: item.id,
+        ...(done ? { arguments: item.arguments } : { delta: item.arguments }),
+      },
+      { type: "response.output_item.done", output_index, item },
+    ]),
+    {
+      type: "response.completed",
+      response: {
+        ...completedResponse(responseId, items),
+        ...(options.usage ? { usage: options.usage } : {}),
+      },
+    },
+  ]);
 }
 
 export function writeRestartToolCall(
@@ -51,68 +153,50 @@ export function writeRestartToolCall(
   args: unknown,
   ordinal: number,
 ) {
-  const item = {
-    type: "function_call",
-    id: `fc_${key}_${ordinal}`,
-    call_id: `call_${key}_${ordinal}`,
-    name,
-    arguments: JSON.stringify(args),
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
+  writeRestartToolCalls(response, `resp_${key}_${ordinal}`, [
     {
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: item.id,
-      delta: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${key}_${ordinal}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
+      type: "function_call",
+      id: `fc_${key}_${ordinal}`,
+      call_id: `call_${key}_${ordinal}`,
+      name,
+      arguments: JSON.stringify(args),
     },
   ]);
 }
 
+export function writeRestartJsonText(
+  response: ServerResponse,
+  text: string,
+  key: string,
+  options: { object?: boolean; completed?: boolean } = {},
+) {
+  respondJson(response, {
+    ...(options.object ? { object: "response" } : {}),
+    ...completedResponse(`resp_${key}`, [
+      {
+        type: "message",
+        id: `msg_${key}`,
+        role: "assistant",
+        ...(options.completed ? { status: "completed" } : {}),
+        content: [{ type: "output_text", text, annotations: [] }],
+      },
+    ]),
+  });
+}
+
 export function writeRestartTitle(response: ServerResponse, text: string) {
-  response.writeHead(200, { "content-type": "application/json" });
-  response.end(
-    JSON.stringify({
-      id: "resp_title",
-      object: "response",
-      status: "completed",
-      output: [
-        {
-          type: "message",
-          id: "msg_title",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text, annotations: [] }],
-        },
-      ],
-      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-    }),
-  );
+  writeRestartJsonText(response, text, "title", { object: true, completed: true });
 }
 
 export function readRestartSession(agentDir: string, sessionKey: string) {
-  const row = readRestartRow(
-    path.join(agentDir, "openclaw-agent.sqlite"),
-    "SELECT entry_json FROM session_nodes WHERE session_key = ?",
-    sessionKey,
-  );
-  return typeof row?.entry_json === "string" ? asRecord(JSON.parse(row.entry_json)) : undefined;
-}
-
-function readRestartRow(databasePath: string, sql: string, key: string) {
-  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
+  const database = openNodeSqliteDatabase(path.join(agentDir, "openclaw-agent.sqlite"), {
+    readOnly: true,
+  });
   try {
-    return database.prepare(sql).get(key);
+    const row = database
+      .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+      .get(sessionKey);
+    return typeof row?.entry_json === "string" ? asRecord(JSON.parse(row.entry_json)) : undefined;
   } finally {
     database.close();
   }
@@ -120,34 +204,47 @@ function readRestartRow(databasePath: string, sql: string, key: string) {
 
 export function restartModelConfig(
   model: ReturnType<typeof buildMockOpenAiResponsesProvider>,
-  workspace: string,
-  subagents?: { runTimeoutSeconds: number },
+  workspace: string | undefined,
+  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {},
+  models: Omit<NonNullable<OpenClawConfig["models"]>, "providers"> = {},
 ): Pick<OpenClawConfig, "models" | "agents"> {
+  const { modelRef, providerId, config } = model;
   return {
     models: {
       mode: "replace",
+      ...models,
       providers: {
-        [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
+        [providerId]: { ...config, request: { allowPrivateNetwork: true } },
       },
     },
     agents: {
       defaults: {
         workspace,
-        model: { primary: model.modelRef },
-        modelPolicy: { allow: [model.modelRef] },
+        model: { primary: modelRef },
+        modelPolicy: { allow: [modelRef] },
         models: {
-          [model.modelRef]: {
+          [modelRef]: {
             agentRuntime: { id: "openclaw" },
             params: { transport: "sse", openaiWsWarmup: false },
           },
         },
-        heartbeat: { every: "0m" },
         skipBootstrap: true,
         skills: [],
         timeoutSeconds: 120,
-        ...(subagents ? { subagents } : {}),
+        ...defaults,
       },
       entries: { main: {} },
     },
   };
+}
+
+export async function readRestartTrace(tracePath: string): Promise<string[]> {
+  try {
+    return (await readFile(tracePath, "utf8")).split("\n").filter(Boolean);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
 }

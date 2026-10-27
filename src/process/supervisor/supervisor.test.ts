@@ -7,7 +7,14 @@ import { createProcessSupervisor } from "./supervisor.js";
 import { createStubChildAdapter, type StubChildAdapter } from "./supervisor.test-support.js";
 import type { SpawnInput } from "./types.js";
 
-const { child, pty } = vi.hoisted(() => ({ child: vi.fn(), pty: vi.fn() }));
+const { child, pty, readMemory } = vi.hoisted(() => ({
+  child: vi.fn(),
+  pty: vi.fn(),
+  readMemory:
+    vi.fn<
+      (path: string, encoding: string, callback: (error: null, text: string) => void) => void
+    >(),
+}));
 vi.mock("./adapters/child.js", () => ({
   createChildAdapter: async (
     ...args: Parameters<typeof import("./adapters/child.js").createChildAdapter>
@@ -17,6 +24,10 @@ vi.mock("./adapters/child.js", () => ({
   }),
 }));
 vi.mock("./adapters/pty.js", () => ({ createPtyAdapter: pty }));
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  readFile: readMemory,
+}));
 
 let supervisor: ReturnType<typeof createProcessSupervisor>;
 const spawn = (input: Partial<Extract<SpawnInput, { mode: "child" }>> = {}) =>
@@ -68,6 +79,7 @@ async function expectRejectedReplacement(input: SpawnInput, error: string, cance
 beforeEach(() => {
   child.mockReset();
   pty.mockReset();
+  readMemory.mockReset();
   supervisor = createProcessSupervisor();
 });
 afterEach(() => {
@@ -77,6 +89,48 @@ afterEach(() => {
 });
 
 describe("process supervisor", () => {
+  it.each(["child", "pty", "external"] as const)(
+    "enforces host memory ownership for %s",
+    async (mode) => {
+      vi.useFakeTimers();
+      mockProcessPlatform("linux");
+      const read = readMemory.mockImplementation((_path, _options, callback) => {
+        callback(null, "VmRSS:\t256 kB\n");
+      });
+      const adapter = terminating();
+      adapter.memoryRootPid = 4321;
+      if (mode === "pty") {
+        pty.mockResolvedValueOnce(adapter);
+      } else {
+        prepare(adapter);
+      }
+      const run = await supervisor.spawn({
+        mode: mode === "pty" ? "pty" : "child",
+        argv: ["fixture"],
+        memoryLimitBytes: 128 * 1024,
+        ...(mode === "external" ? { cleanupOwnership: "external" } : {}),
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+      if (mode === "external") {
+        expect(read).not.toHaveBeenCalled();
+        adapter.settle(0);
+      } else {
+        expect(adapter.killMock).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+        expect(read).toHaveBeenCalledWith("/proc/4321/status", "utf8", expect.any(Function));
+        await expect(run.wait()).resolves.toMatchObject({
+          reason: "memory-limit",
+          timedOut: false,
+          stderr: expect.stringContaining("Command killed for exceeding its host memory bound"),
+        });
+      }
+      await run.wait();
+      await supervisor.shutdown();
+      const reads = read.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(read).toHaveBeenCalledTimes(reads);
+    },
+  );
+
   it("passes private secret input and exact environment to the child adapter", async () => {
     const adapter = prepare();
     const secretInput = { fd: 3, createData: () => Buffer.from("secret") };
@@ -194,9 +248,13 @@ describe("process supervisor", () => {
     const replacementAdapter = createStubChildAdapter();
     const later = prepare();
     const firstRuns = [spawn({ scopeKey: "scope" }), spawn({ scopeKey: "scope" })];
-    const replacement = spawn({ scopeKey: "scope", replaceExistingScope: true });
+    let argument = "before-admission";
+    const resolveArgs = vi.fn(() => [argument]);
+    const replacement = spawn({ scopeKey: "scope", replaceExistingScope: true, resolveArgs });
     const laterRun = spawn({ scopeKey: "scope" });
     expect(child).toHaveBeenCalledTimes(2);
+    expect(resolveArgs).not.toHaveBeenCalled();
+    argument = "after-admission";
     starts[1]!.resolve(predecessors[1]!);
     await firstRuns[1];
     expect(child).toHaveBeenCalledTimes(2);
@@ -211,6 +269,8 @@ describe("process supervisor", () => {
     );
     await admitted.promise;
     expect(child).toHaveBeenCalledTimes(3);
+    expect(resolveArgs).toHaveBeenCalledOnce();
+    expect(child.mock.calls[2]?.[0].argv).toEqual(["fixture", "after-admission"]);
     expect(later.killMock).not.toHaveBeenCalled();
     const runs = await Promise.all([...firstRuns, replacement, laterRun]);
     expect(child).toHaveBeenCalledTimes(4);
@@ -296,24 +356,6 @@ describe("process supervisor", () => {
       "exit",
       "exit",
     ]);
-  });
-
-  it("resolves invocation arguments only after queued scope admission", async () => {
-    const startup = deferStartup();
-    const first = terminating();
-    const replacement = prepare();
-    const firstRun = spawn({ scopeKey: "scope" });
-    let argument = "before-admission";
-    const resolveArgs = vi.fn(() => [argument]);
-    const pending = spawn({ scopeKey: "scope", replaceExistingScope: true, resolveArgs });
-    expect(resolveArgs).not.toHaveBeenCalled();
-    argument = "after-admission";
-    startup.resolve(first);
-    const run = await pending;
-    expect(resolveArgs).toHaveBeenCalledOnce();
-    expect(child.mock.calls[1]?.[0].argv).toEqual(["fixture", "after-admission"]);
-    replacement.settle(0);
-    await Promise.all([(await firstRun).wait(), run.wait()]);
   });
 
   it("leaves the active scope intact when replacement arguments fail", async () => {
@@ -654,23 +696,37 @@ describe("process supervisor", () => {
     expect(adapter.disposeMock).toHaveBeenCalledOnce();
   });
 
-  it("retains cancellation ownership after the root result until cleanup fails", async () => {
-    const { adapter, extinction } = owned();
-    const run = await spawn({ scopeKey: "scope" });
-    adapter.emitStdout("root output");
-    adapter.settle(23);
-    const root = await run.wait();
-    expect(root).toMatchObject({ reason: "exit", exitCode: 23, stdout: "root output" });
-    expect(adapter.disposeMock).not.toHaveBeenCalled();
-    supervisor.cancelScope("scope");
-    expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
-    extinction.reject(new Error("cleanup identity lost"));
-    await expect(run.waitForExtinction!()).rejects.toThrow("cleanup identity lost");
-    expect(adapter.disposeMock).toHaveBeenCalledOnce();
-    await expect(run.wait()).resolves.toBe(root);
-    supervisor.cancel(run.runId);
-    expect(adapter.killMock).toHaveBeenCalledOnce();
-  });
+  it.each([
+    ["transport-only", "SIGKILL"],
+    ["required-all", "SIGTERM"],
+  ] as const)(
+    "retains %s ownership after the root result until cleanup fails",
+    async (policy, signal) => {
+      const { adapter, extinction } = owned();
+      const cleanup = supervisor.acquireScopeCleanup("scope", { processTree: policy });
+      const run = await spawn({ scopeKey: "scope" });
+      adapter.emitStdout("root output");
+      adapter.settle(23);
+      const root = await run.wait();
+      expect(root).toMatchObject({ reason: "exit", exitCode: 23, stdout: "root output" });
+      expect(adapter.disposeMock).not.toHaveBeenCalled();
+      supervisor.cancelScope("scope");
+      expect(adapter.killMock).toHaveBeenCalledWith(signal);
+      extinction.reject(new Error("cleanup identity lost"));
+      await expect(run.waitForExtinction!()).rejects.toThrow("cleanup identity lost");
+      expect(adapter.disposeMock).toHaveBeenCalledOnce();
+      await expect(run.wait()).resolves.toBe(root);
+      supervisor.cancel(run.runId);
+      expect(adapter.killMock).toHaveBeenCalledOnce();
+      await expect(cleanup()).rejects.toThrow("cleanup identity lost");
+      await expect(cleanup()).rejects.toThrow("cleanup identity lost");
+      await expect(
+        supervisor.acquireScopeCleanup("scope", { processTree: "required-all" })(),
+      ).resolves.toBeUndefined();
+      await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+      await expect(spawn()).rejects.toThrow("process supervisor is shut down");
+    },
+  );
 
   it("drains cancelled startups and same-ID siblings before reporting ownership failure", async () => {
     const startup = deferStartup();

@@ -22,7 +22,7 @@ function mergePolicyAllowlist<TPolicy extends ToolPolicyLike>(
  * diverge on profile `alsoAllow`, sender, sandbox, delegation, or runtime-cap semantics.
  */
 export function resolveConversationToolPolicies(params: {
-  capabilityProfile: ResolvedConversationCapabilityProfile;
+  capabilityProfile: Pick<ResolvedConversationCapabilityProfile, "policy">;
   additionalProfileAllow?: readonly string[];
   additionalPolicyAllow?: readonly string[];
   additionalInheritedAllow?: readonly string[];
@@ -65,7 +65,6 @@ export function resolveConversationToolPolicies(params: {
 export function buildConversationToolPolicyPipelineSteps(params: {
   capabilityProfile: ResolvedConversationCapabilityProfile;
   policies: ReturnType<typeof resolveConversationToolPolicies>;
-  additionalStepsAfterSandbox?: ToolPolicyPipelineStep[];
   includeRuntimeToolPolicy: boolean;
   unavailableCoreToolReason?: string;
 }): ToolPolicyPipelineStep[] {
@@ -99,7 +98,6 @@ export function buildConversationToolPolicyPipelineSteps(params: {
       unavailableCoreToolReason: params.unavailableCoreToolReason,
     }),
     step(params.policies.sandboxPolicy, "sandbox tools.allow"),
-    ...(params.additionalStepsAfterSandbox ?? []),
     step(params.policies.subagentPolicy, "subagent tools.allow"),
     ...(params.includeRuntimeToolPolicy
       ? [step(params.policies.runtimeToolPolicy, "runtime tools.allow", "runtime")]

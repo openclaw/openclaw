@@ -23,6 +23,11 @@ import {
 } from "./sqlite-worker-operation-admission.js";
 
 const resources = sqliteMaintenanceFixture();
+const throwingLogger = () => ({
+  warn: vi.fn(() => {
+    throw new Error("diagnostics failed");
+  }),
+});
 
 function fixture(mode: "immediate" | "deferred" = "immediate") {
   const db = resources.entries();
@@ -229,11 +234,7 @@ it.each(["immediate", "deferred"] as const)(
   (mode) => {
     const { db, advance, run } = fixture(mode);
     const execSpy = spySqliteExec(db, undefined, () => advance(1_500));
-    const logger = {
-      warn: vi.fn(() => {
-        throw new Error("diagnostics failed");
-      }),
-    };
+    const logger = throwingLogger();
     const withCommit = vi.fn((commit: () => void) => commit());
     expect(
       run(
@@ -280,11 +281,7 @@ it.each(["begin", "commit"] as const)(
         throw error;
       }
     });
-    const logger = {
-      warn: vi.fn(() => {
-        throw new Error("diagnostics failed");
-      }),
-    };
+    const logger = throwingLogger();
     const operation = vi.fn(() => {
       db.prepare("INSERT INTO entries VALUES ('uncommitted')").run();
     });

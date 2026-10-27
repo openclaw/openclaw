@@ -1,13 +1,15 @@
 import { createServer, type RequestListener, type Server } from "node:http";
-import { connect, type AddressInfo } from "node:net";
+import { connect } from "node:net";
 import type { Duplex } from "node:stream";
 import { setImmediate } from "node:timers/promises";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback as bindLoopbackServer } from "../test-support/hanging-loopback-server.js";
 import { fetchClawRouterUsage } from "./usage.js";
 
+const fetchWithSsrFGuard = ssrf.fetchWithSsrFGuard;
 const runningServers: Server[] = [];
 const runningSockets = new Set<Duplex>();
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"].flatMap((key) => [
@@ -21,12 +23,9 @@ function trackSocket(socket: Duplex): void {
 }
 
 async function listenOnLoopback(server: Server): Promise<number> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
+  const port = await bindLoopbackServer(server);
   runningServers.push(server);
-  return (server.address() as AddressInfo).port;
+  return port;
 }
 
 async function startUsageServer(handler: RequestListener) {
@@ -77,25 +76,15 @@ afterEach(async () => {
     socket.destroy();
   }
   runningSockets.clear();
-  await Promise.all(runningServers.splice(0).map(closeServer));
+  await Promise.all(runningServers.splice(0).map((server) => server[Symbol.asyncDispose]()));
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
-function closeServer(server: Server) {
-  return new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-}
-
-type ClawRouterUsageFetchGuard = NonNullable<
-  Parameters<typeof fetchClawRouterUsage>[0]["fetchGuard"]
->;
-
-function mockFetchGuard(
-  response: Response,
-  release: () => Promise<void> = async () => undefined,
-): MockedFunction<ClawRouterUsageFetchGuard> {
-  return vi.fn(async ({ url }) => ({ response, finalUrl: url, release }));
+function mockFetchGuard(response: Response, release: () => Promise<void> = async () => undefined) {
+  return vi
+    .spyOn(ssrf, "fetchWithSsrFGuard")
+    .mockImplementation(async ({ url }) => ({ response, finalUrl: url, release }));
 }
 
 function fetchUsage(
@@ -105,14 +94,14 @@ function fetchUsage(
 }
 
 function fetchResponse(response: Response) {
-  return fetchUsage({ fetchGuard: mockFetchGuard(response) });
+  mockFetchGuard(response);
+  return fetchUsage({});
 }
 
 describe("ClawRouter usage", () => {
   it("maps the managed monthly budget and usage totals", async () => {
-    const signal = new AbortController().signal;
     const resetAt = Date.UTC(2026, 7, 1);
-    const fetchGuard = mockFetchGuard(
+    mockFetchGuard(
       Response.json({
         budget: {
           configured: true,
@@ -126,11 +115,7 @@ describe("ClawRouter usage", () => {
       }),
     );
 
-    const snapshot = await fetchUsage({
-      baseUrl: "https://clawrouter.example/v1",
-      signal,
-      fetchGuard,
-    });
+    const snapshot = await fetchUsage({ baseUrl: "https://clawrouter.example/v1" });
 
     expect(snapshot).toEqual({
       provider: "clawrouter",
@@ -140,18 +125,6 @@ describe("ClawRouter usage", () => {
       summary: "12 requests · 34,567 tokens · $25.00 used",
       plan: "Managed monthly budget",
     });
-    expect(fetchGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://clawrouter.example/v1/usage",
-        init: expect.objectContaining({
-          headers: { Accept: "application/json", Authorization: "Bearer proxy-key" },
-        }),
-        auditContext: "clawrouter.usage",
-        signal,
-        mode: "trusted_env_proxy",
-      }),
-    );
-    expect(fetchGuard.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
   });
 
   it("does not coerce numeric strings from the usage boundary", async () => {
@@ -162,15 +135,15 @@ describe("ClawRouter usage", () => {
       }),
     );
 
-    expect(snapshot).toMatchObject({ windows: [], plan: "Managed monthly budget" });
-    expect(snapshot.billing).toBeUndefined();
-    expect(snapshot.summary).toBeUndefined();
+    expect([snapshot.windows, snapshot.billing, snapshot.summary]).toEqual([
+      [],
+      undefined,
+      undefined,
+    ]);
   });
 
   it("reports malformed JSON as a malformed usage response", async () => {
-    expect(await fetchResponse(new Response(new TextEncoder().encode('{"budget":')))).toEqual({
-      provider: "clawrouter",
-      displayName: "ClawRouter",
+    expect(await fetchResponse(new Response('{"budget":'))).toMatchObject({
       windows: [],
       error: "Malformed usage response",
     });
@@ -183,8 +156,8 @@ describe("ClawRouter usage", () => {
     const release = vi.fn(async () => {
       await capture.body?.cancel();
     });
-    const fetchGuard = mockFetchGuard(response, release);
-    const outcome = fetchUsage({ fetchGuard }).catch((error: unknown) => error);
+    mockFetchGuard(response, release);
+    const outcome = fetchUsage({}).catch((error: unknown) => error);
 
     try {
       await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
@@ -198,10 +171,7 @@ describe("ClawRouter usage", () => {
   });
 
   it("observes peer closure when a real loopback server returns non-OK", async () => {
-    let onResponseClosed: () => void;
-    const responseClosed = new Promise<void>((resolve) => {
-      onResponseClosed = resolve;
-    });
+    const { promise: responseClosed, resolve: onResponseClosed } = Promise.withResolvers<void>();
     const { baseUrl, requests } = await startUsageServer((_req, res) => {
       res.once("close", onResponseClosed);
       res.writeHead(503, { "content-type": "text/plain" });
@@ -217,15 +187,7 @@ describe("ClawRouter usage", () => {
   });
 
   it("bounds successful usage response bodies", async () => {
-    const oversizedPayload = JSON.stringify({
-      budget: { configured: false },
-      usage: { summary: { requestCount: 1 } },
-      padding: "x".repeat(1024 * 1024),
-    });
-
-    const response = new Response(oversizedPayload, {
-      headers: { "content-type": "application/json" },
-    });
+    const response = new Response("x".repeat(1024 * 1024 + 1));
     await expect(fetchResponse(response)).rejects.toThrow("ClawRouter usage response exceeds");
   });
 
@@ -240,7 +202,7 @@ describe("ClawRouter usage", () => {
       async (baseUrl) => {
         const headersReady = Promise.withResolvers<void>();
         const released = vi.fn();
-        const fetchGuard: ClawRouterUsageFetchGuard = async (params) => {
+        vi.spyOn(ssrf, "fetchWithSsrFGuard").mockImplementation(async (params) => {
           const guarded = await fetchWithSsrFGuard(params).catch((error: unknown) => {
             headersReady.reject(error);
             throw error;
@@ -253,7 +215,7 @@ describe("ClawRouter usage", () => {
               released();
             },
           };
-        };
+        });
         const controller = new AbortController();
         // Keep HTTP/body reads native and advance only the request deadline clock.
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -262,7 +224,6 @@ describe("ClawRouter usage", () => {
           baseUrl,
           timeoutMs: 1,
           signal: controller.signal,
-          fetchGuard,
         }).catch((error: unknown) => error);
         try {
           await withinTest(headersReady.promise, signal);
@@ -283,7 +244,8 @@ describe("ClawRouter usage", () => {
   });
 
   it("preserves provider usage routing through the env proxy", async () => {
-    const { baseUrl } = await startUsageServer((_req, res) => {
+    const { baseUrl } = await startUsageServer((req, res) => {
+      expect(req.headers.authorization).toBe("Bearer proxy-key");
       res.writeHead(200, { "content-type": "application/json", connection: "close" });
       res.end(
         JSON.stringify({

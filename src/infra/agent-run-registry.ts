@@ -105,6 +105,7 @@ function storeRunContext(runId: string, context: AgentRunContext, predecessor?: 
   context.localModelWait = undefined;
   context.eventState = { seq: 0 };
   context.modelCallSequence = { value: 0 };
+  context.acceptedUserReply = undefined;
   context.registeredAt ??= Date.now();
   getAgentRunRegistryState().contexts.set(runId, context);
   recordAgentEventRouting(runId, context, predecessor);
@@ -161,7 +162,6 @@ export function registerAgentRunContext(
     "projectSessionActive",
     "projectSessionLifecycle",
     "projectSessionMessages",
-    "isHeartbeat",
   ] as const) {
     if (context[key] !== undefined) {
       existing[key] = context[key];
@@ -323,34 +323,6 @@ export function getAgentRunContextOwnership(runId: string): AgentRunContextOwner
   return getAgentRunRegistryState().owners.get(runId);
 }
 
-/** Records the latest next-check proposal on the matching live cron run. */
-export function recordCronNextCheckProposal(runId: string, jobId: string, delayMs: number): void {
-  const context = getAgentRunContext(runId);
-  const cronRun = context?.cronRunsByJobId?.get(jobId);
-  if (!cronRun || !hasAgentRunContextExecutionOwner(runId)) {
-    throw new Error("cron next_check is only available to the currently running job");
-  }
-  if (!cronRun.nextCheckEnabled) {
-    throw new Error("cron next_check requires pacing or a one-shot session continuation");
-  }
-  cronRun.nextCheckMs = delayMs;
-}
-
-/** Consumes one successful cron run's proposal so it cannot affect a later run. */
-export function consumeCronNextCheckProposal(runId: string, jobId: string): number | undefined {
-  const context = getAgentRunContext(runId);
-  const cronRuns = context?.cronRunsByJobId;
-  const cronRun = cronRuns?.get(jobId);
-  if (!cronRun) {
-    return undefined;
-  }
-  cronRuns?.delete(jobId);
-  if (cronRuns?.size === 0 && context) {
-    delete context.cronRunsByJobId;
-  }
-  return cronRun.nextCheckMs;
-}
-
 /** Claims approval authority for the exact admitted operational execution. */
 export function claimAgentRunDelegatedAuthority(
   operationalRunInstance: Readonly<{ instanceId: string; runId: string }>,
@@ -410,6 +382,7 @@ export function claimAgentRunDelegatedAuthority(
     releaseAgentRunContext(runId, claimId);
     throw new Error("agent run delegated authority lost its lifecycle during admission");
   }
+  context.acceptedUserReply = undefined;
   context.delegatedAuthority = authority;
   context.assertSourceCurrent = assertSourceCurrent;
   return authority;
@@ -632,6 +605,31 @@ export function resolveProjectedAgentRunProgressState(
     params,
     params.index ?? buildProjectedAgentRunIndex(),
   );
+}
+
+// Both the snapshot and its prepared queries are weak: cold rows never pin old run indexes.
+const preparedProgressStates = new WeakMap<
+  ProjectedAgentRunIndex,
+  WeakMap<object, ProjectedAgentRunState | null>
+>();
+
+/** Bind an immutable query once; each owner-published run index supplies its progress fact. */
+export function prepareProjectedAgentRunProgressState(
+  query: Readonly<Parameters<typeof resolveAgentRunProjectionProgressState>[0]>,
+) {
+  return (index: ProjectedAgentRunIndex): ProjectedAgentRunState | undefined => {
+    let facts = preparedProgressStates.get(index);
+    if (!facts) {
+      facts = new WeakMap();
+      preparedProgressStates.set(index, facts);
+    }
+    let progress = facts.get(query);
+    if (progress === undefined) {
+      progress = resolveAgentRunProjectionProgressState(query, index) ?? null;
+      facts.set(query, progress);
+    }
+    return progress ?? undefined;
+  };
 }
 
 /** Clears context state for a run that has ended or been discarded. */

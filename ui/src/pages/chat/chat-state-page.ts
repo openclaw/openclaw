@@ -13,12 +13,15 @@ import {
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
 import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { currentDisplaySpeechConfig } from "../../lib/config/config-state-model.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import { resolveSpeechTextLimit } from "../../lib/speech-playback.ts";
+import { DraftPreferenceState } from "../new-session/draft-preference-state.ts";
 import { loadPageAssistantIdentity } from "./chat-assistant-identity.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { createChatErrorState } from "./chat-error-state.ts";
@@ -30,6 +33,7 @@ import {
 } from "./chat-history-events.ts";
 import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
+import { ChatPaneComposerHandoff } from "./chat-pane-attachment-handoff.ts";
 import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
@@ -51,6 +55,7 @@ import {
   openSessionWorkspacePreview,
   getSessionWorkspace,
   clearSessionWorkspacePreviews,
+  sessionWorkspaceForHost,
 } from "./components/chat-session-workspace-state.ts";
 import {
   handleChatDraftChange,
@@ -130,6 +135,7 @@ export function createPageState(
   const errors = createChatErrorState();
   const presentedFields = {
     settings,
+    accessPreferenceRevision: 0,
     // Unscoped names retain the gateway-wide fallback.
     assistantName:
       bootstrapIdentity?.name ??
@@ -149,6 +155,7 @@ export function createPageState(
     canvasPluginSurfaceUrl: null,
     terminalAvailable: false,
     browserPanelAvailable: false,
+    browserPanelUnavailableReason: "disconnected",
     assistantAgentId: context.agentSelection.state.selectedId,
     sessionKey: initialSessionKey,
     currentSessionId: undefined,
@@ -196,6 +203,11 @@ export function createPageState(
   } satisfies Partial<ChatPageHost>;
   const state = Object.assign(errors, presentedFields, {
     uploadConfig: context.config,
+    outboxRecovery: {
+      gateway: context.gateway,
+      retainedAttachmentIds: (attachments: readonly ChatAttachment[]) =>
+        ChatPaneComposerHandoff.retainedAttachmentIds(context, attachments),
+    },
     captureComposerRecoveryReload: () => {
       const options = createGatewayControlUiReloadOptions(context.gateway);
       return () => retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...options });
@@ -204,6 +216,7 @@ export function createPageState(
     hasPendingInitialTurn: (sessionKey: string) =>
       context.placementStartup.hasPendingTurn(sessionKey),
     chatSubmissions: context.chatSubmissions,
+    reconcileApprovalTerminals: context.overlays?.reconcileApprovalTerminals,
     assistantIdentityRequestVersion: 0,
     userName: identity.name,
     userAvatar: identity.avatar,
@@ -309,13 +322,17 @@ export function createPageState(
         expectedLeafEntryId: resolveDisplayedLeafEntryId(state),
       }),
     async () => {
-      await context.runtimeConfig.ensureLoaded();
-      return resolveSpeechTextLimit(
-        context.runtimeConfig.state.configSnapshot?.runtimeConfig ??
-          context.runtimeConfig.state.configSnapshot?.config,
-      );
+      let config = currentDisplaySpeechConfig(context.runtimeConfig.state);
+      if (!config || !Object.hasOwn(config, "tts")) {
+        await context.runtimeConfig.ensureDisplayLoaded();
+        config = currentDisplaySpeechConfig(context.runtimeConfig.state);
+      }
+      return resolveSpeechTextLimit(config);
     },
   );
+  state.accessPreferences = DraftPreferenceState.forChat(context, () => {
+    state.accessPreferenceRevision = (state.accessPreferenceRevision ?? 0) + 1;
+  });
   state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
   state.handleSendChat = (messageOverride, options, submissionAction) => {
     const message = messageOverride ?? state.chatMessage;
@@ -402,7 +419,15 @@ export function createPageState(
       transientResources.clear();
       transientResourceScope = scope;
     }
-    const normalized = normalizeSidebarLayout(layout);
+    let normalized = normalizeSidebarLayout(layout);
+    // New tab is a live layout fact, not a saved resource or settings schema.
+    // The persistence normalizer deliberately strips it again below.
+    if (layout.newTab && normalized.columns[0]) {
+      normalized.newTab = { ...layout.newTab };
+      if (layout.columns[0]?.activePanelId === layout.newTab.id) {
+        normalized.columns[0].activePanelId = layout.newTab.id;
+      }
+    }
     const previous = state.sidebarLayout;
     const includesResource = (value: SidebarLayout, slot: "desktop" | "browser") =>
       value.columns.some((column) => column.panels.some((panel) => panel.slot === slot));
@@ -421,6 +446,12 @@ export function createPageState(
       if (!panel || panel.environmentId !== undefined) {
         transientResources.delete(resource);
       }
+    }
+    const retiringResource = options?.retireAutomaticResource;
+    if (retiringResource && transientResources.has(retiringResource)) {
+      // Discovery can retire only its own transient tab, never an explicit target.
+      normalized = closeSlot(normalized, retiringResource);
+      transientResources.delete(retiringResource);
     }
     if (
       previous.resourceAutoOpenDismissed ||
@@ -479,6 +510,9 @@ export function createPageState(
     if (!normalizedPanelId) {
       return;
     }
+    if (state.sidebarLayout.newTab?.id === normalizedPanelId) {
+      return;
+    }
     const selected = state.sidebarLayout.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.id === normalizedPanelId)?.slot;
@@ -504,6 +538,23 @@ export function createPageState(
         : content?.kind === "file"
           ? { id: `file:${content.path}`, label: content.name }
           : null);
+    if (fileTab && content) {
+      const preview = openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
+      if (content.kind === "mcp-app" && preview.content.kind === "mcp-app") {
+        // A second app link changes host context on the retained instance.
+        preview.content = content;
+        preview.label = fileTab.label;
+        const workspace = getSessionWorkspace(state);
+        workspace.previews = [...workspace.previews];
+        sessionWorkspaceForHost(state).publish();
+      }
+    } else {
+      state.sidebarContent = content;
+    }
+    // Internal catalog navigation updates the retained reader, never the panel selection.
+    if (content?.fileTab?.intent === "navigate") {
+      return undefined;
+    }
     const targetSlot = fileTab ? "workspace" : "detail";
     let opened = openSlot(state.sidebarLayout, targetSlot);
     const targetPanel = opened.columns
@@ -517,22 +568,11 @@ export function createPageState(
       availableWidth > 0 && availableWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(opened, availableWidth) ?? opened)
         : opened;
-    if (fileTab && content) {
-      const preview = openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
-      if (content.kind === "mcp-app" && preview.content.kind === "mcp-app") {
-        // A second app link changes host context on the retained instance.
-        preview.content = content;
-        preview.label = fileTab.label;
-        const workspace = getSessionWorkspace(state);
-        workspace.previews = [...workspace.previews];
-      }
-    } else {
-      state.sidebarContent = content;
-    }
     state.updateSidebarLayout(fitted);
     if (targetPanel) {
       state.updateSidebarActivePanel(targetPanel.id);
     }
+    return targetSlot;
   };
   state.handleCloseSidebar = (slot) => {
     if (slot === "workspace") {
@@ -566,7 +606,7 @@ export function createPageState(
   state.handleCloseImage = () => {
     invalidateImageLightbox(state);
   };
-  projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
+  projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory", "branchQuery"]);
   {
     let value = state.chatQueue;
     const queue = projectSource(state, {
@@ -586,13 +626,18 @@ export function createPageState(
   {
     const source = chatRunPresentation(state);
     const projection = projectOwner(source, (owner) => owner.values);
+    const nonText = projectSource(source, {
+      read: (owner) => owner.values,
+      subscribe: (owner, notify) => owner.subscribeNonText(notify),
+      equality: "revision",
+    });
     for (const key of source.fields) {
       const descriptor = Object.getOwnPropertyDescriptor(state, key)!;
       Object.defineProperty(state, key, {
         ...descriptor,
         get() {
           if (getObserver()) {
-            projection.read();
+            (key === "chatStream" ? projection : nonText).read();
           }
           return Reflect.get(source.values, key);
         },

@@ -27,45 +27,41 @@ const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
 type DreamingStatus = NonNullable<DoctorMemoryStatusPayload["dreaming"]>;
 export type DreamingEntry = DreamingStatus["shortTermEntries"][number];
 
-type WikiImportInsightItem = {
-  pagePath: string;
-  title: string;
-  riskLevel: "low" | "medium" | "high" | "unknown";
-  riskReasons: string[];
-  labels: string[];
-  topicKey: string;
-  topicLabel: string;
-  digestStatus: "available" | "withheld";
-  activeBranchMessages: number;
-  userMessageCount: number;
-  assistantMessageCount: number;
-  firstUserLine?: string;
-  lastUserLine?: string;
-  assistantOpener?: string;
-  summary: string;
-  candidateSignals: string[];
-  correctionSignals: string[];
-  preferenceSignals: string[];
-  createdAt?: string;
-  updatedAt?: string;
-};
-
-type WikiImportInsightCluster = {
-  key: string;
-  label: string;
-  itemCount: number;
-  highRiskCount: number;
-  withheldCount: number;
-  preferenceSignalCount: number;
-  updatedAt?: string;
-  items: WikiImportInsightItem[];
-};
-
 export type WikiImportInsights = {
   sourceType: "chatgpt";
   totalItems: number;
   totalClusters: number;
-  clusters: WikiImportInsightCluster[];
+  clusters: {
+    key: string;
+    label: string;
+    itemCount: number;
+    highRiskCount: number;
+    withheldCount: number;
+    preferenceSignalCount: number;
+    updatedAt?: string;
+    items: {
+      pagePath: string;
+      title: string;
+      riskLevel: "low" | "medium" | "high" | "unknown";
+      riskReasons: string[];
+      labels: string[];
+      topicKey: string;
+      topicLabel: string;
+      digestStatus: "available" | "withheld";
+      activeBranchMessages: number;
+      userMessageCount: number;
+      assistantMessageCount: number;
+      firstUserLine?: string;
+      lastUserLine?: string;
+      assistantOpener?: string;
+      summary: string;
+      candidateSignals: string[];
+      correctionSignals: string[];
+      preferenceSignals: string[];
+      createdAt?: string;
+      updatedAt?: string;
+    }[];
+  }[];
   truncated: boolean;
 };
 
@@ -85,27 +81,23 @@ type WikiOverviewItem = {
   snippet?: string;
 };
 
-type WikiOverviewCluster = {
-  key: WikiOverviewItem["kind"];
-  label: string;
-  itemCount: number;
-  claimCount: number;
-  questionCount: number;
-  contradictionCount: number;
-  updatedAt?: string;
-  items: WikiOverviewItem[];
-};
-
-type WikiOverviewPageCounts = Record<WikiOverviewItem["kind"], number>;
-
 export type WikiOverview = {
   totalItems: number;
   totalPages: number;
-  pageCounts: WikiOverviewPageCounts;
+  pageCounts: Record<WikiOverviewItem["kind"], number>;
   totalClaims: number;
   totalQuestions: number;
   totalContradictions: number;
-  clusters: WikiOverviewCluster[];
+  clusters: {
+    key: WikiOverviewItem["kind"];
+    label: string;
+    itemCount: number;
+    claimCount: number;
+    questionCount: number;
+    contradictionCount: number;
+    updatedAt?: string;
+    items: WikiOverviewItem[];
+  }[];
   truncated: boolean;
 };
 
@@ -117,8 +109,6 @@ export type WikiPagePreview = {
   truncated?: boolean;
   updatedAt?: string;
 };
-
-export type WikiPreviewState = { page: WikiPagePreview; loading: boolean; error: string | null };
 
 export type DreamingViewState = {
   dreamIndex: number;
@@ -170,28 +160,25 @@ export type DreamingResourceKey =
   | "wikiImportInsights"
   | "wikiOverview";
 
+type DreamingResourceRead = { promise: Promise<void>; pending: boolean };
+
 export type DreamingState = {
+  resourceReads: Partial<Record<DreamingResourceKey, DreamingResourceRead>>;
   client: GatewayBrowserClient | null;
   connected: boolean;
   hello: GatewayHelloOk | null;
   configSnapshot: ConfigSnapshot | null;
   selectedAgentId: string | null;
-  dreamingStatusLoading: boolean;
+  // Mutation/config outcome; read failures stay on the issued promise.
   dreamingStatusError: string | null;
   dreamingStatus: DreamingStatus | null;
   dreamingModeSaving: boolean;
-  dreamDiaryLoading: boolean;
   dreamDiaryActionLoading: boolean;
   dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
   dreamDiaryActionArchivePath: string | null;
-  dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
-  wikiImportInsightsLoading: boolean;
-  wikiImportInsightsError: string | null;
   wikiImportInsights: WikiImportInsights | null;
-  wikiOverviewLoading: boolean;
-  wikiOverviewError: string | null;
   wikiOverview: WikiOverview | null;
   lastError: string | null;
 };
@@ -202,27 +189,21 @@ export function createDreamingState(
   > = {},
 ): DreamingState {
   return {
+    resourceReads: {},
     client: initial.client ?? null,
     connected: initial.connected ?? false,
     hello: initial.hello ?? null,
     configSnapshot: initial.configSnapshot ?? null,
     selectedAgentId: initial.selectedAgentId ?? null,
-    dreamingStatusLoading: false,
     dreamingStatusError: null,
     dreamingStatus: null,
     dreamingModeSaving: false,
-    dreamDiaryLoading: false,
     dreamDiaryActionLoading: false,
     dreamDiaryActionMessage: null,
     dreamDiaryActionArchivePath: null,
-    dreamDiaryError: null,
     dreamDiaryPath: null,
     dreamDiaryContent: null,
-    wikiImportInsightsLoading: false,
-    wikiImportInsightsError: null,
     wikiImportInsights: null,
-    wikiOverviewLoading: false,
-    wikiOverviewError: null,
     wikiOverview: null,
     lastError: null,
   };
@@ -351,13 +332,11 @@ type DreamingResourcePayloads = {
   wikiOverview: WikiOverview;
 };
 
-type DreamingResourceSpec<Key extends DreamingResourceKey> = {
-  method: string;
-  apply: (state: DreamingState, payload: DreamingResourcePayloads[Key]) => void;
-};
-
 const DREAMING_RESOURCES: {
-  [Key in DreamingResourceKey]: DreamingResourceSpec<Key>;
+  [Key in DreamingResourceKey]: {
+    method: string;
+    apply: (state: DreamingState, payload: DreamingResourcePayloads[Key]) => void;
+  };
 } = {
   dreamingStatus: {
     method: "doctor.memory.status",
@@ -399,8 +378,6 @@ async function loadDreamingResourceSpec<Key extends DreamingResourceKey>(
   spec: (typeof DREAMING_RESOURCES)[Key],
 ): Promise<void> {
   const agentId = resolveSelectedAgentId(state);
-  const loadingKey: `${Key}Loading` = `${key}Loading`;
-  const errorKey: `${Key}Error` = `${key}Error`;
   if (!agentId) {
     return;
   }
@@ -412,8 +389,7 @@ async function loadDreamingResourceSpec<Key extends DreamingResourceKey>(
     (key === "wikiImportInsights" || key === "wikiOverview") &&
     !canCallMemoryWikiMethod(state, spec.method)
   ) {
-    state[loadingKey] = false;
-    state[errorKey] = null;
+    delete state.resourceReads[key];
     if (key === "wikiImportInsights") {
       state.wikiImportInsights = null;
     } else {
@@ -422,20 +398,32 @@ async function loadDreamingResourceSpec<Key extends DreamingResourceKey>(
     return;
   }
 
-  if (state[loadingKey]) {
+  if (state.resourceReads[key]?.pending) {
     return;
   }
 
-  state[loadingKey] = true;
-  state[errorKey] = null;
+  if (key === "dreamingStatus") {
+    state.dreamingStatusError = null;
+  }
   // The Memory owner replaces this state when its agent or connection epoch changes.
-  try {
+  const promise = (async () => {
     const payload = await client.request<DreamingResourcePayloads[Key]>(spec.method, { agentId });
     spec.apply(state, payload);
-  } catch (error) {
-    state[errorKey] = formatUiError(error);
+  })();
+  const issued = { promise, pending: true };
+  state.resourceReads[key] = issued;
+  try {
+    await promise;
+  } catch {
+    // Rendering consumes the rejected read; actions keep their own confirmed outcome.
   } finally {
-    state[loadingKey] = false;
+    issued.pending = false;
+  }
+}
+
+export function clearSettledDreamingRead(state: DreamingState, key: DreamingResourceKey) {
+  if (!state.resourceReads[key]?.pending) {
+    delete state.resourceReads[key];
   }
 }
 
@@ -457,7 +445,8 @@ export async function runDreamDiaryAction(
   }
   state.dreamDiaryActionLoading = true;
   state.dreamingStatusError = null;
-  state.dreamDiaryError = null;
+  clearSettledDreamingRead(state, "dreamingStatus");
+  clearSettledDreamingRead(state, "dreamDiary");
   state.dreamDiaryActionMessage = null;
   state.dreamDiaryActionArchivePath = null;
   try {
@@ -581,6 +570,7 @@ export async function updateDreamingEnabled(
   }
   state.dreamingModeSaving = true;
   state.dreamingStatusError = null;
+  clearSettledDreamingRead(state, "dreamingStatus");
   let updated: boolean;
   try {
     updated = await config.patch({

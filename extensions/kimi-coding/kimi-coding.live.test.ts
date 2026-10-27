@@ -10,6 +10,10 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
 import plugin from "./index.js";
 import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
 
@@ -77,13 +81,7 @@ async function runReasoningScenario(params: {
   }
 
   const context: Context = {
-    messages: [
-      {
-        role: "user",
-        content: "Reply with exactly LIVE_OK and no punctuation.",
-        timestamp: Date.now(),
-      },
-    ],
+    messages: [makeUserMessage("Reply with exactly LIVE_OK and no punctuation.", Date.now())],
   };
   return collectDoneMessage(
     wrapped(resolveModel(params.modelId), context, {
@@ -140,13 +138,11 @@ describeLive("Kimi Code K3 reasoning live", () => {
       description: "Read a source file by its relative path.",
       parameters: Type.Object({ path: Type.String() }, { additionalProperties: false }),
     };
-    const firstUser = {
-      role: "user" as const,
-      content:
-        `Read ${sourcePath} with read_file and determine what retryDelayMs(3) returns. ` +
+    const firstUser = makeUserMessage(
+      `Read ${sourcePath} with read_file and determine what retryDelayMs(3) returns. ` +
         "Read the implementation before answering, then return only the numeric result.",
-      timestamp: Date.now(),
-    };
+      Date.now(),
+    );
     const model = resolveModel("k3");
     const options = { apiKey: process.env.KIMI_API_KEY?.trim() ?? "", maxTokens: 4096 };
     const first = await collectDoneMessage(
@@ -167,14 +163,7 @@ describeLive("Kimi Code K3 reasoning live", () => {
           messages: [
             firstUser,
             first,
-            {
-              role: "toolResult",
-              toolCallId: toolCall.id,
-              toolName: toolCall.name,
-              content: [{ type: "text", text: source }],
-              isError: false,
-              timestamp: Date.now(),
-            },
+            makeTextToolResult(toolCall.id, toolCall.name, source, false, Date.now()),
           ],
           tools: [tool],
         },

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import "./detached-async-context.js";
+import { runWithAsyncStore } from "./async-store.js";
 import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
@@ -8,12 +9,24 @@ type AsyncWorkScopeFrame = { scope: AsyncWorkScope; parent?: AsyncWorkScopeFrame
 // Lazy runtime chunks share the context carrier, never the lifetime of its owners.
 const currentWorkScope = resolveGlobalSingleton(
   Symbol.for("openclaw.asyncWorkScope"),
-  () => new AsyncLocalStorage<AsyncWorkScope>(),
+  () => new AsyncLocalStorage<AsyncWorkScope | undefined>(),
 );
 // Keep the shipped owner carrier intact when replacement chunks join a live process.
 const currentWorkScopeAncestry = resolveGlobalSingleton(
   Symbol.for("openclaw.asyncWorkScopeAncestry"),
-  () => new AsyncLocalStorage<AsyncWorkScopeFrame>(),
+  () => new AsyncLocalStorage<AsyncWorkScopeFrame | undefined>(),
+);
+
+// Replacement chunks reject through the same class so callers can classify lifecycle refusals.
+export const AsyncWorkScopeClosedError = resolveGlobalSingleton(
+  Symbol.for("openclaw.asyncWorkScopeClosedError"),
+  () =>
+    class ClosedError extends Error {
+      constructor() {
+        super("Async work scope is closed");
+        this.name = "AsyncWorkScopeClosedError";
+      }
+    },
 );
 
 /** Joins cooperating descendants even when their caller returns a cached value first. */
@@ -43,15 +56,20 @@ export class AsyncWorkScope {
     }
     const ancestry = currentWorkScopeAncestry.getStore();
     const parent = owner ? (ancestry?.scope === owner ? ancestry : { scope: owner }) : undefined;
-    return currentWorkScopeAncestry.run({ scope: this, parent }, () =>
-      currentWorkScope.run(this, run),
-    );
+    return runWithAsyncStore(currentWorkScope, this, () => {
+      currentWorkScopeAncestry.enterWith({ scope: this, parent });
+      return run();
+    });
   }
 
   /** Enters synchronous work without inspecting or assimilating its return value. */
   run<T>(run: () => T): T {
     if (this.phase === "closed") {
-      throw new Error("Async work scope is closed");
+      throw new AsyncWorkScopeClosedError();
+    }
+    // Existing work already makes reentrant drain yield until this synchronous call returns.
+    if (this.pending.size > 0) {
+      return this.enter(run);
     }
     // Synchronous work is removed in finally and needs no promise cleanup reactions.
     const operation = createDeferredCore();
@@ -66,7 +84,7 @@ export class AsyncWorkScope {
 
   track<T>(run: () => T | Promise<T>): Promise<T> {
     if (this.phase === "closed") {
-      return Promise.reject(new Error("Async work scope is closed"));
+      return Promise.reject(new AsyncWorkScopeClosedError());
     }
     // Register before invoking without delaying received node results behind
     // a subsequent socket-close event. Async descendants inherit this exact owner.
@@ -234,7 +252,11 @@ export function runOutsideAsyncWorkScope<T>(run: () => T): T {
       ? run()
       : currentWorkScopeAncestry.exit(run);
   }
-  return currentWorkScope.exit(() => currentWorkScopeAncestry.exit(run));
+  // One isolated frame restores both carriers without copying each on exit.
+  return runWithAsyncStore(currentWorkScope, undefined, () => {
+    currentWorkScopeAncestry.enterWith(undefined);
+    return run();
+  });
 }
 
 export function getAsyncWorkSignal(): AbortSignal | undefined {

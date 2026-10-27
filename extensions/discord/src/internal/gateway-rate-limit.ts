@@ -2,13 +2,6 @@ const GATEWAY_SEND_LIMIT = 120;
 const GATEWAY_SEND_WINDOW_MS = 60_000;
 const GATEWAY_SEND_QUEUE_LIMIT = GATEWAY_SEND_LIMIT;
 
-type GatewaySendQueueOverflow = {
-  droppedEvents: number;
-  maxQueuedEvents: number;
-  policy: "drop-oldest";
-  queuedEvents: number;
-};
-
 export class GatewaySendLimiter {
   private outboundSendTimestamps: number[] = [];
   private outboundQueue: string[] = [];
@@ -19,11 +12,17 @@ export class GatewaySendLimiter {
   constructor(
     private sendNow: (payload: string) => void,
     private emitError: (error: Error) => void,
-    private emitOverflowWarning: (warning: GatewaySendQueueOverflow) => void,
+    private emitOverflowWarning: (warning: {
+      droppedEvents: number;
+      maxQueuedEvents: number;
+      policy: "drop-oldest";
+      queuedEvents: number;
+    }) => void,
   ) {}
 
   send(serialized: string, options?: { critical?: boolean }): void {
-    if (options?.critical || this.canSend(Date.now())) {
+    // Critical sends bypass capacity, not expiration of the shared send window.
+    if (this.canSend(Date.now()) || options?.critical) {
       this.sendSerialized(serialized);
       return;
     }
@@ -95,7 +94,7 @@ export class GatewaySendLimiter {
       this.outboundFlushTimer = undefined;
       this.flush();
     }, delayMs);
-    this.outboundFlushTimer.unref?.();
+    this.outboundFlushTimer.unref();
   }
 
   private flush(): void {

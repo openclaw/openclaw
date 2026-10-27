@@ -19,7 +19,15 @@ field is required. Use a square PNG that remains recognizable at 16 px; 512×512
 Missing, unreadable, or invalid icons are ignored and do not invalidate the plugin.
 
 This is the plugin's identity artwork for catalogs, settings, channel setup, and
-installation cards. Compact tool calls use separate
+installation cards. Tool previews may also use branding for installed third-party
+plugins. The Gateway's optional `hasToolBrandIcon` field in `plugins.list` is true only
+when an icon source is available, the plugin is not bundled, and its recorded
+registry identity resolves to a known ClawHub publisher other than OpenClaw.
+Package names and npm scopes do not establish the publisher. Missing, pending,
+or unavailable publisher metadata leaves branding ineligible; publisher facts
+are prepared and cached with the managed plugin catalog, not fetched per tool.
+
+Bundled and OpenClaw-published plugins retain separate
 [inline activity icons](#inline-activity-icons), so improving a chat glyph does
 not change the plugin's branding elsewhere.
 
@@ -162,8 +170,8 @@ example:
 
 OpenClaw validates the SVG and rasterizes it before using it as an activity
 mask; it never inserts package SVG markup into the chat DOM. Missing or invalid
-artwork falls back to the existing tool glyph, without showing the packaged
-brand image. The plugin remains usable.
+activity artwork falls back to the existing tool glyph when third-party branding
+is ineligible or its image cannot load. The plugin remains usable.
 
 Include both `assets/activity.svg` and `assets/activity/*.svg` in the published
 package's `files` list when used. OpenClaw's bundled metadata copier and plugin
@@ -438,16 +446,17 @@ plugin code.
 }
 ```
 
-| Value         | Contribution                                         |
-| ------------- | ---------------------------------------------------- |
-| `page`        | A dedicated plugin page.                             |
-| `navigation`  | A navigation entry that opens a plugin page.         |
-| `panel`       | A panel within an existing view.                     |
-| `action`      | A user-facing action in an existing view.            |
-| `accessory`   | A small addition such as a session-header accessory. |
-| `widget`      | A dashboard widget.                                  |
-| `replacement` | A replacement for a supported host UI surface.       |
-| `link-reader` | A reader or preview for supported links.             |
+| Value         | Contribution                                                   |
+| ------------- | -------------------------------------------------------------- |
+| `page`        | A dedicated plugin page.                                       |
+| `navigation`  | A navigation entry that opens a plugin page.                   |
+| `panel`       | A panel within an existing view.                               |
+| `action`      | A user-facing action in an existing view.                      |
+| `accessory`   | A small addition such as a session-header accessory.           |
+| `widget`      | A dashboard widget.                                            |
+| `inline`      | A native view populated by tool-result data in a conversation. |
+| `replacement` | A replacement for a supported host UI surface.                 |
+| `link-reader` | A reader or preview for supported links.                       |
 
 The field is optional. Omission means unspecified; `[]` explicitly declares no
 UI contributions. OpenClaw ignores an invalid declaration (unknown values or a

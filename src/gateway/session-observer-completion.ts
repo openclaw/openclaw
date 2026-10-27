@@ -1,25 +1,68 @@
+import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { emitAgentEvent, emitAgentEventForOwner } from "../infra/agent-events.js";
+import { getAgentRunContextOwnership } from "../infra/agent-run-registry.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   buildSessionObserverPrompt,
+  type defaultCompleteModel,
+  type defaultPrepareModel,
   normalizeSessionObserverModelOutput,
   sanitizeSessionObserverModelText,
   SESSION_OBSERVER_SYSTEM_PROMPT,
+  type SessionObserverDeps,
+  type SessionObserverState,
 } from "./session-observer-model.js";
-import type { SessionObserverDeps, SessionObserverState } from "./session-observer-model.js";
 
+const observerLog = createSubsystemLogger("gateway/session-observer");
 // CLI-backed utility models (for example claude-cli Haiku) take 9-16s per call.
 const SESSION_OBSERVER_MODEL_TIMEOUT_MS = 30_000;
 const REJECTED_OUTPUT_MAX_CHARS = 160;
 
-type PrepareModel = NonNullable<SessionObserverDeps["prepareModel"]>;
-type CompleteModel = NonNullable<SessionObserverDeps["completeModel"]>;
+export function reportSessionObserverDegradation(
+  state: SessionObserverState,
+  error: unknown,
+  cfg: OpenClawConfig,
+) {
+  const selection = resolveSimpleCompletionSelectionForAgent({
+    cfg,
+    agentId: state.agentId,
+    modelRef: state.utilityModelRef,
+    useUtilityModel: "required",
+  });
+  const modelLabel = selection ? ` "${selection.provider}/${selection.modelId}"` : "";
+  const notice = {
+    runId: state.runId,
+    sessionKey: state.sessionKey,
+    agentId: state.agentId,
+    stream: "notice",
+    data: {
+      phase: "warning",
+      message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly. To restore assessments, choose a capable utility model or add capable utilityModel.fallbacks.`,
+    },
+  };
+  const owner = getAgentRunContextOwnership(state.runId)?.exclusiveClaimId;
+  if (owner) {
+    emitAgentEventForOwner(notice, owner);
+  } else {
+    emitAgentEvent(notice);
+  }
+  observerLog.warn("session observer disabled after consecutive failures", {
+    sessionKey: state.sessionKey,
+    runId: state.runId,
+    consecutiveFailures: state.consecutiveFailures,
+    error: formatErrorMessage(error),
+  });
+}
 
 export function createSessionObserverCompletion(params: {
   getConfig: SessionObserverDeps["getConfig"];
-  prepareModel: PrepareModel;
-  completeModel: CompleteModel;
+  prepareModel: typeof defaultPrepareModel;
+  completeModel: typeof defaultCompleteModel;
   isCurrent: (state: SessionObserverState) => boolean;
 }) {
   const ensurePrepared = async (state: SessionObserverState) => {

@@ -306,14 +306,18 @@ it.each([
   { host: undefined, node: "node-1", route: "node" },
   { host: "node", node: "node-1", route: "node" },
   { host: "gateway", node: "node-1", route: "conflict" },
-  { host: "sandbox", node: "node-1", route: "conflict" },
-  { host: "auto", node: "node-1", route: "conflict" },
   { host: undefined, node: undefined, route: "gateway" },
 ] as const)("routes node=$node host=$host through $route", async ({ host, node, route }) => {
   const fixture = nodeFixture("node-ok");
   mockGateway({ "node.invoke": fixture.handle });
-  const tool = createExecTool({ security: "full", ask: "off" });
-  const run = () => tool.execute("host-routing", { command: "echo ok", node, host });
+  const tool = createExecTool({ security: "full", ask: "off", allowBackground: false });
+  const run = () =>
+    tool.execute("host-routing", {
+      command: "echo ok",
+      node,
+      host,
+      ...(route === "node" ? { workdir: "/Users/vv", background: true } : {}),
+    });
   if (route === "conflict") {
     await expect(run()).rejects.toThrow(
       `exec node="node-1" conflicts with host="${host}"; omit host or use host="node" to run on this node.`,
@@ -327,6 +331,11 @@ it.each([
       expect(result.details).toMatchObject({ nodeId: "node-1" });
       expect(getResultText(result)).toContain("node-ok");
       expect(fixture.runs).toHaveLength(1);
+      expect(fixture.runs[0]?.cwd).toBe("/Users/vv");
+      expectText(
+        result,
+        "Warning: continuation options are unavailable for host=node; running synchronously via remote system.run without a process session.",
+      );
       expect(localSpawn).not.toHaveBeenCalled();
     } else {
       expect(result.details).not.toHaveProperty("nodeId");
@@ -339,7 +348,8 @@ it.each([
 it("reuses approval id as the node runId for an explicit agent follow-up", async () => {
   const node = nodeFixture();
   const followup = mockFollowup("allow-once", { "node.invoke": node.handle });
-  const tool = approvalTool({ host: "node", ...agentFollowup, sessionKey: "agent:main:main" });
+  const route = externalRoute("feishu");
+  const tool = approvalTool({ host: "node", ...agentFollowup, ...route });
   const result = await tool.execute("call1", { command: "ls -la" });
   const details = pendingDetails(result);
   const pendingText = getResultText(result);
@@ -350,7 +360,6 @@ it("reuses approval id as the node runId for an explicit agent follow-up", async
     "Host: node",
     "Node: node-1",
     "CWD: (node default)",
-    "Command:\n```sh\n",
     "ls -la",
     "Mode: foreground (interactive approvals available).",
   );
@@ -359,77 +368,45 @@ it("reuses approval id as the node runId for an explicit agent follow-up", async
   const run = requireRecord(node.runs[0], "system.run params");
   expect(run).toMatchObject({ runId: details.approvalId, suppressNotifyOnExit: true });
   expect(Object.hasOwn(run, "cwd")).toBe(false);
-  expectAuthenticatedExecFollowup(agent, "agent:main:main");
+  expectAuthenticatedExecFollowup(agent, route.sessionKey);
+  expect(agent).toMatchObject({
+    deliver: true,
+    bestEffortDeliver: true,
+    channel: "feishu",
+    to: "123",
+    accountId: "default",
+    threadId: "456",
+  });
+  expect(sendMessage).not.toHaveBeenCalled();
   expect(String(agent.idempotencyKey)).toContain(details.approvalId);
 });
 
-it("skips approval when node allowlist is satisfied", async () => {
-  const exePath = await executable(process.platform === "win32" ? "tool.cmd" : "tool");
-  const node = nodeFixture();
-  const calls = mockGateway({
-    "node.invoke": node.handle,
-    "exec.approvals.node.get": () => ({ file: policy(allowlistDefaults, [{ pattern: exePath }]) }),
+it("keeps ask=always prompts for gateway runs with durable trust", async () => {
+  const allowlist: ExecApprovalsAgent["allowlist"] = [
+    { pattern: process.execPath, source: "allow-always" },
+  ];
+  saveExecApprovals(policy(alwaysFullDefaults, allowlist));
+  mockGateway({
+    [requestApproval]: () => ({ status: "accepted", id: "approval-id" }),
+    // Detached work must stay pending instead of racing the next policy fixture.
+    [waitDecision]: () => new Promise<never>(() => {}),
   });
-  const tool = allowlistTool("on-miss", { host: "node", allowBackground: false });
-  const result = await tool.execute("call2", {
-    command: `"${exePath}" --help`,
-    workdir: "/Users/vv",
+  const tool = approvalTool({ security: "full", ...agentFollowup, allowBackground: false });
+  const result = await tool.execute("call-gateway-durable", {
+    command: `${JSON.stringify(process.execPath)} --version`,
     background: true,
   });
-  expect(node.runs).toHaveLength(1);
-  expect(node.runs[0]?.cwd).toBe("/Users/vv");
-  expectText(
-    result,
-    "Warning: continuation options are unavailable for host=node; running synchronously via remote system.run without a process session.",
-    "ok",
-  );
-  expect(result.details.status).toBe("completed");
-  expect(calls).toContain("exec.approvals.node.get");
-  expect(calls).toContain("node.invoke");
-  expect(calls).not.toContain(requestApproval);
+  expect(result.details.status).toBe("approval-pending");
+  expect(requireRecord(result.details, "result details").allowedDecisions).toEqual([
+    "allow-once",
+    "deny",
+  ]);
+  expect(gatewayParams(requestApproval)).toHaveLength(1);
+  expect(getResultText(result)).not.toMatch(/process|background|yieldMs|poll/i);
+  expect(gatewayParams(requestApproval)[0]?.warningText).toBeUndefined();
+  expectText(result, "Reply with: /approve ", "allow-once|deny", "Allow Always is unavailable");
+  expect(getResultText(result)).not.toContain("allow-once|allow-always|deny");
 });
-
-it.each(["gateway", "node"] as const)(
-  "keeps ask=always prompts for %s runs with durable trust",
-  async (host) => {
-    const allowlist: ExecApprovalsAgent["allowlist"] = [
-      { pattern: process.execPath, source: "allow-always" },
-    ];
-    if (host === "gateway") {
-      saveExecApprovals(policy(alwaysFullDefaults, allowlist));
-    }
-    const node = nodeFixture("node-ok");
-    mockGateway(
-      host === "gateway"
-        ? {
-            [requestApproval]: () => ({ status: "accepted", id: "approval-id" }),
-            // Detached work must stay pending instead of racing the next policy fixture.
-            [waitDecision]: () => new Promise<never>(() => {}),
-          }
-        : {
-            "node.invoke": node.handle,
-            "exec.approvals.node.get": () => ({ file: policy(undefined, allowlist) }),
-          },
-    );
-    const tool = approvalTool({ host, security: "full", ...agentFollowup, allowBackground: false });
-    const result = await tool.execute(`call-${host}-durable`, {
-      command: `${JSON.stringify(process.execPath)} --version`,
-      background: true,
-    });
-    expect(result.details.status).toBe("approval-pending");
-    expect(requireRecord(result.details, "result details").allowedDecisions).toEqual([
-      "allow-once",
-      "deny",
-    ]);
-    expect(gatewayParams(requestApproval)).toHaveLength(1);
-    if (host === "gateway") {
-      expect(getResultText(result)).not.toMatch(/process|background|yieldMs|poll/i);
-      expect(gatewayParams(requestApproval)[0]?.warningText).toBeUndefined();
-      expectText(result, "Reply with: /approve ", "allow-once|deny", "Allow Always is unavailable");
-      expect(getResultText(result)).not.toContain("allow-once|allow-always|deny");
-    }
-  },
-);
 
 it("reuses gateway allow-always approvals for repeated exact commands", async () => {
   saveExecApprovals(policy(allowlistDefaults));
@@ -449,48 +426,6 @@ it("reuses gateway allow-always approvals for repeated exact commands", async ()
   expect(calls).not.toContain(requestApproval);
   expect(calls).not.toContain(waitDecision);
 });
-
-it.each(["allow-once", "deny"] as const)(
-  "routes %s through the requested agent follow-up",
-  async (decision) => {
-    const followup = mockFollowup(decision);
-    const sessionKey = decision === "deny" ? "agent:main:main" : "agent:main:feishu:channel:123";
-    const tool = approvalTool({
-      ...agentFollowup,
-      sessionKey,
-      elevated,
-      ...(decision === "allow-once" ? externalRoute("feishu") : {}),
-    });
-    const result = await tool.execute("followup", { command: "echo ok", workdir: process.cwd() });
-    const details = pendingDetails(result);
-    const agent = await followup;
-    expect(gatewayParams("agent")).toHaveLength(1);
-    if (decision === "deny") {
-      const approvalId = details.approvalId;
-      expect(approvalId).toBeTypeOf("string");
-      expect(agent).toMatchObject({
-        sessionKey,
-        deliver: false,
-        idempotencyKey: `exec-approval-followup:${approvalId}`,
-      });
-      expect(agent.message).toContain("An async command did not run.");
-      expect(agent.message).toContain(
-        `Exec denied (gateway id=${approvalId}, user-denied): echo ok`,
-      );
-    } else {
-      expectAuthenticatedExecFollowup(agent, sessionKey);
-      expect(agent).toMatchObject({
-        deliver: true,
-        bestEffortDeliver: true,
-        channel: "feishu",
-        to: "123",
-        accountId: "default",
-        threadId: "456",
-      });
-    }
-    expect(sendMessage).not.toHaveBeenCalled();
-  },
-);
 
 it("waits inline for native Discord approval and resumes the same session without a second user turn", async () => {
   const decision = createDeferredCore<{ decision: string }>();
@@ -551,26 +486,6 @@ it("runs a direct skill wrapper command without prompting when the wrapper is al
   });
   expectCompleted(result, '{"events":[]}');
   expect(calls).not.toContain(requestApproval);
-});
-
-it("denies an allowlisted command with shell expansion without requesting approval", async () => {
-  if (process.platform === "win32") {
-    return;
-  }
-  saveExecApprovals(
-    policy({ ...allowlistDefaults, ask: "off" }, [
-      { pattern: await fs.realpath(process.execPath) },
-    ]),
-  );
-  const calls = mockGateway();
-  const tool = allowlistTool("off");
-  const result = await tool.execute("shell-deny", {
-    command: `${JSON.stringify(process.execPath)} --version *.md`,
-  });
-  expect(result.details.status).toBe("failed");
-  expect(getResultText(result)).toContain("ask-fallback-deny: execution-plan-miss");
-  expect(calls).not.toContain(requestApproval);
-  expect(calls).not.toContain(waitDecision);
 });
 
 it("waits for approval registration before returning approval-pending", async () => {

@@ -1,27 +1,15 @@
+import { commonPrefixLength } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type {
+  RealtimeTalkConversationEntry,
+  RealtimeTalkConversationRole,
+  RealtimeTalkConversationState,
+} from "./conversation-state.ts";
 import type { RealtimeTalkTranscript } from "./shared.ts";
-
-type RealtimeTalkConversationRole = "user" | "assistant";
-
-export type RealtimeTalkConversationEntry = {
-  id: string;
-  role: RealtimeTalkConversationRole;
-  text: string;
-  isStreaming: boolean;
-  order?: number;
-  transcriptId?: string;
-};
-
-export type RealtimeTalkConversationState = {
-  entries: RealtimeTalkConversationEntry[];
-  nextEntryId: number;
-  userEntryId: string | null;
-  userEntryAwaitingFinalStartedAtMs: number | null;
-  assistantEntryId: string | null;
-};
 
 type RealtimeTalkTranscriptUpdate = RealtimeTalkTranscript & {
   nowMs?: number;
+  afterMessageId?: string | null;
 };
 
 const MAX_CONVERSATION_ENTRIES = 60;
@@ -30,31 +18,30 @@ const CONVERSATION_ENTRY_PREFIX_CHARS = 256;
 const CONVERSATION_ENTRY_TRUNCATION_MARKER = "\n…\n";
 const USER_FINAL_REWRITE_GRACE_MS = 1_500;
 
-export function createRealtimeTalkConversationState(): RealtimeTalkConversationState {
-  return {
-    entries: [],
-    nextEntryId: 1,
-    userEntryId: null,
-    userEntryAwaitingFinalStartedAtMs: null,
-    assistantEntryId: null,
-  };
-}
-
-export function continueRealtimeTalkConversation(
-  state: RealtimeTalkConversationState,
-): RealtimeTalkConversationState {
-  return {
-    ...createRealtimeTalkConversationState(),
-    nextEntryId: state.nextEntryId,
-    entries: state.entries.map((entry, order) => ({ ...entry, order, isStreaming: false })),
-  };
-}
-
 export function updateRealtimeTalkConversation(
   state: RealtimeTalkConversationState,
   update: RealtimeTalkTranscriptUpdate,
 ): RealtimeTalkConversationState {
-  const next = applyRealtimeTalkTranscript(state, update);
+  const applied = applyRealtimeTalkTranscript(state, update);
+  let next = applied;
+  if (applied !== state) {
+    // Only a caption's first update records where it started in history. Delayed
+    // speech the provider orders before an existing caption shares that caption's
+    // earlier position, so a question never renders below its own answer.
+    const known = new Set(state.entries.map((entry) => entry.id));
+    const entries = applied.entries.slice();
+    let following: RealtimeTalkConversationEntry | undefined;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index]!;
+      if (known.has(entry.id)) {
+        following = entry;
+      } else {
+        const afterMessageId = following ? following.afterMessageId : update.afterMessageId;
+        entries[index] = { ...entry, afterMessageId };
+      }
+    }
+    next = { ...applied, entries };
+  }
   if (!update.transcriptId || next === state) {
     return next;
   }
@@ -87,6 +74,7 @@ function applyRealtimeTalkTranscript(
       order: update.order,
       text: boundRealtimeConversationText(update.final ? text : (previous?.text ?? "") + text),
       isStreaming: !update.final,
+      afterMessageId: previous?.afterMessageId,
     };
     // Provider identities survive delayed ASR and overlapping responses. Text and
     // wall-clock proximity cannot identify which utterance a final replaces.
@@ -366,15 +354,6 @@ function transcriptWords(value: string): string[] {
 
 function normalizeTranscriptText(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function commonPrefixLength(left: string, right: string): number {
-  const max = Math.min(left.length, right.length);
-  let index = 0;
-  while (index < max && left[index] === right[index]) {
-    index += 1;
-  }
-  return index;
 }
 
 function findTextOverlap(base: string, next: string): number {

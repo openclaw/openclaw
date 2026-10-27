@@ -2,12 +2,15 @@ import fs from "node:fs/promises";
 import { getEnvironmentData } from "node:worker_threads";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { cliRecoveryEntrypoints } from "../cli/cli-entrypoint.test-support.js";
+import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
 import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { migrateLegacyDesktopStreamOptOuts } from "../infra/device-pairing-node-desktop-migration.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resetLogger } from "../logging/logger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -19,19 +22,16 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
-import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
-import {
-  createGatewayWorkerEnvironmentRuntime,
-  loadGatewayWorkerEnvironmentStartupState,
-} from "./server-worker-environment-startup.js";
+import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
+import { createWorkerStartupRuntime } from "./server-worker-environment-startup.runtime.test-support.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -190,6 +190,49 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
     return state;
   }
 
+  it("reports invalid config with exit 78 through gateway run on PostgreSQL and SQLite", async () => {
+    const { current, snapshot } = await bootstrapped();
+    const agents = { entries: { main: {}, helper: {} } };
+    await current.writeConfig({ ...snapshot.sourceConfig, agents });
+    const sqliteConfigPath = current.path("sqlite-invalid.json");
+    await fs.writeFile(sqliteConfigPath, JSON.stringify({ gateway: { mode: "local" }, agents }));
+    const diagnostic =
+      'agents.ownership: multi-agent rosters require agents.ownership="explicit" or one legacy default=true marker; add agents.ownership="explicit" or run openclaw doctor';
+    const nodeExecutable = resolveTestNodeExecPath();
+    for (const engine of ["sqlite", "postgres"]) {
+      const result = await runCliProcessChild({
+        nodeExecutable,
+        timeoutMs: 30_000,
+        nodeArgs: [
+          ...resolveRuntimeWorkerArgv(
+            resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli),
+            nodeExecutable,
+          ),
+          "gateway",
+          "run",
+        ],
+        env: {
+          ...process.env,
+          ...current.env,
+          ...(engine === "sqlite"
+            ? { OPENCLAW_CONFIG_PATH: sqliteConfigPath, OPENCLAW_STATE_DIR: current.path("sqlite") }
+            : {}),
+          NODE_ENV: undefined,
+          NODE_OPTIONS: undefined,
+          VITEST: undefined,
+          VITEST_POOL_ID: undefined,
+          VITEST_WORKER_ID: undefined,
+          OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_HIDE_BANNER: "1",
+        },
+      });
+      const output = `${result.stdout}\n${result.stderr}`;
+      expect(result, `${engine}: ${output}`).toMatchObject({ code: 78, signal: null });
+      expect(output).toContain(diagnostic);
+      expect(output).not.toContain("Cannot open PostgreSQL connection");
+    }
+  });
+
   it("resolves an exec DSN during bootstrap, captures workers' input, and reuses the anchor on restart", () =>
     withSecureTestNodeCommand(async (command) => {
       const { current, snapshot, anchor } = await bootstrapped(command);
@@ -225,15 +268,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         expect(workers.store.list()).toEqual([]);
         expect(await workers.placementStore.listAsync()).toEqual([]);
         const registry = createEmptyPluginRegistry();
-        const runtime = await createGatewayWorkerEnvironmentRuntime({
-          scheduler: createTestGatewayScheduler(),
-          getPluginRegistry: () => registry,
-          getPortalRuntime: () => undefined,
-          resolveGatewayContext: () => undefined,
-          desktopSessionRegistry: createDesktopSessionRegistry(),
-          startup: workers,
-          log: { child: () => ({ info: () => {}, warn: () => {} }) },
-        });
+        const runtime = await createWorkerStartupRuntime(workers, () => registry);
         try {
           expect(runtime.workerEnvironmentService).toBeDefined();
         } finally {

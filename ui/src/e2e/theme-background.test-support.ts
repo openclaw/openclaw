@@ -31,9 +31,9 @@ export async function expectComposerSurface(composer: Locator, accessible = fals
   });
 }
 
-export async function readArtwork(shell: Locator) {
+export async function readArtwork(shell: Locator, artworkDetail?: "fingerprint" | "color-spread") {
   await shell.evaluate(finishElementAnimations);
-  return shell.evaluate(async (element) => {
+  return shell.evaluate(async (element, detail) => {
     const style = getComputedStyle(element);
     const probe = document.createElement("div");
     probe.style.backgroundImage = "var(--app-background-image)";
@@ -43,6 +43,8 @@ export async function readArtwork(shell: Locator) {
     const tokenImage = getComputedStyle(probe).backgroundImage;
     const canvasColor = getComputedStyle(probe).backgroundColor;
     const mutedColor = getComputedStyle(probe).color;
+    probe.style.backgroundColor = "var(--bg)";
+    const nativeCanvasColor = getComputedStyle(probe).backgroundColor;
     probe.remove();
 
     const match = /^url\(["']?(.*?)["']?\)$/u.exec(style.backgroundImage);
@@ -68,15 +70,22 @@ export async function readArtwork(shell: Locator) {
       throw new Error("Cannot inspect decoded app artwork");
     }
     pixels.drawImage(image, 0, 0);
-    const fingerprint = canvas.toDataURL();
     const data = pixels.getImageData(0, 0, canvas.width, canvas.height).data;
+    // Compare decoded artwork without PNG encoding or transporting full images.
+    const fingerprint =
+      detail === "fingerprint"
+        ? `${canvas.width}x${canvas.height}:${Array.from(
+            new Uint8Array(await crypto.subtle.digest("SHA-256", data)),
+            (byte) => byte.toString(16).padStart(2, "0"),
+          ).join("")}`
+        : null;
     let paintedPixels = 0;
     let maxColorSpread = 0;
     for (let offset = 0; offset < data.length; offset += 4) {
       const alpha = data[offset + 3]!;
       paintedPixels += alpha > 0 ? 1 : 0;
       // Ignore unpremultiplication noise in almost-transparent antialiasing.
-      if (alpha >= 8) {
+      if (detail === "color-spread" && alpha >= 8) {
         const channels = [data[offset]!, data[offset + 1]!, data[offset + 2]!];
         maxColorSpread = Math.max(maxColorSpread, Math.max(...channels) - Math.min(...channels));
       }
@@ -90,15 +99,22 @@ export async function readArtwork(shell: Locator) {
     };
     let ancestorCount = 0;
     const opaqueAncestors: string[] = [];
-    const composer = element.querySelector<HTMLElement>(".agent-chat__input");
-    const description = element.querySelector<HTMLElement>(".settings-section__desc");
+    // SPA navigation retains hidden chat panes and their unsent drafts.
+    const visible = (surface: HTMLElement) => surface.checkVisibility({ visibilityProperty: true });
+    const composer = [...element.querySelectorAll<HTMLElement>(".agent-chat__input")].find(visible);
+    const description = [...element.querySelectorAll<HTMLElement>(".settings-section__desc")].find(
+      visible,
+    );
     const transcript = [
       ...element.querySelectorAll<HTMLElement>(".chat-group.assistant .chat-text"),
-    ].at(-1);
+    ].findLast(visible);
     const anchor = composer?.parentElement ?? description;
     if (!anchor) {
       throw new Error("Expected a real composer or Appearance description on the app canvas");
     }
+    const nativeCanvas = anchor.closest<HTMLElement>(".sidebar-region--mobile-host");
+    const nativeStyle = nativeCanvas ? getComputedStyle(nativeCanvas) : null;
+    const nativeBounds = nativeCanvas?.getBoundingClientRect();
     for (const start of [anchor, transcript]) {
       for (
         let parent: Element | null | undefined = start;
@@ -108,9 +124,10 @@ export async function readArtwork(shell: Locator) {
         const parentStyle = getComputedStyle(parent);
         ancestorCount++;
         if (
-          color(parentStyle.backgroundColor)[3] !== 0 ||
-          parentStyle.backgroundImage !== "none" ||
-          Number(parentStyle.opacity) !== 1
+          parent !== nativeCanvas &&
+          (color(parentStyle.backgroundColor)[3] !== 0 ||
+            parentStyle.backgroundImage !== "none" ||
+            Number(parentStyle.opacity) !== 1)
         ) {
           opaqueAncestors.push(parent.className);
         }
@@ -147,13 +164,25 @@ export async function readArtwork(shell: Locator) {
       image.naturalHeight * scale,
     );
 
-    const luminance = (red: number, green: number, blue: number) => {
-      const linear = (channel: number) => {
-        const value = channel / 255;
-        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-      };
-      return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue);
+    // The approved mobile pane owns an opaque reading canvas above the app
+    // artwork. Contrast must include that surface before the composer fill.
+    if (nativeStyle && nativeBounds) {
+      pixels.fillStyle = nativeStyle.backgroundColor;
+      pixels.fillRect(
+        nativeBounds.x - bounds.x,
+        nativeBounds.y - bounds.y,
+        nativeBounds.width,
+        nativeBounds.height,
+      );
+    }
+
+    const linear = (channel: number) => {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
     };
+    const linearBytes = Float64Array.from({ length: 256 }, (_, channel) => linear(channel));
+    const luminance = (red: number, green: number, blue: number) =>
+      0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue);
     const minContrast = (rect: DOMRect, foreground: number[], artwork = true) => {
       const x = Math.max(0, Math.ceil(rect.x - bounds.x));
       const y = Math.max(0, Math.ceil(rect.y - bounds.y));
@@ -164,6 +193,8 @@ export async function readArtwork(shell: Locator) {
       }
       const rgba = pixels.getImageData(x, y, width, height).data;
       const alpha = foreground[3]! / 255;
+      const opaqueLuminance =
+        alpha === 1 ? luminance(foreground[0]!, foreground[1]!, foreground[2]!) : null;
       let minimum = Infinity;
       for (let offset = 0; offset < rgba.length; offset += 4) {
         const red = rgba[offset]!;
@@ -172,12 +203,15 @@ export async function readArtwork(shell: Locator) {
         if (artwork && (red !== baseColor[0] || green !== baseColor[1] || blue !== baseColor[2])) {
           visiblePaintedPixels += 1;
         }
-        const bg = luminance(red, green, blue);
-        const fg = luminance(
-          foreground[0]! * alpha + red * (1 - alpha),
-          foreground[1]! * alpha + green * (1 - alpha),
-          foreground[2]! * alpha + blue * (1 - alpha),
-        );
+        const bg =
+          0.2126 * linearBytes[red]! + 0.7152 * linearBytes[green]! + 0.0722 * linearBytes[blue]!;
+        const fg =
+          opaqueLuminance ??
+          luminance(
+            foreground[0]! * alpha + red * (1 - alpha),
+            foreground[1]! * alpha + green * (1 - alpha),
+            foreground[2]! * alpha + blue * (1 - alpha),
+          );
         minimum = Math.min(minimum, (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05));
       }
       return minimum;
@@ -203,6 +237,7 @@ export async function readArtwork(shell: Locator) {
     }
     return {
       backgroundImage: style.backgroundImage,
+      canvasOwner: nativeCanvas ? "native-mobile" : "shell-artwork",
       canvasContrast,
       composerContrast,
       maxColorSpread,
@@ -215,7 +250,15 @@ export async function readArtwork(shell: Locator) {
           centered: style.backgroundPosition === "50% 50%",
           cover: style.backgroundSize === "cover",
           painted: paintedPixels > 0,
-          visible: visiblePaintedPixels > 0,
+          visible: nativeBounds
+            ? nativeBounds.width > 0 && nativeBounds.height > 0
+            : visiblePaintedPixels > 0,
+          nativeCanvas:
+            !nativeStyle ||
+            (nativeStyle.backgroundColor === nativeCanvasColor &&
+              color(nativeStyle.backgroundColor)[3] === 255 &&
+              nativeStyle.backgroundImage === "none" &&
+              Number(nativeStyle.opacity) === 1),
           ancestors: ancestorCount > 0,
           sidebars: readingSurfaces.length > 0 && readingSurfaces.every((alpha) => alpha === 255),
         })
@@ -224,7 +267,7 @@ export async function readArtwork(shell: Locator) {
         ...opaqueAncestors.map((name) => `opaque ancestor: ${name}`),
       ],
     };
-  });
+  }, artworkDetail);
 }
 
 export function expectAppArtwork(artwork: Awaited<ReturnType<typeof readArtwork>>, label: string) {
@@ -232,6 +275,8 @@ export function expectAppArtwork(artwork: Awaited<ReturnType<typeof readArtwork>
 }
 
 export async function expectMobileComposer(composer: Locator) {
+  // Sample the final editor surface, after its focus-triggered height reveal.
+  await composer.evaluate(finishElementAnimations);
   const layout = await composer.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     const textarea = element.querySelector("textarea");

@@ -26,11 +26,6 @@ import { readLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 export type GatewayActiveWorkBlocker = GatewaySuspendBlocker;
 export type GatewayActiveWorkSnapshot = ReturnType<typeof createGatewayActiveWorkSnapshot>;
 
-type GatewayActiveWorkWaitResult = {
-  drained: boolean;
-  snapshot: GatewayActiveWorkSnapshot;
-};
-
 export type GatewayActiveWorkInspectors = Omit<
   typeof defaultInspectors,
   "getRootRequestHolders"
@@ -188,7 +183,10 @@ const GATEWAY_ACTIVE_WORK_POLL_MS = 250;
 export async function waitForGatewayActiveWork(
   timeoutMs?: number,
   options: { onSnapshot?: (snapshot: GatewayActiveWorkSnapshot) => void } = {},
-): Promise<GatewayActiveWorkWaitResult> {
+): Promise<{
+  drained: boolean;
+  snapshot: GatewayActiveWorkSnapshot;
+}> {
   return waitForGatewayDrain(createGatewayActiveWorkSnapshot, timeoutMs, {
     ...options,
     pollMs: GATEWAY_ACTIVE_WORK_POLL_MS,

@@ -2,10 +2,7 @@ import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { describe, expect, it } from "vitest";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import type { AssistantMessage, Context, Model, ToolResultMessage, UserMessage } from "../types.js";
-import {
-  buildGoogleInteractionsParams,
-  resolveGoogleApiClientHeaders,
-} from "./google-interactions-request.js";
+import { buildGoogleInteractionsParams } from "./google-interactions-request.js";
 import { makeModel } from "./google-shared.test-helpers.js";
 
 const model = {
@@ -114,15 +111,6 @@ describe("buildGoogleInteractionsParams", () => {
       { type: "function_call", id: "call_123", name: "getWeather", arguments: { city: "Tokyo" } },
       missingResult("call_123", "getWeather"),
     ]);
-  });
-
-  it("resolves the documented Gemini API partner client header x-goog-api-client", () => {
-    expect(
-      resolveGoogleApiClientHeaders({
-        baseUrl: "https://generativelanguage.googleapis.com",
-        model,
-      })["x-goog-api-client"],
-    ).toMatch(/^openclaw\//u);
   });
 
   it("rejects unsupported explicit prompt caching locally", () => {

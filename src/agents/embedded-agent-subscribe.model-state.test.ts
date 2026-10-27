@@ -102,11 +102,8 @@ async function runUsageCalls(
     {
       model,
       convertToLlm: (messages) =>
-        messages.filter(
-          (message): message is Message =>
-            message.role === "user" ||
-            message.role === "assistant" ||
-            message.role === "toolResult",
+        messages.filter((message): message is Message =>
+          ["user", "assistant", "toolResult"].includes(message.role),
         ),
       getFollowUpMessages: async () =>
         callIndex < calls.length
@@ -409,6 +406,7 @@ it.each([
         output: 5,
         cacheWrite: 4,
         cacheWrite1h: 3,
+        cacheWrite5m: 1,
         reasoningTokens: 2,
         cost: 0.125,
         billed: true,
@@ -420,6 +418,7 @@ it.each([
       ...expectedUsage(7, 5, 0.125, true),
       cacheWrite: 4,
       cacheWrite1h: 3,
+      cacheWrite5m: 1,
       reasoningTokens: 2,
       total: 16,
     },

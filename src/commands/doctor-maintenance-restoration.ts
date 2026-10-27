@@ -15,6 +15,8 @@ import {
 import type { GatewayServiceState } from "../daemon/service-types.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { UpdateDoctorError } from "../infra/update-doctor-result.js";
+import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update-failure-facts.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
@@ -72,7 +74,26 @@ export async function restoreDoctorGatewayService(params: {
       assertInspectionCurrent();
       assertRestoreAdmission?.();
     };
-    assertMaintenanceCurrent();
+    const assertAutoStartCurrent = async () => {
+      assertMaintenanceCurrent();
+      if (before.serviceAutoStartEnabled === undefined) {
+        return;
+      }
+      const readEnabled = service.isEnabled;
+      if (!readEnabled) {
+        throw new Error(
+          "Gateway native autostart policy could not be verified after Doctor repair.",
+        );
+      }
+      const enabled = await settle(() => readEnabled({ env: serviceEnv }));
+      assertMaintenanceCurrent();
+      if (enabled !== before.serviceAutoStartEnabled) {
+        throw new Error(
+          "Gateway native autostart policy changed during Doctor repair; automatic restoration was refused. Inspect gateway status --deep before starting it.",
+        );
+      }
+    };
+    await assertAutoStartCurrent();
     const readCurrent = () =>
       settle(() =>
         readGatewayServiceState(service, {
@@ -214,6 +235,7 @@ export async function restoreDoctorGatewayService(params: {
           params.assertInstallationAdmission?.();
         };
         assertInstallationCurrent();
+        await assertAutoStartCurrent();
         const [{ maybeRepairGatewayServiceConfig }, { createDoctorPrompter }] = await Promise.all([
           import("./doctor-gateway-services.js"),
           import("./doctor-prompter.js"),
@@ -254,6 +276,7 @@ export async function restoreDoctorGatewayService(params: {
                       managerUid: before.serviceManagerUid,
                       assertCurrent: assertInstallationCurrent,
                       assertReadCurrent: assertInspectionCurrent,
+                      beforeMutation: assertAutoStartCurrent,
                     },
                   },
                 ),
@@ -328,6 +351,8 @@ export async function restoreDoctorGatewayService(params: {
         env: current?.env ?? serviceEnv,
         stdout: params.options.json ? process.stderr : process.stdout,
         preserveDefinition: true,
+        preserveAutoStart: true,
+        beforeMutation: assertAutoStartCurrent,
         assertCurrent: assertMaintenanceCurrent,
         ...(before.serviceSystemdIdentity
           ? { systemdIdentity: before.serviceSystemdIdentity }
@@ -338,4 +363,45 @@ export async function restoreDoctorGatewayService(params: {
     return current ?? { env: serviceEnv, command: null };
   });
   return { service, state: restoredState, cfg };
+}
+
+export async function recordDoctorGatewayRestorationRefusal({
+  serviceEnv,
+  error,
+  before,
+  warnings,
+  failureFacts,
+  runtime,
+}: {
+  serviceEnv: NodeJS.ProcessEnv;
+  error: GatewayServiceAuthorityError;
+  before: PreManagedServiceStop;
+  warnings: string[];
+  failureFacts: UpdateFailureFact[];
+  runtime: RuntimeEnv;
+}) {
+  const { formatDaemonServiceInstallCommand } = await import("../cli/daemon-cli/shared.js");
+  const outcome = error.outcome ?? "recovery-pending";
+  const recovery =
+    outcome === "unchanged"
+      ? "The previous service definition was left unchanged."
+      : outcome === "restored"
+        ? "The previous service definition was restored from its captured backup."
+        : "Restoration was not verified; inspect the current service before replacing it.";
+  const message = `Doctor could not finish Gateway installation or activation under its maintenance authority (${outcome}). ${recovery} Run \`${formatCliCommand("openclaw gateway status --deep", serviceEnv)}\`; after the active maintenance or update finishes, run \`${formatDaemonServiceInstallCommand(serviceEnv, before.servicePort)}\` from the active CLI. Reason: ${error.message}`;
+  failureFacts.push(
+    createUpdateFailureFact(
+      {
+        check: "gateway-restoration",
+        code: `${error.code}-${outcome}`,
+        message,
+      },
+      serviceEnv,
+    ),
+  );
+  warnings.push(message);
+  runtime.error(message);
+  if (outcome === "recovery-pending") {
+    throw new UpdateDoctorError(message, failureFacts, { cause: error });
+  }
 }

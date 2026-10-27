@@ -104,6 +104,21 @@ export class MessageInjectionRequesterMismatchError extends Error {
   }
 }
 
+/** A live caller needs a separate execution; this is not a failed or revoked publisher. */
+export class MessageInjectionPolicyMismatchError extends Error {
+  override name = "MessageInjectionPolicyMismatchError";
+
+  constructor(
+    readonly reason:
+      | "execution-settings-changed"
+      | "tool_authority_mismatch"
+      | "model-fallback-changed",
+    message = "Current caller policy does not match the active execution",
+  ) {
+    super(message);
+  }
+}
+
 /** The caller remains valid, but this target can no longer receive its input. */
 export class MessageInjectionTargetUnavailableError extends Error {
   constructor(message: string) {

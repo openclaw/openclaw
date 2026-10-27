@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type, type TSchema } from "typebox";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseVideoGenerationModelRef } from "../../media-generation/model-ref.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
@@ -21,7 +20,6 @@ import type {
   VideoGenerationResolution,
   VideoGenerationSourceAsset,
 } from "../../video-generation/types.js";
-import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { AgentGeneratedAttachment } from "../generated-attachments.js";
 import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
 import { getCustomProviderApiKey } from "../model-auth.js";
@@ -117,56 +115,40 @@ function readVideoReferenceInputs(
   return { inputs, roles };
 }
 
-const VideoGenerateToolProperties = {
+function videoReferenceProperties(
+  kind: keyof typeof MAX_REFERENCE_INPUTS,
+  inputDescription: string,
+  rolesDescription: string,
+): Record<string, TSchema> {
+  const input = kind === "audio" ? "audioRef" : kind;
+  return {
+    [input]: Type.Optional(Type.String({ description: inputDescription })),
+    [`${input}s`]: Type.Optional(
+      Type.Array(Type.String(), {
+        description: `Reference ${kind}s; max ${MAX_REFERENCE_INPUTS[kind]}.`,
+      }),
+    ),
+    [`${kind}Roles`]: Type.Optional(Type.Array(Type.String(), { description: rolesDescription })),
+  };
+}
+
+const VideoGenerateToolSchema = Type.Object({
   action: Type.Optional(Type.String({ description: MEDIA_GENERATE_DESCRIPTIONS.action })),
   prompt: Type.Optional(Type.String({ description: "Video prompt." })),
-  image: Type.Optional(
-    Type.String({
-      description: "One reference image path/URL.",
-    }),
+  ...videoReferenceProperties(
+    "image",
+    "One reference image path/URL.",
+    "`image` + `images` roles by index. Values: first_frame, last_frame, reference_image; empty string leaves unset.",
   ),
-  images: Type.Optional(
-    Type.Array(Type.String(), {
-      description: `Reference images; max ${MAX_REFERENCE_INPUTS.image}.`,
-    }),
+  ...videoReferenceProperties(
+    "video",
+    "One reference video path/URL.",
+    "`video` + `videos` roles by index. Value: reference_video; empty string leaves unset.",
   ),
-  imageRoles: Type.Optional(
-    Type.Array(Type.String(), {
-      description:
-        "`image` + `images` roles by index. Values: first_frame, last_frame, reference_image; empty string leaves unset.",
-    }),
-  ),
-  video: Type.Optional(
-    Type.String({
-      description: "One reference video path/URL.",
-    }),
-  ),
-  videos: Type.Optional(
-    Type.Array(Type.String(), {
-      description: `Reference videos; max ${MAX_REFERENCE_INPUTS.video}.`,
-    }),
-  ),
-  videoRoles: Type.Optional(
-    Type.Array(Type.String(), {
-      description:
-        "`video` + `videos` roles by index. Value: reference_video; empty string leaves unset.",
-    }),
-  ),
-  audioRef: Type.Optional(
-    Type.String({
-      description: "One reference audio path/URL, e.g. music.",
-    }),
-  ),
-  audioRefs: Type.Optional(
-    Type.Array(Type.String(), {
-      description: `Reference audios; max ${MAX_REFERENCE_INPUTS.audio}.`,
-    }),
-  ),
-  audioRoles: Type.Optional(
-    Type.Array(Type.String(), {
-      description:
-        "`audioRef` + `audioRefs` roles by index. Value: reference_audio; empty string leaves unset.",
-    }),
+  ...videoReferenceProperties(
+    "audio",
+    "One reference audio path/URL, e.g. music.",
+    "`audioRef` + `audioRefs` roles by index. Value: reference_audio; empty string leaves unset.",
   ),
   model: Type.Optional(
     Type.String({ description: "Provider/model override, e.g. qwen/wan2.6-t2v." }),
@@ -217,101 +199,12 @@ const VideoGenerateToolProperties = {
       minimum: 1,
     }),
   ),
-} satisfies Record<string, TSchema>;
-
-function shouldExposeVideoReferenceAudioParams(params: {
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
-  workspaceDir?: string;
-}): boolean {
-  const snapshot = loadCapabilityMetadataSnapshot({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-  });
-  const knownProviderIds = new Set<string>();
-  const audioCandidateProviderIds = new Set<string>();
-  const modelConfig = coerceToolModelConfig(params.cfg.agents?.defaults?.mediaModels?.video);
-  const explicitProviderIds = new Set<string>();
-  for (const modelRef of [modelConfig.primary, ...(modelConfig.fallbacks ?? [])]) {
-    const parsed = parseVideoGenerationModelRef(modelRef);
-    if (parsed?.provider) {
-      explicitProviderIds.add(
-        resolveProviderIdForAuth(parsed.provider, {
-          config: params.cfg,
-          ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-        }),
-      );
-    }
-  }
-  let normalizedConfig: ReturnType<typeof normalizePluginsConfig> | undefined;
-  let isInstalledPluginEnabled:
-    | ReturnType<typeof createInstalledPluginEnabledPredicate>
-    | undefined;
-
-  for (const plugin of snapshot.plugins) {
-    if (
-      !plugin.contracts?.videoGenerationProviders?.length ||
-      !isManifestPluginAvailableForControlPlane({
-        snapshot,
-        plugin,
-        config: params.cfg,
-        normalizedConfig: params.cfg.plugins
-          ? (normalizedConfig ??= normalizePluginsConfig(params.cfg.plugins))
-          : undefined,
-        isInstalledPluginEnabled: (isInstalledPluginEnabled ??=
-          createInstalledPluginEnabledPredicate(snapshot.index.plugins, params.cfg)),
-      })
-    ) {
-      continue;
-    }
-    for (const providerId of plugin.contracts.videoGenerationProviders) {
-      knownProviderIds.add(providerId);
-      const metadata = plugin.videoGenerationProviderMetadata?.[providerId];
-      const providerCanUseReferenceAudio = metadata?.referenceAudioInputs === true;
-      for (const alias of metadata?.aliases ?? []) {
-        knownProviderIds.add(alias);
-        if (providerCanUseReferenceAudio) {
-          audioCandidateProviderIds.add(alias);
-        }
-      }
-      if (providerCanUseReferenceAudio) {
-        audioCandidateProviderIds.add(providerId);
-      }
-    }
-  }
-
-  for (const providerId of explicitProviderIds) {
-    if (!knownProviderIds.has(providerId) || audioCandidateProviderIds.has(providerId)) {
-      return true;
-    }
-  }
-
-  for (const providerId of audioCandidateProviderIds) {
-    if (
-      getCustomProviderApiKey(params.cfg, providerId) !== undefined ||
-      hasSnapshotCapabilityProviderAvailability({
-        snapshot,
-        key: "videoGenerationProviders",
-        providerId,
-        config: params.cfg,
-        authStore: params.authStore,
-      }) ||
-      hasAuthForProvider({
-        provider: providerId,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-        authProfileStoreSource: params.authProfileStoreSource,
-      })
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
+});
+const VideoGenerateWithoutAudioToolSchema = Type.Omit(VideoGenerateToolSchema, [
+  "audioRef",
+  "audioRefs",
+  "audioRoles",
+]);
 
 export function createVideoGenerateTool(
   options?: MediaGenerateToolOptions,
@@ -327,19 +220,97 @@ export function createVideoGenerateTool(
     return null;
   }
   const { cfg, preparedProviders, sandboxConfig, taskOptions } = context;
-  const includeAudioReferences = shouldExposeVideoReferenceAudioParams({
-    cfg,
-    agentDir: options?.agentDir,
-    authStore: options?.authProfileStore,
-    authProfileStoreSource: options?.authProfileStoreSource,
-    workspaceDir: options?.workspaceDir,
-  });
-  const properties: Record<string, TSchema> = { ...VideoGenerateToolProperties };
-  if (!includeAudioReferences) {
-    delete properties.audioRef;
-    delete properties.audioRefs;
-    delete properties.audioRoles;
-  }
+  const includeAudioReferences = (() => {
+    const agentDir = options?.agentDir;
+    const authStore = options?.authProfileStore;
+    const authProfileStoreSource = options?.authProfileStoreSource;
+    const workspaceDir = options?.workspaceDir;
+    const snapshot = loadCapabilityMetadataSnapshot({
+      config: cfg,
+      workspaceDir,
+    });
+    const knownProviderIds = new Set<string>();
+    const audioCandidateProviderIds = new Set<string>();
+    const modelConfig = coerceToolModelConfig(cfg.agents?.defaults?.mediaModels?.video);
+    const explicitProviderIds = new Set<string>();
+    for (const modelRef of [modelConfig.primary, ...(modelConfig.fallbacks ?? [])]) {
+      const parsed = parseVideoGenerationModelRef(modelRef);
+      if (parsed?.provider) {
+        explicitProviderIds.add(
+          resolveProviderIdForAuth(parsed.provider, {
+            config: cfg,
+            ...(workspaceDir !== undefined ? { workspaceDir } : {}),
+          }),
+        );
+      }
+    }
+    let normalizedConfig: ReturnType<typeof normalizePluginsConfig> | undefined;
+    let isInstalledPluginEnabled:
+      | ReturnType<typeof createInstalledPluginEnabledPredicate>
+      | undefined;
+
+    for (const plugin of snapshot.plugins) {
+      if (
+        !plugin.contracts?.videoGenerationProviders?.length ||
+        !isManifestPluginAvailableForControlPlane({
+          snapshot,
+          plugin,
+          config: cfg,
+          normalizedConfig: cfg.plugins
+            ? (normalizedConfig ??= normalizePluginsConfig(cfg.plugins))
+            : undefined,
+          isInstalledPluginEnabled: (isInstalledPluginEnabled ??=
+            createInstalledPluginEnabledPredicate(snapshot.index.plugins, cfg)),
+        })
+      ) {
+        continue;
+      }
+      for (const providerId of plugin.contracts.videoGenerationProviders) {
+        knownProviderIds.add(providerId);
+        const metadata = plugin.videoGenerationProviderMetadata?.[providerId];
+        const providerCanUseReferenceAudio = metadata?.referenceAudioInputs === true;
+        for (const alias of metadata?.aliases ?? []) {
+          knownProviderIds.add(alias);
+          if (providerCanUseReferenceAudio) {
+            audioCandidateProviderIds.add(alias);
+          }
+        }
+        if (providerCanUseReferenceAudio) {
+          audioCandidateProviderIds.add(providerId);
+        }
+      }
+    }
+
+    for (const providerId of explicitProviderIds) {
+      if (!knownProviderIds.has(providerId) || audioCandidateProviderIds.has(providerId)) {
+        return true;
+      }
+    }
+
+    for (const providerId of audioCandidateProviderIds) {
+      if (
+        getCustomProviderApiKey(cfg, providerId) !== undefined ||
+        hasSnapshotCapabilityProviderAvailability({
+          snapshot,
+          key: "videoGenerationProviders",
+          providerId,
+          config: cfg,
+          authStore,
+        }) ||
+        hasAuthForProvider({
+          provider: providerId,
+          cfg,
+          workspaceDir,
+          agentDir,
+          authStore,
+          authProfileStoreSource,
+        })
+      ) {
+        return true;
+      }
+    }
+    return false;
+  })();
 
   return {
     label: "Video Generation",
@@ -349,7 +320,9 @@ export function createVideoGenerateTool(
       "Create video, incl. image-to-video: image refs take first_frame/last_frame/reference_image roles; video refs condition style" +
       (includeAudioReferences ? "; audio refs condition sound" : "") +
       ". resolution up to 4K; audio/watermark toggles. action=list discovers providers/models. Session chat background: call once/request; result returns as a later turn that sends the media. This turn: short ack at most, then end; no poll/yield. status checks active task. Duration may round to provider value.",
-    parameters: Type.Object(properties),
+    parameters: includeAudioReferences
+      ? VideoGenerateToolSchema
+      : VideoGenerateWithoutAudioToolSchema,
     execute: createMediaGenerateExecute({
       options,
       list: (auth) => createVideoGenerateListActionResult(cfg, auth),

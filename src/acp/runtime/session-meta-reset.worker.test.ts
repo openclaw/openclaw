@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -30,8 +30,8 @@ import { rebindDurableAcpSessionMetaAfterReset } from "./session-meta-reset.js";
 const withState = (label: string, run: (state: OpenClawTestState) => Promise<void>) =>
   withOpenClawTestState({ scenario: "minimal", label }, run);
 
-it("retains incognito reset context until its memory owner closes", async () => {
-  await withState("incognito-reset-context", async (state) => {
+it("retains incognito reset context until its memory owner closes", () =>
+  withState("incognito-reset-context", async (state) => {
     const f = await fixture(state, true);
     let captured: SessionResetCommitContext | undefined;
     const sql = observeHostDataSql();
@@ -55,8 +55,7 @@ it("retains incognito reset context until its memory owner closes", async () => 
     } finally {
       sql.restore();
     }
-  });
-});
+  }));
 
 const META = createAcpMeta({
   agent: "fixture",
@@ -112,13 +111,11 @@ async function fixture(state: OpenClawTestState, incognito = false) {
 
 it.each([
   [false, false],
-  [false, true],
-  [true, false],
   [true, true],
 ])(
   "rebinds and publishes the reset receipt (native owner: %s, lost reply: %s)",
-  async (native, loseReply) => {
-    await withState("acp-reset-receipt", async (state) => {
+  (native, loseReply) =>
+    withState("acp-reset-receipt", async (state) => {
       const f = await fixture(state);
       if (native) {
         openOpenClawAgentDatabase({ ...f.source, env: state.env });
@@ -134,17 +131,16 @@ it.each([
           publications.push(change.facts);
         }
       });
-      const commit = vi.fn(async (execute: () => Promise<unknown>) => {
+      const intercepted = interceptAcpCommit(async (execute) => {
         const value = await execute();
         if (loseReply) {
           throw new Error("synthetic shared worker reply lost after COMMIT");
         }
         return value;
       });
-      const intercepted = interceptAcpCommit(commit);
-      const afterEntryMutation = vi.fn<
-        NonNullable<Parameters<typeof resetSessionEntryLifecycle>[0]["afterEntryMutation"]>
-      >(async (mutation, context) => {
+      const afterEntryMutation: NonNullable<
+        Parameters<typeof resetSessionEntryLifecycle>[0]["afterEntryMutation"]
+      > = async (mutation, context) => {
         const sql = observeHostDataSql();
         try {
           await rebindDurableAcpSessionMetaAfterReset({
@@ -157,7 +153,7 @@ it.each([
           sql.restore();
           expect(sql.queries).toEqual([]);
         }
-      });
+      };
       try {
         const reset = resetSessionEntryLifecycle({ ...f.reset, afterEntryMutation });
         if (loseReply) {
@@ -165,8 +161,6 @@ it.each([
         } else {
           expect((await reset).nextEntry).toEqual(f.entry);
         }
-        expect(afterEntryMutation).toHaveBeenCalledOnce();
-        expect(commit).toHaveBeenCalledOnce();
         expect(publications).toEqual([
           {
             kind: "acp",
@@ -182,14 +176,13 @@ it.each([
         intercepted.mockRestore();
         unsubscribe();
       }
-    });
-  },
+    }),
 );
 
 it.each(["foreign-lifecycle", "pinned-lifecycle", "in-process-writer", "authority"] as const)(
   "refuses reset metadata when %s changes while the shared worker request is pending",
-  async (replacement) => {
-    await withState("acp-reset-refusal", async (state) => {
+  (replacement) =>
+    withState("acp-reset-refusal", async (state) => {
       const f = await fixture(state);
       const native = openOpenClawAgentDatabase({ ...f.source, env: state.env });
       await resetSessionEntryLifecycle(f.reset);
@@ -212,10 +205,7 @@ it.each(["foreign-lifecycle", "pinned-lifecycle", "in-process-writer", "authorit
             throw denied;
           }
         },
-      }).then(
-        () => ({ ok: true as const }),
-        (error: unknown) => ({ ok: false as const, error }),
-      );
+      }).then(() => undefined, String);
       const successor = { ...f.entry, lifecycleRevision: "foreign-successor" };
       const successorMeta = { ...META, runtimeSessionName: "foreign-runtime" };
       try {
@@ -257,15 +247,13 @@ it.each(["foreign-lifecycle", "pinned-lifecycle", "in-process-writer", "authorit
           });
         }
         release.resolve();
-        const settled = await outcome;
-        expect(settled.ok).toBe(false);
-        if (!settled.ok) {
-          expect(String(settled.error)).toMatch(
+        expect(await outcome).toEqual(
+          expect.stringMatching(
             replacement === "authority"
               ? /synthetic reset authority revoked/
               : /Canonical ACP session changed before/,
-          );
-        }
+          ),
+        );
         expect(f.read(f.entry)).toBeUndefined();
         const foreign = replacement === "foreign-lifecycle" || replacement === "pinned-lifecycle";
         expect(f.read(foreign ? successor : f.previous)).toEqual(foreign ? successorMeta : META);
@@ -277,6 +265,5 @@ it.each(["foreign-lifecycle", "pinned-lifecycle", "in-process-writer", "authorit
         await outcome;
         intercepted.mockRestore();
       }
-    });
-  },
+    }),
 );

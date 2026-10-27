@@ -9,6 +9,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { withEnv } from "../test-utils/env.js";
 import * as errorFormatting from "./errors.js";
 type RestartModule = typeof import("./restart.js");
 const managedSuccessorOwner = {
@@ -82,24 +83,7 @@ function withoutRestartSignalListeners(fn: () => void): void {
 }
 
 function withRestartSupervisorEnabled(fn: () => void): void {
-  const originalVitest = process.env.VITEST;
-  const originalNodeEnv = process.env.NODE_ENV;
-  delete process.env.VITEST;
-  delete process.env.NODE_ENV;
-  try {
-    fn();
-  } finally {
-    if (originalVitest === undefined) {
-      delete process.env.VITEST;
-    } else {
-      process.env.VITEST = originalVitest;
-    }
-    if (originalNodeEnv === undefined) {
-      delete process.env.NODE_ENV;
-    } else {
-      process.env.NODE_ENV = originalNodeEnv;
-    }
-  }
+  withEnv({ VITEST: undefined, NODE_ENV: undefined }, fn);
 }
 
 function countRestartSignalEmits(calls: readonly unknown[][]): number {
@@ -1125,4 +1109,3 @@ describe("infra runtime", () => {
     );
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

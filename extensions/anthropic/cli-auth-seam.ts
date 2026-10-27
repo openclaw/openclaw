@@ -27,7 +27,7 @@ type ClaudeCliAuthStatus =
       authMethod?: (typeof CLAUDE_CLI_AUTH_METHODS)[number];
       email?: string;
     }
-  | { status: "missing" | "unreadable" }
+  | { status: "missing" | "not-installed" | "unreadable" }
   | { status: "timeout"; timeoutMs: number };
 
 // Mirrors the CLI runner's child-env contract (src/agents/cli-runner/execute.ts): keys listed
@@ -102,8 +102,9 @@ export async function probeClaudeCliAuthStatus(params?: {
       ...(authMethod ? { authMethod } : {}),
       ...(email && email.length <= 320 && !/[\r\n]/u.test(email) ? { email } : {}),
     };
-  } catch {
+  } catch (error) {
     params?.signal?.throwIfAborted();
-    return { status: "unreadable" };
+    // A host without the executable cannot run native login; only an installed CLI is inconclusive.
+    return { status: isRecord(error) && error.code === "ENOENT" ? "not-installed" : "unreadable" };
   }
 }

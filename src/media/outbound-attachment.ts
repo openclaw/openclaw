@@ -10,18 +10,20 @@ export async function resolveOutboundAttachmentFromUrl(
     mediaAccess?: OutboundMediaAccess;
     localRoots?: readonly string[];
     readFile?: (filePath: string) => Promise<Buffer>;
+    /** Host-selected publication intent; does not grant file-read or delivery authority. */
+    htmlPublication?: "explicit";
   },
 ): Promise<{ path: string; contentType?: string }> {
   const { loadWebMedia, markTrustedGeneratedHtmlPath } = await import("./web-media.js");
-  const media = await loadWebMedia(
-    mediaUrl,
-    buildOutboundMediaLoadOptions({
+  const media = await loadWebMedia(mediaUrl, {
+    ...buildOutboundMediaLoadOptions({
       maxBytes,
       mediaAccess: options?.mediaAccess,
       mediaLocalRoots: options?.localRoots,
       mediaReadFile: options?.readFile,
     }),
-  );
+    htmlPublication: options?.htmlPublication,
+  });
   // Preserve source file names so outbound attachments keep useful names after UUID staging.
   const saved = await saveMediaBuffer(
     media.buffer,

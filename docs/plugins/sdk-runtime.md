@@ -34,11 +34,45 @@ enabling behavior that depends on it; equal product versions and tool names do
 not establish support. These process-stable facts do not grant caller authority,
 and they remain unavailable during metadata-only registration.
 
+Versioned APIs use string tokens in that list. For example,
+`api.runtime.capabilities?.includes("requester-model-catalog-v1")` advertises the
+[requester-admitted model catalog](/plugins/sdk-runtime/models#requester-admitted-model-catalog).
+An absent token is unsupported; do not substitute a product-version check or
+attach capability properties to the array.
+
 `sender-restricted-hidden-helpers-v1` guarantees that sender-restricted requesters
 can start only hidden helpers of the same agent, retaining their restricted tool
 surface and session root. Channels may use this capability to enable helper
 tools for restricted senders. Core remains responsible for authorization and
 containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
+
+## Module loading and host identity
+
+Declare plugin entries in `package.json` under `openclaw.extensions`, import
+documented `openclaw/plugin-sdk/*` subpaths, and declare `openclaw` as a peer
+dependency. The running host owns SDK classes, registries, and lifecycle state;
+do not bundle a second SDK copy. Installation and Doctor repair the peer link.
+Loading retains the existing peer-identity, captured-source, and instance
+disposal checks and never installs dependencies.
+
+[Standalone builds](/install/standalone) validate an explicit map of package SDK
+runtime exports and bundled runtime/setup entries. Those modules execute from the
+image and cannot be replaced through cache deletion or export mutation.
+Replacing bundled code requires restarting its owner. JIT and bytecode standalone
+builds, including a matched JIT companion, lazily load a host-owned Jiti package
+when a plugin needs transformation. The host supplies its native SDK namespace
+directly. This preserves SDK identity
+without evaluating another SDK copy. Native JavaScript loading retains its
+existing behavior.
+
+Use `api.logger` for plugin logs, owned fetch wrappers and the declared provider
+`createStreamFn`/`wrapStreamFn` hooks for transport behavior, and `onDiagnosticEvent` from
+`openclaw/plugin-sdk/diagnostic-runtime` for observability. Local wrappers,
+owned subclasses, and metadata on individual response objects avoid competing
+process-wide `console`, `fetch`, process-method, or prototype patches. Loader
+interception cannot observe every import in a compiled host. Qualify a plugin's
+transitive dependencies and activation/shutdown behavior against the actual host
+runtime; the compiled entry map is not a compatibility certificate.
 
 ## What each page covers
 
@@ -46,7 +80,7 @@ containment. The same ID is advertised in Gateway `hello-ok.features.capabilitie
 - [Agent and sessions](/plugins/sdk-runtime/agent) — agent identity, directories, session store, transcripts, and sandbox authority.
 - [Model helpers](/plugins/sdk-runtime/models) — host-owned completions, model-selection policy, and provider auth resolution.
 - [Background work](/plugins/sdk-runtime/background-work) — hook agent turns, subagent runs, and native harness completion delivery.
-- [Gateway and nodes](/plugins/sdk-runtime/gateway-and-nodes) — in-process Gateway requests, bounded session facts through `gateway.readSessionFacts`, paired node invocation, and Gateway service events.
+- [Gateway and nodes](/plugins/sdk-runtime/gateway-and-nodes) — in-process Gateway requests, bounded session facts through `gateway.readSessionFacts`, plugin-written agent messages through `gateway.appendAgentMessage`, paired node invocation, and Gateway service events.
 - [Media helpers](/plugins/sdk-runtime/media) — speech, media understanding, image/video/music generation, web search, and media utilities.
 - [State and system](/plugins/sdk-runtime/state-and-system) — config snapshot, SQLite-backed plugin state, system utilities, events, and logging.
 - [Channel helpers](/plugins/sdk-runtime/channel) — channel-specific runtime helper groups for chunking, routing, pairing, media, and mentions.
@@ -107,44 +141,47 @@ session, and current model authority.
 Start a normal parent turn
 in the current runtime before requesting a fork. The native hook relay must be
 enabled and available; otherwise the request fails closed.
-The built-in `openclaw` runtime replays the parent's recorded provider request,
-followed by its completed messages and the side question, preserving its system prompt, tools, reasoning
-settings, and prompt-cache affinity for OpenAI and Anthropic. It reuses prepared
-payload data without re-running the parent's one-shot continuation hooks.
-Completed asynchronous tool calls, their outcomes, and the final answer remain in
-conversation order.
-If a published tool call is still running when the fork starts, the built-in
-runtime includes a non-error placeholder saying its result is not available yet.
-This does not cancel the parent call or persist a result in the parent session.
-The replay uses the current prepared model's proxy and TLS policy. Session read
-authority is checked immediately before every network send, including retries.
+The built-in `openclaw` runtime builds the fork request when `forkSession` is
+called. Normal model turns do not serialize or retain fork snapshots, copy
+published messages, or schedule fork expiry timers. Active forks read the running
+session's current context; completed sessions are reconstructed from the persisted
+model context, including compaction and the pinned system prompt and tool schemas.
+Sessions with history can be forked after a restart without sending another normal
+message first. Routes without a persisted prompt pin rebuild their configured
+system prompt at fork time.
+Completed-session forks apply the configured channel history window and preserve
+compaction summaries. All built-in runtime forks omit the parent's prompt-cache
+identity, including forks of running sessions: they rebuild context independently
+and do not share the parent's complete request preparation.
+
+The fork uses the same provider payload builders as a normal request. Unchanged
+prompt and tool prefixes can reuse the provider's prompt cache. Cache reuse is
+not guaranteed: reconstruction, compaction, images, and one-shot context or
+payload hooks can produce different bytes. Forks do not re-run the parent's
+one-shot hooks. They return text and usage even when reconstruction misses the
+cache; callers should use the returned cache-read usage to measure actual reuse.
+
+Completed tool calls and their outcomes remain in conversation order. A tool
+call still running when the fork starts receives a non-error placeholder saying
+its result is not available yet. This does not cancel the call or persist a
+result in the parent session.
+
+The request uses the current model's credentials, proxy, and TLS policy. Session
+read authority is checked immediately before network sends, including retries.
 Native ChatGPT forks use independent connections without consuming or replacing
 the parent's continuation. Supported APIs are OpenAI Responses (including native
 ChatGPT), Chat Completions, and Anthropic Messages. Other APIs, including Bedrock,
-fail before dispatch because their transports cannot enforce the fork's live
-request authority.
-Tool choice is set to `none` before dispatch to prevent hosted tool execution;
-local tool calls are also denied, with at most two additional inference attempts.
-On Anthropic, changing tool choice invalidates the messages cache, but preserves
-the tool and system caches. Other APIs without a supported hosted-tool prohibition
-are rejected when the recorded request contains tools.
-The built-in runtime keeps snapshots for up to 90 minutes, with a shared 64 MiB
-request-data budget and at most 1,000 sessions, until expiry or session cleanup.
-Keeping a snapshot does not retain the completed parent session or its transcript manager.
-The built-in runtime retains the prepared provider prefix instead of a second copy
-of conversation history. Forks convert only later publications and the side question;
-HTTP continuations retain the full prefix even when the parent sends only a suffix.
-Read-only forks do not acquire workspace placement authority, so a parent's
-pending placement publication does not block them. Normal parent settlement and
-usage updates preserve the fork's read authority. Session reset or deletion
-revokes even an in-flight fork before its answer can be returned.
-After a restart or without a prepared parent turn, the request fails closed:
-"Cache-parity session fork requires a parent turn prepared by this OpenClaw
-runtime. Send a normal message first." CLI runtimes are unsupported for
-`forkSession`, even when their backend can disable native tools. Ordinary `/btw`
-keeps its lightweight, tool-free context; CLI backends with native tools must
-explicitly support disabling them for side questions, while backends with no
-native tools need no additional declaration.
+fail before dispatch because their transports cannot enforce live fork authority.
+Tool choice is set to `none` to prevent hosted tool execution; local tool calls
+are denied, with at most two additional inference attempts. On Anthropic, changing
+tool choice invalidates the messages cache, while the tool and system caches can
+remain reusable.
+
+Read-only forks do not acquire workspace placement authority, write a transcript,
+or change the parent's history. Normal parent settlement preserves a fork's read
+authority; session reset or deletion revokes it before an answer can be returned.
+CLI runtimes remain unsupported for `forkSession`. Ordinary `/btw` keeps its
+lightweight, tool-free context.
 
 Conversation access is required through
 `plugins.entries.<id>.hooks.allowConversationAccess` (enabled by default only for
@@ -263,6 +300,12 @@ plugin mutations cannot alter caller arguments or an approved request. These
 snapshots reject shared memory in the cloned graph; properties omitted by
 structured cloning do not cross this boundary.
 
+`before_prompt_build` and `agent_turn_prepare` receive fresh message arrays and
+envelopes with shared, frozen transcript payload leaves. Treat nested history as
+read-only and return contribution fields instead of mutating message content.
+Non-owned values still receive detached snapshots with shared-memory checks.
+See the [prompt-hook migration](/plugins/sdk-migration#prompt-hook-history-is-read-only).
+
 Host-created request scopes borrow their plugin registry. A direct registry-scope
 callback keeps its registry until its returned operation settles; detached async
 resources do not extend that lifetime. Access to a released registry fails instead
@@ -334,6 +377,34 @@ cleanup registration. This covers `onDiagnosticEvent` and
 `onInternalDiagnosticEvent` from `openclaw/plugin-sdk/diagnostic-runtime`, as well
 as host-owned diagnostic subscriptions created on the plugin's behalf.
 
+### Handle native client errors
+
+Attach an `error` listener before connecting any long-lived native client that
+emits error events, including `pg.Client` and `pg.Pool`. A `try`/`catch` around
+queries does not handle an error emitted after the call returns or while the
+connection is idle. An unhandled emitter error can become an uncaught exception
+and terminate the Gateway.
+
+Handle the event without throwing or leaving an unhandled recovery promise.
+Log the failure and mark affected functionality unavailable so dependent tools
+report a useful error. Replace unusable clients and invalidate cached
+initialization as part of the plugin's recovery path. Registered services can
+report the failure through `ctx.serviceHealth?.reportFailure(error)` and call
+`clearFailure()` after successful recovery; see
+[service health reporting](/plugins/sdk-runtime/gateway-and-nodes#gateway-service-events).
+
+Keep the listener attached until the client has closed, and release the client
+in `api.lifecycle.onDispose(...)` or the service's `stop()` method. A PostgreSQL
+server disconnect can emit `57P01` followed by an uncoded connection-termination
+error. Suppressing a SQLSTATE in a process-wide exception handler neither handles
+all these events nor restores the failed connection. This guidance concerns
+plugin-owned clients; OpenClaw's state database remains managed by its own owner.
+
+Test idle disconnects against a disposable database by terminating only the
+plugin client's own backend. Verify that the Gateway stays responsive, affected
+tools report unavailability, and those tools work again after the plugin's
+connection recovery succeeds.
+
 ### Instance-bound background context
 
 Managed instances also expose the additive
@@ -342,6 +413,9 @@ immediately and returns the callback's value or promise. It detaches the calling
 turn, request, and unrelated async-local context while preserving the instance's
 host resource bindings. Each call selects that exact instance's current adopted
 registry, so a retained plugin sees replacement providers after a reload.
+Background SQLite readers belong to the instance, independently of the temporary
+scope that loaded it or invoked the callback. They stay available through admitted
+work and cleanup, and close with the instance's module resources.
 
 Use it when installing timers, watchers, and listeners, and again when delivering
 each background callback. Keep the runner with the resource that owns it; an old
@@ -356,8 +430,10 @@ cleanup owner. Like the other instance lifecycle fields, it can be absent on an
 API host without a managed instance.
 
 Inspection release reports settled disposal failures without marking the managed
-resources as still retained. Prepared-model shutdown records those failures and
-can finish after cleanup settles. Unfinished disposal and failed host cleanup
+resources as still retained. It joins physical cleanup even when an earlier
+bounded retirement report timed out, so that timeout does not poison later
+Gateway closes. Prepared-model shutdown records callback failures and can finish
+after cleanup settles. Unfinished disposal and failed host cleanup
 prerequisites still prevent shutdown from reporting a completed resource release.
 
 Stopping or restarting the Gateway preserves persistent plugin session state and
@@ -432,6 +508,14 @@ by Doctor after backup, the maintenance scope owns the reader. Other sources use
 an artifact-preserving private copy with the existing unstable-source refusal.
 The helper owns cleanup; callbacks must not retain or close the connection.
 
+First-party imports of an external SQLite database can use
+`startSqliteReadOnlyLocationAsync(path, { signal })` from the private
+`sqlite-runtime` facade. Snapshot preparation, native flushes, and staging
+retirement run outside the Gateway thread. Await `preparation.result` to read
+its private `location`, and always await `preparation.startClose().result` in
+`finally`, including when preparation fails. Keep readers closed before disposal;
+cleanup failure rejects instead of reporting a successful import.
+
 SQLite worker backends set connection lock-wait policy with
 `setSqliteBusyTimeout` from `openclaw/plugin-sdk/sqlite-worker-runtime`, including
 temporary changes. The connection owner retains the current timeout, skips
@@ -469,6 +553,15 @@ recipes in the worker/admission-only
 are opened through `openEngineStore`, without a public connection constructor.
 See [Database engine adapters](/plugins/sdk-overview/infrastructure#database-engine-adapters-experimental)
 for the contracts and boundary.
+
+Core worker transports carry PostgreSQL I/O pool endpoints into their children.
+An externally constructed worker, including one created with `createCpuTrackedWorker`,
+can still open PostgreSQL without that private capability: on first use it starts
+its own four I/O services through the same pool owner. This emits a once-per-thread
+warning and `openclaw.postgres.pool.self-root` diagnostic (`threadId`, `owner`), and
+increments `postgresPoolSelfRootCount` in worker diagnostics. The public worker
+constructor and connection ownership contracts are unchanged. Prefer the existing
+core worker transports when available to share the process pool.
 
 `readSqliteDatabaseWriteTokenForPath` from `openclaw/plugin-sdk/sqlite-runtime`
 reads the existing physical database identity and in-process writer receipt without
@@ -843,3 +936,19 @@ attempt-scoped snapshot or cold-start facts. Environment status and session
 placement expose these facts as `startStatus`; the host closes the callback when
 the attempt finishes or loses authority. Report capture progress only when capture
 is claimed. These display facts do not change allocation or enrollment ownership.
+
+## Runtime schema validation
+
+`openclaw/plugin-sdk/runtime-profile` exports `getRuntimeExecutionProfile()` and
+`RuntimeExecutionProfile` for choosing an implementation appropriate to the host.
+The profile is a process-stable build fact, not execution authorization.
+
+`openclaw/plugin-sdk/json-schema-validator` exports
+`createJsonSchemaValidatorProvider({ dialect, formats, validateSchema?, duplicateIds? })`
+for codegen-free JSON Schema checks. The provider owns schema preparation, reference
+registration, and cached checks. `formats` defines assertion formats; an empty map
+keeps formats as annotations. Set `validateSchema: true` when a consumer requires
+metaschema admission, and `duplicateIds: "reject"` when a new schema cannot reuse a
+registered root ID. The defaults preserve MCP's existing schema-admission behavior.
+Keep one provider per reference namespace; use a new provider when schemas must not
+retain references to previously registered IDs.

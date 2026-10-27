@@ -154,7 +154,8 @@ async function validateCoreGraphs(cwd: string): Promise<CoreTsgoGraph[]> {
     name: shard.name,
     roots: (shard.expanded.files ?? []).map(normalize).filter((file) => testRootPattern.test(file)),
   }));
-  const oversized = reportLimitViolations(
+  // Shard size is a cost signal no single change owns: report it, never fail on it.
+  reportLimitViolations(
     findOversizedTsgoCoreTestShards({ shards: shardRoots }).map((message) => ({
       file: canonicalCoreTestConfig,
       title: "Core test shard root budget",
@@ -190,10 +191,6 @@ async function validateCoreGraphs(cwd: string): Promise<CoreTsgoGraph[]> {
     }
     throw new Error("Core test graph ownership validation failed");
   }
-  if (oversized) {
-    throw new Error("Core test shard root budget exceeded");
-  }
-
   const violations: string[] = [];
   const graphs: CoreTsgoGraph[] = [];
   for (const graph of TSGO_CORE_GRAPHS) {

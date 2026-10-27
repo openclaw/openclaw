@@ -1,13 +1,20 @@
-import type { Locator, Page } from "playwright";
+import { writeFile } from "node:fs/promises";
+import type { Route } from "playwright";
 import { expect, it } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
+import {
+  waitForControlUiGatewayReady,
+  waitForControlUiGatewayReconnecting,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { expectPath } from "./sidebar-assertions.test-support.ts";
 import {
   captureUnionProof,
   createSidebarFooterProofSuite,
   openSidebarFooterProofPage,
-  setSidebarProofTheme,
 } from "./sidebar-footer-proof.test-support.ts";
 
 const featureBuild: ControlUiBuildInfo = {
@@ -21,335 +28,237 @@ const featureBuild: ControlUiBuildInfo = {
   buildId: "sidebar-account-footer-feat-sidebar-footer",
 };
 
-async function openIdentityMenu(page: Page, sidebar: Locator) {
-  await setSidebarProofTheme(page, "dark");
-  await waitForControlUiGatewayReady(page);
-  await sidebar.locator(".sidebar-identity-card").click();
-  await page.mouse.move(0, 0);
-  const menu = sidebar.locator(".sidebar-identity-menu");
-  await menu.waitFor();
-  return menu;
-}
+const avatarSvg =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" rx="32" fill="#527866"/><circle cx="32" cy="24" r="12" fill="#f5d6b5"/><path d="M10 64c0-30 44-30 44 0" fill="#e3b367"/></svg>';
 
-async function expectRailConnectionStatus(footer: Locator, kind: string, label: string) {
-  const identity = footer.locator(".sidebar-identity-card");
-  await expect.poll(() => identity.getAttribute("data-connection-status")).toBe(kind);
-  expect(await identity.isVisible()).toBe(true);
-  expect(await identity.locator(".sidebar-identity-card__status").isVisible()).toBe(true);
-  expect(await footer.locator(".gateway-status").count()).toBe(0);
-  expect(await identity.getAttribute("aria-label")).toBe(
-    `Identity and app menu for Riley: ${label}`,
-  );
-  expect(
-    await identity.evaluate(
-      (element) =>
-        element.getAttribute("title") ||
-        element.ownerDocument
-          .getElementById(element.getAttribute("aria-describedby") ?? "")
-          ?.textContent?.trim(),
-    ),
-  ).toBe(`Identity and app menu for Riley: ${label}`);
-  expect(await footer.locator(":scope > [role=status]").count()).toBe(0);
-  expect(await identity.getByRole("status").count()).toBe(0);
-}
-
-async function runAccountFooterProof(page: Page, sidebar: Locator) {
-  const identity = sidebar.locator(".sidebar-identity-card");
-  for (const part of [identity.locator("openclaw-viewer-avatar"), identity]) {
-    await part.click();
-    await expect.poll(() => sidebar.locator(".sidebar-identity-menu").count()).toBe(1);
-    await page.keyboard.press("Escape");
-    await expect.poll(() => sidebar.locator(".sidebar-identity-menu").count()).toBe(0);
-  }
-
-  for (const theme of ["light", "dark"] as const) {
-    await setSidebarProofTheme(page, theme);
-    await page.mouse.move(0, 0);
-
-    await identity.focus();
-    await page.keyboard.press("Enter");
-    const menu = sidebar.locator(".sidebar-identity-menu");
-    await menu.waitFor();
-    expect(await menu.locator('[data-value="command:recent-activity"]').count()).toBe(0);
-    expect(await menu.evaluate((dropdown) => dropdown.closest("openclaw-menu-surface"))).toBeNull();
-
-    const buildLink = menu.getByRole("menuitem", { name: "Control UI build details" });
-    expect((await buildLink.textContent())?.trim().startsWith("feat/sidebar-f…@0123456 · ")).toBe(
-      true,
-    );
-    const buildTooltip = sidebar.locator(
-      "openclaw-sidebar-build-chip openclaw-tooltip .tooltip-surface[popover]",
-    );
-    const buildTooltipCard = sidebar.locator(".sidebar-build-hover-card");
-    await page.clock.install();
-    await buildLink.hover();
-    await page.clock.runFor(300);
-    await page.mouse.move(0, 0);
-    await page.clock.runFor(300);
-    expect(await buildTooltip.evaluate((element) => element.matches(":popover-open"))).toBe(false);
-    await buildLink.hover();
-    await page.clock.runFor(600);
-    await expect
-      .poll(() => buildTooltip.evaluate((element) => element.matches(":popover-open")))
-      .toBe(true);
-    await page.clock.resume();
-    await captureUnionProof(suite, page, "sidebar-account-footer", `${theme}-build-hover.png`, [
-      buildTooltipCard,
-    ]);
-    await page.mouse.move(0, 0);
-    await buildTooltipCard.waitFor({ state: "hidden" });
-
-    const settings = menu.locator('[data-value="command:settings"]');
-    const settingsShortcut = settings.locator(".session-menu__shortcut");
-    expect(
-      await settingsShortcut.evaluate((element) => getComputedStyle(element).fontFamily),
-    ).toMatch(/^system-ui,/u);
-    const settingsRestBackground = await settings.evaluate(
-      (element) => getComputedStyle(element).backgroundColor,
-    );
-    await settings.hover();
-    await expect.poll(() => settings.evaluate((element) => element.matches(":hover"))).toBe(true);
-    await expect
-      .poll(() => settings.evaluate((element) => getComputedStyle(element).backgroundColor))
-      .not.toBe(settingsRestBackground);
-
-    const usage = menu.locator('[data-value="command:usage"]');
-    await usage.focus();
-
-    const themeToggle = menu.locator(".theme-mode-toggle");
-    const themeLabel = await themeToggle.getAttribute("aria-label");
-    await themeToggle.click();
-    await expect.poll(() => themeToggle.getAttribute("aria-label")).not.toBe(themeLabel);
-
-    const help = menu.locator('[data-value="command:help"]');
-    await help.hover();
-    const submenu = help.locator("..").locator('[role="menu"]');
-    await submenu.waitFor({ state: "visible" });
-
-    await page.keyboard.press("Escape");
-    await submenu.waitFor({ state: "hidden" });
-    await page.keyboard.press("Escape");
-    await expect.poll(() => menu.count()).toBe(0);
-    await expect
-      .poll(() =>
-        page.evaluate(() =>
-          document.activeElement instanceof HTMLElement ? document.activeElement.className : "",
-        ),
-      )
-      .toContain("sidebar-identity-card");
-  }
-}
-
-const gatewayBuild = {
-  serverVersion: featureBuild.version ?? undefined,
-  serverBuildId: featureBuild.buildId,
-};
-const suite = createSidebarFooterProofSuite(
-  "Control UI sidebar account footer feature build E2E",
-  featureBuild,
-);
-
-async function withFooter(
-  run: (opened: Awaited<ReturnType<typeof openSidebarFooterProofPage>>) => Promise<void>,
-  options: Parameters<typeof openSidebarFooterProofPage>[1] = gatewayBuild,
-) {
-  const opened = await openSidebarFooterProofPage(suite, options);
-  try {
-    await run(opened);
-  } finally {
-    await suite.closeBrowserContext(opened.context);
-  }
-}
+const suite = createSidebarFooterProofSuite("Control UI sidebar build navigation", featureBuild);
 
 suite.define(() => {
-  it.each(["stable", "beta", "dev"] as const)(
-    "gates release-update notifications on %s",
-    async (channel) => {
-      const updateAvailable = { channel, currentVersion: "1.0.0", latestVersion: "2.0.0" };
-      const updateSchedule = {
-        channel,
-        autoEnabled: false,
-        target: { kind: "package" as const, version: "2.0.0" },
-      };
-      await withFooter(
-        async ({ gateway, page, sidebar }) => {
-          const menu = await openIdentityMenu(page, sidebar);
-          const updates = menu.getByRole("menuitem", { name: /^Updates/ });
-          await updates.waitFor();
-          const badge = updates.getByText("Available", { exact: true });
-          await expect.poll(() => badge.count()).toBe(channel === "dev" ? 0 : 1);
-          await expect
-            .poll(() => sidebar.locator(".sidebar-issues-button__count").count())
-            .toBe(channel === "dev" ? 0 : 1);
-          if (channel === "stable") {
-            // The selected schedule wins over leftover availability from another channel.
-            await gateway.emitGatewayEvent("update.available", {
-              updateAvailable,
-              schedule: { ...updateSchedule, channel: "dev" },
-            });
-            await expect.poll(() => badge.count()).toBe(0);
-            await expect
-              .poll(() => sidebar.locator(".sidebar-issues-button__count").count())
-              .toBe(0);
-            await gateway.emitGatewayEvent("update.available", {
-              updateAvailable: { ...updateAvailable, channel: "beta" },
-              schedule: { ...updateSchedule, channel: "beta" },
-            });
-            await expect.poll(() => badge.count()).toBe(1);
-            await gateway.emitGatewayEvent("update.available", {
-              updateAvailable: { channel: "beta", currentVersion: "2.0.0", latestVersion: "2.0.0" },
-              schedule: { channel: "beta", autoEnabled: false },
-            });
-            await expect.poll(() => badge.count()).toBe(0);
-          }
-          await updates.click();
-          await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/updates");
-          expect(await gateway.getRequests("update.run")).toHaveLength(0);
-        },
-        {
-          ...gatewayBuild,
-          operatorScopes: ["operator.read", "operator.admin"],
-          updateAvailable,
-          updateSchedule,
-        },
-      );
-    },
-  );
-
-  it("opens Updates settings from the account menu without starting an update", async () => {
-    await withFooter(async ({ gateway, page, sidebar }) => {
-      const menu = await openIdentityMenu(page, sidebar);
-      await menu.getByRole("menuitem", { name: "Updates", exact: true }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/updates");
-      await expect.poll(() => menu.count()).toBe(0);
-      await page.getByRole("heading", { name: "Updates", exact: true }).waitFor();
-      await gateway.waitForRequest("update.status");
-      expect(await gateway.getRequests("update.run")).toHaveLength(0);
-      await page.getByRole("button", { name: "Back to app", exact: true }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
-    });
-  });
-
-  it("labels the lifecycle status on the account icon and retries through its menu", async () => {
-    await withFooter(
-      async ({ gateway, page, sidebar }) => {
-        const footer = sidebar.locator(".sidebar-footer-bar");
-        const identity = footer.locator(".sidebar-identity-card");
-        const connectionStatus = page.locator(".sidebar-shell__footer .gateway-status:visible");
-        const announcement = page.locator(".shell > .sr-only[role=status]");
-        await setSidebarProofTheme(page, "dark");
-        await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
-        await waitForControlUiGatewayReady(page);
-        await expectRailConnectionStatus(footer, "suspended", "Suspended");
-        await expect
-          .poll(() => connectionStatus.locator(".gateway-status__label").textContent())
-          .toBe("Suspended");
-        const inbox = footer.locator("openclaw-sidebar-attention");
-        expect(await inbox.getByRole("status").count()).toBe(1);
-        expect(await inbox.getByRole("status").textContent()).toBe(
-          await inbox.locator(".sidebar-issues-button").getAttribute("aria-label"),
+  it("keeps profile initials visible while the account photo is loading", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      let photo: Route | undefined;
+      await page.route("**/api/users/riley/avatar*", (route) => {
+        photo = route;
+      });
+      await installMockGateway(page, {
+        presenceUsers: [
+          {
+            self: true,
+            id: "riley",
+            name: "Riley Morgan",
+            avatarUrl: "/api/users/riley/avatar?v=slow",
+          },
+        ],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const avatar = page.locator(".sidebar-identity-card .viewer-avatar");
+      await expect.poll(() => avatar.getAttribute("data-avatar-state")).toBe("pending");
+      const before = await avatar.boundingBox();
+      const fallback = avatar.locator(".viewer-avatar__fallback");
+      try {
+        await captureUnionProof(
+          suite,
+          page,
+          "sidebar-account-footer",
+          `photo-${process.env.OPENCLAW_SIDEBAR_PROOF_STAGE ?? "proof"}-pending.png`,
+          [page.locator(".sidebar-identity-card")],
         );
-        await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
-        await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("connected");
-        await connectionStatus.waitFor({ state: "detached" });
-        expect(await announcement.textContent()).toBe("Connected");
-
-        for (const [phase, label] of [
-          ["preparing", "Suspending…"],
-          ["draining", "Suspending…"],
-          ["prepared", "Suspended"],
-        ] as const) {
-          await gateway.emitGatewayEvent("gateway.suspension", { phase });
-          await expectRailConnectionStatus(
-            footer,
-            phase === "prepared" ? "suspended" : "suspending",
-            label,
-          );
-          await expect
-            .poll(() => connectionStatus.locator(".gateway-status__label").textContent())
-            .toBe(label);
-          expect(await announcement.textContent()).toBe(label);
-        }
-        await sidebar.locator(".sidebar-identity-card").click();
-        await sidebar.locator('[data-value="command:settings"]').click();
-        const settingsFooter = page.locator(".settings-sidebar__footer");
-        await settingsFooter.waitFor();
-        expect(await settingsFooter.locator(".gateway-status").count()).toBe(1);
-        expect(await settingsFooter.locator("openclaw-settings-save-indicator").count()).toBe(1);
-        await expect
-          .poll(() => connectionStatus.locator(".gateway-status__label").textContent())
-          .toBe("Suspended");
-        await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
-        await connectionStatus.waitFor({ state: "detached" });
-        expect(await settingsFooter.locator("openclaw-settings-save-indicator").count()).toBe(1);
-        await page.locator(".settings-sidebar__back").click();
-        await sidebar.waitFor();
-        await gateway.emitGatewayEvent("gateway.suspension", { phase: "prepared" });
-        await expectRailConnectionStatus(footer, "suspended", "Suspended");
-
-        await page.clock.install();
-        await pauseVirtualClock(page);
-        await gateway.setOnline(false);
-        await page.clock.runFor(2_001);
-        // Offline mock sockets stay connecting until their attempt explicitly fails.
-        await gateway.closeLatest(1006, "synthetic failed attempt");
-        await expectRailConnectionStatus(footer, "reconnecting", "Reconnecting…");
-        await connectionStatus
-          .getByRole("button", { name: "Reconnecting… — Retry now", exact: true })
-          .waitFor();
-        expect(await footer.getByText("Offline", { exact: true }).count()).toBe(0);
-
-        const socketCount = await gateway.getSocketCount();
-        await footer
-          .getByRole("button", {
-            name: "Identity and app menu for Riley: Reconnecting…",
-            exact: true,
-          })
-          .click();
-        const retry = sidebar.locator('[data-value="command:retry-connect"]');
-        await retry.waitFor();
-        await retry.click();
-        await expect
-          .poll(() => gateway.getSocketCount(), { timeout: 10_000 })
-          .toBeGreaterThan(socketCount);
-
-        await gateway.setOnline(true);
-        await page.clock.resume();
-        await expectRailConnectionStatus(footer, "suspended", "Suspended");
-        await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
-        await expect
-          .poll(() => identity.getAttribute("data-connection-status"), { timeout: 10_000 })
-          .toBe("connected");
-        await connectionStatus.waitFor({ state: "detached" });
-        expect(await announcement.textContent()).toBe("Connected");
-        await gateway.emitGatewayEvent("gateway.suspension", { phase: "prepared" });
-        await gateway.emitGatewayEvent("shutdown", {
-          reason: "gateway restart",
-          restartExpectedMs: 5_000,
-        });
-        await expectRailConnectionStatus(footer, "restarting", "Restarting…");
-        await expect
-          .poll(() => connectionStatus.locator(".gateway-status__label").textContent())
-          .toBe("Restarting…");
-      },
-      { ...gatewayBuild, awaitInitialRoster: false, gatewaySuspensionPhase: "prepared" },
-    );
-  });
-
-  it("keeps the feature account target, identity menu, and visual states coherent", async () => {
-    await withFooter(async ({ page, sidebar }) => {
-      await runAccountFooterProof(page, sidebar);
+        expect(await fallback.isVisible()).toBe(true);
+        expect(await fallback.textContent()).toBe("RM");
+        const fallbackBox = await fallback.boundingBox();
+        expect(fallbackBox!.x + fallbackBox!.width / 2).toBe(before!.x + before!.width / 2);
+      } finally {
+        await photo?.fulfill({ contentType: "image/svg+xml", body: avatarSvg });
+      }
+      await expect.poll(() => avatar.getAttribute("data-avatar-state")).toBe("loaded");
+      await avatar.locator("img").evaluate((image: HTMLImageElement) => image.decode());
+      expect(await avatar.boundingBox()).toEqual(before);
+      expect(await fallback.isVisible()).toBe(false);
     });
   });
+  it("keeps account identity and sidebar geometry through disconnect and recovery", async () => {
+    const rows = [
+      "Museum itinerary",
+      "Exhibit inventory",
+      "Accessibility notes",
+      "Weekend route",
+    ].map((label, index) =>
+      Object.assign(createControlUiSessionRow(`agent:main:museum-${index}`, label, 100 - index), {
+        owner: { actor: { type: "human" as const, id: "riley" } },
+      }),
+    );
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 900 },
+    });
+    await context.route("**/api/users/riley/avatar*", (route) =>
+      route.fulfill({ contentType: "image/svg+xml", body: avatarSvg }),
+    );
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      authMethod: "token",
+      authMode: "token",
+      subscriptionInitialHistory: false,
+      // Warm reload deliberately holds hello; observe cached chrome before roster readiness.
+      awaitInitialRoster: false,
+      methodResponses: {
+        "chat.startup": {
+          sessionId: "museum-session",
+          sessionInfo: rows[0],
+          messages: [
+            {
+              role: "assistant",
+              content: "Your museum itinerary is ready.",
+              __openclaw: { id: "museum-note", seq: 1 },
+            },
+          ],
+          deltaCursor: "museum-cursor",
+          hasMore: false,
+        },
+        "sessions.list": {
+          ts: Date.now(),
+          path: "",
+          count: rows.length,
+          sessions: rows,
+          defaults: { model: null, modelProvider: null, contextTokens: null },
+          ownerSessionCounts: [],
+        },
+      },
+      sessions: rows,
+      sessionKey: rows[0]!.key,
+      presenceUsers: [
+        {
+          self: true,
+          id: "riley",
+          identity: { type: "profile", id: "riley" },
+          name: "Riley Morgan",
+          email: "riley@example.test",
+          avatarUrl: "/api/users/riley/avatar?v=1",
+        },
+      ],
+    });
+    try {
+      await page.goto(
+        controlUiSessionUrl(suite.server.baseUrl, rows[0]!.key) + "#token=test-token",
+      );
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await waitForControlUiGatewayReady(page);
+      await sidebar.getByText("Exhibit inventory", { exact: true }).waitFor();
+      const account = sidebar.locator(".sidebar-identity-card");
+      const avatar = account.locator(".viewer-avatar");
+      await expect.poll(() => avatar.getAttribute("data-viewer-id")).toBe("riley");
+      await avatar.locator("img").waitFor();
+      const rail = sidebar.locator(".sidebar-rail");
+      const list = sidebar.locator(".sidebar-shell__body");
+      const readChrome = () =>
+        page.evaluate(() => {
+          const rect = (selector: string) => {
+            const { x, y, width, height } = document
+              .querySelector(selector)!
+              .getBoundingClientRect();
+            return { x, y, width, height };
+          };
+          return {
+            account: rect(".sidebar-identity-card"),
+            rail: rect(".sidebar-rail"),
+            list: rect(".sidebar-shell__body"),
+          };
+        });
+      const connected = await readChrome();
+      const capture = async (state: string) => {
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+          return;
+        }
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".shell"),
+          [account, rail, list],
+          { animations: "disabled", elements: [sidebar.locator("aside.sidebar")] },
+        );
+        await writeFile(
+          `${suite.artifactDir}/sidebar-${process.env.OPENCLAW_SIDEBAR_PROOF_STAGE ?? "proof"}-${state}.png`,
+          frame.png,
+        );
+        await writeFile(
+          `${suite.artifactDir}/sidebar-${process.env.OPENCLAW_SIDEBAR_PROOF_STAGE ?? "proof"}-${state}-crop.png`,
+          frame.elements[0]!.png,
+        );
+      };
+      await capture("connected");
+      await gateway.setOnline(false);
+      await gateway.closeLatest(1001, "synthetic network interruption");
+      await page.waitForFunction(
+        () => window.openclawControlUi?.snapshot().gatewayPhase === "reconnecting",
+      );
+      // The grace window suppresses feedback, not the fixed connection slot.
+      expect.soft(await readChrome()).toEqual(connected);
+      await waitForControlUiGatewayReconnecting(page);
+      await capture("reconnecting");
+      expect.soft(await account.getAttribute("aria-label")).toContain("Riley Morgan");
+      expect.soft(await avatar.locator("img").isVisible()).toBe(true);
+      expect.soft(await readChrome()).toEqual(connected);
+      await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
+      await capture("recovered");
+      expect(await account.getAttribute("aria-label")).toContain("Riley Morgan");
+      expect(await readChrome()).toEqual(connected);
+      await expect
+        .poll(() => sidebar.locator("aside.sidebar").getAttribute("data-snapshot-saved"))
+        .toBe("true");
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            Object.keys(localStorage).some((key) =>
+              key.startsWith("openclaw.control.bootRecord.v1:"),
+            ),
+          ),
+        )
+        .toBe(true);
+      await page.addInitScript(() => {
+        const mockWindow: MockGatewayWindow = window;
+        mockWindow.openclawControlUiE2eGateway?.deferNext("connect");
+      });
+      await page.reload();
+      await gateway.waitForRequest("connect");
+      await sidebar.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
+      await sidebar.getByText("Exhibit inventory", { exact: true }).waitFor();
+      await avatar.locator("img").waitFor();
+      await capture("saved-connecting");
+      expect(await account.getAttribute("aria-label")).toContain("Riley Morgan");
+      expect(await readChrome()).toEqual(connected);
+      await gateway.resolveDeferred("connect");
+      await waitForControlUiGatewayReady(page);
+      await sidebar.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
+      expect(await account.getAttribute("aria-label")).toContain("Riley Morgan");
+      expect(await readChrome()).toEqual(connected);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
 
-  it("navigates from the build link without opening its hovercard", async () => {
-    await withFooter(async ({ page, sidebar }) => {
+  it("navigates from the build link without opening its hovercard on click", async () => {
+    const { page, sidebar, context } = await openSidebarFooterProofPage(suite, {
+      serverVersion: featureBuild.version ?? undefined,
+      serverBuildId: featureBuild.buildId,
+    });
+    try {
       await sidebar.locator(".sidebar-identity-card").click();
       const buildLink = sidebar.getByRole("menuitem", {
         name: "Control UI build details",
         exact: true,
       });
       const tooltip = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip");
+      const surface = tooltip.locator(".tooltip-surface[popover]");
+      await buildLink.hover();
+      await expect
+        .poll(() => surface.evaluate((element) => element.matches(":popover-open")))
+        .toBe(true);
+      await captureUnionProof(suite, page, "sidebar-account-footer", "build-hover.png", [
+        sidebar.locator(".sidebar-build-hover-card"),
+      ]);
+      await page.mouse.move(0, 0);
+      await sidebar.locator(".sidebar-build-hover-card").waitFor({ state: "hidden" });
       await tooltip.evaluate((element) => {
         document.documentElement.dataset.buildTooltipOpenedByClick = "false";
         element.addEventListener(
@@ -360,13 +269,13 @@ suite.define(() => {
           { once: true },
         );
       });
-
       await buildLink.click();
-
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/about");
+      await expectPath(page, "/settings/about");
       expect(await page.locator("html").getAttribute("data-build-tooltip-opened-by-click")).toBe(
         "false",
       );
-    });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
   });
 });

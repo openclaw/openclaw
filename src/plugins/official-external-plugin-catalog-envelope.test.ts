@@ -1,35 +1,22 @@
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
 import { beforeEach, expect, it } from "vitest";
+import {
+  createSigningKey,
+  signCatalogEnvelope,
+  legacyCatalogEnvelope,
+} from "./official-external-catalog-signing.test-support.js";
 import { verifyOfficialExternalPluginCatalogSignedEnvelope } from "./official-external-plugin-catalog-envelope.js";
 import type { OfficialExternalPluginCatalogFeed } from "./official-external-plugin-catalog.js";
 
-const PAYLOAD_TYPE = "openclaw.official-external-plugin-catalog-feed.v1";
-
 type SigningKey = ReturnType<typeof createSigningKey>;
 
-function fixtureFeed(): OfficialExternalPluginCatalogFeed {
-  return {
-    schemaVersion: 2,
-    id: "clawhub-official",
-    generatedAt: "2026-06-30T00:00:00.000Z",
-    sequence: 42,
-    entries: [
-      {
-        type: "plugin",
-        id: "@openclaw/signed-feed-proof",
-        title: "Signed Feed Proof",
-        state: "available",
-        publisher: { id: "openclaw", trust: "official" },
-      },
-    ],
-  };
-}
-
-function createSigningKey(keyId: string) {
-  const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
-  return { keyId, privateKey, publicKey };
-}
+const feed: OfficialExternalPluginCatalogFeed = {
+  schemaVersion: 2,
+  id: "clawhub-official",
+  generatedAt: "2026-06-30T00:00:00.000Z",
+  sequence: 42,
+  entries: [],
+};
 
 function expectVerification(
   envelope: unknown,
@@ -48,47 +35,21 @@ function expectVerification(
   ).toMatchObject(typeof expected === "string" ? { ok: false, error: expected } : expected);
 }
 
-function signingInput(payloadType: string, payloadBytes: Buffer): Buffer {
-  const payloadTypeBytes = Buffer.from(payloadType, "utf8");
-  return Buffer.concat([
-    Buffer.from(`DSSEv1 ${payloadTypeBytes.length} ${payloadType} ${payloadBytes.length} `, "utf8"),
-    payloadBytes,
-  ]);
-}
-
-function signedEnvelope(
-  params: {
-    keys?: readonly SigningKey[];
-    feed?: unknown;
-    payloadType?: string;
-  } = {},
-) {
-  const payloadType = params.payloadType ?? PAYLOAD_TYPE;
-  const payloadBytes = Buffer.from(JSON.stringify(params.feed ?? fixtureFeed()), "utf8");
-  const payload = payloadBytes.toString("base64url");
-  const input = signingInput(payloadType, payloadBytes);
-  return {
-    payloadType,
-    payload,
-    signatures: (params.keys ?? [key]).map((key) => ({
-      keyid: key.keyId,
-      sig: crypto.sign(null, input, key.privateKey).toString("base64url"),
-    })),
-  };
-}
+const sign = (keys = [key], body: unknown = feed, type?: string) =>
+  signCatalogEnvelope(body, keys, type);
 
 let key: SigningKey;
-let envelope: ReturnType<typeof signedEnvelope>;
+let envelope: ReturnType<typeof sign>;
 beforeEach(() => {
   key = createSigningKey("catalog-root");
-  envelope = signedEnvelope();
+  envelope = sign();
 });
 
 it("enforces distinct trusted key material for signature thresholds", () => {
   const first = createSigningKey("first");
   const second = createSigningKey("second");
   expectVerification(
-    signedEnvelope({ keys: [first, second] }),
+    sign([first, second]),
     {
       ok: true,
       signedByKeyIds: ["first", "second"],
@@ -99,74 +60,51 @@ it("enforces distinct trusted key material for signature thresholds", () => {
     { threshold: 2 },
   );
   const duplicate = { ...first, keyId: "duplicate-material" };
-  expectVerification(
-    signedEnvelope({ keys: [first, duplicate] }),
-    "invalid-signature",
-    [first, duplicate],
-    { threshold: 2 },
-  );
+  expectVerification(sign([first, duplicate]), "invalid-signature", [first, duplicate], {
+    threshold: 2,
+  });
 });
 
 it("rejects payload bytes changed after signing", () => {
-  envelope.payload = Buffer.from(
-    JSON.stringify({ ...fixtureFeed(), sequence: 43 }),
-    "utf8",
-  ).toString("base64url");
+  envelope.payload = Buffer.from(JSON.stringify({ ...feed, sequence: 43 }), "utf8").toString(
+    "base64url",
+  );
   expectVerification(envelope, "invalid-signature");
 });
 
 it("distinguishes unknown keys from invalid trusted signatures", () => {
   const signer = createSigningKey("signer");
   const other = createSigningKey("other");
-  const signed = signedEnvelope({ keys: [signer] });
+  const signed = sign([signer]);
   expectVerification(signed, "missing-trust-key", [other]);
   expectVerification(signed, "invalid-signature", [{ ...other, keyId: signer.keyId }]);
 });
 
-it("rejects duplicate key ids and excessive signature lists", () => {
-  const signature = envelope.signatures[0];
-  expectVerification({ ...envelope, signatures: [signature, signature] }, "invalid-envelope");
-  expectVerification(
-    {
-      ...envelope,
-      signatures: Array.from({ length: 17 }, (_, index) => ({
-        ...signature,
-        keyid: `key-${index}`,
-      })),
-    },
-    "invalid-envelope",
-  );
+it.each([
+  ["duplicate keys", () => [envelope.signatures[0], envelope.signatures[0]]],
+  [
+    "excess signatures",
+    () => Array.from({ length: 17 }, (_, i) => ({ ...envelope.signatures[0], keyid: `key-${i}` })),
+  ],
+  ["missing key id", () => [{ sig: envelope.signatures[0]!.sig }]],
+  ["empty signatures", () => []],
+] as const)("rejects %s before verification", (_name, signatures) => {
+  expectVerification({ ...envelope, signatures: signatures() }, "invalid-envelope");
 });
 
 it("rejects unsupported payload types and signed invalid feeds", () => {
-  expectVerification(signedEnvelope({ payloadType: "example.unsupported" }), "unsupported-payload");
-  expectVerification(signedEnvelope({ feed: { entries: [] } }), {
+  expectVerification(sign(undefined, feed, "example.unsupported"), "unsupported-payload");
+  expectVerification(sign(undefined, { entries: [] }), {
     ok: false,
     error: "invalid-payload",
     authenticatedPayload: { entries: [] },
   });
 });
 
-it("rejects malformed envelopes before verification", () => {
-  const signature = envelope.signatures[0];
-  assert(signature);
-  expectVerification(
-    { payloadType: PAYLOAD_TYPE, payload: "", signatures: [] },
-    "invalid-envelope",
-    [],
-  );
-  expectVerification({ ...envelope, signatures: [{ sig: signature.sig }] }, "invalid-envelope");
-});
-
 it("accepts beta legacy field names only for persisted snapshots", () => {
   const signature = envelope.signatures[0];
   assert(signature);
-  const legacySignature = {
-    keyId: signature.keyid,
-    algorithm: "ed25519",
-    signature: signature.sig,
-  };
-  const legacyEnvelope = { ...envelope, schemaVersion: 1, signatures: [legacySignature] };
+  const legacyEnvelope = legacyCatalogEnvelope(envelope);
   expectVerification(legacyEnvelope, "invalid-envelope");
   expectVerification(legacyEnvelope, { ok: true, signedBy: key.keyId }, [key], {
     allowLegacyBetaEnvelope: true,
@@ -174,7 +112,7 @@ it("accepts beta legacy field names only for persisted snapshots", () => {
   const mixedEnvelope = {
     ...envelope,
     schemaVersion: 1,
-    signatures: [signature, legacySignature],
+    signatures: [signature, legacyEnvelope.signatures[0]],
   };
   expectVerification(mixedEnvelope, "invalid-envelope");
   expectVerification(mixedEnvelope, "invalid-envelope", [key], { allowLegacyBetaEnvelope: true });

@@ -59,7 +59,7 @@ media captions are sent as text/card chunks before the attachment.
 
 ### Streaming
 
-Feishu/Lark supports streaming replies via interactive cards (Card Kit streaming API). When enabled, the bot updates the card in real time as it generates text.
+Feishu/Lark supports streaming replies via interactive cards (Card Kit streaming API). When enabled, the bot updates the card in real time as it generates text. Text written before a tool call remains in the same card when the assistant continues afterward.
 
 If Card Kit rejects the completed answer after accepting a streaming preview, OpenClaw sends the complete answer as a separate static reply instead of leaving only the preview.
 
@@ -139,6 +139,11 @@ but table metadata is not retrieved, keep the returned `app_token` and URL. Insp
 that existing application rather than creating another one; a missing `table_id`
 does not mean creation failed.
 
+Bitable metadata discovery reads every table and field page. If table discovery
+fails after the application lookup succeeds, the result keeps the validated
+application token and name and reports `tables_error`; retry discovery or use a
+known table ID. Record listing remains paginated by the caller.
+
 `feishu_doc` creates title-only documents. To add Markdown, pass the returned
 `document_id` as `doc_token` in a separate `write` action. A `create` request
 that includes `content` fails without creating an empty document.
@@ -213,7 +218,6 @@ Use `bindings` to route Feishu/Lark DMs or groups to different agents.
   agents: {
     ownership: "explicit",
     defaults: {
-      heartbeat: { agentId: "main" },
       systemAgent: { agentId: "main" },
     },
     entries: {

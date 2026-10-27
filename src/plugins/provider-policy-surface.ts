@@ -28,6 +28,7 @@ const PROVIDER_POLICY_HOOK_KEYS = [
   "resolveServiceTiers",
   "normalizeConfig",
   "applyConfigDefaults",
+  "resolveProactiveCadenceMs",
   "resolveConfigApiKey",
   "resolveThinkingProfile",
   "resolveToolSearchMode",
@@ -58,10 +59,6 @@ function extractBundledProviderPolicySurface(
   mod: Record<string, unknown>,
 ): BundledProviderPolicySurface | null {
   const surface: BundledProviderPolicySurface = extractProviderPolicySurface(mod) ?? {};
-  if (typeof mod.projectConfiguredModelRow === "function") {
-    surface.projectConfiguredModelRow =
-      mod.projectConfiguredModelRow as BundledProviderPolicySurface["projectConfiguredModelRow"];
-  }
   if (typeof mod.projectRealtimeVoicePublicProjection === "function") {
     Object.assign(surface, {
       projectRealtimeVoicePublicProjection: mod.projectRealtimeVoicePublicProjection,

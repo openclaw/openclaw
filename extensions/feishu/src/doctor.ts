@@ -76,18 +76,8 @@ type FeishuDoctorSessionEntry = {
 type FeishuDoctorInspection = Awaited<ReturnType<typeof inspectFeishuDoctorState>>;
 type FeishuDoctorRepairReport = Awaited<ReturnType<typeof repairFeishuDoctorState>>;
 
-function timestampForPath(now = new Date()): string {
+function timestampForPath(now: Date): string {
   return now.toISOString().replaceAll(":", "-");
-}
-
-function toFeishuSessionEntry(value: unknown): FeishuSessionEntry {
-  if (!isRecord(value)) {
-    return {};
-  }
-  return {
-    sessionId: value.sessionId,
-    sessionFile: value.sessionFile,
-  };
 }
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
@@ -303,6 +293,20 @@ function isUserMessage(value: unknown): value is { message: Record<string, unkno
   );
 }
 
+function invalidSessionTranscriptFinding(
+  params: { sessionKey: string; storePath: string },
+  transcriptPath: string,
+  reason: string,
+): FeishuDoctorFinding {
+  return {
+    kind: "invalid-session-transcript",
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    path: transcriptPath,
+    reason,
+  };
+}
+
 function inspectTranscriptEntries(params: {
   sessionKey: string;
   storePath: string;
@@ -336,13 +340,7 @@ function inspectTranscriptEntries(params: {
           ? `${params.malformedLines} malformed JSONL line(s)`
           : undefined;
   if (invalidReason) {
-    return {
-      kind: "invalid-session-transcript",
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      path: params.transcriptPath,
-      reason: invalidReason,
-    };
+    return invalidSessionTranscriptFinding(params, params.transcriptPath, invalidReason);
   }
   if (maxBlankUserMessageRun >= BLANK_USER_MESSAGE_REPAIR_THRESHOLD) {
     return {
@@ -366,13 +364,7 @@ function inspectSessionTranscript(params: {
     return null;
   }
   if (!stat.isFile()) {
-    return {
-      kind: "invalid-session-transcript",
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      path: params.transcriptPath,
-      reason: "not a file",
-    };
+    return invalidSessionTranscriptFinding(params, params.transcriptPath, "not a file");
   }
   if (stat.size > SESSION_FILE_INSPECTION_MAX_BYTES) {
     return null;
@@ -382,13 +374,7 @@ function inspectSessionTranscript(params: {
   try {
     raw = fs.readFileSync(params.transcriptPath, "utf-8");
   } catch {
-    return {
-      kind: "invalid-session-transcript",
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      path: params.transcriptPath,
-      reason: "unreadable",
-    };
+    return invalidSessionTranscriptFinding(params, params.transcriptPath, "unreadable");
   }
 
   const entries: unknown[] = [];
@@ -423,13 +409,7 @@ async function inspectCanonicalSessionTranscript(params: {
       storePath: params.storePath,
     });
   } catch {
-    return {
-      kind: "invalid-session-transcript",
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      path: params.storePath,
-      reason: "unreadable",
-    };
+    return invalidSessionTranscriptFinding(params, params.storePath, "unreadable");
   }
   return inspectTranscriptEntries({
     sessionKey: params.sessionKey,
@@ -532,19 +512,18 @@ async function inspectFeishuDoctorState(params: { cfg: OpenClawConfig; env?: Nod
           isFeishuSessionEntry(sessionKey, sessionEntry),
       )
       .toSorted((left, right) => left.sessionKey.localeCompare(right.sessionKey))) {
-      const sessionEntry = toFeishuSessionEntry(entry);
       sessionEntries.push({
         key,
         storePath: target.storePath,
         agentId: target.agentId,
-        entry: sessionEntry,
+        entry,
       });
       findings.push(
         ...(await collectFeishuSessionFindings({
           sessionKey: key,
           storePath: target.storePath,
           agentId: target.agentId,
-          entry: sessionEntry,
+          entry,
         })),
       );
     }

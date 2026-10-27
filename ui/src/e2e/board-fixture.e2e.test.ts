@@ -4,16 +4,11 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import {
-  canRunPlaywrightChromium,
-  controlUiSessionUrl,
-  resolvePlaywrightChromiumExecutablePath,
-  type ControlUiMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, type ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   startFixtureServer,
   stopFixtureServer,
@@ -21,8 +16,11 @@ import {
 } from "./board-fixture-server.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
+const {
+  executablePath: chromiumExecutablePath,
+  available: chromiumAvailable,
+  wsEndpoint: chromiumWsEndpoint,
+} = inject("controlUiE2eChromium");
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const describeStandaloneMockServer =
@@ -78,6 +76,12 @@ async function readMenuColors(page: Page): Promise<{ background: string; foregro
 
 let browser: Browser;
 let fixtureServer: FixtureServer;
+
+function connectFixtureBrowser() {
+  return chromiumWsEndpoint
+    ? chromium.connect(chromiumWsEndpoint, { timeout: 30_000 })
+    : chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+}
 
 function withFixturePage(run: (page: Page) => Promise<void>) {
   return async () => {
@@ -287,7 +291,7 @@ async function probeNativeEgress(page: Page, sinkUrl: string) {
 describeStandaloneMockServer("standalone Control UI mock server", () => {
   beforeAll(async () => {
     fixtureServer = await startFixtureServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+    browser = await connectFixtureBrowser();
   });
 
   afterAll(async () => {
@@ -299,10 +303,20 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     );
   });
 
-  it(
-    "correlates concurrent caretaker replies with their original requests",
-    withFixturePage(async (page) => {
+  describe("Gateway fixture contracts", () => {
+    // These RPC contracts share one mounted preview; UI flows keep fresh pages.
+    let page: Page;
+
+    beforeAll(async () => {
+      page = await browser.newPage();
       await openPreviewChat(page);
+    });
+
+    afterAll(async () => {
+      await page?.close();
+    });
+
+    it("correlates concurrent caretaker replies with their original requests", async () => {
       const replies = await requestPreviewGateway(page, [
         { method: "openclaw.chat", params: { sessionId: "delayed", message: "hello" } },
         { method: "openclaw.chat", params: { sessionId: "welcome" } },
@@ -311,33 +325,35 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         { sessionId: "delayed", reply: expect.stringContaining("demo turn 0") },
         { sessionId: "welcome", reply: expect.stringContaining("system caretaker") },
       ]);
-    }),
-  );
+    });
 
-  it(
-    "keeps renamed preview groups authoritative across reads and reloads",
-    withFixturePage(async (page) => {
-      await openPreviewChat(page);
-      await requestPreviewGateway(page, [
-        { method: "sessions.groups.rename", params: { name: "Research", to: "Reviewed" } },
+    it("keeps generated search-session metadata in the canonical fixture catalog", async () => {
+      const replies = await requestPreviewGateway(
+        page,
+        ["telegram", "claude"].map((search) => ({
+          method: "sessions.list",
+          params: { search },
+        })),
+      );
+      expect(replies).toMatchObject([
+        {
+          sessions: expect.arrayContaining([
+            expect.objectContaining({ label: "Telegram investigation 001", model: "gpt-5-mini" }),
+          ]),
+        },
+        {
+          sessions: expect.arrayContaining([
+            expect.objectContaining({
+              label: "Model search result 001",
+              model: "claude-sonnet-4-6",
+            }),
+          ]),
+        },
       ]);
-      for (const reload of [false, true]) {
-        if (reload) {
-          await page.reload();
-          await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
-        }
-        expect(await requestPreviewGateway(page, [{ method: "sessions.groups.list" }])).toEqual([
-          { groups: [{ name: "Reviewed", position: 0 }], sectionOrder: [] },
-        ]);
-      }
-    }),
-  );
+    });
 
-  it(
-    "serves preview session agent:main:tax-research through both chat entry points",
-    withFixturePage(async (page) => {
+    it("serves preview session agent:main:tax-research through both chat entry points", async () => {
       const sessionKey = "agent:main:tax-research";
-      await openPreviewChat(page);
       const sampledAt = 1_790_598_431_356;
       await page.clock.setFixedTime(sampledAt);
       const [description] = (await requestPreviewGateway(page, [
@@ -384,6 +400,25 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           snapshotAt: sampledAt + 2,
         },
       });
+    });
+  });
+
+  it(
+    "keeps renamed preview groups authoritative across reads and reloads",
+    withFixturePage(async (page) => {
+      await openPreviewChat(page);
+      await requestPreviewGateway(page, [
+        { method: "sessions.groups.rename", params: { name: "Research", to: "Reviewed" } },
+      ]);
+      for (const reload of [false, true]) {
+        if (reload) {
+          await page.reload();
+          await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+        }
+        expect(await requestPreviewGateway(page, [{ method: "sessions.groups.list" }])).toEqual([
+          { groups: [{ name: "Reviewed", position: 0 }], sectionOrder: [] },
+        ]);
+      }
     }),
   );
 
@@ -402,35 +437,6 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         },
       ]);
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
-    }),
-  );
-
-  it(
-    "keeps generated search-session metadata in the canonical fixture catalog",
-    withFixturePage(async (page) => {
-      await openPreviewChat(page);
-      const replies = await requestPreviewGateway(
-        page,
-        ["telegram", "claude"].map((search) => ({
-          method: "sessions.list",
-          params: { search },
-        })),
-      );
-      expect(replies).toMatchObject([
-        {
-          sessions: expect.arrayContaining([
-            expect.objectContaining({ label: "Telegram investigation 001", model: "gpt-5-mini" }),
-          ]),
-        },
-        {
-          sessions: expect.arrayContaining([
-            expect.objectContaining({
-              label: "Model search result 001",
-              model: "claude-sonnet-4-6",
-            }),
-          ]),
-        },
-      ]);
     }),
   );
 
@@ -475,22 +481,28 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     });
     await runQaGatewayFixture(
       async () => {
-        await page.goto(`${origin}/chat`, { waitUntil: "networkidle" });
+        await page.goto(`${origin}/chat`, { waitUntil: "domcontentloaded" });
         // The fixture viewer is Riley; this shared checkout belongs to Peter.
         await selectAllSidebarSessions(page);
         await page.getByText("OpenClaw work checkout", { exact: true }).click();
         await page.getByRole("button", { name: "Write a message to send." }).waitFor();
-        await page.screenshot({ path: path.join(artifacts, "chat.png") });
-        await page.goto(`${origin}/profile`, { waitUntil: "networkidle" });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "chat.png") });
+        }
+        await page.goto(`${origin}/profile`, { waitUntil: "domcontentloaded" });
         await expect
           .poll(() => page.getByRole("textbox", { name: "Display name", exact: true }).inputValue())
           .toBe("Riley");
-        await page.screenshot({ path: path.join(artifacts, "profile.png") });
-        await page.goto(`${origin}/focus/terminal`, { waitUntil: "networkidle" });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "profile.png") });
+        }
+        await page.goto(`${origin}/focus/terminal`, { waitUntil: "domcontentloaded" });
         const terminal = page.locator("openclaw-terminal-panel");
         await terminal.locator(".tabstrip-tab.is-live").waitFor();
         await terminal.locator(".tp-host canvas").waitFor({ state: "visible" });
-        await page.screenshot({ path: path.join(artifacts, "terminal.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "terminal.png") });
+        }
         expect(
           escaped,
           "standalone mock must not attempt Gateway HTTP or external requests",
@@ -543,7 +555,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
             }
           });
         });
-        await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
+        await page.goto(fixtureServer.url, { waitUntil: "domcontentloaded" });
+        await page.locator('[data-test-id="board-widget"]').first().waitFor();
         const localWorkerOutput = await page.evaluate(async () => {
           const canvas = new OffscreenCanvas(1, 1);
           canvas.getContext("2d")?.fillRect(0, 0, 1, 1);
@@ -608,7 +621,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           body: { error: "Standalone mock has no HTTP fixture for this route." },
         });
         outcomes.missing = missing;
-        await page.screenshot({ path: path.join(artifacts, "board.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "board.png") });
+        }
         expect(escaped).toEqual([]);
         expect(received).toEqual([]);
         expect(connections).toBe(0);
@@ -641,7 +656,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         const isolated = await isolatedPage(attachments.url, { serviceWorkers: "block" });
         context = isolated.context;
         const { page, origin, escaped } = isolated;
-        await page.goto(`${origin}/chat`, { waitUntil: "networkidle" });
+        await page.goto(`${origin}/chat`, { waitUntil: "domcontentloaded" });
+        await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
         const result = await page.evaluate(async () => {
           const response = await fetch("/__fixtures/chat-attachments/sample-image.svg");
           const blob = await response.blob();
@@ -661,7 +677,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           width: 640,
           policy: expect.stringContaining("worker-src 'self'"),
         });
-        await page.screenshot({ path: path.join(artifacts, "attachments.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "attachments.png") });
+        }
         expect(escaped).toEqual([]);
         await writeFile(
           path.join(artifacts, "network.json"),
@@ -679,7 +697,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       const context = await browser.newContext({ colorScheme: mode });
       try {
         const page = await context.newPage();
-        await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
+        await page.goto(fixtureServer.url, { waitUntil: "domcontentloaded" });
         await expect
           .poll(() =>
             page.locator("html").evaluate((root) => ({
@@ -734,7 +752,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
   it(
     "renders consistent menu options with a leading trash icon",
     withFixturePage(async (page) => {
-      await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
+      await page.goto(fixtureServer.url, { waitUntil: "domcontentloaded" });
       await openWidgetMenu(page);
       const presentation = await page
         .locator(".board-widget__menu-panel:popover-open .board-widget__menu-danger")
@@ -768,7 +786,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
   it(
     "opens a visible catalog session with its transcript in chronological order",
     withFixturePage(async (page) => {
-      await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      await page.goto(new URL("/chat", fixtureServer.url).toString(), {
+        waitUntil: "domcontentloaded",
+      });
       // External catalog sessions have no human owner.
       await selectAllSidebarSessions(page);
       await page.getByText("Release checklist sweep", { exact: true }).click();
@@ -783,8 +803,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         .poll(() =>
           page
             .locator(".chat-pane-cache__pane--active .chat-thread .chat-bubble")
-            .allTextContents()
-            .then((messages) => messages.map((message) => message.trim())),
+            .evaluateAll((bubbles) =>
+              bubbles.map((bubble) => bubble.querySelector(".chat-text")?.textContent?.trim()),
+            ),
         )
         .toEqual(transcript);
       expect(
@@ -796,14 +817,16 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
   );
 
   it(
-    "starts with aligned build identity and an upgraded chat pane",
+    "starts with aligned build identity and renders a deterministic reply after generic chat.send",
     withFixturePage(async (page) => {
-      await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
-      expect(await page.locator(".community-invite-card").count()).toBe(0);
+      await page.goto(new URL("/chat", fixtureServer.url).toString(), {
+        waitUntil: "domcontentloaded",
+      });
       await selectAllSidebarSessions(page);
       await page.getByText("OpenClaw work checkout", { exact: true }).click();
 
       await page.getByRole("button", { name: "Write a message to send." }).waitFor();
+      expect(await page.locator(".community-invite-card").count()).toBe(0);
       expect(await page.getByText("Server updated", { exact: true }).count()).toBe(0);
       const paneState = await page
         .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
@@ -828,16 +851,6 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         upgraded: true,
       });
       expect(await page.getByRole("button", { name: "Stop" }).count()).toBe(0);
-    }),
-  );
-
-  it(
-    "renders a deterministic reply after generic chat.send",
-    withFixturePage(async (page) => {
-      await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
-      await selectAllSidebarSessions(page);
-      await page.getByText("OpenClaw work checkout", { exact: true }).click();
-      await page.getByRole("button", { name: "Write a message to send." }).waitFor();
 
       const prompt = "generic mock send probe";
       const composer = page.locator(
@@ -861,10 +874,7 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
 
   beforeAll(async () => {
     server = await startFixtureServer("workboard");
-    previewBrowser = await chromium.launch({
-      executablePath: chromiumExecutablePath,
-      headless: true,
-    });
+    previewBrowser = await connectFixtureBrowser();
   });
 
   afterAll(async () => {
@@ -881,6 +891,7 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
         : undefined,
     });
     const page = await context.newPage();
+    let completed = false;
     try {
       await page.goto(new URL("/workboard", server.url).toString());
       await page.getByText("Capture customer feedback themes", { exact: true }).waitFor();
@@ -897,10 +908,16 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
         )
         .toEqual(
           expect.arrayContaining([
-            expect.objectContaining({ pluginId: "workboard", status: "activated" }),
+            {
+              reports: expect.arrayContaining([
+                expect.objectContaining({ pluginId: "workboard", status: "activated" }),
+              ]),
+            },
           ]),
         );
-      await page.screenshot({ path: path.join(artifactDir, "native-page.png"), fullPage: true });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(artifactDir, "native-page.png"), fullPage: true });
+      }
 
       await page.goto(
         controlUiSessionUrl(
@@ -912,9 +929,17 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
       const widget = page.locator('[data-test-id="workboard-board-widget"]');
       await widget.getByText("Capture customer feedback themes", { exact: true }).waitFor();
       expect(await page.getByText("Unknown plugin widget", { exact: false }).count()).toBe(0);
-      await page.screenshot({ path: path.join(artifactDir, "native-widget.png"), fullPage: true });
+      if (captureUiProof) {
+        await page.screenshot({
+          path: path.join(artifactDir, "native-widget.png"),
+          fullPage: true,
+        });
+      }
+      completed = true;
     } finally {
-      await page.screenshot({ path: path.join(artifactDir, "final.png"), fullPage: true });
+      if (captureUiProof || !completed) {
+        await page.screenshot({ path: path.join(artifactDir, "final.png"), fullPage: true });
+      }
       await context.close();
     }
   });

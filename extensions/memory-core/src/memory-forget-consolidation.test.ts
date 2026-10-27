@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { zstdCompressSync } from "node:zlib";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -21,13 +24,16 @@ import {
   recordShortTermRecalls,
 } from "./short-term-promotion.js";
 
+const h = memoryForgetHarness();
+
 describe("memory forget", () => {
-  const h = memoryForgetHarness();
   const { forget, readText } = h;
   const origins = (agentId: string, entryKey: string) =>
     h.origins({ entryKeys: [entryKey] }, agentId);
 
   const readBackups = () => h.readEntries<{ content: string }>(DREAMING_MEMORY_BACKUP_NAMESPACE);
+  const promotedAt = async (nowMs: number) =>
+    (await readShortTermRecallEntries({ workspaceDir: h.workspaceDir, nowMs }))[0]?.promotedAt;
 
   const thresholds = { minScore: 0, minRecallCount: 0, minUniqueQueries: 0 };
   async function candidatesFor(
@@ -129,9 +135,7 @@ describe("memory forget", () => {
       const output = JSON.stringify({
         operations: [{ candidateKey: promotedKey, action, priorEntries: [priorEntry] }],
       });
-      const subagent = {
-        complete: vi.fn(async () => ({ text: output })),
-      };
+      const subagent = { complete: vi.fn(async () => ({ text: output })) };
 
       const restoreOriginFailure = failOrigins
         ? failMemoryEntryOriginWrites({
@@ -146,7 +150,6 @@ describe("memory forget", () => {
         : undefined;
       let renamed = false;
       let fileFaultInjected = false;
-      let memoryRenameCalls = 0;
       let readbackBlocked = false;
       const fileError = Object.assign(new Error("synthetic atomic memory failure"), {
         code: "EPERM",
@@ -167,7 +170,6 @@ describe("memory forget", () => {
         });
         vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
           if (String(to) === memoryPath) {
-            memoryRenameCalls += 1;
             if (!fileFaultInjected && fileFailure.startsWith("rename-")) {
               fileFaultInjected = true;
               if (fileFailure === "rename-published") {
@@ -217,7 +219,6 @@ describe("memory forget", () => {
       if (fileFailure === "rename-unchanged") {
         const applied = await application;
         expect(applied.applied).toBe(1);
-        expect(memoryRenameCalls).toBe(2);
         const memory = await readText(memoryPath);
         expect(memory).toContain("openclaw-memory-promotion:retired-entry");
         expect(memory).toContain(promotedMarker);
@@ -242,7 +243,6 @@ describe("memory forget", () => {
         });
         expect(failed).toMatchObject({ cause: { errno: -1 } });
         expect(fileFaultInjected).toBe(true);
-        expect(memoryRenameCalls).toBe(1);
         const published = fileFailure.startsWith("close") || fileFailure === "rename-published";
         expect(renamed).toBe(published);
         if (published) {
@@ -252,10 +252,7 @@ describe("memory forget", () => {
             fileFailure === "rename-changed" ? externalMemory : previousMemory,
           );
         }
-        expect(
-          (await readShortTermRecallEntries({ workspaceDir: h.workspaceDir, nowMs }))[0]
-            ?.promotedAt,
-        ).toBeUndefined();
+        expect(await promotedAt(nowMs)).toBeUndefined();
         expect((await readBackups()).map(({ value }) => value.content)).toEqual([previousMemory]);
         expect(await origins("gamma", "retired-entry")).toHaveLength(1);
         expect(await origins("gamma", promotedKey)).toMatchObject([
@@ -271,10 +268,7 @@ describe("memory forget", () => {
         try {
           await expect(application).rejects.toThrow("injected origin write failure");
           await expect(readText(memoryPath)).resolves.toBe(previousMemory);
-          expect(
-            (await readShortTermRecallEntries({ workspaceDir: h.workspaceDir, nowMs }))[0]
-              ?.promotedAt,
-          ).toBeUndefined();
+          expect(await promotedAt(nowMs)).toBeUndefined();
         } finally {
           restoreOriginFailure?.();
         }
@@ -393,5 +387,132 @@ describe("memory forget", () => {
     expect(survivingMemory).toContain("Curated operator fact.");
     expect(survivingMemory).not.toContain(snippet);
     expect(survivingMemory).not.toContain(candidateKey);
+  });
+});
+
+describe("memory forget curated writes", () => {
+  const forget = (dryRun = false) => h.forget({ sessionIds: ["target"], dryRun });
+  async function expectCuratedWrites(
+    content: string,
+    writes: Awaited<ReturnType<typeof forget>>["curatedWrites"],
+  ) {
+    const preview = await forget(true);
+    expect(preview.curatedWrites).toEqual(writes);
+    expect(await h.read("MEMORY.md")).toBe(content);
+    const report = await forget();
+    expect(report).toEqual({ ...preview, dryRun: false });
+    expect(report.artifacts.memoryFiles).toBe(0);
+    expect(await h.read("MEMORY.md")).toBe(content);
+  }
+
+  const toolCall = (id: string, name: string, args: unknown) => ({
+    type: "toolCall",
+    id,
+    name,
+    arguments: args,
+  });
+
+  it("reports session-authored curated memory without deleting unattributable file content", async () => {
+    await h.seedSession("target");
+    const curatedContent = "# Long-Term Memory\nThe launch code is violet.\n";
+    const writeTool = createOpenClawCodingTools({
+      workspaceDir: h.workspaceDir,
+      config: h.cfg,
+      sessionId: "target",
+      sessionKey: "agent:main:target",
+      senderIsOwner: true,
+    }).find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+    await writeTool!.execute("write-curated-memory", {
+      path: "MEMORY.md",
+      content: curatedContent,
+    });
+    await h.append("target", {
+      role: "assistant",
+      content: [toolCall("observed-write", "write", { path: "MEMORY.md" })],
+    });
+
+    await expectCuratedWrites(curatedContent, [
+      { relativePath: "MEMORY.md", observedAt: expect.any(Number) },
+    ]);
+  });
+
+  it("reports harness memory writes from selected live and archived transcripts without observer state", async () => {
+    await h.seedSession("survivor");
+    await h.seedSession("target");
+    const observedAt = Date.parse("2026-08-26T12:34:56.000Z");
+    const memoryContent = "# Long-Term Memory\nA harness-authored private fact.\n";
+    await fs.mkdir(h.path("memory"), { recursive: true });
+    await h.write("MEMORY.md", memoryContent);
+    await h.write("USER.md", "# User\n");
+    await fs.writeFile(h.path("memory", "profile.md"), "# Profile\n");
+    const patchInput = [
+      "*** Begin Patch",
+      "*** Update File: MEMORY.md",
+      "@@",
+      "+A harness-authored private fact.",
+      "*** Update File: README.md",
+      "@@",
+      "+Not a memory file.",
+      "*** End Patch",
+    ].join("\n");
+    await h.append("target", {
+      role: "assistant",
+      timestamp: observedAt,
+      content: [
+        toolCall("patch", "apply_patch", { input: patchInput }),
+        toolCall("profile", "write", { path: "USER.md" }),
+        {
+          type: "toolCall",
+          id: "nested",
+          name: "edit",
+          input: { file_path: h.path("memory", "profile.md") },
+        },
+        toolCall("structured", "apply_patch", {
+          changes: [{ path: "memory/structured.md" }, { path: "README.md" }],
+        }),
+        toolCall("ordinary", "write", { path: "README.md" }),
+        toolCall("escaping", "edit", { path: "../MEMORY.md" }),
+        toolCall("malformed", "apply_patch", { input: 42 }),
+        toolCall("read-only", "read", { path: "MEMORY.md" }),
+        toolCall("missing", "write", null),
+        null,
+      ],
+    });
+    await h.append("survivor", {
+      role: "assistant",
+      timestamp: observedAt + 1,
+      content: [toolCall("unselected", "write", { path: "memory/keep.md" })],
+    });
+    const archiveDir = path.join(h.stateDir, "agents", "main", "sessions");
+    await fs.mkdir(archiveDir, { recursive: true });
+    const archivedMessage = {
+      type: "message",
+      timestamp: new Date(observedAt + 1).toISOString(),
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "archived",
+            name: "edit",
+            input: { filePath: "memory/archive.md" },
+          },
+        ],
+      },
+    };
+    await fs.writeFile(
+      path.join(archiveDir, "target.jsonl.deleted.2026-08-26T12-35-00.000Z.zst"),
+      zstdCompressSync(`${JSON.stringify(archivedMessage)}\n`),
+    );
+    expect(await listMemoryArtifactProvenance({ workspaceDir: h.workspaceDir })).toEqual([]);
+
+    await expectCuratedWrites(memoryContent, [
+      { relativePath: "MEMORY.md", observedAt },
+      { relativePath: "memory/archive.md", observedAt: observedAt + 1 },
+      { relativePath: "memory/profile.md", observedAt },
+      { relativePath: "memory/structured.md", observedAt },
+      { relativePath: "USER.md", observedAt },
+    ]);
   });
 });

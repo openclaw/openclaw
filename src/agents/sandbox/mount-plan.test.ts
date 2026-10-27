@@ -6,7 +6,7 @@ import { DOCKER_SANDBOX_ENGINE as engine, execContainer } from "./container-engi
 import { resolveDockerSourceNamespace } from "./docker-mount-source.js";
 import {
   prepareSandboxMountPlan,
-  sandboxMountPlanMatchesContainer as matchesContainer,
+  compareSandboxMountPlan,
   sandboxContainerShowsWorkspacePaths,
 } from "./mount-plan.js";
 
@@ -25,6 +25,8 @@ vi.mock("./docker-mount-source.js", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type MountInput = Parameters<typeof prepareSandboxMountPlan>[0];
+const skillsTarget = "/workspace/.openclaw/sandbox-skills/skills";
+const skillsBind = `/host/materialized skills/skills:${skillsTarget}:ro,z`;
 let root: string;
 function bind(Source: string, Destination: string, RW = true) {
   return { Type: "bind", Source, Destination, RW };
@@ -78,13 +80,19 @@ async function expectMounts(
     stderr: "",
     code: 0,
   });
-  expect(await matchesContainer({ engine, containerName: "retained", plan })).toBe(matches);
+  expect(
+    (await compareSandboxMountPlan({ engine, containerName: "retained", plan })) === "match",
+  ).toBe(matches);
 }
 
 describe("managed mount plan", () => {
   it("allocates managed skill mount targets as the workspace host owner before engine create", async () => {
     const workspace = path.join(root, "agent");
     fs.mkdirSync(path.join(workspace, ".openclaw"), { mode: 0o750 });
+    if (process.platform !== "win32") {
+      // mkdir's mode is filtered by the runner's umask.
+      fs.chmodSync(path.join(workspace, ".openclaw"), 0o750);
+    }
     fs.writeFileSync(path.join(workspace, ".openclaw/project.json"), "preserved");
     const plan = await prepare("rw", { workspaceSource: "managed-worktree" });
     const target = path.join(workspace, ".openclaw/sandbox-skills/skills");
@@ -95,9 +103,7 @@ describe("managed mount plan", () => {
     expect(fs.readFileSync(path.join(workspace, ".openclaw/project.json"), "utf8")).toBe(
       "preserved",
     );
-    expect(plan.binds).toContain(
-      "/host/materialized skills/skills:/workspace/.openclaw/sandbox-skills/skills:ro,z",
-    );
+    expect(plan.binds).toContain(skillsBind);
   });
 
   it("rechecks the workspace owner after namespace lookup before creating scaffold directories", async () => {
@@ -127,48 +133,88 @@ describe("managed mount plan", () => {
     expect(fs.readdirSync(outside)).toEqual([]);
   });
 
-  it.each(["none", "ro", "rw"] as const)(
-    "maps all managed roots with %s permissions",
-    async (access) => {
-      const plan = await prepare(access);
-      if (access === "none") {
-        expect(plan.binds).toEqual([
-          "/host/state/private:/workspace:z",
-          "/host/state/private/skills:/workspace/skills:ro,z",
-        ]);
-      } else if (access === "ro") {
-        expect(plan.binds).toEqual([
-          "/host/state/private:/workspace:ro,z",
-          "/host/agent:/agent:ro,z",
-        ]);
-      } else {
-        expect(plan.binds).toEqual([
-          "/host/agent:/workspace:z",
-          "/host/agent/skills:/workspace/skills:ro,z",
-          "/host/agent/.agents/skills:/workspace/.agents/skills:ro,z",
-          "/host/materialized skills/skills:/workspace/.openclaw/sandbox-skills/skills:ro,z",
-        ]);
-      }
-    },
-  );
-
-  it("preserves custom daemon sources while keeping protected skill mounts authoritative", async () => {
-    const plan = await prepare("rw", {
-      binds: ["/custom/host:/data:ro", "/custom/override:/workspace/skills:rw"],
-    });
-    expect(plan.binds).toContain("/custom/host:/data:ro");
-    expect(plan.binds).toContain("/host/agent/skills:/workspace/skills:ro,z");
-    expect(plan.skippedBinds).toEqual(["/custom/override:/workspace/skills:rw"]);
+  it("pins writable ancestors of nested protected skill mounts so they cannot be renamed", async () => {
+    const workspace = path.join(root, "agent");
+    const plan = await prepare("rw", { workdir: "/srv/work/" });
+    // Ancestors exist on the host before create, owned by the workspace owner.
+    for (const ancestor of [".agents", ".openclaw", ".openclaw/sandbox-skills"]) {
+      const stat = fs.lstatSync(path.join(workspace, ancestor));
+      expect(stat.isDirectory()).toBe(true);
+      expect(stat.uid).toBe(fs.statSync(workspace).uid);
+    }
+    // Each ancestor is a writable self-bind ordered before the protected mount it pins.
+    const index = (spec: string) => plan.binds.indexOf(spec);
+    expect(index("/host/agent/.agents:/srv/work/.agents:z")).toBeGreaterThan(-1);
+    expect(index("/host/agent/.agents:/srv/work/.agents:z")).toBeLessThan(
+      index("/host/agent/.agents/skills:/srv/work/.agents/skills:ro,z"),
+    );
+    expect(index("/host/agent/.openclaw:/srv/work/.openclaw:z")).toBeLessThan(
+      index("/host/agent/.openclaw/sandbox-skills:/srv/work/.openclaw/sandbox-skills:z"),
+    );
+    expect(
+      index("/host/agent/.openclaw/sandbox-skills:/srv/work/.openclaw/sandbox-skills:z"),
+    ).toBeLessThan(
+      index("/host/materialized skills/skills:/srv/work/.openclaw/sandbox-skills/skills:ro,z"),
+    );
+    // Direct children of the workdir are already mountpoints; no extra bind.
+    expect(plan.binds.filter((spec) => spec.endsWith(":/srv/work:z"))).toHaveLength(1);
   });
 
-  it("selects the last custom destination while preserving its raw daemon bind", async () => {
-    const plan = await prepare("rw", {
-      binds: ["/daemon/A:/data:ro", "/daemon/B:/data/:rw", "invalid-bind"],
-    });
-    expect(plan.binds).toContain("/daemon/B:/data/:rw");
-    expect(plan.binds).not.toContain("/daemon/A:/data:ro");
-    expect(plan.binds).toContain("invalid-bind");
-    expect(plan.skippedBinds).toEqual([]);
+  it("keeps a read-only Gateway ancestor bind read-only instead of failing startup", async () => {
+    const namespace = await resolveDockerSourceNamespace(engine);
+    vi.mocked(resolveDockerSourceNamespace).mockResolvedValue([
+      ...namespace!,
+      namespaceBind("/host/agents-ro", path.join(root, "agent/.agents"), false),
+    ]);
+    const plan = await prepare("rw");
+    expect(plan.binds).toContain("/host/agents-ro:/workspace/.agents:ro,z");
+    expect(plan.binds).toContain("/host/agents-ro/skills:/workspace/.agents/skills:ro,z");
+  });
+
+  it("keeps a writable Gateway child under a read-only Gateway ancestor writable", async () => {
+    fs.mkdirSync(path.join(root, "agent/.agents/output"));
+    const namespace = await resolveDockerSourceNamespace(engine);
+    vi.mocked(resolveDockerSourceNamespace).mockResolvedValue([
+      ...namespace!,
+      namespaceBind("/host/agents-ro", path.join(root, "agent/.agents"), false),
+      namespaceBind("/host/agents-output", path.join(root, "agent/.agents/output")),
+    ]);
+    const plan = await prepare("rw");
+    expect(plan.binds).toContain("/host/agents-ro:/workspace/.agents:ro,z");
+    expect(plan.binds).toContain("/host/agents-output:/workspace/.agents/output:z");
+    expect(plan.binds).toContain("/host/agents-ro/skills:/workspace/.agents/skills:ro,z");
+  });
+
+  it("detects a retained container created before ancestor pinning as a mount change", async () => {
+    const plan = await prepare("rw");
+    await expectMounts(
+      plan,
+      [
+        bind("/host/agent", "/workspace"),
+        bind("/host/agent/skills", "/workspace/skills", false),
+        bind("/host/agent/.agents/skills", "/workspace/.agents/skills", false),
+        bind("/host/materialized skills/skills", skillsTarget, false),
+      ],
+      null,
+      false,
+    );
+  });
+
+  it("refuses a symlinked protected-mount ancestor without creating outside the workspace", async () => {
+    const outside = path.join(root, "outside-ancestor");
+    fs.mkdirSync(outside);
+    fs.symlinkSync(
+      outside,
+      path.join(root, "agent/.openclaw"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await expect(prepare("rw")).rejects.toThrow();
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+
+  it("does not pin ancestors below a read-only workspace", async () => {
+    const plan = await prepare("ro", { workspaceDir: path.join(root, "agent") });
+    expect(plan.binds.some((spec) => spec.includes(":/workspace/.agents:"))).toBe(false);
   });
 
   it("keeps meaningful source and target whitespace through create and retained comparison", async () => {
@@ -179,13 +225,17 @@ describe("managed mount plan", () => {
     });
     expect(plan.binds).toEqual([
       "/host/state/empty:/workspace:z",
-      "/host/materialized skills/skills:/workspace/.openclaw/sandbox-skills/skills:ro,z",
+      "/host/state/empty/.openclaw:/workspace/.openclaw:z",
+      "/host/state/empty/.openclaw/sandbox-skills:/workspace/.openclaw/sandbox-skills:z",
+      skillsBind,
       "/daemon/A:/data:ro",
       "/daemon/B :/data :rw",
     ]);
     await expectMounts(plan, [
       bind("/host/state/empty", "/workspace"),
-      bind("/host/materialized skills/skills", "/workspace/.openclaw/sandbox-skills/skills", false),
+      bind("/host/state/empty/.openclaw", "/workspace/.openclaw"),
+      bind("/host/state/empty/.openclaw/sandbox-skills", "/workspace/.openclaw/sandbox-skills"),
+      bind("/host/materialized skills/skills", skillsTarget, false),
       bind("/daemon/A", "/data", false),
       bind("/daemon/B ", "/data "),
     ]);
@@ -221,9 +271,7 @@ describe("managed mount plan", () => {
       );
       expect(plan.binds).toContain(`/host/${workspace}-skill:/workspace/skills/nested:ro,z`);
       if (access === "rw") {
-        expect(plan.binds).toContain(
-          "/host/materialized-skill:/workspace/.openclaw/sandbox-skills/skills/nested:ro,z",
-        );
+        expect(plan.binds).toContain(`/host/materialized-skill:${skillsTarget}/nested:ro,z`);
       }
     },
   );
@@ -241,21 +289,6 @@ describe("managed mount plan", () => {
     });
     expect(plan.binds).toContain("/custom/data:/workspace/data/:ro");
     expect(plan.binds.some((mount) => mount.startsWith("/host/hidden:"))).toBe(false);
-  });
-
-  it("keeps protected skills read-only on a read-only Gateway source", async () => {
-    vi.mocked(resolveDockerSourceNamespace).mockResolvedValue([
-      { type: "bind", source: "/host/state", destination: root, writable: true },
-      {
-        type: "bind",
-        source: "/host/skills",
-        destination: path.join(root, "materialized"),
-        writable: false,
-      },
-    ]);
-    expect((await prepare("rw")).binds).toContain(
-      "/host/skills/skills:/workspace/.openclaw/sandbox-skills/skills:ro,z",
-    );
   });
 });
 
@@ -282,17 +315,10 @@ describe("retained mount identity", () => {
       await expectMounts(
         plan,
         [
-          { Type: "bind", Source: "/host/state/empty", Destination: "/workspace", RW: true },
+          bind("/host/state/empty", "/workspace"),
           ...(type === "tmpfs"
             ? []
-            : [
-                {
-                  Type: type,
-                  Source: "/engine/storage",
-                  Destination: "/workspace/cache",
-                  RW: true,
-                },
-              ]),
+            : [{ ...bind("/engine/storage", "/workspace/cache"), Type: type }]),
         ],
         type === "tmpfs" ? { "/workspace/cache": "rw" } : null,
         type !== "tmpfs",
@@ -400,3 +426,33 @@ it.each([false, true])(
     }
   },
 );
+
+it("accepts an ancestor self-bind backing the same workspace bytes for image reads", async () => {
+  const workspaceDir = path.join(root, "private");
+  let agentsSource = "/host/state/private/.agents";
+  vi.mocked(execContainer).mockImplementation(async (_engine, args) => {
+    const stdout = args.includes("{{.Id}} {{.State.Running}} {{.State.Paused}}")
+      ? `${"a".repeat(64)} false false`
+      : JSON.stringify({
+          Mounts: [
+            bind("/host/state/private", "/workspace"),
+            bind(agentsSource, "/workspace/.agents"),
+            bind("/host/state/private/.agents/skills", "/workspace/.agents/skills", false),
+          ],
+          Tmpfs: {},
+        });
+    return { stdout, stderr: "", code: 0 };
+  });
+  const read = () =>
+    sandboxContainerShowsWorkspacePaths({
+      engine,
+      containerName: "owned",
+      workspaceDir,
+      containerRoot: "/workspace",
+      targets: ["/workspace/.agents/preview.png"],
+      assertCurrent() {},
+    });
+  await expect(read()).resolves.toBe(true);
+  agentsSource = "/different/source";
+  await expect(read()).resolves.toBe(false);
+});

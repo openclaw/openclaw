@@ -1,4 +1,3 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   resetPluginStateStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -36,58 +35,34 @@ export function warmEntry() {
 
 export function updateWarmImage(patch: Partial<WarmImageRecord>) {
   const entry = warmEntry();
-  openWarmImageStore().register(entry.key, {
-    ...entry.value,
-    image: { ...entry.value.image!, ...patch },
-  });
+  const image = { ...entry.value.image!, ...patch };
+  openWarmImageStore().register(entry.key, { ...entry.value, image });
   return entry;
 }
+const uncached = { preparationKey: null, cacheKey: null, purpose: null };
 
-export const warmImage = (
-  checkpointId: string,
-  overrides: Partial<WarmImageRecord> = {},
-): WarmImageRecord => ({
-  checkpointId,
-  kind: "native",
-  state: "available",
-  createdAtMs: 1,
-  preparationKey: null,
-  cacheKey: null,
-  purpose: null,
-  lastDemandAtMs: 1,
-  ...overrides,
-});
-
-export const warmRecord = (overrides: Partial<WarmProfileRecord> = {}): WarmProfileRecord => ({
-  version: 3,
-  allocations: {},
-  ...overrides,
-});
-
-type CaptureOperation = Extract<NonNullable<WarmProfileRecord["operation"]>, { type: "capture" }>;
-export const captureOperation = (
-  id: string,
-  overrides: Partial<CaptureOperation> = {},
-): CaptureOperation => ({
-  type: "capture",
-  id,
-  phase: "creating",
-  startedAtMs: Date.now(),
-  ...overrides,
-});
-
-export function pause() {
-  const entered = createDeferred<void>(),
-    released = createDeferred<void>();
+export function warmImage(id: string, patch: Partial<WarmImageRecord> = {}): WarmImageRecord {
   return {
-    entered: entered.promise,
-    release: () => released.resolve(),
-    async wait(this: void) {
-      entered.resolve();
-      await released.promise;
-    },
+    checkpointId: id,
+    kind: "native",
+    state: "available",
+    createdAtMs: 1,
+    ...uncached,
+    lastDemandAtMs: 1,
+    ...patch,
   };
 }
+
+export function warmRecord(patch: Partial<WarmProfileRecord> = {}): WarmProfileRecord {
+  return { version: 3, allocations: {}, ...patch };
+}
+
+type Capture = Extract<NonNullable<WarmProfileRecord["operation"]>, { type: "capture" }>;
+export function captureOperation(id: string, patch: Partial<Capture> = {}): Capture {
+  return { type: "capture", id, phase: "creating", startedAtMs: Date.now(), ...patch };
+}
+
+export { createAsyncGate as pause } from "../../test-support/async-gate.test-support.js";
 
 export const warmStore = <T = WarmProfileRecord>(env?: NodeJS.ProcessEnv) =>
   createPluginStateSyncKeyedStoreForTests<T>("crabbox", {
@@ -104,19 +79,13 @@ export const warmAllocation = (
   machineClass: "standard",
   phase: "pending",
   choice,
-  preparationKey: null,
-  cacheKey: null,
-  purpose: null,
+  ...uncached,
   demandAtMs: null,
   imageGeneration: null,
   ...overrides,
 });
 
 export function expectText(text: string | undefined, contains: string[], excludes: string[] = []) {
-  for (const value of contains) {
-    expect(text).toContain(value);
-  }
-  for (const value of excludes) {
-    expect(text).not.toContain(value);
-  }
+  contains.forEach((value) => expect(text).toContain(value));
+  excludes.forEach((value) => expect(text).not.toContain(value));
 }

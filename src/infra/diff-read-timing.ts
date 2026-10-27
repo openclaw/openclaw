@@ -10,7 +10,6 @@ const DIFF_READ_STAGES = [
   "git-wall",
   "encode",
 ] as const;
-type DiffReadStage = (typeof DIFF_READ_STAGES)[number];
 
 type DiffRevisionUnavailableReason =
   | "oversized"
@@ -22,7 +21,6 @@ type DiffRevisionUnavailableReason =
   | "no-revision-reftable"
   | "no-revision-alternates"
   | "no-revision-symlink"
-  | "no-revision-nested-repository"
   | "no-revision-status"
   | "no-revision-unmerged"
   | "no-revision-submodule"
@@ -43,7 +41,7 @@ export type DiffReadCacheMissReason =
   | "revision-changed-metadata";
 
 export type DiffReadTiming = {
-  durations: Partial<Record<DiffReadStage, number>>;
+  durations: Partial<Record<(typeof DIFF_READ_STAGES)[number], number>>;
   outcome?: "cache-hit" | "cache-miss";
   missReason?: DiffReadCacheMissReason;
   revisionUnavailableReason?: DiffRevisionUnavailableReason;

@@ -1,4 +1,11 @@
+import { recordSessionPrDiagnostic } from "./control-ui-session-pr-diagnostics.js";
 import { gitHubPublicApi } from "./github-public-api.js";
+
+export type SessionPullRequestReadCredential = {
+  token: string;
+  apiBaseUrl: string;
+  assertCurrent: () => void;
+};
 
 /** Shared I/O survives one reader's retirement while each reader owns its delivery. */
 export function createGitHubReadGroup() {
@@ -53,16 +60,29 @@ export function createGitHubReadGroup() {
 export function prepareSessionPullRequestGitHubRead(
   host: string,
   assertAccess: () => void,
-  options: { optionalAuth?: boolean; signal?: AbortSignal } = {},
+  options: {
+    optionalAuth?: boolean;
+    signal?: AbortSignal;
+    credential?: SessionPullRequestReadCredential;
+  } = {},
 ) {
   const fetchRequest = fetch;
-  const optionalAuth = options.optionalAuth !== false;
-  const selected = gitHubPublicApi.resolveGitHubApiCredentialScope(undefined, host);
+  const credential = options.credential;
+  const optionalAuth = !credential && options.optionalAuth !== false;
+  const selected = credential
+    ? {
+        token: credential.token,
+        apiBaseUrl: credential.apiBaseUrl,
+        cacheScope: `${host}:${credential.apiBaseUrl}:${gitHubPublicApi.githubApiCredentialCacheScope(credential.token)}`,
+      }
+    : gitHubPublicApi.resolveGitHubApiCredentialScope(undefined, host);
   const assertCurrent = () => {
     assertAccess();
+    credential?.assertCurrent();
     if (
+      !credential &&
       gitHubPublicApi.resolveGitHubApiCredentialScope(undefined, host).cacheScope !==
-      selected.cacheScope
+        selected.cacheScope
     ) {
       throw new gitHubPublicApi.ControlUiGitHubError(
         409,
@@ -74,6 +94,7 @@ export function prepareSessionPullRequestGitHubRead(
   return {
     ...selected,
     host,
+    credential,
     assertCurrent,
     async request(
       this: void,
@@ -88,25 +109,24 @@ export function prepareSessionPullRequestGitHubRead(
       );
       const requestSignal =
         sourceSignals.length > 1 ? AbortSignal.any(sourceSignals) : sourceSignals[0];
-      const readJson = async (token: string | undefined) =>
-        gitHubPublicApi.readGitHubJsonResponse(
-          await gitHubPublicApi.fetchGitHubApi(
-            url,
-            fetchRequest,
-            token,
-            beforeRedirect,
-            identity,
-            undefined,
-            requestSignal,
-            undefined,
-            selected.apiBaseUrl,
-          ),
+      const readJson = async (token: string | undefined) => {
+        recordSessionPrDiagnostic("github-fetch-started");
+        const { value } = await gitHubPublicApi.fetchGitHubJsonPage(url, fetchRequest, token, {
+          beforeRedirect,
+          identity,
+          signal: requestSignal,
+          apiBaseUrl: selected.apiBaseUrl,
           maxBytes,
-        );
+        });
+        recordSessionPrDiagnostic("github-fetch-returned");
+        recordSessionPrDiagnostic("github-json-returned");
+        return value;
+      };
       const value = optionalAuth
         ? await gitHubPublicApi.withOptionalGitHubAuth(selected.token, readJson)
         : await readJson(selected.token);
       assertCurrent();
+      recordSessionPrDiagnostic("github-request-returned");
       return value;
     },
   };

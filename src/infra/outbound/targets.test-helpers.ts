@@ -6,7 +6,10 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelOutboundSessionRoute } from "../../plugin-sdk/core.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 
 function stripTestPrefix(raw: string, channelId: string): string {
   return raw.replace(new RegExp(`^${channelId}:`, "i"), "").trim();
@@ -89,20 +92,15 @@ export function createTestChannelPlugin(params: {
   resolveDefaultTo?: (params: { cfg: OpenClawConfig }) => string | undefined;
 }): ChannelPlugin {
   return {
-    id: params.id,
-    meta: {
+    ...createChannelTestPluginBase({
       id: params.id,
-      label: params.label ?? String(params.id),
-      selectionLabel: params.label ?? String(params.id),
-      docsPath: `/channels/${params.id}`,
-      blurb: "test stub.",
-    },
-    capabilities: { chatTypes: ["direct", "group"] },
-    config: {
-      listAccountIds: () => [],
-      resolveAccount: () => ({}),
-      ...(params.resolveDefaultTo ? { resolveDefaultTo: params.resolveDefaultTo } : {}),
-    },
+      label: params.label,
+      capabilities: { chatTypes: ["direct", "group"] },
+      config: {
+        listAccountIds: () => [],
+        ...(params.resolveDefaultTo ? { resolveDefaultTo: params.resolveDefaultTo } : {}),
+      },
+    }),
     ...(params.outbound ? { outbound: params.outbound } : {}),
     ...(params.messaging ? { messaging: params.messaging } : {}),
   };

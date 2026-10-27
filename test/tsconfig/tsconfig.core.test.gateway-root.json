@@ -8,8 +8,14 @@
     "../../src/gateway/*.test.tsx"
   ],
   "exclude": [
+    "../../src/gateway/client*.test.ts",
+    "../../src/gateway/client*.test.tsx",
     "../../src/gateway/chat-*.test.ts",
     "../../src/gateway/chat-*.test.tsx",
+    "../../src/gateway/cron-stream-*.test.ts",
+    "../../src/gateway/cron-stream-*.test.tsx",
+    "../../src/gateway/github*.test.ts",
+    "../../src/gateway/github*.test.tsx",
     "../../src/gateway/server*.test.ts",
     "../../src/gateway/server*.test.tsx"
   ]

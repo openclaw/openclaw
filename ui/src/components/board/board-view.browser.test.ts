@@ -4,11 +4,28 @@ import { buildWidgetDocument } from "../../../../src/canvas/wrap.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
+import { createBoardWidget } from "../../lib/board/widget.test-support.ts";
 import "../../styles/base.css";
 import "../../styles/chat/board.css";
-import "./board-view.ts";
+import "./board-view.tsx";
 
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
+const cellsOf = (view: OpenClawBoardView) => [
+  ...view.querySelectorAll("openclaw-board-widget-cell"),
+];
+async function settle(view: OpenClawBoardView) {
+  await view.updateComplete;
+  await Promise.all(cellsOf(view).map((cell) => cell.updateComplete));
+}
+
+function expectSelectedTabVisible(view: OpenClawBoardView, track: HTMLElement) {
+  const selected = view.querySelector<HTMLElement>('[data-board-tab-id="tab-7"]')!;
+  expect(selected.getAttribute("aria-selected")).toBe("true");
+  const bounds = track.getBoundingClientRect();
+  const tab = selected.getBoundingClientRect();
+  expect(tab.left).toBeGreaterThanOrEqual(bounds.left - 1);
+  expect(tab.right).toBeLessThanOrEqual(bounds.right + 1);
+}
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
@@ -20,28 +37,17 @@ const source: BoardSnapshot = {
     { tabId: "ops", title: "Operations", position: 1, chatDock: "right" },
   ],
   widgets: [
-    {
+    createBoardWidget({
       name: "first",
-      tabId: "main",
       title: "First",
-      contentKind: "html",
-      sizeW: 6,
       sizeH: 3,
-      position: 0,
-      grantState: "none",
-      revision: 1,
-    },
-    {
+    }),
+    createBoardWidget({
       name: "second",
-      tabId: "main",
       title: "Second",
-      contentKind: "html",
-      sizeW: 6,
       sizeH: 3,
       position: 1,
-      grantState: "none",
-      revision: 1,
-    },
+    }),
   ],
 };
 
@@ -55,10 +61,7 @@ async function mount(
   view.widgetFrameUrl = () => "about:blank";
   view.callbacks = { applyOps, grant: vi.fn(async () => undefined), selectTab: vi.fn() };
   parent.append(view);
-  await view.updateComplete;
-  await Promise.all(
-    [...view.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.updateComplete),
-  );
+  await settle(view);
   return view;
 }
 
@@ -79,6 +82,11 @@ function pointer(
       cancelable: true,
     }),
   );
+}
+
+function dropAt(pointerId: number, x: number, y: number) {
+  pointer(window, "pointermove", pointerId, x, y);
+  pointer(window, "pointerup", pointerId, x, y);
 }
 
 afterEach(() => {
@@ -126,14 +134,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const trigger = view.querySelector<HTMLButtonElement>(".board-tabs__overflow-trigger")!;
     await page.elementLocator(trigger).click();
     await page.getByRole("menuitem", { name: "Research area 8", exact: true }).click();
-    await vi.waitFor(() => {
-      const selected = view.querySelector<HTMLElement>('[data-board-tab-id="tab-7"]')!;
-      expect(selected.getAttribute("aria-selected")).toBe("true");
-      const bounds = track.getBoundingClientRect();
-      const tab = selected.getBoundingClientRect();
-      expect(tab.left).toBeGreaterThanOrEqual(bounds.left - 1);
-      expect(tab.right).toBeLessThanOrEqual(bounds.right + 1);
-    });
+    await vi.waitFor(() => expectSelectedTabVisible(view, track));
     expect(document.activeElement).toBe(trigger);
     track.scrollLeft = 0;
     view.snapshot = { ...view.snapshot!, revision: 2 };
@@ -150,12 +151,8 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     await view.updateComplete;
     await vi.waitFor(() => {
       const restored = view.querySelector<HTMLElement>(".board-tabs__track")!;
-      const selected = view.querySelector<HTMLElement>('[data-board-tab-id="tab-7"]')!;
       expect(restored).not.toBe(track);
-      const bounds = restored.getBoundingClientRect();
-      const tab = selected.getBoundingClientRect();
-      expect(tab.left).toBeGreaterThanOrEqual(bounds.left - 1);
-      expect(tab.right).toBeLessThanOrEqual(bounds.right + 1);
+      expectSelectedTabVisible(view, restored);
     });
   });
 
@@ -164,50 +161,13 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const cell = view.querySelector("openclaw-board-widget-cell")!;
     const frame = cell.querySelector("iframe")!;
     const messages: string[] = [];
-    const fixtureStates = new Set(["ready", "Last 30 days:1", "Last 30 days:2"]);
-    const loggedState = (value: string) => (fixtureStates.has(value) ? value : "unexpected-state");
-    const startedAt = performance.timeOrigin + performance.now();
-    const timeline: {
-      phase: string;
-      elapsedMs: number;
-      visibility: DocumentVisibilityState;
-      state?: string;
-      sourceMatches?: boolean;
-      emittedAtMs?: number;
-    }[] = [];
-    const record = (
-      phase: string,
-      detail: { state?: string; sourceMatches?: boolean; emittedAtMs?: number } = {},
-    ) => {
-      if (timeline.length >= 16) {
-        return;
-      }
-      timeline.push({
-        phase,
-        elapsedMs: performance.timeOrigin + performance.now() - startedAt,
-        visibility: document.visibilityState,
-        ...detail,
-      });
-    };
-    const loaded = () => record("iframe-load");
-    frame.addEventListener("load", loaded);
     const receive = (event: MessageEvent) => {
-      if (typeof event.data?.tabState === "string") {
-        record("message", {
-          state: loggedState(event.data.tabState),
-          sourceMatches: event.source === frame.contentWindow,
-          emittedAtMs:
-            typeof event.data.emittedAt === "number" ? event.data.emittedAt - startedAt : undefined,
-        });
-      }
       if (event.source === frame.contentWindow && typeof event.data?.tabState === "string") {
         messages.push(event.data.tabState);
       }
     };
     window.addEventListener("message", receive);
-    record("listener-registered");
     try {
-      record("assign-srcdoc");
       frame.srcdoc = `<input value="All observations"><script>
         let visits = 0;
         addEventListener("message", ({ data }) => {
@@ -269,24 +229,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
       await vi.waitFor(() =>
         expect(messages).toEqual(["ready", "Last 30 days:1", "Last 30 days:2"]),
       );
-    } catch (error) {
-      record("failure");
-      console.error(
-        "Board tab retention diagnostics",
-        JSON.stringify({
-          timeline,
-          messages: messages.map(loggedState),
-          connected: frame.isConnected,
-          active: cell.active,
-          loading: frame.loading,
-          // Read geometry only after failure so diagnostics cannot trigger initial layout.
-          bounds: frame.getBoundingClientRect().toJSON(),
-          viewport: { width: innerWidth, height: innerHeight },
-        }),
-      );
-      throw error;
     } finally {
-      frame.removeEventListener("load", loaded);
       window.removeEventListener("message", receive);
     }
   });
@@ -296,7 +239,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     async (width) => {
       const view = await mount();
       view.style.width = `${width}px`;
-      const cells = [...view.querySelectorAll("openclaw-board-widget-cell")];
+      const cells = cellsOf(view);
       const frames = cells.map((cell) => cell.querySelector("iframe"));
       const snapshot = structuredClone(source);
       snapshot.widgets[0]!.position = 1;
@@ -304,8 +247,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
       snapshot.widgets[1]!.position = 0;
       snapshot.widgets[1]!.heightMode = "fixed";
       view.snapshot = snapshot;
-      await view.updateComplete;
-      await Promise.all(cells.map((cell) => cell.updateComplete));
+      await settle(view);
       const grid = view.querySelector<HTMLElement>(".board-grid")!.getBoundingClientRect();
       const [first, second] = cells.map((cell) =>
         cell.querySelector("section")!.getBoundingClientRect(),
@@ -331,10 +273,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const target = cards[0]!.getBoundingClientRect();
     pointer(cards[1]!.querySelector(".board-widget__drag-handle")!, "pointerdown", 81);
     pointer(window, "pointermove", 81, target.right - 3, target.top + target.height / 2);
-    await view.updateComplete;
-    await Promise.all(
-      [...view.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.updateComplete),
-    );
+    await settle(view);
     pointer(window, "pointerup", 81, target.right - 3, target.top + target.height / 2);
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "second", position: 0 }]),
@@ -450,30 +389,12 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const columnUnit = (gridBounds.width - BOARD_GRID_GAP * 11) / 12 + BOARD_GRID_GAP;
     pointer(handles[0]!, "pointerdown", 31, 100, 100);
     pointer(handles[1]!, "pointerdown", 32, 200, 100);
-    pointer(
-      window,
-      "pointermove",
-      32,
-      200 + columnUnit,
-      100 + BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP,
-    );
+    const targetY = 100 + BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP;
+    pointer(window, "pointermove", 32, 200 + columnUnit, targetY);
     pointer(window, "pointerup", 32);
     expect(applyOps).not.toHaveBeenCalled();
 
-    pointer(
-      window,
-      "pointermove",
-      31,
-      100 + columnUnit,
-      100 + BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP,
-    );
-    pointer(
-      window,
-      "pointerup",
-      31,
-      100 + columnUnit,
-      100 + BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP,
-    );
+    dropAt(31, 100 + columnUnit, targetY);
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([
         { kind: "widget_resize", name: "first", sizeW: 7, sizeH: 4, heightMode: "fixed" },
@@ -490,10 +411,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
         { ...source.widgets[1]!, sizeW: 6, presentation: "frameless" },
       ],
     };
-    await view.updateComplete;
-    await Promise.all(
-      [...view.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.updateComplete),
-    );
+    await settle(view);
     const cells = [...view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')];
     const first = cells[0]!;
     const second = cells[1]!;
@@ -642,20 +560,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const foreignTab = other.querySelector<HTMLElement>('[data-board-tab-id="foreign-b"]');
     const target = foreignTab!.getBoundingClientRect();
     pointer(handle!, "pointerdown", 41, 100, 100);
-    pointer(
-      window,
-      "pointermove",
-      41,
-      target.left + target.width / 2,
-      target.top + target.height / 2,
-    );
-    pointer(
-      window,
-      "pointerup",
-      41,
-      target.left + target.width / 2,
-      target.top + target.height / 2,
-    );
+    dropAt(41, target.left + target.width / 2, target.top + target.height / 2);
     await Promise.resolve();
     expect(applyOps).not.toHaveBeenCalled();
   });
@@ -665,8 +570,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const view = await mount(applyOps);
     const handle = view.querySelector<HTMLElement>(".board-widget__drag-handle");
     pointer(handle!, "pointerdown", 51, 100, 100);
-    pointer(window, "pointermove", 51, 0, 10_000);
-    pointer(window, "pointerup", 51, 0, 10_000);
+    dropAt(51, 0, 10_000);
     await Promise.resolve();
     expect(applyOps).not.toHaveBeenCalled();
   });
@@ -679,9 +583,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
       ...structuredClone(source),
       widgets: source.widgets.map((widget) => ({ ...widget, sizeW: 12 })),
     };
-    await view.updateComplete;
-    const cells = view.querySelectorAll("openclaw-board-widget-cell");
-    await Promise.all([...cells].map((cell) => cell.updateComplete));
+    await settle(view);
     const handle = view.querySelector<HTMLElement>(".board-widget__drag-handle");
     pointer(handle!, "pointerdown", 61, 100, 100);
     await view.updateComplete;
@@ -689,8 +591,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const target = appendZone!.getBoundingClientRect();
     const targetX = target.left + target.width / 2;
     const targetY = target.top + target.height / 2;
-    pointer(window, "pointermove", 61, targetX, targetY);
-    pointer(window, "pointerup", 61, targetX, targetY);
+    dropAt(61, targetX, targetY);
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "first", position: 1 }]),
     );

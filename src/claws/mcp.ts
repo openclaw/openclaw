@@ -1,6 +1,6 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { setConfiguredMcpServer, unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
-import { withClawMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
+import { withMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
 import { canonicalizeConfiguredMcpServer } from "../config/mcp-config-normalize.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { digestClawValue } from "./digest.js";
@@ -12,7 +12,6 @@ export type { PersistedClawMcpServerRef } from "./mcp-records.js";
 
 export class ClawMcpInstallError extends Error {
   constructor(
-    readonly code: string,
     message: string,
     readonly mcpServers: PersistedClawMcpServerRef[],
   ) {
@@ -40,16 +39,15 @@ export async function installClawMcpServersStateless(
 ): Promise<PersistedClawMcpServerRef[]> {
   const refs: PersistedClawMcpServerRef[] = [];
   for (const action of plan.actions.filter((candidate) => candidate.kind === "mcpServer")) {
-    await withClawMcpLifecycleLease(action.id, options, async (assertOwned) => {
+    await withMcpLifecycleLease(action.id, options, async (lease) => {
       const assertCurrent = () => {
-        assertOwned();
+        lease.assertCurrent();
         options.assertCurrent?.();
         options.assertForwardCurrent?.();
       };
       const server = action.details ? mcpServerFromActionDetails(action.details) : undefined;
       if (!server) {
         throw new ClawMcpInstallError(
-          "mcp_plan_invalid",
           `MCP server action ${JSON.stringify(action.id)} is invalid.`,
           refs,
         );
@@ -57,13 +55,12 @@ export async function installClawMcpServersStateless(
       const listed = await listConfiguredMcpServers();
       assertCurrent();
       if (!listed.ok) {
-        throw new ClawMcpInstallError("mcp_preflight_failed", listed.error, refs);
+        throw new ClawMcpInstallError(listed.error, refs);
       }
       const configured = listed.mcpServers[action.id];
       const configDigest = digestClawMcpServer(server);
       if (configured && digestClawMcpServer(configured) !== configDigest) {
         throw new ClawMcpInstallError(
-          "mcp_config_conflict",
           `MCP server ${JSON.stringify(action.id)} already exists with different configuration.`,
           refs,
         );
@@ -89,9 +86,14 @@ export async function installClawMcpServersStateless(
             createOnly: true,
             skipLifecycleLease: true,
             assertCurrent,
+            assertCurrentAsync: async () => {
+              await options.prepareEffect?.();
+              await lease.assertOwned();
+              assertCurrent();
+            },
           });
           if (!result.ok) {
-            throw new ClawMcpInstallError("mcp_install_failed", result.error, refs);
+            throw new ClawMcpInstallError(result.error, refs);
           }
           refs.push(ref);
           assertCurrent();
@@ -99,7 +101,7 @@ export async function installClawMcpServersStateless(
           if (error instanceof ClawMcpInstallError) {
             throw error;
           }
-          throw new ClawMcpInstallError("mcp_install_uncertain", coerceErrorMessage(error), refs);
+          throw new ClawMcpInstallError(coerceErrorMessage(error), refs);
         }
       }
       if (configured) {
@@ -121,9 +123,9 @@ export async function rollbackStatelessClawMcpServers(
       continue;
     }
     try {
-      await withClawMcpLifecycleLease(ref.name, options, async (assertOwned) => {
+      await withMcpLifecycleLease(ref.name, options, async (lease) => {
         const assertCurrent = () => {
-          assertOwned();
+          lease.assertCurrent();
           options.assertCurrent?.();
         };
         const listed = await listConfiguredMcpServers();
@@ -144,6 +146,11 @@ export async function rollbackStatelessClawMcpServers(
           expectedServer: configured,
           skipLifecycleLease: true,
           assertCurrent,
+          assertCurrentAsync: async () => {
+            await options.prepareEffect?.();
+            await lease.assertOwned();
+            assertCurrent();
+          },
         });
         assertCurrent();
         if (!removed.ok) {

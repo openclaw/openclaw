@@ -17,7 +17,6 @@ import {
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
 import type { SessionMutationAuthorization } from "./server-methods/types.js";
-import { isSessionCreatorProfile } from "./session-creator.js";
 import { isRequiredSessionTargetMethod, mayCreateSessionTarget } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -172,9 +171,14 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       const entryFilter = policy
         ? policy.entryFilter
         : createSessionListEntryFilter({ cfg, client: params.client });
-      return entryFilter?.(target.storeKey, target.entry) === false
-        ? hiddenSessionNotFound(target.canonicalKey)
-        : null;
+      const visible = policy
+        ? policy.canReadTarget(target)
+        : entryFilter?.(
+            target.storeKey,
+            target.entry,
+            resolveSessionSharingMembership(target, identity?.id, members, projection),
+          ) !== false;
+      return !visible ? hiddenSessionNotFound(target.canonicalKey) : null;
     }
     return policy
       ? authorizeSessionSharingTarget(
@@ -242,17 +246,24 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       hidesForeignSessions &&
       target &&
       !(
-        preparedPolicy(getPolicyConfig())?.isCreator(target.entry.createdActor) ??
-        isSessionCreatorProfile(
-          target.entry.createdActor,
-          params.client?.authenticatedUserProfile?.profileId,
-        )
+        preparedPolicy(getPolicyConfig())?.canReadTarget(target) ??
+        createSessionListEntryFilter({ cfg: getPolicyConfig(), client: params.client })?.(
+          target.storeKey,
+          target.entry,
+          resolveSessionSharingMembership(
+            target,
+            sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client))?.id,
+            undefined,
+            "projection" in resolved ? resolved.projection : undefined,
+          ),
+        ) !== false
       )
     ) {
       return { error: hiddenSessionNotFound(targetRef.sessionKey) };
     }
   }
   const bindsOwnProfile = params.sessionScope === "operator.sessions.write";
+  const bindsLifecycle = bindsProgressLifecycle || bindsOwnProfile || params.method === "chat.send";
   const ownProfile = resolveOwnSessionProfileAuthorization({
     client: params.client,
     bindsOwnProfile,
@@ -355,9 +366,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
             },
           }
         : {}),
-      ...(bindsProgressLifecycle || bindsOwnProfile
-        ? { lifecycleRevision: target?.entry.lifecycleRevision }
-        : {}),
+      ...(bindsLifecycle ? { lifecycleRevision: target?.entry.lifecycleRevision } : {}),
     });
   }
   consuming.sharing = undefined;
@@ -377,7 +386,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     ensuredSessionId?: string,
     prepared?: { target: SessionSharingTarget | null; members: readonly string[] },
     currentTalkTarget?: PreparedTalkSessionTarget,
-    bindSessionId = true,
+    bindSessionIdentity = true,
   ): void => {
     if (!prepared && !consuming.sharing && params.preparedTargets) {
       const retained = findPreparedSharingTarget(params, targetRef);
@@ -394,7 +403,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
           ensuredSessionId,
           { target: read.target, members: read.members.map((member) => member.identityId) },
           currentTalkTarget,
-          bindSessionId,
+          bindSessionIdentity,
         ),
       );
     }
@@ -462,9 +471,10 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
           current.canonicalKey === expectedResolved.canonicalKey &&
           current.storeKey === expectedResolved.storeKey &&
           isSameSessionSharingSource(current, expectedResolved) &&
-          (!bindSessionId || (current.entry.sessionId?.trim() || null) === expectedSessionId) &&
-          (!(bindsProgressLifecycle || bindsOwnProfile || expected.created) ||
-            current.entry.lifecycleRevision === expected.lifecycleRevision));
+          (!bindSessionIdentity ||
+            ((current.entry.sessionId?.trim() || null) === expectedSessionId &&
+              (!(bindsLifecycle || expected.created) ||
+                current.entry.lifecycleRevision === expected.lifecycleRevision))));
     if (!sameResolvedTarget) {
       throw targetChanged(targetRef.sessionKey);
     }
@@ -500,7 +510,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     params.method === "chat.send" && authorizedTargets.length === 1 && !talkSessionTarget
       ? authorizedTargets[0]
       : undefined;
-  // Reply admission owns compaction lineage; custody rechecks access in the same store.
+  // Reply admission owns compaction and rollover identity; custody rechecks access in the same store.
   const assertAdmittedTargetCurrent = (
     target: AuthorizedSessionMutationTarget,
     cfg: OpenClawConfig,

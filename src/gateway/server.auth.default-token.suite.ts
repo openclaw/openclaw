@@ -357,6 +357,27 @@ export function registerDefaultAuthTokenSuite(): void {
       });
     });
 
+    test("keeps protocol-v4 Mac apps connected after widget retirement", async () => {
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, {
+          minProtocol: 4,
+          maxProtocol: 4,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.MACOS_APP,
+            version: "2026.10.3",
+            platform: "macos",
+            mode: GATEWAY_CLIENT_MODES.UI,
+          },
+        });
+        expect(res.ok, JSON.stringify(res)).toBe(true);
+        expect(res.payload).toMatchObject({ type: "hello-ok", protocol: 4 });
+        expect((await rpcReq(ws, "health")).ok).toBe(true);
+      } finally {
+        ws.close();
+      }
+    });
+
     test("allows previous protocol for restart health probes", async () => {
       const ws = await openWs(port);
       const res = await connectReq(ws, {

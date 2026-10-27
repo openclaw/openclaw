@@ -11,18 +11,10 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
-import type {
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
-  PluginLogger,
-} from "../runtime-api.js";
+import type { OpenClawPluginService, OpenClawPluginServiceContext } from "../runtime-api.js";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { DEFAULT_ACPX_TIMEOUT_SECONDS } from "./config-schema.js";
-import {
-  resolveAcpxPluginConfig,
-  toAcpMcpServers,
-  type ResolvedAcpxPluginConfig,
-} from "./config.js";
+import { resolveAcpxPluginConfig, toAcpMcpServers } from "./config.js";
 import {
   ACPX_PROBE_LEASE_SESSION_KEY,
   createAcpxProcessLeaseStore,
@@ -52,15 +44,6 @@ const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
 const SKIP_RUNTIME_PROBE_ENV = "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE";
 const MAX_ACPX_TOKIO_WORKER_THREADS = 8;
 
-type AcpxRuntimeFactoryParams = {
-  pluginConfig: ResolvedAcpxPluginConfig;
-  getProbeAgent: () => string | undefined;
-  gatewayInstanceId: string;
-  processLeaseStore: AcpxProcessLeaseStore;
-  wrapperRoot: string;
-  logger?: PluginLogger;
-};
-
 type AcpxBackendLifecycle = {
   publish: (backend: { runtime: CompleteAcpRuntime; healthy?: () => boolean }) => void;
   retract: (runtime: CompleteAcpRuntime) => void;
@@ -73,8 +56,7 @@ type CreateAcpxRuntimeServiceParams = {
   backendLifecycle: AcpxBackendLifecycle;
   pluginConfig?: unknown;
   getAllowedAgents?: () => readonly string[] | undefined;
-  openKeyedStore?: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
-  runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike | Promise<AcpxRuntimeLike>;
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
 };
 
 function resolveAcpxTimerTimeoutMs(timeoutSeconds: number | undefined): number | undefined {
@@ -93,50 +75,6 @@ function resolveAgentProcessEnv(): Record<string, string> | undefined {
   return {
     TOKIO_WORKER_THREADS: String(Math.min(availableParallelism(), MAX_ACPX_TOKIO_WORKER_THREADS)),
   };
-}
-
-async function createDefaultRuntime(params: AcpxRuntimeFactoryParams): Promise<AcpxRuntimeLike> {
-  // Snapshot filenames once under the service owner. Runtime never migrates or reads legacy payloads.
-  const names = await fs
-    .readdir(path.join(params.pluginConfig.stateDir, "sessions"))
-    .catch((error: unknown) => {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-        return [];
-      }
-      throw error;
-    });
-  const legacyBareSessionKeys = new Set<string>();
-  for (const name of names) {
-    if (!name.endsWith(".json")) {
-      continue;
-    }
-    const recordId = decodeURIComponent(name.slice(0, -5));
-    if (
-      !recordId.startsWith("agent:") &&
-      !recordId.startsWith(".openclaw-owner-") &&
-      !recordId.includes(":oneshot:")
-    ) {
-      legacyBareSessionKeys.add(recordId.toLowerCase());
-    }
-  }
-  return new AcpxRuntime({
-    cwd: params.pluginConfig.cwd,
-    agentProcessEnv: resolveAgentProcessEnv(),
-    openclawLegacyBareSessionKeys: legacyBareSessionKeys,
-    openclawGatewayInstanceId: params.gatewayInstanceId,
-    openclawProcessLeaseStore: params.processLeaseStore,
-    openclawWrapperRoot: params.wrapperRoot,
-    sessionStore: createFileSessionStore({ stateDir: params.pluginConfig.stateDir }),
-    agentRegistry: createAgentRegistry({ overrides: params.pluginConfig.agents }),
-    getProbeAgent: params.getProbeAgent,
-    mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
-    pluginToolsMcpBridgeEnabled: params.pluginConfig.pluginToolsMcpBridge,
-    openclawToolsMcpBridgeEnabled: params.pluginConfig.openClawToolsMcpBridge,
-    permissionMode: params.pluginConfig.permissionMode,
-    nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
-    elicitationModes: ["form", "url"],
-    timeoutMs: resolveAcpxTimerTimeoutMs(params.pluginConfig.timeoutSeconds),
-  });
 }
 
 function formatDoctorFailureMessage(report: { message: string; details?: string[] }): string {
@@ -284,9 +222,6 @@ export function createAcpxRuntimeService(
         return;
       }
       const openKeyedStore = params.openKeyedStore;
-      if (!openKeyedStore) {
-        throw new Error("ACPX runtime service requires plugin keyed state");
-      }
 
       const basePluginConfig = await measureAcpxStartup(ctx, "config.resolve", () =>
         resolveAcpxPluginConfig({
@@ -341,16 +276,51 @@ export function createAcpxRuntimeService(
       const getProbeAgent = () =>
         pluginConfig.probeAgent ??
         getAllowedAgents()?.map(normalizeLowercaseStringOrEmpty).find(Boolean);
-      const startedRuntime = await measureAcpxStartup(ctx, "runtime.create", () =>
-        (params.runtimeFactory ?? createDefaultRuntime)({
-          pluginConfig,
+      const startedRuntime = await measureAcpxStartup(ctx, "runtime.create", async () => {
+        // Snapshot filenames once under the service owner. Runtime never migrates or reads legacy payloads.
+        const names = await fs
+          .readdir(path.join(pluginConfig.stateDir, "sessions"))
+          .catch((error: unknown) => {
+            if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+              return [];
+            }
+            throw error;
+          });
+        const legacyBareSessionKeys = new Set<string>();
+        for (const name of names) {
+          if (!name.endsWith(".json")) {
+            continue;
+          }
+          const recordId = decodeURIComponent(name.slice(0, -5));
+          if (
+            !recordId.startsWith("agent:") &&
+            !recordId.startsWith(".openclaw-owner-") &&
+            !recordId.includes(":oneshot:")
+          ) {
+            legacyBareSessionKeys.add(recordId.toLowerCase());
+          }
+        }
+        return new AcpxRuntime({
+          cwd: pluginConfig.cwd,
+          agentProcessEnv: resolveAgentProcessEnv(),
+          agentProcessEnvAllow: pluginConfig.agentProcessEnvAllow,
+          agentProcessEnvBlock: pluginConfig.agentProcessEnvBlock,
+          openclawLegacyBareSessionKeys: legacyBareSessionKeys,
+          openclawGatewayInstanceId: gatewayInstanceId,
+          openclawProcessLeaseStore: processLeaseStore,
+          openclawWrapperRoot: wrapperRoot,
+          sessionStore: createFileSessionStore({ stateDir: pluginConfig.stateDir }),
+          agentRegistry: createAgentRegistry({ overrides: pluginConfig.agents }),
           getProbeAgent,
-          gatewayInstanceId,
-          processLeaseStore,
-          wrapperRoot,
-          logger: ctx.logger,
-        }),
-      );
+          mcpServers: toAcpMcpServers(pluginConfig.mcpServers),
+          pluginToolsMcpBridgeEnabled: pluginConfig.pluginToolsMcpBridge,
+          openclawToolsMcpBridgeEnabled: pluginConfig.openClawToolsMcpBridge,
+          permissionMode: pluginConfig.permissionMode,
+          nonInteractivePermissions: pluginConfig.nonInteractivePermissions,
+          elicitationModes: ["form", "url"],
+          timeoutMs: resolveAcpxTimerTimeoutMs(pluginConfig.timeoutSeconds),
+        });
+      });
       runtime = startedRuntime;
 
       const shouldProbeRuntime = params.probeAtStartup !== false && shouldProbeRuntimeAtStartup();

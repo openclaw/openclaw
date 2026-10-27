@@ -10,10 +10,9 @@ import {
   publishSqliteDatabaseSchemaChange,
   revokeSqliteDatabaseAdmissions,
 } from "../sqlite-database-admission.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import type { StoreSchema } from "./contract.js";
-import { openEngineStore, readEngineAnchor } from "./open.js";
+import { openPostgresEngineTestStore } from "./engine-store.test-support.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
@@ -37,19 +36,11 @@ function fixture(
     const anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-schema-"), "anchor.sqlite"));
     const connections: PostgresSyncConnection[] = [];
     const open = (selected = schema, existingVersion = false) => {
-      const db = openEngineStore({
+      const db = openPostgresEngineTestStore({
         anchor,
         schema: selected,
         existingVersion,
         input: { connection: connection!, schemaPrefix: "r2" },
-        openSqlite: () => {
-          throw new Error("Unexpected SQLite bootstrap");
-        },
-        prepareAnchor: () => {},
-        inspectSqlite: () => {
-          admitSqliteSchema(anchor);
-          return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
-        },
       });
       if (!(db instanceof PostgresSyncConnection)) {
         throw new Error("Expected PostgreSQL connection");
@@ -75,6 +66,35 @@ function fixture(
 }
 
 describe.skipIf(!connection)("PostgreSQL schema admission", () => {
+  it("keeps migration callbacks out of worker admission snapshots", () => {
+    fixture(({ open, invalidate }) => {
+      invalidate();
+      open({
+        ...schema,
+        postgresMigrations: [
+          {
+            version: 2,
+            fromSchema: { postgres: ddl },
+            schema: { postgres: ddl },
+            sql: "",
+            backup: {
+              id: "fixture",
+              version: 1,
+              minimumPostgresVersion: 16,
+              tables: [],
+              sqlite: "",
+              preData: "",
+              postData: "",
+              expectedCatalog: [],
+              postgresPostData: () => "",
+            },
+          },
+        ],
+      });
+      expect(() => structuredClone(captureSqliteDatabaseAdmissions())).not.toThrow();
+    });
+  });
+
   it("reads an existing anchor while another handle holds write admission", () => {
     fixture(({ db }) => {
       db.exec("INSERT INTO items (id) VALUES (1)");
@@ -86,19 +106,11 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
       revokeSqliteDatabaseAdmissions(db.anchor);
       db.anchor.exec("BEGIN IMMEDIATE");
       try {
-        const opened = openEngineStore({
+        const opened = openPostgresEngineTestStore({
           anchor: reader,
           schema,
           input: { connection: connection!, schemaPrefix: "r2" },
           existingOnly: true,
-          openSqlite: () => {
-            throw new Error("Unexpected SQLite bootstrap");
-          },
-          prepareAnchor: () => {},
-          inspectSqlite: () => {
-            admitSqliteSchema(reader);
-            return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(reader)) };
-          },
         });
         try {
           expect(opened.prepare("SELECT value FROM items").all()).toEqual([{ value: 1 }]);

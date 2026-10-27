@@ -12,6 +12,12 @@ import { UpdateCandidateStateSnapshotSchema } from "./update-candidate-state.js"
 import { inventoryUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const credential = {
+  socket_key: "current",
+  socket_path: "/synthetic/native.sock",
+  socket_token: "synthetic-socket-token",
+  updated_at_ms: 456,
+};
 
 async function runWorker(input: Record<string, unknown>): Promise<unknown> {
   const result = await runCommandBuffered(
@@ -27,7 +33,7 @@ async function runWorker(input: Record<string, unknown>): Promise<unknown> {
   return JSON.parse(result.stdout.toString("utf8"));
 }
 
-it.each(["legacy", "local-aware", "legacy-alias", "local-aware-alias"] as const)(
+it.each(["legacy", "daemon-aware", "local-aware", "legacy-alias", "local-aware-alias"] as const)(
   "%s worker replies preserve local capture independently of schema visibility",
   async (caller) => {
     const root = await fs.realpath(dirs.make("update-local-schemas-"));
@@ -57,10 +63,7 @@ it.each(["legacy", "local-aware", "legacy-alias", "local-aware-alias"] as const)
       db.exec(CLIENT_CREDENTIAL_SCHEMA_SQL);
       db.exec("PRAGMA user_version = 1");
       db.prepare("INSERT INTO native_exec_socket_credentials VALUES (?, ?, ?, ?)").run(
-        "current",
-        "/synthetic/native.sock",
-        "synthetic-socket-token",
-        456,
+        ...Object.values(credential),
       );
     }
     const intent = {
@@ -69,52 +72,48 @@ it.each(["legacy", "local-aware", "legacy-alias", "local-aware-alias"] as const)
       updated_at_ms: 123,
     };
     withDaemonRuntimePinStore(env, true, (db) => {
-      db.prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)").run(
-        intent.state_key,
-        intent.value_json,
-        intent.updated_at_ms,
-      );
+      db.prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)").run(...Object.values(intent));
     });
+    const localAware = caller.startsWith("local-aware");
+    const daemonAware = !caller.startsWith("legacy");
     const input = {
       stateDir,
       targetStateDir,
       candidateRoot: root,
       config: {},
       env,
-      ...(caller.startsWith("local-aware") ? { includeLocalStoreVersions: true } : {}),
+      ...(daemonAware ? { includeLocalStoreVersions: true } : {}),
+      ...(localAware ? { includeClientCredentialStoreVersion: true } : {}),
     };
-    const admitted = await inventoryUpdateCandidateStateWorker(input);
-    expect(admitted.databaseInventory).toContain(local);
-    expect(admitted.databaseInventory).toContain(client);
-    const versions = UpdateCandidateStateSnapshotSchema.shape.versions.parse(
-      await runWorker({ ...input, mode: "versions" }),
-    );
-    const snapshot = UpdateCandidateStateSnapshotSchema.parse(
-      await runWorker({ ...input, ...admitted, mode: "snapshot" }),
-    );
+    const capture = caller !== "local-aware" && caller !== "legacy-alias";
+    const admitted = capture ? await inventoryUpdateCandidateStateWorker(input) : undefined;
+    const response = await runWorker({
+      ...input,
+      ...admitted,
+      mode: capture ? "snapshot" : "versions",
+    });
+    const versions = capture
+      ? UpdateCandidateStateSnapshotSchema.parse(response).versions
+      : UpdateCandidateStateSnapshotSchema.shape.versions.parse(response);
     const expected = [
       { path: agent, userVersion: 3 },
-      ...(caller.startsWith("local-aware") ? [{ path: client, userVersion: 1 }] : []),
-      ...(caller.startsWith("local-aware") ? [{ path: local, userVersion: 1 }] : []),
+      ...(localAware ? [{ path: client, userVersion: 1 }] : []),
+      ...(daemonAware ? [{ path: local, userVersion: 1 }] : []),
       { path: shared, userVersion: 7, contentVersion: 7 },
     ];
     expect(versions).toEqual(expected);
-    expect(snapshot.versions).toEqual(expected);
-    using copied = openNodeSqliteDatabase(path.join(targetStateDir, "control", "services.sqlite"), {
-      readOnly: true,
-    });
+    if (!capture) {
+      return;
+    }
+    const openCopy = (file: string) =>
+      openNodeSqliteDatabase(path.join(targetStateDir, path.relative(stateDir, file)), {
+        readOnly: true,
+      });
+    using copied = openCopy(local);
     expect(copied.prepare("SELECT * FROM daemon_runtime_pins").all()).toEqual([intent]);
-    using copiedClient = openNodeSqliteDatabase(
-      path.join(targetStateDir, "client", "credentials.sqlite"),
-      { readOnly: true },
-    );
+    using copiedClient = openCopy(client);
     expect(copiedClient.prepare("SELECT * FROM native_exec_socket_credentials").all()).toEqual([
-      {
-        socket_key: "current",
-        socket_path: "/synthetic/native.sock",
-        socket_token: "synthetic-socket-token",
-        updated_at_ms: 456,
-      },
+      credential,
     ]);
   },
 );

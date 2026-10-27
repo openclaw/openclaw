@@ -33,14 +33,10 @@ function outboxSession(key: string, displayName: string) {
   return { key, displayName, kind: "direct" as const };
 }
 
-async function reconnectUnconfirmed(
-  page: Page,
-  gateway: Awaited<ReturnType<typeof installMockGateway>>,
-) {
-  await gateway.setOnline(false);
-  await page.locator('.chat-send-status[data-send-state="waiting-reconnect"]').waitFor();
-  await gateway.setOnline(true);
-  await page.locator('.chat-send-status[data-send-state="unconfirmed"]').waitFor();
+async function expectReservedInbox(page: Page) {
+  await expectCount(page.locator(".sidebar-issues-button:enabled"), 0);
+  expect(await page.locator(".sidebar-issues-button").count()).toBe(1);
+  expect(await page.locator(".sidebar-issues-button__count").count()).toBe(0);
 }
 
 async function expectCompactRow(incident: Locator) {
@@ -81,7 +77,7 @@ async function expectCompactRow(incident: Locator) {
 }
 
 suite.define(() => {
-  it("reviews an unconfirmed submission through System without sending or deleting its draft", async () => {
+  it("reviews a rejected submission through System without sending or deleting its draft", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       const sessionKey = "agent:main:release-notes";
       const { gateway, composer } = await openOutbox(page, {
@@ -100,14 +96,17 @@ suite.define(() => {
       await composer.fill("Please review the release notes before publishing.");
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       await gateway.waitForRequest("chat.send");
-      await reconnectUnconfirmed(page, gateway);
-      const delivery = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
-      await delivery.getByText("Delivery unconfirmed", { exact: true }).waitFor();
+      await gateway.rejectDeferred("chat.send", {
+        code: "INVALID_REQUEST",
+        message: "Synthetic delivery rejection",
+      });
+      const delivery = page.locator('.chat-send-status[data-send-state="failed"]');
+      await delivery.getByText("Not sent", { exact: true }).waitFor();
 
       await page.locator(".sidebar-issues-button").click();
       await page.locator("#sidebar-issues-tab-system").click();
       const incident = page.locator('[data-attention-kind="outbox"]');
-      await incident.getByText("Your message may not have arrived", { exact: true }).waitFor();
+      await incident.getByText("Your message wasn’t sent", { exact: true }).waitFor();
       expect(await incident.textContent()).toContain("Release notes");
       expect(await incident.textContent()).not.toContain(
         "Please review the release notes before publishing.",
@@ -128,10 +127,10 @@ suite.define(() => {
       await delivery.waitFor();
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       // Review clears the notification but preserves the draft for explicit recovery.
-      await expectCount(page.locator(".sidebar-issues-button"), 0);
+      await expectReservedInbox(page);
       await delivery.getByRole("button", { name: "Discard", exact: true }).click();
       await delivery.waitFor({ state: "detached" });
-      await expectCount(page.locator(".sidebar-issues-button"), 0);
+      await expectReservedInbox(page);
       expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
       await gateway.setOnline(true);
@@ -141,9 +140,12 @@ suite.define(() => {
       await page.locator(".chat-queue__item").waitFor();
       await page
         .locator(".sidebar-shell__footer .gateway-status")
-        .getByRole("button", { name: "Reconnecting… · 1 queued — Retry now", exact: true })
+        .getByText("Reconnecting… · 1 queued", { exact: true })
         .waitFor();
-      expect(await page.locator(".sidebar-issues-button").count()).toBe(0);
+      expect(
+        await page.locator(".sidebar-shell__footer .gateway-status").getByRole("button").count(),
+      ).toBe(0);
+      await expectReservedInbox(page);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
     });
   });
@@ -166,25 +168,11 @@ suite.define(() => {
         await composer.fill(`Review draft ${number}`);
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         await gateway.waitForRequest("chat.send", { after });
-        if (number === 1) {
-          await gateway.rejectDeferred("chat.send", {
-            code: "INVALID_REQUEST",
-            message: "Synthetic delivery rejection",
-          });
-          await page.locator('.chat-send-status[data-send-state="failed"]').waitFor();
-        } else {
-          await gateway.setMethodResponse("chat.history", {
-            sessionId: `session:${sessionKey}`,
-            messages: [],
-            sessionInfo: {
-              key: sessionKey,
-              sessionId: `session:${sessionKey}`,
-              status: "done",
-              hasActiveRun: false,
-            },
-          });
-          await reconnectUnconfirmed(page, gateway);
-        }
+        await gateway.rejectDeferred("chat.send", {
+          code: "INVALID_REQUEST",
+          message: "Synthetic delivery rejection",
+        });
+        await expectCount(page.locator('.chat-send-status[data-send-state="failed"]'), number);
       }
       await page.setViewportSize({ width, height: 900 });
       await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
@@ -194,7 +182,7 @@ suite.define(() => {
       expect(await incidents.count()).toBe(2);
       expect(await incidents.locator(".sidebar-issues-panel__entity").allTextContents()).toEqual([
         "Your message wasn’t sent",
-        "Your message may not have arrived",
+        "Your message wasn’t sent",
       ]);
       for (const incident of await incidents.all()) {
         await expectCompactRow(incident);
@@ -208,78 +196,46 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.send")).toHaveLength(2);
     });
   });
-  it("clears the warning on authoritative pending custody and retires only after consumption", async () => {
-    await suite.withPage(
-      { viewport: { width: 1280, height: 900 }, locale: "en-US", serviceWorkers: "block" },
-      async ({ page }) => {
-        const sessionKey = "agent:main:late-custody";
-        const sessionId = `session:${sessionKey}`;
-        const prompt = "Keep this input until it is consumed";
-        const history = {
-          sessionId,
-          messages: [],
-          sessionInfo: { key: sessionKey, sessionId, hasActiveRun: false, status: "done" },
-        };
-        const { gateway, composer } = await openOutbox(page, {
-          sessionKey,
-          methodResponses: { "chat.history": history },
-        });
-        await gateway.deferNext("chat.send");
-        await composer.fill(prompt);
-        await page.getByRole("button", { name: "Send message", exact: true }).click();
-        const runId = requireString(
-          requireRecord((await gateway.waitForRequest("chat.send")).params).idempotencyKey,
-          "submission id",
-        );
-        const hasPayload = (sendState?: string) =>
-          page.evaluate(
-            (expected) =>
-              Object.entries(sessionStorage).some(
-                ([key, value]) =>
-                  key.startsWith("openclaw.control.chatComposer.") &&
-                  value.includes(expected.runId) &&
-                  (!expected.sendState || value.includes(`"sendState":"${expected.sendState}"`)),
-              ),
-            { runId, sendState },
-          );
-        await reconnectUnconfirmed(page, gateway);
-        await page.locator(".sidebar-issues-button").click();
-        await page.locator("#sidebar-issues-tab-system").click();
-        await page
-          .locator('[data-attention-kind="outbox"]')
-          .getByText("Your message may not have arrived", { exact: true })
-          .waitFor();
-        await gateway.setOnline(false);
-        await gateway.setMethodResponse("chat.history", {
-          ...history,
-          pendingInputs: {
-            total: 1,
-            items: [
-              {
-                id: "accepted-input",
-                runId,
-                state: "queued",
-                acceptedAt: 100,
-                message: { role: "user", content: prompt },
-              },
-            ],
-          },
-          inputReceipts: [{ runId, state: "pending" }],
-        });
-        await gateway.setOnline(true);
-        await expect.poll(() => hasPayload("waiting-idle")).toBe(true);
-        await expectCount(page.locator('[data-attention-kind="outbox"]'), 0);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-        await gateway.setOnline(false);
-        await gateway.setMethodResponse("chat.history", {
-          ...history,
-          pendingInputs: { items: [], total: 0 },
-          inputReceipts: [{ runId, state: "consumed", consumedByEventId: "canonical-input" }],
-        });
-        await gateway.setOnline(true);
-        await expect.poll(() => hasPayload()).toBe(false);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      },
-    );
+  it("keeps pending submissions out of System and retires them on duplicate acknowledgment", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const sessionKey = "agent:main:late-custody";
+      const { gateway, composer } = await openOutbox(page, {
+        sessionKey,
+        heldMethods: ["chat.send"],
+      });
+      await composer.fill("Reconcile this pending input");
+      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      const first = await gateway.waitForRequest("chat.send");
+      const runId = requireString(requireRecord(first.params).idempotencyKey, "submission id");
+      await gateway.setOnline(false);
+      const pending = page.locator('.chat-send-status[data-send-state="waiting-reconnect"]');
+      await pending.getByText("Waiting for reconnect", { exact: true }).waitFor();
+      await expectReservedInbox(page);
+      await gateway.setOnline(true);
+      const replay = await gateway.waitForRequest("chat.send", { after: 1 });
+      expect(replay.params).toEqual({
+        ...requireRecord(first.params),
+        __controlUiReconnectResume: true,
+      });
+      await expectCount(page.locator(".sidebar-issues-button__count"), 0);
+      await page.locator(".sidebar-issues-button").click();
+      await page.locator("#sidebar-issues-tab-system").click();
+      await expectCount(page.locator('[data-attention-kind="outbox"]'), 0);
+      await page.keyboard.press("Escape");
+      await gateway.resolveDeferred("chat.send", { runId, status: "queued" });
+      await page.locator(".chat-send-status").waitFor({ state: "detached" });
+      await expectCount(page.locator(".sidebar-issues-button__count"), 0);
+      expect(
+        await page.evaluate(
+          (id) =>
+            Object.entries(sessionStorage).some(
+              ([key, value]) =>
+                key.startsWith("openclaw.control.chatComposer.") && value.includes(id),
+            ),
+          runId,
+        ),
+      ).toBe(false);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(2);
+    });
   });
 });

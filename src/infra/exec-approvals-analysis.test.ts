@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { evaluateExecAllowlist } from "./exec-approvals-allowlist.js";
@@ -16,6 +15,10 @@ import { analyzeWindowsShellCommand, windowsEscapeArg } from "./windows-shell-co
 
 const analyzeWindows = (command: string) =>
   analyzeWindowsShellCommand({ command, platform: "win32" });
+const enforceWindows = (
+  command: string,
+  segments: ReturnType<typeof analyzeWindows>["segments"] = [],
+) => buildEnforcedShellCommand({ command, segments, platform: "win32" });
 
 function expectWindowsArgv(command: string, argv: string[]) {
   const result = analyzeWindows(command);
@@ -71,41 +74,26 @@ describe("exec command analysis", () => {
   });
 
   it.each([
-    [
-      "PowerShell expansions",
-      [
-        'node tool.js "--user=%USERNAME%"',
-        'node app.js "$env:USERPROFILE"',
-        "node app.js ${var}",
-        "node app.js $(whoami)",
-        'node app.js "$?"',
-        'node app.js "$$"',
-      ],
-    ],
-    [
-      "cmd-incompatible single quotes",
-      [
-        "node tool.js '--name=foo & bar'",
-        "node tool.js '--filter=a|b'",
-        "node tool.js '--msg=Hello!'",
-        "node tool.js '--pattern=(x)'",
-        "node tool.js '--label=%USERNAME%'",
-      ],
-    ],
-  ] satisfies Array<[string, string[]]>)("rejects %s", (_name, commands) => {
-    for (const command of commands) {
-      expect(analyzeWindows(command).ok).toBe(false);
-    }
-  });
-
-  it("allows bare $ not followed by identifier", () => {
-    expect(analyzeWindows('net use "\\\\host\\C$"').ok).toBe(true);
+    'node tool.js "--user=%USERNAME%"',
+    'node app.js "$env:USERPROFILE"',
+    "node app.js ${var}",
+    "node app.js $(whoami)",
+    'node app.js "$?"',
+    'node app.js "$$"',
+    "node tool.js '--name=foo & bar'",
+    "node tool.js '--filter=a|b'",
+    "node tool.js '--msg=Hello!'",
+    "node tool.js '--pattern=(x)'",
+    "node tool.js '--label=%USERNAME%'",
+  ])("rejects unsafe Windows command: %s", (command) => {
+    expect(analyzeWindows(command).ok).toBe(false);
   });
 
   const toolPath = "C:\\Program Files\\Tool\\tool.exe";
   const workingDirectoryCommand =
     'powershell -WorkingDirectory "C:\\Users\\Jane Doe\\proj" -Command "node a.js"';
   it.each([
+    ['net use "\\\\host\\C$"', ["net", "use", "\\\\host\\C$"]],
     ["node tool.js 'O''Brien'", ["node", "tool.js", "O'Brien"]],
     ['node tool.js ""', ["node", "tool.js", ""]],
     ["node tool.js ''", ["node", "tool.js", ""]],
@@ -128,23 +116,14 @@ describe("exec command analysis", () => {
     });
 
     expect(analysis.ok).toBe(true);
-    const result = buildEnforcedShellCommand({
-      command: "python3 a.py",
-      segments: analysis.segments,
-      platform: "win32",
+    expect(enforceWindows("python3 a.py", analysis.segments)).toMatchObject({
+      ok: true,
+      command: `& ${python3} a.py`,
     });
-
-    expect(result).toMatchObject({ ok: true, command: `& ${python3} a.py` });
   });
 
   it("rejects Windows commands with unsafe tokens", () => {
-    const result = buildEnforcedShellCommand({
-      command: "echo ok & del file",
-      segments: [],
-      platform: "win32",
-    });
-
-    expect(result.ok).toBe(false);
+    expect(enforceWindows("echo ok & del file").ok).toBe(false);
   });
 
   it.each([
@@ -163,11 +142,8 @@ describe("exec command analysis", () => {
 
   it("evaluates inline cmd payloads against the inner executable", () => {
     const dir = makeExecApprovalsTempDir();
-    const nodePath = path.join(dir, "node.exe");
-    for (const file of [path.join(dir, "cmd.exe"), nodePath]) {
-      fs.writeFileSync(file, "");
-      fs.chmodSync(file, 0o755);
-    }
+    const nodePath = makeExecutable(dir, process.platform === "win32" ? "node" : "node.exe");
+    makeExecutable(dir, process.platform === "win32" ? "cmd" : "cmd.exe");
     const env = makePathEnv(dir);
     const analysis = analyzeArgvCommand({
       argv: ["cmd.exe", "/c", "node.exe", "app.js"],

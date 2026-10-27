@@ -31,7 +31,7 @@ import {
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
 import { normalizeCronStreamBatching } from "./stream-schedule.js";
 import { normalizeCronToolsAllowProvenance } from "./tools-allow-provenance.js";
-import { isSystemOwnedCronPayloadKind, type CronJobCreate, type CronJobPatch } from "./types.js";
+import type { CronJobCreate, CronJobPatch } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -57,7 +57,7 @@ function coerceSchedule(schedule: UnknownRecord) {
   const timezone = normalizeOptionalString(next.tz);
   const commandRaw = readNonBlankString(next.command) ?? "";
   const streamCommand = normalizeCronCommandArgv(next.command);
-  const cwdRaw = normalizeOptionalString(next.cwd) ?? "";
+  const cwdRaw = readNonBlankString(next.cwd) ?? "";
   const streamMode = normalizeOptionalLowercaseString(next.mode);
   const streamMatch = typeof next.match === "string" ? next.match : undefined;
   const everyMs = coerceFiniteScheduleNumber(next.everyMs);
@@ -428,7 +428,7 @@ export function normalizeCronJobInput(
       // Agent turns bind to the creating conversation by default: the run carries
       // that chat's context and announces its result there. Callers without session
       // context are downgraded to isolated by resolveCronCurrentSessionTarget.
-      if (kind === "systemEvent" || isSystemOwnedCronPayloadKind(kind)) {
+      if (kind === "systemEvent") {
         next.sessionTarget = "main";
       } else if (kind === "agentTurn") {
         next.sessionTarget = "current";

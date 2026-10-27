@@ -260,16 +260,15 @@ export function readSessionTranscriptAnchorFactsInDatabase(
         : {};
       const anchors = new Map<string, TranscriptEntryAnchor | undefined>();
       const readAnchor = (entryId: string) => {
-        if (!anchors.has(entryId)) {
-          const anchor = currentProjection
-            ? readActiveTranscriptEntryAnchorFromProjection(currentProjection, entryId)
-            : readActiveTranscriptEntryAnchorInTransaction({ database, resolved, entryId });
-          anchors.set(
-            entryId,
-            fence && anchor && anchor.rawSeq >= fence.beforeRawSeq ? undefined : anchor,
-          );
+        if (anchors.has(entryId)) {
+          return anchors.get(entryId);
         }
-        return anchors.get(entryId);
+        const anchor = currentProjection
+          ? readActiveTranscriptEntryAnchorFromProjection(currentProjection, entryId)
+          : readActiveTranscriptEntryAnchorInTransaction({ database, resolved, entryId });
+        const value = fence && anchor && anchor.rawSeq >= fence.beforeRawSeq ? undefined : anchor;
+        anchors.set(entryId, value);
+        return value;
       };
       const selected = selection.entryIds.flatMap((entryId) => readAnchor(entryId) ?? []);
       const activePath =

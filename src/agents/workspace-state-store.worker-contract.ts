@@ -1,12 +1,12 @@
 import type { AgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
 import type { AgentDeletionWorkerGuard } from "../state/agent-deletion-worker-contract.js";
 import type { WorkspaceStateIdentity } from "./workspace-state-identity.js";
+import type { WorkspaceAttestationInput } from "./workspace-state-store.kernel.js";
 import type {
   WorkspaceAttestation,
-  WorkspaceAttestationInput,
   WorkspaceSetupState,
   WorkspaceStateSnapshot,
-} from "./workspace-state-store.kernel.js";
+} from "./workspace-state-types.js";
 
 export type WorkspaceStateGuard = {
   /** Host lifecycle and filesystem authority only; never reads SQLite. */

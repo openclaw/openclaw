@@ -127,7 +127,6 @@ export function createInstalledPluginIndexScopeLookup(
   };
   const lookup: InstalledPluginIndexScopeLookup = {
     addAgentHarnessOwners: agentHarnessOwners.add,
-    addChannelContributionOwners: channelContributionOwners.add,
     addDirectChannelOwners: directChannelOwners.add,
     addDirectProviderOwners: installedPluginOwners.add,
     addProviderContributionOwners: providerContributionOwners.add,

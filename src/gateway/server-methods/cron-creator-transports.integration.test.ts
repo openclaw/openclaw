@@ -14,6 +14,10 @@ import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-cont
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -45,6 +49,7 @@ import {
   resolveGatewayChatCronCreatorAuthorityAdmission,
   resolveGatewayCronCreatorAuthorityAdmission,
 } from "./cron-creator-authority-admission.js";
+import { expectCronReply } from "./cron.validation.test-support.js";
 import { deviceHandlers } from "./devices.js";
 import {
   SESSION,
@@ -322,11 +327,7 @@ it.for([
                   context: fixture.context,
                   respond,
                 });
-                expect(respond).toHaveBeenCalledWith(
-                  true,
-                  expect.objectContaining(params),
-                  undefined,
-                );
+                expectCronReply(respond, expect.objectContaining(params));
               } else if (revocation === "role downgrade") {
                 setUserProfileRole(profile.id, "revoked-role");
               } else if (revocation === "access grant revocation") {
@@ -381,14 +382,15 @@ it("preserves ordinary restricted caller creation without management admission",
   );
 });
 it.each([
-  ["cli", "local"],
-  ["embedded", "local"],
-  ["embedded", "remote"],
-  ["embedded", "remote-chat"],
+  ["cli", "local", "device"],
+  ["embedded", "local", "device"],
+  ["embedded", "remote", "device"],
+  ["embedded", "remote-chat", "device"],
+  ["embedded", "local", "skill selection"],
 ] as const)(
-  "fences a real %s %s creator mutation while its run remains admitted",
+  "fences a real %s %s creator mutation on %s change while its run remains admitted",
   { timeout: 30_000 },
-  async (transport, origin) => {
+  async (transport, origin, reason) => {
     const { release } = fixture;
     const caller = captureGatewayDeviceRevocation(
       fixture.context,
@@ -419,7 +421,7 @@ it.each([
     let transportTools: CreatorTransportTools | undefined;
     try {
       if (transport === "cli") {
-        await ensureMcpLoopbackServer(0);
+        await ensureMcpLoopbackServer();
       }
       await inRun(
         runId,
@@ -467,8 +469,33 @@ it.each([
           expect(before[0]?.runtimeAuthority).toBeUndefined();
           await fixture.rejectMutation(
             () => invoke("Revoked creator"),
-            /authority.*no longer active/i,
-            () => invalidateGatewayDeviceRevocation(fixture.context, "creator-device", "operator"),
+            reason === "skill selection"
+              ? /Creator session changed before scheduling/
+              : /authority.*no longer active/i,
+            () => {
+              if (reason === "skill selection") {
+                const session = expectDefined(
+                  loadSessionEntry({ sessionKey: SESSION }),
+                  "creator session",
+                );
+                const updated = {
+                  ...session,
+                  skillLibrarySelections: [
+                    {
+                      skillId: "00000000-0000-4000-8000-000000000001",
+                      revision: "b".repeat(64),
+                      name: "Selected skill",
+                      ownerProfileId: CREATOR.id,
+                    },
+                  ],
+                };
+                replaceSessionEntrySync({ sessionKey: SESSION }, updated);
+                expect(loadSessionEntry({ sessionKey: SESSION })).toEqual(updated);
+                expect(caller.isCurrent()).toBe(true);
+              } else {
+                invalidateGatewayDeviceRevocation(fixture.context, "creator-device", "operator");
+              }
+            },
           );
           expect(getAdmittedRunDelegatedAuthority(admitted)).toBe(delegated);
           expect(creator).toMatchObject({ active: true, signal: { aborted: false } });

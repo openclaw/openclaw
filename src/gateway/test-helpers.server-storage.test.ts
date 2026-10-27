@@ -1,6 +1,6 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import type { Worker } from "node:worker_threads";
 import { afterAll, expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -11,19 +11,9 @@ import { ensureSessionEntrySync } from "../config/sessions/session-accessor.sqli
 import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import { createLifecycleArtifactReclamationPlan } from "../config/sessions/session-accessor.sqlite-reclamation.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../state/openclaw-agent-db.js";
-import {
-  captureOpenClawStateDatabaseReadAdmission,
-  registerOpenClawStateDatabaseAsyncResource,
-  retainOpenClawStateDatabaseForIndependentRead,
-} from "../state/openclaw-state-db-cache.js";
-import {
-  closeOpenClawStateDatabaseByPathAsync,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import * as agentDb from "../state/openclaw-agent-db.js";
+import * as stateCache from "../state/openclaw-state-db-cache.js";
+import * as stateDb from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateReader from "../state/openclaw-state-read-worker.js";
 import { setTestEnvValue } from "../test-utils/env.js";
@@ -37,11 +27,11 @@ let externalRoot: string | undefined;
 let externalStatePath: string | undefined;
 afterAll(async () => {
   if (externalRoot) {
-    await closeOpenClawAgentDatabasesAsync(externalRoot);
-    closeOpenClawAgentDatabasesForTest(externalRoot);
+    await agentDb.closeOpenClawAgentDatabasesAsync(externalRoot);
+    agentDb.closeOpenClawAgentDatabasesForTest(externalRoot);
   }
   if (externalStatePath) {
-    await closeOpenClawStateDatabaseByPathAsync(externalStatePath);
+    await stateDb.closeOpenClawStateDatabaseByPathAsync(externalStatePath);
   }
 });
 installGatewayTestHooks();
@@ -49,7 +39,7 @@ installGatewayTestHooks();
 test("joins a direct history projection's accepted read before retiring the Gateway home", async () => {
   setRuntimeConfigSnapshot({});
   const scope = { agentId: "main", sessionKey: "agent:main:fixture-history" };
-  const shared = openOpenClawStateDatabase();
+  const shared = stateDb.openOpenClawStateDatabase();
   const context = createDirectChatContext();
   await initializeSessionReadContext(context);
   const projection = getSessionRowProjection(context)!;
@@ -60,14 +50,15 @@ test("joins a direct history projection's accepted read before retiring the Gate
   const reader = vi.spyOn(stateReader, "captureOpenClawStateReadSource").mockImplementation(() => {
     const source = captureSource();
     return {
-      ...source,
+      own: (close) => source.own(close),
       createTransport(command) {
         const transport = source.createTransport(command);
         if (command.type !== "sessionRows.sharedFacts") {
           return transport;
         }
         return {
-          ...transport,
+          startValidateFresh: (...args) => transport.startValidateFresh(...args),
+          startClose: () => transport.startClose(),
           async startRead(...args) {
             const reply = await transport.startRead(...args);
             entered.resolve();
@@ -83,8 +74,7 @@ test("joins a direct history projection's accepted read before retiring the Gate
     dispose();
     release.resolve();
   });
-  // Returning leaves a real native borrower pending until fixture disposal starts.
-  // Always release it after a failed hook so the proof itself cannot leak custody.
+  // Keep the native borrower until fixture disposal; failed hooks must still release it.
   onTestFinished(async () => {
     release.resolve();
     try {
@@ -125,38 +115,27 @@ test("joins external-store workers before deleting their Gateway lease coordinat
     materializedPlans: [],
   });
   // Seed handles belong to this external fixture; the next operation retains only its Worker.
-  await closeOpenClawAgentDatabasesAsync(externalRoot);
-  const workers: Worker[] = [];
-  const create = archiveWorker.createSqliteTranscriptArchiveWorker;
-  const spawned = vi
-    .spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker")
-    .mockImplementation((data) => {
-      const worker = create(data);
-      workers.push(worker);
-      return worker;
-    });
-  try {
-    await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
-      kind: "lifecycle-artifacts",
-      value: { removedEntries: 1 },
-    });
-  } finally {
-    spawned.mockRestore();
-  }
-  expect(workers).toHaveLength(1);
-  expect(workers[0]?.threadId).toBeGreaterThan(0);
+  await agentDb.closeOpenClawAgentDatabasesAsync(externalRoot);
+  using spawned = vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker");
+  await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
+    kind: "lifecycle-artifacts",
+    value: { removedEntries: 1 },
+  });
+  expect(spawned).toHaveBeenCalledOnce();
+  const [result] = spawned.mock.results;
+  const worker = result?.type === "return" ? result.value : undefined;
+  expect(worker?.threadId).toBeGreaterThan(0);
   expect(fs.existsSync(sharedStatePath)).toBe(true);
   const otherStateDir = path.join(externalRoot, "other-state");
-  const otherState = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: otherStateDir } });
-  externalStatePath = otherState.path;
-  const identity = captureOpenClawStateDatabaseReadAdmission(sharedStatePath).identity;
-  const sharedState = openOpenClawStateDatabase({ env });
-  let retained = retainOpenClawStateDatabaseForIndependentRead(sharedState.path);
-  if (!retained) {
-    throw new Error("Expected the fixture shared-state owner to be open");
-  }
+  externalStatePath = stateDb.openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: otherStateDir },
+  }).path;
+  const identity = stateCache.captureOpenClawStateDatabaseReadAdmission(sharedStatePath).identity;
+  const sharedState = stateDb.openOpenClawStateDatabase({ env });
+  let retained = stateCache.retainOpenClawStateDatabaseForIndependentRead(sharedState.path);
+  assert(retained, "Expected the fixture shared-state owner to be open");
   const closedOwners: Array<string | undefined> = [];
-  const unregister = registerOpenClawStateDatabaseAsyncResource({
+  const unregister = stateCache.registerOpenClawStateDatabaseAsyncResource({
     close: async (closedIdentity) => {
       closedOwners.push(closedIdentity?.key);
       if (closedIdentity?.key === identity.key) {
@@ -168,7 +147,7 @@ test("joins external-store workers before deleting their Gateway lease coordinat
   setTestEnvValue("OPENCLAW_STATE_DIR", otherStateDir);
   onTestFinished(() => {
     try {
-      expect(workers[0]?.threadId).toBe(-1);
+      expect(worker?.threadId).toBe(-1);
       expect(fs.existsSync(sharedStatePath)).toBe(false);
       expect(closedOwners[0]).toBe(identity.key);
     } finally {

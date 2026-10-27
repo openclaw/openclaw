@@ -73,8 +73,9 @@ Host recovery snapshots retain host data under their existing rules, but
 restoration does not admit that data to the guest. Use the
 session's managed GitHub publication action to publish accepted changes; host credentials are not
 copied into the sandbox. The runtime-owned `.openclaw/sandbox-skills` subtree
-is excluded from workspace reconciliation and publication; other project content
-under `.openclaw` is retained. Its empty mount targets are created by the host
+is excluded from workspace reconciliation and publication, as is the scratch
+directory described below. Other project content under `.openclaw` is retained.
+Its empty mount targets are created by the host
 workspace owner before container allocation, while the skill mounts remain
 read-only. This also keeps normal retention cleanup independent of container
 user-namespace ownership.
@@ -84,13 +85,23 @@ At the checkout root, `.cache/vitest/`, `.cache/bun-transpiler/`, `.cache/opencl
 that produced them, along with `.artifacts/vitest-workers/` compiler outputs,
 `.artifacts/vitest-worker-cache/` retained compiler outputs,
 `.artifacts/vitest-shard-timings.json` scheduling samples, and
-`.artifacts/dist-artifacts.lock/` ownership files.
+`.artifacts/dist-artifacts.lock/` ownership files. The root `.openclaw/tmp/`
+scratch directory also stays local, including downloaded toolchains and browsers.
+Scratch remains available to later commands in the same runtime, but is not
+synchronized or restored onto another runtime. Save durable outputs outside it;
+other `.openclaw/` content and nested project fixtures still reconcile.
 Synchronization and recovery of older pending results exclude these exact paths,
 so dependency and test-tool downloads do not count as authored workspace results.
 Other guest-created files under `.cache/`, `.local/`, and `.artifacts/` still
 reconcile, including nested paths and explicit staged inputs; an ignore
 rule alone does not make a file disposable. Source changes cannot remove a
 runtime-owned lock subtree by replacing its parent directory.
+
+Changed user files remain limited to 64 MiB each. If one exceeds the limit, reduce
+it or move it outside synchronization before retrying; repeated messages cannot
+resolve the size violation. For a newly created local sandbox file,
+[`openclaw sandbox recover`](/cli/sandbox#openclaw-sandbox-recover) preserves the
+file outside synchronization so the next turn can settle the remaining edits.
 
 Local managed guest workspaces also exclude disposable `.artifacts/build-all-cache/`
 build snapshots and `.artifacts/build-cache-inputs/` temporary receipts. Original
@@ -111,7 +122,9 @@ If you are a guest, you can ask the agent:
 
 Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
 current selected repository base into this session's existing local managed
-workspace. The Gateway fetches with its host identity and prepares any missing
+workspace. This action is offered only in sessions with a writable managed sandbox;
+sessions running directly on the host merge the base with git in their workspace,
+then publish. The Gateway fetches with its host identity and prepares any missing
 file contents from the selected repository before offline merge and snapshot
 operations, including the ancestor versions needed to merge diverged branches.
 This also works when a partial clone already knows the base commit. A
@@ -186,6 +199,8 @@ return to a supporting version before continuing guest work.
 With the OpenShell backend, `mirror` mode still uses the local workspace as the source of truth between exec turns, and `remote` mode uses the remote OpenShell workspace as the source of truth after the initial seed. The same access rules apply: `none` permits private workspace writes, while `ro` disables writes.
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
+Later conversation turns load retained images from that same staged copy.
+Missing copies and paths outside the active sandbox remain unavailable.
 For a managed project session, attachments on follow-up messages use that
 session's private checkout, including after its worktree has been created.
 Attachment staging retains the managed workspace owner until the copy settles.

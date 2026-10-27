@@ -2,7 +2,10 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
@@ -101,25 +104,6 @@ function zoneFileNeedsBootstrap(zonePath: string): boolean {
   }
 }
 
-function detectBrewPrefix(): string {
-  // A hung brew shim can block setup indefinitely; bound only this fast probe.
-  const out = run("brew", ["--prefix"], { timeoutMs: 15_000 });
-  const prefix = out.trim();
-  if (!prefix) {
-    throw new Error("failed to resolve Homebrew prefix");
-  }
-  return prefix;
-}
-
-function ensureImportLine(corefilePath: string, importGlob: string): void {
-  const existing = fs.readFileSync(corefilePath, "utf-8");
-  if (existing.includes(importGlob)) {
-    return;
-  }
-  const next = `${existing.replace(/\s*$/, "")}\n\nimport ${importGlob}\n`;
-  writeFileSudoIfNeeded(corefilePath, next);
-}
-
 export function registerDnsCli(program: Command) {
   const dns = program
     .command("dns")
@@ -158,7 +142,7 @@ export function registerDnsCli(program: Command) {
       const tableWidth = getTerminalTableWidth();
       defaultRuntime.log(theme.heading("DNS setup"));
       defaultRuntime.log(
-        renderTable({
+        renderTerminalSafeTable({
           width: tableWidth,
           columns: [
             { key: "Key", header: "Key", minWidth: 18 },
@@ -206,7 +190,12 @@ export function registerDnsCli(program: Command) {
         throw new Error("no tailnet IP detected; check that Tailscale is running on this machine");
       }
 
-      const prefix = detectBrewPrefix();
+      // A hung brew shim can block setup indefinitely; bound only this fast probe.
+      const out = run("brew", ["--prefix"], { timeoutMs: 15_000 });
+      const prefix = out.trim();
+      if (!prefix) {
+        throw new Error("failed to resolve Homebrew prefix");
+      }
       const etcDir = path.join(prefix, "etc", "coredns");
       const corefilePath = path.join(etcDir, "Corefile");
       const confDir = path.join(etcDir, "conf.d");
@@ -224,7 +213,11 @@ export function registerDnsCli(program: Command) {
       if (!fs.existsSync(corefilePath)) {
         writeFileSudoIfNeeded(corefilePath, `import ${importGlob}\n`);
       } else {
-        ensureImportLine(corefilePath, importGlob);
+        const existing = fs.readFileSync(corefilePath, "utf-8");
+        if (!existing.includes(importGlob)) {
+          const next = `${existing.replace(/\s*$/, "")}\n\nimport ${importGlob}\n`;
+          writeFileSudoIfNeeded(corefilePath, next);
+        }
       }
 
       const bindArgs = [tailnetIPv4, tailnetIPv6].filter((v): v is string => Boolean(v?.trim()));
@@ -260,7 +253,7 @@ export function registerDnsCli(program: Command) {
           ``,
         ].filter((line): line is string => Boolean(line));
 
-        replaceWideAreaZoneFile(zonePath, zoneLines.join("\n"));
+        await replaceWideAreaZoneFile(zonePath, zoneLines.join("\n"));
       }
 
       defaultRuntime.log("");

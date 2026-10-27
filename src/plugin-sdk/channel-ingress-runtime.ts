@@ -31,6 +31,7 @@ import {
   type PluginInstanceHandle,
 } from "../plugins/plugin-instance-scope.js";
 import { getPluginRecordRegistry } from "../plugins/registry-lifecycle.js";
+export { prepareChannelIngressEvent } from "../channels/message/ingress-hooks.js";
 export { channelIngressRoutes } from "../channels/message-access/runtime.js";
 export {
   meetsIdentifierAuthentication,
@@ -160,7 +161,7 @@ type StandardRawEventIngressOptions<TRaw, TMetadata, TInspection> = Omit<
   classifyAdmissionError: (error: unknown) => string | undefined;
 };
 
-/** Version-1 raw events, 500 ms polling, eight deliveries, and standard retention. */
+/** Version-1 raw events, direct admission wakeups, eight deliveries, and standard retention. */
 export function createStandardRawEventIngressMonitor<
   TRaw,
   TMetadata,

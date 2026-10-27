@@ -15,9 +15,13 @@ const answer = `${answerText}\n\n\`\`\`ts\n${answerCode}\n\`\`\``;
 function typography(element: Locator) {
   return element.evaluate((node) => {
     const style = getComputedStyle(node);
-    return ["font-family", "font-size", "line-height", "font-weight", "-webkit-font-smoothing"].map(
-      (field) => style.getPropertyValue(field),
-    );
+    return {
+      family: style.fontFamily,
+      size: style.fontSize,
+      lineHeight: style.lineHeight,
+      weight: style.fontWeight,
+      smoothing: style.getPropertyValue("-webkit-font-smoothing"),
+    };
   });
 }
 
@@ -50,15 +54,39 @@ suite.define(() => {
         typography(surface.getByText(text, { exact: true }));
       for (const text of [questionText, answerText]) {
         const expected = await textStyle(main, text);
-        expect(expected[0]).toContain("Fraunces");
+        expect(expected.family).toContain("Fraunces");
         expect(await textStyle(side, text)).toEqual(expected);
       }
       await page.evaluate(() =>
         document.documentElement.style.setProperty("--control-ui-text-scale", "1.25"),
       );
       expect(await textStyle(side, questionText)).toEqual(await textStyle(main, questionText));
-      const composer = page.locator(".agent-chat__composer-shell textarea");
-      expect(await typography(side.getByRole("textbox"))).toEqual(await typography(composer));
+      const mainInput = await typography(
+        page.getByRole("textbox", {
+          name: "Chat composer",
+          exact: true,
+          includeHidden: true,
+        }),
+      );
+      const sideInput = await typography(side.getByRole("textbox"));
+      if (width === 390) {
+        // The compact row and multiline Side chat share type and text scaling,
+        // while each layout owns its line height.
+        expect(mainInput.size).toBe("17.5px");
+        expect(sideInput).toMatchObject({
+          family: mainInput.family,
+          size: mainInput.size,
+          weight: mainInput.weight,
+          smoothing: mainInput.smoothing,
+        });
+        for (const input of [mainInput, sideInput]) {
+          expect(Number.parseFloat(input.lineHeight)).toBeGreaterThanOrEqual(
+            Number.parseFloat(input.size),
+          );
+        }
+      } else {
+        expect(sideInput).toEqual(mainInput);
+      }
       await side.getByRole("button", { name: "Copy code", exact: true }).click();
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(answerCode);
       const wrap = side.locator(".code-block-wrap");

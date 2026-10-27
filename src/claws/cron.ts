@@ -6,9 +6,12 @@ import { toPublicCronJob } from "../cron/public-job.js";
 import { createTrustedCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { applyDefaultCronToolsAllow } from "../cron/tools-allow.js";
 import type { CronJob, CronStoredJob } from "../cron/types.js";
+import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { CLAW_CRON_REF_SCHEMA_VERSION, type PersistedClawCronRef } from "./cron-records.js";
+import { digestClawBytes } from "./digest.js";
 import type { ClawMutationStateOptions } from "./state-mutation-options.js";
 import type { ClawAddPlan, ClawCronJob } from "./types.js";
+import { readClawWorkspaceActionSource } from "./workspace.js";
 
 export type { PersistedClawCronRef } from "./cron-records.js";
 
@@ -24,6 +27,12 @@ export type ClawCronGateway = {
     options: { commitGuard?: () => void; expectedConfigRevision: string },
   ) => Promise<unknown>;
   waitUntilAgentAvailable?: (agentId: string) => Promise<void>;
+  writeScratch?: (jobId: string, content: string, commitGuard: () => void) => Promise<void>;
+  enable?: (
+    jobId: string,
+    expectedConfigRevision: string,
+    commitGuard: () => void,
+  ) => Promise<void>;
 };
 
 export class ClawCronInstallError extends Error {
@@ -75,6 +84,9 @@ function schedulerJobRecordByDeclarationKey(
 
 function clawCronGatewayInput(agentId: string, ref: PersistedClawCronRef) {
   const job = ref.job;
+  if ("automation" in job) {
+    return { ...job.automation, declarationKey: ref.declarationKey, owner: { agentId } };
+  }
   return {
     name: job.name ?? job.id,
     declarationKey: ref.declarationKey,
@@ -117,6 +129,13 @@ export function clawCronGatewayJobMatchesRef(
     !live.state
   ) {
     return false;
+  }
+  if (
+    expected.schedule.kind === "every" &&
+    expected.schedule.anchorMs === undefined &&
+    live.schedule?.kind === "every"
+  ) {
+    expected.schedule.anchorMs = live.schedule.anchorMs;
   }
   const comparableLive = toPublicCronJob({
     ...live,
@@ -161,7 +180,10 @@ export async function installClawCronJobsStateless(
   plan: ClawAddPlan,
   options: ClawMutationStateOptions & {
     assertForwardCurrent?: () => void;
-    gateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable">;
+    gateway?: Pick<
+      ClawCronGateway,
+      "add" | "list" | "get" | "waitUntilAgentAvailable" | "writeScratch" | "enable"
+    >;
     nowMs?: number;
   } = {},
 ): Promise<PersistedClawCronRef[]> {
@@ -183,58 +205,134 @@ export async function installClawCronJobsStateless(
   };
   await options.gateway.waitUntilAgentAvailable?.(plan.agent.finalId);
   assertCurrent();
-  for (const action of actions) {
-    // SAFETY: cronJob plan actions originate from validated ClawCronJob manifest entries.
-    const details = action.details as ClawCronJob | undefined;
-    if (!details?.id) {
-      throw new ClawCronInstallError(
-        "cron_plan_invalid",
-        `Cron action ${action.id} is invalid.`,
-        refs,
-      );
-    }
-    const nowMs = options.nowMs ?? Date.now();
-    const ref: PersistedClawCronRef = {
-      schemaVersion: CLAW_CRON_REF_SCHEMA_VERSION,
-      agentId: plan.agent.finalId,
-      manifestId: details.id,
-      declarationKey: `claw:${plan.agent.finalId}:${details.id}`,
-      status: "pending",
-      job: details,
-      createdAtMs: nowMs,
-      updatedAtMs: nowMs,
-    };
-    let result: { id: string } | undefined;
-    try {
-      assertCurrent();
-      result = clawCronSchedulerJobFromResult(
-        await options.gateway.add(clawCronGatewayInput(plan.agent.finalId, ref), {
-          commitGuard: assertCurrent,
-        }),
-      );
-      assertCurrent();
-      if (!result) {
-        throw new Error("cron.add returned no scheduler job id");
+  let scratchWriteAttempted = false;
+  try {
+    for (const action of actions) {
+      // SAFETY: cronJob plan actions originate from validated ClawCronJob manifest entries.
+      const details = action.details as ClawCronJob | undefined;
+      if (!action.automation && !details?.id) {
+        throw new ClawCronInstallError(
+          "cron_plan_invalid",
+          `Cron action ${action.id} is invalid.`,
+          refs,
+        );
       }
-    } catch (error) {
-      if (options.gateway.list) {
-        try {
-          const listed = schedulerJobRecordByDeclarationKey(
-            await options.gateway.list(plan.agent.finalId),
-            ref.declarationKey,
+      if (action.source) {
+        const source = await readClawWorkspaceActionSource({
+          action,
+          packageRoot: plan.claw.packageRoot,
+          sourceRoot: await fsSafeRoot(plan.claw.packageRoot),
+        });
+        if (digestClawBytes(source.content) !== action.digest) {
+          throw new ClawCronInstallError(
+            "cron_source_changed",
+            "Portable HEARTBEAT.md changed after consent.",
+            refs,
           );
-          if (listed && clawCronGatewayJobMatchesRef(plan.agent.finalId, ref, listed)) {
-            result = listed;
+        }
+        assertCurrent();
+      }
+      const plannedJob = action.automation ? { automation: action.automation } : details;
+      if (!plannedJob) {
+        throw new ClawCronInstallError(
+          "cron_plan_invalid",
+          `Cron action ${action.id} is invalid.`,
+          refs,
+        );
+      }
+      const nowMs = options.nowMs ?? Date.now();
+      const activateAfterScratch = action.automation?.enabled && action.scratch !== undefined;
+      let ref: PersistedClawCronRef = {
+        schemaVersion: CLAW_CRON_REF_SCHEMA_VERSION,
+        agentId: plan.agent.finalId,
+        manifestId: action.id,
+        declarationKey: `claw:${plan.agent.finalId}:${action.id}`,
+        status: "pending",
+        job: action.automation
+          ? {
+              automation: {
+                ...action.automation,
+                ...(activateAfterScratch ? { enabled: false } : {}),
+              },
+            }
+          : plannedJob,
+        createdAtMs: nowMs,
+        updatedAtMs: nowMs,
+      };
+      let result: { id: string } | undefined;
+      try {
+        await options.prepareEffect?.();
+        assertCurrent();
+        result = clawCronSchedulerJobFromResult(
+          await options.gateway.add(clawCronGatewayInput(plan.agent.finalId, ref), {
+            commitGuard: assertCurrent,
+          }),
+        );
+        assertCurrent();
+        if (!result) {
+          throw new Error("cron.add returned no scheduler job id");
+        }
+      } catch (error) {
+        if (options.gateway.list) {
+          try {
+            const listed = schedulerJobRecordByDeclarationKey(
+              await options.gateway.list(plan.agent.finalId),
+              ref.declarationKey,
+            );
+            if (listed && clawCronGatewayJobMatchesRef(plan.agent.finalId, ref, listed)) {
+              result = listed;
+            }
+          } catch {
+            // The primary error is more useful when reconciliation is unavailable.
           }
-        } catch {
-          // The primary error is more useful when reconciliation is unavailable.
+        }
+        if (!result) {
+          throw new ClawCronInstallError("cron_install_failed", coerceErrorMessage(error), refs);
         }
       }
-      if (!result) {
-        throw new ClawCronInstallError("cron_install_failed", coerceErrorMessage(error), refs);
+      refs.push({ ...ref, status: "complete", schedulerJobId: result.id });
+      if (action.scratch !== undefined) {
+        if (!options.gateway.writeScratch) {
+          throw new ClawCronInstallError(
+            "cron_scratch_import_failed",
+            "Claw scratch import requires the gateway-owned cron.scratch.set API.",
+            refs,
+          );
+        }
+        await options.prepareEffect?.();
+        assertCurrent();
+        scratchWriteAttempted = true;
+        await options.gateway.writeScratch(result.id, action.scratch, assertCurrent);
+        assertCurrent();
+        if (activateAfterScratch && action.automation) {
+          if (!options.gateway.get || !options.gateway.enable) {
+            throw new Error("Claw scratch import requires the gateway-owned cron.update API.");
+          }
+          const live = await options.gateway.get(result.id);
+          assertCurrent();
+          const revision = clawCronGatewayJobConfigRevision(live);
+          if (!revision || !clawCronGatewayJobMatchesRef(plan.agent.finalId, ref, live)) {
+            throw new Error("Claw automation changed before scratch activation.");
+          }
+          await options.prepareEffect?.();
+          assertCurrent();
+          await options.gateway.enable(result.id, revision, assertCurrent);
+          ref = { ...ref, job: { automation: action.automation } };
+          refs[refs.length - 1] = { ...ref, status: "complete", schedulerJobId: result.id };
+        }
       }
     }
-    refs.push({ ...ref, status: "complete", schedulerJobId: result.id });
+  } catch (error) {
+    // Once scratch is exposed, a later Add failure cannot prove that it is still ours.
+    throw new ClawCronInstallError(
+      scratchWriteAttempted
+        ? "cron_scratch_import_incomplete"
+        : error instanceof ClawCronInstallError
+          ? error.code
+          : "cron_install_failed",
+      coerceErrorMessage(error),
+      refs,
+    );
   }
   return refs;
 }

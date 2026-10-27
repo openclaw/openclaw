@@ -90,13 +90,12 @@ export function scheduleGatewayHandlerPrewarm(params: {
   getConfig: () => OpenClawConfig;
   startupTrace?: Pick<GatewayStartupTrace, "measure">;
   log: { warn: (msg: string) => void };
-  items?: readonly GatewayHandlerPrewarmItem[];
   waitForPostReadyWork?: () => Promise<void>;
 }): GatewayIdleTaskHandle {
   let stopped = false;
   const startedAt = params.scheduler.now();
   // Warm code and local facts without executing requests or acquiring live provider catalogs.
-  const items = params.items ?? gatewayPrewarmItems(params.getConfig);
+  const items = gatewayPrewarmItems(params.getConfig);
   let nextIndex = 0;
   let currentItemName = "unknown";
   let idleTask: GatewayIdleTaskHandle | undefined;

@@ -23,6 +23,16 @@ vi.mock("../plugins/runtime/gateway-request-scope.js", () => ({
 // mock-isolation: Capture resolver diagnostics without initializing global logging.
 vi.mock("../logger.js", () => ({ logWarn: vi.fn() }));
 const requester = { serverNames: ["calendar"], requesterSenderId: "alice" };
+const url = "https://calendar.example/mcp";
+async function retainedObservation() {
+  const authority = (
+    await resolveRequesterScopedMcpConnections({ ...requester, retainAuthority: true })
+  ).get("calendar")?.authority;
+  if (!authority) {
+    throw new Error("Missing retained observation");
+  }
+  return authority;
+}
 function observation() {
   return {
     authorizationId: "grant-one",
@@ -40,32 +50,23 @@ afterEach(() => {
 describe("MCP resolver authority observation lifecycle", () => {
   it("leaves ordinary tool results unchanged and releases unsolicited observations", async () => {
     const authority = observation();
-    mocks.resolve.mockResolvedValue({ url: "https://calendar.example/mcp", authority });
+    mocks.resolve.mockResolvedValue({ url, authority });
     expect(await resolveRequesterScopedMcpConnections(requester)).toEqual(
-      new Map([["calendar", { url: "https://calendar.example/mcp" }]]),
+      new Map([["calendar", { url }]]),
     );
     expect(mocks.resolve).toHaveBeenCalledWith({ requesterSenderId: "alice" });
     expect(authority.dispose).toHaveBeenCalledOnce();
   });
   it("namespaces authorization lifetimes by their actual resolver issuer", async () => {
-    mocks.resolve.mockImplementation(() => ({
-      url: "https://calendar.example/mcp",
-      authority: observation(),
-    }));
-    const first = (
-      await resolveRequesterScopedMcpConnections({ ...requester, retainAuthority: true })
-    ).get("calendar")?.authority;
+    mocks.resolve.mockImplementation(() => ({ url, authority: observation() }));
+    const first = await retainedObservation();
     mocks.pluginId = "replacement-connector";
-    const replacement = (
-      await resolveRequesterScopedMcpConnections({ ...requester, retainAuthority: true })
-    ).get("calendar")?.authority;
+    const replacement = await retainedObservation();
     try {
-      expect(first).toBeDefined();
-      expect(replacement).toBeDefined();
-      expect(replacement?.authorizationId).not.toBe(first?.authorizationId);
+      expect(replacement.authorizationId).not.toBe(first.authorizationId);
     } finally {
-      first?.dispose();
-      replacement?.dispose();
+      first.dispose();
+      replacement.dispose();
     }
   });
 
@@ -79,20 +80,14 @@ describe("MCP resolver authority observation lifecycle", () => {
     ).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_UNAVAILABLE" });
     await vi.advanceTimersByTimeAsync(10_000);
     await failure;
-    result.resolve({ url: "https://calendar.example/mcp", authority });
+    result.resolve({ url, authority });
     await vi.advanceTimersByTimeAsync(0);
     expect(authority.dispose).toHaveBeenCalledOnce();
   });
   it("revalidates temporarily unavailable observations and retains only sanitized errors", async () => {
     const authority = observation();
-    authority.assertCurrent.mockImplementationOnce(() => {});
-    mocks.resolve.mockResolvedValue({ url: "https://calendar.example/mcp", authority });
-    const retained = (
-      await resolveRequesterScopedMcpConnections({ ...requester, retainAuthority: true })
-    ).get("calendar")?.authority;
-    if (!retained) {
-      throw new Error("Missing retained observation");
-    }
+    mocks.resolve.mockResolvedValue({ url, authority });
+    const retained = await retainedObservation();
     authority.assertCurrent.mockImplementation(() => {
       throw new McpConnectionAuthorityError("unavailable");
     });

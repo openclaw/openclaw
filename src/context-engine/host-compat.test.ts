@@ -1,5 +1,6 @@
 // Context engine host compatibility tests cover host API compatibility behavior.
 import { describe, expect, it } from "vitest";
+import { createPassthroughEngineMethods } from "./context-engine.test-support.js";
 import {
   assertContextEngineHostSupport,
   buildGenericCliContextEngineHostSupport,
@@ -22,15 +23,7 @@ function createEngine(requiredCapabilities: ContextEngineHostCapability[]): Cont
         },
       },
     },
-    async ingest() {
-      return { ingested: true };
-    },
-    async assemble({ messages }) {
-      return { messages, estimatedTokens: 0 };
-    },
-    async compact() {
-      return { ok: true, compacted: false };
-    },
+    ...createPassthroughEngineMethods(),
   };
 }
 

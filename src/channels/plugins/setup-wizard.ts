@@ -178,11 +178,11 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
         : { cfg, restore: (currentCfg: OpenClawConfig) => currentCfg };
       let next = accountScope.cfg;
       const accountContext = (currentCfg = next) => ({ cfg: currentCfg, accountId });
-      const collectCredentialValues = (currentCfg = next): ChannelSetupWizardCredentialValues => {
+      const collectCredentialValues = (): ChannelSetupWizardCredentialValues => {
         const values: ChannelSetupWizardCredentialValues = {};
         for (const credential of wizard.credentials) {
           const resolvedValue = normalizeOptionalString(
-            credential.inspect(accountContext(currentCfg)).resolvedValue,
+            credential.inspect(accountContext()).resolvedValue,
           );
           if (resolvedValue) {
             values[credential.inputKey] = resolvedValue;

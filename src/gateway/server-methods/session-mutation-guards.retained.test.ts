@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureGatewayDeviceRevocation,
@@ -12,6 +12,7 @@ import {
   bindWebSocketRequestMutationAuthority,
   retainGatewayRequestMutationAuthority,
 } from "./session-mutation-guards.js";
+import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestOptions } from "./types.js";
 
 function roleConfig(scopes: "operator.admin"[] = ["operator.admin"]): OpenClawConfig {
@@ -35,13 +36,7 @@ function requestFixture() {
     getCommittedRuntimeConfig: () => config,
   } as GatewayRequestContext;
   const client: GatewayClient = {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.admin"],
-    },
+    ...createSessionMutationTestClient(),
     connectionSignal: connection.signal,
     preparedSessionProfile: {
       profileId: "fixture-operator",
@@ -50,6 +45,7 @@ function requestFixture() {
     },
     internal: { operatorRoleActor: { kind: "operator", profileId: "fixture-operator" } },
   };
+  client.connect.scopes = ["operator.admin"];
   const device = captureGatewayDeviceRevocation(
     context,
     { deviceId: "fixture-device", role: "operator" },
@@ -57,6 +53,7 @@ function requestFixture() {
     connection.signal,
     { isCurrent: () => sourceCurrent, subscribe: () => () => {} },
   );
+  onTestFinished(() => device.release());
   const request: GatewayRequestOptions = {
     req: { type: "req", id: "setup", method: "openclaw.setup.auto", params: {} },
     client,
@@ -78,84 +75,72 @@ function requestFixture() {
   );
   return {
     handler,
-    device,
     disconnect: () => {
       client.invalidated = true;
       connection.abort();
       invocation.abort();
       device.release();
     },
-    revokeDevice: () => invalidateGatewayDeviceRevocation(context, "fixture-device", "operator"),
-    revokeRole: () => {
-      config = roleConfig([]);
-    },
-    revokeSource: () => {
-      sourceCurrent = false;
+    revoke: {
+      disconnect: () => {},
+      "device revocation": () =>
+        invalidateGatewayDeviceRevocation(context, "fixture-device", "operator"),
+      "role revocation": () => {
+        config = roleConfig([]);
+      },
+      "source revocation": () => {
+        sourceCurrent = false;
+      },
     },
   };
 }
 
-describe("retained Gateway mutation authority", () => {
-  it.each(["disconnect", "device revocation", "role revocation", "source revocation"] as const)(
-    "rechecks the original grant after %s while work is pending",
-    async (change) => {
-      const fixture = requestFixture();
-      const authority = retainGatewayRequestMutationAuthority(fixture.handler);
-      try {
-        // Durable setup runs after asynchronous discovery and can outlive its socket.
-        await Promise.resolve();
-        fixture.disconnect();
-        if (change === "device revocation") {
-          fixture.revokeDevice();
-        } else if (change === "role revocation") {
-          fixture.revokeRole();
-        } else if (change === "source revocation") {
-          fixture.revokeSource();
-        }
-        if (change === "disconnect") {
-          expect(authority.assertCurrent).not.toThrow();
-        } else {
-          expect(authority.assertCurrent).toThrow(SessionMutationAuthorizationChangedError);
-        }
-      } finally {
-        authority.release();
-        fixture.device.release();
-      }
-      expect(authority.assertCurrent).toThrow(SessionMutationAuthorizationChangedError);
-    },
-  );
+function retain(request: GatewayRequestOptions) {
+  const authority = retainGatewayRequestMutationAuthority(request);
+  onTestFinished(() => authority.release());
+  return authority;
+}
 
-  it("preserves an opaque caller's original commit guard", () => {
+it.each(["disconnect", "device revocation", "role revocation", "source revocation"] as const)(
+  "rechecks the original grant after %s while work is pending",
+  async (change) => {
     const fixture = requestFixture();
-    let current = true;
-    const request: GatewayRequestOptions = {
-      ...fixture.handler,
-      sessionMutationCommitGuard: () => {
-        if (!current) {
-          throw new Error("Opaque caller grant expired");
-        }
-      },
-    };
-    const authority = retainGatewayRequestMutationAuthority(request);
-    try {
+    const authority = retain(fixture.handler);
+    // Durable setup runs after asynchronous discovery and can outlive its socket.
+    await Promise.resolve();
+    fixture.disconnect();
+    fixture.revoke[change]();
+    if (change === "disconnect") {
       expect(authority.assertCurrent).not.toThrow();
-      current = false;
-      expect(authority.assertCurrent).toThrow("Opaque caller grant expired");
-    } finally {
-      authority.release();
-      fixture.device.release();
+    } else {
+      expect(authority.assertCurrent).toThrow(SessionMutationAuthorizationChangedError);
     }
-  });
+    authority.release();
+    expect(authority.assertCurrent).toThrow(SessionMutationAuthorizationChangedError);
+  },
+);
 
-  it("rejects a grant revoked before it can be retained", () => {
-    const fixture = requestFixture();
-    fixture.revokeDevice();
-    try {
-      expect(() => retainGatewayRequestMutationAuthority(fixture.handler)).toThrow(
-        "Gateway requester authority changed",
-      );
-    } finally {
-      fixture.device.release();
-    }
-  });
+it("preserves an opaque caller's original commit guard", () => {
+  const fixture = requestFixture();
+  let current = true;
+  const request: GatewayRequestOptions = {
+    ...fixture.handler,
+    sessionMutationCommitGuard: () => {
+      if (!current) {
+        throw new Error("Opaque caller grant expired");
+      }
+    },
+  };
+  const authority = retain(request);
+  expect(authority.assertCurrent).not.toThrow();
+  current = false;
+  expect(authority.assertCurrent).toThrow("Opaque caller grant expired");
+});
+
+it("rejects a grant revoked before it can be retained", () => {
+  const fixture = requestFixture();
+  fixture.revoke["device revocation"]();
+  expect(() => retainGatewayRequestMutationAuthority(fixture.handler)).toThrow(
+    "Gateway requester authority changed",
+  );
 });

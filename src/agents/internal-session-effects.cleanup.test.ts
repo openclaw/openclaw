@@ -1,16 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.js";
 import { shouldRemoveSessionEntry } from "../config/sessions/session-accessor.sqlite-lifecycle-state.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
 
 type LifecycleMutation = Parameters<typeof applySessionEntryLifecycleMutation>[0];
-
 const { state, remove, loadEntry } = vi.hoisted(() => {
-  const storageState: { entry?: InternalSessionEntry; beforeRemoval?: () => Promise<void> } = {};
+  const storage: { entry?: InternalSessionEntry; beforeRemoval?: () => Promise<void> } = {};
   return {
-    state: storageState,
+    state: storage,
     remove: vi.fn<(params: LifecycleMutation) => Promise<void>>(),
     loadEntry: vi.fn<() => Promise<InternalSessionEntry | undefined>>(),
   };
@@ -22,8 +20,7 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
   forkSessionFromParentTranscript: vi.fn(),
   upsertSessionEntryCore: vi.fn(),
 }));
-
-// mock-isolation: Read the controlled lifecycle state without opening a separate database worker.
+// mock-isolation: Read controlled state without opening a database worker.
 vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
   readSessionEntryReadOnlyInWorker: loadEntry,
 }));
@@ -34,17 +31,8 @@ const target = {
   sessionKey: "agent:main:internal:companion-session",
   storePath: "/synthetic/companion/openclaw-agent.sqlite",
 };
-const ownedEntry = {
-  sessionId: target.sessionId,
-  lifecycleRevision: "companion-lifecycle",
-  activeWriterRunId: "companion-writer",
-  updatedAt: 1,
-};
-const expectedOwner = {
-  lifecycleRevision: ownedEntry.lifecycleRevision,
-  activeWriterRunId: ownedEntry.activeWriterRunId,
-};
-
+const owner = { lifecycleRevision: "life", activeWriterRunId: "writer" };
+const ownedEntry = { sessionId: target.sessionId, ...owner, updatedAt: 1 };
 beforeEach(() => {
   state.entry = { ...ownedEntry };
   state.beforeRemoval = undefined;
@@ -61,51 +49,33 @@ beforeEach(() => {
   });
 });
 
-describe("internal session cleanup ownership", () => {
-  it.each([
-    { name: "lifecycle", change: { lifecycleRevision: "replacement-lifecycle" } },
-    { name: "writer", change: { activeWriterRunId: "replacement-writer" } },
-  ])("preserves a changed $name before guarded cleanup", async ({ change }) => {
-    const replacement = { ...ownedEntry, ...change };
-    state.entry = replacement;
-    await removeInternalSessionEffectsSession(target, expectedOwner);
-    expect(state.entry).toEqual(replacement);
-  });
-
-  it.each([
-    { name: "lifecycle", change: { lifecycleRevision: "replacement-lifecycle" } },
-    { name: "writer", change: { activeWriterRunId: "replacement-writer" } },
-  ])("preserves a $name change during removal preparation", async ({ change }) => {
-    const planned = createDeferredCore();
-    const resume = createDeferredCore();
+it.each([
+  ["lifecycleRevision", false],
+  ["activeWriterRunId", false],
+  ["lifecycleRevision", true],
+  ["activeWriterRunId", true],
+] as const)("preserves changed %s (during preparation: %s)", async (field, during) => {
+  const replacement = { ...ownedEntry, [field]: "replacement" };
+  if (during) {
     state.beforeRemoval = async () => {
-      planned.resolve();
-      await resume.promise;
-    };
-    const cleanup = removeInternalSessionEffectsSession(target, expectedOwner);
-    try {
-      await planned.promise;
-      const replacement = { ...ownedEntry, ...change };
       state.entry = replacement;
-      resume.resolve();
-      await cleanup;
-      expect(state.entry).toEqual(replacement);
-    } finally {
-      resume.resolve();
-      await cleanup;
-    }
-  });
+    };
+  } else {
+    state.entry = replacement;
+  }
+  await removeInternalSessionEffectsSession(target, owner);
+  expect(state.entry).toEqual(replacement);
+});
 
-  it("removes the original owner after its ordinary metadata changes", async () => {
-    state.entry = { ...ownedEntry, updatedAt: 2, label: "Seeded history" };
-    await removeInternalSessionEffectsSession(target, expectedOwner);
-    expect(state.entry).toBeUndefined();
-  });
+it("removes the original owner after ordinary metadata changes", async () => {
+  state.entry = { ...ownedEntry, updatedAt: 2, label: "Seeded history" };
+  await removeInternalSessionEffectsSession(target, owner);
+  expect(state.entry).toBeUndefined();
+});
 
-  it("preserves normal run-owned cleanup after a writer handoff", async () => {
-    state.entry = { ...ownedEntry, activeWriterRunId: "embedded-writer" };
-    await removeInternalSessionEffectsSession(target);
-    expect(state.entry).toBeUndefined();
-    expect(loadEntry).not.toHaveBeenCalled();
-  });
+it("preserves run-owned cleanup after a writer handoff", async () => {
+  state.entry = { ...ownedEntry, activeWriterRunId: "embedded-writer" };
+  await removeInternalSessionEffectsSession(target);
+  expect(state.entry).toBeUndefined();
+  expect(loadEntry).not.toHaveBeenCalled();
 });

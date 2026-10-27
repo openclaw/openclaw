@@ -1402,6 +1402,35 @@ CREATE INDEX IF NOT EXISTS idx_sandbox_registry_last_used
   ON sandbox_registry_entries(registry_kind, last_used_at_ms DESC, container_name)
   WHERE last_used_at_ms IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS sandbox_persistent_execs (
+  owner_key TEXT NOT NULL PRIMARY KEY,
+  source_identity TEXT NOT NULL,
+  attempt_id TEXT NOT NULL UNIQUE,
+  owner_json TEXT NOT NULL,
+  backend_id TEXT NOT NULL CHECK (backend_id = 'docker'),
+  backend_target_json TEXT NOT NULL,
+  workspace_binding_json TEXT NOT NULL,
+  container_id TEXT NOT NULL,
+  container_name TEXT NOT NULL,
+  container_started_at TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  phase TEXT NOT NULL CHECK (phase IN ('reserved', 'prepared', 'running', 'stopping', 'uncertain', 'stopped')),
+  receipt_json TEXT,
+  error TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  CHECK (phase NOT IN ('prepared', 'running') OR receipt_json IS NOT NULL)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_persistent_execs_container
+  ON sandbox_persistent_execs(container_id, owner_key);
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_persistent_execs_container_name
+  ON sandbox_persistent_execs(container_name, owner_key);
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_persistent_execs_source
+  ON sandbox_persistent_execs(source_identity, owner_key);
+
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
@@ -2332,8 +2361,20 @@ CREATE TABLE IF NOT EXISTS local_workspace_projections (
   journal_pack BLOB CHECK (journal_pack IS NULL OR length(journal_pack) <= 268435456),
   revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
   created_at_ms INTEGER NOT NULL,
-  CHECK ((baseline_json IS NULL) = (baseline_ref IS NULL)),
+  checkpoint_json TEXT,
+  CHECK (baseline_json IS NULL OR baseline_ref IS NOT NULL),
   CHECK ((journal_json IS NULL) = (journal_pack IS NULL))
+) STRICT;
+
+-- The projection owner advances changed nodes and its root in one acceptance.
+-- Legacy baseline_json remains only until that owner's resumable conversion.
+CREATE TABLE IF NOT EXISTS local_workspace_manifest_nodes (
+  worktree_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  node_json TEXT NOT NULL,
+  PRIMARY KEY (worktree_id, path),
+  FOREIGN KEY (worktree_id)
+    REFERENCES local_workspace_projections(worktree_id) ON DELETE CASCADE
 ) STRICT;
 
 -- A reconciliation journal is written before managed-worktree mutation. The

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
@@ -32,6 +33,11 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import {
+  getOrLoadSqliteDatabaseAdmissionForPath,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "./sqlite-database-admission.js";
 import { runWithSqliteCleanup, throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { invalidateSuccessfulMigrationCheckpointsInTransaction } from "./startup-migration-checkpoint.js";
 import { withStateDatabaseSchemaMaintenance } from "./state-database-maintenance.js";
@@ -49,6 +55,16 @@ function invalidatePinnedMigrationReads(): void {
 }
 
 const RUN_PREFIX = "deferred-plugin-migration:";
+const migrationReceipt: SqliteDatabaseAdmissionKey<object> = {
+  name: "plugins.deferred-migrations",
+  lifetime: "process",
+  read: (value) => (isRecord(value) ? value : undefined),
+};
+
+/** Only committed migration writes retire readiness; ordinary state writes do not. */
+export function readDeferredPluginMigrationReceipt(databasePath: string): object {
+  return getOrLoadSqliteDatabaseAdmissionForPath(databasePath, migrationReceipt, () => ({})) ?? {};
+}
 
 type ConfigMigrationCompletion = {
   configPath: string;
@@ -259,23 +275,27 @@ export async function readDeferredPluginMigrationsAsync(
 export async function withLeasePinnedDeferredPluginMigrations<T>(
   options: {
     env: NodeJS.ProcessEnv;
-    lease: { databasePath: string; assertOwned: () => void };
+    lease: {
+      databasePath: string;
+      assertOwned: () => void | Promise<void>;
+      assertCurrent: () => void;
+    };
   },
   run: (pending: readonly DeferredPluginMigration[], assertCurrent: () => void) => Promise<T>,
 ): Promise<T> {
-  options.lease.assertOwned();
+  await options.lease.assertOwned();
   const pending = await readDeferredPluginMigrationsAsync({
     env: options.env,
     path: options.lease.databasePath,
   });
-  options.lease.assertOwned();
+  await options.lease.assertOwned();
   const read: PinnedMigrationRead = {
     invalidated: false,
     ...(pinnedMigrationRead.getStore() ? { parent: pinnedMigrationRead.getStore() } : {}),
   };
   return await pinnedMigrationRead.run(read, async () =>
     run(pending, () => {
-      options.lease.assertOwned();
+      options.lease.assertCurrent();
       if (read.invalidated) {
         throw new Error("Deferred plugin migration policy changed since review.");
       }
@@ -513,6 +533,9 @@ export function recordDeferredPluginMigrationsInTransaction(
   if (deferred.length > 0) {
     invalidateSuccessfulMigrationCheckpointsInTransaction(db);
   }
+  if (deferred.length > 0 || resolved.length > 0) {
+    publishSqliteDatabaseAdmission(db, migrationReceipt, {});
+  }
   return { deferred, resolved, pending: pendingMigrationRecords(readPendingMigrationRows(db)) };
 }
 
@@ -534,10 +557,10 @@ export async function recordDeferredPluginMigrations(
     settlements: params.settlements,
     expectedPending: params.expectedPending,
   });
-  const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+  const { withPluginLifecycleLeaseAsync } = await import("../plugins/plugin-lifecycle-lease.js");
   const { runWithOpenClawStateLeaseWorker } =
     await import("../state/openclaw-state-lease-worker-operation.js");
-  return withPluginLifecycleLease({ env: params.env }, async (lease) => {
+  return withPluginLifecycleLeaseAsync({ env: params.env }, async (lease) => {
     const context = captureOpenClawStateWorkerContext({
       env: params.env,
       path: lease.databasePath,

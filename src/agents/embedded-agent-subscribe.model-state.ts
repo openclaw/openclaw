@@ -58,6 +58,7 @@ function preserveAssistantUsage(message: AssistantMessage, pending: NormalizedUs
     cacheRead,
     cacheWrite,
     ...(pending.cacheWrite1h !== undefined ? { cacheWrite1h: pending.cacheWrite1h } : {}),
+    ...(pending.cacheWrite5m !== undefined ? { cacheWrite5m: pending.cacheWrite5m } : {}),
     ...(pending.contextUsage ? { contextUsage: { ...pending.contextUsage } } : {}),
     ...(pending.usageReport ? { usageReport: { ...pending.usageReport } } : {}),
     totalTokens: pending.total ?? input + output + cacheRead + cacheWrite,

@@ -34,7 +34,11 @@ import type { InventoryRemovalRequest } from "../../lib/nodes/page-operations.ts
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { CapabilityChips } from "./capability-chips.tsx";
-import { deviceDesktopEnvironment, DeviceEntryMenu } from "./entry-menu.tsx";
+import {
+  deviceDesktopEnvironment,
+  DeviceEntryMenu,
+  PendingDeviceDecisions,
+} from "./entry-menu.tsx";
 import { HostStats } from "./host-stats.tsx";
 import { deviceIcon, DeviceTile, DeviceIdentityFacts } from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
@@ -67,7 +71,7 @@ function inventorySummary(
   return parts.join(" · ");
 }
 
-export function DeviceInventory(props: DevicesProps) {
+export function DeviceInventoryContent(props: DevicesProps & { pending: boolean }) {
   // Inventory reads replace their snapshots; config and approval drafts publish independently.
   const pending = createMemo(() => props.devicesList?.pending ?? []);
   const paired = createMemo(() => props.devicesList?.paired ?? []);
@@ -79,7 +83,8 @@ export function DeviceInventory(props: DevicesProps) {
   const gatewayPresence = createMemo(() => findGatewayPresence(presenceSnapshot()));
   const unpairedPresence = createMemo(() => listUnpairedPresence(presenceSnapshot(), groups()));
   const stale = createMemo(() => listStaleInventoryEntries(groups()));
-  const loading = () => props.loading || props.devicesLoading;
+  // Mutation owners can also start internal reloads after their write settles.
+  const loading = () => props.pending || props.loading || props.devicesLoading;
   const actions = (
     <>
       {stale().length > 0 ? (
@@ -88,7 +93,7 @@ export function DeviceInventory(props: DevicesProps) {
           title={
             props.connected && !props.canManagePairing ? t("devices.readOnly.pairingRequired") : ""
           }
-          disabled={!props.connected || !props.canManagePairing}
+          disabled={props.inventorySaving || !props.connected || !props.canManagePairing}
           onClick={() => props.onInventoryCleanup(stale().map(toRemovalRequest))}
         >
           <Icon name="trash" />{" "}
@@ -108,6 +113,11 @@ export function DeviceInventory(props: DevicesProps) {
   // Pending requests and unpaired presence render in their own sections, so
   // this section's empty state depends only on its own rows.
   const empty = () => groups().length === 0 && !gatewayPresence();
+  const groupedRows = (
+    <For each={groups()} keyed={(group) => group.key}>
+      {(group) => <InventoryGroup group={group()} devices={props} />}
+    </For>
+  );
   const deviceRows = (
     <>
       <Show when={gatewayPresence()}>
@@ -120,16 +130,12 @@ export function DeviceInventory(props: DevicesProps) {
       ) : empty() && (props.connected || props.devicesList) ? (
         <SettingsEmpty message={t("devices.inventory.empty")} />
       ) : (
-        <For each={groups()} keyed={(group) => group.key}>
-          {(group) => <InventoryGroup group={group()} devices={props} />}
-        </For>
+        groupedRows
       )}
     </>
   );
   return (
     <>
-      {props.devicesError ? <div class="callout danger">{props.devicesError}</div> : undefined}
-      {props.lastError ? <div class="callout danger">{props.lastError}</div> : undefined}
       {pending().length > 0 ? (
         <SettingsSection title={t("devices.inventory.pendingApproval")} count={pending().length}>
           <PendingDeviceRows {...props} />
@@ -554,6 +560,8 @@ function TokenRow(props: {
   tokenSummary: DeviceTokenSummary;
   devices: DevicesProps;
 }) {
+  const disabled = () =>
+    props.devices.inventorySaving || !props.devices.connected || !props.devices.canManagePairing;
   const status = () =>
     props.tokenSummary.revokedAtMs ? t("devices.inventory.revoked") : t("devices.inventory.active");
   const scopes = createMemo(() => formatList(props.tokenSummary.scopes));
@@ -575,7 +583,7 @@ function TokenRow(props: {
         <div class="device-entry__token-actions">
           <button
             class="btn btn--sm"
-            disabled={!props.devices.connected || !props.devices.canManagePairing}
+            disabled={disabled()}
             onClick={() =>
               props.devices.onDeviceRotate(
                 props.device,
@@ -589,7 +597,7 @@ function TokenRow(props: {
           {props.tokenSummary.revokedAtMs ? undefined : (
             <button
               class="btn btn--sm danger"
-              disabled={!props.devices.connected || !props.devices.canManagePairing}
+              disabled={disabled()}
               onClick={() => props.devices.onDeviceRevoke(props.device.id, props.tokenSummary.role)}
             >
               {t("devices.inventory.revoke")}
@@ -686,20 +694,11 @@ function PendingDevice(props: {
         </span>
       </div>
       <div class="settings-row__control">
-        <button
-          class="btn btn--sm"
-          disabled={!props.devices.connected || !props.devices.canManagePairing}
-          onClick={() => props.devices.onDeviceApprove(props.req.requestId)}
-        >
-          {t("devices.inventory.approve")}
-        </button>
-        <button
-          class="btn btn--sm"
-          disabled={!props.devices.connected || !props.devices.canManagePairing}
-          onClick={() => props.devices.onDeviceReject(props.req.requestId)}
-        >
-          {t("devices.inventory.reject")}
-        </button>
+        <PendingDeviceDecisions
+          devices={props.devices}
+          requestId={props.req.requestId}
+          name={name()}
+        />
         <DeviceEntryMenu
           devices={props.devices}
           entry={{ name: name(), deviceId: props.req.deviceId }}

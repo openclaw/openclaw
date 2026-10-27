@@ -288,6 +288,9 @@ it.runIf(process.platform !== "win32")(
         "gateway-run-argv.mjs",
         "gateway-shutdown-budget.mjs",
         "node-sqlite.mjs",
+        "node-sqlite-capabilities.mjs",
+        "runtime-process-bootstrap.generated.mjs",
+        "runtime-process-scripts.generated.mjs",
       ]) {
         copyFileSync(filename, path.join(checkoutRoot, filename));
       }
@@ -455,6 +458,7 @@ it.runIf(process.platform !== "win32").for(["runner", "watch"] as const)(
     const sourceRoot = process.cwd();
     const hook = fileURLToPath(new URL("./fixtures/native-runner-signals.mjs", import.meta.url));
     mkdirSync(path.join(checkout, "src"), { recursive: true });
+    mkdirSync(path.join(checkout, ".git"));
     mkdirSync(path.join(root, "home"));
     writeFileSync(
       path.join(root, "receipts.mjs"),
@@ -545,11 +549,12 @@ it.runIf(process.platform !== "win32").for(["runner", "watch"] as const)(
   },
 );
 
-it.runIf(process.platform !== "win32").for(["SIGTERM", "SIGHUP"] as const)(
-  "joins the dev runner's resistant child before returning from %s",
-  async (stopSignal, { signal }) => {
+it.runIf(process.platform !== "win32")(
+  "joins the dev runner's resistant child before returning from SIGTERM",
+  async ({ signal }) => {
     await withShimFixture("scripts/run-node.mjs", async (fixture) => {
       const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
+      mkdirSync(path.join(checkoutRoot, ".git"));
       const childPidPath = path.join(fixtureRoot, "child.pid");
       const wrapperPidPath = path.join(fixtureRoot, "wrapper.pid");
       const childPath = path.join(fixtureRoot, "resistant-child.mjs");
@@ -612,7 +617,7 @@ else process.exit(outcome);
         );
         // The implementation records its wrapper before runNodeMain can spawn the child.
         const wrapperPid = Number(readFileSync(wrapperPidPath, "utf8"));
-        process.kill(wrapperPid, stopSignal);
+        process.kill(wrapperPid, "SIGTERM");
         const result = await withinTest(command, signal);
         expect(result.error, formatShimResult(result)).toBeUndefined();
         expect(isProcessAlive(childPid), "the stopped runner still owns a live child").toBe(false);

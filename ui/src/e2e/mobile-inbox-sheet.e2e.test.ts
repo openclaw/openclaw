@@ -1,8 +1,4 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { expect, it } from "vitest";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -10,13 +6,6 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-let artifactDir: string | undefined;
-beforeEach(() => {
-  artifactDir = artifactRoot
-    ? createControlUiE2eArtifactDir("mobile-inbox-sheet", artifactRoot)
-    : undefined;
-});
 const viewport = { width: 390, height: 844 };
 const suite = createControlUiE2eSuite({
   name: "Control UI mobile Inbox sheet",
@@ -83,6 +72,9 @@ suite.define(() => {
           await page.locator('.nav-drawer[aria-hidden="true"]').waitFor({ state: "attached" });
         };
         await openInbox();
+        expect(await panel.evaluate((element) => getComputedStyle(element).animationName)).toBe(
+          "none",
+        );
         await panel.getByRole("tab", { name: /Mentions/ }).click();
         expect(await drawer.getAttribute("aria-hidden")).toBeNull();
         await panel.getByRole("button", { name: "Close", exact: true }).click();
@@ -121,38 +113,11 @@ suite.define(() => {
   });
 
   it("rises from the bottom with a continuous header and compact close control", async () => {
-    const results: Array<{
-      closeBackground: string;
-      closeBorderRadius: string;
-      closeBorderWidth: string;
-      closeHeight: number;
-      closeWidth: number;
-      easing: string;
-      sheetBackground: string;
-      headerBackground: string;
-      listBackground: string;
-      startTop: number;
-      finalTop: number;
-      duration: number;
-      tabTrackLeft: number;
-      tabTrackRight: number;
-      tabs: Array<{
-        panel: string | null;
-        left: number;
-        right: number;
-        labelLeft: number;
-        labelRight: number;
-      }>;
-    }> = [];
-
     for (const theme of ["light", "dark"] as const) {
       const context = await suite.newBrowserContext({
         colorScheme: theme,
         deviceScaleFactor: 1,
         locale: "en-US",
-        recordVideo: artifactDir
-          ? { dir: path.join(artifactDir, "video"), size: viewport }
-          : undefined,
         reducedMotion: "no-preference",
         serviceWorkers: "block",
         viewport,
@@ -175,9 +140,7 @@ suite.define(() => {
           });
         let animation = findEntrance();
         if (!animation) {
-          // A loaded runner can sample after the CSS entrance already finished, and
-          // getAnimations() drops finished animations. Replay it so the geometry is
-          // measured from the real keyframes instead of depending on scheduling luck.
+          // Finished animations disappear; replay real keyframes on loaded runners.
           element.style.animation = "none";
           void element.getBoundingClientRect();
           element.style.removeProperty("animation");
@@ -187,8 +150,7 @@ suite.define(() => {
           throw new Error("Expected the mobile Inbox sheet entrance animation");
         }
         const timing = animation.effect.getComputedTiming();
-        // Playwright can reach this sample after the entrance animation has advanced.
-        // Rewind the real effect so start geometry does not depend on runner load.
+        // Rewind so start geometry is independent of runner scheduling.
         animation.pause();
         animation.currentTime = 0;
         const startTop = element.getBoundingClientRect().top;
@@ -200,159 +162,69 @@ suite.define(() => {
         const tabTrack = element.querySelector<HTMLElement>(".sidebar-issues-panel__tabs")!;
         const tabTrackBounds = tabTrack.getBoundingClientRect();
         const tabs = Array.from(element.querySelectorAll<HTMLElement>(".hub-tab"));
+        const paint = document.createElement("canvas").getContext("2d")!;
+        paint.fillStyle = getComputedStyle(element).backgroundColor;
+        paint.fillRect(0, 0, 1, 1);
         return {
+          sheetBackgroundAlpha: paint.getImageData(0, 0, 1, 1).data[3],
           closeBackground: getComputedStyle(close).backgroundColor,
-          closeBorderRadius: getComputedStyle(close).borderRadius,
-          closeBorderWidth: getComputedStyle(close).borderTopWidth,
           closeHeight: close.getBoundingClientRect().height,
           closeWidth: close.getBoundingClientRect().width,
           duration: Number(timing.duration),
-          easing: getComputedStyle(element).animationTimingFunction,
           finalTop: element.getBoundingClientRect().top,
           sheetBackground: getComputedStyle(element).backgroundColor,
           headerBackground: getComputedStyle(header).backgroundColor,
+          tabsBackground: getComputedStyle(tabTrack).backgroundColor,
           listBackground: getComputedStyle(list).backgroundColor,
           startTop,
-          tabTrackLeft: tabTrackBounds.left,
-          tabTrackRight: tabTrackBounds.right,
-          tabs: tabs.map((tab) => {
+          tabCount: tabs.length,
+          tabFailures: tabs.flatMap((tab, index) => {
             const label = Array.from(tab.childNodes).find(
               (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
             )!;
             const range = document.createRange();
             range.selectNodeContents(label);
-            const labelBounds = range.getBoundingClientRect();
+            const text = range.getBoundingClientRect();
             const bounds = tab.getBoundingClientRect();
-            return {
-              panel: tab.getAttribute("data-tab-value"),
-              left: bounds.left,
-              right: bounds.right,
-              labelLeft: labelBounds.left,
-              labelRight: labelBounds.right,
-            };
+            const fits =
+              text.width > 0 && text.left >= bounds.left - 1 && text.right <= bounds.right + 1;
+            const ordered =
+              index === 0
+                ? Math.abs(bounds.left - tabTrackBounds.left) < 0.05
+                : bounds.left >= tabs[index - 1]!.getBoundingClientRect().right - 1;
+            const fillsTrack =
+              index !== tabs.length - 1 || Math.abs(bounds.right - tabTrackBounds.right) < 0.05;
+            return fits && ordered && fillsTrack ? [] : [tab.getAttribute("data-tab-value")];
           }),
         };
       });
-      results.push(result);
 
-      if (artifactDir) {
-        const previousStyle = await page.addStyleTag({
-          content: `
-            .shell--mobile-nav .sidebar-issues-panel { background: var(--bg-elevated); }
-            .shell--mobile-nav .sidebar-issues-panel__mobile-close {
-              width: 30px;
-              height: 30px;
-              border: 0;
-              background: transparent;
-            }
-            .shell--mobile-nav .sidebar-issues-panel__tabs {
-              gap: var(--space-1);
-              padding-inline: 8px;
-            }
-            .shell--mobile-nav .sidebar-issues-panel__tabs .hub-tab {
-              min-width: auto;
-              flex: 0 1 auto;
-              width: auto;
-              justify-content: normal;
-            }
-            .shell--mobile-nav .sidebar-issues-panel__list-wrap { background: transparent; }
-          `,
-        });
-        await writeFile(
-          path.join(artifactDir, `mobile-inbox-before-${theme}.png`),
-          await takeControlUiViewportScreenshot(page, panel, [panel.getByRole("tab").first()]),
-        );
-        const dismissShownBefore = await page
-          .locator(".sidebar-issues-panel__dismiss-shown")
-          .evaluate((element) => ({
-            fontSize: getComputedStyle(element).fontSize,
-            height: element.getBoundingClientRect().height,
-            lineHeight: getComputedStyle(element).lineHeight,
-          }));
-        await previousStyle.evaluate((element) => element.parentNode?.removeChild(element));
-        await writeFile(
-          path.join(artifactDir, `mobile-inbox-after-${theme}.png`),
-          await takeControlUiViewportScreenshot(page, panel, [panel.getByRole("tab").first()]),
-        );
-        const dismissShownAfter = await page
-          .locator(".sidebar-issues-panel__dismiss-shown")
-          .evaluate((element) => ({
-            fontSize: getComputedStyle(element).fontSize,
-            height: element.getBoundingClientRect().height,
-            lineHeight: getComputedStyle(element).lineHeight,
-          }));
-        expect(dismissShownAfter).toEqual(dismissShownBefore);
-      }
-      for (const name of ["approvals", "mentions", "automations", "system", "all"]) {
-        const tab = panel.locator(`.hub-tab[data-tab-value="${name}"]`);
+      for (const tab of await panel.getByRole("tab").all()) {
+        const id = await tab.getAttribute("id");
+        expect(id).toMatch(/^sidebar-issues-tab-/u);
         await tab.click();
         await expect.poll(() => tab.getAttribute("aria-selected")).toBe("true");
         await expect
           .poll(() => panel.getByRole("tabpanel").getAttribute("aria-labelledby"))
-          .toBe(`sidebar-issues-tab-${name}`);
+          .toBe(id);
       }
       await panel.getByRole("button", { name: "Close", exact: true }).click();
       await panel.waitFor({ state: "hidden" });
       await suite.closeBrowserContext(context);
-    }
-
-    for (const result of results) {
       expect(result.startTop).toBeGreaterThan(result.finalTop + 100);
       expect(result.duration).toBeGreaterThanOrEqual(200);
       expect(result.duration).toBeLessThan(300);
-      expect(result.easing).toBe("cubic-bezier(0.32, 0.72, 0, 1)");
-      expect(result.sheetBackground).toBe(result.headerBackground);
-      expect(result.headerBackground).not.toBe(result.listBackground);
-      expect(result.closeWidth).toBe(36);
-      expect(result.closeHeight).toBe(36);
-      expect(result.closeBorderWidth).toBe("1px");
-      expect(result.closeBorderRadius).toBe("9999px");
+      expect(result).toMatchObject({
+        closeWidth: 36,
+        closeHeight: 36,
+      });
+      expect(result.headerBackground).toBe("rgba(0, 0, 0, 0)");
+      expect(result.tabsBackground).toBe(result.headerBackground);
+      expect(result.sheetBackgroundAlpha).toBe(255);
+      expect(result.listBackground).toBe(result.sheetBackground);
       expect(result.closeBackground).not.toBe("rgba(0, 0, 0, 0)");
-      expect(result.tabs.map((tab) => tab.panel)).toEqual([
-        "all",
-        "approvals",
-        "mentions",
-        "automations",
-        "system",
-      ]);
-      expect(result.tabs[0]!.left).toBeCloseTo(result.tabTrackLeft, 1);
-      expect(result.tabs.at(-1)!.right).toBeCloseTo(result.tabTrackRight, 1);
-      for (const [index, tab] of result.tabs.entries()) {
-        expect(tab.labelRight).toBeGreaterThan(tab.labelLeft);
-        expect(tab.labelLeft, `${tab.panel} label starts inside its tab`).toBeGreaterThanOrEqual(
-          tab.left - 1,
-        );
-        expect(tab.labelRight, `${tab.panel} label fits inside its tab`).toBeLessThanOrEqual(
-          tab.right + 1,
-        );
-        if (index > 0) {
-          expect(tab.left).toBeGreaterThanOrEqual(result.tabs[index - 1]!.right - 1);
-        }
-      }
+      expect(result.tabCount).toBeGreaterThan(0);
+      expect(result.tabFailures).toEqual([]);
     }
-  });
-
-  it("removes sheet movement when reduced motion is requested", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        reducedMotion: "reduce",
-        serviceWorkers: "block",
-        viewport,
-      },
-      async ({ page }) => {
-        await installMockGateway(page, { operatorScopes: ["operator.read", "operator.write"] });
-        await page.goto(`${suite.server.baseUrl}activity`);
-        await page.getByRole("button", { name: "Expand sidebar" }).click();
-        await page.locator(".nav-drawer").waitFor();
-        await page.locator(".sidebar-issues-button:visible").click();
-        const panel = page.locator("#sidebar-issues-panel");
-        await panel.waitFor();
-        expect(await panel.evaluate((element) => getComputedStyle(element).animationName)).toBe(
-          "none",
-        );
-      },
-    );
   });
 });

@@ -12,6 +12,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const intervalMs = 15_000;
+const processSampleIntervalMs = 60_000;
 const maxOutputBytes = 4 * 1024 * 1024;
 const qualificationPhases = [
   "source-head",
@@ -27,6 +28,7 @@ const qualificationPhases = [
   "simulator-create",
   "simulator-boot",
   "simulator-ready",
+  "simulator-headroom",
   "simulator-slim",
   "simulator-delete",
   "fixture-server",
@@ -55,16 +57,15 @@ const phases = new Set([
   ...["iphone", "ipad", "watch", "all"].flatMap((device) =>
     [
       "build",
+      "host-idle",
+      "simulator-idle",
       "create",
       "boot",
       "shutdown",
       "delete",
       "status-bar",
       "watch-capture",
-      "capture-01-control-connected",
-      "capture-02-chat-connected",
-      "capture-03-agent-connected",
-      "capture-04-settings-connected",
+      "capture",
     ].map((operation) => `screenshot-${device}-${operation}`),
   ),
 ]);
@@ -78,6 +79,8 @@ const roles = new Set([
   "git",
   "xcodebuild",
   "XCBBuildService",
+  "SWBBuildService",
+  "DTServiceHub",
   "swift-frontend",
   "swift-driver",
   "swift",
@@ -106,6 +109,72 @@ const roles = new Set([
   "mds",
   "mds_stores",
   "mdworker_shared",
+  "CoreSpotlightService",
+  "spotlightknowledged",
+  "spotlightknowledged.updater",
+  "searchd",
+  "photoanalysisd",
+  "mediaanalysisd",
+  "assetsd",
+  "mobileassetd",
+  "UserEventAgent",
+  "configd_sim",
+  "ids_simd",
+  "cfprefsd",
+  "containermanagerd",
+  "containermanagerd_system",
+  "installd",
+  "installcoordinationd",
+  "lsd",
+  "notifyd",
+  "trustd",
+  "securityd",
+  "modelcatalogd",
+  "modelmanagerd",
+  "mlhostd",
+  "mlruntimed",
+  "intelligenceplatformd",
+  "intelligencecontextd",
+  "intelligenceflowd",
+  "intelligencetasksd",
+  "generativeexperiencesd",
+  "knowledgeconstructiond",
+  "assistantd",
+  "triald",
+  "axassetsd",
+  "managedassetsd",
+  "AssetCacheLocatorService",
+  "fileindexerd",
+  "biomed",
+  "biomesyncd",
+  "chronod",
+  "liveactivitiesd",
+  "systemsoundserver-simd",
+  "_iokitsimd",
+  "iokitsimd",
+  "xpcproxy_sim",
+  "launchd_sim_trampoline",
+  "tccd",
+  "diagnosticd",
+  "diagnosticextensionsd",
+  "ScreenTimeAgent",
+  "UsageTrackingAgent",
+  "familycircled",
+  "ReportCrash",
+  "osanalyticshelper",
+  "PerfPowerServices",
+  "PerfPowerServicesExtended",
+  "symptomsd",
+  "logd_helper",
+  "logd_reporter",
+  "MTLCompilerService",
+  "com.apple.WebKit.GPU",
+  "com.apple.WebKit.Networking",
+  "com.apple.WebKit.WebContent",
+  "dasd",
+  "nsurlsessiond",
+  "sharingd",
+  "swcd",
   "testmanagerd",
   "xctest",
   "OpenClaw",
@@ -138,7 +207,7 @@ function delta(current, previous) {
 }
 
 function processRows(output, previous, elapsedMs) {
-  return output.split("\n").flatMap((line) => {
+  const rows = output.split("\n").flatMap((line) => {
     const match = /^\s*(\d+)\s+(\d+)\s+([\d:.-]+)\s+(\d+)\s+([A-Za-z+<>=-]+)\s+(.+)$/u.exec(line);
     if (!match) {
       return [];
@@ -148,12 +217,38 @@ function processRows(output, previous, elapsedMs) {
     const cpuMs =
       (Number(day) * 86_400 + clock.split(":").reduce((s, n) => s * 60 + Number(n), 0)) * 1_000;
     const cpuDeltaMs = delta(cpuMs, previous.get(Number(pid)));
-    const basename = path.basename(command.trim());
+    const executable = command.trim();
+    const basename = path.basename(executable);
+    const origin =
+      (executable.startsWith("/Library/Developer/CoreSimulator/") ||
+        executable.startsWith(
+          "/private/var/run/com.apple.security.cryptexd/mnt/com.apple.iPhoneOS.SimulatorRuntime-",
+        ) ||
+        executable.startsWith(
+          "/private/var/run/com.apple.security.cryptexd/mnt/com.apple.watchOS.SimulatorRuntime-",
+        )) &&
+      executable.includes("/Contents/Resources/RuntimeRoot/")
+        ? "simulator-runtime"
+        : /^\/Applications\/Xcode(?:_[^/]+)?\.app\//u.test(executable)
+          ? "xcode"
+          : /^\/(?:System\/Library|usr\/(?:bin|sbin|libexec)|bin|sbin)\//u.test(executable)
+            ? "host-system"
+            : "other";
+    // Only installed Apple runtime system paths may contribute an otherwise unknown name.
+    // Device data, apps, and container paths retain the fixed-role privacy boundary.
+    const runtimeSystemPath =
+      /^(?:\/Library\/Developer\/CoreSimulator\/Volumes\/[^/]+|\/private\/var\/run\/com\.apple\.security\.cryptexd\/mnt\/com\.apple\.(?:iPhoneOS|watchOS)\.SimulatorRuntime-[^/]+)\/Library\/Developer\/CoreSimulator\/Profiles\/Runtimes\/[^/]+\.simruntime\/Contents\/Resources\/RuntimeRoot\/(?:System\/Library|usr\/(?:bin|sbin|libexec))\//u.test(
+        executable,
+      ) && path.posix.normalize(executable) === executable;
+    const publicRuntimeName =
+      runtimeSystemPath && /^[A-Za-z][A-Za-z0-9_.+-]{0,95}$/u.test(basename);
     return [
       {
         pid: Number(pid),
         parentPid: Number(ppid),
-        role: roles.has(basename) ? basename : "other",
+        role: roles.has(basename) || publicRuntimeName ? basename : "other",
+        origin,
+        parentRole: "other",
         state,
         rssBytes: Number(rss) * 1024,
         cpuMs,
@@ -163,6 +258,38 @@ function processRows(output, previous, elapsedMs) {
       },
     ];
   });
+  const byPid = new Map(rows.map((row) => [row.pid, row]));
+  for (const row of rows) {
+    row.parentRole = byPid.get(row.parentPid)?.role ?? "other";
+  }
+  return rows;
+}
+
+function processSummary(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = `${row.origin}:${row.role}`;
+    const group = groups.get(key) ?? {
+      origin: row.origin,
+      role: row.role,
+      count: 0,
+      cpuObservedCount: 0,
+      cpuDeltaMs: 0,
+    };
+    group.count += 1;
+    if (row.cpuDeltaMs !== null) {
+      group.cpuObservedCount += 1;
+      group.cpuDeltaMs += row.cpuDeltaMs;
+    }
+    groups.set(key, group);
+  }
+  return {
+    count: rows.length,
+    runnableCount: rows.filter((row) => row.state.startsWith("R")).length,
+    uninterruptibleCount: rows.filter((row) => row.state.startsWith("U")).length,
+    // All observed rows contribute, including those outside the top-process display.
+    groups: [...groups.values()].toSorted((a, b) => b.cpuDeltaMs - a.cpuDeltaMs),
+  };
 }
 
 function memory(output) {
@@ -237,6 +364,8 @@ function startTimeline(output) {
     previousDisks = new Map();
   let previousAt = started;
   let previousProcessAt = started;
+  let nextProcessAt = started;
+  let processSamplingStopped = false;
   const phase = () => {
     try {
       const value = readFileSync(phaseFile, "utf8").trim();
@@ -316,10 +445,24 @@ function startTimeline(output) {
     const vm = memory(await probe("/usr/bin/vm_stat"));
     const pressure = await probe("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]);
     const diskRows = disks(await probe("/usr/sbin/iostat", ["-Id"]));
-    const processOutput = await probe("/bin/ps", ["-axo", "pid=,ppid=,time=,rss=,state=,comm="]);
-    // Earlier probes can stall independently of the interval between process CPU observations.
-    const processAt = performance.now();
-    const rows = processRows(processOutput, previousProcesses, processAt - previousProcessAt);
+    let rows = [];
+    let processIntervalMs = null;
+    if (processSamplingStopped) {
+      probeStatus.ps = { wallMs: 0, outcome: "disabled-after-timeout" };
+    } else if (performance.now() < nextProcessAt) {
+      probeStatus.ps = { wallMs: 0, outcome: "not-due" };
+    } else {
+      const processOutput = await probe("/bin/ps", ["-axo", "pid=,ppid=,time=,rss=,state=,comm="]);
+      // Intentional skips retain the CPU baseline; earlier probes may delay the next observation.
+      const processAt = performance.now();
+      processIntervalMs = previousProcesses.size ? Math.round(processAt - previousProcessAt) : null;
+      rows = processRows(processOutput, previousProcesses, processAt - previousProcessAt);
+      previousProcessAt = processAt;
+      previousProcesses = new Map(rows.map((row) => [row.pid, row.cpuMs]));
+      nextProcessAt = processAt + processSampleIntervalMs;
+      // Under contention, ps termination can itself stall. Do not keep adding process scans.
+      processSamplingStopped = probeStatus.ps?.outcome === "timeout";
+    }
     if (!active) {
       return;
     }
@@ -340,6 +483,7 @@ function startTimeline(output) {
       phase: phase(),
       intervalMs: samples === 1 ? null : Math.round(at - previousAt),
       sampleWallMs: Math.round(performance.now() - at),
+      processIntervalMs,
       probes: probeStatus,
       host: {
         cpuPercent:
@@ -374,14 +518,13 @@ function startTimeline(output) {
         })),
       },
       processes: selected,
+      processSummary: probeStatus.ps?.outcome === "ok" ? processSummary(rows) : null,
       collector: overhead(),
     });
     previousAt = at;
-    previousProcessAt = processAt;
     previousCpu = cpu;
     previousMemory = vm;
     previousDisks = new Map(diskRows.map((disk) => [disk.device, disk]));
-    previousProcesses = new Map(rows.map((row) => [row.pid, row.cpuMs]));
     // Delayed collection skips missed slots; there is never a catch-up queue.
     if (active) {
       timer = setTimeout(collect, intervalMs);
@@ -397,6 +540,7 @@ function startTimeline(output) {
     type: "start",
     at: new Date().toISOString(),
     intervalMs,
+    processSampleIntervalMs,
     maxOutputBytes,
     cpuCount: os.availableParallelism(),
     totalMemoryBytes: os.totalmem(),

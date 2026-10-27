@@ -1,24 +1,26 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type {
-  ControlUiSessionBranch,
-  ControlUiSessionPullRequest,
-  ControlUiSessionPullRequestSnapshot,
+import { projectCatalogItemForDisplay } from "../../../../src/chat/session-catalog-display.js";
+import {
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  type ControlUiSessionBranch,
+  type ControlUiSessionPullRequest,
+  type ControlUiSessionPullRequestSnapshot,
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { collectUnreadHiddenRunRows } from "../../components/app-sidebar-session-parent.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { clampText } from "../../lib/format.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   summarizeSessionPullRequests,
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
   sessionGitHubRepository,
 } from "../../lib/session-pull-requests.ts";
@@ -27,18 +29,13 @@ import {
   parseCatalogSessionKey,
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
-import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { getAcceptedChatHistorySession } from "./chat-history-state.ts";
-import {
-  CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS,
-  catalogRawResult,
-  catalogRawString,
-} from "./chat-pane-shared.ts";
 import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -51,6 +48,8 @@ import {
 } from "./components/chat-pull-requests.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { scheduleChatScroll } from "./scroll.ts";
+
+registerChatSessionEnglish();
 
 const NO_PULL_REQUESTS: ControlUiSessionPullRequest[] = [];
 
@@ -72,14 +71,11 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   protected get sessionPullRequestsBranch(): ControlUiSessionBranch | undefined {
     return this.readPullRequestSnapshot()?.branch;
   }
-  protected get githubRepo() {
-    return sessionGitHubRepository(this.readPullRequestSnapshot());
-  }
   protected get sessionPullRequestsStatus(): ControlUiSessionPullRequestSnapshot["status"] {
     return this.readPullRequestSnapshot()?.status ?? "ready";
   }
 
-  private deferredSessionHydration: { resume?: () => void } | null = null;
+  deferredSessionHydration: { resume?: () => void } | null = null;
   /** Hidden-run acknowledgements in flight or sent, keyed by run and activity revision. */
   private readonly hiddenRunReadRequests = new Map<
     string,
@@ -197,7 +193,12 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     ) {
       this.repository.dismissedIds = dismissed;
     }
-    if (!result.rateLimited || result.pullRequests.length > 0 || repositoryChanged) {
+    if (
+      result.discardPrevious ||
+      !result.rateLimited ||
+      result.pullRequests.length > 0 ||
+      repositoryChanged
+    ) {
       const previousSummary = scope.context.sessions.pullRequestSummary(sessionKey);
       scope.context.sessions.setPullRequestSummary(
         sessionKey,
@@ -284,6 +285,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         retireIfCurrent();
         return;
       }
+      if (historyCommitted) {
+        this.cacheSessionReactions();
+      }
       if (!this.presented || document.visibilityState === "hidden") {
         hydration.resume = () => scheduleHydration(historyCommitted);
         return;
@@ -294,6 +298,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       scheduleControlUiAfterPaint(state, () => {
         if (isCurrent() && this.presented && document.visibilityState !== "hidden") {
           this.deferredSessionHydration = null;
+          this.syncSessionReactions();
           void this.refreshTaskSuggestions({ automatic: true });
           if (historyCommitted) {
             this.markSessionRead(selectedChatSessionRow(state));
@@ -331,7 +336,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
 
   protected markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
-    if (!state?.connected || !row || !isGatewayAvailable(this.context.gateway.snapshot)) {
+    if (!state || !row || !this.secondarySessionReadsReady()) {
       return;
     }
     const failureAt = row.endedAt ?? row.updatedAt ?? 0;
@@ -378,6 +383,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     guard: SessionUnreadPatchGuard,
     agentId: string | undefined,
   ) {
+    const state = this.state;
+    const sessionKey = state?.sessionKey;
     const settle = guard.settlePatch();
     void this.context.sessions
       .patch(
@@ -386,7 +393,17 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         { agentId, expectedMarkedUnreadAt: row.markedUnreadAt ?? null },
       )
       .then(
-        (result) => settle(result !== null),
+        (result) => {
+          if (
+            settle(result !== null) &&
+            result !== null &&
+            state &&
+            this.state === state &&
+            state.sessionKey === sessionKey
+          ) {
+            this.markSessionRead(selectedChatSessionRow(state));
+          }
+        },
         (error: unknown) => settle(false, error),
       );
   }
@@ -491,17 +508,21 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   }
 
   protected catalogItemMessage(item: SessionCatalogTranscriptItem): Record<string, unknown> | null {
-    const timestamp = parseDateStringTimestampMs(item.timestamp) ?? null;
-    const text = item.text?.trim() ? item.text : null;
-    if (item.type === "userMessage") {
-      return text
+    const timestamp = parseDateStringTimestampMs(item.timestamp);
+    const message = projectCatalogItemForDisplay(item);
+    if (!message) {
+      return null;
+    }
+    return {
+      ...message,
+      ...(timestamp == null ? {} : { timestamp }),
+      ...(item.type === "userMessage"
         ? {
-            role: "user",
-            // Missing source attribution must never fall back to the current viewer.
             senderLabel: item.sender?.label ?? t("sessionsView.user"),
             ...(item.sender
               ? {
                   __openclaw: {
+                    ...asOptionalRecord(message["__openclaw"]),
                     senderIdentity: item.sender.identity,
                     senderId: item.sender.identity.id,
                     senderName: item.sender.label,
@@ -509,39 +530,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
                   },
                 }
               : {}),
-            content: text,
-            ...(timestamp == null ? {} : { timestamp }),
-            messageId: item.id,
           }
-        : null;
-    }
-    let content = text;
-    let truncated = item.truncated;
-    if (item.type === "reasoning") {
-      content = text ? `Thinking\n\n${text}` : "Thinking";
-    } else if (item.type === "toolCall") {
-      const label =
-        text ?? catalogRawString(item.raw, ["command", "name", "tool", "title", "query"]);
-      content = label ? `Tool call\n\n${label}` : "Tool call";
-    } else if (item.type === "toolResult") {
-      const output =
-        text ?? catalogRawString(item.raw, ["aggregatedOutput"]) ?? catalogRawResult(item.raw);
-      // Native text and raw fallbacks share the same display limit; source data stays intact.
-      const preview = output ? clampText(output, CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS) : null;
-      truncated ||= Boolean(output && preview !== output);
-      content = preview ? `Tool result\n\n${preview}` : "Tool result";
-    }
-    if (!content) {
-      return null;
-    }
-    if (truncated) {
-      content = `${content}\n\n${t("chat.catalogOutputTruncated")}`;
-    }
-    return {
-      role: "assistant",
-      content: [{ type: "text", text: content }],
-      ...(timestamp == null ? {} : { timestamp }),
-      messageId: item.id,
+        : {}),
     };
   }
 

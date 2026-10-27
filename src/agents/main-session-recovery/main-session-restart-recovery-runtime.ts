@@ -12,7 +12,10 @@ import {
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
+  isGatewayRestartDrainError,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import type { CommandLane } from "../../process/lanes.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import {
@@ -29,6 +32,7 @@ import {
   restartRecoveryStoreTargetKey,
   type MainSessionRecoverySkipReason,
 } from "./main-session-restart-recovery-diagnostics.js";
+import type { RecoveryCounts } from "./main-session-restart-recovery-dispatch.js";
 import {
   loadExpectedRestartRecoveryTarget,
   prepareExpectedRestartRecoveryCurrent,
@@ -44,8 +48,6 @@ import {
   discoverRestartRecoveryStoreTargets,
 } from "./main-session-restart-recovery-shared.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
-
-type RecoveryCounts = { started: number; settled: number; failed: number; skipped: number };
 
 function prepareRestartRecovery(gatewayRuntime: GatewayRecoveryRuntime, signal?: AbortSignal) {
   return gatewayRuntime.prepareRestartRecovery(signal)?.then((pausedUntilMs) => {
@@ -151,25 +153,51 @@ export async function recoverRestartAbortedMainSessions(params: {
       a.storePath.localeCompare(b.storePath) ||
       a.sessionKey.localeCompare(b.sessionKey),
   );
-  for (const candidate of candidates) {
-    if (params.shouldContinue?.() === false) {
-      break;
+  let dispatchTail = Promise.resolve();
+  let dispatchFailure: { error: unknown } | undefined;
+  try {
+    for (const candidate of candidates) {
+      if (params.shouldContinue?.() === false) {
+        break;
+      }
+      const storeResult = await recoverStore({
+        ...params,
+        passId,
+        onDispatch: (dispatch) => {
+          // One FIFO pump preserves admission order and attempt accounting.
+          // Its capacity/start wait must not block the reconciliation scan.
+          dispatchTail = dispatchTail.then(async () => {
+            try {
+              const dispatched = await dispatch();
+              result.started += dispatched.started;
+              result.settled += dispatched.settled;
+              result.failed += dispatched.failed;
+              result.skipped += dispatched.skipped;
+            } catch (error) {
+              dispatchFailure ??= { error };
+            }
+          });
+        },
+        storePath: candidate.storePath,
+        storeAgentId: candidate.storeAgentId,
+        preparedEntries: [candidate],
+        handledSessionKeys,
+        onSkipped: (reason) => {
+          skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);
+        },
+      });
+      result.started += storeResult.started;
+      result.settled += storeResult.settled;
+      result.failed += storeResult.failed;
+      result.skipped += storeResult.skipped;
     }
-    const storeResult = await recoverStore({
-      ...params,
-      passId,
-      storePath: candidate.storePath,
-      storeAgentId: candidate.storeAgentId,
-      preparedEntries: [candidate],
-      handledSessionKeys,
-      onSkipped: (reason) => {
-        skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);
-      },
-    });
-    result.started += storeResult.started;
-    result.settled += storeResult.settled;
-    result.failed += storeResult.failed;
-    result.skipped += storeResult.skipped;
+  } finally {
+    // Stop joins queued dispatches too, releasing their retained sources without
+    // retiring the durable claims that the next Gateway must recover.
+    await dispatchTail;
+  }
+  if (dispatchFailure) {
+    throw dispatchFailure.error;
   }
 
   if (result.started > 0 || result.settled > 0 || result.failed > 0 || result.skipped > 0) {
@@ -313,7 +341,7 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(
       return false;
     },
     onError: (error, finalAttempt) => {
-      if (finalAttempt) {
+      if (finalAttempt && !isGatewayRestartDrainError(error)) {
         mainSessionRecoveryLog.warn(`main-session owner-release recovery failed: ${String(error)}`);
       }
     },
@@ -321,7 +349,6 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(
 }
 
 export function scheduleRestartAbortedMainSessionRecovery(params: {
-  delayMs?: number;
   getConfig: () => OpenClawConfig;
   maxRetries?: number;
   shouldContinue?: () => boolean;
@@ -475,9 +502,11 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
         ) {
           return;
         }
-        mainSessionRecoveryLog.warn(
-          `main-session exhaustion reconciliation failed: ${String(error)}`,
-        );
+        if (!isGatewayRestartDrainError(error)) {
+          mainSessionRecoveryLog.warn(
+            `main-session exhaustion reconciliation failed: ${String(error)}`,
+          );
+        }
       }
     }
   };
@@ -487,7 +516,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       await Promise.race([params.waitForStart(), waitForAbortSignal(abortController.signal)]);
     }
     await runRecoveryRetries({
-      initialDelayMs: params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS,
+      initialDelayMs: 0,
       maxRetries: Math.max(1, params.maxRetries ?? MAX_RECOVERY_RETRIES),
       shouldContinue,
       signal: abortController.signal,
@@ -512,11 +541,13 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
         return true;
       },
       onError: async (err, finalAttempt) => {
+        if (!isGatewayRestartDrainError(err)) {
+          mainSessionRecoveryLog.warn(
+            `main-session restart recovery ${finalAttempt ? "gave up" : "failed"}: ${String(err)}`,
+          );
+        }
         if (finalAttempt) {
-          mainSessionRecoveryLog.warn(`main-session restart recovery gave up: ${String(err)}`);
           await reconcileExhaustedTargets(exhaustedTargets.values());
-        } else {
-          mainSessionRecoveryLog.warn(`main-session restart recovery failed: ${String(err)}`);
         }
       },
     });
@@ -577,7 +608,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
         return result.failed === 0;
       },
       onError: (error, finalAttempt) => {
-        if (finalAttempt) {
+        if (finalAttempt && !isGatewayRestartDrainError(error)) {
           mainSessionRecoveryLog.warn(`main-session preparation recovery failed: ${String(error)}`);
         }
       },

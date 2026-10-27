@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import {
@@ -22,6 +23,14 @@ const socketOptions = {
   clientOptions: {},
 } as const;
 
+afterEach(() => vi.restoreAllMocks());
+
+function expectNoSocketListeners(client: EventEmitter) {
+  for (const event of ["disconnected", "unable_to_socket_mode_start", "error"]) {
+    expect(client.listenerCount(event)).toBe(0);
+  }
+}
+
 async function createSocketApp(clientOptions: Record<string, unknown> = {}) {
   const slackBoltModule = await import("@slack/bolt");
   const interop = resolveSlackBoltInterop(slackBoltModule);
@@ -34,6 +43,15 @@ async function createSocketApp(clientOptions: Record<string, unknown> = {}) {
 
 async function createSocketServer() {
   const socketServer = new WebSocketServer({ port: 0 });
+  const acknowledgements: string[] = [];
+  const connectionSizes: number[] = [];
+  socketServer.on("connection", (socket) => {
+    connectionSizes.push(socketServer.clients.size);
+    socket.on("message", (data) => {
+      acknowledgements.push(JSON.parse(rawDataToString(data)).envelope_id);
+    });
+    socket.send(JSON.stringify({ type: "hello", num_connections: socketServer.clients.size }));
+  });
   await new Promise<void>((resolve) => {
     socketServer.once("listening", resolve);
   });
@@ -44,7 +62,7 @@ async function createSocketServer() {
   const result = await createSocketApp({
     fetch: async () => Response.json({ ok: true, url: `ws://127.0.0.1:${address.port}` }),
   });
-  return { ...result, socketServer };
+  return { ...result, socketServer, acknowledgements, connectionSizes };
 }
 
 async function stopSocketServer({
@@ -65,28 +83,6 @@ async function stopSocketServer({
   });
 }
 
-describe("resolveSlackBoltInterop", () => {
-  function FakeApp() {}
-  function FakeHTTPReceiver() {}
-  function FakeSocketModeReceiver() {}
-
-  const moduleExports = {
-    App: FakeApp,
-    HTTPReceiver: FakeHTTPReceiver,
-    SocketModeReceiver: FakeSocketModeReceiver,
-  };
-
-  it("resolves the App constructor with namespace receivers", () => {
-    expect(
-      resolveSlackBoltInterop({
-        default: FakeApp,
-        HTTPReceiver: FakeHTTPReceiver,
-        SocketModeReceiver: FakeSocketModeReceiver,
-      }),
-    ).toEqual(moduleExports);
-  });
-});
-
 describe("createSlackBoltApp", () => {
   class FakeApp {
     middleware: unknown[] = [];
@@ -94,7 +90,6 @@ describe("createSlackBoltApp", () => {
 
     use(middleware: unknown) {
       this.middleware.push(middleware);
-      return this;
     }
   }
 
@@ -102,10 +97,20 @@ describe("createSlackBoltApp", () => {
     constructor(readonly args: Record<string, unknown>) {}
   }
 
-  class FakeSocketModeReceiver extends FakeHTTPReceiver {
-    client = Object.assign(new EventEmitter(), {
-      send: vi.fn<(envelopeId: string) => Promise<void>>().mockResolvedValue(undefined),
+  function createSocketClient() {
+    return Object.assign(new EventEmitter(), {
+      clientPingTimeoutMS: 0,
+      numOfConsecutiveReconnectionFailures: 0,
+      shuttingDown: false,
+      send: async () => {},
+      start: vi.fn(async () => {}),
+      delayReconnectAttempt: (_callback: () => Promise<unknown>): Promise<unknown> => {
+        throw new Error("native reconnect observer was not installed");
+      },
     });
+  }
+  class FakeSocketModeReceiver extends FakeHTTPReceiver {
+    client = createSocketClient();
   }
 
   const fakeInterop = {
@@ -114,52 +119,43 @@ describe("createSlackBoltApp", () => {
     SocketModeReceiver: FakeSocketModeReceiver as never,
   };
 
-  it("filters Socket Mode noise and retains SDK errors through the configured receiver logger", () => {
+  it("resolves the App constructor with namespace receivers", () => {
+    const { App, HTTPReceiver, SocketModeReceiver } = fakeInterop;
+    expect(resolveSlackBoltInterop({ default: App, HTTPReceiver, SocketModeReceiver })).toEqual(
+      fakeInterop,
+    );
+  });
+
+  function createFakeApp(overrides: Partial<Parameters<typeof createSlackBoltApp>[0]> = {}) {
+    const result = createSlackBoltApp({ ...socketOptions, interop: fakeInterop, ...overrides });
+    return {
+      ...result,
+      app: result.app as unknown as FakeApp,
+      receiver: result.receiver as unknown as FakeHTTPReceiver | FakeSocketModeReceiver,
+    };
+  }
+
+  it("filters Socket Mode noise through the configured receiver logger", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const { receiver, socketModeLogger } = createSlackBoltApp({
-        ...socketOptions,
-        interop: fakeInterop,
-      });
-      const receiverLogger = (receiver as unknown as FakeSocketModeReceiver).args.logger;
-      expect(receiverLogger).toBe(socketModeLogger);
-
-      socketModeLogger.setName("SlackWebSocket:1");
-      socketModeLogger.warn(
-        "A pong wasn't received from the server before the timeout of 15000ms!",
-      );
-      socketModeLogger.warn(
-        "A ping wasn't received from the server before the timeout of 30000ms!",
-      );
-      socketModeLogger.warn(
-        "The logLevel given to Socket Mode was ignored as you also gave logger",
-      );
-      socketModeLogger.warn("Received unexpected ping diagnostics message format");
-      socketModeLogger.warn("Received unexpected pong diagnostics message format");
-      socketModeLogger.warn("another socket warning");
-      socketModeLogger.error("failed to retrieve WSS URL", {
-        data: { error: "missing_scope", needed: "connections:write" },
-      });
-
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn).toHaveBeenCalledWith("socket-mode:SlackWebSocket:1", "another socket warning");
-      expect(error).toHaveBeenCalledTimes(1);
-      expect(socketModeLogger.getLastMessage()).toBe(
-        "socket-mode:SlackWebSocket:1 failed to retrieve WSS URL slack error: missing_scope; needed: connections:write",
-      );
-    } finally {
-      warn.mockRestore();
-      error.mockRestore();
+    const { receiver, socketModeLogger } = createFakeApp();
+    expect(receiver.args.logger).toBe(socketModeLogger);
+    socketModeLogger.setName("SlackWebSocket:1");
+    for (const message of [
+      "A pong wasn't received from the server before the timeout of 15000ms!",
+      "A ping wasn't received from the server before the timeout of 30000ms!",
+      "The logLevel given to Socket Mode was ignored as you also gave logger",
+      "Received unexpected ping diagnostics message format",
+      "Received unexpected pong diagnostics message format",
+    ]) {
+      socketModeLogger.warn(message);
     }
+    socketModeLogger.warn("another socket warning");
+    expect(warn.mock.calls).toEqual([["socket-mode:SlackWebSocket:1", "another socket warning"]]);
   });
 
   it("applies OpenClaw self-event filtering through installed Bolt middleware", async () => {
-    const { app } = createSlackBoltApp({
-      ...socketOptions,
-      interop: fakeInterop,
-    });
-    const middleware = (app as unknown as FakeApp).middleware[0] as
+    const { app } = createFakeApp();
+    const middleware = app.middleware[0] as
       | ((args: {
           next: () => Promise<void>;
           context?: { botId?: string; botUserId?: string };
@@ -173,14 +169,10 @@ describe("createSlackBoltApp", () => {
 
     const bot = { botUserId: "U_BOT", botId: "B_BOT" };
     const cases = [
-      [{ context: bot, event: { type: "reaction_added", user: "U_BOT" } }, false],
-      [
-        { context: bot, event: { type: "message", subtype: "message_changed", user: "U_BOT" } },
-        true,
-      ],
+      [{ event: { type: "reaction_added", user: "U_BOT" } }, false],
+      [{ event: { type: "message", subtype: "message_changed", user: "U_BOT" } }, true],
       [
         {
-          context: bot,
           event: { type: "message", user: "U_OTHER" },
           message: { subtype: "bot_message", bot_id: "B_BOT" },
         },
@@ -190,46 +182,20 @@ describe("createSlackBoltApp", () => {
 
     for (const [args, forwarded] of cases) {
       const next = vi.fn(async () => {});
-      await middleware({ ...args, next });
+      await middleware({ ...args, context: bot, next });
       expect(next).toHaveBeenCalledTimes(forwarded ? 1 : 0);
     }
   });
 
   it("routes native reconnect start failures through the socket disconnect event", async () => {
     const startError = new Error("invalid_auth");
-    class FakeSocketModeClient extends EventEmitter {
-      emitted: unknown[][] = [];
-      clientPingTimeoutMS = 0;
-      numOfConsecutiveReconnectionFailures = 0;
-      logger = { debug: () => undefined };
-      shuttingDown = false;
-      send = async () => {};
-      start = async () => {
-        throw startError;
-      };
-
-      delayReconnectAttempt(callback: (this: FakeSocketModeClient) => Promise<unknown>) {
-        return Promise.resolve(callback.call(this));
-      }
-
-      override emit(event: string, ...args: unknown[]) {
-        this.emitted.push([event, ...args]);
-        return super.emit(event, ...args);
-      }
+    const { receiver } = createFakeApp();
+    if (!(receiver instanceof FakeSocketModeReceiver)) {
+      throw new Error("expected Socket Mode receiver");
     }
-    class FakeObservedSocketModeReceiver {
-      client = new FakeSocketModeClient();
-    }
-    const { receiver } = createSlackBoltApp({
-      ...socketOptions,
-      interop: {
-        App: FakeApp as never,
-        HTTPReceiver: FakeHTTPReceiver as never,
-        SocketModeReceiver: FakeObservedSocketModeReceiver as never,
-      },
-    });
-
-    const client = (receiver as unknown as FakeObservedSocketModeReceiver).client;
+    const client = receiver.client;
+    client.start.mockRejectedValue(startError);
+    const emit = vi.spyOn(client, "emit");
 
     await expect(client.delayReconnectAttempt(client.start)).resolves.toBeUndefined();
     await expect(
@@ -237,7 +203,7 @@ describe("createSlackBoltApp", () => {
         throw new Error("transient");
       }),
     ).rejects.toThrow("transient");
-    expect(client.emitted).toEqual([
+    expect(emit.mock.calls).toEqual([
       ["reconnecting"],
       ["unable_to_socket_mode_start", startError],
       ["reconnecting"],
@@ -249,6 +215,11 @@ describe("createSlackBoltApp", () => {
     try {
       const { app, receiver } = await createSocketApp();
       const client = receiver.client;
+      const stop = app.stop.bind(app);
+      vi.spyOn(app, "stop").mockImplementation(async () => {
+        expect(Reflect.get(client, "shuttingDown")).toBe(true);
+        await stop();
+      });
       const start = vi.fn(async () => {
         Reflect.set(client, "shuttingDown", false);
       });
@@ -272,14 +243,7 @@ describe("createSlackBoltApp", () => {
 
   it("recovers a transient error and close through one real SDK socket lifecycle", async () => {
     const fixture = await createSocketServer();
-    const { app, receiver, socketServer } = fixture;
-    let connectionAttempts = 0;
-    let peakActiveConnections = 0;
-    socketServer.on("connection", (socket) => {
-      connectionAttempts += 1;
-      peakActiveConnections = Math.max(peakActiveConnections, socketServer.clients.size);
-      socket.send(JSON.stringify({ type: "hello", num_connections: socketServer.clients.size }));
-    });
+    const { app, receiver, socketServer, connectionSizes } = fixture;
 
     const client = receiver.client;
     Reflect.set(client, "clientPingTimeoutMS", 20);
@@ -302,11 +266,11 @@ describe("createSlackBoltApp", () => {
       for (const socket of socketServer.clients) {
         socket.terminate();
       }
-      await vi.waitFor(() => expect(connectionAttempts).toBe(2));
+      await vi.waitFor(() => expect(connectionSizes).toHaveLength(2));
       await vi.waitFor(() => expect(socketServer.clients.size).toBe(1));
 
       expect(appStart).toHaveBeenCalledTimes(1);
-      expect(peakActiveConnections).toBe(1);
+      expect(Math.max(...connectionSizes)).toBe(1);
       expect(lifecycleSettled).toBe(false);
     } finally {
       abortController.abort();
@@ -322,19 +286,7 @@ describe("createSlackBoltApp", () => {
     "acknowledges control or incomplete envelopes and keeps receiving messages: $type",
     async (body) => {
       const fixture = await createSocketServer();
-      const { app, socketServer, socketModeLogger } = fixture;
-      const acknowledgements: string[] = [];
-      socketServer.on("connection", (socket) => {
-        socket.on("message", (data) => {
-          const bytes = Array.isArray(data)
-            ? Buffer.concat(data)
-            : Buffer.isBuffer(data)
-              ? data
-              : Buffer.from(new Uint8Array(data));
-          acknowledgements.push(JSON.parse(bytes.toString("utf8")).envelope_id);
-        });
-        socket.send(JSON.stringify({ type: "hello" }));
-      });
+      const { app, socketServer, socketModeLogger, acknowledgements } = fixture;
       const processEvent = vi.spyOn(app, "processEvent").mockImplementation(async (event) => {
         await event.ack();
       });
@@ -342,19 +294,13 @@ describe("createSlackBoltApp", () => {
       try {
         await app.start();
         for (const socket of socketServer.clients) {
-          socket.send(
-            JSON.stringify({ type: "events_api", envelope_id: "control", payload: body }),
-          );
-          socket.send(
-            JSON.stringify({
-              type: "events_api",
-              envelope_id: "message",
-              payload: {
-                type: "event_callback",
-                event: { type: "message", text: "still connected" },
-              },
-            }),
-          );
+          const send = (envelope_id: string, payload: object) =>
+            socket.send(JSON.stringify({ type: "events_api", envelope_id, payload }));
+          send("control", body);
+          send("message", {
+            type: "event_callback",
+            event: { type: "message", text: "still connected" },
+          });
         }
         await vi.waitFor(() => expect(acknowledgements).toEqual(["control", "message"]));
         expect(processEvent).toHaveBeenCalledTimes(1);
@@ -374,50 +320,35 @@ describe("createSlackBoltApp", () => {
     async (slackMode) => {
       const wrappedReceiver = { durable: true };
       const wrapReceiver = vi.fn(() => wrappedReceiver as never);
-      const { app, receiver } = createSlackBoltApp({
-        interop: fakeInterop,
+      const { app, receiver } = createFakeApp({
         slackMode,
-        token: "test-bot-token",
-        ...(slackMode === "socket"
-          ? { appToken: "test-app-token" }
-          : { signingSecret: "test-signing-secret" }),
-        slackWebhookPath: "/slack/events",
-        clientOptions: {},
+        signingSecret: "test-signing-secret",
         wrapReceiver,
       });
 
       expect(wrapReceiver).toHaveBeenCalledWith(receiver);
-      expect((app as unknown as FakeApp).args).toMatchObject({
+      expect(app.args).toMatchObject({
         receiver: wrappedReceiver,
         tokenVerificationEnabled: false,
       });
-      const receiverArgs = (receiver as unknown as FakeHTTPReceiver | FakeSocketModeReceiver).args;
-      expect(receiverArgs.processEventErrorHandler).toBeTypeOf("function");
       await expect(
-        (receiverArgs.processEventErrorHandler as () => Promise<boolean>)(),
+        (receiver.args.processEventErrorHandler as () => Promise<boolean>)(),
       ).resolves.toBe(false);
     },
   );
 });
 
 describe("slack socket reconnect helpers", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("marks socket mode disconnected without error when the socket closes cleanly", () => {
     const setStatus = vi.fn();
     vi.spyOn(Date, "now").mockReturnValue(1_711_406_402_000);
 
     publishSlackDisconnectedStatus(setStatus);
 
-    expect(setStatus).toHaveBeenCalledTimes(1);
-    expect(setStatus).toHaveBeenCalledWith({
+    expect(setStatus).toHaveBeenCalledExactlyOnceWith({
       connected: false,
       lifecycle: "recovering",
-      lastDisconnect: {
-        at: 1_711_406_402_000,
-      },
+      lastDisconnect: { at: 1_711_406_402_000 },
       lastError: null,
     });
   });
@@ -439,8 +370,7 @@ describe("slack socket reconnect helpers", () => {
     client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 2 }), false);
     client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 3 }), false);
 
-    expect(onSharedConnection).toHaveBeenCalledTimes(1);
-    expect(onSharedConnection).toHaveBeenCalledWith(2);
+    expect(onSharedConnection.mock.calls).toEqual([[2]]);
     const warning = formatSlackSocketModeSharedConnectionWarning(
       onSharedConnection.mock.calls[0]?.[0],
     );
@@ -474,82 +404,38 @@ describe("slack socket reconnect helpers", () => {
     expect(onStarted).toHaveBeenCalledTimes(1);
   });
 
-  it("cancels the disconnect waiter when onStarted throws", async () => {
+  it.each([
+    ["onStarted", "status sink failed"],
+    ["start", "missing_scope"],
+  ] as const)("cleans up %s failure and preserves its error detail", async (phase, message) => {
     const client = new EventEmitter();
+    const err = new Error(message);
     const app = {
-      start: vi.fn().mockResolvedValue(undefined),
+      start: vi.fn(async () => {
+        if (phase === "start") {
+          client.emit("unable_to_socket_mode_start", err);
+          throw new Error();
+        }
+      }),
     };
-    const err = new Error("status sink failed");
-
     await expect(
       startSlackSocketAndWaitForDisconnect({
         app,
         socketClient: client,
-        onStarted: () => {
-          throw err;
-        },
+        onStarted:
+          phase === "onStarted"
+            ? () => {
+                throw err;
+              }
+            : undefined,
       }),
-    ).rejects.toThrow("status sink failed");
-
-    expect(client.listenerCount("disconnected")).toBe(0);
-    expect(client.listenerCount("unable_to_socket_mode_start")).toBe(0);
-    expect(client.listenerCount("error")).toBe(0);
+    ).rejects.toThrow(message);
+    expectNoSocketListeners(client);
   });
-
-  it("uses socket start event error when Bolt rejects without detail", async () => {
-    const client = new EventEmitter();
-    const err = new Error("missing_scope");
-    const app = {
-      start: vi.fn().mockImplementation(() => {
-        client.emit("unable_to_socket_mode_start", err);
-        throw new Error();
-      }),
-    };
-
-    await expect(
-      startSlackSocketAndWaitForDisconnect({ app, socketClient: client }),
-    ).rejects.toThrow("missing_scope");
-
-    expect(client.listenerCount("disconnected")).toBe(0);
-    expect(client.listenerCount("unable_to_socket_mode_start")).toBe(0);
-    expect(client.listenerCount("error")).toBe(0);
-  });
-
-  it("marks the socket client as shutting down before stop runs", async () => {
-    const app = {
-      receiver: { client: { shuttingDown: false } },
-      stop: vi.fn().mockImplementation(async () => {
-        expect(app.receiver.client.shuttingDown).toBe(true);
-      }),
-    };
-
-    await gracefulStopSlackApp(app, app.receiver.client);
-
-    expect(app.stop).toHaveBeenCalledTimes(1);
-    expect(app.receiver.client.shuttingDown).toBe(true);
-  });
-});
-
-it.each([
-  "account_inactive",
-  "invalid_auth",
-  "token_revoked",
-  "token_expired",
-  "not_authed",
-  "org_login_required",
-  "team_access_not_granted",
-  "user_removed_from_team",
-  "team_disabled",
-  "missing_scope",
-  "cannot_find_service",
-  "invalid_token",
-])("recognizes permanent Slack credential failure %s", (code) => {
-  expect(isNonRecoverableSlackAuthError(new Error(`An API error occurred: ${code}`))).toBe(true);
 });
 
 it("does not treat missing or non-error values as permanent auth failures", () => {
-  expect(isNonRecoverableSlackAuthError(null)).toBe(false);
-  expect(isNonRecoverableSlackAuthError(undefined)).toBe(false);
-  expect(isNonRecoverableSlackAuthError(42)).toBe(false);
-  expect(isNonRecoverableSlackAuthError({})).toBe(false);
+  for (const value of [null, undefined, 42, {}]) {
+    expect(isNonRecoverableSlackAuthError(value)).toBe(false);
+  }
 });

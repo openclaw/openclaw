@@ -1,6 +1,7 @@
 import type { PluginOperatorGrants } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { PluginAcceptedDeclaredSurface } from "../config/types.plugins.js";
+import type { CronJobCreate } from "../cron/types.js";
 import type {
   CLAW_SCHEMA_VERSION,
   ClawAppliedExtension,
@@ -95,7 +96,6 @@ export type ClawReadResult =
       clawMarkdownBody?: Buffer;
       packageBootstrap?: ClawWorkspaceSourceSnapshot;
       openClawProfile?: ClawOpenClawProfile;
-      legacyOpenClawProfile?: ClawOpenClawProfile;
       source: ClawSourceIdentity;
       snapshot: ClawSourceSnapshot;
       diagnostics: ClawDiagnostic[];
@@ -114,6 +114,8 @@ export type ClawAddPlanAction = {
   sourceKind?: "clawMarkdownBody";
   digest?: string;
   details?: Record<string, unknown>;
+  automation?: CronJobCreate;
+  scratch?: string;
   blocked: boolean;
   reason?: string;
 };

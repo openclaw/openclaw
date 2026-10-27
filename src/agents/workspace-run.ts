@@ -6,7 +6,7 @@
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { classifySessionKeyShape, parseAgentSessionKey } from "../routing/session-key.js";
+import { classifySessionKeyShape } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { hasAgentRosterProperty } from "./agent-scope-config.js";
 import {
@@ -17,7 +17,6 @@ import {
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 type WorkspaceFallbackReason = "missing" | "blank" | "invalid_type";
-type AgentIdSource = "explicit" | "session_key" | "default";
 
 export type ResolveRunWorkspaceResult = {
   workspaceDir: string;
@@ -25,7 +24,6 @@ export type ResolveRunWorkspaceResult = {
   usedFallback: boolean;
   fallbackReason?: WorkspaceFallbackReason;
   agentId: string;
-  agentIdSource: AgentIdSource;
 };
 
 /** Redacts a run/session identifier for logs and prompts. */
@@ -33,7 +31,6 @@ export function redactRunIdentifier(value: string | undefined): string {
   return redactIdentifier(value, { len: 12 });
 }
 
-/** Resolves the workspace directory used for an agent run. */
 export function resolveRunWorkspaceDir(params: {
   workspaceDir: unknown;
   sessionKey?: string;
@@ -61,11 +58,6 @@ export function resolveRunWorkspaceDir(params: {
     agentId: params.agentId,
     config,
   });
-  const agentIdSource: AgentIdSource = params.agentId
-    ? "explicit"
-    : parseAgentSessionKey(rawSessionKey)?.agentId
-      ? "session_key"
-      : "default";
   if (!resolveAgentConfig(config, agentId)) {
     throw Object.assign(new Error(`Agent ${agentId} is not present in the configured roster.`), {
       name: "RunWorkspaceAgentNotConfiguredError",
@@ -95,7 +87,6 @@ export function resolveRunWorkspaceDir(params: {
     usedFallback,
     ...(usedFallback ? { fallbackReason } : {}),
     agentId,
-    agentIdSource,
   };
 }
 

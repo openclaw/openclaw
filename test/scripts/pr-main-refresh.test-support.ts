@@ -33,6 +33,12 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
+function writeFiles(directory: string, files: Record<string, string>) {
+  for (const [name, contents] of Object.entries(files)) {
+    writeFileSync(join(directory, name), contents);
+  }
+}
+
 function createFixtureGit(root: string) {
   const home = join(root, "home");
   mkdirSync(home);
@@ -68,22 +74,25 @@ function createFixtureGit(root: string) {
     }
     return result.stdout.trim();
   }
-  return { env, realGit, git, handoff };
+  function configureRepository(cwd: string, perWorktreeConfig: boolean) {
+    git(cwd, "config", "user.name", "OpenClaw Test");
+    git(cwd, "config", "user.email", "test@example.invalid");
+    git(cwd, "config", "core.hooksPath", "/dev/null");
+    if (perWorktreeConfig) {
+      git(cwd, "config", "extensions.worktreeConfig", "true");
+    }
+  }
+  return { env, realGit, git, handoff, configureRepository };
 }
 
 function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean) {
   const root = realpathSync(directory);
   const canonical = join(root, "canonical");
   const origin = join(root, "origin.git");
-  const { git } = createFixtureGit(root);
+  const { git, configureRepository } = createFixtureGit(root);
   git(root, "init", "--bare", "-b", "main", origin);
   git(root, "init", "-b", "main", canonical);
-  git(canonical, "config", "user.name", "OpenClaw Test");
-  git(canonical, "config", "user.email", "test@example.invalid");
-  git(canonical, "config", "core.hooksPath", "/dev/null");
-  if (perWorktreeConfig) {
-    git(canonical, "config", "extensions.worktreeConfig", "true");
-  }
+  configureRepository(canonical, perWorktreeConfig);
   copyPrWrapperSources(canonical);
   cpSync(join(process.cwd(), ".github", "workflows"), join(canonical, ".github", "workflows"), {
     recursive: true,
@@ -92,11 +101,10 @@ function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean
   cpSync(join(process.cwd(), "tsconfig.json"), join(canonical, "tsconfig.json"));
   writeFileSync(join(canonical, ".gitignore"), ".worktrees/\n.local/\nnode_modules\n");
   mkdirSync(join(canonical, "src"), { recursive: true });
-  writeFileSync(join(canonical, "src", "subject.ts"), "export const subject = 'base';\n");
-  writeFileSync(
-    join(canonical, "src", "subject.test.ts"),
-    "// Synthetic package-command target.\n",
-  );
+  writeFiles(join(canonical, "src"), {
+    "subject.ts": "export const subject = 'base';\n",
+    "subject.test.ts": "// Synthetic package-command target.\n",
+  });
   git(canonical, "add", ".");
   git(canonical, "commit", "-qm", "test: trusted native wrapper");
   const main = git(canonical, "rev-parse", "HEAD");
@@ -152,7 +160,7 @@ export function createMainRefreshFixture(
   const worktree = join(canonical, ".worktrees", "pr-42");
   const bin = join(root, "bin");
   mkdirSync(bin);
-  const { env, realGit, git, handoff } = createFixtureGit(root);
+  const { env, realGit, git, handoff, configureRepository } = createFixtureGit(root);
   const privateNodeOptions = env.NODE_OPTIONS;
   const { main, head, sameTreeHead, movedMain, gateMain } = template;
   const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
@@ -166,12 +174,7 @@ export function createMainRefreshFixture(
       pathToFileURL(origin).href,
       canonical,
     );
-    git(canonical, "config", "user.name", "OpenClaw Test");
-    git(canonical, "config", "user.email", "test@example.invalid");
-    git(canonical, "config", "core.hooksPath", "/dev/null");
-    if (perWorktreeConfig) {
-      git(canonical, "config", "extensions.worktreeConfig", "true");
-    }
+    configureRepository(canonical, perWorktreeConfig);
   } else {
     // Copy complete object stores (including sameTreeHead), never shared refs or
     // hardlinks. Create worktrees afterward so their absolute back-links stay local.
@@ -225,19 +228,15 @@ export function createMainRefreshFixture(
   if (options.precreateWorktree !== false) {
     git(canonical, "worktree", "add", "--detach", worktree, head);
     mkdirSync(local);
-    writeFileSync(join(local, "pr-meta.json"), JSON.stringify(metadata));
-    writeFileSync(
-      join(local, "pr-meta.env"),
-      `PR_NUMBER=42\nPR_URL=https://example.invalid/pr/42\nPR_AUTHOR=fixture\nPR_BASE=main\nPR_HEAD=topic\nPR_HEAD_SHA=${head}\nPR_HEAD_REPO_URL=${origin}\n`,
-    );
-    writeFileSync(join(local, "review-mode.env"), "REVIEW_MODE=pr\n");
-    writeFileSync(
-      join(local, "review.md"),
-      [
+    writeFiles(local, {
+      "pr-meta.json": JSON.stringify(metadata),
+      "pr-meta.env": `PR_NUMBER=42\nPR_URL=https://example.invalid/pr/42\nPR_AUTHOR=fixture\nPR_BASE=main\nPR_HEAD=topic\nPR_HEAD_SHA=${head}\nPR_HEAD_REPO_URL=${origin}\n`,
+      "review-mode.env": "REVIEW_MODE=pr\n",
+      "review.md": [
         `Review artifact for PR #42 at ${head}`,
         ..."ABCDEFGHIJ".split("").map((letter) => `${letter}) Synthetic evidence.`),
       ].join("\n"),
-    );
+    });
     const review = {
       ...validReview(head),
       recommendation: "READY FOR /prepare-pr",
@@ -584,9 +583,9 @@ if (args[0] === 'pr' && args[1] === 'view') {
       html_url: 'https://github.com/fixture/repo',
       permissions: { admin: true },
     };
-  } else if (endpoint === 'repos/fixture/repo/branches/main/protection') {
-    // Hosted CI fixtures retain GraphQL through explicit classic branch protection.
-    value = {};
+  } else if (endpoint === 'repos/fixture/repo/rules/branches/main?per_page=100') {
+    // Signature rules retain the supported GraphQL fallback for these lifecycle cases.
+    value = [[{ type: 'required_signatures' }]];
   } else if (endpoint === 'repos/fixture/repo/git/ref/heads/main') {
     value = { ref: 'refs/heads/main', object: { type: 'commit',
       sha: runGit(['-C', origin, 'rev-parse', 'refs/heads/main']) } };
@@ -793,19 +792,12 @@ console.log(args.slice(2).join('\\n'));
       // Preparation lifecycle cases still create these artifacts through the wrapper.
       git(worktree, "checkout", "-B", "pr-42-prep", head);
       git(worktree, "update-ref", "refs/heads/pr-42", head);
-      writeFileSync(
-        join(local, "prep-context.env"),
-        `PR_NUMBER=42\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${head}\nPREP_BRANCH=pr-42-prep\nPR_AUTHOR_ACCESS_AT_PREP=maintainer\n`,
-      );
-      writeFileSync(
-        join(local, "prep.env"),
-        `PR_NUMBER=42\nPR_AUTHOR=fixture\nPR_URL=https://github.com/fixture/repo/pull/42\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${head}\nPREP_HEAD_SHA=${head}\nLOCAL_PREP_HEAD_SHA=${head}\nPREP_MAINLINE_BASE_SHA=${main}\nPREP_REPLACED_HOSTED_ANCESTRY=false\nPREP_AUTHOR_ACCESS=maintainer\n`,
-      );
-      writeFileSync(
-        join(local, "gates.env"),
-        `PR_NUMBER=42\nDOCS_ONLY=false\nCHANGELOG_REQUIRED=false\nGATES_MODE=hosted_exact_or_recent_parent\nHOSTED_GATES_TARGET_HEAD_SHA=${head}\nLAST_VERIFIED_HEAD_SHA=${head}\n`,
-      );
-      writeFileSync(join(local, "prep.md"), "Prepared synthetic merge fixture.\n");
+      writeFiles(local, {
+        "prep-context.env": `PR_NUMBER=42\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${head}\nPREP_BRANCH=pr-42-prep\nPR_AUTHOR_ACCESS_AT_PREP=maintainer\n`,
+        "prep.env": `PR_NUMBER=42\nPR_AUTHOR=fixture\nPR_URL=https://github.com/fixture/repo/pull/42\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${head}\nPREP_HEAD_SHA=${head}\nLOCAL_PREP_HEAD_SHA=${head}\nPREP_MAINLINE_BASE_SHA=${main}\nPREP_REPLACED_HOSTED_ANCESTRY=false\nPREP_AUTHOR_ACCESS=maintainer\n`,
+        "gates.env": `PR_NUMBER=42\nDOCS_ONLY=false\nCHANGELOG_REQUIRED=false\nGATES_MODE=hosted_exact_or_recent_parent\nHOSTED_GATES_TARGET_HEAD_SHA=${head}\nLAST_VERIFIED_HEAD_SHA=${head}\n`,
+        "prep.md": "Prepared synthetic merge fixture.\n",
+      });
     },
     configure(update: Partial<typeof control>) {
       const next = { ...JSON.parse(readFileSync(controlFile, "utf8")), ...update };

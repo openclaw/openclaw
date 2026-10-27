@@ -10,6 +10,7 @@ import { getPluginCache } from "../plugins/plugin-cache.js";
 import {
   hasPluginLifecycleLease,
   withPluginLifecycleLease,
+  withPluginLifecycleLeaseAsync,
 } from "../plugins/plugin-lifecycle-lease.js";
 import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
@@ -172,7 +173,10 @@ describe("Gateway Claw Add plugin handoff", () => {
           options.runtimeBatch.retain("fixture");
           return {
             kind: "ready",
-            continue: continueAdd,
+            stageAgent: async () => {
+              const result = await continueAdd();
+              return { kind: "ready", finish: async () => result };
+            },
             failBeforeContinue: async (_error: unknown, code: string) => ({
               agent: { finalId: "workflow-operator" },
               status: "partial" as const,
@@ -182,7 +186,7 @@ describe("Gateway Claw Add plugin handoff", () => {
         },
       );
       const reloadPlugins = vi.fn(async (_targets, options) =>
-        withPluginLifecycleLease({ env }, async () => {
+        withPluginLifecycleLeaseAsync({ env }, async () => {
           options?.commitGuard?.();
           return { operationId: "reload", generation: 3, pluginIds: ["fixture"] };
         }),
@@ -292,7 +296,14 @@ describe("Gateway Claw Add plugin handoff", () => {
                 },
               };
             }
-            return { kind: "ready", continue: continueAdd, failBeforeContinue };
+            return {
+              kind: "ready",
+              stageAgent: async (agentOptions: Parameters<typeof continueAdd>[0]) => {
+                const result = await continueAdd(agentOptions);
+                return { kind: "ready", finish: async () => result };
+              },
+              failBeforeContinue,
+            };
           },
         );
         const reloadPlugins = vi.fn(async (_targets, reloadOptions) => {

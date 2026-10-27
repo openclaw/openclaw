@@ -129,6 +129,7 @@ suite.define(() => {
       const diagnostic =
         "Agent main has not completed startup inspection and preparation. Run Doctor if inspection cannot complete.";
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         awaitInitialRoster: false,
         sessionKey: "agent:main:main",
         methodResponses: {
@@ -156,7 +157,7 @@ suite.define(() => {
 
       const notice = page.locator(".chat-history-error");
       await notice.waitFor();
-      expect(await notice.textContent()).toContain(
+      expect(await notice.locator("p").textContent()).toContain(
         "This agent is still starting. Retry in a moment.",
       );
       expect(await notice.textContent()).not.toContain(diagnostic);
@@ -180,6 +181,7 @@ suite.define(() => {
           });
         }
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: method !== "chat.startup",
           sessionKey: "agent:main:main",
           heldMethods: [method],
           historyMessages: [{ role: "assistant", content: readyText }],
@@ -202,7 +204,16 @@ suite.define(() => {
         }
         await composer.fill(draft);
         await pauseVirtualClock(page);
-        await page.clock.runFor(60_001);
+        if (method === "chat.startup") {
+          // Preserve the first timeout and automatic retry before the shared deadline.
+          await page.clock.fastForward(30_001);
+          await page.clock.runFor(501);
+          await gateway.waitForRequest(method, { after: 1 });
+          await page.clock.fastForward(30_001);
+        } else {
+          await page.clock.fastForward(60_001);
+        }
+        await page.clock.runFor(100);
 
         expect(await gateway.getSocketCount()).toBe(1);
         expect(await composer.inputValue()).toBe(draft);
@@ -277,6 +288,7 @@ suite.define(() => {
         const diagnostic = "⚠️ ✉️ Message failed: delivery unavailable near 🧭";
         const renderedDiagnostic = "Message failed: delivery unavailable near 🧭";
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: false,
           sessionKey,
           // Account recovery can replace startup with a scoped history request.
           heldMethods: ["chat.startup", "chat.history", "chat.send"],

@@ -33,7 +33,6 @@ type FeishuIngressPayload = {
 
 type FeishuIngressFacts = {
   eventId: string;
-  eventType: string;
   laneKey: string;
 };
 
@@ -139,33 +138,27 @@ function inspectFeishuIngressEnvelope(
     );
   }
   const event = nestedEvent ?? envelope;
+  const missingLane = (message: string): FeishuIngressFacts => {
+    if (allowInvalidLane) {
+      return { eventId, laneKey: `invalid:${eventType}:${eventId}` };
+    }
+    throw new FeishuIngressPermanentError("invalid-event", message);
+  };
   if (eventType === "im.message.receive_v1") {
     const message = isRecord(event.message) ? event.message : null;
     const chatId = normalizeNullableString(message?.chat_id);
     if (!chatId) {
-      if (allowInvalidLane) {
-        return { eventId, eventType, laneKey: `invalid:${eventType}:${eventId}` };
-      }
-      throw new FeishuIngressPermanentError(
-        "invalid-event",
-        "Feishu message ingress envelope is missing event.message.chat_id.",
-      );
+      return missingLane("Feishu message ingress envelope is missing event.message.chat_id.");
     }
-    return { eventId, eventType, laneKey: `chat:${chatId}` };
+    return { eventId, laneKey: `chat:${chatId}` };
   }
   const noticeMeta = isRecord(event.notice_meta) ? event.notice_meta : null;
   const fileType = normalizeNullableString(noticeMeta?.file_type);
   const documentId = normalizeNullableString(noticeMeta?.file_token);
   if (!fileType || !documentId) {
-    if (allowInvalidLane) {
-      return { eventId, eventType, laneKey: `invalid:${eventType}:${eventId}` };
-    }
-    throw new FeishuIngressPermanentError(
-      "invalid-event",
-      "Feishu comment ingress envelope is missing its document identity.",
-    );
+    return missingLane("Feishu comment ingress envelope is missing its document identity.");
   }
-  return { eventId, eventType, laneKey: `comment-doc:${fileType}:${documentId}` };
+  return { eventId, laneKey: `comment-doc:${fileType}:${documentId}` };
 }
 
 function resolveFeishuIngressNonRetryableFailure(error: unknown) {
@@ -304,14 +297,8 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
         getFeishuRuntime().state.openChannelIngressQueue<FeishuIngressPayload>({
           accountId: options.accountId,
         })),
-    inspect: (rawEnvelope, context) => {
-      const facts = inspectFeishuIngressEnvelope(
-        rawEnvelope,
-        options.encryptKey,
-        context.phase === "admission",
-      );
-      return facts ? { eventId: facts.eventId, laneKey: facts.laneKey } : null;
-    },
+    inspect: (rawEnvelope, context) =>
+      inspectFeishuIngressEnvelope(rawEnvelope, options.encryptKey, context.phase === "admission"),
     payload: {
       version: FEISHU_INGRESS_PAYLOAD_VERSION,
       serialize: (rawEnvelope, { receivedAt }) => ({ receivedAt, rawEnvelope }),
@@ -407,9 +394,7 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
       };
     }
     try {
-      await monitor.admit(rawEnvelope, {
-        facts: { eventId: facts.eventId, laneKey: facts.laneKey },
-      });
+      await monitor.admit(rawEnvelope, { facts });
     } catch (error) {
       socketTerminator?.();
       throw error;

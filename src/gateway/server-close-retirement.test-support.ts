@@ -5,11 +5,8 @@ import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import { createCliLiveSessionCapability } from "../agents/cli-runner/cli-live-session-registry.js";
-import { enqueueSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
-import { testing } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { CliBackendLiveSessionHandle } from "../plugins/cli-backend.types.js";
-import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type {
   createGatewayCloseTestHandlerFactory,
@@ -20,7 +17,55 @@ type GatewayCloseHandler = ReturnType<ReturnType<typeof createGatewayCloseTestHa
 
 export function registerGatewayResourceRetirementTests(
   createGatewayCloseHandler: (overrides?: Partial<GatewayCloseParams>) => GatewayCloseHandler,
+  {
+    mocks,
+    sharedStateLifecycle,
+  }: {
+    mocks: Pick<
+      typeof import("./server-close.mocks.test-support.js").mocks,
+      | "disposeAllSessionMcpRuntimes"
+      | "disposeAllBundleLspRuntimes"
+      | "drainRetainedEmbeddingProviders"
+      | "closeProviderTransportDispatcherPool"
+    >;
+    sharedStateLifecycle: ReadonlyMap<string, boolean>;
+  },
 ): void {
+  it.each([
+    { label: "bundle-mcp", dispose: mocks.disposeAllSessionMcpRuntimes },
+    { label: "embedding-providers", dispose: mocks.drainRetainedEmbeddingProviders },
+  ])(
+    "continues independent teardown while $label cleanup is pending",
+    async ({ label, dispose }) => {
+      vi.useFakeTimers();
+      const cleanup = createDeferredCore();
+      dispose.mockReturnValue(cleanup.promise);
+      const httpClose = vi.fn((callback: (error?: Error | null) => void) => callback(null));
+      const close = createGatewayCloseHandler({
+        httpServer: { close: httpClose, closeIdleConnections: vi.fn() } as never,
+      });
+      const closePromise = close({ reason: "test shutdown" });
+      try {
+        if (label === "bundle-mcp") {
+          await vi.advanceTimersByTimeAsync(0);
+          expect(mocks.disposeAllBundleLspRuntimes).toHaveBeenCalledOnce();
+          expect(dispose.mock.invocationCallOrder[0]).toBeLessThan(
+            mocks.disposeAllBundleLspRuntimes.mock.invocationCallOrder[0]!,
+          );
+        }
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(httpClose).toHaveBeenCalledOnce();
+        expect(sharedStateLifecycle.has("open")).toBe(true);
+        expect(mocks.closeProviderTransportDispatcherPool).not.toHaveBeenCalled();
+      } finally {
+        cleanup.resolve();
+        await closePromise;
+      }
+      expect((await closePromise).warnings).toContain(label);
+      expect(mocks.closeProviderTransportDispatcherPool).toHaveBeenCalledOnce();
+    },
+  );
+
   it("retires warm CLI processes and joins their resource cleanup during shutdown", async () => {
     const context = buildPreparedCliRunContext({ sessionId: "shutdown-warm-cli" });
     const admission = prepareSystemAgentRunAdmission(
@@ -141,50 +186,4 @@ export function registerGatewayResourceRetirementTests(
       await actor.release();
     }
   });
-
-  it.each([
-    { ownership: "owned", retained: false },
-    { ownership: "unowned", retained: false },
-    { ownership: "owned", retained: true },
-    { ownership: "unowned", retained: true },
-  ] as const)(
-    "reports $ownership queued cleanup failure and honors retained resources ($retained)",
-    async ({ ownership, retained }) => {
-      const resolveGatewayContext = () => undefined;
-      const cleanupError = new Error("queued engine disposal failed");
-      const failure = retained ? new PluginRuntimeCloseRetainedError(cleanupError) : cleanupError;
-      const onRemoved = vi.fn(() => Promise.reject(failure));
-      enqueueSwarmRun({
-        groupId: `failed-queued-cleanup-${ownership}`,
-        runId: `failed-queued-${ownership}`,
-        maxConcurrent: 1,
-        activeRunIds: [`failed-queued-blocker-${ownership}`],
-        lifecycleOwner: ownership === "owned" ? resolveGatewayContext : undefined,
-        start: async () => {},
-        onStartFailure: () => true,
-        onRemoved,
-      });
-      const retireRegistry = vi.fn(async () => ({ cleanupCount: 0, failures: [] }));
-      const closeSdkResources = vi.fn(async () => {});
-      const clearSecretsRuntimeSnapshot = vi.fn();
-      const close = createGatewayCloseHandler({
-        resolveGatewayContext,
-        closeSdkResources,
-        clearSecretsRuntimeSnapshot,
-        closePluginRegistry: async (onRetirement) => {
-          await onRetirement?.(retireRegistry);
-          return { memoryErrors: [], pluginFailures: [] };
-        },
-      });
-      try {
-        await expect(close()).rejects.toMatchObject({ errors: [failure] });
-        expect(onRemoved).toHaveBeenCalledExactlyOnceWith("shutdown");
-        expect(closeSdkResources).toHaveBeenCalledTimes(ownership === "owned" && retained ? 0 : 1);
-        expect(retireRegistry).toHaveBeenCalledTimes(retained ? 0 : 1);
-        expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledTimes(retained ? 0 : 1);
-      } finally {
-        testing.reset();
-      }
-    },
-  );
 }

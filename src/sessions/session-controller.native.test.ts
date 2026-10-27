@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
-  activeNativeAttempts,
   getActiveNativeAttempt,
   type EmbeddedAgentQueueHandle,
 } from "../agents/embedded-agent-runner/run-state.js";
@@ -390,7 +389,6 @@ describe("controller/native admission boundary", () => {
         policy: { mode: "followup" },
       });
       expect(getActiveNativeAttempt(sessionId)).toBeUndefined();
-      expect([...activeNativeAttempts()]).not.toContainEqual([sessionId, native]);
       detachActiveEmbeddedRun(sessionId, native, undefined, undefined, undefined, attachment);
       retireSessionControllerInput(input);
     });

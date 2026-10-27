@@ -6,15 +6,16 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import { mirrorDeliveredPayloads } from "../../../infra/outbound/deliver-transcript.js";
 import { sendMessage } from "../../../infra/outbound/message.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
+import { commitConfirmedVisibleMessage } from "../../../sessions/confirmed-visible-message.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import { runSessionMutation } from "../../../sessions/session-controller.lifecycle.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { taskCompletionEvents } from "../../subagent-test-fixtures.test-helpers.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { deliverCompletionDirect } from "./subagent-announce-completion-delivery.js";
 
@@ -23,7 +24,7 @@ vi.mock("../../../infra/outbound/message.js", async (importOriginal) => ({
   sendMessage: vi.fn(),
 }));
 
-it("settles child delivery before a blocked requester mirror", ({ signal }) =>
+it("settles child delivery and records its result during the requester turn", ({ signal }) =>
   withOpenClawTestState({ label: "direct-completion-mirror" }, async (state) => {
     const target = {
       agentId: "main",
@@ -67,19 +68,29 @@ it("settles child delivery before a blocked requester mirror", ({ signal }) =>
       params.assertDirectAdapterHandoff?.();
       const payload = { text: params.content, mediaUrls: [] };
       params.onDeliveredPayload?.(payload);
-      const mirror = {
-        delivery: {
-          cfg: params.cfg ?? cfg,
-          channel: params.channel ?? "discord",
+      // Record as outbound delivery does, twice with one identity, without another send.
+      const record = () =>
+        commitConfirmedVisibleMessage({
+          config: params.cfg ?? cfg,
+          channel: "discord",
           to: params.to,
-          payloads: [{ text: params.content }],
-          mirror: params.mirror,
-        },
-        payloads: [payload],
-      };
-      // Retry bookkeeping with the same identity, without another platform send.
-      await mirrorDeliveredPayloads(mirror);
-      await mirrorDeliveredPayloads(mirror);
+          route: {
+            sessionKey: target.sessionKey,
+            baseSessionKey: target.sessionKey,
+            peer: { kind: "direct", id: "mirror-fixture" },
+            chatType: "direct",
+            from: "discord:mirror-fixture",
+            to: params.to,
+          },
+          producer: params.session,
+          payload: { text: params.content },
+          deliveryId: params.idempotencyKey ?? "missing-identity",
+          payloadIndex: 0,
+          expectedGeneration: params.transcriptExpectedGeneration,
+          provenance: params.transcriptProvenance,
+        });
+      expect(await record()).toMatchObject({ ok: true });
+      expect(await record()).toMatchObject({ ok: true });
       return {
         channel: "discord",
         to: params.to,
@@ -101,20 +112,7 @@ it("settles child delivery before a blocked requester mirror", ({ signal }) =>
           directIdempotencyKey: "announce:v1:child:run",
           deliveryTarget: { deliver: true, channel: "discord", to: "dm:mirror-fixture" },
           contentKind: "completed_result",
-          agentResult: { payloads: [{ text: "Synthetic child result" }] },
-          internalEvents: [
-            {
-              type: "task_completion",
-              source: "subagent",
-              childSessionKey: "agent:main:subagent:child",
-              announceType: "subagent task",
-              taskLabel: "synthetic child",
-              status: "ok",
-              statusLabel: "completed",
-              result: "Synthetic child result",
-              replyInstruction: "Summarize the result.",
-            },
-          ],
+          internalEvents: taskCompletionEvents({ result: "Synthetic child result" }),
           onDeliveryResult,
         });
       const result = await withinTest(
@@ -125,7 +123,9 @@ it("settles child delivery before a blocked requester mirror", ({ signal }) =>
       );
       await deliveryWork.drain();
       expect(result).toMatchObject({ delivered: true, path: "direct" });
-      expect(onDeliveryResult).toHaveBeenCalledOnce();
+      expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ delivered: true, deliveredAt: expect.any(Number) }),
+      );
       expect(send).toHaveBeenCalledOnce();
 
       release.resolve();
@@ -134,16 +134,23 @@ it("settles child delivery before a blocked requester mirror", ({ signal }) =>
       const messages = (await loadTranscriptEvents(target)).flatMap((entry) =>
         isRecord(entry) && entry.type === "message" ? [entry.message] : [],
       );
-      expect(messages).toMatchObject([
-        { role: "user", content: wake.content },
-        { role: "assistant", content: [{ type: "text", text: "Synthetic wake reply" }] },
-        {
+      // The result is recorded once during the turn and does not consume its wake input.
+      expect(messages).toHaveLength(3);
+      expect(
+        messages.filter((message) => isRecord(message) && message.role === "user"),
+      ).toMatchObject([{ content: wake.content }]);
+      expect(messages).toContainEqual(
+        expect.objectContaining({
           role: "assistant",
-          model: "delivery-mirror",
-          openclawDeliveryMirror: { kind: "subagent-completion-direct" },
+          model: "automation-result",
+          openclawAutomation: { kind: "subagent-completion" },
           content: [{ type: "text", text: "Synthetic child result" }],
-        },
-      ]);
+        }),
+      );
+      expect(messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "Synthetic wake reply" }],
+      });
     } finally {
       release.resolve();
       await Promise.allSettled([turn, settleMirrors()]);

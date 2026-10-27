@@ -10,7 +10,6 @@ import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { FsSafeError } from "../infra/fs-safe.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
-import { expectSavedOriginalFilenameCase } from "./store-filename.test-support.js";
 
 const binaryMime = "application/octet-stream";
 const streamDir = "stream-inbound";
@@ -225,28 +224,6 @@ describe("media store", () => {
     expect(result.size).toBe(content.length);
   });
 
-  it("retries local-source writes when cleanup prunes the target directory", async () => {
-    const srcFile = await fileFixture(path.join(home, "tmp-src-race.txt"), "local file");
-    const targetDir = path.join(await store.ensureMediaDir(), "race-source");
-    const open = fs.open;
-    let injectedEnoent = false;
-    vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-      if (
-        !injectedEnoent &&
-        typeof filePath === "string" &&
-        filePath.startsWith(`${targetDir}${path.sep}`)
-      ) {
-        injectedEnoent = true;
-        await fs.rm(targetDir, { recursive: true, force: true });
-        throw Object.assign(new Error("missing dir"), { code: "ENOENT" });
-      }
-      return open(filePath, flags, mode);
-    });
-    const saved = await store.saveMediaSource(srcFile, undefined, "race-source");
-    expect(injectedEnoent).toBe(true);
-    await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("local file");
-  });
-
   it("does not let a mixed-case image header disguise a stored ZIP", async () => {
     const zip = new JSZip();
     zip.file("hello.txt", "hi");
@@ -283,11 +260,12 @@ describe("media store", () => {
           (subdir) => store.saveMediaBuffer(Buffer.from("media"), "text/plain", subdir),
         ),
       );
-      const past = (Date.now() - 10_000) / 1000;
+      // Keep file ages independent of setup and cleanup latency.
+      const now = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(now);
       for (const [index, saved] of files.entries()) {
-        if (index !== 3) {
-          await fs.utimes(saved.path, past, past);
-        }
+        const time = (now - (index === 3 ? 0 : 10_000)) / 1000;
+        await fs.utimes(saved.path, time, time);
       }
       await store.cleanOldMedia(1_000, options);
       for (const [index, saved] of files.entries()) {
@@ -338,9 +316,23 @@ describe("media store", () => {
       name: "strips controls and neutralizes bidi/zero-width formatting",
       originalFilename: "report\rC\nL\tT\fF\x1bE\x00N\x7fD\u202efd\u200bp\ufeffsafe.exe",
       expectedIdPattern: /^reportCLTFEND_fd_p_safe---[a-f0-9-]{36}\.txt$/,
+      expectUuidOnly: false,
     },
-  ] as const)("saveMediaBuffer: $name", (testCase) =>
-    expectSavedOriginalFilenameCase(store, testCase),
+  ] as const)(
+    "saveMediaBuffer: $name",
+    async ({ originalFilename, expectedIdPattern, expectUuidOnly }) => {
+      const saved = await store.saveMediaBuffer(
+        Buffer.from("test content"),
+        "text/plain",
+        "inbound",
+        5 * 1024 * 1024,
+        originalFilename,
+      );
+      expect(saved.id).toMatch(expectedIdPattern);
+      if (expectUuidOnly) {
+        expect(saved.id).not.toContain("---");
+      }
+    },
   );
   describe("playback cache", () => {
     const clearMedia = async () => {
@@ -533,17 +525,17 @@ describe("media store filesystem faults", () => {
     },
   );
 
-  it.each(["ENOENT", "ENOSPC", "not-found", "wrapped-ENOENT"] as const)(
-    "retries only recoverable buffer writes (%s)",
+  it.each(["ENOENT", "ENOSPC", "not-found", "wrapped-ENOENT", "wrapped-ENOSPC"] as const)(
+    "does not replay failed buffer writes (%s)",
     async (code) => {
       const segment = "retry-buffer";
-      const shouldRetry = code === "ENOENT" || code === "wrapped-ENOENT";
+      const nestedError = code.startsWith("wrapped-") ? errnoError(code.slice(8)) : undefined;
       const injectedError =
-        code === "not-found" || code === "wrapped-ENOENT"
+        code === "not-found" || nestedError
           ? new FsSafeError(
               "not-found",
               "media target not found",
-              code === "wrapped-ENOENT" ? { cause: errnoError("ENOENT") } : undefined,
+              nestedError ? { cause: nestedError } : undefined,
             )
           : errnoError(code);
       const attempts: string[] = [];
@@ -563,30 +555,21 @@ describe("media store filesystem faults", () => {
       }));
       const scoped = await freshStore(`buffer-write-${code}`);
       const result = scoped.saveMediaBuffer(Buffer.from("voice"), "audio/ogg", segment);
-      if (shouldRetry) {
-        const saved = await result;
-        expect(attempts).toHaveLength(2);
-        const stat = await fs.stat(saved.path);
-        expect(stat.isFile()).toBe(true);
-        expect(stat.size).toBe(5);
-      } else {
-        await expect(result).rejects.toBe(injectedError);
-        await expect(result).rejects.toBeInstanceOf(Error);
-        expect(attempts).toHaveLength(1);
-        if (code === "ENOSPC") {
-          await expect(result).rejects.toMatchObject({ code: "ENOSPC" });
-          expect(path.basename(attempts[0] ?? "")).toMatch(/^[^/\\]+\.ogg$/);
-          expect(
-            await fs.readdir(path.join(await scoped.ensureMediaDir(), segment)).catch(() => []),
-          ).toStrictEqual([]);
-        }
+      await expect(result).rejects.toBe(code === "wrapped-ENOSPC" ? nestedError : injectedError);
+      expect(attempts).toHaveLength(1);
+      if (code.endsWith("ENOSPC")) {
+        await expect(result).rejects.toMatchObject({ code: "ENOSPC" });
+        expect(path.basename(attempts[0] ?? "")).toMatch(/^[^/\\]+\.ogg$/);
+        expect(
+          await fs.readdir(path.join(await scoped.ensureMediaDir(), segment)).catch(() => []),
+        ).toStrictEqual([]);
       }
     },
   );
 
-  it("recovers a missing staging directory before consuming a stream", async () => {
+  it("rejects missing stream staging without consuming the source", async () => {
     const subdir = "stream-before-open";
-    const input = Buffer.from("media stream survives directory recovery");
+    const input = Buffer.from("media stream must not be consumed before staging");
     let consumptionStarted = false;
     const stream = (async function* () {
       consumptionStarted = true;
@@ -594,7 +577,6 @@ describe("media store filesystem faults", () => {
     })();
     const originalOpen = fs.open.bind(fs);
     let directoryPruned = false;
-    let consumedBeforeRecovery: boolean | undefined;
     vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       if (
         !directoryPruned &&
@@ -602,7 +584,6 @@ describe("media store filesystem faults", () => {
         args[0].includes(`${path.sep}${subdir}${path.sep}`) &&
         args[1] === "wx"
       ) {
-        consumedBeforeRecovery = consumptionStarted;
         await fs.rmdir(path.dirname(args[0]));
         directoryPruned = true;
       }
@@ -610,13 +591,12 @@ describe("media store filesystem faults", () => {
     });
 
     const store = await freshStore("stream-before-open");
-    const saved = await store.saveMediaStream(stream, "text/plain", subdir, 1024);
+    await expect(store.saveMediaStream(stream, "text/plain", subdir, 1024)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
 
     expect(directoryPruned).toBe(true);
-    expect(consumedBeforeRecovery).toBe(false);
-    expect(saved.size).toBe(input.byteLength);
-    await expect(fs.readFile(saved.path)).resolves.toEqual(input);
-    await expect(fs.readdir(path.dirname(saved.path))).resolves.toEqual([saved.id]);
+    expect(consumptionStarted).toBe(false);
   });
 
   it("rejects publication failure without replaying a consumed stream", async () => {

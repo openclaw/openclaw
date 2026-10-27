@@ -13,13 +13,12 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "../server-worker-placement-reclaim.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
-import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
+import { sessionRuntime } from "../server-worker-placement-reclaim.test-support.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import type { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { makeClaimInput } from "./placement-lifecycle.test-support.js";
 import { projectWorkerPlacementMove } from "./placement-projector.js";
-import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
@@ -216,12 +215,9 @@ describe("worker Gateway move recovery", () => {
       if (begun.placement.state !== "draining") {
         throw new Error("Move source did not enter draining state");
       }
-      const claim = await placements.claimReclaimWorkspaceResult({
-        ...REQUEST,
-        claimId: "reclaim-gateway-recovery",
-        runId: "reclaim-gateway-recovery",
-        owner: placementTurnOwner(begun.placement),
-      });
+      const claim = await placements.claimReclaimWorkspaceResult(
+        makeClaimInput(begun.placement, "reclaim-gateway-recovery"),
+      );
       const restartedStore = createWorkerSessionPlacementStore({
         database: support.testState.stateDb,
       });
@@ -285,7 +281,7 @@ describe("worker Gateway move recovery", () => {
       expect(restarted.environments.stopTunnel).not.toHaveBeenCalled();
       expect(restarted.environments.get(active.environmentId)?.state).toBe("attached");
       expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual(acceptedPending);
-      expect(restartedStore.get(active.sessionId)).toMatchObject({
+      expect((await restartedStore.getWithMoveAsync(active.sessionId)).placement).toMatchObject({
         state: "draining",
         turnClaim:
           mode === "claim-replaced"
@@ -314,12 +310,7 @@ describe("worker Gateway move recovery", () => {
       }
       let claim =
         kind === "ordinary"
-          ? await placements.claimTurn({
-              ...REQUEST,
-              claimId: "ordinary-policy-stop",
-              runId: "ordinary-policy-stop",
-              owner: placementTurnOwner(active),
-            })
+          ? await placements.claimTurn(makeClaimInput(active, "ordinary-policy-stop"))
           : undefined;
       await placements.beginPlacementMove({
         sessionId: active.sessionId,
@@ -333,12 +324,9 @@ describe("worker Gateway move recovery", () => {
       if (claim) {
         await placements.markWorkspaceResultPending(claim);
       } else {
-        claim = await placements.claimReclaimWorkspaceResult({
-          ...REQUEST,
-          claimId: "reclaim-policy-stop",
-          runId: "reclaim-policy-stop",
-          owner: placementTurnOwner(active),
-        });
+        claim = await placements.claimReclaimWorkspaceResult(
+          makeClaimInput(active, "reclaim-policy-stop"),
+        );
       }
       if (source === "destroyed-missing-ref") {
         await placements.recordStagedWorkspaceResult(
@@ -363,15 +351,7 @@ describe("worker Gateway move recovery", () => {
       );
       const barriers = createGatewayWorkerPlacementReclaimBarriers({
         placements,
-        loadSessionRuntime: async () => ({
-          managedWorktrees: { findLiveByOwner: async () => undefined },
-          resolveGatewaySessionStoreTargetInWorker: (params) =>
-            resolveGatewaySessionStoreTargetInWorker({
-              ...params,
-              cfg: { ...params.cfg, session: { ...params.cfg.session, store: target.storePath } },
-            }),
-          resolveCanonicalSessionEntryFromStoreKeys,
-        }),
+        loadSessionRuntime: async () => sessionRuntime(target.storePath),
         cancelSessionWork: async ({ assertCurrent }) => assertCurrent(),
         revokeSessionAuthority: vi.fn(),
       });

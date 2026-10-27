@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import * as tar from "tar";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
 import { prepareRestoredClientCredentials } from "../infra/client-credential-restore.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
@@ -270,7 +271,9 @@ function formatRestoreResult(result: BackupRestoreResult): string {
     ...result.warnings.map((warning) => `- ${warning}`),
     "",
     "Activation is explicit: stop the Gateway, move the restored asset tree into place or point OPENCLAW_STATE_DIR at the restored state asset, then run `openclaw doctor`.",
-  ].join("\n");
+  ]
+    .map(sanitizeTerminalText)
+    .join("\n");
 }
 
 /** Verify first, then extract a whole backup archive into a fresh staging directory. */

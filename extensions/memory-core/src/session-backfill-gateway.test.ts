@@ -64,7 +64,7 @@ function createHarness(config?: Record<string, unknown>) {
     },
   } as unknown as OpenClawPluginApi;
   registerSessionBackfillGatewayMethods(api);
-  return { api, methods };
+  return { methods };
 }
 
 async function invoke(methods: Map<string, RegisteredMethod>, operation: string, params: unknown) {
@@ -125,27 +125,16 @@ describe("session backfill gateway methods", () => {
     });
   });
 
-  it("rejects invalid ranges and unknown params before executing", async () => {
+  it.each([
+    ["preview", { from: "2026-08-01", to: "2026-07-01" }, "from must not be after to."],
+    ["preview", { archiveFiles: [] }, "unexpected parameter: archiveFiles"],
+    ["rollback", { from: "2026-07-01" }, "unexpected parameter: from"],
+    ["preview", { agentId: "missing" }, 'Unknown agent id "missing".'],
+  ] as const)("rejects %s params %j before executing", async (operation, params, message) => {
     const { methods } = createHarness();
-    const invalidRange = await invoke(methods, "preview", {
-      agentId: "main",
-      from: "2026-08-01",
-      to: "2026-07-01",
-    });
-    const unexpected = await invoke(methods, "preview", { agentId: "main", archiveFiles: [] });
-    const rollback = await invoke(methods, "rollback", { agentId: "main", from: "2026-07-01" });
-
+    const respond = await invoke(methods, operation, { agentId: "main", ...params });
     expect(executeBatchMock).not.toHaveBeenCalled();
-    expectInvalid(invalidRange, "from must not be after to.");
-    expectInvalid(unexpected, "unexpected parameter: archiveFiles");
-    expectInvalid(rollback, "unexpected parameter: from");
-  });
-
-  it("rejects unknown agents in preview", async () => {
-    const { methods } = createHarness();
-    const respond = await invoke(methods, "preview", { agentId: "missing" });
-    expect(executeBatchMock).not.toHaveBeenCalled();
-    expectInvalid(respond, 'Unknown agent id "missing".');
+    expectInvalid(respond, message);
   });
 
   it("accepts a keyed non-default agent", async () => {

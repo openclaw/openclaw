@@ -7,6 +7,7 @@ import {
   UPDATE_RUN_STEP_STATUSES,
   UPDATE_RUN_TRIGGERS,
 } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { StateLeaseLossSchema } from "../shared/state-lease-loss.js";
 import {
   UpdateDoctorConfigChangeSchema,
   UpdateDoctorConfigWriteRefusalSchema,
@@ -137,6 +138,7 @@ export const UpdateFailureFactSchema = z.object({
   destination: UpdateDestinationFailureSchema.optional(),
   npmErrorCode: z.enum(UPDATE_NPM_ERROR_CODES).optional(),
   packageSpec: z.string().max(200).optional(),
+  leaseLoss: StateLeaseLossSchema.optional(),
 });
 
 const UpdateRollbackOutcomeSchema = z.object({
@@ -291,6 +293,7 @@ export const UpdateRunRecordSchema = z.object({
     pluginErrors: z.array(text).max(32).optional(),
     channelsReady: z.boolean().optional(),
     readyz: z.boolean().optional(),
+    coreReady: z.boolean().optional(),
     settled: z.boolean().optional(),
     noticeDelivered: z.boolean().optional(),
     doctorHint: text.optional(),

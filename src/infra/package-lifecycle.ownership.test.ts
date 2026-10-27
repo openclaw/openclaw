@@ -68,9 +68,9 @@ function onPendingAccess(action: () => Promise<void>, { at = 1, after = true } =
     return result;
   });
 }
-const settle = <T>(work: Promise<T>) =>
+const settle = (work: Promise<void>) =>
   work.then(
-    (completed) => ({ completed }),
+    () => ({ completed: true as const }),
     (error: unknown) => ({ error }),
   );
 function onLockOpen(action: (flags: Parameters<typeof fs.open>[1]) => Promise<void>) {
@@ -142,16 +142,25 @@ function isExclusiveCreate(flags: string | number | undefined): boolean {
   );
 }
 
-it.each(["absent", "replacement-pending", "replacement-complete"])(
-  "refuses %s root after observation-time disposal",
-  async (state) => {
+it.each([
+  ["observation", "absent"],
+  ["observation", "replacement-pending"],
+  ["observation", "replacement-complete"],
+  ["script", "absent"],
+  ["script", "replacement-pending"],
+  ["script", "replacement-empty"],
+])("refuses a displaced root during %s (%s)", async (phase, state) => {
+  const displaced = displacedRoot();
+  const cooperativeDiscard = vi.fn();
+  let originalLock: Buffer | undefined;
+  let replaced = false;
+  vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
+  if (phase === "observation") {
     const originalIdentity = await identity(packageRoot);
     // Allocate while the original exists: deletion may immediately recycle its inode.
     const replacementRoot = tempDirs.make("openclaw-lifecycle-replacement-");
     const replacementIdentity = await identity(replacementRoot);
     expect(replacementIdentity).not.toEqual(originalIdentity);
-    let replaced = false;
-    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     onPendingAccess(async () => {
       replaced = true;
       await dispose(() => fs.rm(packageRoot, { recursive: true, force: true }));
@@ -164,27 +173,7 @@ it.each(["absent", "replacement-pending", "replacement-complete"])(
         }
       }
     });
-    await expect(finish()).rejects.toMatchObject({ name: "PackageLifecycleOwnershipError" });
-    expect({ replaced, dispatches: runScript.mock.calls.length }).toEqual({
-      replaced: true,
-      dispatches: 0,
-    });
-    await missing(lock);
-    if (state === "absent") {
-      await missing(packageRoot);
-    } else if (state === "replacement-pending") {
-      expect(await read(pending)).toBe("replacement pending\n");
-    }
-  },
-);
-
-it.each(["absent", "replacement-empty", "replacement-pending"])(
-  "does not arm %s root displaced during a script",
-  async (state) => {
-    const displaced = displacedRoot();
-    const cooperativeDiscard = vi.fn();
-    let originalLock: Buffer | undefined;
-    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
+  } else {
     runScript.mockImplementation(async () => {
       await expect(dispose(cooperativeDiscard)).rejects.toBeInstanceOf(OwnershipError);
       expect(cooperativeDiscard).not.toHaveBeenCalled();
@@ -198,29 +187,27 @@ it.each(["absent", "replacement-empty", "replacement-pending"])(
         }
       }
     });
-    await expect(finish()).rejects.toBeInstanceOf(OwnershipError);
-    expect(runScript).toHaveBeenCalledTimes(1);
+  }
+  await expect(finish()).rejects.toBeInstanceOf(OwnershipError);
+  expect(runScript).toHaveBeenCalledTimes(phase === "script" ? 1 : 0);
+  if (phase === "script") {
     expect(await fs.readFile(path.join(displaced, path.basename(lock)))).toEqual(originalLock);
-    await missing(lock);
-    if (state === "absent") {
-      await missing(packageRoot);
-      return;
-    }
-    const markerBeforeReplay = await optionalPending();
-    if (state === "replacement-pending") {
-      // The failed generation does not authorize recovery of its replacement.
-      expect(markerBeforeReplay).toBe("replacement pending\n");
-      return;
-    }
+  } else {
+    expect(replaced).toBe(true);
+  }
+  await missing(lock);
+  if (state === "absent") {
+    await missing(packageRoot);
+  } else if (state === "replacement-pending") {
+    // The failed generation does not authorize recovery of its replacement.
+    expect(await read(pending)).toBe("replacement pending\n");
+  } else if (phase === "script") {
+    expect(await optionalPending()).toBeNull();
     const replay = vi.fn();
-    const completed = await finish(replay);
-    expect({ markerBeforeReplay, completed, dispatches: replay.mock.calls.length }).toEqual({
-      markerBeforeReplay: null,
-      completed: false,
-      dispatches: 0,
-    });
-  },
-);
+    await finish(replay);
+    expect(replay).not.toHaveBeenCalled();
+  }
+});
 
 it.each([
   ["callback", "absent"],
@@ -282,11 +269,10 @@ it.each([
   const replay = vi.fn(async () => {
     await rm(legacy, { force: true });
   });
-  const completed = await finish(replay);
+  await finish(replay);
   const shouldRestore = phase === "callback" && shape !== "absent";
-  expect({ markerBeforeReplay, completed, dispatches: replay.mock.calls.length }).toEqual({
+  expect({ markerBeforeReplay, dispatches: replay.mock.calls.length }).toEqual({
     markerBeforeReplay: shape === "pending" || shouldRestore ? "pending\n" : null,
-    completed: shape !== "absent",
     dispatches: shape !== "absent" ? 2 : 0,
   });
 });
@@ -359,7 +345,7 @@ it("retries when the observed owner released before exiting", async () => {
     fsSync.rmSync(lock);
     return false;
   });
-  await expect(finish()).resolves.toBe(true);
+  await finish();
   expect(runScript).toHaveBeenCalledTimes(2);
   await missing(lock);
 });
@@ -437,7 +423,7 @@ it.each(["pending", "completed", "replacement"])("reads %s after release", async
     expect(await read(lock)).toBe("{replacement publishing");
     expect(await read(pending)).toBe("pending\n");
   } else {
-    await expect(completion).resolves.toBe(state === "pending");
+    await completion;
     expect(runScript).toHaveBeenCalledTimes(state === "pending" ? 2 : 0);
     await missing(lock, pending);
   }
@@ -516,7 +502,7 @@ it.each(["ownership", "release"])("keeps work retired after %s failure", async (
 
   vi.restoreAllMocks();
   await rm(lock);
-  await expect(finish()).resolves.toBe(false);
+  await finish();
   expect(runScript).not.toHaveBeenCalled();
 });
 
@@ -576,7 +562,7 @@ it.each(["pending", "legacy"])("retires %s before disposal waiters enter", async
   }
   const contended = observeContention();
   const rm = fs.rm;
-  let contender: Promise<{ completed: boolean } | { error: unknown }> | undefined;
+  let contender: ReturnType<typeof settle> | undefined;
   vi.spyOn(fs, "rm").mockImplementation(async (file, options) => {
     if (file === (shape === "legacy" ? legacy : pending) && !contender) {
       contender = settle(finish());
@@ -586,8 +572,7 @@ it.each(["pending", "legacy"])("retires %s before disposal waiters enter", async
   });
   try {
     await dispose(async () => {
-      await expect(fs.access(pending)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.access(legacy)).rejects.toMatchObject({ code: "ENOENT" });
+      await missing(pending, legacy);
       // A recursive remover may unlink the in-tree lock before other files.
       await rm(lock, { force: true });
       expect(runScript).not.toHaveBeenCalled();
@@ -599,10 +584,10 @@ it.each(["pending", "legacy"])("retires %s before disposal waiters enter", async
     if (result && "error" in result) {
       expect(result.error).toBeInstanceOf(OwnershipError);
     } else {
-      expect(result).toEqual({ completed: false });
+      expect(result).toEqual({ completed: true });
     }
     expect(runScript).not.toHaveBeenCalled();
-    await expect(fs.access(packageRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await missing(packageRoot);
   } finally {
     vi.restoreAllMocks();
     await rm(lock, { force: true });
@@ -613,7 +598,7 @@ it.each(["pending", "legacy"])("retires %s before disposal waiters enter", async
 it.each(["removed", "replacement"])("refuses %s roots after disposal", async (state) => {
   const displaced = displacedRoot();
   const contended = observeContention();
-  let completion: ReturnType<typeof settle<boolean>> | undefined;
+  let completion: ReturnType<typeof settle> | undefined;
   vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
   vi.useFakeTimers({ toFake: ["setTimeout"] });
   try {

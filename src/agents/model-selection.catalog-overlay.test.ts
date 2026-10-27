@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveThinkingProfile } from "../auto-reply/thinking.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,8 +11,8 @@ import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinkin
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { isSmallModel } from "../shared/model-param-b.js";
 import { makeModel } from "./embedded-agent-runner/model.test-harness.js";
+import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import {
-  type ModelCatalogRoutePolicy,
   projectModelCatalogEntryForRoute,
   createConfiguredModelCatalogOverridesResolver,
 } from "./model-catalog-route.js";
@@ -23,6 +23,7 @@ import {
   buildConfiguredModelCatalog,
   createModelVisibilityPolicyWithFallbacks,
 } from "./model-selection-shared.js";
+import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -31,10 +32,14 @@ type OverlayCase = [string, Partial<ModelDefinitionConfig>, boolean, ("api" | "b
 const capturedRoute = { api: "openai-responses", baseUrl: "https://captured.example/v1" } as const;
 const configuredEndpoint = "https://configured.example/v1";
 const thinkingOwner = "fixture-thinking-owner";
-const routePolicy: ModelCatalogRoutePolicy = {
-  resolveIdentity: ({ provider, id }) => ({ id, key: `${provider}/${id}` }),
-  matchesRoute: modelTransportRoutesMatch,
-};
+beforeEach(() => {
+  vi.spyOn(openAIModelCatalogRoutePolicy, "resolveIdentity").mockImplementation(
+    ({ provider, id }) => ({ id, key: `${provider}/${id}` }),
+  );
+  vi.spyOn(openAIModelCatalogRoutePolicy, "matchesRoute").mockImplementation(
+    modelTransportRoutesMatch,
+  );
+});
 
 function modelConfig<T>(
   models: T[],
@@ -61,9 +66,8 @@ function project(
         authRequirement: "api-key",
         requestTransportOverrides: "none",
       },
-      policy: routePolicy,
     },
-    overrides: createConfiguredModelCatalogOverridesResolver({ cfg, policy: routePolicy })(entry),
+    overrides: createConfiguredModelCatalogOverridesResolver({ cfg })(entry),
   });
 }
 
@@ -104,6 +108,40 @@ it.each([undefined, 4_000_000_000])(
     }
   },
 );
+
+it("keeps a catalog family only where the configured route serves the declared model", () => {
+  const captured = {
+    ...capturedRoute,
+    provider: "route-fixture",
+    id: "compact-chat",
+    name: "Compact Chat",
+    family: "meta",
+  };
+  const familyFor = (route: Partial<ModelDefinitionConfig>) =>
+    buildConfiguredModelCatalog({
+      cfg: modelConfig([{ ...makeModel("compact-chat"), ...route }]),
+      catalog: [captured],
+      manifestPlugins: [],
+    })[0]?.family;
+  expect(familyFor({})).toBe("meta");
+  expect(familyFor({ baseUrl: `${capturedRoute.baseUrl}/` })).toBe("meta");
+  // Another endpoint or wire API may serve a different model under the same id.
+  expect(familyFor({ baseUrl: configuredEndpoint })).toBeUndefined();
+  expect(familyFor({ api: "openai-completions" })).toBeUndefined();
+
+  const overlayFamily = (override: Partial<ModelCatalogEntry> = {}) =>
+    overlayCatalogMetadata(captured, { ...captured, family: undefined, ...override }).family;
+  expect(overlayFamily()).toBe("meta");
+  expect(overlayFamily({ baseUrl: configuredEndpoint })).toBeUndefined();
+  expect(overlayFamily({ baseUrl: configuredEndpoint, family: "zai" })).toBe("zai");
+
+  // A managed route projection keeps the model identity, family included.
+  const cfg = modelConfig([makeModel("compact-chat")]);
+  const { entry, runtimeEntry } = project(cfg, captured, [captured], {
+    baseUrl: "https://different.example/v1",
+  });
+  expect([entry.family, runtimeEntry.family]).toEqual(["meta", "meta"]);
+});
 
 it.each<OverlayCase>([
   [

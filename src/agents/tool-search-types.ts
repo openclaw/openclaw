@@ -5,11 +5,12 @@ import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { TOOL_CALL_RAW_TOOL_NAME } from "./tool-catalog.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 export const TOOL_SEARCH_RAW_TOOL_NAME = "tool_search";
 export const TOOL_DESCRIBE_RAW_TOOL_NAME = "tool_describe";
-export const TOOL_CALL_RAW_TOOL_NAME = "dispatch_action";
+export { TOOL_CALL_RAW_TOOL_NAME } from "./tool-catalog.js";
 // One model-visible search response, including a batch, may expose at most this many candidates.
 export const MAX_TOOL_SEARCH_RESULTS = 50;
 export const MAX_TOOL_SEARCH_BATCH_QUERIES = 16;
@@ -105,6 +106,8 @@ export type ToolSearchCatalogEntry = {
   description: string;
   /** Recorded when the catalog owner also exposes this tool in the native surface. */
   directVisible?: boolean;
+  /** Its bare name also belongs to an eligible tool kept direct outside the catalog. */
+  requiresExactId?: boolean;
   parameters?: unknown;
   outputSchema?: TSchema;
   tool: CatalogTool;
@@ -140,6 +143,7 @@ export type ToolSearchCatalogApplyResult = {
 };
 
 export type ToolSearchCatalogCompactionParams = {
+  config?: OpenClawConfig;
   tools: AnyAgentTool[];
   enabled: boolean;
   catalogRef?: ToolSearchCatalogRef;
@@ -148,4 +152,5 @@ export type ToolSearchCatalogCompactionParams = {
   isVisibleControlTool: (tool: AnyAgentTool) => boolean;
   isVisibleCatalogTool?: (tool: AnyAgentTool) => boolean;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
+  selection?: Pick<ToolSearchConfig, "include" | "exclude">;
 };

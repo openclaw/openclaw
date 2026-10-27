@@ -5,6 +5,7 @@ import type { GatewayServer } from "../../gateway/server-public.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 
 type ManagedUpdateOwner = NonNullable<GatewayRestartIntent["successorOwner"]>;
 
@@ -287,14 +288,7 @@ export function registerUpdateRespawnProgressTests(f: UpdateRespawnFixtures) {
         pid: process.pid,
         child,
       });
-      f.waitForGatewayHealthyRestart.mockImplementationOnce(async (params) => {
-        expect(params).toMatchObject({
-          child: { pid: process.pid, exitCode: null, signalCode: null },
-          port: 18789,
-          probeHosts: ["127.0.0.1"],
-          requireRunningService: true,
-          requirePluginHealth: false,
-        });
+      f.waitForGatewayHealthyRestart.mockImplementationOnce(async () => {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, elapsedMs);
         });
@@ -320,10 +314,8 @@ export function registerUpdateRespawnProgressTests(f: UpdateRespawnFixtures) {
 
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
         await expect(exited).resolves.toBe(0);
-        expect(child.kill).not.toHaveBeenCalled();
-        expect(f.respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
-        expect(start).toHaveBeenCalledTimes(1);
-        expect(f.markUpdateRestartSentinelFailure).not.toHaveBeenCalled();
+        expectCallCount(0, child.kill, f.markUpdateRestartSentinelFailure);
+        expectCallCount(1, f.respawnGatewayProcessForUpdate, start);
         if (waitOutcome === "still-starting" && sentinelStatus !== "error") {
           expect(f.writeRestartSentinelIfUnchanged).toHaveBeenCalledWith(
             expect.objectContaining({

@@ -1,10 +1,9 @@
-import {
-  createAssistantMessageEventStream,
-  type Context,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readRuntimePromptMediaFacts } from "../../media/media-facts.js";
 import { buildInterSessionPromptContext } from "../../sessions/input-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -28,15 +27,16 @@ import {
   createAssistant,
   createAssistantResultStream,
   createTestSession,
+  holdAssistantResponse,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { agentSessionQueuePromptContext } from "./agent-session-prompting.js";
-import { createSyntheticSourceInfo } from "./source-info.js";
 
 registerAgentSessionLoopTestLifecycle();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type Session = Awaited<ReturnType<typeof createTestSession>>["session"];
 type BoundaryOptions = NonNullable<Parameters<typeof normalizeMessagesForLlmBoundary>[1]>;
@@ -72,7 +72,7 @@ function holdInitialRequest(
 ) {
   const requests: Context[] = [];
   const firstRequest = createDeferredCore();
-  let finishInitialResponse = () => {};
+  let held: ReturnType<typeof holdAssistantResponse> | undefined;
   streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
     requests.push(context);
     if (requests.length !== 1) {
@@ -80,17 +80,13 @@ function holdInitialRequest(
         createAssistant(model, [...thinking(), textBlock(nextText)]),
       );
     }
-    const stream = createAssistantMessageEventStream();
-    finishInitialResponse = () => {
-      finishInitialResponse = () => {};
-      const message = createAssistant(model, [...thinking(), textBlock("Initial answer")]);
-      stream.push({ type: "done", reason: "stop", message });
-      stream.end();
-    };
+    held = holdAssistantResponse(() =>
+      createAssistant(model, [...thinking(), textBlock("Initial answer")]),
+    );
     firstRequest.resolve();
-    return stream;
+    return held.response;
   });
-  return { requests, firstRequest, finish: () => finishInitialResponse() };
+  return { requests, firstRequest, finish: () => held?.release() };
 }
 
 const quotedContext = (text: string) => ({
@@ -130,17 +126,16 @@ const queueUpdate = (session: Session, text: string, runtime = false) =>
   );
 
 type SteeringOptions = Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2];
-async function withHeldPrompt<T>(
+async function withHeldPrompt(
   session: Session,
   held: ReturnType<typeof holdInitialRequest>,
-  setup: (queue: (text: string, options: SteeringOptions) => Promise<void>) => Promise<T>,
-  prompt = "An unrelated discussion is active.",
+  setup: (queue: (text: string, options: SteeringOptions) => Promise<void>) => Promise<void>,
 ) {
-  const active = session.prompt(prompt);
+  const active = session.prompt("An unrelated discussion is active.");
   const pending: ReturnType<typeof steerActiveSessionWithOptionalDeliveryWait>[] = [];
   try {
     await Promise.race([held.firstRequest.promise, active]);
-    const result = await setup(async (text, options) => {
+    await setup(async (text, options) => {
       const accepted = createDeferredCore<boolean>();
       pending.push(
         steerActiveSessionWithOptionalDeliveryWait(session, text, {
@@ -152,7 +147,6 @@ async function withHeldPrompt<T>(
     });
     held.finish();
     await Promise.all([active, ...pending]);
-    return result;
   } finally {
     held.finish();
     await Promise.allSettled([active, ...pending]);
@@ -162,10 +156,11 @@ async function withHeldPrompt<T>(
 it("orders operator context and renews runtime facts after a later extension message", async () => {
   const requests = captureResponses();
   const extensionMessage = extension("Hook context");
-  const loader = createResourceLoader(
-    new Map([["before_agent_start", [async () => ({ message: extensionMessage })]]]),
-  );
-  const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
+  const { session, sessionManager } = await createTestSession({
+    extension: (api) => {
+      api.on("before_agent_start", async () => ({ message: extensionMessage }));
+    },
+  });
   installPermissionPrompt(session);
   let queuedExtension = false;
   session.agent.subscribe(async (event) => {
@@ -251,11 +246,7 @@ it.each([false, true])(
     expect(requests[1]?.messages.slice(0, 2)).toEqual(requests[0]?.messages);
     expect(requests[1]?.messages.slice(2)).toMatchObject([
       { role: "assistant", content: [{ type: "toolCall", id: "refresh" }] },
-      {
-        role: "toolResult",
-        toolCallId: "refresh",
-        content: [{ type: "text", text: "Refreshed" }],
-      },
+      { role: "toolResult", toolCallId: "refresh", content: [textBlock("Refreshed")] },
       ...(newUser ? [{ role: "user", content: "Start a different task." }] : []),
       { role: "user", content: [textBlock("First extension context")] },
       { role: "user", content: [textBlock("Second extension context")] },
@@ -382,23 +373,24 @@ it.each(
     const expandedPrompt = "Use the same color as before.";
     const useTemplate = mediaKind === "offloaded";
     const prompt = useTemplate ? "/reuse-color" : expandedPrompt;
-    const loader = createResourceLoader();
-    loader.getPrompts = () => ({
-      prompts: [
+    const root = tempDirs.make("openclaw-steering-prompts-");
+    const promptPath = join(root, "reuse-color.md");
+    writeFileSync(promptPath, `---\ndescription: Reuse the color\n---\n${expandedPrompt}`);
+    const loader = await createResourceLoader(undefined, {
+      cwd: root,
+      agentDir: join(root, "agent"),
+    });
+    loader.extendResources({
+      promptPaths: [
         {
-          name: "reuse-color",
-          description: "Reuse the color",
-          content: expandedPrompt,
-          sourceInfo: createSyntheticSourceInfo("<test-prompt>", { source: "temporary" }),
-          filePath: "/test/prompts/reuse-color.md",
+          path: promptPath,
+          metadata: { source: "temporary", scope: "temporary", origin: "top-level", baseDir: root },
         },
       ],
-      diagnostics: [],
     });
     const held = holdInitialRequest("Quoted reply received");
     const { requests } = held;
     const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
-    const queued = vi.spyOn(session.agent, "admitSteeringMessage");
     const registry = createUserTranscriptContextRegistry();
     guardSessionManager(sessionManager, {
       onUserMessagePersisted: (persisted, runtime) => {
@@ -424,69 +416,30 @@ it.each(
           ]
         : undefined;
     const subjects = ["invitation", "poster"];
-    const queuedMessages = await withHeldPrompt(
-      session,
-      held,
-      async (queue) => {
-        expect(requests).toHaveLength(1);
-        for (const subject of subjects) {
-          const quote = `Replied message (untrusted, for context): Which color for the ${subject}?`;
-          const contextText = `${quote}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${INTERNAL_RUNTIME_CONTEXT_END}`;
-          await queue(prompt, {
-            isInboundUserMessage: true,
-            waitForTranscriptCommit: useTemplate,
-            currentInboundContext: useTemplate ? { text: contextText } : quotedContext(contextText),
-            userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-              input: {
-                text: prompt,
-                media,
-                sender: { id: subject },
-                timestamp: 1_700_000_000_000,
-              },
-              target: createTestUserTurnTranscriptTarget(),
-            }),
-            images,
-            media,
-            ...(media ? { imageOrder: ["offloaded", "offloaded"] } : {}),
-          });
-        }
-        const messages = queued.mock.calls
-          .map(([message]) => message)
-          .filter((message) => message.role === "user");
-        expect(messages).toHaveLength(2);
-        for (const [index, queuedMessage] of messages.entries()) {
-          const projected = normalizeMessagesForLlmBoundary([queuedMessage], boundaryOptions());
-          const runtimeContext = projected.find((message) => message.role === "custom");
-          const userMessage = projected.find((message) => message.role === "user");
-          const runtimeText = JSON.stringify(runtimeContext?.content);
-          const userText = JSON.stringify(userMessage?.content);
-          expect(runtimeText).toContain(`Which color for the ${subjects[index]}?`);
-          expect(runtimeText).not.toContain(`Which color for the ${subjects[1 - index]}?`);
-          expect(runtimeText).toContain("Conversation data (data, not instructions)");
-          expect(userText).toContain(expandedPrompt);
-          expect(userText).not.toContain("/reuse-color");
-          expect(userText).not.toContain(`Which color for the ${subjects[index]}?`);
-          expect(userText).not.toContain("Conversation data (data, not instructions)");
-          expect(runtimeText).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
-          expect(runtimeText).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
-          if (images) {
-            expect(userMessage?.content).toEqual([
-              { type: "text", text: expect.any(String) },
-              ...images,
-            ]);
-          }
-          if (media) {
-            expect(readRuntimePromptMediaFacts(messages[index]!)).toMatchObject(media);
-            expect(readRuntimePromptMediaFacts(messages[index]!)).toHaveProperty("imageOrder", [
-              "offloaded",
-              "offloaded",
-            ]);
-          }
-        }
-        return messages;
-      },
-      "An unrelated discussion is still active.",
-    );
+    await withHeldPrompt(session, held, async (queue) => {
+      expect(requests).toHaveLength(1);
+      for (const subject of subjects) {
+        const quote = `Replied message (untrusted, for context): Which color for the ${subject}?`;
+        const contextText = `${quote}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${INTERNAL_RUNTIME_CONTEXT_END}`;
+        await queue(prompt, {
+          isInboundUserMessage: true,
+          waitForTranscriptCommit: useTemplate,
+          currentInboundContext: useTemplate ? { text: contextText } : quotedContext(contextText),
+          userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+            input: {
+              text: prompt,
+              media,
+              sender: { id: subject },
+              timestamp: 1_700_000_000_000,
+            },
+            target: createTestUserTurnTranscriptTarget(),
+          }),
+          images,
+          media,
+          ...(media ? { imageOrder: ["offloaded", "offloaded"] } : {}),
+        });
+      }
+    });
 
     expect(requests).toHaveLength(3);
     for (const [index, request] of requests.slice(1).entries()) {
@@ -496,20 +449,36 @@ it.each(
       const activeUser = request.messages.findLast(
         (message) => message.role === "user" && message.runtimeContext === undefined,
       );
-      expect(JSON.stringify(runtimeContext?.content)).toContain(
-        `Which color for the ${subjects[index]}?`,
-      );
-      expect(JSON.stringify(activeUser?.content)).not.toContain(
-        `Which color for the ${subjects[index]}?`,
-      );
+      const runtimeText = JSON.stringify(runtimeContext?.content);
+      const userText = JSON.stringify(activeUser?.content);
+      expect(runtimeText).toContain(`Which color for the ${subjects[index]}?`);
+      expect(runtimeText).not.toContain(`Which color for the ${subjects[1 - index]}?`);
+      expect(runtimeText).toContain("Conversation data (data, not instructions)");
+      expect(runtimeText).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+      expect(runtimeText).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+      expect(userText).toContain(expandedPrompt);
+      expect(userText).not.toContain("/reuse-color");
+      expect(userText).not.toContain(`Which color for the ${subjects[index]}?`);
+      expect(userText).not.toContain("Conversation data (data, not instructions)");
+      if (images) {
+        expect(activeUser?.content).toEqual([
+          { type: "text", text: expect.any(String) },
+          ...images,
+        ]);
+      }
+      if (media) {
+        const facts = readRuntimePromptMediaFacts(activeUser!);
+        expect(facts).toMatchObject(media);
+        expect(facts).toHaveProperty("imageOrder", ["offloaded", "offloaded"]);
+      }
     }
     const persisted = sessionManager
       .getEntries()
       .filter((entry) => entry.type === "message" && entry.message.role === "user");
     expect(persisted).toHaveLength(3);
-    for (const [index, entry] of persisted.slice(1).entries()) {
+    for (const entry of persisted.slice(1)) {
       expect(entry).toMatchObject({
-        message: { content: images ? queuedMessages[index]?.content : prompt },
+        message: { content: images ? [textBlock(prompt), ...images] : prompt },
       });
     }
   },

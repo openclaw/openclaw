@@ -1,4 +1,5 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -20,9 +21,16 @@ type AcceptedRunAbortParams = {
   isCurrent?: () => boolean;
   callGateway?: GatewayCall;
   timeoutMs?: number;
-  signal?: AbortSignal;
 };
 type AcceptedRunTerminationResult = { status: "settled" } | { status: "failed"; error: unknown };
+
+/** Keep the committed incarnation pair together; never rediscover it from a reused key. */
+export function captureSubagentSessionCleanupIdentity(entry?: SessionEntry) {
+  return {
+    expectedSessionId: entry?.sessionId,
+    expectedLifecycleRevision: entry?.lifecycleRevision,
+  };
+}
 
 /** Binds rollback to the session this spawn created, independently of its operator's lifetime. */
 export function bindSubagentSpawnCleanup(params: {
@@ -63,7 +71,7 @@ export function bindSubagentSpawnCleanup(params: {
     return (
       !currentRun ||
       (currentRun === acceptedRun?.entry &&
-        currentRun.adapter.operationalRunInstance === acceptedRun?.operationalRunInstance &&
+        currentRun.adapter.operationalRunInstance === acceptedRun.operationalRunInstance &&
         getRpcSourceIdentity(currentRun).sessionKey === params.childSessionKey &&
         getRpcSourceIdentity(currentRun).sessionId === identity.expectedSessionId)
     );
@@ -175,8 +183,7 @@ function isDefinitiveAbortMiss(response: unknown, gatewayRunId: string): boolean
   const result = asNullableRecord(response);
   return (
     typeof result?.aborted === "boolean" &&
-    Array.isArray(result.runIds) &&
-    result.runIds.every((runId) => typeof runId === "string") &&
+    isStringArray(result.runIds) &&
     !result.runIds.includes(gatewayRunId)
   );
 }
@@ -185,7 +192,6 @@ type SessionCleanupOptions = {
   childAgentId?: string;
   isCurrent?: () => boolean;
   emitLifecycleHooks?: boolean;
-  deleteTranscript?: boolean;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
   callGateway?: GatewayCall;
@@ -200,7 +206,7 @@ function requestProvisionalSessionCleanup(
     ...options,
     childSessionKey,
     callGateway: options?.callGateway ?? callSubagentGateway,
-    deleteTranscript: options?.deleteTranscript === true,
+    deleteTranscript: true,
     timeoutMs: options?.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
   });
 }
@@ -219,7 +225,6 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   childAgentId?: string;
   attachmentId?: string;
   emitLifecycleHooks?: boolean;
-  deleteTranscript?: boolean;
   waitForSessionDeletion?: boolean;
   waitForCleanup?: () => Promise<void> | undefined;
   expectedSessionId?: string;
@@ -287,14 +292,12 @@ export async function terminateFailedRegistrationRun(params: {
 
 async function requestAcceptedRunAbort(params: AcceptedRunAbortParams): Promise<unknown> {
   const call = params.callGateway ?? callSubagentGateway;
-  params.signal?.throwIfAborted();
   return await call({
     method: "chat.abort",
     params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
-    ...(params.isCurrent || params.signal
+    ...(params.isCurrent
       ? {
           assertDispatchCurrent: () => {
-            params.signal?.throwIfAborted();
             if (params.isCurrent && !params.isCurrent()) {
               throw new Error("Subagent spawn no longer owns this accepted run");
             }
@@ -302,7 +305,6 @@ async function requestAcceptedRunAbort(params: AcceptedRunAbortParams): Promise<
         }
       : {}),
     timeoutMs: params.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
-    ...(params.signal ? { signal: params.signal } : {}),
   });
 }
 
@@ -337,7 +339,6 @@ export async function terminateAcceptedCollectorRun(params: {
   }
   const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
     isCurrent: params.isCurrent,
-    deleteTranscript: true,
     expectedSessionId: params.expectedSessionId,
     expectedLifecycleRevision: params.expectedLifecycleRevision,
     callGateway: call,

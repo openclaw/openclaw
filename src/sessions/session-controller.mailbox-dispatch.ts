@@ -1,9 +1,9 @@
 /** Selection, preparation and dispatch share one mailbox-owned lifecycle. */
-import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
 import {
   prepareNextDeliveryGroup,
   resolveFollowupDeliveryStorageKey,
 } from "../auto-reply/reply/queue/delivery-context.js";
+import { runOutsideAdmittedGenerationScopes } from "../auto-reply/reply/queue/drain-admission-scope.js";
 import { requiresIndividualCollectDrain } from "../auto-reply/reply/queue/envelope.js";
 import { updateFollowupRetryHeartbeatsWithCustody } from "../auto-reply/reply/queue/pre-adoption-heartbeat.js";
 import {
@@ -154,7 +154,7 @@ export function pumpSessionControllerMailbox(mailbox: SessionControllerMailbox):
   const delay =
     first.ready || first.task || priority
       ? 0
-      : Math.max(0, mailbox.lastEnqueuedAt + mailbox.debounceMs - Date.now());
+      : Math.max(0, mailbox.lastEnqueuedAt + mailbox.debounceMs - performance.now());
   if (delay > 0) {
     clearTimeout(mailbox.timer);
     mailbox.timer = setTimeout(() => {
@@ -214,7 +214,7 @@ async function prepareSessionControllerMailboxSelection(
       () =>
         runWithGatewayDetachedWorkContinuation(
           () =>
-            runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+            runOutsideAdmittedGenerationScopes(() =>
               prepareNextDeliveryGroup(() => selection.sources, assertCurrent),
             ),
           "session:mailbox-preparation",
@@ -229,7 +229,7 @@ async function prepareSessionControllerMailboxSelection(
       selection.sources,
       (source) => source.controllerClaim?.custody ?? source.controllerInput!.custody,
     );
-    mailbox.lastEnqueuedAt = Date.now();
+    mailbox.lastEnqueuedAt = performance.now();
     retry = !(error instanceof AgentDatabaseExecutionAdmissionClosedError);
     if (!(error instanceof FollowupRunDeferredError)) {
       if (isGatewayRestartDrainError(error)) {

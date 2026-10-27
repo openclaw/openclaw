@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import type { McpToolCatalog } from "../agents/agent-bundle-mcp-types.js";
+import { fixtureCatalog } from "../agents/agent-bundle-mcp-fixture.test-support.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createCoreGatewayMethodDescriptors } from "./methods/core-method-policy.js";
@@ -34,26 +34,17 @@ test("global App discovery uses a session admitted by sessions.create before any
     ...getRuntimeConfig(),
     mcp: { apps: { enabled: true }, servers: { demo: { command: "fixture" } } },
   };
-  const owner = ensureProfileForEmail("app-discovery@example.test");
-  const client = identifiedClient(owner.id);
-  const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+  const client = identifiedClient(ensureProfileForEmail("app-discovery@example.test").id);
+  const runtimeContext = { getRuntimeConfig: () => cfg };
+  const context = createDirectChatContext(runtimeContext);
   await initializeSessionReadContext(context);
-  const catalog: McpToolCatalog = {
-    version: 1,
-    generatedAt: 1,
-    servers: { demo: { serverName: "demo", launchSummary: "fixture", toolCount: 1 } },
-    tools: [
-      {
-        serverName: "demo",
-        safeServerName: "demo",
-        toolName: "show",
-        inputSchema: { type: "object" },
-        fallbackDescription: "Show app",
-        uiResourceUri: "ui://demo/app",
-        appExtensions: { entrypoints: [{ type: "global" }] },
-      },
-    ],
-  };
+  const catalog = fixtureCatalog("demo", [
+    {
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      appExtensions: { entrypoints: [{ type: "global" }] },
+    },
+  ]);
   mcp.acquire.mockResolvedValue({ runtime: { getCatalog: async () => catalog } });
   const sessionKey = "agent:main:main";
   const discover = async () => {
@@ -73,30 +64,18 @@ test("global App discovery uses a session admitted by sessions.create before any
         createCoreGatewayMethodDescriptors(mcpAppExtensionHandlers),
       ),
     });
-    return respond;
+    return respond.mock.calls;
   };
-  expect(await discover()).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code: "FORBIDDEN" }),
-  );
+  expect(await discover()).toMatchObject([[false, undefined, { code: "FORBIDDEN" }]]);
   expect(mcp.acquire).not.toHaveBeenCalled();
   const created = await directSessionReq(
     "sessions.create",
     { key: sessionKey, agentId: "main" },
-    {
-      client,
-      context: { getRuntimeConfig: () => cfg },
-    },
+    { client, context: runtimeContext },
   );
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(await discover()).toHaveBeenCalledWith(
-    true,
-    expect.objectContaining({
-      servers: [
-        expect.objectContaining({ entrypoints: [expect.objectContaining({ toolName: "show" })] }),
-      ],
-    }),
-  );
+  expect(await discover()).toMatchObject([
+    [true, { servers: [{ entrypoints: [{ toolName: "show" }] }] }],
+  ]);
   expect(mcp.acquire).toHaveBeenCalledOnce();
 });

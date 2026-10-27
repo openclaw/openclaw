@@ -63,7 +63,7 @@ export function prepareCatalogExecutor(options?: {
       sessionManager: options?.sessionManager ?? SessionManager.inMemory(),
       subscribe: () => () => {},
     } as never);
-  const prepared = prepareEmbeddedAttemptStream({
+  const input: StreamInput = {
     attempt: {
       runId: "run-output-schema",
       sessionId: "session-output-schema",
@@ -105,9 +105,11 @@ export function prepareCatalogExecutor(options?: {
     getRunState: options?.getRunState ?? (() => ({ ...idleRunState })),
     onBlockReply: options?.streamReplies === false ? undefined : vi.fn(),
     onBlockReplyFlush: options?.streamReplies === false ? undefined : vi.fn(),
-  });
+  };
+  const prepared = prepareEmbeddedAttemptStream(input);
   return {
     ...prepared,
+    input,
     nestedToolActivityState,
     readActivities: () =>
       readAttemptNestedToolActivity(activeSession.sessionManager, nestedToolActivityState),
@@ -141,7 +143,9 @@ export async function createHeldSettlementSession() {
     await releaseSettlement.promise;
   };
   const { session } = await createTestSession({
-    resourceLoader: createResourceLoader(new Map([["agent_settled", [holdSettlement]]])),
+    resourceLoader: await createResourceLoader((api) => {
+      api.on("agent_settled", holdSettlement);
+    }),
   });
   streamMocks.streamSimple.mockImplementation((model) =>
     createAssistantResultStream(createAssistant(model, "Done.")),
@@ -247,7 +251,6 @@ export async function observeTerminalRunActivity(
       createMediaGenerationOperation({
         taskId: "tool:image_generate:terminal",
         status: "running",
-        createdAt: 1,
         taskKind: "image_generation",
         requesterSessionKey: sessionKey,
         runId: "tool:image_generate:terminal",

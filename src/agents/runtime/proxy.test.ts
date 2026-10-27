@@ -1,30 +1,21 @@
 import { once } from "node:events";
 import http from "node:http";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { collect } from "../../../test/helpers/async-iterable.js";
 import type { Context, Model, Usage } from "../../llm/types.js";
-import { streamProxy } from "./proxy.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { createUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { streamProxy, type ProxyStreamOptions } from "./proxy.js";
 
-const usage: Usage = {
-  input: 1,
-  output: 2,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 3,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage: Usage = createUsageFixture(1, 2, 3);
 
-const model: Model = {
+const model: Model = makeProviderModelFixture({
   id: "test-model",
-  name: "Test Model",
   provider: "test",
   api: "openai-responses",
   baseUrl: "https://example.test",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1024,
-  maxTokens: 1024,
-};
+});
 
 const context: Context = { messages: [{ role: "user", content: "hello", timestamp: 1 }] };
 
@@ -35,6 +26,11 @@ function stubResponse(response: Response) {
   const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response);
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+function startStream(response: Response, options: Partial<ProxyStreamOptions> = {}) {
+  stubResponse(response);
+  return streamProxy(model, context, { ...proxyOptions, ...options });
 }
 
 function requestBody(fetchMock: ReturnType<typeof stubResponse>) {
@@ -50,85 +46,45 @@ function sseFrame(event: unknown): string {
   return `data: ${JSON.stringify(event)}\n\n`;
 }
 
-async function collectEvents(stream: ReturnType<typeof streamProxy>) {
-  const events = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
-}
-
-function readerResponse(reader: ReadableStreamDefaultReader<Uint8Array>): Response {
-  return { ok: true, status: 200, body: { getReader: () => reader } } as Response;
-}
-
 function responseFromText(text: string): Response {
-  return new Response(new TextEncoder().encode(text), { status: 200 });
+  return new Response(new TextEncoder().encode(text));
 }
 
 function responseFromSseFrames(frames: unknown[]): Response {
-  const encoder = new TextEncoder();
-  const chunks = frames.map((frame) => encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
-  const reader = {
-    read: vi.fn(async () => {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      const value = chunks.shift();
-      return value ? { done: false, value } : { done: true, value: undefined };
-    }),
-    cancel: vi.fn(async () => undefined),
-    releaseLock: vi.fn(),
-  } as unknown as ReadableStreamDefaultReader<Uint8Array>;
-
-  return readerResponse(reader);
-}
-
-function responseFromReaderText(
-  text: string,
-  releaseLock: () => void,
-  cancel: () => Promise<void> = async () => undefined,
-): Response {
-  const chunks: Array<ReadableStreamReadResult<Uint8Array>> = [
-    { done: false, value: new TextEncoder().encode(text) },
-    { done: true, value: undefined },
-  ];
-  const reader = {
-    read: async () => chunks.shift() ?? { done: true, value: undefined },
-    cancel,
-    releaseLock,
-  } as ReadableStreamDefaultReader<Uint8Array>;
-
-  return readerResponse(reader);
+  return readerResponse(frames.map(sseFrame), { beforeRead: nextTurn });
 }
 
 const unresolved = Symbol("unresolved stream result");
 
-function pendingReaderResponse(params: {
-  chunks: Uint8Array[];
-  status?: number;
-  statusText?: string;
-  onCancel?: (reason?: unknown) => void;
-}): Response {
-  const chunks = [...params.chunks];
+function readerResponse(
+  texts: string[],
+  {
+    pending = false,
+    status = 200,
+    statusText = "OK",
+    beforeRead = async () => {},
+    cancel = async (_reason?: unknown) => {},
+    releaseLock = () => {},
+  } = {},
+): Response {
+  const chunks = texts.map((text) => new TextEncoder().encode(text));
   const reader = {
-    read: vi.fn(async () => {
-      const chunk = chunks.shift();
-      if (chunk) {
-        return { done: false, value: chunk };
-      }
-      return await new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
-    }),
-    cancel: vi.fn(async (reason?: unknown) => {
-      params.onCancel?.(reason);
-    }),
-    releaseLock: vi.fn(),
-  } as unknown as ReadableStreamDefaultReader<Uint8Array>;
-
+    read: async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+      await beforeRead();
+      const value = chunks.shift();
+      return value
+        ? { done: false, value }
+        : pending
+          ? new Promise(() => {})
+          : { done: true, value: undefined };
+    },
+    cancel,
+    releaseLock,
+  };
   return {
-    ok: (params.status ?? 200) >= 200 && (params.status ?? 200) < 300,
-    status: params.status ?? 200,
-    statusText: params.statusText ?? "OK",
+    ok: status >= 200 && status < 300,
+    status,
+    statusText,
     body: { getReader: () => reader },
   } as Response;
 }
@@ -162,21 +118,17 @@ describe("streamProxy", () => {
   });
 
   it("accepts data lines without a space after the colon", async () => {
-    // The SSE spec makes the space optional; proxies emitting `data:{...}`
-    // must not have their events silently dropped.
     const proxyEvents = [
       { type: "text_start", contentIndex: 0, contentSignature: "sig" },
       { type: "text_delta", contentIndex: 0, delta: "Working..." },
       { type: "text_end", contentIndex: 0 },
-      { type: "done", reason: "stop", usage },
+      done,
     ];
     const body = proxyEvents
       .map((event, index) => `data:${index === 1 ? " " : ""}${JSON.stringify(event)}\n`)
       .join("\n");
-    stubResponse(responseFromText(body));
-
-    const stream = streamProxy(model, context, proxyOptions);
-    const events = await collectEvents(stream);
+    const stream = startStream(responseFromText(body));
+    const events = await collect(stream);
 
     expect(events.map((event) => event.type)).toEqual([
       "text_start",
@@ -193,7 +145,7 @@ describe("streamProxy", () => {
     const initialContent = "a".repeat(128);
     const checkpointContent = "b".repeat(400);
     const deltas = [`{"content":"${initialContent}`, checkpointContent, `","terminal":"exact"}`];
-    stubResponse(
+    const stream = startStream(
       responseFromSseFrames([
         { type: "toolcall_start", contentIndex: 0, id: "call-1", toolName: "write" },
         ...deltas.map((delta) => ({ type: "toolcall_delta", contentIndex: 0, delta })),
@@ -202,7 +154,6 @@ describe("streamProxy", () => {
       ]),
     );
 
-    const stream = streamProxy(model, context, proxyOptions);
     const argumentSnapshots: Array<Record<string, unknown>> = [];
     let terminalArguments: Record<string, unknown> | undefined;
     for await (const event of stream) {
@@ -226,15 +177,13 @@ describe("streamProxy", () => {
   });
 
   it("preserves empty arguments for terminal-only tool calls", async () => {
-    stubResponse(
+    const stream = startStream(
       responseFromSseFrames([
         { type: "toolcall_start", contentIndex: 0, id: "call-1", toolName: "list" },
         { type: "toolcall_end", contentIndex: 0 },
         { type: "done", reason: "toolUse", usage },
       ]),
     );
-
-    const stream = streamProxy(model, context, proxyOptions);
 
     await expect(stream.result()).resolves.toMatchObject({
       stopReason: "toolUse",
@@ -243,8 +192,6 @@ describe("streamProxy", () => {
   });
 
   it("flushes a final SSE frame without a trailing newline", async () => {
-    // Provider proxies can close immediately after the last SSE frame; the
-    // parser still has to emit the terminal done event.
     const fetchMock = stubResponse(responseFromText(`data: ${JSON.stringify(done)}`));
 
     const options = {
@@ -252,7 +199,7 @@ describe("streamProxy", () => {
       headers: { Authorization: "Bearer upstream", "x-api-key": "secret" },
     };
     const stream = streamProxy(model, context, options);
-    const events = await collectEvents(stream);
+    const events = await collect(stream);
 
     expect(events.at(-1)?.type).toBe("done");
     await expect(stream.result()).resolves.toMatchObject({
@@ -273,12 +220,14 @@ describe("streamProxy", () => {
       ...proxyOptions,
       sessionId: "run-session",
       promptCacheKey: "stable-cache-key",
+      promptCacheTtl: "12h",
     }).result();
 
     const body = requestBody(fetchMock);
     expect(body.options).toMatchObject({
       sessionId: "run-session",
       promptCacheKey: "stable-cache-key",
+      promptCacheTtl: "12h",
     });
   });
 
@@ -307,50 +256,34 @@ describe("streamProxy", () => {
     });
   });
 
-  async function expectBodySizeLimit(
-    text: string,
-    errorMessage: string,
-    responseOptions: { status?: number; statusText?: string } = {},
-  ) {
-    const cancel = vi.fn();
+  it.each([
+    { name: "JSON error", prefix: '{"error":"', delimiter: "", status: 502, kind: "error body" },
+    { name: "pending SSE", prefix: "data: ", delimiter: "", status: 200, kind: "SSE stream" },
+    { name: "delimited SSE", prefix: "data: ", delimiter: "\n", status: 200, kind: "SSE stream" },
+  ])("bounds $name bytes", async ({ prefix, delimiter, status, kind }) => {
+    const cancel = vi.fn(async (_reason?: unknown) => {});
     stubResponse(
-      pendingReaderResponse({
-        ...responseOptions,
-        chunks: [new TextEncoder().encode(text)],
-        onCancel: cancel,
+      readerResponse([`${prefix}${"x".repeat(17 * 1024 * 1024)}${delimiter}`], {
+        status,
+        pending: true,
+        cancel,
       }),
     );
     const stream = streamProxy(model, context, proxyOptions);
-    expect(await resultWithinMs(stream)).toMatchObject({ stopReason: "error", errorMessage });
-    return cancel;
-  }
-
-  it("bounds non-2xx proxy JSON error reads", async () => {
-    const cancel = await expectBodySizeLimit(
-      `{"error":"${"x".repeat(17 * 1024 * 1024)}`,
-      "Proxy error body exceeded 16777216 bytes",
-      { status: 502, statusText: "Bad Gateway" },
-    );
+    expect(await resultWithinMs(stream)).toMatchObject({
+      stopReason: "error",
+      errorMessage: `Proxy ${kind} exceeded 16777216 bytes`,
+    });
     expect(cancel).toHaveBeenCalled();
+    if (status === 200) {
+      expect(cancel).toHaveBeenCalledWith(expect.any(Error));
+    }
   });
 
-  async function expectSseSizeLimit(delimiter: string) {
-    const cancel = await expectBodySizeLimit(
-      `data: ${"x".repeat(17 * 1024 * 1024)}${delimiter}`,
-      "Proxy SSE stream exceeded 16777216 bytes",
-    );
-    expect(cancel).toHaveBeenCalledWith(expect.any(Error));
-  }
-
-  it("caps unterminated pending SSE bytes before a frame delimiter arrives", async () => {
-    await expectSseSizeLimit("");
-  });
-
-  it("caps delimiter-terminated SSE success body bytes", async () => {
-    await expectSseSizeLimit("\n");
-  });
-
-  async function expectStreamSurvivesChunks(intervalMs: number, timeoutMs?: number) {
+  it.each([
+    { name: "re-arms the default idle timeout", intervalMs: 119_000, timeoutMs: undefined },
+    { name: "does not impose an absolute stream deadline", intervalMs: 4, timeoutMs: 5 },
+  ])("$name", async ({ intervalMs, timeoutMs }) => {
     vi.useFakeTimers();
     const encoder = new TextEncoder();
     const secondRead = Promise.withResolvers<ReadableStreamReadResult<Uint8Array>>();
@@ -365,7 +298,7 @@ describe("streamProxy", () => {
       cancel,
       releaseLock: vi.fn(),
     } as unknown as ReadableStreamDefaultReader<Uint8Array>;
-    stubResponse(readerResponse(reader));
+    stubResponse({ ok: true, body: { getReader: () => reader } } as Response);
 
     const stream = streamProxy(model, context, { ...proxyOptions, timeoutMs });
 
@@ -383,22 +316,14 @@ describe("streamProxy", () => {
     });
 
     await expect(stream.result()).resolves.toMatchObject({ stopReason: "stop", usage });
-  }
-
-  it("re-arms the SSE idle timeout after each received chunk", async () => {
-    await expectStreamSurvivesChunks(119_000);
-  });
-
-  it("does not apply the pre-header timeout as an absolute stream deadline", async () => {
-    await expectStreamSurvivesChunks(4, 5);
   });
 
   it("honors a longer configured SSE read idle timeout", async () => {
     vi.useFakeTimers();
-    const cancel = vi.fn(() => undefined);
-    stubResponse(pendingReaderResponse({ chunks: [], onCancel: cancel }));
-
-    const stream = streamProxy(model, context, { ...proxyOptions, timeoutMs: 180_000 });
+    const cancel = vi.fn(async (_reason?: unknown) => {});
+    const stream = startStream(readerResponse([], { pending: true, cancel }), {
+      timeoutMs: 180_000,
+    });
     await vi.advanceTimersByTimeAsync(120_000);
 
     expect(await settledResult(stream)).toBe(unresolved);
@@ -415,30 +340,27 @@ describe("streamProxy", () => {
 
   it("releases the response reader when terminal stream cancellation never settles", async () => {
     const releaseLock = vi.fn();
-    stubResponse(
-      responseFromReaderText(sseFrame(done), releaseLock, () => new Promise<void>(() => {})),
+    const stream = startStream(
+      readerResponse([sseFrame(done)], { releaseLock, cancel: () => new Promise<void>(() => {}) }),
     );
 
-    await streamProxy(model, context, proxyOptions).result();
+    await stream.result();
 
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
   it("does not cancel a naturally drained response ending with a terminal frame", async () => {
     const cancel = vi.fn(async () => undefined);
-    stubResponse(responseFromReaderText(`data: ${JSON.stringify(done)}`, () => undefined, cancel));
-
-    await expect(streamProxy(model, context, proxyOptions).result()).resolves.toMatchObject({
+    const stream = startStream(readerResponse([`data: ${JSON.stringify(done)}`], { cancel }));
+    await expect(stream.result()).resolves.toMatchObject({
       stopReason: "stop",
     });
     expect(cancel).not.toHaveBeenCalled();
   });
 
   it("returns an error result when EOF arrives without a terminal event", async () => {
-    stubResponse(responseFromText(`data: ${JSON.stringify({ type: "start" })}`));
-
-    const stream = streamProxy(model, context, proxyOptions);
-    const events = await collectEvents(stream);
+    const stream = startStream(responseFromText(`data: ${JSON.stringify({ type: "start" })}`));
+    const events = await collect(stream);
 
     expect(events.at(-1)?.type).toBe("error");
     await expect(stream.result()).resolves.toMatchObject({
@@ -450,7 +372,7 @@ describe("streamProxy", () => {
 
 describe("streamProxy loopback /api/stream", () => {
   let server: http.Server | undefined;
-  const dripIntervals = new Set<ReturnType<typeof setInterval>>();
+  let dripInterval: ReturnType<typeof setInterval> | undefined;
 
   async function listen(listener: http.RequestListener, handleClientError = false) {
     server = http.createServer(listener);
@@ -471,10 +393,7 @@ describe("streamProxy loopback /api/stream", () => {
   }
 
   afterEach(async () => {
-    for (const interval of dripIntervals) {
-      clearInterval(interval);
-    }
-    dripIntervals.clear();
+    clearInterval(dripInterval);
     if (!server) {
       return;
     }
@@ -485,46 +404,10 @@ describe("streamProxy loopback /api/stream", () => {
     server = undefined;
   });
 
-  async function listenDripProxy(): Promise<number> {
-    return await listen((req, res) => {
-      res.on("error", () => {});
-      if (req.method !== "POST" || req.url !== "/api/stream") {
-        res.writeHead(404);
-        res.end();
-        return;
-      }
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Transfer-Encoding": "chunked",
-      });
-      // Keepalive-style drip resets chunk-idle; outer abort must win.
-      const drip = () => {
-        if (res.writableEnded || res.destroyed) {
-          return;
-        }
-        res.write(`data: ${JSON.stringify({ type: "start" })}\n\n`);
-      };
-      const interval = setInterval(drip, 20);
-      dripIntervals.add(interval);
-      res.once("close", () => {
-        clearInterval(interval);
-        dripIntervals.delete(interval);
-      });
-      drip();
-    }, true);
-  }
-
   async function listenProxyErrorBody(bytes: Buffer, splitAt: number) {
-    const request: {
-      method?: string;
-      path?: string;
-      authorization?: string;
-    } = {};
-
+    let request: [string | undefined, string | undefined, string | undefined] | undefined;
     const port = await listen((req, res) => {
-      request.method = req.method;
-      request.path = req.url;
-      request.authorization = req.headers.authorization;
+      request = [req.method, req.url, req.headers.authorization];
       if (req.method !== "POST" || req.url !== "/api/stream") {
         res.writeHead(404);
         res.end();
@@ -536,11 +419,7 @@ describe("streamProxy loopback /api/stream", () => {
       res.end(bytes.subarray(splitAt));
     }, true);
     const result = await streamProxy(model, context, loopbackOptions(port)).result();
-    expect(request).toEqual({
-      method: "POST",
-      path: "/api/stream",
-      authorization: "Bearer token",
-    });
+    expect(request).toEqual(["POST", "/api/stream", "Bearer token"]);
     return result;
   }
 
@@ -591,20 +470,17 @@ describe("streamProxy loopback /api/stream", () => {
     },
   );
 
-  it("falls back to the HTTP status for malformed UTF-8 proxy errors", async () => {
-    const prefix = Buffer.from('{"error":"corrupted ');
-    const bytes = Buffer.concat([prefix, Buffer.from([0xff]), Buffer.from(' upstream"}')]);
-    const result = await listenProxyErrorBody(bytes, prefix.length);
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorMessage: "Proxy error: 502 Bad Gateway",
-    });
-  });
-
-  it("preserves a valid replacement character in proxy error responses", async () => {
-    const error = "upstream legitimately contains \uFFFD";
-    const bytes = Buffer.from(JSON.stringify({ error }));
-    const result = await listenProxyErrorBody(bytes, bytes.indexOf(0xef) + 1);
+  it.each([
+    { name: "rejects malformed UTF-8", character: Buffer.from([0xff]), error: "502 Bad Gateway" },
+    {
+      name: "preserves a valid replacement character",
+      character: Buffer.from("\uFFFD"),
+      error: "upstream \uFFFD",
+    },
+  ])("$name in proxy error responses", async ({ character, error }) => {
+    const prefix = Buffer.from('{"error":"upstream ');
+    const bytes = Buffer.concat([prefix, character, Buffer.from('"}')]);
+    const result = await listenProxyErrorBody(bytes, prefix.length + 1);
     expect(result).toMatchObject({
       stopReason: "error",
       errorMessage: `Proxy error: ${error}`,
@@ -612,7 +488,22 @@ describe("streamProxy loopback /api/stream", () => {
   });
 
   it("cancels a dripping native SSE body when the outer abort signal fires", async () => {
-    const port = await listenDripProxy();
+    const port = await listen((req, res) => {
+      res.on("error", () => {});
+      if (req.method !== "POST" || req.url !== "/api/stream") {
+        res.writeHead(404).end();
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Transfer-Encoding": "chunked" });
+      const drip = () => {
+        if (!res.writableEnded && !res.destroyed) {
+          res.write(sseFrame({ type: "start" }));
+        }
+      };
+      dripInterval = setInterval(drip, 20);
+      res.once("close", () => clearInterval(dripInterval));
+      drip();
+    }, true);
     const controller = new AbortController();
     const stream = streamProxy(model, context, {
       ...loopbackOptions(port),

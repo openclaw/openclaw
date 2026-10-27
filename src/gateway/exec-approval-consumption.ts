@@ -5,7 +5,6 @@ import {
 } from "./exec-approval-lifecycle.js";
 import type {
   ExecApprovalManagerOptions,
-  ExecApprovalPreparedConsumption,
   ExecApprovalRecord,
 } from "./exec-approval-manager.types.js";
 import {
@@ -13,6 +12,7 @@ import {
   captureExecApprovalMutationPersistence,
 } from "./exec-approval-recovery.js";
 import type { OperatorApprovalKind } from "./operator-approval-store.js";
+import type { ExecApprovalPreparedConsumption } from "./operator-approval-store.types.js";
 
 /** Prepare consumption using the manager's exact live binding and grace lifecycle. */
 export function prepareExecApprovalConsumption<TPayload>(params: {

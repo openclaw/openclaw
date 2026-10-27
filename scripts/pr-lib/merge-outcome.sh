@@ -194,6 +194,9 @@ merge_outcome_load_local() {
         (.prId | type == "string" and length > 0) and (.head | oid) and (.main | oid) and
         (if has("localHead") then (.localHead | oid) else true end) and
         (.attempt | attempt) and recovery and
+        (if has("workflowRecovery") then has("recovery") and
+          (.workflowRecovery | keys == ["binding","from","to"] and all(.[]; oid))
+         else true end) and
         (if has("cancellation") then . as $record | .route == "auto" and
           (.cancellation |
             (if has("observedHead") then keys == ["actor","observedHead","outcome","state"] and
@@ -242,10 +245,21 @@ merge_outcome_load_local() {
       merge_outcome_stop "invalid retained repository identity"; return 1;
     }
     parents=$(GIT_NO_LAZY_FETCH=1 pr_git cat-file commit "$MERGE_OUTCOME_OID" | awk 'NF == 0 {exit} $1 == "parent" {printf "%s ", $2}') || return 1
-    for retained in $(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead] | .[] | select(. != null)'); do
+    for retained in $(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead,.workflowRecovery.binding,.workflowRecovery.from,.workflowRecovery.to] | .[] | select(. != null)'); do
       case " $parents " in *" $retained "*) ;; *) merge_outcome_stop "record does not retain required commit $retained"; return 1 ;; esac
       GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$retained^{commit}" || { merge_outcome_stop "required historical commit $retained is unavailable"; return 1; }
     done
+    if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("workflowRecovery")' >/dev/null; then
+      local workflow_binding workflow_from workflow_to workflow_record
+      IFS=$'\t' read -r workflow_binding workflow_from workflow_to < <(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '.workflowRecovery | [.binding,.from,.to] | @tsv')
+      workflow_record=$(GIT_NO_LAZY_FETCH=1 pr_git show "$workflow_binding:binding.json") || return 1
+      printf '%s\n' "$workflow_record" | jq -e --arg from "$workflow_from" --arg pr "$pr" \
+        '.version == 1 and .source == $from and .pr == $pr' >/dev/null &&
+        [ "$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse "$workflow_binding^@")" = "$workflow_from" ] &&
+        GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$workflow_from" "$workflow_to" || {
+        merge_outcome_stop "invalid retained workflow recovery provenance"; return 1;
+      }
+    fi
     if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("legacyRefusal")' >/dev/null; then
       local name expected actual
       while IFS=$'\t' read -r name expected; do
@@ -369,7 +383,7 @@ merge_outcome_write() {
   shift
   mark_pr_operation_side_effects_started || return 1
   local parents=()
-  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead] | unique | .[] | select(. != null)'); do
+  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead,.workflowRecovery.binding,.workflowRecovery.from,.workflowRecovery.to] | unique | .[] | select(. != null)'); do
     parents+=(-p "$parent")
   done
   [ -z "$MERGE_OUTCOME_OID" ] || parents+=(-p "$MERGE_OUTCOME_OID")
@@ -970,17 +984,13 @@ merge_outcome_stable() {
           (.pr.mergeable | IN("UNKNOWN", "MERGEABLE"))))
       ' >/dev/null; then
         main=$(printf '%s\n' "$reread" | jq -r .main) || return 1
-        # External proof tightens ancestry without consuming the new tip's first
-        # projection observation. Later settling reads follow the observed cursor.
+        # A caller-held floor tightens ancestry without consuming the new tip's
+        # first projection observation. Later settling reads follow the cursor.
         local proof_main="${main_floor:-$previous_main}" advance_result=0
-        if [ "${3:-}" = requalify-prior-ci ] && [ "$local_only" != true ] && [ -n "${MERGE_PRIOR_CI_REMATERIALIZE_MAIN:-}" ]; then
-          # A returned authority window must also descend from its missing tip.
-          proof_main="$MERGE_PRIOR_CI_REMATERIALIZE_MAIN"
-        fi
         proof_started=$(pr_merge_now)
         if [ -n "$before" ] && [ "$before" != "$main" ]; then
           verify_merge_main_advance "$proof_main" "$before" "$local_only" "${3:-}" || advance_result=$?
-          proof_main="$before"
+          [ "$advance_result" -ne 0 ] || proof_main="$before"
         fi
         if [ "$advance_result" -eq 0 ]; then
           verify_merge_main_advance "$proof_main" "$main" "$local_only" "${3:-}" || advance_result=$?
@@ -997,7 +1007,10 @@ merge_outcome_stable() {
           settle_deadline=$((settle_deadline + local_proof_seconds))
         fi
         if [ "$advance_result" -ne 0 ]; then
-          [ "$advance_result" -eq 75 ] && [ -n "${MERGE_PRIOR_CI_REMATERIALIZE_MAIN:-}" ] && return 75
+          if [ "$advance_result" -eq 75 ] && [ -n "${MERGE_PRIOR_CI_REMATERIALIZE_MAIN:-}" ]; then
+            MERGE_PRIOR_CI_REMATERIALIZE_PREVIOUS="$proof_main"
+            return 75
+          fi
           return 1
         fi
         MERGE_PRIOR_CI_REMATERIALIZE_MAIN=""

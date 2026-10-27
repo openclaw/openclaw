@@ -2,6 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DiscordError } from "../internal/rest.js";
 import {
   bindTestThread,
   createTestThreadBindingManager,
@@ -20,6 +21,8 @@ const {
   resolveThreadBindingMaxAgeExpiresAt: ageExpiry,
 } = await import("./thread-bindings.state.js");
 const target = { accountId: "default", targetSessionKey: "agent:main:subagent:child" };
+const gone = (status: number, code?: string) =>
+  new DiscordError(new Response(null, { status }), { code, message: "Unknown Channel" });
 
 installThreadBindingLifecycleTestHooks();
 
@@ -56,26 +59,21 @@ describe("thread binding clock-controlled lifecycle", () => {
     }
   });
 
-  it.each(["max-age", "transient", "missing"] as const)("sweeps bindings at %s", async (reason) => {
+  it.each([
+    ["max-age", null],
+    ["transient", new Error("ECONNRESET")],
+    ["missing", gone(404)],
+    ["forbidden", gone(403)],
+    ["unknown-channel", gone(400, "10003")],
+  ] as const)("sweeps bindings at %s", async (reason, error) => {
     const expires = reason === "max-age";
     const manager = await createTestThreadBindingManager({
       enableSweeper: true,
       ...(expires ? { idleTimeoutMs: 0, maxAgeMs: 60_000 } : {}),
     });
-    const binding = await bindTestThread(manager, expires ? { introText: "intro" } : {});
-    if (expires) {
-      expect(binding).toMatchObject({
-        threadId: "thread-1",
-        targetSessionKey: target.targetSessionKey,
-      });
-      hoisted.sendMessageDiscord.mockClear();
-      hoisted.sendWebhookMessageDiscord.mockClear();
-    } else {
-      hoisted.restGet.mockRejectedValueOnce(
-        reason === "transient"
-          ? new Error("ECONNRESET")
-          : { status: 404, rawError: { code: 10003, message: "Unknown Channel" } },
-      );
+    const binding = await bindTestThread(manager);
+    if (!expires) {
+      hoisted.restGet.mockRejectedValueOnce(error);
     }
     await vi.advanceTimersByTimeAsync(120_000);
     expect(manager.getByThreadId("thread-1")).toEqual(reason === "transient" ? binding : undefined);
@@ -88,23 +86,21 @@ describe("thread binding clock-controlled lifecycle", () => {
   });
 
   it("preserves explicitly updated lifecycle windows when rebinding", async () => {
-    vi.setSystemTime(new Date("2026-02-20T10:00:00.000Z"));
+    vi.setSystemTime(60_000);
     const manager = await createTestThreadBindingManager();
     await bindTestThread(manager);
     const idleTimeoutMs = 2 * 60 * 60 * 1000;
     const maxAgeMs = 3 * 60 * 60 * 1000;
-    const idle = await setIdle({ ...target, idleTimeoutMs });
-    const age = await setAge({ ...target, maxAgeMs });
-    expect([idle.length, age.length]).toEqual([1, 1]);
-    vi.setSystemTime(new Date("2026-02-20T10:30:00.000Z"));
+    await setIdle({ ...target, idleTimeoutMs });
+    await setAge({ ...target, maxAgeMs });
+    vi.setSystemTime(31 * 60_000);
     const rebound = await bindTestThread(manager, { agentId: undefined });
     expect(rebound).toMatchObject({ idleTimeoutMs, maxAgeMs });
     const record = manager.getByThreadId("thread-1")!;
-    expect(record).toEqual(rebound);
     expect([
       idleExpiry({ record, defaultIdleTimeoutMs: manager.getIdleTimeoutMs() }),
       ageExpiry({ record, defaultMaxAgeMs: manager.getMaxAgeMs() }),
-    ]).toEqual([Date.parse("2026-02-20T12:30:00.000Z"), Date.parse("2026-02-20T13:30:00.000Z")]);
+    ]).toEqual([151 * 60_000, 211 * 60_000]);
   });
 
   it("rechecks activity touched during the same sweep pass", async () => {

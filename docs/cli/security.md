@@ -59,8 +59,8 @@ Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then upd
 - Warns when `gateway.nodes.commands.allow` explicitly enables dangerous node commands.
 - Warns when global `tools.profile="minimal"` is overridden by agent tool profiles.
 - Warns when write/edit tools are disabled but `exec` is still available without a constraining sandbox filesystem boundary.
-- Warns when open DMs or groups expose runtime/filesystem tools without sandbox/workspace guards.
-- Warns when installed plugin tools may be reachable under permissive tool policy.
+- Warns when open DMs or groups expose runtime/filesystem tools without sandbox/workspace guards. Summary and exposure findings share channel-owned DM policy precedence, including named accounts and nested scopes.
+- Warns when installed plugin tools may be reachable under permissive tool policy, including restrictive profiles widened with `tools.alsoAllow: ["group:plugins"]`.
 
 ### Sandbox browser
 
@@ -88,6 +88,8 @@ Settings prefixed with `dangerous`/`dangerously` are explicit break-glass operat
 ## SecretRef behavior
 
 `security audit` resolves supported SecretRefs in read-only mode for its targeted paths. If a SecretRef is unavailable in the current command path, audit continues and reports `secretDiagnostics` instead of crashing. `--token` and `--password` only override deep-check auth for that command invocation; they do not rewrite config or SecretRef mappings.
+
+The stored-secret checks for `gateway.auth.password` and `hooks.token` recognize references that occupy the entire value, such as `${VAR}`, even after config loading resolves them. Literal secrets and escaped literal placeholders such as `$${VAR}` still produce findings.
 
 ## Suppressions
 

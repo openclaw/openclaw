@@ -1,176 +1,124 @@
-// Control UI regression coverage for native and Markdown indicators in forced colors.
-import path from "node:path";
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import {
-  canRunPlaywrightChromium,
-  resolvePlaywrightChromiumExecutablePath,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
+import { withBrowserPage } from "../test-helpers/browser-page.ts";
+import { readStyles, styleDocument, styleFixture } from "./style-fixture.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const describeForcedColors = canRunPlaywrightChromium(chromiumExecutablePath)
-  ? describe
-  : describe.skip;
-let browser: Browser;
+const fixture = styleFixture("forced-colors-indicators-", { ignoreCloseErrors: true });
 
-function readUiCss(): string {
-  return [
-    "ui/src/styles/base.css",
-    "ui/src/styles/components.css",
-    "ui/src/styles/settings-controls.css",
-    "ui/src/styles/settings.css",
-    "ui/src/styles/chat/startup-layout.css",
-    "ui/src/styles/chat/layout.css",
-    "ui/src/styles/chat/text.css",
-  ]
-    .map((file) => readStyleSheet(file))
-    .join("\n");
+function readIndicators(page: Page) {
+  return page.evaluate(() => {
+    const style = (selector: string, pseudo?: string) => {
+      const element = document.querySelector(selector);
+      if (!element) {
+        throw new Error(`Missing indicator fixture: ${selector}`);
+      }
+      return getComputedStyle(element, pseudo);
+    };
+    return {
+      selects: [".field select:not([disabled])", ".settings-select:not([disabled])"].map(
+        (selector) => {
+          const css = style(selector);
+          return { appearance: css.appearance, image: css.backgroundImage };
+        },
+      ),
+      disabled: [".field select[disabled]", ".settings-select[disabled]"].map(
+        (selector) => style(selector).appearance,
+      ),
+      disclosures: [":not([open])", "[open]"].map((state) => {
+        const css = style(`.chat-text details${state} > summary`, "::before");
+        return [css.borderInlineEndStyle, css.borderBlockEndStyle, css.transform];
+      }),
+      summaryImage: style(".chat-text details:not([open]) > summary", "::before").backgroundImage,
+      checkbox: style(".task-list-item-checkbox").appearance,
+    };
+  });
 }
+
+const css = readStyles(
+  "styles/base",
+  "styles/components",
+  "styles/settings-controls",
+  "styles/settings",
+  "styles/channels",
+  "styles/plugins",
+  "styles/usage",
+  "styles/chat/startup-layout",
+  "styles/chat/layout",
+  "styles/chat/text",
+);
 
 function fixtureDocument(direction: "ltr" | "rtl"): string {
-  return [
-    '<!doctype html><html dir="' +
-      direction +
-      '" data-theme="light" data-theme-mode="light"><head><style>' +
-      readUiCss() +
-      "</style><style>",
-    "body { margin: 0; padding: 24px; font: 14px sans-serif; } main { max-width: 760px; margin: auto; padding: 24px; } .field, .settings-row { display: grid; gap: 6px; margin: 12px 0; } .chat-text, .chat-thinking { margin-top: 24px; }",
-    "</style></head><body><main data-forced-colors-indicator-fixture>",
-    "<h1>Settings and Markdown indicators</h1><p>Actual native controls and Markdown disclosure consumers.</p>",
-    '<section aria-label="Native controls"><label class="field"><span>Field select</span><select><option>All sessions</option><option>Active sessions</option></select></label>',
-    '<label class="field"><span>Disabled field select</span><select disabled><option>All sessions</option></select></label>',
-    '<label class="settings-row"><span>Settings select</span><select class="settings-select"><option>Enter</option><option>Control + Enter</option></select></label>',
-    '<label class="settings-row"><span>Disabled settings select</span><select class="settings-select" disabled><option>Enter</option></select></label></section>',
-    '<section class="chat-text" aria-label="Assistant message"><details><summary>Collapsed details</summary><p>Hidden details content.</p></details>',
-    '<details open><summary>Expanded details</summary><p>Visible details content.</p></details><ul><li class="task-list-item"><input class="task-list-item-checkbox" type="checkbox" checked disabled><span>Completed task</span></li></ul></section>',
-    '<section class="chat-thinking" aria-label="Reasoning"><details><summary>Reasoning details</summary><p>Hidden reasoning content.</p></details></section>',
-    "</main></body></html>",
-  ].join("\n");
+  return styleDocument(
+    css,
+    `<label class="field"><select><option>All sessions</option></select><select disabled><option>All sessions</option></select></label>
+    <label class="settings-row"><select class="settings-select"><option>Enter</option></select><select class="settings-select" disabled><option>Enter</option></select></label>
+    <section class="chat-text"><details><summary>Collapsed</summary></details><details open><summary>Expanded</summary></details>
+    <ul><li class="task-list-item"><input class="task-list-item-checkbox" type="checkbox" checked disabled></li></ul></section>`,
+    `dir="${direction}" data-theme="light" data-theme-mode="light"`,
+  );
 }
 
-describeForcedColors("Control UI forced-colors indicators", () => {
-  beforeAll(async () => {
-    if (canRunPlaywrightChromium(chromiumExecutablePath)) {
-      browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
-    }
-  });
-  afterAll(async () => {
-    await browser?.close().catch(() => {});
-  });
-  it("restores indicators for native selects, Markdown disclosures, and task checkboxes", async () => {
-    const artifactDir = createControlUiE2eArtifactDir("forced-colors-indicators");
-    for (const direction of ["ltr", "rtl"] as const) {
-      const context = await browser.newContext({
-        colorScheme: "light",
-        forcedColors: "active",
-        viewport: { width: 1100, height: 900 },
-      });
-      const page = await context.newPage();
-      try {
-        await page.setContent(fixtureDocument(direction));
-        expect(await page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(true);
-        await page.locator("[data-forced-colors-indicator-fixture]").screenshot({
-          animations: "disabled",
-          path: path.join(artifactDir, direction + "-forced-colors.png"),
-        });
-        const fieldSelect = page.locator(".field select:not([disabled])");
-        const settingsSelect = page.locator(".settings-select:not([disabled])");
-        await fieldSelect.focus();
-        expect(await fieldSelect.evaluate((element) => element.matches(":focus-visible"))).toBe(
-          true,
-        );
-        await settingsSelect.focus();
-        expect(await settingsSelect.evaluate((element) => element.matches(":focus-visible"))).toBe(
-          true,
-        );
-        const forced = await page.evaluate(() => {
-          const field = document.querySelector(".field select:not([disabled])");
-          const disabledField = document.querySelector(".field select[disabled]");
-          const settings = document.querySelector(".settings-select:not([disabled])");
-          const disabledSettings = document.querySelector(".settings-select[disabled]");
-          const collapsed = document.querySelector(".chat-text details:not([open]) > summary");
-          const expanded = document.querySelector(".chat-text details[open] > summary");
-          const checkbox = document.querySelector(".task-list-item-checkbox");
-          const style = (element: Element | null, pseudo?: string) => {
-            if (!element) {
-              throw new Error("Missing indicator fixture element");
-            }
-            return getComputedStyle(element, pseudo);
-          };
-          const select = (element: Element | null) => ({
-            appearance: style(element).appearance,
-            backgroundImage: style(element).backgroundImage,
-          });
-          const disclosure = (element: Element | null) => {
-            const pseudo = style(element, "::before");
-            return {
-              end: pseudo.borderInlineEndStyle,
-              block: pseudo.borderBlockEndStyle,
-              color: pseudo.borderInlineEndColor,
-              transform: pseudo.transform,
-            };
-          };
-          return {
-            field: select(field),
-            disabledField: select(disabledField),
-            settings: select(settings),
-            disabledSettings: select(disabledSettings),
-            collapsed: disclosure(collapsed),
-            expanded: disclosure(expanded),
-            checkboxAppearance: style(checkbox).appearance,
-          };
-        });
-        expect(forced.field.appearance).toBe("auto");
-        expect(forced.disabledField.appearance).toBe("auto");
-        expect(forced.settings.appearance).toBe("auto");
-        expect(forced.disabledSettings.appearance).toBe("auto");
-        expect(forced.collapsed.end).toBe("solid");
-        expect(forced.collapsed.block).toBe("solid");
-        expect(forced.expanded.end).toBe("solid");
-        expect(forced.expanded.block).toBe("solid");
-        const expectedTransforms =
-          direction === "ltr"
-            ? {
-                collapsed: "matrix(0.707107, -0.707107, 0.707107, 0.707107, 0, 0)",
-                expanded: "matrix(0.707107, 0.707107, -0.707107, 0.707107, 0, 0)",
-              }
-            : {
-                collapsed: "matrix(0.707107, 0.707107, -0.707107, 0.707107, 0, 0)",
-                expanded: "matrix(0.707107, -0.707107, 0.707107, 0.707107, 0, 0)",
-              };
-        expect(forced.collapsed.transform).toBe(expectedTransforms.collapsed);
-        expect(forced.expanded.transform).toBe(expectedTransforms.expanded);
-        expect(forced.checkboxAppearance).toBe("auto");
-        await page.emulateMedia({ forcedColors: "none" });
-        await page.locator("[data-forced-colors-indicator-fixture]").screenshot({
-          animations: "disabled",
-          path: path.join(artifactDir, direction + "-normal.png"),
-        });
-        const normal = await page.evaluate(() => {
-          const field = document.querySelector(".field select:not([disabled])");
-          const settings = document.querySelector(".settings-select:not([disabled])");
-          const summary = document.querySelector(".chat-text details:not([open]) > summary");
-          if (!field || !settings || !summary) {
-            throw new Error("Missing normal-mode indicator fixture element");
-          }
-          return {
-            field: getComputedStyle(field).appearance,
-            fieldImage: getComputedStyle(field).backgroundImage,
-            settings: getComputedStyle(settings).appearance,
-            settingsImage: getComputedStyle(settings).backgroundImage,
-            summaryImage: getComputedStyle(summary, "::before").backgroundImage,
-          };
-        });
-        expect(normal.field).toBe("none");
-        expect(normal.fieldImage).toContain("gradient");
-        expect(normal.settings).toBe("none");
-        expect(normal.settingsImage).toContain("gradient");
-        expect(normal.summaryImage).toContain("gradient");
-      } finally {
-        await context.close();
+fixture.describe("Control UI forced-colors indicators", () => {
+  it("keeps row-button keyboard focus visible when forced colors suppress shadows", async () => {
+    const classes = [
+      "channels-item__detail",
+      "plugins-item__detail-button",
+      "session-bar-selection",
+    ];
+    await withBrowserPage(fixture.page({ forcedColors: "active" }), async (page) => {
+      await page.setContent(
+        `<!doctype html><html data-theme="light"><head><style>${css}</style></head><body><main style="margin:40px;padding:24px"><h1>Keyboard focus in forced colors</h1>${classes.map((name) => `<p><button type="button" class="${name}">${name}</button></p>`).join("")}</main></body></html>`,
+      );
+      for (const name of classes) {
+        const button = page.locator(`.${name}`);
+        await page.keyboard.press("Tab");
+        expect(
+          await button.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return [
+              element.matches(":focus-visible"),
+              style.outlineStyle,
+              style.outlineWidth,
+              style.boxShadow,
+            ];
+          }),
+        ).toEqual([true, "solid", "2px", "none"]);
       }
+    });
+  });
+
+  it("restores indicators for native selects, Markdown disclosures, and task checkboxes", async () => {
+    for (const direction of ["ltr", "rtl"] as const) {
+      await withBrowserPage(
+        fixture.page({ colorScheme: "light", forcedColors: "active" }),
+        async (page) => {
+          await page.setContent(fixtureDocument(direction));
+          for (const selector of [".field select", ".settings-select"]) {
+            const select = page.locator(`${selector}:not([disabled])`);
+            await select.focus();
+            expect(await select.evaluate((element) => element.matches(":focus-visible"))).toBe(
+              true,
+            );
+          }
+          const forced = await readIndicators(page);
+          const clockwise = "matrix(0.707107, 0.707107, -0.707107, 0.707107, 0, 0)";
+          const counterclockwise = "matrix(0.707107, -0.707107, 0.707107, 0.707107, 0, 0)";
+          expect(forced).toMatchObject({
+            selects: [{ appearance: "auto" }, { appearance: "auto" }],
+            disabled: ["auto", "auto"],
+            checkbox: "auto",
+            disclosures: [
+              ["solid", "solid", direction === "ltr" ? counterclockwise : clockwise],
+              ["solid", "solid", direction === "ltr" ? clockwise : counterclockwise],
+            ],
+          });
+          await page.emulateMedia({ forcedColors: "none" });
+          const normal = await readIndicators(page);
+          const selectStyle = { appearance: "none", image: expect.stringContaining("gradient") };
+          expect(normal.selects).toEqual([selectStyle, selectStyle]);
+          expect(normal.summaryImage).toContain("gradient");
+        },
+      );
     }
   });
 });

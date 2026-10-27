@@ -12,10 +12,7 @@ import { clawContainedRelativePath } from "./path-containment.js";
 import type { ClawAddPlan } from "./types.js";
 
 class ClawBootstrapWriteError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
+  constructor(message: string) {
     super(message);
     this.name = "ClawBootstrapWriteError";
   }
@@ -34,26 +31,19 @@ export async function seedClawPackageBootstrap(
   }
   if (actions.length !== 1) {
     throw new ClawBootstrapWriteError(
-      "bootstrap_plan_invalid",
       "A Claw add plan may contain only one package bootstrap action.",
     );
   }
   const action = actions[0]!;
   if (!action.source || !action.digest) {
-    throw new ClawBootstrapWriteError(
-      "bootstrap_plan_invalid",
-      "The package bootstrap action lacks source integrity.",
-    );
+    throw new ClawBootstrapWriteError("The package bootstrap action lacks source integrity.");
   }
 
   const packageRoot = await realpath(resolve(plan.claw.packageRoot));
   const sourcePath = resolve(action.source);
   const sourceRelative = clawContainedRelativePath(packageRoot, sourcePath);
   if (!sourceRelative) {
-    throw new ClawBootstrapWriteError(
-      "bootstrap_source_escape",
-      "BOOTSTRAP.md must remain inside the Claw package.",
-    );
+    throw new ClawBootstrapWriteError("BOOTSTRAP.md must remain inside the Claw package.");
   }
   const sourceRoot = await fsSafeRoot(packageRoot);
   const read = await sourceRoot.read(sourceRelative, {
@@ -63,7 +53,6 @@ export async function seedClawPackageBootstrap(
   });
   if (resolve(read.realPath) !== sourcePath || digestClawBytes(read.buffer) !== action.digest) {
     throw new ClawBootstrapWriteError(
-      "bootstrap_source_changed",
       "BOOTSTRAP.md changed after consent; run add --dry-run again.",
     );
   }
@@ -71,7 +60,6 @@ export async function seedClawPackageBootstrap(
   const expectedTarget = resolve(plan.agent.workspace, DEFAULT_BOOTSTRAP_FILENAME);
   if (resolve(action.target) !== expectedTarget) {
     throw new ClawBootstrapWriteError(
-      "bootstrap_target_changed",
       "The package bootstrap target is not the new agent workspace root.",
     );
   }
@@ -86,12 +74,10 @@ export async function seedClawPackageBootstrap(
     ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
     stateOptions: { ...options, readOnly: options.stateMode === "worker" },
     beforePersistentApply: assertForwardCurrent,
+    beforePersistentEffect: options.prepareEffect,
     mergeSetupState: (workspaceDir, next, nowMs) => {
       if (!next.bootstrapSeededAt) {
-        throw new ClawBootstrapWriteError(
-          "bootstrap_state_invalid",
-          "Missing bootstrap timestamp.",
-        );
+        throw new ClawBootstrapWriteError("Missing bootstrap timestamp.");
       }
       return mergeWorkspaceBootstrapSetupStateForAdd(
         workspaceDir,

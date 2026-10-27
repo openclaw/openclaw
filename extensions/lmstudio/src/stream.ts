@@ -8,15 +8,16 @@ import {
   finiteSecondsToTimerSafeMilliseconds,
 } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import {
   createOpenAICompatibleCompletionsThinkingOffWrapper,
   createPlainTextToolCallCompatWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   buildAssistantMessage,
+  buildGuardedModelFetch,
   createEmptyTransportUsage,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asPositiveSafeInteger,
   asRecord,
@@ -39,7 +40,6 @@ import {
 
 const log = createSubsystemLogger("extensions/lmstudio/stream");
 
-type StreamOptions = Parameters<StreamFn>[2];
 type StreamModel = Parameters<StreamFn>[0];
 
 const preloadInFlight = new Map<string, Promise<LmstudioPreparedModel | undefined>>();
@@ -73,42 +73,6 @@ function withLmstudioUsageCompat(model: StreamModel): StreamModel {
   };
 }
 
-async function resolveLmstudioPreloadRequest(params: {
-  baseUrl: string;
-  modelKey: string;
-  requestedContextLength?: number;
-  timeoutMs?: number;
-  options: StreamOptions;
-  ctx: ProviderWrapStreamFnContext;
-  modelHeaders?: Record<string, string>;
-}) {
-  const providerConfig = params.ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
-  const providerHeaders = { ...providerConfig?.headers, ...params.modelHeaders };
-  const runtimeApiKey = params.options?.apiKey?.trim() || undefined;
-  const headers = await resolveLmstudioProviderHeaders({
-    config: params.ctx.config,
-    headers: providerHeaders,
-  });
-  const configuredApiKey =
-    runtimeApiKey !== undefined
-      ? undefined
-      : await resolveLmstudioRuntimeApiKey({
-          config: params.ctx.config,
-          agentDir: params.ctx.agentDir,
-          headers: providerHeaders,
-        });
-
-  return {
-    baseUrl: params.baseUrl,
-    apiKey: runtimeApiKey ?? configuredApiKey,
-    headers,
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
-    modelKey: params.modelKey,
-    requestedContextLength: params.requestedContextLength,
-    timeoutMs: params.timeoutMs ?? 120_000,
-  };
-}
-
 export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): StreamFn {
   const underlying = ctx.streamFn ?? streamSimple;
   // LM Studio does not ride the shared OpenAI provider hook stack, so the
@@ -137,19 +101,37 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
     const requestedContextLength =
       asPositiveSafeInteger(model.contextTokens) ?? asPositiveSafeInteger(model.contextWindow);
     return (async () => {
-      let request: Awaited<ReturnType<typeof resolveLmstudioPreloadRequest>>;
-      try {
-        request = await resolveLmstudioPreloadRequest({
+      async function resolveLmstudioPreloadRequest() {
+        const requestedTimeoutMs =
+          clampPositiveTimerTimeoutMs(options?.timeoutMs ?? asRecord(model).requestTimeoutMs) ??
+          finiteSecondsToTimerSafeMilliseconds(providerConfig?.timeoutSeconds);
+        const providerHeaders = { ...providerConfig?.headers, ...model.headers };
+        const runtimeApiKey = options?.apiKey?.trim();
+        const timeoutMs = requestedTimeoutMs ?? 120_000;
+        const headers = await resolveLmstudioProviderHeaders({
+          config: ctx.config,
+          headers: providerHeaders,
+        });
+        return {
           baseUrl: resolvedBaseUrl,
+          apiKey:
+            runtimeApiKey && !isNonSecretApiKeyMarker(runtimeApiKey)
+              ? runtimeApiKey
+              : await resolveLmstudioRuntimeApiKey({
+                  config: ctx.config,
+                  agentDir: ctx.agentDir,
+                  headers: providerHeaders,
+                }),
+          headers,
+          fetchImpl: buildGuardedModelFetch({ ...model, baseUrl: resolvedBaseUrl }, timeoutMs),
           modelKey,
           requestedContextLength,
-          timeoutMs:
-            clampPositiveTimerTimeoutMs(options?.timeoutMs ?? asRecord(model).requestTimeoutMs) ??
-            finiteSecondsToTimerSafeMilliseconds(providerConfig?.timeoutSeconds),
-          options,
-          ctx,
-          modelHeaders: model.headers,
-        });
+          timeoutMs,
+        };
+      }
+      let request: Awaited<ReturnType<typeof resolveLmstudioPreloadRequest>>;
+      try {
+        request = await resolveLmstudioPreloadRequest();
       } catch (error) {
         options?.signal?.throwIfAborted();
         log.warn(`LM Studio inference preload failed for "${modelKey}": ${String(error)}`);

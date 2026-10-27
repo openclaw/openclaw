@@ -168,7 +168,6 @@ export function installSessionToolResultGuard(
   flushPendingToolResults: () => void;
   flushPendingToolResultsAsync: () => Promise<void>;
   clearPendingToolResults: () => void;
-  setNextUserMessagePersistence: (mode: NextUserMessagePersistence) => void;
   getPendingIds: () => string[];
 } {
   const originalAppend = getRawSessionAppendMessage(sessionManager);
@@ -632,9 +631,6 @@ export function installSessionToolResultGuard(
     flushPendingToolResults,
     flushPendingToolResultsAsync,
     clearPendingToolResults: () => pending.clear(),
-    setNextUserMessagePersistence: (mode) => {
-      captureMessageContext().nextUserMessagePersistence = mode;
-    },
     getPendingIds: () => Array.from(pending.keys()),
   };
 }

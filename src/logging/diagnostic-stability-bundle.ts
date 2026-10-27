@@ -135,19 +135,10 @@ type DiagnosticStabilityBundleLocationOptions = {
   stateDir?: string;
 };
 
-type DiagnosticStabilityBundleFile = {
-  path: string;
-  mtimeMs: number;
-};
-
 export type ReadDiagnosticStabilityBundleResult =
   | { status: "found"; path: string; mtimeMs: number; bundle: DiagnosticStabilityBundle }
   | { status: "missing"; dir: string }
   | { status: "failed"; path?: string; error: unknown };
-
-type DiagnosticStabilityBundleFailureWriteOutcome =
-  | { status: "written"; message: string; path: string }
-  | { status: "failed"; message: string; error: unknown };
 
 let fatalHookInstalled = false;
 
@@ -753,7 +744,10 @@ function isMemoryPressureReason(
 function listDiagnosticStabilityBundleFilesSync(
   dir: string,
   statFailure: "throw" | "use-zero",
-): DiagnosticStabilityBundleFile[] {
+): {
+  path: string;
+  mtimeMs: number;
+}[] {
   try {
     return fs
       .readdirSync(dir, { withFileTypes: true })
@@ -844,7 +838,7 @@ export function writeDiagnosticStabilityBundleForFailureSync(
   reason: string,
   error?: unknown,
   options: WriteDiagnosticStabilityBundleForFailureOptions = {},
-): DiagnosticStabilityBundleFailureWriteOutcome {
+): { status: "written"; message: string; path: string } | { status: "failed"; message: string } {
   try {
     const now = options.now ?? new Date();
     const snapshot = getDiagnosticStabilitySnapshot({
@@ -904,7 +898,6 @@ export function writeDiagnosticStabilityBundleForFailureSync(
   } catch (writeError) {
     return {
       status: "failed",
-      error: writeError,
       message: `failed to write stability bundle: ${String(writeError)}`,
     };
   }

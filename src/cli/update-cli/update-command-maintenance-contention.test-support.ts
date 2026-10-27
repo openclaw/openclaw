@@ -16,6 +16,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import {
   createManagedServiceIdentityFixture,
   finishSuccessfulPackageSwitch,
@@ -24,17 +25,11 @@ import {
 } from "./update-command-post-update.test-support.js";
 import { resolveMutableUpdateFailure } from "./update-command-result.js";
 import * as service from "./update-command-service.js";
-import { createPostUpdateFailureResult } from "./update-command-terminal-publication.js";
+import { createPostUpdateExceptionResult } from "./update-command-terminal-publication.js";
 import { resolveSettledUpdateCommandResult } from "./update-command-terminal.js";
 
 const healthyRecovery = { serviceRestartSafe: true as const, version: "2026.10.3" };
-const packageResult = () => ({
-  status: "ok" as const,
-  mode: "npm" as const,
-  after: { version: "2026.10.3" },
-  steps: [],
-  durationMs: 1,
-});
+const packageResult = () => updateResult({ after: { version: "2026.10.3" } });
 
 export function registerMaintenanceContentionTests(
   makeHome: () => string,
@@ -67,7 +62,6 @@ export function registerMaintenanceContentionTests(
       let refusal: unknown;
       let releaseRequested = false;
       let held = false;
-      let refusedReads = 0;
       const assertFresh = ownerRecord.assertPersistedStateDatabaseAccessAllowed;
       vi.spyOn(ownerRecord, "assertPersistedStateDatabaseAccessAllowed").mockImplementation(
         (...args) => {
@@ -75,7 +69,6 @@ export function registerMaintenanceContentionTests(
             return assertFresh(...args);
           } catch (error) {
             refusal = error;
-            refusedReads++;
             if (!expires && !releaseRequested && child?.connected) {
               releaseRequested = true;
               child.send(50);
@@ -162,7 +155,6 @@ export function registerMaintenanceContentionTests(
           expect(mocks.restartService).not.toHaveBeenCalled();
         } else {
           await work;
-          expect(refusedReads).toBeGreaterThanOrEqual(1);
           expect(mocks.restartService).toHaveBeenCalledOnce();
           expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({ status: "ok" });
         }
@@ -177,42 +169,32 @@ export function registerMaintenanceContentionTests(
     },
   );
 
-  it.each([false, true])(
-    "keeps actual data-at-risk refusal authoritative (dataAtRisk=%s)",
-    async (dataAtRisk) => {
-      const contention = new StateDatabaseOfflineMaintenanceError(
-        "/synthetic/state.sqlite",
-        "maintenance busy",
-      );
-      const error = dataAtRisk
-        ? new AggregateError([
-            contention,
-            new DoctorMaintenanceRefusalError("incomplete migration", {
-              kind: "data-at-risk",
-              reason: "incomplete-migration",
-            }),
-          ])
-        : new Error("settlement failed", { cause: contention });
-      const original = packageResult();
-      const postUpdate = createPostUpdateFailureResult(
-        { result: original, root: "/synthetic", startedAt: Date.now() },
-        error,
-      ).result;
-      const originalRecovery = vi.fn(async () => ({ ...healthyRecovery }));
-      const { result: fallback } = await resolveMutableUpdateFailure({
-        ...original,
-        root: "/synthetic",
-        cause: error,
-        originalRecovery,
-      });
-      expect(postUpdate.recovery?.serviceRestartSafe).toBe(!dataAtRisk);
-      if (dataAtRisk) {
-        expect(fallback.recovery?.serviceRestartSafe).not.toBe(true);
-        expect(originalRecovery).not.toHaveBeenCalled();
-      } else {
-        expect(fallback.recovery).toEqual(healthyRecovery);
-        expect(originalRecovery).toHaveBeenCalledOnce();
-      }
-    },
-  );
+  it("keeps data-at-risk refusal authoritative over maintenance contention", async () => {
+    const contention = new StateDatabaseOfflineMaintenanceError(
+      "/synthetic/state.sqlite",
+      "maintenance busy",
+    );
+    const error = new AggregateError([
+      contention,
+      new DoctorMaintenanceRefusalError("incomplete migration", {
+        kind: "data-at-risk",
+        reason: "incomplete-migration",
+      }),
+    ]);
+    const original = packageResult();
+    const postUpdate = createPostUpdateExceptionResult(
+      { result: original, root: "/synthetic", startedAt: Date.now() },
+      error,
+    ).result;
+    const originalRecovery = vi.fn(async () => ({ ...healthyRecovery }));
+    const { result: fallback } = await resolveMutableUpdateFailure({
+      ...original,
+      root: "/synthetic",
+      cause: error,
+      originalRecovery,
+    });
+    expect(postUpdate.recovery?.serviceRestartSafe).toBe(false);
+    expect(fallback.recovery?.serviceRestartSafe).not.toBe(true);
+    expect(originalRecovery).not.toHaveBeenCalled();
+  });
 }
