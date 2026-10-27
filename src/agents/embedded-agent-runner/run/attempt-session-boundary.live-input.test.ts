@@ -300,7 +300,26 @@ describe("live pending inputs at the attempt boundary", () => {
       expect(
         await recorder.stageApproved?.({ runId: "correction-run", assertCurrent: () => {} }),
       ).toBe(true);
+      const foreign = expectDefined(
+        await stageSessionPendingInput(target, {
+          runId: "queued-run",
+          message: {
+            role: "user",
+            content: "queued user request",
+            timestamp: 3,
+            idempotencyKey: "queued-run:user",
+          },
+          assertCurrent: () => {},
+        }),
+        "Expected queued receipt",
+      );
       try {
+        const foreignRecorder = createUserTurnTranscriptRecorder({
+          message: foreign.message,
+          target: { ...target, sessionEntry: { sessionId: target.sessionId, updatedAt: 1 } },
+          updateMode: "none",
+        });
+        await foreign.run(() => foreignRecorder.persistApproved());
         const manager = guardSessionManager(
           await SessionManager.openBoundedAsync(target, { maxBytes: 8192, maxEvents: 30 }),
           { runId: "active-run" },
@@ -326,12 +345,14 @@ describe("live pending inputs at the attempt boundary", () => {
         await run;
         expect(activeSession.getLastAssistantText()).toBe("correction applied");
         expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
-        expect(JSON.stringify(streamMocks.streamSimple.mock.calls[1]?.[1].messages)).toContain(
-          "correction steered into the run",
-        );
+        const corrected = JSON.stringify(streamMocks.streamSimple.mock.calls[1]?.[1].messages);
+        expect(corrected).toContain("correction steered into the run");
+        // Adoption is per input: another turn's live input stays out of this run.
+        expect(corrected).not.toContain("queued user request");
         activeSession.dispose();
       } finally {
         recorder.finishPendingInput?.("interrupted");
+        foreign.finish("interrupted");
       }
     });
   });
