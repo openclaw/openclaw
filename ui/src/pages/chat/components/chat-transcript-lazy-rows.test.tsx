@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { onSettled } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
+import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
@@ -21,6 +24,49 @@ function row(key: string, view: NativeTranscriptView): TestContentRow {
 
 const group = (role: "user" | "assistant", content: string, timestamp: number) =>
   createMessageGroup({ role, content, timestamp }, role);
+
+it("commits a cached run's message body with its row shell", () => {
+  const container = document.body.appendChild(document.createElement("div"));
+  const answer = createMessageGroup(
+    { role: "assistant", content: "The cached run answer", timestamp: 3 },
+    "assistant",
+  );
+  let firstCommit: string | null = null;
+  const view = mountSolid(
+    () => {
+      onSettled(() => {
+        expect(container.querySelector(".chat-group.assistant")).not.toBeNull();
+        firstCommit = container.textContent;
+      });
+      return (
+        <AgentRunFrame
+          frame={{
+            kind: "agent-run-frame",
+            key: "run:cached",
+            runId: "cached",
+            boundaryId: "boundary",
+            outcome: { kind: "completed", actionOwner: answer.messages[0]! },
+            parts: [answer],
+          }}
+          options={{
+            streamOptions: {},
+            renderGroupOptions: () => ({ showReasoning: false }),
+            isWorkExpanded: () => false,
+            onToggleWork: () => {},
+          }}
+        />
+      );
+    },
+    { container },
+  );
+  try {
+    flush();
+    expect(firstCommit).toContain("The cached run answer");
+  } finally {
+    view.unmount();
+    container.remove();
+  }
+});
 
 it("loads stream and run rows without losing the adjacent message or the latest snapshot", async () => {
   const message = group("user", "Keep this message", 1);

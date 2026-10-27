@@ -7,10 +7,7 @@ import type { DoctorModelReplacement } from "./model-replacement.js";
 import type { ModelRefRepair } from "./retired-model-ref-repair.types.js";
 import { resolveSuccessorModelRepair } from "./retired-model-successor-guard.js";
 
-export function withAccessProgram(
-  settings: unknown,
-  cyber: DoctorModelReplacement["accessProgram"],
-) {
+function withAccessProgram(settings: unknown, cyber: DoctorModelReplacement["accessProgram"]) {
   const row = asOptionalRecord(settings) ?? {};
   const params = asOptionalRecord(row.params);
   return {

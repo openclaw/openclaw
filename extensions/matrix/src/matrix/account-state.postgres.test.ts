@@ -10,7 +10,7 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getMatrixRuntime } from "../runtime.js";
 import { resolveMatrixAccountStorageRoot } from "../storage-paths.js";
-import { installMatrixTestRuntime } from "../test-runtime.js";
+import { installMatrixTestRuntime, resetMatrixTestStores } from "../test-runtime.js";
 import { resolveMatrixStoragePaths, writeStorageMeta } from "./client/storage.js";
 import type { MatrixStoragePaths } from "./client/types.js";
 import * as recovery from "./crypto-state-store.js";
@@ -59,13 +59,10 @@ describe.skipIf(!connection)("Matrix account-root PostgreSQL persistence", () =>
     roots.add(resolveMatrixAccountStorageRoot(input).rootDir);
     const paths = await resolveMatrixStoragePaths(input);
     roots.add(paths.rootDir);
+    await expect(writeStorageMeta({ storagePaths: paths, ...auth, accountId })).resolves.toBe(true);
     return paths;
   }
 
-  const writeMeta = (paths: MatrixStoragePaths) =>
-    expect(
-      writeStorageMeta({ storagePaths: paths, ...auth, accountId: paths.accountKey }),
-    ).resolves.toBe(true);
   const writeKey = (paths: MatrixStoragePaths) =>
     recovery.writeMatrixRecoveryKeyStateForPathAsync({
       recoveryKeyPath: paths.recoveryKeyPath,
@@ -93,8 +90,7 @@ describe.skipIf(!connection)("Matrix account-root PostgreSQL persistence", () =>
   }
 
   async function restartStores() {
-    await closeOpenClawStateDatabaseAsync();
-    state.resetPluginStateStoreForTests();
+    await resetMatrixTestStores();
     installMatrixTestRuntime({ stateDir });
   }
 
@@ -105,8 +101,7 @@ describe.skipIf(!connection)("Matrix account-root PostgreSQL persistence", () =>
   });
 
   afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    state.resetPluginStateStoreForTests();
+    await resetMatrixTestStores();
     await idb.clearAllIndexedDbState({ databasePrefix });
     try {
       for (const root of roots) {
@@ -130,8 +125,6 @@ describe.skipIf(!connection)("Matrix account-root PostgreSQL persistence", () =>
     await withPostgres(async () => {
       const primary = await accountPaths("primary");
       const secondary = await accountPaths("secondary");
-      await writeMeta(primary);
-      await writeMeta(secondary);
       await writeKey(primary);
       const records = Array.from({ length: 24 }, (_, index) => ({
         key: `room-${String(index).padStart(2, "0")}`,
@@ -173,7 +166,6 @@ describe.skipIf(!connection)("Matrix account-root PostgreSQL persistence", () =>
   it("keeps a populated account root and its namespace across a token rotation", async () => {
     await withPostgres(async () => {
       const original = await accountPaths("rotated", "synthetic-old-token");
-      await writeMeta(original);
       await writeKey(original);
       await restartStores();
       const originalAnchor = readAnchor(original.rootDir);

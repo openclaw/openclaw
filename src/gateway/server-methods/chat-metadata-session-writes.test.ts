@@ -28,6 +28,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { rolePolicyConfig, sharingPolicyClient } from "../session-sharing.test-utils.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import {
   chatMetadataCommandFields,
@@ -37,7 +38,6 @@ import {
   createOpenAIChatMetadataConfig,
 } from "./chat-metadata-runtime.test-support.js";
 import * as metadataProjection from "./chat-metadata-session-projection.js";
-import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 async function invokeMetadata(

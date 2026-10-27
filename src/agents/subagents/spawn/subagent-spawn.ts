@@ -206,6 +206,7 @@ export async function spawnSubagentDirect(
     const initialSession = await runWithAgentToolSourceExecutionScope(assertActive, () =>
       createInitialSubagentSession({
         assertActive,
+        signal: ctx.signal,
         onCreated: (session) => {
           provisionalSessionIdentity = captureSubagentSessionCleanupIdentity(session.entry);
           const cleanupContext = gatewayContextResolver?.();

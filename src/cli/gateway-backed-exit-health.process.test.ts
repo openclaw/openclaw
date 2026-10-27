@@ -125,7 +125,7 @@ it.each<[string, string[]]>([
       auth: { mode: "none" },
       remote: { url: gateway.url },
     });
-    const { identity, env } = seedDeviceAuth(
+    const { identity, env } = await seedDeviceAuth(
       root,
       stateDir,
       gateway.url,

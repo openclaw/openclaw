@@ -17,7 +17,7 @@ import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { renderChatModelAccountControl } from "../chat/components/chat-model-account-control.ts";
-import type { ChatModelControlsProps } from "../chat/components/chat-model-controls.tsx";
+import type { ChatModelControlsProps } from "../chat/components/chat-model-controls.types.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { CatalogTargetDiscovery } from "./catalog-target.ts";
 import { resolveHostedEnvironments, resolveHostEnvironmentChoice } from "./hosted-environments.ts";

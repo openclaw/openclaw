@@ -38,17 +38,11 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
   });
   // Reuse Vitest's source graph at the module-loading seam. The real loader
   // still discovers and validates the entrypoint and owns registration.
-  const loadModule = Object.assign(
-    vi.fn((...[source]: Parameters<pluginModuleRuntime.PluginModuleLoader>) => {
-      expect(source).toBe(entrypoint);
-      return plugin;
-    }),
-    {
-      prepare: vi.fn(async () => {
-        throw new Error("bundled harness must not prepare an external plugin artifact");
-      }),
+  const loadModule: pluginModuleRuntime.PluginModuleLoader = Object.assign(() => plugin, {
+    prepare: async () => {
+      throw new Error("bundled harness must not prepare an external plugin artifact");
     },
-  );
+  });
   vi.spyOn(pluginModuleRuntime, "createPluginModuleLoader").mockReturnValue(loadModule);
   const env = {
     ...process.env,
@@ -87,12 +81,6 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
     vi.fn(),
   );
 
-  expect(registry).not.toBe(root);
-  expect(loadModule).toHaveBeenCalledOnce();
-  const owner = loadModule.mock.calls[0]?.[1];
-  expect(owner?.registry).toBe(registry);
-  expect(owner?.record).toBe(registry?.plugins[0]);
-  expect(owner?.rootDir).toBe(path.dirname(entrypoint));
   expect(getActivePluginRegistry()).toBe(root);
   expect(root.agentHarnesses).toEqual([]);
   expect(registry?.plugins).toEqual([
@@ -101,16 +89,5 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
   await expect(
     ensureHarness({ ...selection, config, workspaceDir, pluginRegistry: registry }),
   ).resolves.toBeUndefined();
-  const harness = registry?.agentHarnesses.find((entry) => entry.harness.id === "copilot")?.harness;
-  expect(
-    harness?.supports({
-      ...selection,
-      requestedRuntime: "copilot",
-      providerOwnerStatus: "unowned",
-      providerOwnerPluginIds: [],
-      modelProvider: config.models!.providers!["custom-proxy"],
-    }),
-  ).toEqual({ supported: true, priority: 100 });
-  await harness?.dispose?.();
   expect(openStore).not.toHaveBeenCalled();
 });

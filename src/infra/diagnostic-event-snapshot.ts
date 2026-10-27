@@ -88,11 +88,6 @@ function isImmutableDiagnosticValue(value: unknown, seen?: WeakSet<object>): boo
   });
 }
 
-export function deepFreezeDiagnosticValue<T>(value: T): T {
-  freezeDiagnosticValue(value, new WeakSet());
-  return value;
-}
-
 function freezeDiagnosticValue(value: unknown, seen: WeakSet<object>): boolean {
   if (!value || typeof value !== "object" || seen.has(value)) {
     return true;

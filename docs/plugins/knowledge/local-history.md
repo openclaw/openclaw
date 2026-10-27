@@ -27,7 +27,9 @@ credentials or network access are needed.
    any retained evidence.
 2. The transaction that acknowledges the publication queues the exact changed
    bytes in `state.sqlite`.
-3. Knowledge commits that batch and records the commit in the receipt.
+3. Knowledge commits that batch outside a SQLite write transaction, then records
+   the commit and receipt together in a short transaction. Queued batches stay
+   ordered; a retry after interruption reuses the checkpoint commit.
 
 The queue is an outbox, not a second knowledge store; Markdown stays
 authoritative. Because exact snapshots are queued, a Git outage followed by more

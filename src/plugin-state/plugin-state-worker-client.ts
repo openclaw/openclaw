@@ -46,6 +46,7 @@ import {
   beginPluginStatePublication,
   recordPluginStateReadDependency,
   withPluginStatePublication,
+  type PluginStatePublicationEffect,
   type PluginStatePublicationScope,
 } from "./plugin-state-publication.js";
 import { wrapPluginStateError } from "./plugin-state-store.database.js";
@@ -160,6 +161,26 @@ function prepareCommandOrder(
   }
 }
 
+function publicationEffect(
+  command: PluginStateCommand,
+  scope: PluginStatePublicationScope | undefined,
+): PluginStatePublicationEffect | undefined {
+  if (command.type === "pluginState.observe") {
+    return Object.freeze({ kind: "unchanged" });
+  }
+  // Only exact-key CAS writes have a bounded set of possible values: the
+  // committed row on conflict/rollback, or this immutable serialized postimage.
+  if (command.type === "pluginState.compareUpdate" && scope?.key !== undefined) {
+    if (command.input.action === "keep") {
+      return Object.freeze({ kind: "unchanged" });
+    }
+    if (command.input.ttlMs === undefined) {
+      return Object.freeze({ kind: "postimage", valueJson: command.input.valueJson });
+    }
+  }
+  return undefined;
+}
+
 async function execute<Key extends keyof PluginStateWorkerOperations>(
   { env, assertActive, sessionEntryCurrent, context: capturedContext, signal }: HostAdmission,
   command: { type: Key; input: PluginStateWorkerOperations[Key]["input"] },
@@ -208,6 +229,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     // SAFETY: Key and input are correlated by every caller; this forms the dispatch union.
     const typedCommand = command as PluginStateCommand;
     const writeScope = publicationScope(typedCommand);
+    const effect = publicationEffect(typedCommand, writeScope);
     order = prepareCommandOrder(context.admission.coordinationKey, typedCommand);
     if (
       order?.finish ||
@@ -218,6 +240,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         () => context.admission.identity.key,
         context.assertPublicationCurrent ?? context.admission.assertCurrent,
         writeScope,
+        effect,
       );
     }
     if (order?.ready) {
@@ -535,7 +558,13 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     const result = await runOpenClawStateWorkerOperation(context, operation, {
       signal,
       assertCurrent: assertAdmission,
-      createAdmission: withPluginStatePublication(baseAdmission, context, onCommitted, writeScope),
+      createAdmission: withPluginStatePublication(
+        baseAdmission,
+        context,
+        onCommitted,
+        writeScope,
+        effect,
+      ),
       existingOnly: existingOnly !== undefined,
     });
     if (result === undefined && existingOnly) {

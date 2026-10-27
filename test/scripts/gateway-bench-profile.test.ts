@@ -566,8 +566,9 @@ function createWorker() {
         return Array.from({length: 100000}, (_, i) => ({i, values: [i, i + 1]}));
       }
       function discardedWorkerAllocation() {
-        const rows = Array.from({length: 100000}, (_, i) => ({i, values: [i, i + 1]}));
-        return rows[rows.length - 1].values[1];
+        // Avoid hot callback bookkeeping that V8 can retain after collecting the rows.
+        const rows = new Array(1_000_000).fill(1);
+        return rows[rows.length - 1];
       }
       parentPort.on('message', async message => {
         if (message !== 'fixed-allocations') return allocateForProfile();
@@ -770,7 +771,8 @@ it.each([
     expect(await readFile(profilePath, "utf8")).not.toBe("");
 
     if (kind === "heap") {
-      for (const includeCollectedObjects of [true, false]) {
+      // Exercise retention before another capture can warm the allocation fixture.
+      for (const includeCollectedObjects of [false, true]) {
         const fixedPath = path.join(directory, `heap-collected-${includeCollectedObjects}`);
         const samplingIntervalBytes = 1024;
         await controlGatewayProfile(child, "heap", "start", fixedPath, {
@@ -853,7 +855,8 @@ it("separates discarded allocation churn from retained objects and cleans up fai
     function retainedAllocation() {
       return Array.from({ length: 100000 }, (_, i) => ({ i, values: [i, i + 1] }));
     }
-    function discardedAllocation() {
+    // Keep GC/promotion churn separate from the exact-zero discarded allocation fixture.
+    function allocationChurn() {
       let checksum = 0;
       for (let batch = 0; batch < 10; batch++) {
         const rows = Array.from({ length: 20000 }, (_, i) => ({ i, values: [i, i + 1] }));
@@ -861,9 +864,17 @@ it("separates discarded allocation churn from retained objects and cleans up fai
       }
       return checksum;
     }
+    function discardedAllocation() {
+      const rows = new Array(1_000_000).fill(1);
+      return rows[rows.length - 1];
+    }
     process.on('message', async message => {
+      if (message.stop) return process.disconnect();
       if (!message.run) return;
-      for (let operation = 0; operation < 4; operation++) discardedAllocation();
+      for (let operation = 0; operation < 4; operation++) {
+        allocationChurn();
+        discardedAllocation();
+      }
       if (message.retain) retainedRows = retainedAllocation();
       globalThis.gc();
       await new Promise(setImmediate);
@@ -926,7 +937,8 @@ it("separates discarded allocation churn from retained objects and cleans up fai
   const retained = await readJson<HeapProfiler.SamplingHeapProfile>(retainedPath);
   expect(heapBytesUnder(retained.head, "retainedAllocation")).toBeGreaterThan(1_000_000);
   expect(heapBytesUnder(retained.head, "discardedAllocation")).toBe(0);
-  child.disconnect();
+  // Child-side IPC shutdown lets Node observe EOF and emit the close event.
+  child.send({ stop: true });
   await closed;
   const logPath = path.join(directory, "gateway.log");
   await writeFile(logPath, stdout());

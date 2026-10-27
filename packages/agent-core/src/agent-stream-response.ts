@@ -8,7 +8,12 @@ import {
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   REPETITIVE_OUTPUT_ERROR_CODE,
 } from "@openclaw/llm-core";
-import type { AssistantMessage, Context, ToolResultMessage } from "@openclaw/llm-core";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  ToolResultMessage,
+} from "@openclaw/llm-core";
 import { AssistantRepetitionGuard } from "./assistant-repetition-guard.js";
 import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
@@ -339,6 +344,26 @@ export async function streamAgentResponse(
           await emit({ type: "message_end", message });
         };
 
+        function projectEvent(
+          event: Extract<AssistantMessageEvent, { contentIndex: number }>,
+          fragment: AssistantMessage,
+          completedToolCall: boolean,
+        ) {
+          // Keep completion events isolated: their original fields govern admission after emit.
+          if (
+            committedContentCount === 0 &&
+            !completedToolCall &&
+            (!("partial" in event) || event.partial === fragment)
+          ) {
+            return event;
+          }
+          const projected = { ...event, contentIndex: event.contentIndex - committedContentCount };
+          if ("partial" in event) {
+            projected.partial = fragment;
+          }
+          return projected;
+        }
+
         for await (const event of response) {
           switch (event.type) {
             case "start": {
@@ -361,14 +386,14 @@ export async function streamAgentResponse(
             case "toolcall_end":
               if (partialMessage) {
                 // Only updates assembled here prove appends; provider snapshots can correct text.
-                const priorBlock = partialMessage.content[event.contentIndex];
-                const append =
-                  repetitionGuard && event.type === "text_delta" && event.partial === undefined
-                    ? {
-                        offset: priorBlock?.type === "text" ? priorBlock.text.length : 0,
-                        delta: event.delta,
-                      }
-                    : undefined;
+                let append: { offset: number; delta: string } | undefined;
+                if (repetitionGuard && event.type === "text_delta" && event.partial === undefined) {
+                  const priorBlock = partialMessage.content[event.contentIndex];
+                  append = {
+                    offset: priorBlock?.type === "text" ? priorBlock.text.length : 0,
+                    delta: event.delta,
+                  };
+                }
                 let message: AssistantMessage = partialMessage;
                 if ("partial" in event && event.partial) {
                   message = event.partial;
@@ -401,41 +426,36 @@ export async function streamAgentResponse(
                 } else {
                   context.messages[partialIndex] = fragment;
                 }
-                const fragmentEvent = {
-                  ...event,
-                  contentIndex: event.contentIndex - committedContentCount,
-                  ...("partial" in event ? { partial: fragment } : {}),
-                };
+                const completedToolCall = event.type === "toolcall_end";
+                const fragmentEvent = projectEvent(event, fragment, completedToolCall);
                 await emit({
                   type: "message_update",
                   assistantMessageEvent: fragmentEvent,
                   message: { ...fragment },
                 });
                 if (
-                  event.type === "toolcall_end" &&
+                  completedToolCall &&
                   event.toolCall.async &&
                   !executedIds.has(event.toolCall.id) &&
                   message.content
                     .slice(committedContentCount, event.contentIndex)
                     .every((item) => item.type !== "toolCall" || item.async === true)
                 ) {
-                  const prefix = prepareAssistantMessage(
-                    ensureToolTurnIdentity({
-                      // Persistence takes ownership and freezes nested values. Detach the
-                      // completed prefix from the provider's still-mutable stream, after
-                      // replay checkpoints have been reindexed using original block identity.
-                      ...structuredClone(
-                        replaceCompactionReplayOwnerContent(
-                          message,
-                          message.content.slice(committedContentCount, event.contentIndex + 1),
-                        ),
-                      ),
-                      ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
-                      stopReason: "toolUse",
-                      // Usage belongs to the terminal fragment, once per provider response.
-                      usage: createEmptyTransportUsage(),
-                    }),
+                  // Persistence takes ownership and freezes nested values. Detach the
+                  // completed prefix after reindexing checkpoints using original block identity.
+                  let prefix = structuredClone(
+                    replaceCompactionReplayOwnerContent(
+                      message,
+                      message.content.slice(committedContentCount, event.contentIndex + 1),
+                    ),
                   );
+                  if (streamedTurnId) {
+                    prefix.turnId = streamedTurnId;
+                  }
+                  prefix.stopReason = "toolUse";
+                  // Usage belongs to the terminal fragment, once per provider response.
+                  prefix.usage = createEmptyTransportUsage();
+                  prefix = prepareAssistantMessage(ensureToolTurnIdentity(prefix));
                   streamedTurnId ??= prefix.turnId;
                   // Await transcript persistence before admitting side effects. The model
                   // may keep sampling, but every executed call has a durable owner.

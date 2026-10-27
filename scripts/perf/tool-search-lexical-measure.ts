@@ -10,12 +10,17 @@
  * queries and yields through a GC boundary; this is not a wall-clock soak.
  * Keep allocation sampling separate from untraced timing/GC runs. The score digest
  * must match exactly; report retained heap, build/search CPU, natural GC and tails.
- * This owner workload supplements, never replaces, the loaded Gateway comparison.
+ * --views measures 2,000 new views of a 40-plugin catalog (one changing document,
+ * changing visibility), then warm requests. Save the index owner beside itself
+ * as .tool-search-index-baseline.ts and pass --index-owner to compare revisions.
+ * Run five serial AB/BA pairs, timing and --allocations separately. Digests must
+ * match. This owner workload measures rebuild cost, not its production frequency.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import inspector from "node:inspector/promises";
+import { loadavg } from "node:os";
 import path from "node:path";
 import { performance, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as yieldTurn } from "node:timers/promises";
@@ -28,6 +33,7 @@ const { values } = parseArgs({
     owner: { type: "string", default: "src/agents/tool-search-ranking.ts" },
     allocations: { type: "boolean", default: false },
     lifecycle: { type: "boolean", default: false },
+    views: { type: "boolean", default: false },
     "index-owner": { type: "string", default: "src/agents/tool-search-index.ts" },
   },
 });
@@ -62,6 +68,95 @@ const tools = Array.from({ length: 320 }, (_, i) => {
   const resource = resources[Math.floor(i / actions.length) % resources.length]!;
   return `plugin_${Math.floor(i / 8)}_${action} ${action} ${resource} records. Query by identifier, name, date, status or channel. Return matching ${resource} details with pagination.`;
 });
+if (values.views) {
+  const { getTextLexicalIndex } = (await import(
+    pathToFileURL(path.resolve(values["index-owner"])).href
+  )) as typeof import("../../src/agents/tool-search-index.js");
+  const iterations = 2_000;
+  const query = tokenizeQuery("read file records");
+  const digest = createHash("sha256");
+  const profiler = values.allocations ? new inspector.Session() : undefined;
+  const gcEvents: Array<{ kind: number; duration: number }> = [];
+  const observer = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      gcEvents.push({
+        kind: (entry as import("node:perf_hooks").PerformanceNodeEntry).detail.kind,
+        duration: entry.duration,
+      });
+    }
+  });
+  const prepare = (revision: number) =>
+    getTextLexicalIndex([
+      ...tools.filter((_, position) => position % 8 !== revision % 8),
+      `Current catalog revision ${revision}`,
+    ]);
+  // Warm compilation separately from the measured unique revisions.
+  for (let iteration = 0; iteration < 50; iteration++) {
+    prepare(-iteration - 1);
+  }
+  await yieldTurn();
+  global.gc();
+  await yieldTurn();
+  const before = process.memoryUsage();
+  const hostLoad = loadavg();
+  profiler?.connect();
+  if (profiler) {
+    await profiler.post("HeapProfiler.startSampling", {
+      samplingInterval: 16384,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
+  }
+  observer.observe({ entryTypes: ["gc"] });
+  const started = performance.now();
+  const cpuStart = process.threadCpuUsage();
+  for (let iteration = 0; iteration < iterations; iteration++) {
+    digest.update(JSON.stringify(scoreLexical(prepare(iteration), query)));
+    if (iteration % 25 === 0) {
+      await yieldTurn();
+    }
+  }
+  const cpu = process.threadCpuUsage(cpuStart);
+  const wallMs = performance.now() - started;
+  await yieldTurn();
+  observer.disconnect();
+  let sampledBytes: number | undefined;
+  if (profiler) {
+    const { profile } = await profiler.post("HeapProfiler.stopSampling");
+    const sum = (node: inspector.HeapProfiler.SamplingHeapProfileNode): number =>
+      node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
+    sampledBytes = sum(profile.head);
+    profiler.disconnect();
+  }
+  const warmCpuStart = process.threadCpuUsage();
+  for (let iteration = 0; iteration < iterations; iteration++) {
+    prepare(iterations - 1);
+  }
+  const warmCpu = process.threadCpuUsage(warmCpuStart);
+  // Let WeakRef keep-alives and finalizers retire before reporting retained heap.
+  for (let cycle = 0; cycle < 2; cycle++) {
+    await yieldTurn();
+    global.gc();
+  }
+  await yieldTurn();
+  console.log(
+    JSON.stringify({
+      owner: values["index-owner"],
+      iterations,
+      tools: tools.length,
+      hostLoad,
+      wallMs,
+      cpuMs: (cpu.user + cpu.system) / 1000,
+      warmCpuMs: (warmCpu.user + warmCpu.system) / 1000,
+      sampledBytes,
+      digest: digest.digest("hex"),
+      gcEvents,
+      retainedHeapBytes: process.memoryUsage().heapUsed - before.heapUsed,
+      ...process.memoryUsage(),
+    }),
+  );
+  process.exit(0);
+}
 const documents = [...skills, ...tools].map((text, value) => ({
   value,
   terms: tokenizeDocument(text),

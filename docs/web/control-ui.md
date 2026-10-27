@@ -164,6 +164,8 @@ Sidebar pull-request indicators reuse the last known snapshot. Subscriptions ack
 
 Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
 
+If session metadata takes more than two seconds to load, the Changes panel keeps waiting and polls again while that shared read finishes in the background. An empty pending response does not mean there are no changes. The completed diff still requires current session and workspace access.
+
 When a checkout is too large or its Git layout cannot be validated cheaply, summaries reuse the last result for up to ten seconds before probing again. Missing or unavailable checkouts retry after one second. Full patches still require fresh revision validation.
 
 Nested repositories remain separate from the parent checkout's file contents. Untracked repositories appear as directory entries, while tracked submodules report Git's change status. Unchanged results can be reused in both cases, including when the checkout uses an external `core.excludesFile`; editing that ignore file refreshes which files appear.
@@ -394,6 +396,11 @@ download manager, with no separate download-size cap. The inline-preview limit
 still applies, but files too large to preview retain their download action.
 Folders are not downloadable. Downloads require the Control UI and its Gateway
 connection to share an origin (including a same-origin Gateway proxy).
+
+Detected PDFs opened from chat file links or the Files panel use the same
+browser-native preview as PDF attachments, up to 16 MiB. Preview failures and
+larger PDFs retain **Download file**. Rendering depends on your browser's PDF
+support; the generic text and image inline-preview limit is unchanged.
 
 Downloads use the session's existing file-read access, including managed repository
 workspaces. Provider-backed node workspaces whose bridge only supports whole-file

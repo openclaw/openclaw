@@ -21,11 +21,9 @@ import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import { buildModelsListResult, prepareModelsListResult } from "./models-list-result.js";
-import {
-  createModelsListTestContext,
-  WITHOUT_OPENAI_ENV_AUTH,
-} from "./models-list-result.openai-routes.test-support.js";
+import { createModelsListTestContext } from "./models-list-result.openai-routes.test-support.js";
 
 const advertisedTiers = ["priority", "ultrafast"];
 const subscriptionFields = { api: subscriptionRoute.api, baseUrl: subscriptionRoute.baseUrl };

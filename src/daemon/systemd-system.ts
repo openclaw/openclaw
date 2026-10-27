@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -140,12 +141,13 @@ async function inspectLoadedSystemOwnership(
           throw unavailable();
         }
         if (result.code !== 0) {
+          // systemd 245 busctl colors this line even when stderr is not a terminal.
           if (
             allowMissing &&
             [
               `Call failed: Unit ${unitName} not loaded.`,
               `Call failed: Unit ${unitName} not found.`,
-            ].includes(result.stderr.trim())
+            ].includes(stripAnsi(result.stderr).trim())
           ) {
             return missingUnit;
           }

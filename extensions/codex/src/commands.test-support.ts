@@ -278,7 +278,7 @@ function ensureCodexCommandMocks(): void {
   );
 }
 
-export function installCodexCommandMocks(deps: CodexCommandDeps): CodexCommandHost {
+function installCodexCommandMocks(deps: CodexCommandDeps): CodexCommandHost {
   ensureCodexCommandMocks();
   // Direct command-handler fixtures install once per test, outside a dispatch scope.
   if (!commandFixture.getStore()) {

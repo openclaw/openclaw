@@ -212,6 +212,19 @@ export async function withFixedOwnerSessionStore(
   }
 }
 
+export function sessionCreateRuntimeClient(scopes: string[]) {
+  return {
+    connect: { scopes },
+    internal: {
+      agentRuntimeIdentity: {
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      },
+    },
+  };
+}
+
 export { sessionDiffBaselineMocks, dashboardTitleGenerationMocks, dashboardTitleScheduleMocks };
 
 export function createGuestSandboxSessionConfig(storePath: string, others: "none" | "view") {

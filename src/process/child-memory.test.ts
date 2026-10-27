@@ -10,7 +10,20 @@ const procfs = vi.hoisted(() => ({
 }));
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs/promises")>()),
-  ...procfs,
+  readdir: procfs.readdir,
+}));
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  readFile: (
+    file: string,
+    _encoding: string,
+    callback: (error: unknown, text?: string) => void,
+  ) => {
+    void procfs.readFile(file).then(
+      (text) => callback(null, text),
+      (error: unknown) => callback(error),
+    );
+  },
 }));
 
 beforeEach(() => {

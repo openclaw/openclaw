@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { persistSubagentSessionTiming } from "../agents/subagents/registry/subagent-registry-helpers.js";
 import { getSubagentRunsForChildSession } from "../agents/subagents/registry/subagent-registry-memory.js";
@@ -24,6 +25,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { withProjectCheckoutLifecycle } from "../projects/project-checkout.js";
 import { registerProjectRegistry, removeProjectRegistry } from "../projects/project-registry.js";
 import {
   captureSessionControllerSettlement,
@@ -32,6 +34,7 @@ import {
 } from "../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -404,6 +407,7 @@ test.each(["startup", "source settlement"] as const)(
               withCommit: async (commit) => {
                 await withCommit(commit);
                 sourceSettled = true;
+                invocation.abort(new Error("Stop after child commit"));
                 // Model source settlement failure after the real child write has completed.
                 throw new Error("Source settlement stopped after child commit");
               },
@@ -421,7 +425,9 @@ test.each(["startup", "source settlement"] as const)(
         sessionId: entry?.sessionId,
         lifecycleRevision: entry?.lifecycleRevision,
       });
-      invocation.abort(new Error("Stop after child commit"));
+      if (failure === "startup") {
+        invocation.abort(new Error("Stop after child commit"));
+      }
       return entry;
     });
     const result = await withPluginRuntimeGatewayContextResolver(
@@ -439,6 +445,111 @@ test.each(["startup", "source settlement"] as const)(
     expect(await sessionAccess.listSessionEntryKeysReadOnly(scope)).toEqual(originalKeys);
     expect([...getSubagentRunsForChildSession(committedChildKey!)]).toEqual([]);
     expect(await managedWorktrees.listRegistryRecords()).toEqual([]);
+  },
+);
+
+test.for(["invocation", "configured"] as const)(
+  "stops native worktree spawn from its %s signal while its inherited registered source is busy",
+  async (cancelSource, { signal }) => {
+    const parent = await createDirectProjectParent();
+    const scope = { agentId: "main", storePath };
+    const originalKeys = await sessionAccess.listSessionEntryKeysReadOnly(scope);
+    const originalCheckouts = (await git("worktree", "list", "--porcelain")).stdout;
+    const { getRuntimeConfig } = await getGatewayConfigModule();
+    const context = createDirectChatContext({
+      getRuntimeConfig,
+      trackExecution: async (run) => run(),
+    });
+    const invocation = new AbortController();
+    const configured = new AbortController();
+    const cancelled = cancelSource === "invocation" ? invocation : configured;
+    const tool = createSessionsSpawnTool({
+      signal: configured.signal,
+      agentSessionKey: parent.key,
+      expectedParentSessionId: parent.entry.sessionId,
+      config: getRuntimeConfig(),
+      countActiveRuns: () => 0,
+    });
+    const publishChild = vi.spyOn(spawnRuntime, "upsertSessionEntryCore");
+    const held = createDeferredCore<() => void>();
+    const release = createDeferredCore();
+    const holder = withProjectCheckoutLifecycle(repository, {}, async (lease) => {
+      held.resolve(lease.assertOwned);
+      await release.promise;
+    });
+    const operations: Promise<unknown>[] = [holder];
+    let continuedAfterStop = false;
+    try {
+      const assertHeld = await withinTest(
+        awaitGateBeforeSettlement(held.promise, holder, "Source holder did not acquire custody"),
+        signal,
+      );
+      const waiting = createDeferredCore();
+      const continued = createDeferredCore();
+      const acquire = leaseAcquisition.acquireOpenClawStateLease;
+      vi.spyOn(leaseAcquisition, "acquireOpenClawStateLease").mockImplementation((options) =>
+        acquire({
+          ...options,
+          acquire: async (...args) => {
+            const selectedSource = options.label.endsWith(`projects.checkout/${repository}`);
+            if (selectedSource && cancelled.signal.aborted) {
+              continued.resolve();
+            }
+            const outcome = await options.acquire(...args);
+            if (selectedSource && outcome.kind === "held") {
+              // Observe actual SQLite contention; do not replace acquisition or its cancellation.
+              waiting.resolve();
+            }
+            return outcome;
+          },
+        }),
+      );
+      let failure: unknown;
+      const spawning = withPluginRuntimeGatewayContextResolver(
+        () => context,
+        () =>
+          tool.execute(
+            "native-source-stop",
+            { task: "Read README.md", worktree: true, worktreeName: "stopped-child" },
+            invocation.signal,
+          ),
+      ).catch((error: unknown) => {
+        failure = error;
+        return undefined;
+      });
+      operations.push(spawning);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          waiting.promise,
+          spawning,
+          "Native child did not wait for its source",
+        ),
+        signal,
+      );
+      cancelled.abort(new Error("Stop native source wait"));
+      continuedAfterStop = await withinTest(
+        Promise.race([spawning.then(() => false), continued.promise.then(() => true)]),
+        signal,
+      );
+      assertHeld();
+      expect(publishChild).not.toHaveBeenCalled();
+      expect(await sessionAccess.listSessionEntryKeysReadOnly(scope)).toEqual(originalKeys);
+      release.resolve();
+      const result = await withinTest(spawning, signal);
+      if (failure) {
+        expect(failure).toBeInstanceOf(Error);
+      } else {
+        expect(result?.details).toMatchObject({ status: "error" });
+      }
+    } finally {
+      release.resolve();
+      await Promise.allSettled(operations);
+    }
+    expect(publishChild).not.toHaveBeenCalled();
+    expect(await sessionAccess.listSessionEntryKeysReadOnly(scope)).toEqual(originalKeys);
+    expect(await managedWorktrees.listRegistryRecords()).toEqual([]);
+    expect((await git("worktree", "list", "--porcelain")).stdout).toBe(originalCheckouts);
+    expect(continuedAfterStop, "Native child kept acquiring after Stop").toBe(false);
   },
 );
 

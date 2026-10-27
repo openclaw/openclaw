@@ -1,10 +1,26 @@
 import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
-import type { ChannelCapability } from "../../lib/channels/index.ts";
+import { createChannelCapability, type ChannelCapability } from "../../lib/channels/index.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ChannelsProps } from "./view.types.ts";
+
+export function channelSnapshot(
+  channels: ChannelsStatusSnapshot["channels"] = {},
+  overrides: Partial<ChannelsStatusSnapshot> = {},
+): ChannelsStatusSnapshot {
+  return {
+    ts: 1,
+    channelOrder: Object.keys(channels),
+    channelLabels: Object.fromEntries(Object.keys(channels).map((id) => [id, id])),
+    channels,
+    channelAccounts: {},
+    channelDefaultAccountId: {},
+    ...overrides,
+  };
+}
 
 export type ChannelsViewTestOverrides = Partial<
   Omit<ChannelsProps, "channels" | "config" | "presentation" | "wizardHost">
@@ -20,30 +36,16 @@ export function createChannelsState(
   pairingSnapshot: ChannelsPairingListResult | null,
   overrides: Partial<ChannelCapability["state"]> = {},
 ): ChannelCapability["state"] {
-  return {
-    client: null,
+  const channels = createChannelCapability(createApplicationGateway().gateway);
+  const state = {
+    ...channels.state,
     connected: true,
-    channelsLoading: false,
-    channelsLoadingProbe: null,
-    channelsRefreshSeq: 0,
     channelsSnapshot: snapshot,
-    channelsRead: null,
-    channelsError: null,
-    channelsLastSuccess: null,
-    pairingLoading: false,
-    pairingRefreshSeq: 0,
     pairingSnapshot,
-    pairingRead: null,
-    pairingError: null,
-    pairingLastSuccess: null,
-    pairingBusyRequestId: null,
-    whatsappLoginMessage: null,
-    whatsappLoginQrDataUrl: null,
-    whatsappLoginSessionKey: null,
-    whatsappLoginConnected: null,
-    whatsappBusy: false,
     ...overrides,
   };
+  channels.dispose();
+  return state;
 }
 
 export function createChannelsViewProps(
@@ -52,9 +54,8 @@ export function createChannelsViewProps(
   overrides: ChannelsViewTestOverrides = {},
 ): ChannelsProps {
   const { channels, config, presentation, wizardHost, ...props } = overrides;
-  const channelState = createChannelsState(snapshot, pairingSnapshot, channels);
   return {
-    channels: channelState,
+    channels: createChannelsState(snapshot, pairingSnapshot, channels),
     config: { ...createInitialConfigState(), ...config },
     presentation: {
       pluginCatalog: null,

@@ -37,14 +37,8 @@ export function observeMainThreadSql(options: SqlObservationOptions = {}) {
   return observeSqlCalls(mainThreadSqlSpies(options));
 }
 
-export async function expectNoMainThreadSql(run: () => Promise<void>) {
-  const sql = observeMainThreadSql();
-  try {
-    await run();
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-  }
+export function expectNoMainThreadSql(run: () => Promise<void>) {
+  return withoutMainThreadSql(run);
 }
 
 export async function withoutMainThreadSql<T>(run: () => Promise<T>): Promise<T> {

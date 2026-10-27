@@ -243,19 +243,30 @@ it("runs retirement in the owning Gateway worker while retaining pending recover
   await closeOpenClawStateDatabaseAsync();
   const lock = await acquireGatewayLock({ env, role: "gateway", allowInTests: true });
   expect(lock).toBeTruthy();
+  const lstat = fs.lstatSync;
+  let hostOwnerReads = 0;
+  using hostProbe = vi.spyOn(fs, "lstatSync").mockImplementation((pathname, options) => {
+    if (String(pathname) === lock!.stateLockPath) {
+      hostOwnerReads++;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+    return lstat(pathname, options);
+  });
   try {
-    const result = await cleanupGatewayUpdateRecovery(second, env, () => lock!.assertCurrent());
+    const result = await cleanupGatewayUpdateRecovery(second, env);
     expect(result?.advisory).toBeUndefined();
+    expect(hostOwnerReads).toBe(0);
     expect(fs.existsSync(original)).toBe(false);
     expect(fs.existsSync(current)).toBe(true);
     expect(fs.existsSync(pendingCapture)).toBe(true);
     expect(getUpdateRun(second, { env })?.status).toBe("succeeded");
   } finally {
+    hostProbe.mockRestore();
     await lock?.release();
   }
 });
 
-it.each(["claim-publication", "first-unlink"] as const)(
+it.each(["before-first-effect", "claim-publication", "first-unlink"] as const)(
   "stops migration-original retirement when its physical owner is replaced after %s",
   async (phase) => {
     const fixture = await recoveryFixture();
@@ -299,13 +310,14 @@ it.each(["claim-publication", "first-unlink"] as const)(
         // Observe real worker effects, then replace the real physical owner.
         // Production host admission still decides whether the next effect is allowed.
         const reached =
-          phase === "claim-publication"
+          phase === "before-first-effect" ||
+          (phase === "claim-publication"
             ? moves().some(
                 (move) =>
                   move.artifact?.disposal.state === "pending-disposal" &&
                   fs.existsSync(move.artifact.disposal.claimPath),
               )
-            : remaining().length < originals.size;
+            : remaining().length < originals.size);
         if (!successor && reached) {
           originalOwner.release();
           successor = acquire();
@@ -316,11 +328,11 @@ it.each(["claim-publication", "first-unlink"] as const)(
       expect(() => originalOwner.assertCurrent()).toThrow();
       successor!.assertCurrent();
       const retained = remaining();
-      expect(retained).toHaveLength(phase === "claim-publication" ? 2 : 1);
+      expect(retained).toHaveLength(phase === "first-unlink" ? 1 : 2);
       for (const { original, retained: file } of retained) {
         expect(fs.readFileSync(file)).toEqual(originals.get(original));
       }
-      if (phase === "claim-publication") {
+      if (phase !== "first-unlink") {
         expectOriginals(originals);
       }
       expect(fs.existsSync(current)).toBe(true);

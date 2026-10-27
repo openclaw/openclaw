@@ -6,10 +6,8 @@ import {
   subscriptionRoute,
 } from "../../agents/model-auth-availability.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  listModels,
-  WITHOUT_OPENAI_ENV_AUTH,
-} from "./models-list-result.openai-routes.test-support.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
+import { listModels } from "./models-list-result.openai-routes.test-support.js";
 
 it("publishes only explicit access metadata for the selected account, model and runtime", async () => {
   await withOpenClawTestState(

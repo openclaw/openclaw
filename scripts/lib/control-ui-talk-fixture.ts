@@ -83,10 +83,29 @@ export async function launchTalkObservationBrowser(artifactDir: string, headed: 
 export type TalkBenchState =
   | "listening"
   | "speaking"
+  | "responding"
   | "transcribing"
   | "idle"
   | "hidden"
   | "hidden-transcribing";
+type TalkRevealProof = {
+  visibilityAtMs: number;
+  transcriptDomAtMs?: number;
+  secondFrameAtMs?: number;
+  visibilityToDomMs?: number;
+  visibilityToFrameMs?: number;
+  domToFrameMs?: number;
+  observedChunks?: number;
+};
+type TalkNativeAudioState = {
+  contextStates: AudioContextState[];
+  contextCount: number;
+  liveContextCount: number;
+  audioElementCount: number;
+  pausedAudioElementCount: number;
+  allLiveContextsSuspended: boolean;
+  allAudioPaused: boolean;
+};
 type TalkBenchProof = {
   peer?: { channel: EventTarget; remoteDescription: RTCSessionDescriptionInit | null };
   analyserReads: number;
@@ -95,6 +114,9 @@ type TalkBenchProof = {
   intervalCallbacks: number;
   timeoutCallbacks: number;
   animationCallbacks: number;
+  mutationObserverCallbacks: number;
+  resizeObserverCallbacks: number;
+  intersectionObserverCallbacks: number;
   transcriptChunks: number;
   transcriptDomMutations: number;
   readonly transcriptPendingChunks: number;
@@ -113,6 +135,10 @@ type TalkBenchProof = {
   transcriptLatenciesMs: number[];
   playbackStartLatenciesMs: number[];
   frameTimes: number[];
+  reveal?: TalkRevealProof;
+  armReveal: () => void;
+  readNativeAudioState: () => TalkNativeAudioState;
+  suspendNativeAudio: () => Promise<TalkNativeAudioState>;
   setState: (state: TalkBenchState, externalTranscripts?: boolean) => void;
   deliverTranscriptChunk: (expectedHidden?: boolean) => string;
   readTranscriptDom: () => void;
@@ -132,15 +158,34 @@ declare global {
   }
 }
 /** Real Web Audio signal; provider data-channel messages use the existing E2E contract. */
-export async function installTalkPerfFixture(page: Page, includeCounters: boolean) {
+export async function installTalkPerfFixture(
+  page: Page,
+  includeCounters: boolean,
+  suspendNativeAudio: boolean,
+) {
   await page.addInitScript(
-    ({ counters }) => {
+    ({ counters, suspendAudio }) => {
+      const NativeMutationObserver = window.MutationObserver;
+      const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window);
+      const nativeCancelAnimationFrame = window.cancelAnimationFrame.bind(window);
+      const nativeAudioContexts: AudioContext[] = [];
+      if (suspendAudio) {
+        // Counterfactual only: retain the native graph, connections, and JS meter timer.
+        window.AudioContext = new Proxy(window.AudioContext, {
+          construct(target, args, newTarget) {
+            const created: AudioContext = Reflect.construct(target, args, newTarget);
+            nativeAudioContexts.push(created);
+            return created;
+          },
+        });
+      }
       let context: AudioContext | undefined;
       let gain: GainNode | undefined;
       let modulationDepth: GainNode | undefined;
       let stream: MediaStream | undefined;
       let sequence = 0;
       let turn = 0;
+      let respondingId: string | undefined;
       let previousTranscriptId: string | null = null;
       let activeTranscript:
         | {
@@ -153,8 +198,23 @@ export async function installTalkPerfFixture(page: Page, includeCounters: boolea
       let observer: MutationObserver | undefined;
       let tooltipObserver: MutationObserver | undefined;
       let finishFocusedStop: (() => void) | undefined;
+      let revealObserver: MutationObserver | undefined;
+      let revealFrame: number | undefined;
+      let revealVisibilityListener: ((event: Event) => void) | undefined;
       let observing = false;
       const pending = new Map<string, number>();
+      const clearRevealObservation = () => {
+        revealObserver?.disconnect();
+        revealObserver = undefined;
+        if (revealFrame !== undefined) {
+          nativeCancelAnimationFrame(revealFrame);
+          revealFrame = undefined;
+        }
+        if (revealVisibilityListener) {
+          document.removeEventListener("visibilitychange", revealVisibilityListener);
+          revealVisibilityListener = undefined;
+        }
+      };
       const send = (event: unknown) => {
         if (!proof.peer) {
           throw new Error("Synthetic Talk peer was not created");
@@ -163,6 +223,16 @@ export async function installTalkPerfFixture(page: Page, includeCounters: boolea
           new MessageEvent("message", { data: JSON.stringify(event) }),
         );
       };
+      const finishResponding = () => {
+        if (respondingId === undefined) {
+          return;
+        }
+        send({
+          type: "response.done",
+          response: { id: respondingId, status: "completed", output: [] },
+        });
+        respondingId = undefined;
+      };
       const proof: TalkBenchProof = {
         analyserReads: 0,
         meterStyleMutations: 0,
@@ -170,6 +240,9 @@ export async function installTalkPerfFixture(page: Page, includeCounters: boolea
         intervalCallbacks: 0,
         timeoutCallbacks: 0,
         animationCallbacks: 0,
+        mutationObserverCallbacks: 0,
+        resizeObserverCallbacks: 0,
+        intersectionObserverCallbacks: 0,
         transcriptChunks: 0,
         transcriptDomMutations: 0,
         get transcriptPendingChunks() {
@@ -183,7 +256,92 @@ export async function installTalkPerfFixture(page: Page, includeCounters: boolea
         transcriptLatenciesMs: [],
         playbackStartLatenciesMs: [],
         frameTimes: [],
+        readNativeAudioState() {
+          const contextStates = nativeAudioContexts.map((audioContext) => audioContext.state);
+          const liveStates = contextStates.filter((state) => state !== "closed");
+          const audioElements = [...document.querySelectorAll("audio")];
+          const pausedAudioElementCount = audioElements.filter((audio) => audio.paused).length;
+          return {
+            contextStates,
+            contextCount: contextStates.length,
+            liveContextCount: liveStates.length,
+            audioElementCount: audioElements.length,
+            pausedAudioElementCount,
+            allLiveContextsSuspended:
+              liveStates.length > 0 && liveStates.every((state) => state === "suspended"),
+            allAudioPaused:
+              audioElements.length > 0 && pausedAudioElementCount === audioElements.length,
+          };
+        },
+        async suspendNativeAudio() {
+          if (!suspendAudio) {
+            throw new Error("Native audio suspension requires the comparison's suspended side");
+          }
+          for (const audio of document.querySelectorAll("audio")) {
+            audio.pause();
+          }
+          await Promise.all(
+            nativeAudioContexts
+              .filter((audioContext) => audioContext.state === "running")
+              .map((audioContext) => audioContext.suspend()),
+          );
+          const state = proof.readNativeAudioState();
+          if (!state.allLiveContextsSuspended || !state.allAudioPaused) {
+            throw new Error(`Native audio suspension was incomplete: ${JSON.stringify(state)}`);
+          }
+          return state;
+        },
+        armReveal() {
+          clearRevealObservation();
+          proof.reveal = undefined;
+          if (!document.hidden) {
+            throw new Error("Reveal observation must be armed while hidden");
+          }
+          const onVisibility = (event: Event) => {
+            if (document.hidden) {
+              return;
+            }
+            document.removeEventListener("visibilitychange", onVisibility);
+            revealVisibilityListener = undefined;
+            const reveal: TalkRevealProof = { visibilityAtMs: event.timeStamp };
+            proof.reveal = reveal;
+            const observeDom = () => {
+              if (reveal.transcriptDomAtMs !== undefined) {
+                return;
+              }
+              proof.readTranscriptDom();
+              if (pending.size) {
+                return;
+              }
+              const domAtMs = performance.now();
+              reveal.transcriptDomAtMs = domAtMs;
+              reveal.visibilityToDomMs = domAtMs - reveal.visibilityAtMs;
+              reveal.observedChunks = proof.transcriptChunks;
+              revealObserver?.disconnect();
+              revealObserver = undefined;
+              revealFrame = nativeRequestAnimationFrame(() => {
+                revealFrame = nativeRequestAnimationFrame(() => {
+                  const frameAtMs = performance.now();
+                  reveal.secondFrameAtMs = frameAtMs;
+                  reveal.visibilityToFrameMs = frameAtMs - reveal.visibilityAtMs;
+                  reveal.domToFrameMs = frameAtMs - domAtMs;
+                  clearRevealObservation();
+                });
+              });
+            };
+            revealObserver = new NativeMutationObserver(observeDom);
+            revealObserver.observe(document.body, {
+              subtree: true,
+              childList: true,
+              characterData: true,
+            });
+            observeDom();
+          };
+          revealVisibilityListener = onVisibility;
+          document.addEventListener("visibilitychange", onVisibility);
+        },
         setState(state, externalTranscripts = false) {
+          clearRevealObservation();
           if (timer !== undefined) {
             clearTimeout(timer);
           }
@@ -204,8 +362,12 @@ export async function installTalkPerfFixture(page: Page, includeCounters: boolea
             previousTranscriptId = activeTranscript.id;
             activeTranscript = undefined;
           }
+          finishResponding();
           send({ type: "input_audio_buffer.speech_started" });
-          if (state === "transcribing" || state === "hidden-transcribing") {
+          if (state === "responding") {
+            respondingId = `bench-audio-response-${++turn}`;
+            send({ type: "response.created", response: { id: respondingId } });
+          } else if (state === "transcribing" || state === "hidden-transcribing") {
             const id = `bench-response-${++turn}`;
             activeTranscript = { id, text: "" };
             send({
@@ -256,13 +418,16 @@ export async function installTalkPerfFixture(page: Page, includeCounters: boolea
             }
           }
         },
-        start(frames, observeTranscripts = true, observeTooltips = false, focusedStop = false) {
+        start(frames, observeTranscripts = false, observeTooltips = false, focusedStop = false) {
           observing = true;
           pending.clear();
           proof.analyserReads =
             proof.intervalCallbacks =
             proof.timeoutCallbacks =
             proof.animationCallbacks =
+            proof.mutationObserverCallbacks =
+            proof.resizeObserverCallbacks =
+            proof.intersectionObserverCallbacks =
               0;
           proof.transcriptChunks = 0;
           proof.transcriptDomMutations = 0;
@@ -365,6 +530,7 @@ export async function installTalkPerfFixture(page: Page, includeCounters: boolea
         },
         stop() {
           observing = false;
+          clearRevealObservation();
           if (timer !== undefined) {
             clearTimeout(timer);
           }
@@ -375,6 +541,8 @@ export async function installTalkPerfFixture(page: Page, includeCounters: boolea
           tooltipObserver?.disconnect();
           finishFocusedStop?.();
           finishFocusedStop = undefined;
+          // Observation ends after CPU sampling, before the native Stop action.
+          finishResponding();
         },
       };
       window.openclawTalkBench = proof;
@@ -400,6 +568,53 @@ export async function installTalkPerfFixture(page: Page, includeCounters: boolea
         return nativeAnalyse.call(this, samples);
       };
       if (counters) {
+        function countObserverCallbacks<
+          Constructor extends
+            | typeof MutationObserver
+            | typeof ResizeObserver
+            | typeof IntersectionObserver,
+        >(
+          constructor: Constructor,
+          counter:
+            | "mutationObserverCallbacks"
+            | "resizeObserverCallbacks"
+            | "intersectionObserverCallbacks",
+        ): Constructor {
+          return new Proxy(constructor, {
+            construct(target, args, newTarget) {
+              const callback: unknown = args[0];
+              if (typeof callback !== "function") {
+                return Reflect.construct(target, args, newTarget);
+              }
+              // Preserve native construction, subclass prototypes, callback receiver, and options.
+              return Reflect.construct(
+                target,
+                [
+                  function (this: unknown, ...notifications: unknown[]) {
+                    if (observing) {
+                      proof[counter]++;
+                    }
+                    Reflect.apply(callback, this, notifications);
+                  },
+                  ...args.slice(1),
+                ],
+                newTarget,
+              );
+            },
+          });
+        }
+        window.MutationObserver = countObserverCallbacks(
+          window.MutationObserver,
+          "mutationObserverCallbacks",
+        );
+        window.ResizeObserver = countObserverCallbacks(
+          window.ResizeObserver,
+          "resizeObserverCallbacks",
+        );
+        window.IntersectionObserver = countObserverCallbacks(
+          window.IntersectionObserver,
+          "intersectionObserverCallbacks",
+        );
         const interval = window.setInterval.bind(window);
         const timeout = window.setTimeout.bind(window);
         const raf = window.requestAnimationFrame.bind(window);
@@ -510,7 +725,7 @@ export async function installTalkPerfFixture(page: Page, includeCounters: boolea
         value: FakePeerConnection,
       });
     },
-    { counters: includeCounters },
+    { counters: includeCounters, suspendAudio: suspendNativeAudio },
   );
   await page.route("https://api.openai.com/v1/realtime/calls", (route) =>
     route.fulfill({ status: 200, contentType: "application/sdp", body: "answer-sdp" }),
