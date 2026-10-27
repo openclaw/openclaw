@@ -287,48 +287,25 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     sessionKeys: [...sessionKeys],
     sessionIds: [...sessionIds],
   };
-  // Channel guard construction gets its own immutable route snapshot. The
-  // post-await store below is loaded separately for final row/privacy decisions.
-  const guardSessionStore =
-    visibility === "channel"
-      ? (await loadMemorySearchSessionStore(params.cfg, sessionSelection)).store
-      : undefined;
-  const guardChannelRowForSession = (key: string) => {
-    const entry = guardSessionStore?.[key];
-    return entry
-      ? {
-          key,
-          chatType: entry.chatType,
-          space: entry.space,
-          origin: sessionDeliveryOrigin(entry),
-          deliveryContext: deliveryContextFromSession(entry),
-        }
-      : undefined;
-  };
-  const guard = params.requesterSessionKey
-    ? await createSessionVisibilityGuard({
-        action: "history",
-        requesterSessionKey: params.requesterSessionKey,
-        requesterAgentId,
-        mainSessionKey:
-          requesterAgentId &&
-          (!params.sandboxed || resolveSandboxSessionToolsVisibility(params.cfg) === "all")
-            ? resolveCanonicalMainSessionKey({
-                agentId: requesterAgentId,
-                mainKey: params.cfg.session?.mainKey,
-                sessionScope: params.cfg.session?.scope,
-              })
-            : undefined,
-        visibility,
-        a2aPolicy,
-        ...(visibility === "channel"
-          ? {
-              requesterChannelRow: guardChannelRowForSession(params.requesterSessionKey),
-              channelRowForSession: guardChannelRowForSession,
-            }
-          : {}),
-      })
-    : null;
+  const guard =
+    visibility !== "channel" && params.requesterSessionKey
+      ? await createSessionVisibilityGuard({
+          action: "history",
+          requesterSessionKey: params.requesterSessionKey,
+          requesterAgentId,
+          mainSessionKey:
+            requesterAgentId &&
+            (!params.sandboxed || resolveSandboxSessionToolsVisibility(params.cfg) === "all")
+              ? resolveCanonicalMainSessionKey({
+                  agentId: requesterAgentId,
+                  mainKey: params.cfg.session?.mainKey,
+                  sessionScope: params.cfg.session?.scope,
+                })
+              : undefined,
+          visibility,
+          a2aPolicy,
+        })
+      : null;
 
   const { store: combinedSessionStore, storePath } = await loadMemorySearchSessionStore(
     params.cfg,

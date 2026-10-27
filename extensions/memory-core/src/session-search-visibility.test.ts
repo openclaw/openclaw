@@ -126,6 +126,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
   });
 
   it("retains channel requester routing when transcript inventory is limited to the search", async () => {
+    const legacyGuard = vi.spyOn(sessionVisibility, "createSessionVisibilityGuard");
     const requester = "agent:main:slack:channel:c111:thread:1.001";
     const sibling = "agent:main:slack:channel:c111:thread:1.002";
     const channelEntry = (id: string) =>
@@ -155,9 +156,9 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
         ),
       ),
     });
-    vi.mocked(engineSessions.loadMemorySearchSessionStore)
-      .mockImplementationOnce(selectedInventory)
-      .mockImplementationOnce(selectedInventory);
+    vi.mocked(engineSessions.loadMemorySearchSessionStore).mockImplementationOnce(
+      selectedInventory,
+    );
     const hit = searchHit("sessions/past.jsonl", "sessions", "same channel");
 
     await expect(
@@ -170,6 +171,8 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
         captureChannelTargets: () => {},
       }),
     ).resolves.toEqual([hit]);
+    expect(engineSessions.loadMemorySearchSessionStore).toHaveBeenCalledTimes(1);
+    expect(legacyGuard).not.toHaveBeenCalled();
   });
 
   it("does not load session history for memory-only hits with configured recall", async () => {
