@@ -332,7 +332,7 @@ ${changeLock}
 
       const result = f.run("review-init");
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("PR operation lock changed or is unreadable");
+      expect(result.stderr).toContain("PR operation lock check failed (status=1, signal=null)");
       expectSeed(f);
       expect(readFileSync(join(f.worktree, "src", "subject.ts"), "utf8")).toBe(
         "hook-owned state after lock loss\n",

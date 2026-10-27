@@ -307,6 +307,15 @@ bounded, redacted error details for classification, including when a large
 partial response cannot fit in the transcript. Unrecognized errors still use
 generic chat copy; inspect the Gateway logs and stored error for diagnosis.
 
+Ordinary OpenAI Responses failures log one `provider-error` warning with available code, type,
+and provider `requestId` metadata. Correlation with the originating model call
+uses `clientRequestId` when the provider supplies its own request ID. Missing
+fields and provider prose, request bodies, and response bodies are omitted.
+Same-model retry scheduling is logged at `debug`; exhausted retries produce an
+explicit error. Generic secret-egress request audit lines, including refusals,
+stay at `debug`. Structured `secret.egress` events still count every outcome,
+and certificate failures retain their actionable warning.
+
 When reply dispatch consumes a thrown error after a partial reply or an adopted
 turn, its terminal `message.dispatch.completed` and `message.processed`
 diagnostics retain the failure outcome, identifiers, and timing. The extra
@@ -420,7 +429,9 @@ but excludes streaming the response body. The targeted debug flags above promote
 start and fast successful response metadata to `info` when troubleshooting.
 
 Embedded model requests attach the raw `sessionKey`, `runId`, numbered
-`requestId`, and `requestNumber` to fetch and transport logs. String identifiers
+`requestId`, and `requestNumber` to fetch and transport logs. When a failure
+also includes a provider `requestId`, the local identifier is labeled
+`clientRequestId`. String identifiers
 use lossless JSON escaping so control characters cannot forge log lines; their
 values are not redacted. The request sequence
 continues across same-run retries. Fetch response logs include the HTTP
@@ -469,6 +480,8 @@ one second. `stage=request` ends at acknowledgement; `stage=startup` ends when
 agent execution starts. `replyInitialization` covers inbound dispatch through
 session preparation. Later prompt, skills, tool catalog, model/auth, and runtime
 preparation belong to `preparation`, before the first model request.
+Fast sends retain numeric phase timings without formatting a log message;
+enabled diagnostic phase subscribers still receive their observations.
 
 `detail.*` fields attribute those intervals using the existing reply and agent
 preparation spans, without enabling timeline file logging. They include session

@@ -46,6 +46,7 @@ export async function resolvePromptBuildHookResult(params: {
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
+  refreshContinuation?: boolean;
 }): Promise<ResolvedPromptBuildHookResult> {
   const turnContext = await resolvePluginTurnContext(params);
   const logHookFailure = (hookName: string) => (hookErr: unknown) => {

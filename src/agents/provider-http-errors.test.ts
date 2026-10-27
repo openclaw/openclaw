@@ -11,7 +11,20 @@ import {
   readProviderJsonResponse as readJson,
   readProviderJsonObjectResponse as readJsonObject,
   readProviderTextResponse as readText,
+  summarizeProviderTransportError,
 } from "./provider-http-errors.js";
+
+it("logs bounded failure labels without missing fields or provider prose", () => {
+  expect(
+    summarizeProviderTransportError(
+      Object.assign(new Error("private response body"), {
+        code: "ECONNRESET",
+        cause: new Error("private upstream body"),
+      }),
+    ),
+  ).toBe("name=Error code=ECONNRESET causeName=Error");
+  expect(summarizeProviderTransportError({ name: "private prompt echo", code: {} })).toBe("");
+});
 
 const streamResponse = (
   source: UnderlyingSource<Uint8Array>,

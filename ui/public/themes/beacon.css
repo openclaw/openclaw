@@ -18,7 +18,6 @@
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
   --github-item-bg: color-mix(in srgb, var(--text) 4%, var(--bg));
   --github-item-hover-bg: color-mix(in srgb, var(--text) 7%, var(--bg));
-  --overlay-shadow: var(--shadow-md);
   --overlay-border: var(--border-strong);
   /* Auxiliary controls retain this palette's deliberately stronger ink. */
   --text-tertiary: var(--muted);
@@ -34,12 +33,6 @@
 :root[data-theme="beacon"] {
   /*
    * Accent — high-visibility amber on pure black
-   *
-   * WCAG 2.1 AAA audit (bg = #000000):
-   *   --accent #ffc233  contrast ≈ 13.0:1 AAA ✓
-   *   --primary-foreground #000000 on #ffc233 button: 13.0:1 ✓
-   *   worst text pairing --muted on --bg-muted: 10.29:1 ✓
-   *   worst status label on its neutral subtle tint: 7.05:1 ✓
    */
   --ring: #ffc233;
   --accent: #ffc233;
@@ -54,23 +47,11 @@
 
   --focus: rgba(255, 194, 51, 0.35);
 
-  --bg: #000000;
-  --bg-accent: #0a0a0a;
-  --bg-elevated: #141414;
-  --bg-hover: #1c1c1c;
-  --bg-muted: #1c1c1c;
+  --bg-content: #000000;
 
-  --card: #0a0a0a;
   --card-foreground: #ffffff;
   --card-highlight: rgba(255, 255, 255, 0.06);
-  --popover: #141414;
   --popover-foreground: #ffffff;
-
-  --panel: #000000;
-  --panel-strong: #141414;
-  --panel-hover: #1c1c1c;
-  --chrome: rgba(0, 0, 0, 0.98);
-  --chrome-strong: #000000;
 
   --text: #ffffff;
   --text-strong: #ffffff;
@@ -83,9 +64,7 @@
   --border: #4a4a4a;
   --border-strong: #6e6e6e;
   --border-hover: #9a9a9a;
-  --input: #4a4a4a;
 
-  --secondary: #141414;
   --secondary-foreground: #ffffff;
   --accent-2: #8ecdff;
   --accent-2-muted: rgba(142, 205, 255, 0.85);
@@ -111,7 +90,6 @@
   --hljs-addition: #7ee787;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.9);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.9);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.95);
 
   --grid-line: rgba(255, 255, 255, 0.08);
@@ -119,13 +97,7 @@
 
 :root[data-theme="beacon-light"] {
   /*
-   * Accent — dark amber on pure white
-   *
-   * WCAG 2.1 AAA audit (bg = #ffffff):
-   *   --accent #6e4a00  contrast ≈ 8.0:1 AAA ✓
-   *   --primary-foreground #ffffff on #6e4a00 button: 8.0:1 ✓
-   *   worst text pairing --muted on --bg-muted: 9.72:1 ✓
-   *   worst status label on its neutral subtle tint: 7.02:1 ✓
+   * Accent — dark amber on neutral daylight
    */
   --ring: #6e4a00;
   --accent: #6e4a00;
@@ -140,25 +112,12 @@
 
   --focus: rgba(110, 74, 0, 0.35);
 
-  --bg: #ffffff;
-  --bg-accent: #f4f4f4;
-  --bg-elevated: #ffffff;
-  --bg-hover: #ededed;
-  --bg-muted: #ededed;
-  --bg-content: #f4f4f4;
+  --bg-content: #f8f8f8;
 
-  --card: #ffffff;
   --card-foreground: #000000;
   --card-highlight: rgba(0, 0, 0, 0.04);
-  --popover: #ffffff;
   --popover-foreground: #000000;
   --session-hovercard-surface: var(--card);
-
-  --panel: #ffffff;
-  --panel-strong: #f4f4f4;
-  --panel-hover: #e4e4e4;
-  --chrome: rgba(255, 255, 255, 0.98);
-  --chrome-strong: #ffffff;
 
   --text: #000000;
   --text-strong: #000000;
@@ -170,9 +129,7 @@
   --border: #8a8a8a;
   --border-strong: #5a5a5a;
   --border-hover: #2e2e2e;
-  --input: #8a8a8a;
 
-  --secondary: #f4f4f4;
   --secondary-foreground: #000000;
   --accent-2: #09428d;
   --accent-2-muted: rgba(9, 66, 141, 0.85);
@@ -197,7 +154,6 @@
   --hljs-addition: #0e5021;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.28);
   --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.3);
 
   --grid-line: rgba(0, 0, 0, 0.12);

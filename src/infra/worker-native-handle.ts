@@ -503,6 +503,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       this.abandonResource();
       this.emit("error", error);
     } else if (reply.type === "stopped") {
+      this.finishExecution(reply.code);
       this.finishJoined(reply.code);
     } else if (reply.type === "execution-exit") {
       this.finishExecution(reply.code);

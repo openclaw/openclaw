@@ -172,6 +172,8 @@ describe("production lint suppressions", () => {
         // Pinned Playwright exposes WebKit Inspector only through its private connection/session fields.
         "scripts/lib/control-ui-engine-memory.ts|no-underscore-dangle|3",
         "scripts/lib/control-ui-engine-metrics.ts|no-underscore-dangle|3",
+        // The streaming probe forwards native methods with their original receivers.
+        "scripts/lib/control-ui-engine-streaming-scenarios.ts|typescript/unbound-method|2",
         // The scheduling probe forwards native methods with the original call receiver through Reflect.apply.
         "scripts/lib/control-ui-resource-counts.ts|typescript/unbound-method|8",
         // The Talk probe forwards native playback, analyser, processor, start, and stop methods with their original receivers.
@@ -292,6 +294,8 @@ describe("production lint suppressions", () => {
         "src/gateway/session-event-projection.ts|typescript/prefer-for-of|1",
         // Event field ordering sorts only the freshly filtered, audience-private key array.
         "src/gateway/session-event-projection.ts|unicorn/no-array-sort|1",
+        // Sharing keys sort the private alias spread without copying it a second time.
+        "src/gateway/session-sharing-read.ts|unicorn/no-array-sort|1",
         "src/gateway/session-swarm-summary.ts|unicorn/no-array-sort|2",
         // Node worker ports do not accept a browser target origin.
         "src/gateway/system-ca-warmup.worker.ts|unicorn/require-post-message-target-origin|1",

@@ -48,6 +48,10 @@
 // --chat-active-after-tool with --chat-active-hold-ms waits for the first text delta
 // after a committed tool result before sending queued/steering inputs. Requires --runs 1;
 // the stream continues during admission and holds completion for the requested interval.
+// --scenario chat.send --runs 20 --heap-snapshot captures active-<round>.heapsnapshot
+// after all primary requests arrive and any pre-release steering hold finishes,
+// before releasing their mock responses. Heap capture is diagnostic, not timing evidence.
+// Heap captures use a 131072-character string limit; match the analyzer's --string-limit.
 // Add --worktree-tool-churn to memory-soak --stress-tools --mixed-rpc to give each
 // foreground session its own managed worktree, read/grep its README, and cycle list searches.
 // This mode keeps a fixed viewer set instead of adding reconnect churn.
@@ -476,6 +480,9 @@ if (values["stress-network-tool"] && !values["stress-tools"]) {
   throw new Error("--stress-network-tool requires --stress-tools");
 }
 const chatActiveHoldMs = integer(values["chat-active-hold-ms"], "--chat-active-hold-ms", 0);
+if (scenario === "chat.send" && values["heap-snapshot"] && values["turn-start-phases"]) {
+  throw new Error("Active heap snapshots require the cohort barrier; omit --turn-start-phases");
+}
 if (
   chatActiveHoldMs &&
   (scenario !== "chat.send" || values["session-event-wake"] || values["cron-operator-turn"])
@@ -4452,6 +4459,17 @@ async function runRound(
       };
     }
   }
+  if (scenario === "chat.send" && values["heap-snapshot"] && measuredRound !== undefined) {
+    const beforeRelease = current.beforeRelease;
+    current.beforeRelease = async () => {
+      await beforeRelease?.();
+      // Admission has completed; snapshot IPC owns its separate diagnostic timeout.
+      clearTimeout(timeout);
+      await readGatewayResources(child, {
+        snapshotPath: path.join(output, `active-${measuredRound}.heapsnapshot`),
+      });
+    };
+  }
   // Include the first response processing after the mock releases the whole cohort.
   const captureWork =
     profilePath || heapProfilePath || finishAdmissionDiagnostics
@@ -5279,6 +5297,7 @@ try {
     values.entry,
     port,
     [
+      ...(values["heap-snapshot"] ? ["--heap-snapshot-string-limit=131072"] : []),
       ...(values.allocations || values["stream-start-allocations"] || values["trace-gc"]
         ? ["--trace-gc-nvp"]
         : []),

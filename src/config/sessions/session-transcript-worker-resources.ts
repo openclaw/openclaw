@@ -28,6 +28,7 @@ import {
 } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { createStateWorkerMemoryPressureSubscription } from "../../state/openclaw-state-worker-memory-pressure.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import type {
   CombinedSessionStoreTopologyRequest,
   CombinedSessionStoreTopologyResult,
@@ -58,6 +59,11 @@ import type {
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
+
+// Discovery uses routing settings; model and plugin config stays with host consumers.
+function sessionDiscoveryConfig({ agents, acp, session }: OpenClawConfig) {
+  return { agents, acp, session };
+}
 
 export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
   pool: WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>;
@@ -689,6 +695,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
         readCombinedTopology: async (request) => {
           const preparedRequest = {
             ...request,
+            config: sessionDiscoveryConfig(request.config),
             options: {
               ...request.options,
               discovery: {
@@ -714,6 +721,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
         readTargetInventory: async (request) => {
           const preparedRequest = {
             ...request,
+            config: sessionDiscoveryConfig(request.config),
             env: captureSessionTranscriptStorageEnvironment(request.env),
             candidates: capturedCandidates,
           };

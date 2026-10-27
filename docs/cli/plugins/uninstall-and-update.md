@@ -204,6 +204,12 @@ New agent runs across the Gateway wait behind either reload until it finishes
 or rolls back; with `--wait`, admitted-work draining alone can delay scheduled
 work for ten minutes. Later cleanup and recovery have their own deadlines.
 
+Plugins that declare `reload.turnHandover` in their manifest don't hold the
+reload for whole turns: running turns stop at their next model step and continue
+on the new version, so the reload finishes in seconds. Reload status says which
+plugins' turns hand over and which plugins keep turns waiting. See
+[Reload-safe plugins](/plugins/sdk-runtime#reload-safe-plugins).
+
 `--wait` keeps new runs behind the same replacement gate. Press Ctrl+C to cancel
 the wait; disconnecting its Gateway request also cancels it. Before publication,
 cancellation restores the previous generation when recovery succeeds, without

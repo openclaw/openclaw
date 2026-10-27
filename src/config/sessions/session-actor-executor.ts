@@ -4,6 +4,7 @@ import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type {
   SessionActor,
   SessionActorAuthority,
+  SessionActorAuthorityFacts,
   SessionActorCommandContext,
   SessionActorCommitObserver,
   SessionActorHotState,
@@ -27,6 +28,7 @@ export type SessionActorExecutorGuards = {
 export type SessionActorExecutor = {
   storage?: SessionActorStorage;
   snapshot(authority: SessionActorAuthority): SessionActorHotState | undefined;
+  snapshotEntry(authority: SessionActorAuthority): SessionActorAuthorityFacts | undefined;
   read(authority: SessionActorAuthority): Promise<SessionActorHotState>;
   command<Phase extends SessionActorPhase>(
     phase: Phase,
@@ -169,6 +171,7 @@ export function createSessionActorWithExecutor(params: {
     assertCurrent,
     assertReadable,
     snapshot: (authority) => executor.snapshot(authority),
+    snapshotEntry: (authority) => executor.snapshotEntry(authority),
     release: releaseActor,
     read: (authority) => retain(() => executor.read(authority), phase),
     acceptInput: (input, authority, observer) =>
