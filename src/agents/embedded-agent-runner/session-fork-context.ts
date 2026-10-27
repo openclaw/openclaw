@@ -25,26 +25,21 @@ import { isCurrentEmbeddedRunAttachment } from "./run-state.js";
 import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
 import { applyRuntimeContextCarrierRetention } from "./run/runtime-context-prompt.js";
 import { resolveActiveEmbeddedRunBySessionFile } from "./runs.js";
-import { createToolResultPromptProjectionState } from "./session-prompt-state.js";
+import {
+  createToolResultPromptProjectionState,
+  parseSystemPromptRouteKey,
+} from "./session-prompt-state.js";
 import { replayToolResultPromptProjections } from "./tool-result-projection-replay.js";
 import { restoreCacheTtlToolResultProjections } from "./tool-result-truncation.js";
 
 function matchesModelRoute(routeKey: unknown, model: Model): boolean {
-  if (typeof routeKey !== "string") {
-    return false;
-  }
-  try {
-    const route: unknown = JSON.parse(routeKey);
-    return (
-      Array.isArray(route) &&
-      route[0] === model.provider &&
-      route[1] === model.id &&
-      route[2] === model.api &&
-      route[3] === (model.baseUrl ?? null)
-    );
-  } catch {
-    return false;
-  }
+  const route = parseSystemPromptRouteKey(routeKey);
+  return (
+    route?.provider === model.provider &&
+    route.model === model.id &&
+    route.api === model.api &&
+    route.baseUrl === (model.baseUrl ?? null)
+  );
 }
 
 /** Rebuild only when a fork is requested; the transcript and live attempt own history. */

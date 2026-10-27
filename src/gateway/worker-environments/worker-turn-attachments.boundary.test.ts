@@ -21,7 +21,10 @@ import { applyStagedWorkerWorkspace } from "./workspace-reconcile.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 beforeEach(worker.setupWorkerTurnLauncherTest);
-afterEach(worker.cleanupWorkerTurnLauncherTest);
+afterEach(async () => {
+  await worker.cleanupWorkerTurnLauncherTest();
+  vi.unstubAllEnvs();
+});
 
 it.each(["worker-turn", "remote-exec"] as const)(
   "keeps later image and PDF originals readable with %s retention",
@@ -30,13 +33,16 @@ it.each(["worker-turn", "remote-exec"] as const)(
     const remote = path.join(physicalRoot, "remote");
     const local = path.join(physicalRoot, "local");
     const remoteHome = path.join(physicalRoot, "remote-home");
+    const bin = path.join(physicalRoot, "bin");
     const relative = (file: string) => path.relative(remote, file).split(path.sep).join("/");
-    await Promise.all([mkdir(remote), mkdir(local), mkdir(remoteHome)]);
+    await Promise.all([mkdir(remote), mkdir(local), mkdir(remoteHome), mkdir(bin)]);
+    await writeFile(path.join(bin, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH ?? ""}`);
     for (const directory of [remote, local]) {
       await writeFile(path.join(directory, "remote-edits.txt"), "preserve me");
     }
-    const base = await captureWorkspaceManifest({ root: local, baseCommit: null });
-    await worker.seedActivePlacement(executionMode, remote);
+    let base = await captureWorkspaceManifest({ root: local, baseCommit: null });
+    await worker.seedActivePlacement(executionMode, remote, base.manifestRef);
     // These arrive after placement: the initial workspace snapshot cannot include them.
     const pdf = Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.alloc(220_000, 65)]);
     const image = Buffer.from(
@@ -174,7 +180,7 @@ it.each(["worker-turn", "remote-exec"] as const)(
         const result = await applyStagedWorkerWorkspace({
           root: local,
           stagingRoot: remote,
-          baseManifestRef: worker.MANIFEST_REF,
+          baseManifestRef: request.baseManifestRef,
           currentManifestRef: manifestRef,
           base: base.manifest,
           current: parseWorkerWorkspaceManifest(raw, manifestRef),
@@ -183,6 +189,7 @@ it.each(["worker-turn", "remote-exec"] as const)(
         });
         workerManifestPaths = JSON.parse(raw).entries.map((entry: { path: string }) => entry.path);
         acceptedManifestPaths = result.manifest.entries.map((entry) => entry.path);
+        base = result;
         return {
           ...result,
           changed: true,
@@ -211,7 +218,8 @@ it.each(["worker-turn", "remote-exec"] as const)(
       expect(commands.length - 1).toBeLessThanOrEqual(5);
     }
     expect(tunnel.syncWorkspace).not.toHaveBeenCalled();
-    expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();
+    // Refresh inputs before execution, then settle the completed turn's workspace.
+    expect(tunnel.reconcileWorkspace).toHaveBeenCalledTimes(2);
     const retainedFiles =
       executionMode === "worker-turn" ? [...originalFiles.keys()].map(relative) : [];
     const expectedFiles = [...Object.keys(outputFiles), ...retainedFiles].toSorted();

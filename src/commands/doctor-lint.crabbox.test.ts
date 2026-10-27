@@ -3,11 +3,11 @@ import { existsSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { registerBundledHealthChecks } from "../flows/bundled-health-checks.js";
 import { clearHealthChecksForTest, getHealthCheck } from "../flows/health-check-registry.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withoutMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -59,23 +59,9 @@ it.each([false, true])("awaits read-only worker findings (existing=%s)", (existi
     const check = getHealthCheck(CHECK_ID);
     assert(check, "Crabbox Doctor check was not registered");
     const detect = check.detect.bind(check);
-    const native = requireNodeSqlite();
-    const hostCalls: number[] = [];
-    const detection = vi.spyOn(check, "detect").mockImplementation(async (...args) => {
-      const sql = [
-        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-        vi.spyOn(native.DatabaseSync.prototype, "exec"),
-        ...(["get", "all", "run", "iterate"] as const).map((method) =>
-          vi.spyOn(native.StatementSync.prototype, method),
-        ),
-      ];
-      try {
-        return await detect(...args);
-      } finally {
-        hostCalls.push(sql.reduce((count, method) => count + method.mock.calls.length, 0));
-        sql.forEach((method) => method.mockRestore());
-      }
-    });
+    const detection = vi
+      .spyOn(check, "detect")
+      .mockImplementation((...args) => withoutMainThreadSql(() => detect(...args)));
     await closeOpenClawStateDatabaseAsync();
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const exitCode = await runDoctorLintCli(createTestRuntime(), {
@@ -92,7 +78,6 @@ it.each([false, true])("awaits read-only worker findings (existing=%s)", (existi
     };
     expect(output).toMatchObject({ checksRun: 1, findings: existing ? [warning] : [] });
     expect(detection).toHaveBeenCalledOnce();
-    expect(hostCalls).toEqual([0]);
     stdout.mockRestore();
     await closeOpenClawStateDatabaseAsync();
     if (existing) {

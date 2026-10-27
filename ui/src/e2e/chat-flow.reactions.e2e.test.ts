@@ -11,6 +11,56 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("paints saved reactions with cached messages and reconciles changes made while away", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const sessionKey = "agent:main:main";
+      const sessionId = "cached-reaction-session";
+      const messageId = "cached-prompt";
+      const prompt = "This message keeps its reactions across reload.";
+      const saved = [{ emoji: "👍", count: 1, identities: [{ id: "peer", label: "Peer" }] }];
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        authMethod: "trusted-proxy",
+        authMode: "trusted-proxy",
+        subscriptionInitialHistory: false,
+        sessions: [
+          {
+            key: sessionKey,
+            sessionId,
+            kind: "direct",
+            visibility: "shared",
+            sharingRole: "owner",
+          },
+        ],
+        heldMethods: ["chat.startup", "session.reactions.list"],
+        historyMessages: [chatMessage("user", prompt, { __openclaw: { id: messageId, seq: 1 } })],
+        sessionReactions: { [sessionKey]: { [messageId]: saved } },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.resolveDeferred("chat.startup");
+      await gateway.waitForRequest("session.reactions.list");
+      await gateway.resolveDeferred("session.reactions.list");
+      const message = page.locator(".chat-group.user", { hasText: prompt });
+      const reactions = page.locator(`.chat-message-reactions[data-message-id="${messageId}"]`);
+      await reactions.getByRole("button", { name: "👍 1", exact: true }).waitFor();
+      await page.evaluate(async () => {
+        const pane = document.querySelector(".chat-pane-cache__pane--active");
+        await Reflect.get(pane!, "sessionSnapshotStore").flush();
+      });
+      await page.reload();
+      await message.waitFor();
+      // Both authoritative reads are held: the message and chip must share the saved paint.
+      expect(await reactions.getByRole("button", { name: "👍 1", exact: true }).count()).toBe(1);
+      await gateway.waitForRequest("session.reactions.list");
+      await gateway.resolveDeferred("session.reactions.list", { sessionId, reactions: {} });
+      await reactions.waitFor({ state: "detached" });
+      await gateway.resolveDeferred("chat.startup");
+      await message.waitFor();
+      expect(await reactions.count()).toBe(0);
+    });
+  });
+
   it("toggles reactions through both picker modes and receives a peer reaction live", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const sessionKey = "agent:main:main";

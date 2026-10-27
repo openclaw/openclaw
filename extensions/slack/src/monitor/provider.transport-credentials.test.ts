@@ -154,6 +154,12 @@ describe("Slack transport credential activation", () => {
                 authorization: "Bearer loopback-relay-token",
               });
             } else {
+              expect(loopback.registry.httpRoutes[0]).toMatchObject({
+                path: "/slack/events",
+                auth: "plugin",
+                pluginId: "slack",
+                source: "slack-webhook",
+              });
               const body = JSON.stringify({ type: "url_verification", challenge: "connected" });
               const timestamp = String(Math.floor(Date.now() / 1_000));
               const sign = (secret: string) =>

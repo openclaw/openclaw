@@ -65,12 +65,16 @@ async function fixture(
     doctorContract: { configRepair: true },
   });
   const manifestRegistry = { plugins: [owner], diagnostics: [] };
-  const migrate = (config: OpenClawConfig, migrationEnv: NodeJS.ProcessEnv = env) =>
+  const migrate = (
+    config: OpenClawConfig,
+    migrationEnv: NodeJS.ProcessEnv = env,
+    historicalWebhookListeners: boolean | "preserve-configured" = true,
+  ) =>
     applyPluginDoctorCompatibilityMigrations(config, {
       env: migrationEnv,
       pluginIds: [channelId],
       manifestRegistry,
-      historicalWebhookListeners: true,
+      historicalWebhookListeners,
     });
   return {
     configPath,
@@ -293,6 +297,20 @@ it.each(["previous boot", "channel ingress", "update ledger", "published updater
     expect(reloaded.sourceConfig.channels?.["nextcloud-talk"]).toEqual(workChannel());
   },
 );
+
+it("preserves configured listeners without claiming an active update", async () => {
+  const { env, migrate, update } = await fixture();
+  const config = channelConfig();
+  const initialized = migrate(config, env, "preserve-configured");
+  expect(initialized).toEqual(update(config));
+  expect(initialized.config.channels?.["nextcloud-talk"]).toEqual(workChannel(endpoint));
+  expect(initialized.config.meta?.migrations?.webhookListeners).toEqual({
+    "nextcloud-talk": [["channels", "nextcloud-talk", "accounts", "work", "legacyWebhook"]],
+  });
+  const fresh = migrate(config);
+  expect(fresh.config.channels).toEqual(config.channels);
+  expect(fresh.config.meta?.migrations?.webhookListeners).toBe(true);
+});
 
 it.each(["no database", "empty database"])(
   "completes a fresh install with %s without pins even after its first Gateway boot",

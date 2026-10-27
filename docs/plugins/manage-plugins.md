@@ -28,6 +28,11 @@ Open **Plugins** in the Control UI, or use `/plugins` relative to the configured
 Control UI base path. For example, a base path of `/openclaw` uses
 `/openclaw/plugins`.
 
+Catalog detail links use `/plugins/<owner>/<plugin-name>`, such as
+`/plugins/openclaw/linear`. Existing encoded catalog links redirect to the readable
+URL while preserving query parameters and fragments. Local-only and unscoped
+catalog entries keep their ID-based URLs.
+
 **Installed plugins** shows up to 12 installed plugins, prioritizing enabled plugins,
 plugins that need setup, and plugins that need attention. Use search to filter
 the full inventory or choose **Show all** to browse every installed plugin. Each
@@ -332,6 +337,11 @@ only to ClawHub installs; official installs use the catalog selection. To activa
 already-installed local TypeScript plugin, use `reload` with its plugin ID.
 Installing new local, npm, Git, or archive sources still uses the CLI workflow
 above.
+
+When the current turn uses the plugin being reloaded, use `reloadAndResume`.
+It checks administrator authority before yielding, finishes turn cleanup, then
+reloads and resumes the same conversation with the result. Permission revocation
+still stops the reload; do not repeat a completed mutation.
 
 In the embedded agent runtime, an applied change refreshes tools before the next
 model request after running code programs have settled. A parked program may need

@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
-import { once } from "node:events";
 import type { Server } from "node:http";
 import { promisify } from "node:util";
 import { expect } from "vitest";
+import { listenLoopback as listenModelsEndpoint } from "../../../test/helpers/gateway-integration-fixtures.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
@@ -90,15 +90,7 @@ export async function connectModelsReader(port: number, token: string) {
   return Object.assign(client, { [Symbol.asyncDispose]: () => disconnectGatewayClient(client) });
 }
 
-export async function listenModelsEndpoint(server: Server) {
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Models fixture did not bind a TCP port");
-  }
-  return `http://127.0.0.1:${address.port}`;
-}
+export { listenModelsEndpoint };
 
 export async function closeModelsEndpoint(server: Server) {
   await promisify(server.close.bind(server))();

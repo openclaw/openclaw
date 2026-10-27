@@ -582,7 +582,7 @@ export async function buildGatewayInstallPlan(params: {
   runtimePath?: string;
   pinnedRuntimePath?: string;
   /** Retained CLI to plan for instead of this process's own entrypoint and executable. */
-  serviceCli?: { executable: string; entrypoint: string };
+  serviceCli?: { executable: string; entrypoint: string | null };
   wrapperPath?: string;
   platform?: NodeJS.Platform;
   warn?: DaemonInstallWarnFn;
@@ -652,7 +652,7 @@ export async function buildGatewayInstallPlan(params: {
     runtime,
     runtimePath,
     wrapperPath,
-    cliEntrypoint: params.serviceCli?.entrypoint,
+    cliEntrypoint: params.serviceCli?.entrypoint ?? undefined,
     ...(params.existingCommand ? { existingCommand: params.existingCommand } : {}),
   });
   await emitNodeRuntimeWarning({
@@ -676,7 +676,10 @@ export async function buildGatewayInstallPlan(params: {
     platform,
     extraPathDirs: resolveDaemonServicePathDirs({
       runtimePath,
-      argv: params.serviceCli && [params.serviceCli.executable, params.serviceCli.entrypoint],
+      argv: params.serviceCli && [
+        params.serviceCli.executable,
+        ...(params.serviceCli.entrypoint ? [params.serviceCli.entrypoint] : []),
+      ],
       env: serviceInputEnv,
       platform,
     }),

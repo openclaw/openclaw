@@ -1,11 +1,11 @@
 import { retireInitialChatSubmission } from "../../app/chat-submissions.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   scopedAgentParamsForSession,
   visibleSessionMatches,
-  type SessionCapability,
-} from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/navigation.ts";
 import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
 import { requestChatAbort } from "./chat-abort-request.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";

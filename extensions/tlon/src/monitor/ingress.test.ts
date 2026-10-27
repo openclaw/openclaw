@@ -5,7 +5,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UrbitHttpError } from "../urbit/errors.js";
 import { createTlonIngressMonitor } from "./ingress.js";
 
@@ -28,27 +28,15 @@ function essay(author = "~nec", text = "hello") {
   return { author, content: [{ text }], sent: 1_700_000_000_000 };
 }
 
-function channelEvent(id = "message-1") {
-  return {
-    nest: "chat/~zod/general",
-    response: {
-      post: {
-        id,
-        "r-post": { set: { essay: essay() } },
-      },
-    },
-  };
-}
-
-function channelReplyEvent(id: string, nest: string) {
+function channelEvent(id = "message-1", nest = "chat/~zod/general", reply = false) {
   return {
     nest,
     response: {
       post: {
-        id: "parent-post",
+        id: reply ? "parent-post" : id,
         "r-post": {
-          set: { essay: essay("~bus", "parent essay") },
-          reply: { id, "r-reply": { set: { memo: essay() } } },
+          set: { essay: reply ? essay("~bus", "parent essay") : essay() },
+          ...(reply ? { reply: { id, "r-reply": { set: { memo: essay() } } } } : {}),
         },
       },
     },
@@ -59,127 +47,97 @@ function chatEvent(id: string) {
   return { whom: "~nec", id, response: { add: { essay: essay() } } };
 }
 
-function createQueue(stateDir: string, accountId = "default") {
+function createQueue(stateDir: string) {
   return createChannelIngressQueueForTests<TlonIngressPayload>({
     channelId: "tlon",
-    accountId,
+    accountId: "default",
     stateDir,
   });
 }
 
-async function withQueue<T>(
-  fn: (queue: TlonIngressQueue, stateDir: string, start: typeof startMonitor) => Promise<T>,
-): Promise<T> {
+let stateDir: string;
+let queue: TlonIngressQueue;
+let monitors: ReturnType<typeof createTlonIngressMonitor>[];
+beforeEach(async () => {
   const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tlon-ingress-"));
-  const stateDir = await fs.realpath(created);
-  const monitors: ReturnType<typeof startMonitor>[] = [];
-  try {
-    return await fn(createQueue(stateDir), stateDir, (queue, dispatch) => {
-      const monitor = startMonitor(queue, dispatch);
-      monitors.push(monitor);
-      return monitor;
-    });
-  } finally {
-    for (const monitor of monitors) {
-      await monitor.stop();
-    }
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
-}
+  stateDir = await fs.realpath(created);
+  queue = createQueue(stateDir);
+  monitors = [];
+  adopt.mockClear();
+});
 
-function startMonitor(queue: TlonIngressQueue, dispatch: TlonIngressDispatch) {
-  openChannelIngressQueue.mockReturnValue(queue);
+function start(dispatch: TlonIngressDispatch, ingressQueue = queue) {
+  openChannelIngressQueue.mockReturnValue(ingressQueue);
   const monitor = createTlonIngressMonitor({
     accountId: "default",
     dispatch,
     runtime: { error: vi.fn(), log: vi.fn() },
   });
+  monitors.push(monitor);
   monitor.start();
   return monitor;
 }
 
-afterEach(() => {
+afterEach(async () => {
+  for (const monitor of monitors) {
+    await monitor.stop();
+  }
   closeOpenClawStateDatabaseForTest();
+  await fs.rm(stateDir, { recursive: true, force: true });
   vi.restoreAllMocks();
+});
+
+async function receive(
+  monitor: ReturnType<typeof start>,
+  event: unknown,
+  source: "channels" | "chat" = "channels",
+) {
+  await monitor.receive({ source, event });
+  await monitor.waitForIdle();
+}
+
+const adopt = vi.fn<TlonIngressDispatch>(async (_source, _event, lifecycle) => {
+  await lifecycle.onAdopted();
 });
 
 describe("Tlon durable ingress", () => {
   it("propagates durable append failure before dispatch", async () => {
-    await withQueue(async (queue, _stateDir, start) => {
-      const appendError = new Error("sqlite unavailable");
-      const failingQueue = {
-        ...queue,
-        enqueue: vi.fn().mockRejectedValue(appendError),
-      } satisfies TlonIngressQueue;
-      const dispatch = vi.fn();
-      const monitor = start(failingQueue, dispatch);
-      await expect(monitor.receive({ source: "channels", event: channelEvent() })).rejects.toBe(
-        appendError,
-      );
-      expect(dispatch).not.toHaveBeenCalled();
-    });
+    const appendError = new Error("sqlite unavailable");
+    const dispatch = vi.fn();
+    const monitor = start(dispatch, { ...queue, enqueue: vi.fn().mockRejectedValue(appendError) });
+    await expect(monitor.receive({ source: "channels", event: channelEvent() })).rejects.toBe(
+      appendError,
+    );
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("recovers an uncompleted message with a fresh drain exactly once", async () => {
-    await withQueue(async (queue, stateDir, start) => {
-      const interruptedDispatch = vi.fn(async () => ({ kind: "deferred" }) as const);
-      const interrupted = start(queue, interruptedDispatch);
-      await interrupted.receive({
-        source: "channels",
-        event: channelEvent("message-restart"),
-      });
-      await interrupted.waitForIdle();
-      expect(await queue.listClaims()).toHaveLength(1);
-      await interrupted.stop();
-      closeOpenClawStateDatabaseForTest();
-
-      const recoveredDispatch = vi.fn<TlonIngressDispatch>(async (_source, _event, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const recovered = start(createQueue(stateDir), recoveredDispatch);
-      await recovered.waitForIdle();
-      expect(recoveredDispatch).toHaveBeenCalledTimes(1);
-    });
+    const interrupted = start(async () => ({ kind: "deferred" }));
+    await receive(interrupted, channelEvent("message-restart"));
+    expect(await queue.listClaims()).toHaveLength(1);
+    await interrupted.stop();
+    closeOpenClawStateDatabaseForTest();
+    await start(adopt, createQueue(stateDir)).waitForIdle();
+    expect(adopt).toHaveBeenCalledTimes(1);
   });
 
   it("retains completed logical ids by count rather than age", async () => {
-    await withQueue(async (queue, _stateDir, start) => {
-      let now = 1_700_000_000_000;
-      vi.spyOn(Date, "now").mockImplementation(() => now);
-      const dispatch = vi.fn<TlonIngressDispatch>(async (_source, _event, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const monitor = start(queue, dispatch);
-      const original = channelEvent("message-aged");
-      await monitor.receive({ source: "channels", event: original });
-      await monitor.waitForIdle();
-
-      now += 31 * 24 * 60 * 60 * 1_000;
-      await monitor.receive({
-        source: "channels",
-        event: channelEvent("message-prune-trigger"),
-      });
-      await monitor.waitForIdle();
-      await monitor.receive({ source: "channels", event: original });
-      await monitor.waitForIdle();
-
-      expect(dispatch).toHaveBeenCalledTimes(2);
-    });
+    let now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const monitor = start(adopt);
+    const original = channelEvent("message-aged");
+    await receive(monitor, original);
+    now += 31 * 24 * 60 * 60 * 1_000;
+    await receive(monitor, channelEvent("message-prune-trigger"));
+    await receive(monitor, original);
+    expect(adopt).toHaveBeenCalledTimes(2);
   });
 
   it.each([
     {
-      name: "reply takes precedence over the parent essay",
+      name: "reply precedence and trimmed group identity preserve the delivered envelope",
       source: "channels" as const,
-      event: channelReplyEvent("reply-stable", "chat/~zod/ops"),
-      id: "reply-stable",
-      laneKey: "group:chat/~zod/ops",
-    },
-    {
-      name: "group identity trims without changing the delivered envelope",
-      source: "channels" as const,
-      event: channelReplyEvent(" reply-padded ", " chat/~zod/ops "),
+      event: channelEvent(" reply-padded ", " chat/~zod/ops ", true),
       id: "reply-padded",
       laneKey: "group:chat/~zod/ops",
     },
@@ -191,99 +149,80 @@ describe("Tlon durable ingress", () => {
       laneKey: "direct:~nec",
     },
   ])("preserves raw wire facts while $name", async ({ source, event, id, laneKey }) => {
-    await withQueue(async (queue, _stateDir, start) => {
-      const dispatch = vi.fn(async () => ({ kind: "deferred" }) as const);
-      const monitor = start(queue, dispatch);
-      await monitor.receive({ source, event });
-      await monitor.waitForIdle();
-      expect(await queue.listClaims()).toEqual([expect.objectContaining({ id, laneKey })]);
-      expect(dispatch).toHaveBeenCalledExactlyOnceWith(source, event, expect.any(Object));
-    });
+    const dispatch = vi.fn(async () => ({ kind: "deferred" }) as const);
+    await receive(start(dispatch), event, source);
+    expect(await queue.listClaims()).toEqual([expect.objectContaining({ id, laneKey })]);
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith(source, event, expect.any(Object));
   });
 
   it("dead-letters malformed persisted payloads and authentication failures", async () => {
-    await withQueue(async (queue, _stateDir, start) => {
-      await queue.enqueue(
-        "message-malformed",
-        { version: 1, receivedAt: 1, source: "channels", rawEvent: "{" },
-        { receivedAt: 1, laneKey: "group:chat/~zod/general" },
-      );
-      const dispatch = vi.fn<TlonIngressDispatch>(async () => {
-        throw new UrbitHttpError({ operation: "Poke", status: 401 });
-      });
-      const monitor = start(queue, dispatch);
-      await monitor.waitForIdle();
-      expect((await queue.enqueue("message-malformed", {} as TlonIngressPayload)).kind).toBe(
-        "failed",
-      );
-
-      await monitor.receive({
-        source: "chat",
-        event: chatEvent("message-auth"),
-      });
-      await monitor.waitForIdle();
-      expect((await queue.enqueue("message-auth", {} as TlonIngressPayload)).kind).toBe("failed");
+    await queue.enqueue(
+      "message-malformed",
+      { version: 1, receivedAt: 1, source: "channels", rawEvent: "{" },
+      { receivedAt: 1, laneKey: "group:chat/~zod/general" },
+    );
+    const dispatch = vi.fn<TlonIngressDispatch>(async () => {
+      throw new UrbitHttpError({ operation: "Poke", status: 401 });
     });
+    const monitor = start(dispatch);
+    await monitor.waitForIdle();
+    expect((await queue.enqueue("message-malformed", {} as TlonIngressPayload)).kind).toBe(
+      "failed",
+    );
+
+    await receive(monitor, chatEvent("message-auth"), "chat");
+    expect((await queue.enqueue("message-auth", {} as TlonIngressPayload)).kind).toBe("failed");
   });
 
   it("keeps unrelated authentication failures retryable", async () => {
-    await withQueue(async (queue, _stateDir, start) => {
-      const dispatch = vi.fn<TlonIngressDispatch>(async () => {
-        throw Object.assign(new Error("model credentials expired"), { status: 401 });
-      });
-      const monitor = start(queue, dispatch);
-      await monitor.receive({
-        source: "chat",
-        event: chatEvent("message-provider-auth"),
-      });
-      await monitor.waitForIdle();
-      expect((await queue.listPending({ limit: "all" })).map((record) => record.id)).toEqual([
-        "message-provider-auth",
-      ]);
+    const dispatch = vi.fn<TlonIngressDispatch>(async () => {
+      throw Object.assign(new Error("model credentials expired"), { status: 401 });
     });
+    await receive(start(dispatch), chatEvent("message-provider-auth"), "chat");
+    expect((await queue.listPending({ limit: "all" })).map((record) => record.id)).toEqual([
+      "message-provider-auth",
+    ]);
   });
 
   it("waits for admitted work and leaves it pending on repeated stop", async () => {
-    await withQueue(async (queue) => {
-      const stored = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      const enqueue = queue.enqueue.bind(queue);
-      queue.enqueue = async (...args) => {
-        const result = await enqueue(...args);
-        stored.resolve();
-        await release.promise;
-        return result;
-      };
-      const dispatch = vi.fn();
-      const monitor = startMonitor(queue, dispatch);
-      const admission = monitor.receive({
-        source: "channels",
-        event: channelEvent("message-stop-1"),
-      });
-      await stored.promise;
-      const queuedAdmission = monitor.receive({
-        source: "channels",
-        event: channelEvent("message-stop-2"),
-      });
-
-      let stopSettled = false;
-      const stopping = monitor.stop().then(() => {
-        stopSettled = true;
-      });
-      const stoppingAgain = monitor.stop();
-      await Promise.resolve();
-      expect(stopSettled).toBe(false);
-      await expect(
-        monitor.receive({ source: "channels", event: channelEvent("message-too-late") }),
-      ).rejects.toThrow("stopped before dispatch adoption");
-
-      release.resolve();
-      await Promise.all([admission, queuedAdmission, stopping, stoppingAgain]);
-      expect(dispatch).not.toHaveBeenCalled();
-      expect((await queue.listPending({ limit: "all" })).map((record) => record.id)).toEqual([
-        "message-stop-1",
-        "message-stop-2",
-      ]);
+    const stored = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const enqueue = queue.enqueue.bind(queue);
+    queue.enqueue = async (...args) => {
+      const result = await enqueue(...args);
+      stored.resolve();
+      await release.promise;
+      return result;
+    };
+    const dispatch = vi.fn();
+    const monitor = start(dispatch);
+    const admission = monitor.receive({
+      source: "channels",
+      event: channelEvent("message-stop-1"),
     });
+    await stored.promise;
+    const queuedAdmission = monitor.receive({
+      source: "channels",
+      event: channelEvent("message-stop-2"),
+    });
+
+    let stopSettled = false;
+    const stopping = monitor.stop().then(() => {
+      stopSettled = true;
+    });
+    const stoppingAgain = monitor.stop();
+    await Promise.resolve();
+    expect(stopSettled).toBe(false);
+    await expect(
+      monitor.receive({ source: "channels", event: channelEvent("message-too-late") }),
+    ).rejects.toThrow("stopped before dispatch adoption");
+
+    release.resolve();
+    await Promise.all([admission, queuedAdmission, stopping, stoppingAgain]);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect((await queue.listPending({ limit: "all" })).map((record) => record.id)).toEqual([
+      "message-stop-1",
+      "message-stop-2",
+    ]);
   });
 });

@@ -1,3 +1,11 @@
+/**
+ * Exercise diagnostic stream consumption, optionally through real plugin bindings.
+ * node --import ./scripts/tsx.mjs scripts/perf/model-stream-observation-measure.ts
+ *   --plugin-bound --listeners metrics --turns 10000 --chunks 100
+ *   --mode timing --output /path/to/result.json
+ * Alternate --owner source snapshots; use mode allocation separately from timing,
+ * and --trace-gc-nvp in a separate pass for promotion. Timings require A/A controls.
+ */
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { HeapProfiler } from "node:inspector";
@@ -17,6 +25,8 @@ import {
 import { createDiagnosticTraceContext } from "../../src/infra/diagnostic-trace-context.js";
 import { getModelTransportContext } from "../../src/llm/model-transport-context.js";
 import type { AssistantMessage, AssistantMessageEvent } from "../../src/llm/types.js";
+import { getPluginExecutionFrame } from "../../src/plugins/plugin-instance-invocation.js";
+import { PluginInstance } from "../../src/plugins/plugin-instance.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -26,6 +36,7 @@ const { values } = parseArgs({
     mode: { type: "string", default: "timing" },
     listeners: { type: "string", default: "none" },
     raw: { type: "boolean", default: false },
+    "plugin-bound": { type: "boolean", default: false },
     owner: { type: "string" },
     output: { type: "string" },
     "start-file": { type: "string" },
@@ -111,7 +122,12 @@ const source: StreamFn = (_model, _context, options) => ({
           counts.providerNext++;
         }
         if (identityProbe) {
+          const invocation = getPluginExecutionFrame()?.invocation;
+          if (plugin) {
+            assert.equal(invocation?.instance, plugin);
+          }
           await Promise.resolve();
+          assert.equal(getPluginExecutionFrame()?.invocation, invocation);
           identityProbe.push({
             expected: options?.requestId,
             observed: getModelTransportContext()?.requestId,
@@ -134,10 +150,12 @@ const source: StreamFn = (_model, _context, options) => ({
     return message;
   },
 });
+const plugin = values["plugin-bound"] ? new PluginInstance("synthetic-provider") : undefined;
+const boundSource = plugin?.wrap(source) ?? source;
 let sequence = 0;
 const wrapped = values.raw
-  ? source
-  : wrapStreamFnWithDiagnosticModelCallEvents(source, {
+  ? boundSource
+  : wrapStreamFnWithDiagnosticModelCallEvents(boundSource, {
       runId: "synthetic-stream-run",
       sessionKey: "agent:synthetic:stream",
       provider: "synthetic",
@@ -263,6 +281,7 @@ if (values.mode === "timing") {
 }
 checkingMetrics = true;
 const cpu = process.cpuUsage();
+const threadCpu = process.threadCpuUsage();
 const started = performance.now();
 for (let index = 0; index < turns; index++) {
   const turnStarted = values.mode === "timing" ? performance.now() : 0;
@@ -278,6 +297,7 @@ for (let index = 0; index < turns; index++) {
 await waitForDiagnosticEventsDrained();
 const elapsedMs = performance.now() - started;
 const used = process.cpuUsage(cpu);
+const threadUsed = process.threadCpuUsage(threadCpu);
 checkingMetrics = false;
 counting = false;
 restoreCounting?.();
@@ -312,6 +332,7 @@ const report = {
   mode: values.mode,
   listeners: values.listeners,
   raw: values.raw,
+  pluginBound: values["plugin-bound"],
   owner: values.owner ?? "current source",
   turns,
   requests: turns * 2,
@@ -322,6 +343,7 @@ const report = {
     ? {
         elapsedMs,
         cpuMsPerTurn: (used.user + used.system) / 1000 / turns,
+        mainThreadCpuMsPerCall: (threadUsed.user + threadUsed.system) / 1000 / turns / 2,
         turnLatency: tail(turnLatencies),
         gcMsPerTurn:
           Object.values(pauses)
@@ -348,3 +370,4 @@ const report = {
 unsubscribe?.();
 await writeFile(output, `${JSON.stringify(report, null, 2)}\n`);
 console.log(JSON.stringify(report));
+await plugin?.dispose();

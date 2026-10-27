@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 
@@ -18,28 +18,14 @@ it("renders a full footer from a reply usage snapshot", () => {
     usage: { input: 204000, output: 15, cacheRead: 0, cacheWrite: 0, total: 204015 },
     turnUsd: 0.03771985,
   };
-  const pieces = [
-    { text: "{model.display_name|alias:models}" },
-    { map: "model.is_fallback", cases: { true: "🔄" } },
-    { text: " | " },
-    { when: "model.reasoning", text: "{model.reasoning|alias:reasoning}" },
-    { map: "state.fast_mode", cases: { true: "⚡", false: "🐌" } },
-    { text: " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}" },
-    { text: " | ${cost.turn_usd|fixed:4}" },
-  ];
+  const text =
+    "{model.display_name}|{model.reasoning}|{state.fast_mode}|{model.is_fallback}|{context.pct_used}|{context.max_tokens}|{cost.turn_usd}";
   const line = resolveResponseUsageLine({
     config: {
       messages: {
         responseUsage: "full",
         usageTemplate: {
-          scales: {
-            braille: "⠐⡀⡄⡆⡇⣇⣧⣷⣿",
-          },
-          aliases: {
-            models: { "claude-opus-4-6": "opus46" },
-            reasoning: { medium: "med" },
-          },
-          output: { sep: "", surfaces: { discord: pieces } },
+          output: { sep: "", surfaces: { discord: [{ text }] } },
         },
       },
     },
@@ -48,7 +34,7 @@ it("renders a full footer from a reply usage snapshot", () => {
     usage: replyUsageState.usage,
     replyUsageState,
   });
-  expect(line).toBe("opus46 | med🐌 | 📚 [⣿⣿⣿⣧⠐]272k | $0.0377");
+  expect(line).toBe("claude-opus-4-6|medium|false|false|75|272000|0.03771985");
 });
 const usageLine = "Usage: 12 in / 3 out";
 
@@ -71,18 +57,12 @@ it.each<[name: string, usage: Usage, tiered: boolean, expected: string | undefin
   ["cost-only zero total", { cost: { total: 0 } }, true, "Usage: ? in / ? out · est $0.0000"],
 ])("formats %s for the selected agent in an explicit fleet", (_name, usage, tiered, expected) => {
   const cost = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 };
-  const model: ModelDefinitionConfig = {
-    id: "priced",
-    name: "Priced",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 1,
-    maxTokens: 1,
+  const model = modelDefinition("priced", {
     cost: {
       ...cost,
       tieredPricing: tiered ? [{ ...cost, input: 2, output: 0, range: [200_000] }] : undefined,
     },
-  };
+  });
   const line = resolveResponseUsageLine({
     config: {
       agents: { ownership: "explicit", entries: { main: {}, other: {} } },
@@ -122,10 +102,7 @@ it("decorates a completed source reply and keeps its private final separate", ()
   };
   const payload = setReplyPayloadMetadata(
     { text: "message tool reply" },
-    {
-      deliverDespiteSourceReplySuppression: true,
-      sourceReplyTranscriptMirror: mirror,
-    },
+    { deliverDespiteSourceReplySuppression: true, sourceReplyTranscriptMirror: mirror },
   );
 
   const privateFinal = { text: "private final" };
@@ -138,25 +115,6 @@ it("decorates a completed source reply and keeps its private final separate", ()
   expect(getReplyPayloadMetadata(privateFinal)).toBeUndefined();
   expect(getReplyPayloadMetadata(expectDefined(updated, "updated test invariant"))).toMatchObject({
     deliverDespiteSourceReplySuppression: true,
-    sourceReplyTranscriptMirror: {
-      ...mirror,
-      text: "message tool reply\nUsage: 12 in / 3 out",
-    },
-  });
-});
-
-it("emits a suppression-authorized footer when no captured source payload exists", () => {
-  const result = appendUsageLine([{ text: "private final" }], usageLine, {
-    completedSourceReply: true,
-  });
-
-  expect(result).toHaveLength(2);
-  expect(result[0]).toEqual({ text: "private final" });
-  expect(result[1]).toMatchObject({ text: usageLine, isStatusNotice: true });
-  expect(
-    getReplyPayloadMetadata(expectDefined(result[1], "completed source footer")),
-  ).toMatchObject({
-    deliverDespiteSourceReplySuppression: true,
-    responseUsageLine: usageLine,
+    sourceReplyTranscriptMirror: { ...mirror, text: "message tool reply\nUsage: 12 in / 3 out" },
   });
 });

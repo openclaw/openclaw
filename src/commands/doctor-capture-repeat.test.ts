@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import * as packageRoot from "../infra/openclaw-root.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
@@ -48,20 +49,17 @@ it("reuses one original across three healthy Doctor repairs and captures a real 
   expect(resolveManagedUpdateLeaseDatabasePath().startsWith(`${temporary}${path.sep}`)).toBe(true);
   // The install root is disposable too: Doctor may repair source-install artifacts.
   vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
-  await fs.writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.10.22" }),
-  );
+  await writeFixtureJson(path.join(root, "package.json"), {
+    name: "openclaw",
+    version: "2026.10.22",
+  });
   await fs.mkdir(path.join(root, "workspace"));
-  await fs.writeFile(
-    config,
-    JSON.stringify({
-      gateway: { mode: "local", port: 1, auth: { mode: "token", token: "synthetic-doctor-token" } },
-      agents: { defaults: { workspace: path.join(root, "workspace") } },
-      memory: { search: { enabled: false, rememberAcrossConversations: false } },
-      plugins: { enabled: false },
-    }),
-  );
+  await writeFixtureJson(config, {
+    gateway: { mode: "local", port: 1, auth: { mode: "token", token: "synthetic-doctor-token" } },
+    agents: { defaults: { workspace: path.join(root, "workspace") } },
+    memory: { search: { enabled: false, rememberAcrossConversations: false } },
+    plugins: { enabled: false },
+  });
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   const repair = async () => {
     await doctorCommand(runtime, { repair: true, nonInteractive: true, json: true });
@@ -94,7 +92,7 @@ it("reuses one original across three healthy Doctor repairs and captures a real 
   const before = await captures();
   const cfg = JSON.parse(await fs.readFile(config, "utf8"));
   cfg.gateway.port = 2;
-  await fs.writeFile(config, JSON.stringify(cfg));
+  await writeFixtureJson(config, cfg);
   await repair();
   expect(await captures()).toHaveLength(2);
   expect(await captures()).toEqual(expect.arrayContaining(before));

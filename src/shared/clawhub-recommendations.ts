@@ -3,7 +3,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 export const CLAWHUB_RECOMMENDATION_LIMIT = 3;
 export const CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY = "openclawClawHubRecommendations";
 
-type RecommendationFields = {
+/** Gateway-authored catalog identity and install facts; models supply only a search query. */
+export type ClawHubRecommendation = {
   type: "clawhub";
   id: string;
   name: string;
@@ -11,10 +12,7 @@ type RecommendationFields = {
   iconUrl?: string;
   installed: boolean;
   official: true;
-};
-/** Gateway-authored catalog identity and install facts; models supply only a search query. */
-export type ClawHubRecommendation = RecommendationFields &
-  ({ kind: "plugin"; pluginId?: string } | { kind: "skill"; registry: string; skillRef: string });
+} & ({ kind: "plugin"; pluginId?: string } | { kind: "skill"; registry: string; skillRef: string });
 
 const sharedKeys = [
   "type",

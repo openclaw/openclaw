@@ -9,6 +9,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import type { ControlUiSessionPullRequests as Snapshot } from "./control-ui-contract.js";
+import type { ControlUiSessionPrTarget } from "./control-ui-session-pr-read.js";
 import { parseControlUiSessionPullRequestsSubscribeParams as parse } from "./control-ui-session-pr-subscriptions.js";
 import {
   createTestControlUiSessionPrSubscriptions,
@@ -73,11 +74,88 @@ function expectSessions(keys: string[], refresh?: true, agentId = "main") {
 }
 
 describe("control UI session PR subscriptions", () => {
+  it("reuses current watcher grants across streaming reads and reacquires changed targets", async () => {
+    const readSource = createTestSessionPrReadSource();
+    let revision = 0;
+    let visible = true;
+    const readCurrent = vi.fn(async (): Promise<ControlUiSessionPrTarget | undefined> => {
+      if (!visible) {
+        return undefined;
+      }
+      const captured = revision;
+      return {
+        params: { sessionKey: "session", agentId: "main" },
+        identity: `session-${captured}`,
+        readSource,
+        source: null,
+        taskReceipts: { sessions: [] },
+        assertCurrent: () => {
+          if (!visible || captured !== revision) {
+            throw new Error("Watcher grant changed");
+          }
+        },
+      };
+    });
+    const active = start({ prepareRead: async () => readCurrent });
+    await active.replace("reader", ["session"]);
+    readCurrent.mockClear();
+    broadcastToConnIds.mockClear();
+    for (let index = 0; index < 20; index++) {
+      sessionChanges.emit({ sessionKey: "streaming-child", scope: "transcript" });
+      await nextEventLoopTurn();
+      await active.pollNow();
+    }
+    expect(readCurrent).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+
+    revision++;
+    await active.pollNow();
+    expect(readCurrent).toHaveBeenCalledOnce();
+    expectPublication("reader");
+
+    visible = false;
+    readCurrent.mockClear();
+    broadcastToConnIds.mockClear();
+    await active.pollNow();
+    expect(readCurrent).toHaveBeenCalledOnce();
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+    readCurrent.mockClear();
+    await active.pollNow();
+    expect(readCurrent).not.toHaveBeenCalled();
+  });
+
+  it("validates an unchanged passive audience in one synchronous pass", async () => {
+    const readSource = createTestSessionPrReadSource();
+    const assertCurrent = vi.fn();
+    const target: ControlUiSessionPrTarget = {
+      params: { sessionKey: "session", agentId: "main" },
+      identity: "session",
+      readSource,
+      source: null,
+      taskReceiptsOnly: true,
+      assertCurrent,
+    };
+    const active = start({ prepareRead: async () => async () => target });
+    for (let index = 0; index < 64; index++) {
+      await active.replace(`reader-${index}`, [], new Set(), new Set(["session"]));
+    }
+    assertCurrent.mockClear();
+    const pending = active.pollNow();
+    try {
+      // Live guards still run for every viewer, without a promise/yield for each one.
+      expect(assertCurrent).toHaveBeenCalledTimes(64);
+    } finally {
+      await pending;
+    }
+  });
+
   it.each([
     { facts: "category", invalidated: undefined, refresh: false },
+    { facts: "participants", invalidated: undefined, refresh: false },
     { facts: undefined, invalidated: "category", refresh: false },
     { facts: "category", invalidated: true, refresh: true },
     { facts: "unchanged", invalidated: true, refresh: true },
+    { facts: "participants", invalidated: true, refresh: true },
   ] as const)(
     "refreshes=$refresh for facts=$facts, invalidated=$invalidated",
     async ({ facts, invalidated, refresh }) => {
@@ -505,10 +583,8 @@ describe("control UI session PR subscriptions", () => {
   it("rejects replace-sets from inactive connections before loading", async () => {
     const active = start({ isConnectionActive: () => false });
 
-    const onAdmitted = vi.fn();
-    await active.replace("conn-closed", ["orphan"], undefined, onAdmitted);
+    await active.replace("conn-closed", ["orphan"]);
 
-    expect(onAdmitted).toHaveBeenCalledTimes(1);
     expect(load).not.toHaveBeenCalled();
     expect(broadcastToConnIds).not.toHaveBeenCalled();
   });
@@ -586,5 +662,10 @@ describe("control UI session PR subscriptions", () => {
         },
       ]),
     );
+    const failedTarget = load.mock.calls.find(([params]) => params.sessionKey === "failed")![2]
+      .target;
+    active.readPrepared(failedTarget);
+    const failedRead = await active.read(failedTarget, () => {});
+    expect(failedRead).toBe(active.readPrepared(failedTarget));
   });
 });

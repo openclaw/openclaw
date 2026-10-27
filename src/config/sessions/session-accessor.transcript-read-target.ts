@@ -3,7 +3,7 @@ import {
   resolveConcreteSessionStorePath,
   resolveExplicitSessionStorePathForScope,
 } from "./paths.js";
-import { resolveSessionEntry } from "./session-accessor.sqlite-exact-read.js";
+import { resolveSessionEntryReadOnly } from "./session-accessor.sqlite-exact-read.js";
 import type {
   SessionTranscriptReadScope,
   SessionTranscriptReadTarget,
@@ -45,7 +45,7 @@ export function resolveSessionTranscriptReadTargetCore(
   const { agentId, sessionKey, storePath, entryValidationScope } =
     prepareSessionTranscriptReadTargetCore(scope, resolveDefaultStorePath);
   const resolved = entryValidationScope
-    ? resolveSessionEntry(entryValidationScope, { readOnly: true })
+    ? resolveSessionEntryReadOnly(entryValidationScope)
     : undefined;
   const resolvedSessionKey = resolved?.normalizedKey ?? sessionKey;
   return {

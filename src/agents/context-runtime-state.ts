@@ -7,13 +7,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const CONTEXT_WINDOW_RUNTIME_STATE_KEY = Symbol.for("openclaw.contextWindowRuntimeState");
 
-type ContextWindowRuntimeState = {
-  loadPromise: Promise<void> | null;
-  configuredConfig: OpenClawConfig | undefined;
-};
-
 const globalState = globalThis as typeof globalThis & {
-  [CONTEXT_WINDOW_RUNTIME_STATE_KEY]?: ContextWindowRuntimeState;
+  [CONTEXT_WINDOW_RUNTIME_STATE_KEY]?: {
+    loadPromise: Promise<void> | null;
+    configuredConfig: OpenClawConfig | undefined;
+  };
 };
 
 /** Shared mutable state for context-window resolution and model discovery. */

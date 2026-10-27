@@ -126,6 +126,7 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
   writeControlPlaneUpdateRestartSentinelBestEffort: mocks.writeSentinel,
 }));
 
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { createCliTtyMock } from "../test-runtime-capture.js";
 import { registerMaintenanceContentionTests } from "./update-command-maintenance-contention.test-support.js";
 import * as postCoreModule from "./update-command-post-core.js";
@@ -541,10 +542,7 @@ describe("successful update finalization ordering", () => {
         const changed = outcome !== "unchanged";
         const restartFailed = outcome === "rolled-back" || outcome === "unverified";
         const packageRoot = tempDirs.make("update-downtime-installed-runtime-");
-        await fs.writeFile(
-          path.join(packageRoot, "package.json"),
-          JSON.stringify({ version: "2026.4.24" }),
-        );
+        await writeFixtureJson(path.join(packageRoot, "package.json"), { version: "2026.4.24" });
         const serviceEnv = {
           ...process.env,
           HOME: identity.home,
@@ -601,10 +599,9 @@ describe("successful update finalization ordering", () => {
             expect(getUpdateRun(run.runId, { env: serviceEnv })?.confirmedAtMs).toBeNull();
             clock.elapsed = 12_000;
             if (outcome === "rolled-back") {
-              await fs.writeFile(
-                path.join(packageRoot, "package.json"),
-                JSON.stringify({ version: "2026.4.23" }),
-              );
+              await writeFixtureJson(path.join(packageRoot, "package.json"), {
+                version: "2026.4.23",
+              });
               mockVerifiedGatewayRun(run);
             }
             return {

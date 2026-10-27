@@ -2,6 +2,7 @@ import { createRouter } from "@openclaw/uirouter";
 import { flush } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
 import type { WebSearchStatusResult } from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -21,6 +22,12 @@ import { SearchPage } from "./search-page.tsx";
 
 export const searchPath = ["tools", "web", "search"];
 export const providerPath = (id: string) => ["plugins", "entries", id, "config", "webSearch"];
+export function pendingResult<T>(value: T) {
+  const deferred = createDeferred<T>();
+  const complete = () => deferred.resolve(value);
+  onTestFinished(complete);
+  return { ...deferred, complete };
+}
 export function atPath(path: string[], value: unknown): Record<string, unknown> {
   return path.slice(0, -1).reduceRight((node, key) => ({ [key]: node }), { [path.at(-1)!]: value });
 }
@@ -144,6 +151,10 @@ export async function mountSearch<R>(options: {
   };
   const input = (label: string) =>
     element.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+  const expectStatus = (text: string) =>
+    expect(
+      [...element.querySelectorAll('[role="status"]')].map((node) => node.textContent),
+    ).toContainEqual(expect.stringContaining(text));
   onTestFinished(() => {
     view.unmount();
     options.cleanup?.(runtime);
@@ -175,6 +186,17 @@ export async function mountSearch<R>(options: {
     gateway: connection,
     button,
     input,
+    expectStatus,
+    expectText: (...texts: string[]) => {
+      for (const text of texts) {
+        expect(element.textContent).toContain(text);
+      }
+    },
+    expectNoText: (...texts: string[]) => {
+      for (const text of texts) {
+        expect(element.textContent).not.toContain(text);
+      }
+    },
     setAgent,
     settle,
     click: (label: string) => button(label).click(),
@@ -191,8 +213,6 @@ export async function mountSearch<R>(options: {
       field.dispatchEvent(new Event("change", { bubbles: true }));
     },
     calls: (method: string) => request.mock.calls.filter(([name]) => name === method),
-    statuses: () =>
-      [...element.querySelectorAll('[role="status"]')].map((region) => region.textContent),
     dispose: () => view.unmount(),
     replaceConnection: () => {
       client = createTestGatewayClient(request);

@@ -1,4 +1,4 @@
-import { resolveSessionEntry } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
+import { resolveSessionEntryReadOnly } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import {
   resolveSandboxRuntimeStatus,
@@ -14,7 +14,7 @@ export function resolveSandboxRuntimeStatusLegacy(params: SandboxRuntimeStatusPa
     replacement: "resolveSandboxRuntimeStatusAsync",
   });
   return withLegacySandboxRuntimeStatusReader(
-    (scope) => resolveSessionEntry({ ...scope, clone: false }, { readOnly: true }).existing,
+    (scope) => resolveSessionEntryReadOnly({ ...scope, clone: false }).existing,
     () => resolveSandboxRuntimeStatus(params),
   );
 }

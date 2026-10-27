@@ -100,7 +100,7 @@ const SETUP_ACTIONS = {
   },
   "restart-call-apps": {
     kind: "manual-test",
-    label: "Quit and reopen FaceTime and Phone, then let OpenClaw reinject the helper",
+    label: "Quit and reopen FaceTime, then let OpenClaw reinject the helper",
   },
   "install-driver": {
     kind: "gateway",
@@ -321,7 +321,7 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     required: true,
     message: developerSecurityEnabled
       ? developerSecurity.message
-      : "Developer tools access is disabled; helper injection cannot attach to FaceTime or Phone",
+      : "Developer tools access is disabled; helper injection cannot attach to FaceTime",
     ...(!developerSecurityEnabled ? { actionId: "enable-developer-tools" } : {}),
   });
 
@@ -347,7 +347,7 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     status: debuggingRestrictionsDisabled ? "ready" : "action-required",
     required: true,
     message: debuggingRestrictionsDisabled
-      ? "SIP permits debugger attachment to FaceTime and Phone; a connected helper must still be verified separately"
+      ? "SIP permits debugger attachment to FaceTime; a connected helper must still be verified separately"
       : debuggingRestrictionsEnabled
         ? "SIP debugging restrictions block LLDB helper injection into protected Apple apps"
         : "Could not verify SIP debugging restrictions; run csrutil status before changing protection settings",
@@ -410,7 +410,7 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
         id: `helper-${target.target.toLowerCase()}`,
         label: `${target.target} helper`,
         status,
-        required: target.target === "FaceTime" || target.target === "Phone",
+        required: true,
         message: target.connected
           ? "Authenticated helper connected"
           : target.stale

@@ -506,6 +506,48 @@ it("keeps the committed child target and later owner metadata through input pers
   });
 });
 
+it("persists subagent completion handoff prompts as hidden inter-session turns", async () => {
+  const sessionKey = "agent:main:completion-handoff";
+  const sessionId = "completion-handoff-session";
+  const target = { agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() };
+  await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+  const provenance = {
+    kind: "inter_session" as const,
+    sourceSessionKey: "agent:main:subagent:child",
+    sourceTool: "subagent_announce",
+  };
+  const message = "Continue the OpenClaw runtime event.";
+  const params = makeTurnParams(target, message, "announce:completion-handoff", {
+    inputProvenance: provenance,
+    request: {
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: provenance.sourceSessionKey,
+          childSessionId: "child-session-id",
+          announceType: "completion",
+          taskLabel: "child task",
+          status: "ok",
+          statusLabel: "completed",
+          result: "child result",
+          replyInstruction: "Deliver the child result.",
+        },
+      ],
+    },
+  });
+  // The completion's runtime context is saved after this turn; replay needs the turn itself.
+  await withTurn(params, async (recorder) => {
+    expect(await recorder.persistApproved()).toMatchObject({ appended: true });
+  });
+  const messages = (await loadTranscriptEvents(target)).filter(
+    (event) => isIndexedSessionEntry(event) && event.type === "message",
+  );
+  expect(messages).toMatchObject([
+    { message: { role: "user", display: false, content: message, provenance } },
+  ]);
+});
+
 it.each(["Original requester", null])(
   "retains accepted sender presentation after a profile rename (%s)",
   async (originalName) => {

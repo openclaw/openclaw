@@ -3,7 +3,11 @@
 import { flush, createSignal, onSettled } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import type { PluginDiscoveryCategory, PluginDiscoveryResult } from "../../lib/plugins/index.ts";
+import type {
+  PluginCatalogItem,
+  PluginDiscoveryCategory,
+  PluginDiscoveryResult,
+} from "../../lib/plugins/index.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -54,6 +58,48 @@ describe("renderPluginCatalogResults", () => {
     cleanupSolid();
     document.body.replaceChildren();
     vi.restoreAllMocks();
+  });
+
+  it("keeps first installed catalog matches current without replacing their cards", async () => {
+    const installed: PluginCatalogItem = {
+      id: "installed",
+      name: "Installed plugin",
+      catalogId: "catalog",
+      kind: ["tool"],
+      origin: "global",
+      installed: true,
+      enabled: false,
+      state: "disabled",
+    };
+    const props = baseProps({
+      intent: "featured",
+      result: { items: [plugin("catalog")] },
+      inventory: [
+        { ...installed, installed: false, state: "not-installed" },
+        installed,
+        { ...installed, id: "second", enabled: true, state: "enabled" },
+      ],
+    });
+    const { container } = await mount(props);
+    const card = container.querySelector('[data-plugin-id="catalog"]');
+    expect(card?.querySelector("[data-plugin-state]")?.getAttribute("data-plugin-state")).toBe(
+      "disabled",
+    );
+
+    update(container, { ...props, inventory: [{ ...installed, enabled: true, state: "enabled" }] });
+    await waitForSolid(() =>
+      expect(card?.querySelector("[data-plugin-state]")?.getAttribute("data-plugin-state")).toBe(
+        "enabled",
+      ),
+    );
+    expect(container.querySelector('[data-plugin-id="catalog"]')).toBe(card);
+
+    update(container, { ...props, inventory: [] });
+    await waitForSolid(() =>
+      expect(card?.querySelector(".plugin-catalog-card__install")).not.toBeNull(),
+    );
+    expect(card?.querySelector("[data-plugin-state]")).toBeNull();
+    expect(container.querySelector('[data-plugin-id="catalog"]')).toBe(card);
   });
 
   it("shows placeholders when the first browse starts after the initial render", async () => {

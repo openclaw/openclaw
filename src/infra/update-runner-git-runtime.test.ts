@@ -22,6 +22,7 @@ import {
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { listDirectoryTreeStrict } from "./directory-walk.js";
+import { writeFixtureTree } from "./fixture-tree.test-support.js";
 import {
   expectRuntime,
   writeRuntime,
@@ -29,7 +30,6 @@ import {
   expectMissing,
   readText,
   runFixtureGit,
-  writeFixtureTree,
 } from "./update-runner-git-candidate.test-support.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 

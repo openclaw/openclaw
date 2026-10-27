@@ -12,7 +12,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import { fingerprintPreparedModelCatalogPluginContext as fingerprint } from "./prepared-model-catalog-fingerprints.js";
+import {
+  fingerprintPreparedModelCatalogPluginContext as fingerprint,
+  prepareModelCatalogWorkerContext,
+} from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput as workerInput } from "./prepared-model-catalog-worker.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import { createCatalogInspectionPool } from "./test-helpers/prepared-model-catalog-inspection.js";
@@ -201,6 +204,7 @@ module.exports = {
         try {
           const result = await pool.run(
             {
+              context: prepareModelCatalogWorkerContext(serialized),
               value: serialized,
               request: {
                 kind: "catalog",

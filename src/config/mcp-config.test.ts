@@ -106,6 +106,43 @@ async function withMcpServers(servers: Record<string, unknown>, fn: () => Promis
 }
 
 describe("config mcp config", () => {
+  it("mutates one detached config while preserving the source and commit-hook history", async () => {
+    const config = {
+      mcp: { servers: { docs: { command: "node", env: { MODE: "original" } } } },
+      agents: { entries: { main: { name: "Original" } } },
+    };
+    await withMcpConfigHome(config, async () => {
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      const committed = vi.fn();
+      try {
+        const result = await mcpConfigInternal.update(
+          {
+            name: "docs",
+            update: (server) => {
+              (server.env as Record<string, string>).MODE = "updated";
+              return server;
+            },
+          },
+          committed,
+        );
+        expect(result.ok).toBe(true);
+        expect(clone).toHaveBeenCalledOnce();
+        expect(clone.mock.calls[0]?.[0]).toEqual(config);
+        expect(committed).toHaveBeenCalledWith({
+          name: "docs",
+          previous: { command: "node", env: { MODE: "original" } },
+          next: { command: "node", env: { MODE: "updated" } },
+        });
+        if (result.ok) {
+          result.config.agents!.entries!.main!.name = "Changed after commit";
+          expect(clone.mock.calls[0]?.[0]).toEqual(config);
+        }
+      } finally {
+        clone.mockRestore();
+      }
+    });
+  });
+
   it("writes and removes top-level mcp servers", async () => {
     await withMcpConfigHome({}, async () => {
       const setResult = await setConfiguredMcpServer({

@@ -22,6 +22,7 @@ it("generates identical executable assets across dependency store locations", as
   };
   const source = 'import { value } from "fixture-dependency"; console.log(value);';
   for (const [entry, exportName] of [
+    ["src/shared/keyboard-shortcuts.ts", "createKeyboardShortcutMatcher"],
     ["src/gateway/mcp-app-standalone-host.ts", "runStandaloneMcpAppHost"],
     [
       "src/gateway/worker-environments/repository-node-requirement.ts",

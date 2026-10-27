@@ -28,15 +28,6 @@ function viewCalls(request: ReturnType<typeof createGatewayRequestMock>) {
 }
 const replacement = { sessionKey: "agent:other:main", viewId: "view-final", agentId: "other" };
 
-it("coalesces same-turn identity changes into one replacement view", async () => {
-  const { view, request } = await mountBridge("view-batched-original");
-  Object.assign(view, replacement);
-  await waitForSolid(() => {
-    expect(viewCalls(request)).toHaveLength(2);
-    expect(viewCalls(request)[1]?.[1]).toEqual(replacement);
-  });
-});
-
 it.each(["restart", "binding"])("reopens a retired view only on %s", async (reopen) => {
   const { view, request, gateway, publish } = await mountBridge("view-retired");
   await view.teardown();
@@ -55,32 +46,40 @@ it.each(["restart", "binding"])("reopens a retired view only on %s", async (reop
   await waitForSolid(() => expect(viewCalls(request)).toHaveLength(2));
 });
 
-it.each(["user", "generation", "access"] as const)("updates binding on %s", async (change) => {
-  const { view, frame, request, gateway, publish } = await mountBridge("view-same-object");
-  if (change === "user") {
-    gateway.snapshot.selfUser = { id: "one", name: "One" };
+it.each(["user", "generation", "access", "binding"] as const)(
+  "updates binding on %s",
+  async (change) => {
+    const { view, frame, request, gateway, publish } = await mountBridge("view-same-object");
+    if (change === "user") {
+      gateway.snapshot.selfUser = { id: "one", name: "One" };
+      publish(gateway.snapshot);
+      flush();
+      expect(viewCalls(request)).toHaveLength(1);
+      expect(view.querySelector("iframe")).toBe(frame);
+      gateway.snapshot.selfUser = { id: "two", name: "Two" };
+    } else if (change === "generation") {
+      const value = gateway.connectionRevision + 1;
+      Object.defineProperty(gateway, "connectionRevision", { value });
+    } else if (change === "binding") {
+      Object.assign(view, replacement);
+    } else {
+      gateway.snapshot.hello!.auth!.scopes = [];
+    }
     publish(gateway.snapshot);
-    flush();
-    expect(viewCalls(request)).toHaveLength(1);
-    expect(view.querySelector("iframe")).toBe(frame);
-    gateway.snapshot.selfUser = { id: "two", name: "Two" };
-  } else if (change === "generation") {
-    const value = gateway.connectionRevision + 1;
-    Object.defineProperty(gateway, "connectionRevision", { value });
-  } else {
-    gateway.snapshot.hello!.auth!.scopes = [];
-  }
-  publish(gateway.snapshot);
-  await waitForSolid(() => {
-    expect(frame.isConnected).toBe(false);
-    expect(viewCalls(request)).toHaveLength(change === "access" ? 1 : 2);
-  });
-  if (change === "access") {
-    expect(view.querySelector(".error")?.textContent).toContain("gateway unavailable");
-  }
-});
+    await waitForSolid(() => {
+      expect(frame.isConnected).toBe(false);
+      expect(viewCalls(request)).toHaveLength(change === "access" ? 1 : 2);
+    });
+    if (change === "binding") {
+      expect(viewCalls(request)[1]?.[1]).toEqual(replacement);
+    }
+    if (change === "access") {
+      expect(view.querySelector(".error")?.textContent).toContain("gateway unavailable");
+    }
+  },
+);
 
-it("retires an initializing request synchronously before coalescing reconnect inputs", async () => {
+it("keeps one pending setup and retires it on reconnect, teardown, and rebinding", async () => {
   const response = deferred<unknown>();
   const request = createGatewayRequestMock(() => response.promise);
   const { gateway, publish } = createApplicationGateway();
@@ -92,51 +91,31 @@ it("retires an initializing request synchronously before coalescing reconnect in
   publish({ ...gateway.snapshot, hello: gatewayHelloForMethods(["mcp.app.view"]) });
   await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
   const signal = request.mock.calls[0]?.[2]?.signal;
-  expect(signal?.aborted).toBe(false);
-  publish({ ...gateway.snapshot, phase: "reconnecting" });
-  expect(signal?.aborted).toBe(true);
-  publish({ ...gateway.snapshot, phase: "connected" });
-  Object.assign(view, replacement);
-  await waitForSolid(() => {
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request.mock.calls[1]?.[1]).toEqual(replacement);
-  });
-  unmount();
-  response.resolve({});
-});
-
-it("keeps an initializing view until its binding changes or it is retired", async () => {
-  const response = deferred<unknown>();
-  const request = createGatewayRequestMock(() => response.promise);
-  const { gateway, publish } = createApplicationGateway();
-  publish({
-    ...gateway.snapshot,
-    client: createTestGatewayClient(request),
-    phase: "connected",
-    hello: gatewayHelloForMethods(["mcp.app.view"]),
-  });
-  const { view, unmount } = mountView(
-    { sessionKey: "agent:main:main", viewId: "view-pending" },
-    { gateway },
-  );
-  await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
-  const signal = request.mock.calls[0]?.[2]?.signal;
   view.restartAfterTeardown();
   publish(gateway.snapshot);
   await view.updateComplete;
   expect(signal?.aborted).toBe(false);
   expect(request).toHaveBeenCalledOnce();
-
-  await view.teardown();
+  publish({ ...gateway.snapshot, phase: "reconnecting" });
   expect(signal?.aborted).toBe(true);
+  publish({ ...gateway.snapshot, phase: "connected" });
+  const reconnected = { ...replacement, viewId: "reconnect" };
+  Object.assign(view, reconnected);
+  await waitForSolid(() => {
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]?.[1]).toEqual(reconnected);
+  });
+  const reconnectedSignal = request.mock.calls[1]?.[2]?.signal;
+  await view.teardown();
+  expect(reconnectedSignal?.aborted).toBe(true);
   view.restartAfterTeardown();
-  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
-  const restartedSignal = request.mock.calls[1]?.[2]?.signal;
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
+  const restartedSignal = request.mock.calls[2]?.[2]?.signal;
   Object.assign(view, replacement);
   await waitForSolid(() => {
     expect(restartedSignal?.aborted).toBe(true);
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(request.mock.calls[2]?.[1]).toEqual(replacement);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(request.mock.calls[3]?.[1]).toEqual(replacement);
   });
   unmount();
   response.resolve({});

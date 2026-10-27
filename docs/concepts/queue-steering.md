@@ -155,6 +155,9 @@ A steer sent while a turn is creating its worktree or preparing its runtime stay
 pending for that turn. Once the runtime is ready, OpenClaw checks whether it can
 accept the input. If the turn ends or cannot accept it, the message stays queued
 for a followup.
+An input already accepted by an embedded run is settled promptly if preparation
+ends before it can be consumed, such as when a policy hook blocks the run. Saved
+interrupted input follows the existing recovery rules.
 Messages waiting for a followup turn appear in the queue above the composer,
 including when the Gateway queues a message that could not be steered. They stay
 there across reconnects until consumed or canceled, without being sent again.

@@ -1,12 +1,12 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
-import {
-  resolveSessionKey,
-  type SessionCapability,
-  type SessionPatch,
-  type SessionPatchResult,
-  type SessionScopeHost,
+import type {
+  SessionCapability,
+  SessionPatch,
+  SessionPatchResult,
+  SessionScopeHost,
 } from "../../lib/sessions/index.ts";
+import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,

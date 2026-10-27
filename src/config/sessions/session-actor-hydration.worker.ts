@@ -312,9 +312,13 @@ export function hydrateSessionActorState(
   const entryRows: SessionActorStoredState["entryRows"] = new Map(
     keys.map((key) => [key, undefined]),
   );
+  let participants: SessionActorHotState["participants"] = [];
   for (const row of rows) {
     const entry = parseReadableSessionEntryData(database, row, "full");
-    const participants = decodeJsonProjection(row.actor_participants).map(readParticipantRecord);
+    const records = decodeJsonProjection(row.actor_participants).map(readParticipantRecord);
+    if (row === selected) {
+      participants = records;
+    }
     // Snapshot comparisons use decoded entries; only node columns need exact persisted bytes.
     const {
       skills_snapshot_json: _skills,
@@ -340,15 +344,12 @@ export function hydrateSessionActorState(
       entry
         ? {
             row: entryRow,
-            entry: withProjectedParticipants(entry, participants),
+            entry: withProjectedParticipants(entry, records),
           }
         : undefined,
     );
   }
   const entry = entryRows.get(target.sessionKey)?.entry;
-  const participants = selected
-    ? decodeJsonProjection(selected.actor_participants).map(readParticipantRecord)
-    : [];
   const members = selected
     ? decodeJsonProjection(selected.actor_members).map((member) => ({
         identityId: member.identity_id,
@@ -458,14 +459,12 @@ export function hydrateSessionActorState(
 
 /** Derives disclosure only from the actor's owned postimage, without touching SQLite. */
 export function projectSessionActorHotState(state: SessionActorStoredState): SessionActorHotState {
-  // Entries are replaced, never mutated; retain the actor's owned entry across projections.
+  // Replace-only metadata stays actor-owned; reads and receipts detach at publication.
   const hot: SessionActorHotState = {
-    ...structuredClone({
-      target: state.hot.target,
-      version: state.hot.version,
-      participants: state.hot.participants,
-      members: state.hot.members,
-    }),
+    target: state.hot.target,
+    version: state.hot.version,
+    participants: state.hot.participants,
+    members: state.hot.members,
     entry: state.hot.entry,
     writeToken: state.hot.writeToken,
     hasBoard: state.hasBoard,

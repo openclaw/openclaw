@@ -22,11 +22,9 @@ const harness: AgentHarness = {
 type FixtureModel = Model<"openai-responses" | "bedrock-converse-stream" | "ollama">;
 const model = makeProviderModelFixture<"openai-responses">({
   id: "gpt-4.1",
-  name: "Synthetic scheduled model",
   provider: "openai",
   api: "openai-responses",
   baseUrl: "https://api.openai.com/v1",
-  contextWindow: 16_000,
   maxTokens: 1_024,
 });
 afterEach(() => vi.restoreAllMocks());
@@ -59,15 +57,9 @@ function prepareAuth(
         agentDir: state.agentDir(),
         workspaceDir: state.workspaceDir,
         nativeModelOwned,
-        ...(nativeModelOwned
-          ? {
-              nativeSessionRuntime: {
-                auth: "native" as const,
-                harness,
-                assertCurrent: async () => {},
-              },
-            }
-          : {}),
+        nativeSessionRuntime: nativeModelOwned
+          ? { auth: "native", harness, assertCurrent: async () => {} }
+          : undefined,
         ...stores,
         getAgentHarness: () => harness,
         setAgentHarness() {},
@@ -100,18 +92,8 @@ function mockModel(selectedModel: FixtureModel = model) {
 }
 
 function configFor(selectedModel: FixtureModel, auth: { apiKey: string } | { auth: "aws-sdk" }) {
-  return {
-    models: {
-      providers: {
-        [selectedModel.provider]: {
-          api: selectedModel.api,
-          baseUrl: selectedModel.baseUrl,
-          models: [],
-          ...auth,
-        },
-      },
-    },
-  };
+  const provider = { api: selectedModel.api, baseUrl: selectedModel.baseUrl, models: [], ...auth };
+  return { models: { providers: { [selectedModel.provider]: provider } } };
 }
 
 const bedrockModel: FixtureModel = {

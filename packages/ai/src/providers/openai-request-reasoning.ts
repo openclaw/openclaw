@@ -3,6 +3,7 @@ import {
   resolveOpenAIThinkingApi,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import { clampThinkingLevel } from "../model-utils.js";
+import { isKnownOpenAIEndpoint } from "../transports/openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
 import type { Api, Model, ModelThinkingLevel, SimpleStreamOptions } from "../types.js";
 import {
@@ -26,9 +27,9 @@ export function resolveOpenAISimpleReasoningEffort<TApi extends Api>(
 export function resolveOpenAIRequestReasoning(
   model: Pick<Model, "id" | "provider" | "api" | "reasoning" | "thinkingLevelMap"> & {
     compat?: unknown;
+    baseUrl?: string;
   },
   reasoning: string | undefined,
-  offDefault: "none" | null = "none",
 ): { effort: string | undefined; thinkingEnabled: boolean | undefined } {
   // Logical off can map to a minimum effort; native none only uses its own explicit mapping.
   const requested = normalizeOpenAIReasoningEffort(reasoning ?? "off");
@@ -40,22 +41,23 @@ export function resolveOpenAIRequestReasoning(
       : (resolveOpenAIReasoningEffortMapping(requested, resolveOpenAIReasoningEffortMap(model)) ??
         modelMapped);
   const intent =
-    mapped !== undefined
-      ? mapped?.trim()
-      : reasoning === undefined || (requested === "off" && offDefault === null)
-        ? undefined
-        : requested;
+    mapped !== undefined ? mapped?.trim() : reasoning === undefined ? undefined : requested;
   const normalizedIntent = normalizeOpenAIReasoningEffort(intent ?? "off");
-  const supported = resolveOpenAIModelReasoningEfforts(model);
+  const disabled = requested === "off" || requested === "none";
+  const supported = resolveOpenAIModelReasoningEfforts(
+    disabled &&
+      resolveOpenAIThinkingApi(model.api) !== "openai-chatgpt-responses" &&
+      !isKnownOpenAIEndpoint(model)
+      ? { compat: model.compat }
+      : model,
+  );
   const effort =
     !model.reasoning || supported?.length === 0 || intent === undefined
       ? undefined
       : supported === undefined
-        ? mapped !== undefined
-          ? intent
-          : requested === "off"
-            ? "none"
-            : requested
+        ? disabled && mapped === undefined
+          ? undefined
+          : intent
         : resolveOpenAIReasoningEffortForModel({
             model,
             effort: requested,
@@ -67,7 +69,9 @@ export function resolveOpenAIRequestReasoning(
       effort === "none" &&
       resolveOpenAIThinkingApi(model.api) === "openai-chatgpt-responses" &&
       !supportsOpenAIReasoningEffort(
-        model.id === "gpt-6-sol" || model.id === "gpt-6-luna" ? model : { compat: model.compat },
+        model.id === "gpt-6-sol" || model.id === "gpt-6-luna"
+          ? model
+          : { compat: model.compat, thinkingLevelMap: model.thinkingLevelMap },
         "none",
       )
         ? undefined

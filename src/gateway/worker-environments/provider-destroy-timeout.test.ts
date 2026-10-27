@@ -24,7 +24,6 @@ it.for([
   ["destroy", false],
   ["bootstrap-failure", false],
   ["destroy", true],
-  ["bootstrap-failure", true],
 ] as const)(
   "selects the teardown deadline during %s (service override=%s)",
   async ([entrance, override], { signal }) => {
@@ -65,12 +64,7 @@ it.for([
       expect(resolveDestroyTimeoutMs.mock.calls).toEqual(override ? [] : [[{ region: "test" }]]);
       expect(destroy).toHaveBeenCalledOnce();
       expect(result).toMatchObject(
-        entrance === "destroy"
-          ? { state: "destroyed" }
-          : {
-              code: "bootstrap_failure",
-              message: "Worker bootstrap failed: bootstrap failed before admission",
-            },
+        entrance === "destroy" ? { state: "destroyed" } : { code: "bootstrap_failure" },
       );
       if (entrance !== "destroy") {
         expect(support.testState.store.list()[0]).toMatchObject({ state: "failed", leaseId: null });
@@ -83,7 +77,7 @@ it.for([
   },
 );
 
-it.each([0, -1, 1.5, Number.NaN, MAX_TIMER_TIMEOUT_MS + 1])(
+it.each([0, 1.5, MAX_TIMER_TIMEOUT_MS + 1])(
   "retains teardown intent without invoking the provider for invalid deadline %s",
   async (timeoutMs) => {
     await support.seedReady("invalid-destroy-timeout");

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import type { AdmittedRunContext } from "./admitted-run-context.js";
 import {
   isolatedAssistant,
@@ -41,12 +42,6 @@ beforeEach(resetIsolatedCompletionTestState);
 
 function expectCall(mock: unknown, shape: object) {
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(shape));
-}
-
-function expectNoCalls(...functions: unknown[]) {
-  for (const mock of functions) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 function complete(overrides: Partial<Parameters<typeof runIsolatedCompletion>[0]> = {}) {
@@ -238,7 +233,7 @@ describe("runIsolatedCompletion", () => {
     "rotates quota failure %s within one deadline (%s ms)",
     async (errorMessage, elapsedMs) => {
       prepareQuotaProfiles();
-      const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+      using now = vi.spyOn(performance, "now").mockReturnValue(1_000);
       const dispatch = vi
         .fn()
         .mockImplementationOnce(async () => {
@@ -248,26 +243,22 @@ describe("runIsolatedCompletion", () => {
         .mockResolvedValueOnce(reply("recovered"));
       registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
 
-      try {
-        const completion = complete();
-        if (elapsedMs === 1_000) {
-          await expect(completion).rejects.toThrow("timed out");
-          expect(dispatch).toHaveBeenCalledOnce();
-        } else {
-          await expect(completion).resolves.toMatchObject({ text: "recovered" });
-          expect(dispatch).toHaveBeenCalledTimes(2);
-          expect(
-            dispatch.mock.calls.map(([params]) => params.authorization.plan.forwardedAuthProfileId),
-          ).toEqual(["openai:first", "openai:backup"]);
-          expect(dispatch).toHaveBeenNthCalledWith(
-            2,
-            expect.objectContaining({ timeoutMs: 1_000 - elapsedMs }),
-          );
-        }
-        expect(releaseRuntimeLease).toHaveBeenCalledOnce();
-      } finally {
-        now.mockRestore();
+      const completion = complete();
+      if (elapsedMs === 1_000) {
+        await expect(completion).rejects.toThrow("timed out");
+        expect(dispatch).toHaveBeenCalledOnce();
+      } else {
+        await expect(completion).resolves.toMatchObject({ text: "recovered" });
+        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(
+          dispatch.mock.calls.map(([params]) => params.authorization.plan.forwardedAuthProfileId),
+        ).toEqual(["openai:first", "openai:backup"]);
+        expect(dispatch).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ timeoutMs: 1_000 - elapsedMs }),
+        );
       }
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
     },
   );
 

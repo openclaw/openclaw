@@ -77,6 +77,7 @@ export type PreparedModelCatalogCandidate = {
 
 export type PreparedModelRuntimeCatalogAccess = Readonly<{
   initialAuth: PreparedModelCatalogAuth;
+  readUsage: (store: AuthProfileStore) => AuthProfileStore;
   accountCatalog?: PreparedAccountCatalogAccess;
   isCurrent: () => boolean;
   withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;

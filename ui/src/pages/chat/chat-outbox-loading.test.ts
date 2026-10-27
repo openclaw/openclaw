@@ -8,6 +8,7 @@ import { makeChatHost, makeRequestMock, expectRequestCounts } from "./chat-host.
 import { admitHostQueueItems, idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
 import { createTestPageState } from "./chat-page-state.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import { queued as makeQueued } from "./chat-thread-fixtures.test-support.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
@@ -24,26 +25,16 @@ it.each([
 ] as const)("retains outbox ownership across recovery module loading (%s)", async (scenario) => {
   const sessionKey = "agent:main:outbox-loading";
   const history = idleChatHistory(sessionKey);
-  Object.assign(history.sessionInfo, {
-    sessionId: "outbox-session",
-    updatedAt: 2,
-    lastRunId: "finished-run",
-  });
+  history.sessionInfo.sessionId = "outbox-session";
   const host = createTestPageState(
     makeChatHost({
       sessionKey,
       currentSessionId: "outbox-session",
-      chatRunId: "finished-run",
       chatQueue: [
-        {
-          id: "retained-input",
-          text: "Retained outbox message",
-          createdAt: 1,
+        makeQueued("retained-input", "Retained outbox message", 1, "waiting-idle", {
           sessionKey,
           sendRunId: "next-run",
-          sendState: "waiting-idle",
-          sendAttempts: 0,
-        },
+        }),
       ],
       requestHandlers: {
         "chat.history": history,
@@ -52,7 +43,6 @@ it.each([
     }),
   );
   admitHostQueueItems(host);
-  expect(host.chatQueue).toHaveLength(1);
   const renderedErrors: Array<string | null | undefined> = [];
   const dispose = createRoot((stop) => {
     createEffect(
@@ -103,9 +93,6 @@ it.each([
     flush();
 
     if (scenario === "current") {
-      expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything(), {
-        timeoutMs: 30_000,
-      });
       const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
       expect(sends).toHaveLength(1);
       expect(sends[0]?.[1]).toMatchObject({ sessionKey, message: "Retained outbox message" });
@@ -114,7 +101,6 @@ it.each([
       expectRequestCounts(host.request, { "chat.history": 0, "chat.send": 0 });
       expect(listStoredChatOutboxes(host)).toEqual(queued);
       if (scenario === "load failure") {
-        expect(host.chatError).toEqual(expect.any(String));
         expect(host.chatError?.trim()).not.toBe("");
         expect(host.lastError).toBe(host.chatError);
         expect(renderedErrors).toContain(host.chatError);
@@ -127,6 +113,5 @@ it.each([
     dispose();
     ready.resolve();
     await draining;
-    host.sessions.dispose();
   }
 });

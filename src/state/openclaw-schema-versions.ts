@@ -1,11 +1,15 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
+// v37 stores cold transcript windows in ordered, independently bounded archive chunks.
+// v36 indexes PostgreSQL memory exact-path candidates without changing ranking.
 // v35 extends native PostgreSQL index ordering to predicate-proven non-null keys.
 // v34 aligns non-null PostgreSQL index keys with default query ordering.
 // v33 adds a stored PostgreSQL binary vector candidate projection.
 // v32 replaces the PostgreSQL vector decoder without rewriting canonical rows.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 35;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 37;
 
+// v35 replaces per-worktree workspace nodes with shared immutable trees and scan fingerprints.
+// v34 binds the default cron partition independently of the state directory.
 // v33 extends native PostgreSQL index ordering to predicate-proven non-null keys.
 // v32 aligns non-null PostgreSQL index keys with default query ordering.
 // v31 stores local workspace baselines by path and checkpoints as recoverable deltas.
@@ -35,7 +39,7 @@ export const OPENCLAW_AGENT_SCHEMA_VERSION = 35;
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 33;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 35;
 
 export type OpenClawSchemaVersions = {
   state: number;

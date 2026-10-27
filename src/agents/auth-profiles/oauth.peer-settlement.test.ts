@@ -114,34 +114,31 @@ describe("OAuth refresh peer settlement", () => {
     const original = requireOAuth(read(peerAgentDir));
     const fence = createOAuthRefreshFence({ profileId, credential: original });
     const publish = workerPublications.executeOpenClawAgentWorkerPublication;
-    const lostReply = vi
+    using lostReply = vi
       .spyOn(workerPublications, "executeOpenClawAgentWorkerPublication")
       .mockImplementationOnce(async (...args) => {
         await publish(...args);
         throw new SqliteWorkerError("Synthetic lost peer acknowledgment", "outcome-unknown");
       });
-    try {
-      const failure = await fenceOAuthRefreshPeers({
-        cfg: {},
-        ownerDatabasePath: resolveAuthProfileDatabasePath(fx.mainDir),
-        profileId,
-        generation: original,
-        fence,
-        rollbackOnFailure: false,
-      }).catch((error: unknown) => error);
-      expect(lostReply).toHaveBeenCalledTimes(1);
-      expect(failure).toBeInstanceOf(OAuthRefreshPeerFenceError);
-      if (!(failure instanceof OAuthRefreshPeerFenceError)) {
-        throw new Error("expected lost peer claim");
-      }
-      expect(failure.claims).toHaveLength(1);
-      expect(read(peerAgentDir)).toStrictEqual(fence);
-      await rollbackOAuthRefreshPeerClaims({ profileId, fence, claims: failure.claims });
-      expect(read(peerAgentDir)).toStrictEqual(original);
-      expect(lostReply).toHaveBeenCalledTimes(2);
-    } finally {
-      lostReply.mockRestore();
+
+    const failure = await fenceOAuthRefreshPeers({
+      cfg: {},
+      ownerDatabasePath: resolveAuthProfileDatabasePath(fx.mainDir),
+      profileId,
+      generation: original,
+      fence,
+      rollbackOnFailure: false,
+    }).catch((error: unknown) => error);
+    expect(lostReply).toHaveBeenCalledTimes(1);
+    expect(failure).toBeInstanceOf(OAuthRefreshPeerFenceError);
+    if (!(failure instanceof OAuthRefreshPeerFenceError)) {
+      throw new Error("expected lost peer claim");
     }
+    expect(failure.claims).toHaveLength(1);
+    expect(read(peerAgentDir)).toStrictEqual(fence);
+    await rollbackOAuthRefreshPeerClaims({ profileId, fence, claims: failure.claims });
+    expect(read(peerAgentDir)).toStrictEqual(original);
+    expect(lostReply).toHaveBeenCalledTimes(2);
   });
 
   it.each([false, true])(

@@ -25,7 +25,7 @@ import {
 
 const statusSummaryMocks = vi.hoisted(() => ({
   readProactiveJobs:
-    vi.fn<typeof import("../cron/proactive-job-receipt.js").readDefaultProactiveJobsAsync>(),
+    vi.fn<typeof import("../cron/proactive-job-receipt.js").readDefaultProactiveJobsByKeyAsync>(),
   hasConfiguredChannelsForReadOnlyScopeAsync: vi.fn<
     typeof import("../plugins/channel-plugin-ids.js").hasConfiguredChannelsForReadOnlyScopeAsync
   >(async () => true),
@@ -48,6 +48,7 @@ const statusSummaryMocks = vi.hoisted(() => ({
 // mock-isolation: Project fixed receipt-owned jobs without opening shared-state storage in the aggregation fixture.
 vi.mock("../cron/proactive-job-receipt.js", () => ({
   readDefaultProactiveJobsAsync: statusSummaryMocks.readProactiveJobs,
+  readDefaultProactiveJobsByKeyAsync: statusSummaryMocks.readProactiveJobs,
 }));
 
 // mock-isolation: Keep plugin discovery outside this status aggregation fixture.

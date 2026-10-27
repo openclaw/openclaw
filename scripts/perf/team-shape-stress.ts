@@ -2,6 +2,7 @@
  * Reusable isolated dist-Gateway stress campaign. Usage and metric caveats:
  * scripts/perf/team-shape-stress.md. Run with node --import ./scripts/tsx.mjs.
  * This controller never connects to an existing Gateway or builds either revision.
+ * --auth-availability-storm seeds a shared synthetic profile and alternates primary HTTP 429/success.
  */
 import { createHash } from "node:crypto";
 import {
@@ -31,6 +32,7 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const headlineMetrics = new Set([
   "mainThreadCpuPercent",
   "allocationMiBPerSecond",
+  "sampledSurvivorMiBPerSecond",
   "gcSecondsPerMinute",
   "eventLoopP99Ms",
   "sessionsListP99Ms",
@@ -50,9 +52,11 @@ export function parseStressOptions(args: string[]) {
       output: { type: "string" },
       minutes: { type: "string", default: "10" },
       pairs: { type: "string", default: "2" },
+      "aa-pairs": { type: "string", default: "0" },
       clients: { type: "string", default: "65" },
       runs: { type: "string", default: "4" },
       sessions: { type: "string", default: "10800" },
+      agents: { type: "string", default: "4" },
       plugins: { type: "string", default: "40" },
       seed: { type: "string", default: "1711" },
       now: { type: "string", default: String(Date.now()) },
@@ -65,6 +69,12 @@ export function parseStressOptions(args: string[]) {
       mode: { type: "string", default: "both" },
       "smoke-seconds": { type: "string" },
       "fixture-only": { type: "boolean" },
+      "operator-model-policy": { type: "boolean" },
+      "gateway-preload": { type: "string" },
+      "worker-heap-snapshot": { type: "boolean" },
+      "knowledge-worker-heap": { type: "boolean" },
+      "worktree-tool-churn": { type: "boolean" },
+      "auth-availability-storm": { type: "boolean" },
       port: { type: "string" },
       help: { type: "boolean" },
     },
@@ -79,10 +89,15 @@ export function parseStressOptions(args: string[]) {
   if (!values.help && !values.output) {
     throw new Error("--output must name a new directory");
   }
-  if (!["timing", "allocation", "both"].includes(values.mode)) {
-    throw new Error("--mode must be timing, allocation, or both");
+  if (!["timing", "allocation", "retention", "both"].includes(values.mode)) {
+    throw new Error("--mode must be timing, allocation, retention, or both");
   }
   const minutes = integer("minutes", 10);
+  const pairs = integer("pairs", 1);
+  const aaPairs = integer("aa-pairs", 0);
+  if (aaPairs > pairs || (aaPairs > 0 && !values.base)) {
+    throw new Error("--aa-pairs requires --base and must not exceed --pairs");
+  }
   const smokeSeconds = values["smoke-seconds"] ? integer("smoke-seconds", 1) : undefined;
   const port = integer("port", 40000);
   const plugins = integer("plugins", 4);
@@ -102,10 +117,12 @@ export function parseStressOptions(args: string[]) {
     output: path.resolve(values.output ?? "."),
     durationMs: smokeSeconds ? smokeSeconds * 1000 : minutes * 60_000,
     smoke: smokeSeconds !== undefined,
-    pairs: integer("pairs", 1),
+    pairs,
+    aaPairs,
     clients: integer("clients", 4),
     runs: integer("runs", 1),
     sessions: integer("sessions", 100),
+    agents: integer("agents", 1),
     plugins,
     seed: integer("seed", 0),
     now: integer("now", 1),
@@ -117,6 +134,12 @@ export function parseStressOptions(args: string[]) {
     warmupMs: integer("warmup-ms", 0),
     mode: values.mode,
     fixtureOnly: values["fixture-only"] ?? false,
+    operatorModelPolicy: values["operator-model-policy"] ?? false,
+    gatewayPreload: values["gateway-preload"] ? path.resolve(values["gateway-preload"]) : undefined,
+    workerHeapSnapshot: values["worker-heap-snapshot"] ?? false,
+    knowledgeWorkerHeap: values["knowledge-worker-heap"] ?? false,
+    worktreeToolChurn: values["worktree-tool-churn"] ?? false,
+    authAvailabilityStorm: values["auth-availability-storm"] ?? false,
     port,
     help: values.help,
   };
@@ -170,9 +193,11 @@ async function main() {
   if (options.help) {
     console.log(`Usage: node --import ./scripts/tsx.mjs scripts/perf/team-shape-stress.ts
   --base <built-repo> --candidate <built-repo> --output <new-dir>
-  [--minutes 10 --pairs 2 --clients 65 --runs 4 --sessions 10800 --plugins 40]
-  [--mode both|timing|allocation --poll-ms 25000 --list-weight 16 --round-ms 60000 --churn-ms 6000]
+  [--minutes 10 --pairs 2 --clients 65 --runs 4 --sessions 10800 --agents 4 --plugins 40]
+  [--mode both|timing|allocation|retention --poll-ms 25000 --list-weight 16 --round-ms 60000 --churn-ms 6000]
   [--warmup-ms 60000 --seed 1711 --transcript-mib 128]
+  [--aa-pairs 0: insert a baseline/baseline control after each of the first N pairs]
+  [--operator-model-policy --auth-availability-storm]
   --smoke-seconds 30 is setup proof only, never performance evidence.
 Timing and allocation are separate fresh-fixture passes. Pairs run AB then BA.
 Without --base, run candidate once per mode. See team-shape-stress.md.`);
@@ -218,14 +243,18 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
   writeFileSync(path.join(options.output, "campaign.json"), JSON.stringify(manifest, null, 2));
   const modes = options.mode === "both" ? ["timing", "allocation"] : [options.mode];
   for (const mode of modes) {
-    for (let pair = 0; pair < (options.base ? options.pairs : 1); pair++) {
+    const schedule = Array.from({ length: options.base ? options.pairs : 1 }, (_, pair) => [
+      { pair, control: false },
+      ...(pair < options.aaPairs ? [{ pair, control: true }] : []),
+    ]).flat();
+    for (const { pair, control } of schedule) {
       const order: Array<"base" | "candidate"> = options.base
         ? pair % 2
           ? ["candidate", "base"]
           : ["base", "candidate"]
         : ["candidate"];
       for (const side of order) {
-        const runName = `${mode}-${pair + 1}-${side}`;
+        const runName = `${mode}-${control ? "aa-" : ""}${pair + 1}-${side}`;
         const state = path.join(options.output, runName);
         const ports = new Set<number>();
         const port = await freePort(ports);
@@ -238,6 +267,7 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "./scripts/tsx.mjs",
             "scripts/perf/team-shape-stress.ts",
             "--fixture-only",
+            ...(options.authAvailabilityStorm ? ["--auth-availability-storm"] : []),
             "--output",
             state,
             "--port",
@@ -248,6 +278,8 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             String(options.now),
             "--sessions",
             String(options.sessions),
+            "--agents",
+            String(options.agents),
             "--transcript-mib",
             String(options.transcriptMiB),
           ],
@@ -262,7 +294,7 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "--state-dir",
             state,
             "--entry",
-            builds[side]!.entry,
+            builds[control ? "base" : side]!.entry,
             "--port",
             String(port),
             "--mock-port",
@@ -270,9 +302,14 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "--scenario",
             "memory-soak",
             "--team-stress",
+            ...(options.knowledgeWorkerHeap ? ["--knowledge-worker-heap"] : []),
+            ...(options.gatewayPreload ? ["--gateway-preload", options.gatewayPreload] : []),
             "--mixed-rpc",
             "--stress-tools",
             "--stress-subagents",
+            ...(options.authAvailabilityStorm ? ["--auth-availability-storm"] : []),
+            ...(options.worktreeToolChurn ? ["--worktree-tool-churn"] : []),
+            ...(options.operatorModelPolicy ? ["--operator-model-policy"] : []),
             "--clients",
             String(options.clients),
             "--exact-clients",
@@ -308,8 +345,12 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "--prompt-kib",
             "8",
             "--worker-memory",
+            ...(options.workerHeapSnapshot
+              ? ["--worker-retained-heap", "--worker-heap-snapshot"]
+              : []),
             "--diagnostics",
-            ...(mode === "allocation" ? ["--team-stress-allocation-sampling"] : []),
+            ...(mode !== "timing" ? ["--team-stress-allocation-sampling"] : []),
+            ...(mode === "retention" ? ["--team-stress-retention-sampling"] : []),
           ],
           path.join(options.output, `${runName}.log`),
         );
@@ -319,7 +360,14 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
         }
         const resultDir = path.join(state, outputs[0]!);
         runs.push(
-          summarizeStressRun({ resultDir, side, pair: pair + 1, mode, smoke: options.smoke }),
+          summarizeStressRun({
+            resultDir,
+            side,
+            pair: pair + 1,
+            mode,
+            control,
+            smoke: options.smoke,
+          }),
         );
         writeFileSync(
           path.join(options.output, "campaign.json"),
@@ -341,6 +389,7 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
       .map((row) => ({
         metric: row.metric,
         mode: row.mode,
+        control: row.control,
         base: rounded(row.base),
         candidate: rounded(row.candidate),
         delta: rounded(row.absolute),
@@ -352,5 +401,10 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main();
+  if (process.argv.includes("--restart-chaos")) {
+    const { runRestartStress } = await import("./team-shape-restart-stress.ts");
+    await runRestartStress(process.argv.slice(2));
+  } else {
+    await main();
+  }
 }

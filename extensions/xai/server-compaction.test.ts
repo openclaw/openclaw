@@ -8,7 +8,7 @@ import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-hea
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, expect, it, vi } from "vitest";
 import { wrapXaiProviderStream } from "./stream.js";
-import { xaiModel } from "./test-helpers.js";
+import { captureXaiRequest, xaiModel } from "./test-helpers.js";
 
 const sdkState = vi.hoisted(() => {
   const clients: Array<{ defaultHeaders?: ModelRequestHeaders }> = [];
@@ -28,11 +28,7 @@ vi.mock("openai", () => {
 
 const model = xaiModel({
   id: "grok-4",
-  name: "Grok 4",
   baseUrl: "https://api.x.ai/v1",
-  input: ["text"],
-  contextWindow: 256_000,
-  maxTokens: 8_192,
 });
 
 function prepareRequests(
@@ -125,22 +121,34 @@ it("compacts and replays through the legacy xAI fast-mode wrapper", async () => 
 });
 
 it("uses the same OAuth proxy headers as a normal turn", async () => {
+  const target = xaiModel({
+    id: "grok-4.7",
+    name: "Subscription default",
+    input: ["text"],
+    params: { canonicalModelId: "grok-fixture-unselected" },
+    baseUrl: "https://cli-chat-proxy.grok.com/v1",
+  });
+  const contract = {
+    "x-grok-client-version": "2026.7.2",
+    "x-grok-model-override": target.id,
+    "X-XAI-Token-Auth": "xai-grok-cli",
+  };
+  const captured = captureXaiRequest(target, {
+    extraParams: { tool_stream: false },
+    headers: { "X-XAI-Token-Auth": "operator-value", "X-Existing": "kept", "x-delete": null },
+  });
+  expect(captured.modelId).toBe(target.id);
+  expect(captured.headers).toEqual({ "X-Existing": "kept", "x-delete": null, ...contract });
   const requests = prepareRequests(
     { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
-    { ...model, id: "grok-4.5", baseUrl: "https://cli-chat-proxy.grok.com/v1" },
+    target,
     { clientVersion: "2026.7.2" },
   );
   await requests.compact();
-  const compactHeaders = sdkState.clients[0]?.defaultHeaders;
-
   await requests.replay();
-  const normalHeaders = sdkState.clients[1]?.defaultHeaders;
-
+  const [compactHeaders, normalHeaders] = sdkState.clients.map((client) => client.defaultHeaders);
   expect(compactHeaders).toEqual(normalHeaders);
-  expect(Object.fromEntries(new Headers(omitNullRequestHeaders(compactHeaders)))).toMatchObject({
-    "x-existing": "kept",
-    "x-grok-client-version": "2026.7.2",
-    "x-grok-model-override": "grok-4.5",
-    "x-xai-token-auth": "xai-grok-cli",
-  });
+  expect(Object.fromEntries(new Headers(omitNullRequestHeaders(compactHeaders)))).toMatchObject(
+    Object.fromEntries(new Headers({ "X-Existing": "kept", ...contract })),
+  );
 });

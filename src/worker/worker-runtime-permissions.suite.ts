@@ -293,7 +293,7 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
         const failure = {
           status: "error",
           tool: "apply_patch",
-          error: `Path escapes sandbox root (${await realpath(contained)}): ../outside.txt`,
+          error: `Path escapes sandbox root (${await realpath(contained)}): ../outside.txt. Keep patch paths within the bound root. For an authorized task in another repository, ask the parent to respawn the worker with sessions_spawn and cwd set to that repository. Changing exec workdir does not rebind file tools.`,
         };
         const toolResult = gateway.inferenceRequests[1]?.context.messages.find(
           (message) => message.role === "toolResult",

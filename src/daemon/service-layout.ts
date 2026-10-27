@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { consumeRootCommandOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { pathExists } from "../infra/fs-safe.js";
@@ -48,6 +49,7 @@ export async function resolveGatewayServiceInstallationRefreshRoot(params: {
     !root ||
     !command ||
     isBunRuntime(command.programArguments[0] ?? "") ||
+    isStandaloneRuntimeExecutable(command.programArguments[0] ?? "") ||
     state.loadState.status === "unknown" ||
     (state.runtime?.status !== "running" && state.runtime?.status !== "stopped") ||
     (process.platform === "linux" && !isSystemdManagerUid(managerUid)) ||
@@ -118,7 +120,9 @@ function resolveSystemdScopeFromServicePath(
 }
 
 export function resolveServiceEntrypointIndex(args: readonly string[]): number | undefined {
-  const { position: script } = resolveRuntimeScriptPosition(args);
+  const { position: script } = isStandaloneRuntimeExecutable(args[0] ?? "")
+    ? { position: { kind: "not-runtime" } }
+    : resolveRuntimeScriptPosition(args);
   if (typeof script !== "number" && script.kind === "other") {
     return undefined;
   }

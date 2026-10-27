@@ -32,7 +32,14 @@ export type PluginStatePublicationScope = {
   /** Omitted when the write can affect any live entry in the namespace. */
   key?: string;
 };
-type PendingPublication = { scope?: PluginStatePublicationScope };
+/** Possible effects derived from the serialized command, never supplied by plugin callers. */
+export type PluginStatePublicationEffect =
+  | { readonly kind: "unchanged" }
+  | { readonly kind: "postimage"; readonly valueJson: string };
+type PendingPublication = {
+  scope?: PluginStatePublicationScope;
+  effect?: PluginStatePublicationEffect;
+};
 
 /** Descriptive read dependencies; these snapshots never grant mutation authority. */
 export type PluginStateReadDependency = {
@@ -253,18 +260,58 @@ export function assertPluginStatePublicationSettled(
   if (state.unavailable.has(identity)) {
     throw new Error("Plugin state authority is unavailable");
   }
+  if (hasPendingPluginStatePublication(identity, scope)) {
+    throw new Error("Plugin state authority is unavailable");
+  }
+}
+
+/** Descriptive views may reload after unknown settlement; authority remains unavailable. */
+export function hasPendingPluginStatePublication(
+  identity: string,
+  scope?: PluginStatePublicationScope,
+): boolean {
   for (const pending of state.pending.get(identity) ?? []) {
     const write = pending.scope;
-    if (
-      !scope ||
-      !write ||
-      (scope.pluginId === write.pluginId &&
-        scope.namespace === write.namespace &&
-        (scope.key === undefined ||
-          write.key === undefined ||
-          toUSVString(scope.key) === toUSVString(write.key)))
-    ) {
+    if (publicationScopesOverlap(scope, write)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function publicationScopesOverlap(
+  scope: PluginStatePublicationScope | undefined,
+  write: PluginStatePublicationScope | undefined,
+): boolean {
+  return (
+    !scope ||
+    !write ||
+    (scope.pluginId === write.pluginId &&
+      scope.namespace === write.namespace &&
+      (scope.key === undefined ||
+        write.key === undefined ||
+        toUSVString(scope.key) === toUSVString(write.key)))
+  );
+}
+
+/** A predicate may survive a pending change; the caller must also validate committed truth. */
+export function assertPluginStatePublicationPreserves(
+  identity: string,
+  scope: PluginStatePublicationScope,
+  assertValueCurrent: (value: unknown) => void,
+): void {
+  if (state.unavailable.has(identity)) {
+    throw new Error("Plugin state authority is unavailable");
+  }
+  for (const pending of state.pending.get(identity) ?? []) {
+    if (!publicationScopesOverlap(scope, pending.scope)) {
+      continue;
+    }
+    if (!pending.effect) {
       throw new Error("Plugin state authority is unavailable");
+    }
+    if (pending.effect.kind === "postimage") {
+      assertValueCurrent(JSON.parse(pending.effect.valueJson));
     }
   }
 }
@@ -274,9 +321,10 @@ export function beginPluginStatePublication(
   identity: () => string | symbol,
   assertCurrent?: () => void,
   scope?: PluginStatePublicationScope,
+  effect?: PluginStatePublicationEffect,
 ) {
   const pendingIdentity = identity();
-  const hold = { scope };
+  const hold = { scope, effect };
   const holds = state.pending.get(pendingIdentity) ?? new Set<PendingPublication>();
   holds.add(hold);
   state.pending.set(pendingIdentity, holds);
@@ -315,6 +363,7 @@ export function withPluginStatePublication(
   context: OpenClawStateWorkerContext,
   onCommitted?: (facts: unknown) => void,
   scope?: PluginStatePublicationScope,
+  effect?: PluginStatePublicationEffect,
 ): SqliteWorkerAdmissionFactory {
   return (operation) => {
     const owner = createAdmission(operation);
@@ -324,6 +373,7 @@ export function withPluginStatePublication(
         () => context.admission.identity.key,
         context.assertPublicationCurrent ?? context.admission.assertCurrent,
         scope,
+        effect,
       );
     } catch (error) {
       owner.admission.finish();

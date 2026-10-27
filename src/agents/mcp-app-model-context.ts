@@ -157,7 +157,7 @@ function modelContent(block: ContentBlock): ContentBlock {
   const { _meta: _presentation, ...content } = block;
   if (content.type === "resource") {
     const { _meta: _resourcePresentation, ...resource } = content.resource;
-    return { ...content, resource };
+    content.resource = resource;
   }
   return content;
 }

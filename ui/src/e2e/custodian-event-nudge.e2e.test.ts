@@ -1,7 +1,7 @@
 // Control UI tests cover event-reactive custodian presence against a mocked Gateway.
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import type { ChannelsStatusSnapshot, WizardStep } from "../api/types.ts";
 import {
   installMockGateway,

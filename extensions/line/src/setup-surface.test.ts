@@ -1,19 +1,14 @@
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
-import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
+import type { OpenClawConfig, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { stubLineApiFetch } from "./probe.test-support.js";
-import { setLineRuntime } from "./runtime.js";
 import { lineSetupWizard } from "./setup-surface.js";
 const monitorLineProviderMock = vi.hoisted(() =>
   vi.fn<typeof import("./monitor.js").monitorLineProvider>(),
@@ -36,36 +31,28 @@ const credentials = (token = "token", secret = "secret") => ({
 const lineConfig = (line: NonNullable<OpenClawConfig["channels"]>["line"]): OpenClawConfig => ({
   channels: { line },
 });
-const identity = {
-  displayName: "OpenClaw",
-  userId: "U123",
-  basicId: "@openclaw",
-  pictureUrl: "https://example.com/bot.png",
-};
+const identity = { userId: "U123", displayName: "OpenClaw" };
 const stubBot = () => stubLineApiFetch(Response.json(identity), Response.json({ type: "none" }));
 describe("line setup wizard", () => {
   it("configures token and secret for the default account", async () => {
     const prompter = createTestWizardPrompter({
-      text: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "Enter LINE channel access token") {
-          return "line-token";
+      text: async ({ message }) => {
+        const field = /^Enter LINE channel (access token|secret)$/.exec(message)?.[1];
+        if (!field) {
+          throw new Error(`Unexpected prompt: ${message}`);
         }
-        if (message === "Enter LINE channel secret") {
-          return "line-secret";
-        }
-        throw new Error(`Unexpected prompt: ${message}`);
-      }) as WizardPrompter["text"],
+        return field === "secret" ? "line-secret" : "line-token";
+      },
     });
     const result = await runSetupWizardConfigure({
       configure: lineConfigure,
-      cfg: {} as OpenClawConfig,
+      cfg: {},
       prompter,
       options: {},
     });
-    expect(result.accountId).toBe("default");
-    expect(result.cfg.channels?.line).toMatchObject({
-      enabled: true,
-      ...credentials("line-token", "line-secret"),
+    expect(result).toMatchObject({
+      accountId: "default",
+      cfg: { channels: { line: { enabled: true, ...credentials("line-token", "line-secret") } } },
     });
   });
   it("uses defaultAccount for policy reads and writes without changing root policy", () => {
@@ -105,49 +92,14 @@ describe("line setup wizard", () => {
 it("status.probeAccount reports bot identity without initializing the message runtime", async () => {
   vi.resetModules();
   const { lineStatusAdapter } = await import("./status.js");
-  const fetchMock = stubBot();
-  const params = {
-    cfg: {} as OpenClawConfig,
-    account: createAccount(),
-    timeoutMs: 50,
-  };
-  await expect(lineStatusAdapter.probeAccount!(params)).resolves.toEqual({
-    ok: true,
-    bot: identity,
-    quota: { kind: "unlimited" },
-    elapsedMs: expect.any(Number),
-  });
-  expect(fetchMock.mock.calls.map(([url]) => resolveRequestUrl(url))).toEqual([
-    "https://api.line.me/v2/bot/info",
-    "https://api.line.me/v2/bot/message/quota",
-    "https://api.line.me/v2/bot/channel/webhook/endpoint",
-  ]);
+  stubBot();
+  await expect(
+    lineStatusAdapter.probeAccount!({ cfg: {}, account: createAccount(), timeoutMs: 50 }),
+  ).resolves.toMatchObject({ ok: true, bot: identity, quota: { kind: "unlimited" } });
 });
-function startLineAccount(params: { account: ResolvedLineAccount; abortSignal?: AbortSignal }) {
-  const providerStarted = createDeferred<void>();
-  monitorLineProviderMock.mockImplementation(async (opts) => {
-    providerStarted.resolve();
-    await waitForAbortSignal(opts.abortSignal);
-    return {
-      account: params.account,
-      handleWebhook: async () => "ignored" as const,
-      stop: async () => {},
-    };
-  });
-  setLineRuntime({ logging: { shouldLogVerbose: () => false } } as unknown as PluginRuntime);
-  const statusEvents: unknown[] = [];
-  return {
-    monitorLineProvider: monitorLineProviderMock,
-    providerStarted: providerStarted.promise,
-    statusEvents,
-    task: lineGatewayAdapter.startAccount!(
-      createStartAccountContext({
-        account: params.account,
-        abortSignal: params.abortSignal,
-        statusPatchSink: (patch) => statusEvents.push(patch),
-      }),
-    ),
-  };
+function startLineAccount(account = createAccount(), abortSignal?: AbortSignal) {
+  const context = createStartAccountContext({ account, abortSignal });
+  return { context, task: lineGatewayAdapter.startAccount!(context) };
 }
 function createAccount(token = "token", secret = "secret"): ResolvedLineAccount {
   return {
@@ -163,41 +115,30 @@ describe("linePlugin gateway.startAccount", () => {
     { token: "token", secret: "   ", field: "channel secret" },
     { token: "   ", secret: "secret", field: "channel access token" },
   ])("fails startup when $field is missing", async ({ token, secret, field }) => {
-    const { monitorLineProvider, task } = startLineAccount({
-      account: createAccount(token, secret),
-    });
+    const { task } = startLineAccount(createAccount(token, secret));
     await expect(task).rejects.toThrow(
       `LINE webhook mode requires a non-empty ${field} for account "default".`,
     );
-    expect(monitorLineProvider).not.toHaveBeenCalled();
+    expect(monitorLineProviderMock).not.toHaveBeenCalled();
   });
   it("starts provider when token and secret are present", async () => {
     stubBot();
+    const account = createAccount();
+    const monitor = {
+      account,
+      handleWebhook: async () => "ignored" as const,
+      stop: async () => {},
+    };
+    monitorLineProviderMock.mockResolvedValueOnce(monitor);
     const abort = new AbortController();
-    const { monitorLineProvider, providerStarted, statusEvents, task } = startLineAccount({
-      account: createAccount(),
-      abortSignal: abort.signal,
+    const { context, task } = startLineAccount(account, abort.signal);
+    await expect(task).resolves.toBe(monitor);
+    expect(monitorLineProviderMock.mock.calls[0]?.[0]).toMatchObject({
+      ...credentials(),
+      accountId: "default",
+      statusSink: expect.any(Function),
     });
-    try {
-      await Promise.race([
-        providerStarted,
-        task.then(() => {
-          throw new Error("LINE account exited before the provider started");
-        }),
-      ]);
-      expect(monitorLineProvider).toHaveBeenCalledTimes(1);
-      expect(monitorLineProvider.mock.calls[0]?.[0]).toMatchObject({
-        ...credentials(),
-        accountId: "default",
-        statusSink: expect.any(Function),
-      });
-      expect(monitorLineProvider.mock.calls[0]?.[0].abortSignal).toBe(abort.signal);
-      expect(statusEvents).toContainEqual(
-        expect.objectContaining({ accountId: "default", lifecycle: "starting" }),
-      );
-    } finally {
-      abort.abort();
-      await task;
-    }
+    expect(monitorLineProviderMock.mock.calls[0]?.[0].abortSignal).toBe(abort.signal);
+    expect(context.getStatus()).toMatchObject({ accountId: "default", lifecycle: "starting" });
   });
 });

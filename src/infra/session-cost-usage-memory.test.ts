@@ -9,10 +9,8 @@ import type {
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { failSessionActorMemoryPublication } from "../config/sessions/session-actor-memory-publication.test-support.js";
 import type { SessionActorMemoryUsageReads } from "../config/sessions/session-actor-memory-usage-contract.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import type { SessionActorStorageWrites } from "../config/sessions/session-actor-storage-contract.js";
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";

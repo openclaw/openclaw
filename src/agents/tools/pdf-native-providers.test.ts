@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { makeStallingStream } from "../../infra/http-body.test-support.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.types.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
@@ -169,13 +170,8 @@ it.each<ModelProviderRequestTransportOverrides>([
 
 it("cancels Anthropic API error bodies that exactly fill the byte cap", async () => {
   let canceled = false;
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode("x".repeat(8 * 1024)));
-    },
-    cancel() {
-      canceled = true;
-    },
+  const body = makeStallingStream([new TextEncoder().encode("x".repeat(8 * 1024))], () => {
+    canceled = true;
   });
   mockFetchResponse(
     new Response(body, {

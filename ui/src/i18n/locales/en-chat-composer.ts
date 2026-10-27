@@ -3,6 +3,10 @@ import { en } from "./en.ts";
 
 const catalog = {
   chat: {
+    view: {
+      activityDetails: "View activity details",
+      workingDetails: "Agent is working. View details",
+    },
     composer: {
       running: "running",
       composerInput: "Chat composer",
@@ -52,44 +56,12 @@ const catalog = {
       addAttachment: "Add attachment",
       attach: "Attach…",
       attachPhoto: "Photo",
-      attachMedia: "Photos & videos",
+      attachMedia: "Media",
       attachFileOption: "File",
       menu: {
-        back: "Back",
-        skills: "Skills",
-        connectors: "Plugins",
-        webSearch: "Web search",
-        webSearchGloballyDisabled:
-          "Web search is disabled in config (tools.web.search.enabled). Session overrides cannot turn it back on.",
-        webSearchClearStaleEnable:
-          "Web search is disabled in config. Click to clear this session’s enable override.",
-        managePlugins: "Manage plugins",
-        manageSkills: "Manage skills",
-        addMcpServer: "Add MCP server…",
-        addMcpServerTitle: "Add MCP server",
-        addMcpServerDescription: "Configure the server and choose where it is enabled.",
-        scopeLabel: "Availability",
-        scopeSession: "This session",
-        scopeEverywhere: "Everywhere",
-        scopeSessionHint:
-          "The server is saved globally disabled and enabled only for this session.",
-        scopeEverywhereHint: "The server is saved and enabled for every session.",
         toolAccess: {
-          label: "Tool access",
-          loading: "Loading tools…",
           loadFailed: "Couldn’t load tools.",
-          noTools: "No tools available for this MCP server.",
-          summary: "{enabled} of {total} tools on",
-          summaryOne: "{enabled} of {total} tool on",
         },
-        enabledCount: "{count} on",
-        loadingSkills: "Loading skills…",
-        skillsLoadFailed: "Couldn’t load skills.",
-        noSkills: "No skills available.",
-        noConnectors: "No MCP servers configured.",
-        depsMissing: "deps missing",
-        skillBlocked: "not available for this agent",
-        sessionTag: "session",
         offlineBlocked: "Connect to the gateway to change session capabilities.",
         adminBlocked: "Admin access is required to manage MCP servers.",
         savingBlocked: "Wait for the current session capability change to finish.",
@@ -197,6 +169,18 @@ const catalog = {
     queue: {
       reviewEdit: "Review edit",
       reloadBlocked: "Save or cancel your queued message edit before reloading.",
+      memoryOnlyReloadBlocked:
+        "A pending message is only saved in this tab. Keep this tab open until it is sent, or copy it before discarding it and reloading.",
+      memoryOnlyReview: "Review pending input",
+      memoryOnlyTitle: "Unsent pending message",
+      memoryOnlyDescription:
+        "This pending message stays only in this tab. Copy its text or download its attachments before discarding the local copy to refresh. Discarding does not cancel a message already received by the Gateway.",
+      memoryOnlyText: "Message text",
+      memoryOnlyDiscard: "Discard local copy and refresh",
+      memoryOnlyChanged:
+        "The pending input changed or is being edited. It has not been discarded; review the current input before refreshing.",
+      memoryOnlyUnavailable:
+        "The pending input could not be opened. It remains protected in this tab; try Review pending input again.",
       connectionPending: "Finishing connection recovery. Try sending again when it is ready.",
       editSourceChanged:
         "This queued message changed while you were editing. Your edit is still here. Copy it, cancel the edit, and review the queue before trying again.",
@@ -249,46 +233,7 @@ const catalog = {
       unsupported:
         "Human mentions are not available in this mode. Remove the selected mentions or send from a normal chat.",
     },
-    permissions: {
-      title: "Grant {permissions}",
-      neededOn: "OpenClaw needs access on {node} to continue this action.",
-      openApp:
-        "Grant access in the OpenClaw Mac app on that device: Settings → This Mac → Permissions. Then tell the agent to try again.",
-      ready: "Access is available. You can ask the agent to try again.",
-      following: "Then grant the remaining permissions: {permissions}.",
-      actions: {
-        "not-determined": "Grant {permissions}",
-        denied: "Open System Settings",
-        "restart-required": "Relaunch OpenClaw",
-        "stale-grant": "Open System Settings",
-        "disabled-in-openclaw": "Enable {permissions}",
-      },
-      tryAgain: "Try again",
-      retryMessage: "I granted {permissions}, try again.",
-      states: {
-        "not-determined": "Choose Grant to review the permission request.",
-        denied: "Open System Settings to allow access for OpenClaw.",
-        "restart-required":
-          "If you enabled access in System Settings, relaunch OpenClaw to make it available.",
-        "stale-grant":
-          "macOS may be using a stale permission grant. Open System Settings to review it.",
-        "disabled-in-openclaw": "Choose Enable to review and enable this capability in OpenClaw.",
-      },
-      capabilities: {
-        notifications: "Notifications",
-        accessibility: "Accessibility",
-        eventPosting: "Event Posting",
-        screenRecording: "Screen Recording",
-        microphone: "Microphone",
-        speechRecognition: "Speech Recognition",
-        camera: "Camera",
-        cameraEnabled: "Camera in OpenClaw",
-        location: "Location",
-        computerControl: "Computer Control",
-        canvas: "Canvas",
-        automation: "Automation",
-      },
-    },
+    permissions: {},
     voice: {
       asking: "Asking OpenClaw...",
       replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
@@ -426,6 +371,7 @@ const catalog = {
 export const registerChatComposerEnglish = Object.assign(
   () => {
     const {
+      view,
       composer,
       queue,
       mentions,
@@ -438,7 +384,10 @@ export const registerChatComposerEnglish = Object.assign(
       ...outboxRecovery
     } = catalog.chat;
     Object.assign(en.chat, outboxRecovery);
-    Object.assign(en.chat.composer, composer);
+    Object.assign(en.chat.view, view);
+    const { menu, ...composerLabels } = composer;
+    Object.assign(en.chat.composer, composerLabels);
+    en.chat.composer.menu ??= menu;
     Object.assign(en.chat.queue, queue);
     Object.assign(en.chat.mentions, mentions);
     Object.assign(en.chat.permissions, permissions);

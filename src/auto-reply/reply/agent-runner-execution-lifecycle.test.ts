@@ -168,6 +168,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       expect(result.outcome).toEqual({
         kind: "aborted",
         reason: "user",
+        sessionWriter: fact.target,
         compaction: { count: 1, durable: [fact] },
       });
       expect(onAgentRunTerminalOutcome).not.toHaveBeenCalled();

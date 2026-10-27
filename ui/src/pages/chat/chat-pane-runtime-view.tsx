@@ -26,7 +26,6 @@ import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { projectTheme } from "../../lib/reactive/theme.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { chatGoalOperations } from "./chat-goals.ts";
 import { chatPanePropertyKeys } from "./chat-pane-inputs.ts";
@@ -35,10 +34,15 @@ import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
+import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import { activeQueuedMessageEdit, subscribeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
+
+const ChatComposerCapabilityDialogs = lazy(() => import("./chat-composer-capability-host.tsx"), {
+  export: "ChatComposerCapabilityDialogs",
+});
 
 const ChatProviderReviewHost = lazy(() => import("./chat-provider-review-controller.tsx"), {
   export: "ChatProviderReviewHost",
@@ -68,6 +72,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   }
   projectChatFields(runtime, [
     ...chatPanePropertyKeys,
+    "composerCapabilities",
     "paneWidth",
     "desktopFocus",
     "deferredSessionHydration",
@@ -173,8 +178,27 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const state = runtime.state;
     const realtime = createMemo(() => {
       const owner = runtime.state?.realtimeTalk;
-      return owner && projectOwner(owner, (source) => source.snapshot);
+      return (
+        owner && {
+          view: projectOwner(
+            owner,
+            (source) => source.snapshot,
+            (previous, next) =>
+              Object.entries(previous).every(
+                ([key, value]) =>
+                  key === "realtimeTalkConversationState" ||
+                  Object.is(value, Reflect.get(next, key)),
+              ),
+          ),
+          conversation: projectOwner(
+            owner,
+            (source) => source.snapshot.realtimeTalkConversationState.entries,
+            Object.is,
+          ),
+        }
+      );
     });
+    const readRealtimeTalkConversation = () => realtime()?.conversation.read() ?? [];
     // Ordinary keystrokes stay in the composer; command intent changes the pane's submit gate.
     const controlCommand = projectOwner(
       runtime.chatState.composerDraft,
@@ -235,6 +259,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       cacheProgress();
       return stop;
     });
+    const composerCapabilities = createMemo(() => {
+      const owner = runtime.composerCapabilities;
+      return owner && projectOwner(owner, (source) => source);
+    });
     const sources = [
       context.plugins,
       context.agents,
@@ -247,7 +275,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       state && sessionWorkspaceForHost(state),
       chatInputOwnerForContext(context),
       runtime.sessionDiscussion,
-      runtime.composerCapabilities,
       runtime.questionPromptState,
       state && chatGoalOperations(state),
       runtime.activeSessionResources,
@@ -268,7 +295,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         parentSession.read();
         transcriptPosition.read();
         progress.read();
-        realtime()?.read();
+        realtime()?.view.read();
         theme.preferences.read();
         controlCommand.read();
         attachments.read();
@@ -277,8 +304,9 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         board().forEach((source) => source.read());
         i18nRevision();
         sources.forEach((source) => source?.read());
+        composerCapabilities()?.read();
         prepareRender();
-        return runtime.render(providerReview);
+        return runtime.render(providerReview, readRealtimeTalkConversation);
       },
       () => runtime.presented && runtime.presentation.documentVisible,
     );
@@ -340,7 +368,11 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
           </Errored>
         </Show>
         <Show when={frame().capabilityDialogs}>
-          {(dialogs) => <ChatComposerCapabilityDialogs {...dialogs()} />}
+          {(dialogs) => (
+            <ChatLazyBoundary>
+              <ChatComposerCapabilityDialogs {...dialogs()} />
+            </ChatLazyBoundary>
+          )}
         </Show>
       </openclaw-link-reader-hovercard-provider>
     );

@@ -44,13 +44,11 @@ export function workboardScrollFadeRef() {
     const scrollable = maxScroll > 1 && (overflow === "auto" || overflow === "scroll");
     const top = scrollable ? Math.max(0, element.scrollTop) : 0;
     const bottom = scrollable ? Math.max(0, maxScroll - element.scrollTop) : 0;
+    const scrollbarWidth = element.offsetWidth - element.clientWidth;
     element.toggleAttribute("data-scrollable", scrollable);
     element.style.setProperty("--workboard-fade-top", `${Math.min(top, 24)}px`);
     element.style.setProperty("--workboard-fade-bottom", `${Math.min(bottom, 24)}px`);
-    element.style.setProperty(
-      "--workboard-scrollbar-width",
-      `${element.offsetWidth - element.clientWidth}px`,
-    );
+    element.style.setProperty("--workboard-scrollbar-width", `${scrollbarWidth}px`);
   });
 }
 

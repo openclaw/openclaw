@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
-import { createSignal, onCleanup, type Accessor } from "solid-js";
+import { onCleanup, type Accessor } from "solid-js";
+import { expect } from "vitest";
 import { analyzeConfigSchema } from "../components/config-form.analyze.ts";
 import { ConfigArray, ConfigObject } from "../components/config-form.node.collection.tsx";
 import { NumberInput, SelectInput, TextInput } from "../components/config-form.node.scalar.tsx";
@@ -7,19 +8,16 @@ import type { ConfigNodeRenderParams } from "../components/config-form.node.shar
 import { renderNode } from "../components/config-form.node.tsx";
 import { ConfigForm } from "../components/config-form.render.tsx";
 import type { ConfigFormProps } from "../components/config-form.shared.ts";
-import { mountSolid } from "./mount-solid.ts";
-import { flush } from "./solid-settle.ts";
+import { mountSolid } from "./solid-render.tsx";
 
-export function connectionSchemaFixture(): ConfigNodeRenderParams["schema"] {
-  return {
-    type: "object",
-    required: ["host", "port"],
-    properties: {
-      host: { type: "string", minLength: 1 },
-      port: { type: "integer", minimum: 1 },
-    },
-  };
-}
+export const connectionSchemaFixture = (): ConfigNodeRenderParams["schema"] => ({
+  type: "object",
+  required: ["host", "port"],
+  properties: {
+    host: { type: "string", minLength: 1 },
+    port: { type: "integer", minimum: 1 },
+  },
+});
 
 type NodeDefaults = Pick<ConfigNodeRenderParams, "hints" | "unsupported" | "disabled">;
 type FixtureOptions<Extra = object> = Omit<ConfigNodeRenderParams, keyof NodeDefaults> &
@@ -40,21 +38,20 @@ function fixture<Props>(component: (props: Accessor<Props>) => JSX.Element) {
       update(props);
     } else {
       activeMounts.get(container)?.();
-      const [value, setValue] = createSignal({ props });
       const view = mountSolid(
-        () => {
+        (value: { props: Props }) => {
           onCleanup(() => {
             mounted.delete(container);
             activeMounts.delete(container);
           });
-          return component(() => value().props);
+          return component(() => value.props);
         },
-        { container },
+        { props },
+        container,
       );
-      mounted.set(container, (next) => setValue({ props: next }));
-      activeMounts.set(container, view.unmount);
+      mounted.set(container, (next) => view.update({ props: next }));
+      activeMounts.set(container, view.dispose);
     }
-    flush();
   };
 }
 
@@ -96,4 +93,12 @@ export function renderAnalyzedFormFixture(
     onShowAdvanced: () => {},
     ...props,
   });
+}
+
+export function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
+  expect(element instanceof Element, label).toBe(true);
+  if (!(element instanceof Element)) {
+    throw new Error(`missing ${label}`);
+  }
+  return element;
 }

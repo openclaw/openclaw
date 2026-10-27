@@ -4,8 +4,9 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { captureUiProofEnabled, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -28,6 +29,7 @@ const reloadProfiles = [
   "large",
   "short-tail",
   "imported",
+  "offline",
 ];
 
 async function expectOwnMessageAlignment(page: Page): Promise<void> {
@@ -158,8 +160,12 @@ suite.define(() => {
     "reconciles the cached shell, roster, and transcript with a %s profile",
     (profile) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const capture = (name: string) =>
-          page.screenshot({ path: path.join(suite.artifactDir, name) });
+        const capture = async (name: string) => {
+          await waitForControlUiProofSurface(page.locator("body"), []);
+          if (captureUiProofEnabled) {
+            await page.screenshot({ path: path.join(suite.artifactDir, name) });
+          }
+        };
         const timestamp = Date.now();
         const imported = profile === "imported";
         const shortTail = profile === "short-tail";
@@ -206,6 +212,7 @@ suite.define(() => {
           modelProvider: "openai",
         };
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: false,
           sessionKey,
           assistantName: "Observatory",
           // The typed hold applies again after reload and releases the normal hello payload.
@@ -383,8 +390,49 @@ suite.define(() => {
             }
           });
         }
-        await page.reload();
-        const connect = await gateway.waitForRequest("connect");
+        if (profile === "offline") {
+          await gateway.setOnline(false);
+          await page.reload();
+          await transcript.getByText(transcriptText, { exact: true }).waitFor();
+          await sidebar.getByText("Cached only session", { exact: true }).waitFor();
+          await page.locator(".chat-pane__connection-state").waitFor({ state: "visible" });
+          expect(await page.locator(".chat-pane-cache__pane--active .skeleton").count()).toBe(0);
+          expect(await gateway.getRequests("connect")).toEqual([]);
+          expect(await gateway.getRequests("chat.send")).toEqual([]);
+          await capture("warm-offline-before-socket.png");
+          return;
+        }
+        if (profile === "matching") {
+          // A cached reload must render even if the Gateway never sends its challenge.
+          await page.addInitScript(() => {
+            let heldChallenge = false;
+            window.WebSocket = new Proxy(window.WebSocket, {
+              construct(Target, args) {
+                const socket = Reflect.construct(Target, args) as WebSocket;
+                const dispatch = socket.dispatchEvent.bind(socket);
+                socket.dispatchEvent = (event) => {
+                  if (
+                    !heldChallenge &&
+                    event instanceof MessageEvent &&
+                    typeof event.data === "string" &&
+                    JSON.parse(event.data).event === "connect.challenge"
+                  ) {
+                    heldChallenge = true;
+                    document.addEventListener(
+                      "openclaw-proof-release-challenge",
+                      () => dispatch(event),
+                      { once: true },
+                    );
+                    return true;
+                  }
+                  return dispatch(event);
+                };
+                return socket;
+              },
+            });
+          });
+        }
+        await page.reload({ waitUntil: "commit" });
         await sidebar.locator(".sidebar-footer-bar__home").waitFor();
         await sidebar.getByText("Cached only session", { exact: true }).waitFor();
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
@@ -407,6 +455,14 @@ suite.define(() => {
           await composer.fill("Typing while the Gateway is still connecting");
           expect(await gateway.getRequests("chat.send")).toEqual([]);
         }
+        if (profile === "matching") {
+          expect(await gateway.getRequests("connect")).toEqual([]);
+          expect(await gateway.getSocketCount()).toBe(1);
+          await page.evaluate(() =>
+            document.dispatchEvent(new Event("openclaw-proof-release-challenge")),
+          );
+        }
+        const connect = await gateway.waitForRequest("connect");
         await capture(`warm-${profile}-before-hello.png`);
 
         await gateway.setSessionsListResponse({

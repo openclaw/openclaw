@@ -7,6 +7,7 @@ import type { SessionActorTranscriptRow } from "./session-actor-bounded-history.
 import type { SessionActorDeliveryEvidence } from "./session-actor-delivery-evidence.types.js";
 import type {
   SessionActorAuthority,
+  SessionActorAuthorityFacts,
   SessionActorTarget,
   SessionActorVersion,
   SessionActorLifetime,
@@ -275,7 +276,7 @@ export type SessionActorReceipt = {
   pendingInputReceipt?: SessionPendingInputWorkerReceipt;
   pendingInputMutationReceipt?: PendingInputMutationReceipt;
   reducers: SessionActorReducerOutcome[];
-  /** Complete detached postimage, installed on MAIN before acknowledgement. */
+  /** Complete postimage installed on MAIN; unchanged entries may share its frozen preimage. */
   postimage: SessionActorHotState;
 };
 
@@ -322,6 +323,8 @@ export type SessionActorOperations = {
     input: SessionActorCommandContext &
       SessionActorPhaseInputs[Phase] & {
         target: SessionActorTarget;
+        /** Command-local immutable preimage retained by the host; never grants authority. */
+        entryReference?: string;
       };
     /** Native settlement owns committed data; the reply only acknowledges it. */
     output:
@@ -385,6 +388,8 @@ export type SessionActor = SessionActorLifetime &
     readonly storage?: SessionActorStorage;
     /** Read-only installed MAIN revision; copy before editing. Undefined means fenced/missing. Never dispatches a worker request. */
     snapshot(authority: SessionActorAuthority): SessionActorHotState | undefined;
+    /** Entry-only receipts retain the same lifetime and reconciliation fence as full snapshots. */
+    snapshotEntry(authority: SessionActorAuthority): SessionActorAuthorityFacts | undefined;
     read(authority: SessionActorAuthority): Promise<SessionActorHotState>;
     /** Drain retained attempts and accepted descendants; a teardown timeout is not settlement. */
     release(): Promise<void>;

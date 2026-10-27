@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { expectText as expectOutput } from "../test-utils/text-assertions.js";
 import {
   createNodesProgram,
   gatewayRequests,
@@ -23,15 +24,6 @@ const statusColumns = ["Detail", "Status", "Caps", "camera", "canvas"];
 
 describe("cli program (nodes basics)", () => {
   let program: Command;
-
-  function expectOutput(output: string, included: string[], excluded: string[] = []) {
-    for (const value of included) {
-      expect(output).toContain(value);
-    }
-    for (const value of excluded) {
-      expect(output).not.toContain(value);
-    }
-  }
 
   async function runNodes(command: string, ...args: string[]) {
     runtime.log.mockClear();

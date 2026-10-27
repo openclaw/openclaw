@@ -191,7 +191,7 @@ export function serializeCacheTtlToolResultProjections(state: CacheTtlProjection
     }
   }
   return {
-    prunedToolResults: [...marks].map(([key, mark]) => Object.assign({ key }, mark)),
+    prunedToolResults: Array.from(marks, ([key, mark]) => Object.assign({ key }, mark)),
     ambiguousToolResultBaseKeys: [...state.ambiguousBaseKeys],
     frozenToolResults: [...state.sourceHashByKey].flatMap(([key, sourceHash]) => {
       if (!state.frozen.has(key)) {

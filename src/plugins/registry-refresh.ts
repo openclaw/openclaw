@@ -9,7 +9,7 @@ import type { InstalledPluginIndexRefreshReason } from "./installed-plugin-index
 import { createPluginCache, getScopedPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   hasPluginLifecycleLease,
-  withPluginLifecycleLease,
+  withPluginLifecycleLeaseAsync,
   type PluginMetadataLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
@@ -135,7 +135,7 @@ export async function refreshPluginRegistryAfterConfigMutation(
     if (callerLease) {
       await refresh(callerLease);
     } else {
-      await withPluginLifecycleLease(params.env ? { env: params.env } : {}, refresh);
+      await withPluginLifecycleLeaseAsync(params.env ? { env: params.env } : {}, refresh);
     }
   } catch (error) {
     if (authorityRefusal) {

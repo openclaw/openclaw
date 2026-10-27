@@ -1,6 +1,6 @@
 import { wrapPromptDataBlock } from "openclaw/plugin-sdk/qa-runtime";
 import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { nestedToolActivityFixture } from "../test/nested-tool-activity-fixture.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { findSubagentHandoffReply } from "./subagent-handoff-reply.js";
@@ -22,7 +22,6 @@ function forRequester<Args extends unknown[], Result>(run: (...args: Args) => Re
 function messageEvent(id: string, parentId: string, message: unknown) {
   return { type: "message", id, parentId, message };
 }
-afterEach(() => vi.useRealTimers());
 
 async function runHandoff({
   fault,
@@ -173,19 +172,14 @@ it.each([
   ["waitForAgentHistory", "observes the child's result in the requester's reply"],
 ])("reports which observation expired at %s", async (wait, name) => {
   const details = "timed out after 360000ms";
-  vi.useFakeTimers();
-  // Let the preceding observations succeed, then expire only the selected wait.
-  const pending = runHandoff({
+  const result = await runHandoff({
     api: {
       runScenario: runQaSuiteScenarioSteps,
-      [wait]: () =>
-        new Promise<never>((_resolve, reject) => {
-          setTimeout(() => reject(new Error(details)), 360_000);
-        }),
+      [wait]: async () => {
+        throw new Error(details);
+      },
     },
   });
-  await vi.advanceTimersByTimeAsync(360_000);
-  const result = await pending;
   expect(result.status).toBe("fail");
   expect(result.steps.at(-1)).toMatchObject({ name, status: "fail", details });
 });

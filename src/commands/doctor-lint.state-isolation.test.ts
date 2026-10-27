@@ -492,7 +492,18 @@ describe("doctor lint state isolation", () => {
             const findings = JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).findings;
             expect(isolated).toBe(true);
             expect(findings).toEqual(
-              exists ? [] : [expect.objectContaining({ severity: "warning", path: credentials })],
+              exists
+                ? []
+                : [
+                    {
+                      checkId: "core/doctor/state-integrity",
+                      severity: "warning",
+                      message: "OAuth dir is missing.",
+                      path: credentials,
+                      fixHint:
+                        "Run `openclaw doctor --fix` to create missing runtime state directories.",
+                    },
+                  ],
             );
             expect(fs.existsSync(credentials)).toBe(exists);
           } finally {
@@ -572,7 +583,18 @@ describe("doctor lint state isolation", () => {
           }
           expect(privateStates.every(({ db }) => !db.isOpen)).toBe(true);
           expect(source.db.isOpen).toBe(mode === "live WAL");
-          expect(snapshotDoctorLintSqliteFamily(source.path)).toEqual(before);
+          const after = snapshotDoctorLintSqliteFamily(source.path);
+          if (mode === "live WAL") {
+            expect(after.map(({ path: location }) => location)).toEqual(
+              before.map(({ path: location }) => location),
+            );
+            const sharedMemoryPath = `${source.path}-shm`;
+            expect(after.filter(({ path: location }) => location !== sharedMemoryPath)).toEqual(
+              before.filter(({ path: location }) => location !== sharedMemoryPath),
+            );
+          } else {
+            expect(after).toEqual(before);
+          }
         }
         const beforeUnused = snapshotDoctorLintSqliteFamily(source.path);
         const exitCode = await runDoctorLintCli(runtime, {

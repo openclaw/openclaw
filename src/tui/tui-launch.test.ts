@@ -84,11 +84,6 @@ describe("launchTuiCli", () => {
     await launchTuiCli({ local: true, deliver: false, message, timeoutMs: 300_000 });
 
     expectSpawned([...cli, "--local", "--message", message, "--timeout-ms", "300000"]);
-  });
-
-  it("keeps parent stdin paused after the relaunched TUI exits", async () => {
-    await launchTuiCli({ deliver: false });
-
     expect(pauseSpy).toHaveBeenCalledOnce();
     expect(resumeSpy).not.toHaveBeenCalled();
   });

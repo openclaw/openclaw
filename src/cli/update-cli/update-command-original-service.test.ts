@@ -33,6 +33,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
@@ -244,10 +245,9 @@ beforeEach(async () => {
     await fs.mkdir(path.join(root!, "dist"), { recursive: true });
     await writePackage(root!, version!);
     await fs.writeFile(path.join(root!, "dist", "index.js"), "export {};\n");
-    await fs.writeFile(
-      path.join(root!, "dist", "build-info.json"),
-      JSON.stringify({ buildId: root === rootA ? "build-A" : "build-B" }),
-    );
+    await writeFixtureJson(path.join(root!, "dist", "build-info.json"), {
+      buildId: root === rootA ? "build-A" : "build-B",
+    });
   }
   // The selected runner must execute with its original dynamic-library search paths.
   if (process.platform === "win32") {
@@ -411,7 +411,7 @@ it.for([
       const packagePath = path.join(rootA, "package.json");
       const metadata = JSON.parse(await fs.readFile(packagePath, "utf8"));
       metadata.openclaw.schemaVersions.agent = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
-      await fs.writeFile(packagePath, JSON.stringify(metadata));
+      await writeFixtureJson(packagePath, metadata);
     }
     const configSnapshot = await readConfigFileSnapshot({ observe: false });
     let newerAgentBytes: Buffer | undefined;
@@ -635,10 +635,7 @@ it("refuses B ledger admission independently from compatible service A state", a
     OPENCLAW_STATE_DIR: parentDir,
     OPENCLAW_CONFIG_PATH: path.join(parentDir, "openclaw.json"),
   };
-  await fs.writeFile(
-    parentEnv.OPENCLAW_CONFIG_PATH,
-    JSON.stringify({ plugins: { enabled: false } }),
-  );
+  await writeFixtureJson(parentEnv.OPENCLAW_CONFIG_PATH, { plugins: { enabled: false } });
   const run: NonNullable<UpdateCommandOptions["run"]> = updateRun(parentEnv);
   await withOriginalRun(run, async (opts) => {
     const original = await observeOriginalManagedServiceRuntime({ root: rootB, opts }, before);
@@ -693,7 +690,7 @@ it.each([
   if (scenario === "missing-schema") {
     const metadata = JSON.parse(await fs.readFile(path.join(rootA, "package.json"), "utf8"));
     delete metadata.openclaw;
-    await fs.writeFile(path.join(rootA, "package.json"), JSON.stringify(metadata));
+    await writeFixtureJson(path.join(rootA, "package.json"), metadata);
   }
   if (scenario === "unverified-health") {
     mocks.inspect.mockResolvedValue({ healthy: false, runtime: { status: "running" } });

@@ -30,6 +30,7 @@ import {
 import { CommandLane } from "../../process/lanes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { evaluateTurnAdmission } from "../../sessions/session-controller.admission-rule.js";
+import { ReplyRunLifecycleAdmissionBlockedError } from "../../sessions/session-controller.contracts.js";
 import {
   createReplyOperation,
   hasCommittedReplyOperationOutcome,
@@ -144,9 +145,12 @@ export async function admitReplyTurn(
   }
   const assertDatabaseOwnerCurrent = (nextClaim?: SessionAdmissionDatabaseClaim) => {
     if (
-      admittedDatabaseClaim &&
-      (!admittedDatabaseClaim.isCurrent() ||
-        (nextClaim && nextClaim.incarnation !== admittedDatabaseClaim.incarnation))
+      (nextClaim &&
+        params.expectedDatabaseIncarnation !== undefined &&
+        nextClaim.incarnation !== params.expectedDatabaseIncarnation) ||
+      (admittedDatabaseClaim &&
+        (!admittedDatabaseClaim.isCurrent() ||
+          (nextClaim && nextClaim.incarnation !== admittedDatabaseClaim.incarnation)))
     ) {
       const release = nextClaim?.release();
       if (release) {
@@ -593,7 +597,12 @@ export async function admitReplyTurn(
           }
           admission?.release();
           scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
-          throw error;
+          throw error instanceof ReplyRunLifecycleAdmissionBlockedError
+            ? new ReplyRunLifecycleAdmissionBlockedError(
+                params.sessionKey,
+                admittedDatabaseClaim?.incarnation,
+              )
+            : error;
         }
         const databaseClaim = admittedDatabaseClaim;
         bindReplyAdmissionRelease({

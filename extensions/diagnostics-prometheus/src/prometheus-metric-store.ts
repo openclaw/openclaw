@@ -82,6 +82,7 @@ export function createPrometheusMetricStore(
   let sharedSeries = 0;
   const familyCounts = new Map<PrometheusMetricName, number>();
   const familyDrops = new Map<PrometheusMetricName, number>();
+  const headers = new Map<string, { type: string; help: string; bytes: Buffer }>();
   // Prefix views share only exporter-owned chunks, never unrelated Buffer-pool traffic.
   let prefixBuffer = Buffer.alloc(0);
   let prefixOffset = 0;
@@ -235,6 +236,7 @@ export function createPrometheusMetricStore(
   ) => scalar(gauges, name, help, labels, value, "set");
 
   const clearGauges = (name: PrometheusMetricName) => {
+    headers.delete(name);
     const previousLength = gauges.samples.length;
     gauges.shapes.delete(name);
     gauges.samples = gauges.samples.filter((sample) => sample.name !== name);
@@ -337,11 +339,25 @@ export function createPrometheusMetricStore(
       return output;
     };
     const emitted = new Set<string>();
+    let previousName: string | undefined;
     const header = (name: string, type: string, help: string) => {
+      if (previousName === name) {
+        return;
+      }
+      previousName = name;
       if (!emitted.has(name)) {
         emitted.add(name);
-        const text = Buffer.from(`# HELP ${name} ${escapeHelp(help)}\n# TYPE ${name} ${type}\n`);
-        append(text);
+        let cached = headers.get(name);
+        // The first sorted series owns the header; admission/removal can change that owner.
+        if (!cached || cached.type !== type || cached.help !== help) {
+          cached = {
+            type,
+            help,
+            bytes: encodePrefix(`# HELP ${name} ${escapeHelp(help)}\n# TYPE ${name} ${type}\n`),
+          };
+          headers.set(name, cached);
+        }
+        append(cached.bytes);
       }
     };
     for (const [type, map] of [
@@ -411,6 +427,7 @@ export function createPrometheusMetricStore(
     sharedSeries = 0;
     familyCounts.clear();
     familyDrops.clear();
+    headers.clear();
     scratch = Buffer.alloc(0);
     prefixBuffer = Buffer.alloc(0);
     prefixOffset = 0;

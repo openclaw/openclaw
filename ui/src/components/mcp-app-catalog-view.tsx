@@ -28,13 +28,6 @@ import { McpAppOperationError } from "./solid/mcp-app-operation-error.tsx";
 
 const DiscoveryStatus = lazy(() => import("./mcp-app-discovery-status.tsx"));
 
-type McpAppCatalogProps = {
-  sessionKey?: string;
-  agentId?: string;
-  surface?: "global" | "thread" | "sidebar" | "file";
-  filePath?: string;
-};
-
 function CatalogIcon(props: { server: McpAppDiscoveredServer; entry: McpAppDiscoveredEntrypoint }) {
   const icon = () =>
     [...(props.entry.icons ?? []), ...(props.server.icons ?? [])].find(
@@ -51,15 +44,15 @@ function CatalogIcon(props: { server: McpAppDiscoveredServer; entry: McpAppDisco
   );
 }
 
-export function McpAppCatalogView(
-  props: McpAppCatalogProps & {
-    host: () => HTMLElement;
-    catalog: ReturnType<typeof createMcpAppCatalog>;
-    visible: boolean;
-    rows: { server: McpAppDiscoveredServer; entry: McpAppDiscoveredEntrypoint }[];
-    entries: (server: McpAppDiscoveredServer) => McpAppDiscoveredEntrypoint[];
-  },
-) {
+export function McpAppCatalogView(props: {
+  surface?: "global" | "thread" | "sidebar" | "file";
+  filePath?: string;
+  host: () => HTMLElement;
+  catalog: ReturnType<typeof createMcpAppCatalog>;
+  visible: boolean;
+  rows: { server: McpAppDiscoveredServer; entry: McpAppDiscoveredEntrypoint }[];
+  entries: (server: McpAppDiscoveredServer) => McpAppDiscoveredEntrypoint[];
+}) {
   const surface = () => props.surface ?? "global";
   const context = useApplication();
   const [expanded, setExpanded] = createSignal(false);
@@ -74,19 +67,15 @@ export function McpAppCatalogView(
   onSettled(() => () => {
     active = false;
   });
-  const target = () => ({
-    sessionKey: props.sessionKey || context.gateway.snapshot.sessionKey || "",
-    agentId: props.agentId || context.agentSelection.state.selectedId || undefined,
-  });
   function captureOperation() {
     const client = context.gateway.snapshot.client;
-    const initialTarget = target();
+    const initialTarget = props.catalog.target();
     const scope = gatewayPresentationScope(context.gateway).key;
     return {
       client,
       selected: initialTarget,
       current: () => {
-        const destination = target();
+        const destination = props.catalog.target();
         return (
           active &&
           context.gateway.snapshot.client === client &&
@@ -132,7 +121,7 @@ export function McpAppCatalogView(
       });
     } else if (
       requestMcpAppOpen(props.host(), {
-        ...target(),
+        ...props.catalog.target(),
         owner: context.gateway.snapshot.client,
         serverName: server.serverName,
         entrypoint,

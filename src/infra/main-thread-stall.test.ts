@@ -15,6 +15,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+const emptyReport = { stalls: [], dropped: 0, unattributedDropped: 0, delayMaxMs: 0 };
+
 function fixture() {
   let now = 0;
   const monitor = createMainThreadStallMonitor(() => now);
@@ -23,6 +25,35 @@ function fixture() {
 }
 
 describe("main-thread stall attribution", () => {
+  it("copies the task context only on label changes and preserves nested timing segments", () => {
+    const { monitor, elapse } = fixture();
+    const enter = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
+    const copyOnReturn = vi.spyOn(AsyncLocalStorage.prototype, "run");
+    try {
+      runWithMainThreadTask("worker:control-decode", () => {
+        elapse(200);
+        runWithMainThreadTask("worker:control-decode", () => elapse(100));
+        elapse(200);
+      });
+      const entries = enter.mock.calls.slice();
+      expect(getMainThreadTaskName()).toBeUndefined();
+      expect(monitor.drain().stalls).toEqual([
+        {
+          elapsedMs: 500,
+          task: "worker:control-decode",
+          taskMs: 200,
+          startedAt: 0,
+          endedAt: 500,
+        },
+      ]);
+      expect(copyOnReturn).not.toHaveBeenCalled();
+      expect(entries).toEqual([["worker:control-decode"]]);
+    } finally {
+      copyOnReturn.mockRestore();
+      enter.mockRestore();
+    }
+  });
+
   it("does not retain the request context that enables heartbeat sampling", async () => {
     const request = new AsyncLocalStorage<string>();
     const observed: (string | undefined)[] = [];
@@ -118,12 +149,7 @@ describe("main-thread stall attribution", () => {
       dropped: 0,
       delayMaxMs: 1_220,
     });
-    expect(monitor.drain()).toEqual({
-      stalls: [],
-      dropped: 0,
-      unattributedDropped: 0,
-      delayMaxMs: 0,
-    });
+    expect(monitor.drain()).toEqual(emptyReport);
   });
 
   it("returns the original promise without observing its continuations", async () => {
@@ -134,12 +160,7 @@ describe("main-thread stall attribution", () => {
     elapse(5_000);
     ready.resolve();
     await operation;
-    expect(monitor.drain()).toEqual({
-      stalls: [],
-      dropped: 0,
-      unattributedDropped: 0,
-      delayMaxMs: 0,
-    });
+    expect(monitor.drain()).toEqual(emptyReport);
   });
 
   it("restores same-name phases after nested work throws", () => {
@@ -217,12 +238,7 @@ describe("main-thread stall attribution", () => {
       monitor.reset();
       elapse(20);
     });
-    expect(monitor.drain()).toEqual({
-      stalls: [],
-      dropped: 0,
-      unattributedDropped: 0,
-      delayMaxMs: 20,
-    });
+    expect(monitor.drain()).toEqual({ ...emptyReport, delayMaxMs: 20 });
   });
 
   it("bounds retained stalls and releases observation with the Gateway lifetime", () => {
@@ -235,11 +251,6 @@ describe("main-thread stall attribution", () => {
     expect(report.dropped).toBe(4);
     monitor.stop();
     runWithMainThreadTask("maintenance", () => elapse(1_001));
-    expect(monitor.drain()).toEqual({
-      stalls: [],
-      dropped: 0,
-      unattributedDropped: 0,
-      delayMaxMs: 0,
-    });
+    expect(monitor.drain()).toEqual(emptyReport);
   });
 });

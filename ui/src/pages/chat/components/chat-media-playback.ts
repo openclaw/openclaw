@@ -34,41 +34,6 @@ export function buildChatMediaFetchHeaders(authToken: string | null | undefined)
   return headers;
 }
 
-async function fetchPlaybackHead(params: {
-  source: string;
-  headers: Headers;
-  signal: AbortSignal;
-  timeoutMs: number;
-}): Promise<Response> {
-  const controller = new AbortController();
-  return await raceWithTimeout(
-    () =>
-      fetch(params.source, {
-        method: "HEAD",
-        headers: params.headers,
-        credentials: "same-origin",
-        signal: controller.signal,
-      }),
-    params.timeoutMs,
-    () => {
-      const error = new DOMException("playback readiness request timed out", "TimeoutError");
-      controller.abort(error);
-      throw error;
-    },
-    {
-      signal: params.signal,
-      onAbort: (signal) => {
-        const error =
-          signal.reason instanceof Error
-            ? signal.reason
-            : new DOMException("playback preparation aborted", "AbortError");
-        controller.abort(error);
-        throw error;
-      },
-    },
-  );
-}
-
 export async function waitForChatMediaPlayback(params: {
   source: string;
   authToken?: string | null;
@@ -87,12 +52,37 @@ export async function waitForChatMediaPlayback(params: {
       if (remainingMs <= 0) {
         return "unavailable";
       }
-      const response = await fetchPlaybackHead({
-        source: params.source,
-        headers,
-        signal: params.signal,
-        timeoutMs: Math.min(CHAT_MEDIA_PLAYBACK_REQUEST_TIMEOUT_MS, remainingMs),
-      });
+      const playbackSource = params.source;
+      const playbackHeaders = headers;
+      const playbackSignal = params.signal;
+      const playbackTimeoutMs = Math.min(CHAT_MEDIA_PLAYBACK_REQUEST_TIMEOUT_MS, remainingMs);
+      const controller = new AbortController();
+      const response = await raceWithTimeout(
+        () =>
+          fetch(playbackSource, {
+            method: "HEAD",
+            headers: playbackHeaders,
+            credentials: "same-origin",
+            signal: controller.signal,
+          }),
+        playbackTimeoutMs,
+        () => {
+          const error = new DOMException("playback readiness request timed out", "TimeoutError");
+          controller.abort(error);
+          throw error;
+        },
+        {
+          signal: playbackSignal,
+          onAbort: (signal) => {
+            const error =
+              signal.reason instanceof Error
+                ? signal.reason
+                : new DOMException("playback preparation aborted", "AbortError");
+            controller.abort(error);
+            throw error;
+          },
+        },
+      );
       if (response.status !== 202) {
         return response.ok ? "ready" : "unavailable";
       }

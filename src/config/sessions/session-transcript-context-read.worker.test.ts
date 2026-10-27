@@ -19,7 +19,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { upsertSessionEntryCore, withTranscriptWriteLock } from "./session-accessor.js";
 import type { SessionTranscriptRawDeltaResult } from "./session-accessor.sqlite-contract.js";
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
-import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
+import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
 import {
   readSessionTranscriptContextProjectionAsync,
   readSessionTranscriptModelContextAsync,

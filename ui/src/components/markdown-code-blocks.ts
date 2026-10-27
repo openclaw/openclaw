@@ -2,6 +2,7 @@ import { createSignal } from "solid-js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
 import { registerCodeBlocksEnglish } from "../i18n/locales/en-code-blocks.ts";
+import { CODE_PREVIEW_LINE_COUNT } from "./markdown-code-highlight-chunks.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
 import {
   parseMarkdownJson,
@@ -16,7 +17,6 @@ registerCodeBlocksEnglish();
 
 const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
 const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
-const CODE_PREVIEW_LINE_COUNT = 7;
 const CODE_STICKY_ACTIONS_LINE_THRESHOLD = 300;
 
 type Highlighter = typeof import("./markdown-highlight-runtime.ts").highlightCodeHtml;
@@ -202,20 +202,24 @@ export function renderMarkdownCodeBlock(
 ): string {
   const blockArt = options.blockArt || isMarkdownBlockArtText(text);
   const highlight = options.highlight;
+  // SAFETY: markdown-it supplies normalized internal renderer options.
+  const renderEnv = env as Partial<MarkdownRenderEnv> | undefined;
+  const interactive = renderEnv?.codeBlockInteraction === "interactive";
+  const { wrapperClass, hiddenLineCount, long } = markdownCodeBlockLayout(text, lang);
+  const deferredHighlight =
+    interactive && long && hiddenLineCount > 0 && highlight !== false && !blockArt;
   const highlighted =
-    blockArt || highlight === false ? escapeHtml(text) : highlightCodeHtml(text, lang);
+    blockArt || highlight === false || deferredHighlight
+      ? escapeHtml(text)
+      : highlightCodeHtml(text, lang);
   const codeClass = blockArt ? "markdown-block-art" : markdownCodeClass(lang, highlighted);
   const classAttr = codeClass ? ` class="${escapeHtml(codeClass)}"` : "";
-  const codeBlock = `<pre><code${classAttr}>${highlighted}</code></pre>`;
-  // SAFETY: markdown-it types renderer env as unknown; this internal renderer
-  // receives the normalized options object, or undefined from direct calls.
-  const renderEnv = env as Partial<MarkdownRenderEnv> | undefined;
+  const deferredAttr = deferredHighlight ? ` data-code-highlight="${escapeHtml(lang)}"` : "";
+  const codeBlock = `<pre><code${classAttr}${deferredAttr}>${highlighted}</code></pre>`;
   const copyEnabled = renderEnv?.codeBlockChrome !== "none";
-  const interactive = renderEnv?.codeBlockInteraction === "interactive";
   if (!copyEnabled && !interactive) {
     return codeBlock;
   }
-  const { wrapperClass, hiddenLineCount } = markdownCodeBlockLayout(text, lang);
   const copyButton = copyEnabled ? renderCodeBlockCopyButton(options.copyText ?? text) : "";
   // Reveal and wrap controls are inert without a host that runs the code-block
   // lifecycle, so only interaction-owning hosts get the collapsible markup.
@@ -251,6 +255,7 @@ export function renderMarkdownCodeBlock(
 export function markdownCodeBlockLayout(text: string, lang: string) {
   const lineCount = countCodeBlockLines(text);
   return {
+    long: lineCount > CODE_STICKY_ACTIONS_LINE_THRESHOLD,
     wrapperClass: `code-block-wrapper${lineCount > CODE_STICKY_ACTIONS_LINE_THRESHOLD ? " code-block-wrapper--long" : ""}`,
     hiddenLineCount: ["text", "md", "markdown"].includes(lang.trim().toLowerCase())
       ? 0

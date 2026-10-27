@@ -15,6 +15,7 @@ import {
   isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "../chat-assistant-reply.ts";
+import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import { readPendingSendStatus } from "../chat-thread-items.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
@@ -198,15 +199,23 @@ export function prepareMessageGroupFrame(
   const hasUserFooterActions =
     normalizedRole === "user" &&
     ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
-  // Source sessions share the stable sender hue machinery; CSS owns contrast
-  // in each theme. Unattributed local messages keep the accent skin.
+  // Source sessions share stable sender hues; the shared participant palette owns contrast
+  // in each theme. Own and unattributed messages keep the theme-derived accent skin.
   const senderHue =
     isForwarded && sourceSessionKey
       ? resolveIdentityHue({ id: sourceSessionKey })
-      : normalizedRole === "user" && group.sender
+      : normalizedRole === "user" && group.sender && !isOwnGroup
         ? resolveIdentityHue(group.sender)
         : null;
-  const sendStatus = readPendingSendStatus(group.messages.at(-1)?.message);
+  const pendingSend = readPendingSendStatus(group.messages.at(-1)?.message);
+  // Normal delivery uses the settled footer; only recovery needs an interruption.
+  const sendStatus =
+    pendingSend &&
+    (pendingSend.state === "failed" ||
+      pendingSend.state === "held" ||
+      isChatSendReconnecting(pendingSend.state, opts.connected))
+      ? pendingSend
+      : null;
 
   const inlineUserAvatar =
     normalizedRole === "user" &&
@@ -257,7 +266,7 @@ export function prepareMessageGroupFrame(
         "chat-group--reply": holdsReplyRow,
       },
     ],
-    style: senderHue === null ? undefined : `--chat-sender-hue: ${senderHue}`,
+    senderHue,
     sessionKey: sourceSessionKey ?? undefined,
   };
 }

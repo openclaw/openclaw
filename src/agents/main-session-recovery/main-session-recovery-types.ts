@@ -1,10 +1,6 @@
 import type { MainRestartRecoveryState } from "../../config/sessions/main-session-recovery.types.js";
 import type { RestartRecoveryRun } from "../../config/sessions/types.js";
 
-type MainSessionRecoveryExecutionIdentity = NonNullable<
-  MainRestartRecoveryState["executionIdentity"]
->;
-
 export type MainSessionRecoveryObservation = {
   sessionId: string;
   cycleId: string;
@@ -95,7 +91,7 @@ export type MainSessionRecoveryCommand =
     }
   | ({
       kind: "bind_admitted_execution_identity";
-      token: MainSessionRecoveryExecutionIdentity;
+      token: NonNullable<MainRestartRecoveryState["executionIdentity"]>;
     } & AdmittedRecoveryAttempt)
   | ({ kind: "register_recovery_turn" } & AdmittedRecoveryAttempt)
   | {

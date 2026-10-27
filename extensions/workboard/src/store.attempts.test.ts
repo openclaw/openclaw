@@ -5,6 +5,13 @@ import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
 type Store = ReturnType<typeof createWorkboardSqliteTestStore>;
 type Prepared = Awaited<ReturnType<Store["prepareExecutionLaunch"]>>;
+function prepare(store: Store, claim: Awaited<ReturnType<Store["claim"]>>) {
+  return store.prepareExecutionLaunch(claim.card.id, {
+    requestedSessionKey: "subagent:workboard-default-requeue",
+    now: claim.card.updatedAt + 1,
+    scope: { ownerId: "workboard-dispatcher", token: claim.token },
+  });
+}
 function sync(store: Store, card: WorkboardCard, now = card.updatedAt + 1, done = false) {
   return store.syncLifecycle(card.id, {
     targetStatus: "review",
@@ -42,11 +49,7 @@ async function createBlockedManagedCard() {
   const store = createWorkboardSqliteTestStore();
   const card = await store.create({ title: "Retry unfinished work", status: "ready" });
   const claim = await store.claim(card.id, { ownerId: "workboard-dispatcher" });
-  const prepared = await store.prepareExecutionLaunch(card.id, {
-    requestedSessionKey: "subagent:workboard-default-requeue",
-    now: claim.card.updatedAt + 1,
-    scope: { ownerId: "workboard-dispatcher", token: claim.token },
-  });
+  const prepared = await prepare(store, claim);
   const sessionKey = "agent:main:subagent:workboard-default-requeue";
   const runId = "old-run";
   await accept(store, prepared, sessionKey, runId);
@@ -55,7 +58,7 @@ async function createBlockedManagedCard() {
     token: claim.token,
     reason: "Work remains unfinished.",
   });
-  return { store, blocked, prepared, sessionKey, runId };
+  return { store, blocked, sessionKey, runId };
 }
 
 it.each([undefined, "shared-run"])(
@@ -85,7 +88,8 @@ it.each([undefined, "shared-run"])(
   },
 );
 it("keeps a released managed attempt blocked after its card is requeued", async () => {
-  const { store, blocked: card, prepared, sessionKey, runId } = await createBlockedManagedCard();
+  const { store, blocked: card, sessionKey, runId } = await createBlockedManagedCard();
+  const blockedAttempt = { status: "blocked", runId, error: "Work remains unfinished." };
   await store.unblock(card.id);
   const requeued = await store.promote(card.id);
 
@@ -98,19 +102,12 @@ it("keeps a released managed attempt blocked after its card is requeued", async 
   await expect(store.get(card.id)).resolves.toMatchObject({
     status: "ready",
     execution: { status: "blocked", runId },
-    metadata: {
-      failureCount: 1,
-      attempts: [{ status: "blocked", runId, error: "Work remains unfinished." }],
-    },
+    metadata: { failureCount: 1, attempts: [blockedAttempt] },
   });
   expect(card.metadata?.claim).toBeUndefined();
   const retryClaim = await store.claim(card.id, { ownerId: "workboard-dispatcher" });
   expect(retryClaim.card.status).toBe("running");
-  const retry = await store.prepareExecutionLaunch(card.id, {
-    requestedSessionKey: prepared.launch.requestedSessionKey,
-    now: retryClaim.card.updatedAt + 1,
-    scope: { ownerId: "workboard-dispatcher", token: retryClaim.token },
-  });
+  const retry = await prepare(store, retryClaim);
   // A pending retry still carries a provisional run ID; the old hook must not adopt it.
   await expect(end(store, sessionKey, runId, retry.card.updatedAt + 1)).resolves.toBe(0);
   await expect(store.get(card.id)).resolves.toEqual(retry.card);
@@ -121,10 +118,7 @@ it("keeps a released managed attempt blocked after its card is requeued", async 
   await expect(store.get(card.id)).resolves.toMatchObject({
     status: "review",
     metadata: {
-      attempts: [
-        { status: "blocked", runId, error: "Work remains unfinished." },
-        { status: "succeeded", runId: "retry-run" },
-      ],
+      attempts: [blockedAttempt, { status: "succeeded", runId: "retry-run" }],
     },
   });
 });

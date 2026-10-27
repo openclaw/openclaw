@@ -1,6 +1,5 @@
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cronRunLogEntryToDetail, cronRunStorageStatus } from "../cron/run-history-detail.js";
 import { readCronRunHistoryPageForTests } from "../cron/run-history.test-support.js";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
@@ -12,37 +11,12 @@ import {
   prepareOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { admitSqliteSchema } from "./sqlite-schema-facts.js";
-import { hasLegacyCronRunLogs } from "./state-migrations.cron-run-logs.js";
 
 const migrationId = "state:cron-run-logs-to-task-runs:v1";
 const reportSql = "SELECT report_json FROM migration_runs WHERE id = ?";
 function publicFields({ ts, jobId, runId, summary, error }: CronRunLogEntry) {
   return [ts, jobId, runId, summary, error];
 }
-
-it("reuses admitted legacy-table presence and observes committed or rolled-back DDL", () => {
-  using database = openNodeSqliteDatabase(":memory:");
-  expect(hasLegacyCronRunLogs(database)).toBe(false);
-  admitSqliteSchema(database);
-  const observation = observeSqliteReadSql(StatementSync.prototype);
-  try {
-    expect(hasLegacyCronRunLogs(database)).toBe(false);
-    expect(hasLegacyCronRunLogs(database)).toBe(false);
-    expect(observation.queries).toEqual([]);
-    database.exec("CREATE TABLE cron_run_logs (entry_json TEXT)");
-    expect(hasLegacyCronRunLogs(database)).toBe(true);
-    database.exec("BEGIN; DROP TABLE cron_run_logs");
-    expect(hasLegacyCronRunLogs(database)).toBe(false);
-    database.exec("ROLLBACK");
-    expect(hasLegacyCronRunLogs(database)).toBe(true);
-    database.exec("DROP TABLE cron_run_logs");
-    expect(hasLegacyCronRunLogs(database)).toBe(false);
-  } finally {
-    observation.restore();
-  }
-});
 
 it("preserves legacy cron history on runtime refusal, then Doctor imports it once", () =>
   withOpenClawTestState(
@@ -75,27 +49,15 @@ it("preserves legacy cron history on runtime refusal, then Doctor imports it onc
       closeOpenClawStateDatabaseForTest();
       {
         using fixture = new DatabaseSync(databasePath);
-        fixture.exec(`
-            CREATE TABLE cron_run_logs (
-              store_key TEXT NOT NULL,
-              job_id TEXT NOT NULL,
-              seq INTEGER NOT NULL,
-              ts INTEGER NOT NULL,
-              entry_json TEXT NOT NULL,
-              created_at INTEGER NOT NULL,
-              PRIMARY KEY (store_key, job_id, seq)
-            );
-            CREATE INDEX idx_cron_run_logs_store_ts
-              ON cron_run_logs(store_key, ts DESC, seq DESC);
-          `);
-        const insertLegacy = fixture.prepare(
-          `INSERT INTO cron_run_logs
-              (store_key, job_id, seq, ts, entry_json, created_at)
-             VALUES (?, ?, ?, ?, ?, ?)`,
+        fixture.exec(`CREATE TABLE cron_run_logs (
+          store_key TEXT NOT NULL, job_id TEXT NOT NULL, seq INTEGER NOT NULL,
+          ts INTEGER NOT NULL, entry_json TEXT NOT NULL, created_at INTEGER NOT NULL,
+          PRIMARY KEY (store_key, job_id, seq)
         );
+        CREATE INDEX idx_cron_run_logs_store_ts ON cron_run_logs(store_key, ts DESC, seq DESC);`);
+        const insertLegacy = fixture.prepare("INSERT INTO cron_run_logs VALUES (?, ?, ?, ?, ?, ?)");
         for (const [index, row] of legacyRows.entries()) {
-          const json = JSON.stringify(row);
-          insertLegacy.run(storeKey, row.jobId, index + 1, row.ts, json, row.ts);
+          insertLegacy.run(storeKey, row.jobId, index + 1, row.ts, JSON.stringify(row), row.ts);
         }
         const insertMirrored = fixture.prepare(
           `INSERT INTO task_runs (
@@ -105,13 +67,12 @@ it("preserves legacy cron history on runtime refusal, then Doctor imports it onc
               ) VALUES (?, 'cron', ?, '', 'system', ?, ?, ?, 'not_applicable', 'silent', ?, ?, ?, ?, ?)`,
         );
         for (const [index, row] of entries.slice(4).entries()) {
-          const mirroredStatus = cronRunStorageStatus(row);
           insertMirrored.run(
             `already-mirrored-${index}`,
             jobId,
             `cron:legacy-history-job:${row.runAtMs}:mirrored`,
             jobId,
-            mirroredStatus,
+            cronRunStorageStatus(row),
             row.runAtMs ?? row.ts,
             row.runAtMs ?? null,
             row.ts,

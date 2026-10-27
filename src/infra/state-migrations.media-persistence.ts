@@ -58,6 +58,7 @@ import {
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { formatSchemaMigrationFailure, SCHEMA_RECOVERY } from "./schema-migration-diagnostics.js";
 import {
   backupDoctorSqliteRepair,
   repairDoctorSqliteIndexCorruption,
@@ -642,17 +643,16 @@ export async function migrateLegacyMediaPersistence(
         if (inspectionSignal?.aborted && error === inspectionSignal.reason) {
           throw error;
         }
-        // An unverified database may own files in this directory. Never fall
-        // back to file-only repair after its canonical archive repair refuses.
+        // An unverified database may own archive files; never fall back to file-only repair.
         refusedArchiveDirectories.add(
           resolveSqliteTranscriptArchiveDirectory({ agentId: entry.agentId, path: pathname }),
         );
-        warnings.push(`Skipped agent database migration for ${pathname}: ${String(error)}`);
+        warnings.push(
+          formatSchemaMigrationFailure("Skipped agent database migration", pathname, error),
+        );
         recoverableWarningCount += Number(error instanceof Utf8InputError);
         const repairHint = formatAgentDatabaseCorruptionRepairHint(entry.agentId, error);
-        if (repairHint) {
-          notices.push(repairHint);
-        }
+        notices.push(repairHint ?? SCHEMA_RECOVERY);
       }
     }
 

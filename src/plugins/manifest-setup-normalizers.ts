@@ -124,51 +124,6 @@ export function normalizeManifestCliCommands(
   );
 }
 
-function normalizeManifestSetupProviders(
-  value: unknown,
-): PluginManifestSetupProvider[] | undefined {
-  return normalizeManifestObjectList(value, (entry) => {
-    const id = normalizeOptionalString(entry.id) ?? "";
-    if (!id) {
-      return undefined;
-    }
-    return omitUndefinedFields({
-      id,
-      authMethods: normalizeOptionalTrimmedStringList(entry.authMethods),
-      envVars: normalizeOptionalTrimmedStringList(entry.envVars),
-      authEvidence: normalizeManifestSetupProviderAuthEvidence(entry.authEvidence),
-    });
-  });
-}
-
-function normalizeManifestSetupProviderAuthEvidence(
-  value: unknown,
-): PluginManifestSetupProviderAuthEvidence[] | undefined {
-  return normalizeManifestObjectList(value, (entry) => {
-    if (entry.type !== "local-file-with-env") {
-      return undefined;
-    }
-    const credentialMarker = normalizeOptionalString(entry.credentialMarker);
-    if (!credentialMarker) {
-      return undefined;
-    }
-    const fileEnvVar = normalizeOptionalString(entry.fileEnvVar);
-    const fallbackPaths = normalizeOptionalTrimmedStringList(entry.fallbackPaths);
-    if (!fileEnvVar && !fallbackPaths) {
-      return undefined;
-    }
-    return omitUndefinedFields<PluginManifestSetupProviderAuthEvidence>({
-      type: "local-file-with-env",
-      fileEnvVar,
-      fallbackPaths,
-      requiresAnyEnv: normalizeOptionalTrimmedStringList(entry.requiresAnyEnv),
-      requiresAllEnv: normalizeOptionalTrimmedStringList(entry.requiresAllEnv),
-      credentialMarker,
-      source: normalizeOptionalString(entry.source),
-    });
-  });
-}
-
 export function normalizeManifestSetup(value: unknown): PluginManifestSetup | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -183,7 +138,46 @@ export function normalizeManifestSetup(value: unknown): PluginManifestSetup | un
       })
     : undefined;
   return optionalManifestFields({
-    providers: normalizeManifestSetupProviders(value.providers),
+    providers: normalizeManifestObjectList<PluginManifestSetupProvider>(
+      value.providers,
+      (entry) => {
+        const id = normalizeOptionalString(entry.id) ?? "";
+        if (!id) {
+          return undefined;
+        }
+        return omitUndefinedFields({
+          id,
+          authMethods: normalizeOptionalTrimmedStringList(entry.authMethods),
+          envVars: normalizeOptionalTrimmedStringList(entry.envVars),
+          authEvidence: normalizeManifestObjectList<PluginManifestSetupProviderAuthEvidence>(
+            entry.authEvidence,
+            (rawEvidence) => {
+              if (rawEvidence.type !== "local-file-with-env") {
+                return undefined;
+              }
+              const credentialMarker = normalizeOptionalString(rawEvidence.credentialMarker);
+              if (!credentialMarker) {
+                return undefined;
+              }
+              const fileEnvVar = normalizeOptionalString(rawEvidence.fileEnvVar);
+              const fallbackPaths = normalizeOptionalTrimmedStringList(rawEvidence.fallbackPaths);
+              if (!fileEnvVar && !fallbackPaths) {
+                return undefined;
+              }
+              return omitUndefinedFields<PluginManifestSetupProviderAuthEvidence>({
+                type: "local-file-with-env",
+                fileEnvVar,
+                fallbackPaths,
+                requiresAnyEnv: normalizeOptionalTrimmedStringList(rawEvidence.requiresAnyEnv),
+                requiresAllEnv: normalizeOptionalTrimmedStringList(rawEvidence.requiresAllEnv),
+                credentialMarker,
+                source: normalizeOptionalString(rawEvidence.source),
+              });
+            },
+          ),
+        });
+      },
+    ),
     cliBackends: normalizeOptionalTrimmedStringList(value.cliBackends),
     configMigrations: normalizeOptionalTrimmedStringList(value.configMigrations),
     nativeSessionCatalog: nativeSessionCatalog?.label ? nativeSessionCatalog : undefined,

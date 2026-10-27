@@ -61,7 +61,7 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
             runId,
             runSessionKey: sessionKey,
             toolsAllow: resolveCronRunToolsAllow(automation.job),
-            operatorAuthorityRestored: params.followupRun.operatorAuthority !== undefined,
+            operatorAuthority: params.followupRun.operatorAuthority,
           }),
           admissionSource: automation.admissionSource,
           assertSourceCurrent,

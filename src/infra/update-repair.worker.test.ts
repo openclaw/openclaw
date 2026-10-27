@@ -6,8 +6,7 @@ import { updateRepairWorkerMessageSchema as releasedUpdateRepairWorkerMessageSch
 import type { UpdateRepairWorkerMessage } from "./update-repair-protocol.js";
 
 const runtime = vi.hoisted(() => ({ run: vi.fn(), close: vi.fn(async () => {}) }));
-// Controllable parent-message parser: pass-through by default; the malformed-input
-// case swaps in the real schema to exercise a genuine multi-field parse error.
+// Malformed-input coverage switches from the controlled turn fixture to the real parser.
 const schemaParse = vi.hoisted(() => ({ parse: (value: unknown) => value as unknown }));
 // mock-isolation: The fake child must not acquire the host CLI scope, plugin resource owners, or process-lifetime job.
 vi.mock("../cli/runtime-cleanup-scope.js", () => ({
@@ -23,8 +22,6 @@ vi.mock("./update-repair-turn-worker.js", () => ({ runDelegatedUpdateRepairTurn:
 vi.mock("./update-repair-protocol.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-repair-protocol.js")>()),
   UPDATE_REPAIR_IPC_MAX_BYTES: 65536,
-  // Delegate to the controllable parser so the malformed-input case can swap in
-  // the real schema at call time (a snapshot would freeze the pass-through).
   updateRepairParentMessageSchema: { parse: (value: unknown) => schemaParse.parse(value) },
 }));
 afterEach(() => {
@@ -33,10 +30,15 @@ afterEach(() => {
   schemaParse.parse = (value: unknown) => value as unknown;
 });
 
-const findStopped = (messages: UpdateRepairWorkerMessage[]) =>
-  messages.flatMap((message) =>
-    message.type === "event" && message.event.type === "stopped" ? [message.event] : [],
-  )[0];
+function expectFailure(sent: UpdateRepairWorkerMessage[]) {
+  const stopped = sent.find((m) => m.type === "event" && m.event.type === "stopped");
+  const result = sent.find((m) => m.type === "result")?.result;
+  expect(stopped).toMatchObject({
+    event: { type: "stopped", status: "aborted", reason: result?.reason },
+  });
+  expect(result?.status).toBe("aborted");
+  return result;
+}
 
 async function startChild() {
   vi.resetModules();
@@ -112,10 +114,7 @@ it("emits a stopped event and result message when the delegated turn fails", asy
   const { child, events, closed, sent } = await startChild();
   events.emit("message", { type: "turn" });
   await closed.promise;
-  const stopped = findStopped(sent);
-  const result = sent.find((m) => m.type === "result");
-  expect(stopped).toMatchObject({ status: "aborted", reason: "turn exploded" });
-  expect(result?.result).toMatchObject({ status: "aborted", reason: "turn exploded" });
+  expect(expectFailure(sent)).toMatchObject({ reason: "turn exploded" });
   expect(child.exitCode).toBe(1);
   expect(child.exit).not.toHaveBeenCalled();
 });
@@ -125,8 +124,7 @@ it("bounds parse-error reasons and emits responses the released parser accepts",
     "./update-repair-protocol.js",
   );
   schemaParse.parse = (value: unknown) => realProtocol.updateRepairParentMessageSchema.parse(value);
-  // Multi-field malformed "turn" (every required field wrong) produces a Zod error
-  // whose message exceeds the protocol's 1024-char text cap.
+  // A multi-field Zod error exceeds the released protocol's text cap.
   const malformed = {
     type: "turn",
     runId: 123,
@@ -137,23 +135,15 @@ it("bounds parse-error reasons and emits responses the released parser accepts",
     timeoutMs: "y",
     maxToolCalls: "z",
   };
-  let rawLength = 0;
-  try {
-    realProtocol.updateRepairParentMessageSchema.parse(malformed);
-  } catch (error) {
-    rawLength = (error as Error).message.length;
-  }
-  expect(rawLength).toBeGreaterThan(1024);
+  const parsed = realProtocol.updateRepairParentMessageSchema.safeParse(malformed);
+  expect(parsed.error?.message.length).toBeGreaterThan(1024);
 
   const { child, events, closed, sent } = await startChild();
   events.emit("message", malformed);
   await closed.promise;
-  const stopped = findStopped(sent);
-  const result = sent.find((m) => m.type === "result");
-  expect(stopped?.status).toBe("aborted");
-  expect(result?.result.status).toBe("aborted");
-  expect(result?.result.reason?.length ?? 0).toBeLessThanOrEqual(1024);
-  expect(result?.result.finalValidation.summary.length).toBeLessThanOrEqual(1024);
+  const result = expectFailure(sent);
+  expect(result?.reason?.length ?? 0).toBeLessThanOrEqual(1024);
+  expect(result?.finalValidation.summary.length).toBeLessThanOrEqual(1024);
   // The frozen v2026.9.4 released parser must accept every emitted message.
   for (const message of sent) {
     expect(releasedUpdateRepairWorkerMessageSchema.safeParse(message).success).toBe(true);

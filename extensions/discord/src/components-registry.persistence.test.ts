@@ -74,11 +74,14 @@ function store<T extends { id: string }>() {
   } satisfies DiscordRegistryStore<T>;
 }
 
+function persistentStores() {
+  const components = (registry.persistentComponentStore = store<DiscordComponentEntry>());
+  const modals = (registry.persistentModalStore = store<DiscordModalEntry>());
+  return { components, modals };
+}
+
 it("waits for both component and modal registration before completing", async () => {
-  const components = store<DiscordComponentEntry>();
-  const modals = store<DiscordModalEntry>();
-  registry.persistentComponentStore = components;
-  registry.persistentModalStore = modals;
+  const { components, modals } = persistentStores();
   const componentDone = gate();
   const modalDone = gate();
   vi.spyOn(components, "register").mockImplementation(componentDone.wait);
@@ -161,10 +164,7 @@ it("awaits modal deletion and keeps in-memory fallback when persistence rejects"
 });
 
 it("captures registration entries and message id before waiting for earlier persistence", async () => {
-  const components = store<DiscordComponentEntry>();
-  const modals = store<DiscordModalEntry>();
-  registry.persistentComponentStore = components;
-  registry.persistentModalStore = modals;
+  const { components, modals } = persistentStores();
   const release = gate();
   vi.spyOn(components, "register").mockImplementationOnce(release.wait);
   const earlier = register([button("earlier")]);
@@ -184,14 +184,13 @@ it("captures registration entries and message id before waiting for earlier pers
     await Promise.all([earlier, queued]);
     const expectedButton = { label: "Captured", messageId: "captured-message" };
     const expectedModal = { title: "Captured modal", messageId: "captured-message" };
-    expect(await resolveComponent({ id: "captured", consume: false })).toMatchObject(
-      expectedButton,
-    );
-    expect(await components.lookup("captured")).toMatchObject({ entry: expectedButton });
-    expect(await resolveModal({ id: "captured-modal", consume: false })).toMatchObject(
-      expectedModal,
-    );
-    expect(await modals.lookup("captured-modal")).toMatchObject({ entry: expectedModal });
+    for (const [id, resolve, persisted, expected] of [
+      ["captured", resolveComponent, components, expectedButton],
+      ["captured-modal", resolveModal, modals, expectedModal],
+    ] as const) {
+      expect(await resolve({ id, consume: false })).toMatchObject(expected);
+      expect(await persisted.lookup(id)).toMatchObject({ entry: expected });
+    }
     expect(await resolveComponent({ id: "late", consume: false })).toBeNull();
   } finally {
     release.resolve();

@@ -16,6 +16,8 @@ Inspector and export command for durable meeting transcripts.
 [Slack huddles](/plugins/slack-huddles), and [Zoom](/plugins/zoom-meetings)
 browser participants capture notes automatically;
 the `transcripts` agent tool also supports provider capture and manual import.
+Automatic meeting capture continues after the joining CLI disconnects. It stops
+when OpenClaw leaves the meeting or its owning plugin stops or reloads.
 
 Stored transcript state lives in the shared SQLite database at
 `$OPENCLAW_STATE_DIR/state/openclaw.sqlite`. `show` and `path` explicitly

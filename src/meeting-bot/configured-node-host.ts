@@ -11,19 +11,16 @@ import {
   type MeetingNodeHostOptions,
 } from "./node-host.js";
 
-type MeetingConfiguredNodeHostOptions = Omit<
-  MeetingNodeHostOptions,
-  "assertAudioAvailable" | "prepareAudio"
-> & {
-  meetingLabel: string;
-  sharePrerequisiteDeadline: boolean;
-};
-
 function isSpawnSyncTimeout(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ETIMEDOUT";
 }
 
-export function createMeetingConfiguredNodeHost(options: MeetingConfiguredNodeHostOptions) {
+export function createMeetingConfiguredNodeHost(
+  options: Omit<MeetingNodeHostOptions, "assertAudioAvailable" | "prepareAudio"> & {
+    meetingLabel: string;
+    sharePrerequisiteDeadline: boolean;
+  },
+) {
   const runCommand = (argv: string[], timeoutMs: number): MeetingAudioCommandResult => {
     const [command, ...args] = argv;
     if (!command) {

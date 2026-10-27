@@ -15,7 +15,7 @@ import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-loc
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import "../llm/ai-transport-host.js";
+import "../agents/ai-transport-runtime-host.js"; // Initialize before spies; lazy setup copies the host.
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -349,9 +349,12 @@ it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
 
 it.each([
   ["configured key", undefined],
-  ["unadopted stored account", "Automation has no recorded inference account"],
-  ["replacement", "inference account was replaced"],
-  ["revocation", "was removed or signed out"],
+  [
+    "unadopted stored account",
+    "Automation has no recorded inference account. Runtime openclaw would run openai/gpt-4.1 with stored account openai:platform. Record the account with openclaw automations edit <jobId> --model openai/gpt-4.1@openai:platform, or with openclaw doctor --fix.",
+  ],
+  ["replacement", "inference account openai:platform on runtime openclaw was replaced"],
+  ["revocation", "account openai:platform on runtime openclaw was removed or signed out"],
 ] as const)("enforces %s before provider HTTP through the real runner", async (kind, error) => {
   await withAuthState("cron-legacy-account", async (state) => {
     const openaiUrl = "https://api.openai.com/v1";

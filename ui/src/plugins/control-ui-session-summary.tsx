@@ -40,7 +40,6 @@ import type {
   ChatHistoryResult,
 } from "../pages/chat/chat-history-snapshot.ts";
 import { ChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
-import "../styles/chat/progress-card.css";
 import "../styles/sidebar-markdown.css";
 import "../styles/plugin-session-summary.css";
 

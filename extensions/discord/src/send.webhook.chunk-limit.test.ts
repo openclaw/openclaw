@@ -4,13 +4,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { maybeSendBindingMessage } from "./monitor/thread-bindings.discord-api.js";
 import type { ThreadBindingRecord } from "./monitor/thread-bindings.types.js";
-import { discordOutbound } from "./outbound-adapter.js";
 import {
   createDiscordOutboundHoisted,
   installDiscordOutboundModuleSpies,
   mockDiscordBoundThreadManager,
   resetDiscordOutboundMocks,
 } from "./outbound-adapter.test-harness.js";
+import { discordOutbound } from "./outbound-payload.js";
 import { sendWebhookMessageDiscord } from "./send.webhook.js";
 
 const realWebhookSend = sendWebhookMessageDiscord;

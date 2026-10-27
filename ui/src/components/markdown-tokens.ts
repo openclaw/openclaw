@@ -75,8 +75,15 @@ export function renderMarkdownTokens(
 
   function codeBlock(token: Token, open: boolean): HTMLElement {
     const lang = token.type === "fence" ? token.info.trim().split(/\s+/)[0] || "" : "";
-    const highlighted = open ? null : highlightCodeHtml(token.content, lang);
-    const code = element("code");
+    const interactive = env.codeBlockInteraction === "interactive";
+    const {
+      wrapperClass,
+      hiddenLineCount: hidden,
+      long,
+    } = markdownCodeBlockLayout(token.content, lang);
+    const deferredHighlight = interactive && long && hidden > 0 && !open;
+    const highlighted = open || deferredHighlight ? null : highlightCodeHtml(token.content, lang);
+    const code = element("code", deferredHighlight ? { "data-code-highlight": lang } : {});
     const className = markdownCodeClass(lang, highlighted ?? "");
     if (className && attributePolicy.isValidAttribute("code", "class", className)) {
       code.className = className;
@@ -96,8 +103,6 @@ export function renderMarkdownTokens(
     if (env.codeBlockChrome === "none" && env.codeBlockInteraction === "static") {
       return pre;
     }
-    const interactive = env.codeBlockInteraction === "interactive";
-    const { wrapperClass, hiddenLineCount: hidden } = markdownCodeBlockLayout(token.content, lang);
     const wrapper = element("div", {
       class: `${wrapperClass}${interactive && hidden ? " is-collapsible" : ""}`,
     });

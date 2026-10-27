@@ -106,6 +106,124 @@ describe("typed no-send retryability", () => {
 });
 
 describe("shared durable delivery recovery coordinator", () => {
+  it("recovers independent domains while keeping each domain's attempts sequential", async () => {
+    vi.useFakeTimers();
+    const coordinator = createDeliveryRecoveryCoordinator<RecoveryTestEntry>({
+      maxConcurrentLanes: 2,
+    });
+    const entries = [createEntry("a-first", 1), createEntry("a-next", 2), createEntry("b", 3)];
+    const started: string[] = [];
+    const scan = coordinator.scan({
+      entries,
+      laneKey: (entry) => entry.id.slice(0, 1),
+      loadEntry: async (id) => entries.find((entry) => entry.id === id) ?? null,
+      onEntry: async (entry) => {
+        started.push(entry.id);
+        if (entry.id === "a-first") {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 1_000);
+          });
+        }
+      },
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect([...started]).toEqual(["a-first", "b"]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await scan;
+      expect(started).toEqual(["a-first", "b", "a-next"]);
+    } finally {
+      await vi.runAllTimersAsync();
+      await scan;
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares lane ownership and capacity across competing scans without consuming busy work", async () => {
+    vi.useFakeTimers();
+    const coordinator = createDeliveryRecoveryCoordinator<RecoveryTestEntry>({
+      maxConcurrentLanes: 2,
+    });
+    const entries = [createEntry("a", 1), createEntry("b", 2), createEntry("c", 3)];
+    const started: string[] = [];
+    const scanOptions = {
+      laneKey: (entry: RecoveryTestEntry) => entry.id,
+      loadEntry: async (id: string) => entries.find((entry) => entry.id === id) ?? null,
+      onEntry: async (entry: RecoveryTestEntry) => {
+        started.push(entry.id);
+        await new Promise((resolve) => {
+          setTimeout(resolve, 1_000);
+        });
+      },
+    };
+    const first = coordinator.scan({ ...scanOptions, entries: entries.slice(0, 2) });
+    let second: Promise<void> | undefined;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      second = coordinator.scan({ ...scanOptions, entries });
+      await vi.advanceTimersByTimeAsync(0);
+      expect([...started]).toEqual(["a", "b"]);
+      await second;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await first;
+      const next = coordinator.scan({ ...scanOptions, entries: entries.slice(2) });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await next;
+      expect(started).toEqual(["a", "b", "c"]);
+    } finally {
+      await vi.runAllTimersAsync();
+      await Promise.all([first, second]);
+      vi.useRealTimers();
+    }
+  });
+
+  it("joins admitted domains after failure and does not start their successors", async () => {
+    vi.useFakeTimers();
+    const coordinator = createDeliveryRecoveryCoordinator<RecoveryTestEntry>({
+      maxConcurrentLanes: 2,
+    });
+    const entries = [createEntry("a", 1), createEntry("b", 2), createEntry("b-next", 3)];
+    const started: string[] = [];
+    let settled = false;
+    const scan = coordinator
+      .scan({
+        entries,
+        laneKey: (entry) => entry.id.slice(0, 1),
+        loadEntry: async (id) => entries.find((entry) => entry.id === id) ?? null,
+        onEntry: async (entry) => {
+          started.push(entry.id);
+          await new Promise((resolve) => {
+            setTimeout(resolve, entry.id === "a" ? 10 : 1_000);
+          });
+          if (entry.id === "a") {
+            throw new Error("owner read failed");
+          }
+        },
+      })
+      .then(
+        () => {
+          settled = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+    try {
+      await vi.advanceTimersByTimeAsync(20);
+      expect(started).toEqual(["a", "b"]);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await scan).toEqual(new Error("owner read failed"));
+      expect(started).toEqual(["a", "b"]);
+    } finally {
+      await vi.runAllTimersAsync();
+      await scan;
+      vi.useRealTimers();
+    }
+  });
+
   it("shares active claims between live delivery and recovery scans", async () => {
     const coordinator = createDeliveryRecoveryCoordinator<RecoveryTestEntry>();
     const entry = createEntry("live-owner", 1);

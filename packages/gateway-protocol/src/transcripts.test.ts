@@ -1,23 +1,17 @@
-import { Check } from "typebox/schema";
-import { describe, expect, it } from "vitest";
+import { describe, it } from "vitest";
 import {
   transcriptGetFixture,
   transcriptListFixture,
   transcriptStatusFixture,
 } from "../../../src/transcripts/library.test-support.js";
-import {
-  TranscriptsGetResultSchema,
-  TranscriptsListResultSchema,
-  TranscriptsStatusResultSchema,
-} from "./schema/transcripts.js";
-import {
-  validateTranscriptsExportParams,
-  validateTranscriptsGetParams,
-  validateTranscriptsListParams,
-  validateTranscriptsStatusParams,
-} from "./validator-registry.js";
+import * as p from "./index.js";
+import { copies, schemaValidation, validation } from "./schema/protocol-validation.test-support.js";
 
-const validateStatus = (value: unknown) => Check(TranscriptsStatusResultSchema, value);
+const status = schemaValidation(p.TranscriptsStatusResultSchema);
+const get = schemaValidation(p.TranscriptsGetResultSchema);
+const listParams = validation(p.validateTranscriptsListParams);
+const getParams = validation(p.validateTranscriptsGetParams);
+const exportParams = validation(p.validateTranscriptsExportParams);
 const sourceRow = { source: { providerId: "fixture" }, state: "not-active", activeSelectors: [] };
 const withSources = (configuredSources: unknown[]) => ({
   ...transcriptStatusFixture,
@@ -27,61 +21,52 @@ const withSources = (configuredSources: unknown[]) => ({
 describe("transcript UI wire contracts", () => {
   it("accepts closed startup diagnostics without raw errors or unbounded extra rows", () => {
     const response = (startDiagnostic: unknown) => withSources([{ ...sourceRow, startDiagnostic }]);
-    for (const code of [
-      "starting",
-      "retrying",
-      "id-conflict",
-      "admitted-start-failed",
-      "start-failed",
-      "ended",
-    ]) {
-      expect(validateStatus(response(code))).toBe(true);
-    }
+    status.accepts(
+      ...[
+        "starting",
+        "retrying",
+        "id-conflict",
+        "admitted-start-failed",
+        "start-failed",
+        "ended",
+      ].map(response),
+    );
     const failed = { ...sourceRow, startDiagnostic: "start-failed" };
-    const tooMany = Array.from({ length: 101 }, () => ({
-      ...sourceRow,
-      startDiagnostic: "starting",
-    }));
-    for (const invalid of [
+    status.rejects(
       response("raw provider error"),
       withSources([{ ...failed, error: "private" }]),
-      withSources(tooMany),
-    ]) {
-      expect(validateStatus(invalid)).toBe(false);
-    }
+      withSources(Array.from({ length: 101 }, () => failed)),
+    );
   });
   it("validates shared UI fixture responses against the canonical wire schemas", () => {
-    expect(Check(TranscriptsListResultSchema, transcriptListFixture)).toBe(true);
-    expect(Check(TranscriptsGetResultSchema, transcriptGetFixture)).toBe(true);
-    expect(validateStatus(transcriptStatusFixture)).toBe(true);
-    const validateGet = (value: unknown) => Check(TranscriptsGetResultSchema, value);
-    const utterances = Array.from({ length: 2000 }, (_, sequence) => ({
-      sequence,
-      text: "speech",
-    }));
+    schemaValidation(p.TranscriptsListResultSchema).accepts(transcriptListFixture);
+    status.accepts(transcriptStatusFixture);
+    const utterances = copies({ sequence: 0, text: "speech" }, 2000);
     const response = (rows: typeof utterances) => ({ ...transcriptGetFixture, utterances: rows });
-    expect(validateGet(response(utterances))).toBe(true);
-    expect(validateGet(response([...utterances, { sequence: 2000, text: "outside" }]))).toBe(false);
+    get.accepts(transcriptGetFixture, response(utterances));
+    get.rejects(response([...utterances, { sequence: 2000, text: "outside" }]));
   });
 
   it("keeps pagination and search bounded and rejects mutation arguments", () => {
-    expect(validateTranscriptsListParams({})).toBe(true);
-    const filter = { limit: 100, query: "x".repeat(256), startedAfter: "2026-08-20T00:00:00Z" };
-    expect(validateTranscriptsListParams(filter)).toBe(true);
-    expect(validateTranscriptsListParams({ limit: 200 })).toBe(true);
-    for (const limit of [0, 201, -1, 1.5, "50"]) {
-      expect(validateTranscriptsListParams({ limit })).toBe(false);
-    }
-    expect(validateTranscriptsListParams({ query: "x".repeat(257) })).toBe(false);
-    expect(validateTranscriptsGetParams({ selector: "opaque/full-value", limit: 100 })).toBe(true);
-    const oversized = { selector: "opaque", includeUtterances: true, limit: 101 };
-    expect(validateTranscriptsGetParams(oversized)).toBe(false);
-    expect(validateTranscriptsGetParams({ selector: "opaque", agentId: "forged" })).toBe(false);
-    expect(validateTranscriptsExportParams({ selector: "opaque", format: "jsonl" })).toBe(true);
-    expect(validateTranscriptsExportParams({ selector: "opaque", format: "markdown" })).toBe(true);
-    expect(validateTranscriptsExportParams({ selector: "opaque", format: "audio" })).toBe(false);
-    expect(validateTranscriptsStatusParams({})).toBe(true);
-    expect(validateTranscriptsStatusParams({ enabled: true, autoStart: [] })).toBe(false);
+    listParams.accepts({
+      limit: 100,
+      query: "x".repeat(256),
+      startedAfter: "2026-08-20T00:00:00Z",
+    });
+    listParams.rejects(...[0, 201, 1.5, "50"].map((limit) => ({ limit })), {
+      query: "x".repeat(257),
+    });
+    getParams.accepts({ selector: "opaque/full-value", limit: 100 });
+    getParams.rejects(
+      { selector: "opaque", includeUtterances: true, limit: 101 },
+      { selector: "opaque", agentId: "forged" },
+    );
+    exportParams.accepts(
+      ...["jsonl", "markdown"].map((format) => ({ selector: "opaque", format })),
+    );
+    exportParams.rejects({ selector: "opaque", format: "audio" });
+    validation(p.validateTranscriptsStatusParams).accepts({});
+    validation(p.validateTranscriptsStatusParams).rejects({ enabled: true, autoStart: [] });
   });
 
   it("keeps auto-start descriptors optional, closed, and limited to existing locator fields", () => {
@@ -89,21 +74,22 @@ describe("transcript UI wire contracts", () => {
       ...transcriptStatusFixture,
       providers: [{ ...transcriptStatusFixture.providers[0], autoStart }],
     });
-    const validDescriptor = {
-      accountId: "optional",
-      guildId: "required",
-      channelId: "required",
-      meetingUrl: "optional",
-    };
-    expect(validateStatus(response(validDescriptor))).toBe(true);
-    expect(validateStatus(response({}))).toBe(true);
-    for (const descriptor of [
-      { fileId: "required" },
-      { sessionId: "optional" },
-      { accountId: true },
-      { channelId: "unknown" },
-    ]) {
-      expect(validateStatus(response(descriptor))).toBe(false);
-    }
+    status.accepts(
+      response({
+        accountId: "optional",
+        guildId: "required",
+        channelId: "required",
+        meetingUrl: "optional",
+      }),
+      response({}),
+    );
+    status.rejects(
+      ...[
+        { fileId: "required" },
+        { sessionId: "optional" },
+        { accountId: true },
+        { channelId: "unknown" },
+      ].map(response),
+    );
   });
 });

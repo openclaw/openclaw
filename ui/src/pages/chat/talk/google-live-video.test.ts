@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../../src/talk/describe-view-tool.js";
 import {
+  beginFakeTimedTransport as beginTransport,
   createSession,
   installGoogleLiveTestFixture,
   latestWebSocket,
@@ -48,16 +49,6 @@ async function createTransport(callbacks: RealtimeTalkCallbacks, videoDeviceId?:
       videoDeviceId,
     },
   );
-}
-
-async function beginTransport(transport: GoogleLiveRealtimeTalkTransport): Promise<{
-  start: Promise<"ready" | "cancelled">;
-  ws: ReturnType<typeof latestWebSocket>;
-}> {
-  const start = transport.start();
-  await vi.advanceTimersByTimeAsync(0);
-  const ws = latestWebSocket();
-  return { start, ws };
 }
 
 async function startTransport(

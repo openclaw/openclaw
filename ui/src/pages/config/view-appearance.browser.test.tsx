@@ -6,7 +6,11 @@ import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "../../styles.css";
-import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
+import {
+  renderAppearance,
+  renderConfigInto,
+  requiredConfigElement as required,
+} from "./config-view.test-support.tsx";
 
 function settingsRow(container: HTMLElement, title: string) {
   const row = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
@@ -35,19 +39,6 @@ describe("config appearance preferences", () => {
       throw new Error(`Expected button with text "${text}"`);
     }
     return button;
-  }
-
-  function required<T extends Element>(
-    container: HTMLElement,
-    selector: string,
-    constructor: new () => T,
-  ): T {
-    const element = container.querySelector(selector);
-    expect(element).toBeInstanceOf(constructor);
-    if (!(element instanceof constructor)) {
-      throw new Error(`Expected element matching "${selector}"`);
-    }
-    return element;
   }
 
   function pickerOption(picker: Element, value: string) {

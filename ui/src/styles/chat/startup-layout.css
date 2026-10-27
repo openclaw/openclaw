@@ -224,11 +224,15 @@
   --chat-avatar-gutter: calc(var(--chat-avatar-column) + var(--chat-avatar-gap));
   --chat-message-column-max: var(--chat-message-max-width, min(900px, 68%));
   --chat-run-block-gap: 8px;
+  --chat-group-inset-start: 4px;
+  --chat-group-inset-end: 16px;
   display: flex;
   gap: var(--chat-avatar-gap);
   align-items: flex-start;
   margin-block: 0 var(--chat-turn-gap);
-  margin-inline: 4px 16px;
+  /* Keep the row bounds fixed while identity adds its existing inner gutter. */
+  margin-inline: 0;
+  padding-inline: var(--chat-group-inset-start) var(--chat-group-inset-end);
 }
 
 @media (hover: none),
@@ -247,7 +251,7 @@
 
 /* Both sides share the content edge inside the trailing avatar gutter. */
 .chat-group:where(:not(.user), .chat-group--peer) {
-  padding-inline-end: var(--chat-avatar-gutter);
+  padding-inline-end: calc(var(--chat-group-inset-end) + var(--chat-avatar-gutter));
 }
 
 .chat-group.user {
@@ -337,7 +341,8 @@
 .chat-thread--direct .chat-group {
   --chat-avatar-column: 0px;
   --chat-avatar-gap: 0px;
-  margin-inline: 0;
+  --chat-group-inset-start: 0px;
+  --chat-group-inset-end: 0px;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -345,7 +350,8 @@
     --chat-avatar-column: 0px;
     --chat-avatar-gap: 0px;
     --chat-message-column-max: 82%;
-    margin-inline: 0;
+    --chat-group-inset-start: 0px;
+    --chat-group-inset-end: 0px;
   }
 
   .chat-group :is(.chat-avatar, .chat-avatar-slot) {
@@ -357,6 +363,13 @@
   .chat-group {
     --chat-message-column-max: 88%;
   }
+}
+
+/* Persistent header controls need more emphasis than tertiary content chrome. */
+.chat-pane__header,
+.side-panel__header,
+.sidebar-region__panels-toggle {
+  --icon-interactive: var(--rail-header-action-color);
 }
 
 .chat-pane__header {
@@ -375,11 +388,10 @@
   -webkit-user-select: none;
 }
 
-/* Desktop composition; mobile keeps its own presenter and touch targets. */
-.chat-pane__header:not(.chat-pane__header--mobile) {
-  min-height: var(--desktop-header-height, calc(var(--rail-header-height) - var(--space-1)));
-  padding-inline: 12px 8px;
-  gap: 4px;
+/* Desktop chat and panel chrome reveal one continuous shell canvas. Mobile
+   keeps its own reading surface. */
+.sidebar-region--desktop .chat-pane__header {
+  background: transparent;
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-leading,
@@ -388,11 +400,37 @@
   flex-wrap: nowrap;
 }
 
+/* Keep the trailing region stable while presence and session actions arrive. */
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-trailing {
+  flex-grow: 1;
+  align-self: stretch;
+  justify-self: stretch;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile)
+  > .chat-pane__header-trailing
+  > .chat-pane__actions:only-child {
+  flex-grow: 1;
+  align-self: stretch;
+  justify-content: flex-end;
+}
+
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__identity-actions {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 0;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile)
+  :is(
+    .chat-icon-btn,
+    .chat-details-toggle,
+    .chat-pane__layout-trigger,
+    .chat-pane__sharing-trigger
+  ),
+.sidebar-region__panels-toggle .chat-pane__panels-toggle {
+  line-height: calc(20px * var(--control-ui-text-scale));
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-icon-btn,
@@ -404,220 +442,279 @@
   padding-inline: 8px;
 }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-icon-btn {
-  width: 32px;
-  min-width: 32px;
-  padding: 0;
-}
-
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-icon-btn svg {
-  width: 16px;
-  height: 16px;
-}
-
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__panels-toggle svg {
-  stroke-width: 1.8;
-}
-
-/* Header composition supplies the approved glyph to the native Details trigger. */
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle,
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__panels-toggle {
-  width: var(--rail-header-action-size);
-  min-width: var(--rail-header-action-size);
-  height: var(--rail-header-action-size);
-  min-height: var(--rail-header-action-size);
-  padding: 0;
-  justify-content: center;
-  border-color: transparent;
-  border-radius: var(--radius-full);
-  background: transparent;
-}
-
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle {
-  border-radius: calc(8px * var(--openclaw-corner-radius-scale));
-  corner-shape: superellipse(1.5);
-}
-
 .chat-pane__header:not(.chat-pane__header--mobile)
-  .chat-details-toggle:is(:hover, [aria-expanded="true"]) {
-  background: var(--session-header-control-hover-bg, var(--bg-hover));
+  :is(.chat-icon-btn, .chat-details-toggle, .chat-pane__layout-trigger):not(
+    :hover,
+    :focus-visible,
+    [aria-expanded="true"]
+  ),
+.sidebar-region__panels-toggle
+  .chat-pane__panels-toggle:not(:hover, :focus-visible, [aria-expanded="true"]) {
+  color: var(--control-secondary-text, var(--muted));
+
+  svg {
+    color: var(--icon-interactive, inherit);
+  }
 }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle svg,
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__workspace-chip svg {
-  width: 16px;
-  height: 16px;
+/* The hover guard excludes resting :not(:hover) rules on touch devices. */
+@media (hover: none) {
+  .chat-pane__header:not(.chat-pane__header--mobile)
+    :is(.chat-icon-btn, .chat-details-toggle, .chat-pane__layout-trigger):not(
+      :focus-visible,
+      [aria-expanded="true"],
+      :disabled,
+      [aria-disabled="true"]
+    ),
+  .sidebar-region__panels-toggle
+    .chat-pane__panels-toggle:not(
+      :focus-visible,
+      [aria-expanded="true"],
+      :disabled,
+      [aria-disabled="true"]
+    ) {
+    color: var(--control-secondary-text, var(--muted));
+
+    svg {
+      color: var(--icon-interactive, inherit);
+    }
+  }
 }
 
-.chat-pane__header:not(.chat-pane__header--mobile)
-  :is(.chat-pane__panels-toggle, .chat-details-toggle)[aria-expanded="true"] {
-  background: var(--session-header-control-surface);
-  color: var(--session-header-control-active-color, var(--text));
-}
-
-.chat-pane__header:not(.chat-pane__header--mobile)
-  :is(.chat-details-toggle, .chat-pane__panels-toggle)[aria-expanded="true"]:hover {
-  background: var(--session-header-control-active-hover-bg);
-}
-
-.chat-pane__header:not(.chat-pane__header--mobile)
-  :is(
-    .chat-pane__workspace-chip,
-    .chat-pane__session-title,
-    .chat-pane__session-title-input,
-    .chat-pane__parent-session
-  ) {
-  min-height: 32px;
-  padding: 0 8px;
-  margin-inline: 0;
-  font-family: inherit;
-  font-size: calc(13px * var(--control-ui-text-scale));
-  font-weight: 500;
-  line-height: calc(20px * var(--control-ui-text-scale));
-  letter-spacing: normal;
-}
-
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__session-title {
-  padding-inline-end: 0;
-}
-
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__crumbs {
-  transform: none;
+/* Desktop composition; mobile keeps its own presenter and touch targets. */
+.chat-pane__header:not(.chat-pane__header--mobile) {
+  min-height: var(--desktop-header-height, calc(var(--rail-header-height) - var(--space-1)));
+  padding-inline: 12px 8px;
   gap: 4px;
-}
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__workspace-menu {
-  min-width: 32px;
-
-  > .chat-pane__workspace-chip {
-    min-width: 0;
+  & .chat-icon-btn {
+    width: 32px;
+    min-width: 32px;
+    padding: 0;
   }
 
-  .chat-pane__workspace-chip svg {
-    flex: 0 0 auto;
-  }
-
-  > .oc-menu {
-    --menu-padding: 8px;
-    --menu-radius: 12px;
-    --menu-item-radius: 5px;
-
-    min-width: 180px;
-    padding: var(--menu-padding);
-    font-size: calc(12px * var(--control-ui-text-scale));
-    line-height: calc(18px * var(--control-ui-text-scale));
-  }
-
-  .oc-menu-item {
-    min-height: 32px;
-    padding: 4px 8px;
-    line-height: inherit;
-  }
-
-  .oc-menu-item__icon {
-    margin-inline-end: 10px;
-  }
-
-  .session-menu__separator {
-    margin: 6px 0;
-    border-color: color-mix(in srgb, var(--border-strong) 70%, var(--border));
-  }
-
-  .session-menu__icon,
-  .session-menu__icon svg {
+  & .chat-icon-btn svg {
     width: 16px;
     height: 16px;
   }
 
-  .session-menu__icon svg {
-    stroke-width: 1.5;
+  & .chat-pane__panels-toggle svg {
+    stroke-width: 1.8;
   }
-}
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__device-offline {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  margin-inline-start: 4px;
-  padding-inline: 8px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--warn) 10%, transparent);
-  color: var(--warn);
-  font-size: 12px;
-  white-space: nowrap;
-}
+  /* Header composition supplies the approved glyph to the native Details trigger. */
+  & .chat-details-toggle,
+  & .chat-pane__panels-toggle {
+    width: var(--rail-header-action-size);
+    min-width: var(--rail-header-action-size);
+    height: var(--rail-header-action-size);
+    min-height: var(--rail-header-action-size);
+    padding: 0;
+    justify-content: center;
+    border-color: transparent;
+    border-radius: var(--radius-full);
+    background: transparent;
+  }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__device-offline > svg {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-}
+  & .chat-details-toggle {
+    border-radius: calc(8px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+  }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__device-name {
-  min-width: 0;
-  max-width: 128px;
-}
+  & .chat-details-toggle:is(:hover, [aria-expanded="true"]) {
+    background: var(--session-header-control-hover-bg, var(--bg-hover));
+  }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__crumb-sep svg {
-  display: block;
-}
+  & .chat-details-toggle svg,
+  & .chat-pane__workspace-chip svg,
+  & .chat-pane__workspace-chip .workspace-icon {
+    width: var(--rail-header-action-glyph-size);
+    height: var(--rail-header-action-glyph-size);
+  }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection {
-  display: inline-flex;
-  align-items: center;
-  gap: 16px;
-  height: 28px;
-  padding-inline: 8px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--warn) 10%, transparent);
-  color: var(--warn);
-  font-size: 12px;
-  white-space: nowrap;
-}
+  & :is(.chat-pane__panels-toggle, .chat-details-toggle)[aria-expanded="true"] {
+    background: var(--session-header-control-surface);
+    color: var(--session-header-control-active-color, var(--text));
+  }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
+  & :is(.chat-details-toggle, .chat-pane__panels-toggle)[aria-expanded="true"]:hover {
+    background: var(--session-header-control-active-hover-bg);
+  }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-icon {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-}
+  &
+    :is(
+      .chat-pane__workspace-chip,
+      .chat-pane__session-title,
+      .chat-pane__session-title-input,
+      .chat-pane__parent-session
+    ) {
+    min-height: 32px;
+    padding: 0 8px;
+    margin-inline: 0;
+    font-family: inherit;
+    font-size: calc(13px * var(--control-ui-text-scale));
+    font-weight: 500;
+    line-height: calc(20px * var(--control-ui-text-scale));
+    letter-spacing: normal;
+  }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-icon--busy {
-  animation: btn-spinner-spin 900ms linear infinite;
-}
+  & .chat-pane__session-title {
+    padding-inline-end: 0;
+  }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-retry {
-  border: 0;
-  border-radius: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-weight: 400;
-  line-height: 16px;
-  cursor: var(--cursor-action);
-}
+  /* Align visible lettering with the glyph centerline without moving hit areas. */
+  &
+    :is(
+      .chat-pane__workspace-chip > .oc-menu-item__label > span,
+      .chat-pane__session-title-text,
+      .chat-pane__parent-session-text,
+      .chat-pane__agent-name,
+      .chat-pane__sharing-trigger-state > span
+    ) {
+    transform: translateY(calc(-1px * var(--control-ui-text-scale)));
+  }
 
-.chat-pane__header:not(.chat-pane__header--mobile)
-  .chat-pane__connection-retry:is(:hover, :focus-visible) {
-  color: var(--text);
-}
+  & .chat-pane__session-title-input {
+    padding-block-end: calc(2px * var(--control-ui-text-scale));
+  }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-divider {
-  width: 1px;
-  height: 12px;
-  background: color-mix(in srgb, var(--muted) 35%, transparent);
-}
+  & .chat-pane__crumbs {
+    transform: none;
+    gap: 4px;
+  }
 
-@media (prefers-reduced-motion: reduce) {
-  .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-icon--busy {
-    animation: none;
+  & .chat-pane__workspace-menu {
+    min-width: 32px;
+
+    > .chat-pane__workspace-chip {
+      min-width: 0;
+    }
+
+    .chat-pane__workspace-chip svg {
+      flex: 0 0 auto;
+    }
+
+    > .oc-menu {
+      --menu-padding: 8px;
+      --menu-radius: 12px;
+      --menu-item-radius: 5px;
+
+      min-width: 180px;
+      padding: var(--menu-padding);
+      font-size: calc(12px * var(--control-ui-text-scale));
+      line-height: calc(18px * var(--control-ui-text-scale));
+    }
+
+    .oc-menu-item {
+      min-height: 32px;
+      padding: 4px 8px;
+      line-height: inherit;
+    }
+
+    .oc-menu-item__icon {
+      margin-inline-end: 10px;
+    }
+
+    .session-menu__separator {
+      margin: 6px 0;
+      border-color: color-mix(in srgb, var(--border-strong) 70%, var(--border));
+    }
+
+    .session-menu__icon,
+    .session-menu__icon svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .session-menu__icon svg {
+      stroke-width: 1.5;
+    }
+  }
+
+  & .chat-pane__device-offline {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    margin-inline-start: 4px;
+    padding-inline: 8px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--warn) 10%, transparent);
+    color: var(--warn);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  & .chat-pane__device-offline > svg {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+  }
+
+  & .chat-pane__device-name {
+    min-width: 0;
+    max-width: 128px;
+  }
+
+  & .chat-pane__crumb-sep svg {
+    display: block;
+  }
+
+  & .chat-pane__connection {
+    display: inline-flex;
+    align-items: center;
+    gap: 16px;
+    height: 28px;
+    padding-inline: 8px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--warn) 10%, transparent);
+    color: var(--warn);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  & .chat-pane__connection-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  & .chat-pane__connection-icon {
+    display: inline-flex;
+    width: 16px;
+    height: 16px;
+  }
+
+  & .chat-pane__connection-icon--busy {
+    animation: btn-spinner-spin 900ms linear infinite;
+  }
+
+  & .chat-pane__connection-retry {
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-weight: 400;
+    line-height: 16px;
+    cursor: var(--cursor-action);
+  }
+
+  & .chat-pane__connection-retry:is(:hover, :focus-visible) {
+    color: var(--text);
+  }
+
+  & .chat-pane__connection-divider {
+    width: 1px;
+    height: 12px;
+    background: color-mix(in srgb, var(--muted) 35%, transparent);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    & .chat-pane__connection-icon--busy {
+      animation: none;
+    }
   }
 }
 
@@ -837,11 +934,10 @@
   gap: 6px;
 }
 
-/* House separator treatment: an aria-hidden glyph tinted with --muted, spacing
-   from the row gap, no size or color of its own beyond matching the title. */
+/* The project and its separator share the header's secondary foreground. */
 .chat-pane__crumb-sep {
   flex: 0 0 auto;
-  color: var(--muted);
+  color: var(--icon-interactive);
   font-size: 12px;
 }
 
@@ -860,8 +956,8 @@
 
 /* A breadcrumb segment, not a badge: flat and inline, sharing the title's type
    size so the two read as one trail and the hierarchy comes from colour alone —
-   the project is --muted, the session --text. Hover and focus reuse the sibling
-   title button's tint, which keeps a visible focus indicator without a border. */
+   the project shares the resting action ink, the session --text. Hover and focus
+   reuse the sibling title button's tint, keeping visible focus without a border. */
 .chat-pane__workspace-chip {
   display: inline-flex;
   max-width: 180px;
@@ -875,7 +971,7 @@
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted);
+  color: var(--icon-interactive);
   font-size: 12px;
   cursor: var(--cursor-action);
 }
@@ -935,7 +1031,7 @@
   .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip,
   .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip:hover,
   .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip:focus-visible {
-    color: var(--muted);
+    color: var(--icon-interactive);
   }
 
   .sidebar-region__header .chat-pane__header .chat-pane__session-title {

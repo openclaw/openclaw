@@ -2,7 +2,7 @@
 import { expect, it, vi } from "vitest";
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { selectThemeSettings, resetServerUiPref } from "./server-prefs-controls.ts";

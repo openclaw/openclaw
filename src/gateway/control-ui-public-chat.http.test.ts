@@ -128,15 +128,18 @@ describe("canonical anonymous HTTP entry", () => {
     expect(response.getBody()).toContain("Published answer");
   });
 
-  it("reloads the exact Incognito address produced by in-app navigation", async () => {
-    const sessionKey = "agent:main:dashboard:incognito-12345678-aaaa-4000-8000-000000000001";
+  it("reloads the exact short-session address produced by new-session navigation", async () => {
+    const sessionKey = "agent:main:dashboard:12345678-aaaa-4000-8000-000000000001";
     const target = sessionNavigationTarget({
       face: "chat",
       sessionKey,
       navigationKey: sessionKey,
+      focusComposer: true,
       fallbackAgentId: "main",
       basePath: "/control",
     });
+    expect(target.options.search).toContain("__openclawSessionKey=");
+    expect(target.options.search).toContain("__openclawComposerFocus=1");
     const response = await sendRequest(server(), {
       path: target.options.pathname + (target.options.search ?? ""),
       host: "gateway.lan:18789",

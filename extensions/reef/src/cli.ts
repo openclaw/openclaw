@@ -56,8 +56,6 @@ function emit(output: ReefCliOutput, payload: Record<string, unknown>, lines: st
   }
 }
 
-// Every action funnels through here so the documented --json contract holds
-// for relay, filesystem, config, and validation failures.
 function reefCliAction<TOptions extends { json: boolean }, TArgs extends unknown[]>(
   run: (output: ReefCliOutput, options: TOptions, ...args: TArgs) => Promise<void>,
 ): (...args: [...TArgs, TOptions]) => Promise<void> {
@@ -71,9 +69,11 @@ function reefCliAction<TOptions extends { json: boolean }, TArgs extends unknown
     try {
       await run(output, options, ...positional);
     } catch (error) {
+      if (output.json) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : String(error);
-      const stream = output.json ? process.stdout : process.stderr;
-      stream.write(output.json ? `${JSON.stringify({ error: message })}\n` : `${message}\n`);
+      process.stderr.write(`${message}\n`);
       process.exitCode = 1;
     }
   };

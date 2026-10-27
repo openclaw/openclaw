@@ -30,7 +30,9 @@ while best-effort delivery can complete successfully without claiming delivery.
 When `gateway.publicOrigin` is configured and the Control UI is enabled, chat
 notifications include an `Inspect` link into the Control UI. Command and script
 completion announcements open the automation run; isolated agent announcements
-open the run's session.
+open the run's session. Telegram and Discord show a compact **Inspect run**
+link instead of the full URL; other channels retain the plain `Inspect: <URL>`
+footer.
 
 With `announce`, the chat that receives the result owns it. The result is added to the conversation after the channel confirms delivery, using the content actually sent after channel transforms and hooks. OpenClaw writes one assistant message into that chat's transcript so the next reply can use it as context. The result records its job and run; retries do not duplicate it, and it can commit while a turn is running. Transcript writes remain ordered, and the running turn keeps ownership of its reply. Destination creation and remembered-route updates happen only after confirmed delivery; newly created destinations inherit the source session's required sandbox policy.
 
@@ -45,7 +47,7 @@ A newly committed visible result refreshes the destination's idle freshness, so 
 If the destination chat belongs to a different agent, the result is sent but not added to either agent’s conversation.
 Channel-native payloads without a text projection are sent without a conversation entry and record a warning.
 
-Execution context is separate: `isolated` starts without conversation history, `current` reads bounded creating-conversation context in a detached run, and `session:<key>` uses a persistent execution session. The private run transcript and tool history are not copied into the destination.
+Execution context is separate: `isolated` starts without conversation history, `current` reads bounded creating-conversation context in a child run of that conversation, and `session:<key>` uses a persistent execution session. The private run transcript and tool history are not copied into the destination.
 When a persistent execution session is already the destination conversation, its final assistant message is the result; OpenClaw does not append a second copy.
 
 Editing explicit delivery coordinates moves future results to that chat or topic. The captured creating-conversation binding remains immutable once recorded (an older job that names its conversation only by key records it when [bound](/cli/cron#binding-older-jobs-to-their-conversation)); changing the public `sessionKey` does not redirect implicit delivery. For an explicit external destination, starting a new session or resetting the destination chat does not stop delivery: the result goes into that chat's current session. Implicit creator-bound delivery requires the captured creating conversation to exist and match its generation before resolving a remembered external route. Implicit agent-turn announcements retain that generation through sending and recovery; routeless WebChat results also require it at commit. If the creating conversation was deleted or reset, recreate the job or configure an explicit external destination. Command and script announcements keep an already resolved route without a source-generation check, matching their existing behavior. Cancellation does not interrupt the destination's active turn. A verified matching `message` tool send suppresses automatic resend, not the conversation result.

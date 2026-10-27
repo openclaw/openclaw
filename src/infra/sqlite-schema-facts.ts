@@ -466,7 +466,9 @@ export function readSqliteNativeMutationRevision(database: EngineConnection): nu
 /** Derived caches may retain reads from a tracked transaction until its first mutation. */
 export function hasUncommittedSqliteWrites(database: EngineConnection): boolean {
   if (isPostgresSqlConnection(database)) {
-    return database.isTransaction;
+    // PostgreSQL read-only snapshots are cacheable; only writable transaction ownership
+    // invalidates derived facts. The scope is installed after the read-only BEGIN.
+    return database.isTransaction && !postgresReadSnapshots.has(database);
   }
   const owner = owners.get(database);
   if (owner) {

@@ -15,7 +15,7 @@ import {
   installDatabaseEngineSelection,
 } from "./database-engine/context.js";
 import { captureSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
-import { bindPostgresPool, postgresPoolWorkerFailure } from "./postgres-sync/pool.js";
+import { bindPostgresPool, postgresPoolWorkerFailure } from "./postgres-sync/pool-state.js";
 import {
   installSqliteDatabaseAdmissions,
   withSqliteDatabaseAdmissionExchange,
@@ -58,6 +58,7 @@ import {
   createSqliteWorkerTransferReceiver,
   type SqliteWorkerTransferFrame,
 } from "./sqlite-worker-transfer.js";
+import { assertSqliteWorkerDatabaseIdentity } from "./sqlite-writer-admission-client.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
@@ -213,6 +214,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
             attachment: request.operationAttachment,
             requestCustody: request.requestCustody,
             executionAuthority: request.executionAuthority,
+            databaseIdentity: request.databaseIdentity,
           },
         };
       }
@@ -315,6 +317,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
               await preparation;
             }
             if (backend[SQLITE_WORKER_PREPARE_ADMITTED]) {
+              if (operationAdmission) {
+                assertSqliteWorkerDatabaseIdentity(operationAdmission.context);
+              }
               // Only the synchronous prefix inherits authority; deferred preparation does not.
               const admitted = runInActorContext(request.actor, () => ({
                 preparation: backend[SQLITE_WORKER_PREPARE_ADMITTED]?.(typedCommand),
@@ -324,6 +329,10 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
               }
             }
             const execute = () => {
+              // Fence preparation may yield; no-grant cleanup still checks its original database.
+              if (operationAdmission) {
+                assertSqliteWorkerDatabaseIdentity(operationAdmission.context);
+              }
               if (timing) {
                 timing.executeStarted = performance.now();
               }
@@ -472,12 +481,16 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
               throw error;
             }
           }
-          const open = () =>
-            factory(input, {
+          const open = () => {
+            if (operationAdmission) {
+              assertSqliteWorkerDatabaseIdentity(operationAdmission.context);
+            }
+            return factory(input, {
               databasePath: request.databasePath,
               ...(request.preparation ? { preparation: deserialize(request.preparation) } : {}),
               ...(request.existingIdentity ? { existingIdentity: request.existingIdentity } : {}),
             });
+          };
           return bridge ? bridge.run(open) : open();
         });
         if (

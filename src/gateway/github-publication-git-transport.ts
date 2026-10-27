@@ -190,7 +190,24 @@ export async function requireGitHubPublicationCommit(
     }
   };
   if (!options.commitPresent) {
-    await fetch();
+    // Fetching a present non-promisor commit still makes Git enumerate every
+    // promisor object for connectivity. Probe the physical commit without lazy
+    // fetching or trusting commit-graph metadata; content hydration stays below.
+    const present = await run(
+      [
+        "git",
+        "-c",
+        "core.commitGraph=false",
+        "rev-list",
+        "--missing=allow-any",
+        "--no-walk",
+        `${sha}^{commit}`,
+      ],
+      { cwd, env },
+    );
+    if (present.code !== 0 || !present.stdout.toString("utf8").trim()) {
+      await fetch();
+    }
   }
   if (!options.contents) {
     return;

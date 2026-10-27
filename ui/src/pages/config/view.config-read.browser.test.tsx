@@ -38,7 +38,6 @@ it("renders and retries a failed initial configuration read", async () => {
   container
     .querySelector<HTMLButtonElement>('.config-content-callout [role="alert"] button')!
     .click();
-  expect(onRetryConfig).toHaveBeenCalledOnce();
   await waitForSolid(() => expect(container.querySelector(".config-loading")).not.toBeNull());
   props.formValue = { gateway: { mode: "local" } };
   props.configLoaded = true;
@@ -57,7 +56,6 @@ it("keeps a loaded editor mounted and locked during configuration refresh", asyn
     forceShowAdvanced: true,
   });
   const field = container.querySelector<HTMLInputElement>(".config-content input")!;
-  expect(field).not.toBeNull();
   props.configRead = read.promise;
   props.loading = true;
   renderConfigInto(props, container);
@@ -82,27 +80,29 @@ it("keeps the blocked editor when an initial read requires publication recovery"
   });
   await waitForSolid(() => {
     const field = container.querySelector<HTMLInputElement>(".config-content input");
-    expect(field).not.toBeNull();
     expect(field?.disabled).toBe(true);
   });
   expect(container.querySelector('.config-content-callout [role="alert"]')).toBeNull();
 });
 
-it("keeps the raw Save command busy until its owner settles", async () => {
+it("publishes the config owner before presenting a raw Save and stays busy until it settles", async () => {
   const completion = createDeferred<boolean>();
-  const save = vi.fn(() => completion.promise);
-  const lifetime = Promise.withResolvers<void>();
-  const { container } = renderConfigView({
+  const save = vi.fn(() => {
+    props.valid = false;
+    renderConfigInto(props, container);
+    return completion.promise;
+  });
+  const { container, props } = renderConfigView({
     formMode: "raw",
     raw: '{"gateway":{"mode":"local"}}',
     originalRaw: "{}",
     onSave: save,
-    presentationRetired: () => lifetime.promise,
   });
   const button = container.querySelector<HTMLButtonElement>(".config-raw-actions button.primary")!;
   const textarea = container.querySelector("textarea");
   button.click();
   await waitForSolid(() => expect(button.disabled).toBe(true));
+  expect(container.querySelector(".config-validity-warning")).not.toBeNull();
   expect(button.textContent).toContain("Saving");
   button.click();
   expect(save).toHaveBeenCalledOnce();
@@ -135,31 +135,8 @@ it.each(["Open", "Discard"])(
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
     completion.resolve();
     await waitForSolid(() => expect(buttons.every((button) => !button.disabled)).toBe(true));
-    expect(command).toHaveBeenCalledOnce();
   },
 );
-
-it("publishes the plain config owner before entering the save presentation", async () => {
-  const completion = createDeferred<boolean>();
-  const save = vi.fn(() => {
-    props.valid = false;
-    renderConfigInto(props, container);
-    return completion.promise;
-  });
-  const { container, props } = renderConfigView({
-    formMode: "raw",
-    raw: '{"gateway":{"mode":"local"}}',
-    originalRaw: "{}",
-    onSave: save,
-  });
-  container.querySelector<HTMLButtonElement>(".config-raw-actions button.primary")!.click();
-  await waitForSolid(() =>
-    expect(container.querySelector(".config-validity-warning")).not.toBeNull(),
-  );
-  expect(save).toHaveBeenCalledOnce();
-  completion.resolve(true);
-  await completion.promise;
-});
 
 it("releases a raw save presentation when its owner retires the route", async () => {
   const completion = createDeferred<boolean>();

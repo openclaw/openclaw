@@ -7,15 +7,17 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import {
+  createInitializationContext,
+  createGatewayBrowserClientFixture,
+} from "./chat-application-context.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
-  createInitializationContext,
   createPaneTestHost,
   getPaneTestRuntime,
-  createGatewayBrowserClientFixture,
   nativeHistoryMessage,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
@@ -37,6 +39,7 @@ import {
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 import "./chat-pane.tsx";
 
@@ -109,7 +112,8 @@ describe("stored chat snapshot hydration", () => {
     messages: ReturnType<typeof nativeHistoryMessage>[],
   ) {
     const writer = new SessionSnapshotStore();
-    writer.write(
+    writeSnapshotFixture(
+      writer,
       resolveChatSnapshotKey(
         { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
         { sessionKey: targetSessionKey },
@@ -123,39 +127,53 @@ describe("stored chat snapshot hydration", () => {
     await writer.flush();
   }
 
-  it("holds ready cached rows until connect dispatch and adopts them once", async () => {
-    const connect = createDeferred<boolean>();
+  it("displays a prepared cached page while the socket cannot open", async () => {
     const client = createGatewayBrowserClientFixture();
-    Object.defineProperty(client, "connectSent", { get: () => connect.promise });
-    const pane = createMountedPane("agent:main:connecting", new Map(), client);
+    Object.defineProperty(client, "connectSent", { get: () => new Promise(() => {}) });
+    const pane = createMountedPane("agent:main:offline-boot", new Map(), client);
     pane.context.gateway.snapshot.phase = "connecting";
     const snapshot = {
-      messages: [nativeHistoryMessage(1, "saved transcript")],
+      messages: [nativeHistoryMessage(1, "Saved page before socket open")],
       sessionId: "saved-session",
       pagination: { hasMore: false as const },
-      deltaCursor: "saved-cursor",
     };
-    pane.sessionSnapshotStore = { read: async () => snapshot } as never;
+    const read = createDeferred<typeof snapshot>();
+    pane.sessionSnapshotStore = { readReady: () => undefined, read: () => read.promise } as never;
     try {
       const state = startPane(pane);
-      const hydration = expectDefined(
-        chatHistoryRequests(state).initialSnapshotHydration,
-        "pending snapshot hydration",
-      );
+      read.resolve(snapshot);
+      await read.promise;
       await Promise.resolve();
-      expect(state.chatMessages).toEqual([]);
-      expect(hydration.adoptReadySnapshot).toBeTypeOf("function");
-      connect.resolve(true);
-      // The subscription reads its cursor synchronously after this adoption.
-      hydration.adoptReadySnapshot?.();
       expect(state.chatMessages).toEqual(snapshot.messages);
-      expect(hydration.adoptReadySnapshot).toBeUndefined();
-      await hydration.promise;
-      expect(state.chatMessages).toEqual(snapshot.messages);
+      expect(state.connected).toBe(false);
     } finally {
       pane.disconnectedCallback();
     }
   });
+
+  it.each(["connecting", "connected"] as const)(
+    "adopts stored history without waiting for connection or paint (%s)",
+    async (phase) => {
+      const pane = createMountedPane("agent:main:first-paint", new Map());
+      pane.context.gateway.snapshot.phase = phase;
+      const snapshot = {
+        messages: [nativeHistoryMessage(1, "cached first paint")],
+        sessionId: "saved-session",
+        pagination: { hasMore: false as const },
+      };
+      const store = new SessionSnapshotStore();
+      vi.spyOn(store, "read").mockResolvedValue(snapshot);
+      pane.sessionSnapshotStore = store;
+      try {
+        const state = startPane(pane);
+        await chatHistoryRequests(state).initialSnapshotHydration?.promise;
+        expect(state.chatMessages).toEqual(snapshot.messages);
+      } finally {
+        pane.disconnectedCallback();
+        store.disconnect();
+      }
+    },
+  );
 
   it.each(
     ["memory", "stored"].flatMap((cacheMode) =>
@@ -384,6 +402,7 @@ describe("stored chat snapshot hydration", () => {
   );
 
   it("merges stored history with an admitted prompt when hydration resolves late", async () => {
+    vi.useFakeTimers();
     const targetSessionKey = "agent:main:first-turn-retry";
     const client = {
       addEventListener: vi.fn(() => vi.fn()),
@@ -395,6 +414,7 @@ describe("stored chat snapshot hydration", () => {
     context.gateway.snapshot.client = client;
     let deliverStoredSnapshot: ((snapshot: unknown) => void) | undefined;
     pane.sessionSnapshotStore = {
+      readReady: () => undefined,
       read: () =>
         new Promise((resolve) => {
           deliverStoredSnapshot = resolve;
@@ -425,8 +445,9 @@ describe("stored chat snapshot hydration", () => {
         pagination: storedPagination,
         sessionId: "stored-session",
       });
-      await Promise.resolve();
-      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      vi.advanceTimersToNextFrame();
+      await vi.advanceTimersByTimeAsync(1);
       expect(deliverStoredSnapshot).toBeDefined();
       expect(attachedState?.chatMessages).toEqual([
         storedMessage,
@@ -453,6 +474,7 @@ describe("stored chat snapshot hydration", () => {
       });
     } finally {
       pane.disconnectedCallback();
+      vi.useRealTimers();
     }
   });
 });

@@ -6,6 +6,9 @@
  * Add --expect-timeout for the unchanged baseline. All listeners are loopback >=40000;
  * only owned child processes and freshly generated state are used. The fixture hangs
  * destroy until its AbortSignal fires, retaining the same lease for the next boot.
+ * For inspection retry backoff, add --reconcile-minutes 8 on both revisions and
+ * --expect-backoff on the candidate. Inspection hangs until its real 15s timeout;
+ * baseline must attempt >=7 times, candidate 2–4 times, then restart retries promptly.
  * This proves process shutdown and durable teardown replay, not pending reply delivery
  * or the separate ten-minute Team-shaped load-test requirement.
  */
@@ -31,6 +34,8 @@ const { values } = parseArgs({
     root: { type: "string", default: process.cwd() },
     output: { type: "string" },
     "expect-timeout": { type: "boolean", default: false },
+    "expect-backoff": { type: "boolean", default: false },
+    "reconcile-minutes": { type: "string" },
     "stop-budget-ms": { type: "string", default: "20000" },
     "startup-budget-ms": { type: "string", default: "120000" },
     fixture: { type: "string" },
@@ -50,6 +55,10 @@ const budget = (raw: string) => {
 };
 const stopBudgetMs = budget(values["stop-budget-ms"]);
 const startupBudgetMs = budget(values["startup-budget-ms"]);
+const reconcileMinutes = values["reconcile-minutes"] ? budget(values["reconcile-minutes"]) : 0;
+assert(!reconcileMinutes || reconcileMinutes >= 8, "Reconcile observation must last >=8 minutes");
+assert(!values["expect-backoff"] || reconcileMinutes, "--expect-backoff needs --reconcile-minutes");
+assert(!reconcileMinutes || !values["expect-timeout"], "Inspection mode expects clean shutdown");
 const script = fileURLToPath(import.meta.url);
 const toolingRoot = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -172,7 +181,22 @@ module.exports = {
       supportedExecutionModes: ["remote-exec"],
       resolveAllocation: async () => ({ leaseId: ${JSON.stringify(leaseId)}, sharedHost: false }),
       provision: async () => { throw new Error("Fixture must never allocate a new lease"); },
-      inspect: async () => ({ status: "active" }),
+      async inspect(lease) {
+        if (!${Boolean(reconcileMinutes)}) return { status: "active" };
+        if (lease.leaseId !== ${JSON.stringify(leaseId)}) throw new Error("Inspection changed the lease");
+        const attempt = { startedAtMs: Date.now(), leaseId: lease.leaseId };
+        const events = path.join(${JSON.stringify(output)}, process.env.OPENCLAW_FIXTURE_PHASE + "-inspect.jsonl");
+        fs.appendFileSync(events, JSON.stringify(attempt) + "\\n");
+        marker("inspect-entered");
+        await new Promise((resolve, reject) => {
+          const abort = () => {
+            fs.appendFileSync(events, JSON.stringify({ ...attempt, abortedAtMs: Date.now(), reason: String(lease.signal.reason) }) + "\\n");
+            reject(lease.signal.reason);
+          };
+          if (lease.signal.aborted) abort();
+          else lease.signal.addEventListener("abort", abort, { once: true });
+        });
+      },
       resolveDestroyTimeoutMs: () => 600000,
       async destroy(lease) {
         if (lease.leaseId !== ${JSON.stringify(leaseId)}) throw new Error("Replay changed the lease");
@@ -232,16 +256,23 @@ async function main() {
     try {
       const marker = path.join(
         output,
-        `${phase}-destroy-${phase === "initial" ? "entered" : "confirmed"}`,
+        reconcileMinutes
+          ? `${phase}-inspect-entered`
+          : `${phase}-destroy-${phase === "initial" ? "entered" : "confirmed"}`,
       );
       const deadline = performance.now() + startupBudgetMs;
-      while (!existsSync(marker)) {
-        assert(!done, `${phase} Gateway exited before reaching provider destroy; see ${phase}.log`);
-        assert(
-          performance.now() < deadline,
-          `${phase} Gateway never reached provider destroy; see ${phase}.log`,
-        );
-        await delay(100);
+      const waitForProvider = async (until: number) => {
+        while (!existsSync(marker)) {
+          assert(!done, `${phase} Gateway exited before reaching provider; see ${phase}.log`);
+          assert(
+            performance.now() < until,
+            `${phase} Gateway never reached provider; see ${phase}.log`,
+          );
+          await delay(100);
+        }
+      };
+      if (!reconcileMinutes) {
+        await waitForProvider(deadline);
       }
       // Startup reconciliation runs after readiness. Wait for the real endpoint before SIGTERM.
       while (true) {
@@ -258,6 +289,18 @@ async function main() {
         }
         await delay(100);
       }
+      const readyAtMs = Date.now();
+      const observationStarted = performance.now();
+      if (reconcileMinutes) {
+        await waitForProvider(Math.min(deadline, observationStarted + 15_000));
+        if (phase === "initial") {
+          while (performance.now() - observationStarted < reconcileMinutes * 60_000) {
+            assert(!done, "Gateway exited during reconcile observation");
+            await delay(1_000);
+          }
+        }
+      }
+      const observationMs = performance.now() - observationStarted;
       const started = performance.now();
       child.kill("SIGTERM");
       let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -273,15 +316,53 @@ async function main() {
         child.kill("SIGKILL");
       }
       const exit = result ?? (await exited);
+      const inspectionEvents: { startedAtMs: number; abortedAtMs?: number; reason?: string }[] =
+        reconcileMinutes
+          ? readFileSync(path.join(output, `${phase}-inspect.jsonl`), "utf8")
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line))
+          : [];
+      const attempts = inspectionEvents.filter((event) => event.abortedAtMs === undefined);
       arms.push({
         phase,
         elapsedMs,
         killed,
         ...exit,
         aborted: existsSync(path.join(output, `${phase}-destroy-aborted`)),
+        ...(reconcileMinutes ? { readyAtMs, observationMs, attempts, inspectionEvents } : {}),
       });
       const record = await runFixture(phase === "initial" ? "interrupted" : "recovered");
-      if (phase === "initial") {
+      if (reconcileMinutes) {
+        assert.equal(killed, false, "Inspection shutdown exceeded its budget");
+        assert.equal(exit.code, 0, "Inspection shutdown did not exit cleanly");
+        assert.equal(record.state, "destroying", "Inspection failure must retain teardown intent");
+        assert.equal(record.leaseId, leaseId);
+        assert(record.lastError, "Inspection interruption must have a visible outcome");
+        assert(
+          !existsSync(path.join(output, `${phase}-destroy-entered`)),
+          "Inspection reached destroy",
+        );
+        if (phase === "initial") {
+          assert(observationMs >= reconcileMinutes * 60_000);
+          assert(
+            attempts.length >= (values["expect-backoff"] ? 2 : 7),
+            "Too few inspection attempts",
+          );
+          if (values["expect-backoff"]) {
+            assert(attempts.length <= 4, "Backoff did not reduce retries");
+          }
+          assert(
+            inspectionEvents.some((event) => event.reason?.includes("15s budget")),
+            "No real inspection timeout observed",
+          );
+        } else {
+          assert.equal(attempts.length, 1, "Restart must begin a new inspection");
+          const firstAttempt = attempts[0];
+          assert(firstAttempt, "Restart inspection was not recorded");
+          assert(firstAttempt.startedAtMs - readyAtMs <= 15_000, "Restart inherited retry delay");
+        }
+      } else if (phase === "initial") {
         assert.equal(record.state, "destroying", "Interrupted teardown must remain retryable");
         assert.equal(record.leaseId, leaseId);
         assert.equal(
@@ -320,6 +401,7 @@ async function main() {
     port,
     stopBudgetMs,
     expectTimeout: values["expect-timeout"],
+    ...(reconcileMinutes ? { reconcileMinutes, expectBackoff: values["expect-backoff"] } : {}),
     arms,
   };
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));

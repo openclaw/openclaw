@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
@@ -254,28 +253,6 @@ export function resolveChatPaneWorkerPresentation(
     confirmMessage: t(`${stopKey}Confirm`, { session: session.label || session.key }),
     confirmLabel: t(`${stopKey}ConfirmAction`),
   };
-}
-
-export function resolveChatPaneDesktopTarget(
-  session: GatewaySessionRow | undefined,
-): string | null {
-  if (!session) {
-    return null;
-  }
-  const placement = session.placement;
-  if (placement && placement.state !== "local") {
-    // Wait for the active owner; starting or reclaimed sessions do not own a desktop yet.
-    if (placement.state !== "active") {
-      return null;
-    }
-    if (placement.runner?.kind === "device") {
-      const nodeId = normalizeOptionalString(placement.runner.deviceId);
-      return placement.runner.status === "available" && nodeId ? `node:${nodeId}` : null;
-    }
-    return normalizeOptionalString(placement.environmentId) ?? null;
-  }
-  const execNode = normalizeOptionalString(session.execNode);
-  return execNode ? `node:${execNode}` : "gateway";
 }
 
 export function resolveChatPanePlacement(params: {

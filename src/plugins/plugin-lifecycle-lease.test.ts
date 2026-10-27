@@ -6,7 +6,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import { createPluginLifecycleLeaseTestClock } from "../gateway/config-reload.test-support.js";
@@ -125,24 +125,22 @@ async function runLeaseChild(
     }
   });
   void completed.catch(() => {});
-  const child = await Promise.race([
+  const child = await awaitGateBeforeSettlement(
     started.promise,
-    completed.then(() => {
-      throw new Error("Lease child exited before starting");
-    }),
-  ]);
+    completed,
+    "Lease child exited before starting",
+  );
   const waitForPhase = (phase: string): Promise<void> => {
     if (phases.has(phase)) {
       return Promise.resolve();
     }
     const waiter = phaseWaiters.get(phase) ?? createDeferred();
     phaseWaiters.set(phase, waiter);
-    return Promise.race([
+    return awaitGateBeforeSettlement(
       waiter.promise,
-      completed.then(() => {
-        throw new Error(`lease child ${args[0]} exited before ${phase}`);
-      }),
-    ]);
+      completed,
+      `lease child ${args[0]} exited before ${phase}`,
+    );
   };
   const run = {
     child,

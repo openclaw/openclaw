@@ -8,6 +8,8 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 const suite = createControlUiE2eSuite({ name: "Settings typography search" });
 
 suite.define(() => {
@@ -38,12 +40,16 @@ suite.define(() => {
           await expect(typographySection.getByText("Interface", { exact: true })).toBeVisible();
           await expect(typographySection.getByText("Chat prose", { exact: true })).toBeVisible();
           await typographySection.scrollIntoViewIfNeeded();
-          await page.screenshot({ path: path.join(artifacts, "typography-present.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(artifacts, "typography-present.png") });
+          }
 
           await page.locator(".page-title").scrollIntoViewIfNeeded();
           await search.fill(query);
           await expect(search).toHaveValue(query);
-          await page.screenshot({ path: path.join(artifacts, "search-before-result.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(artifacts, "search-before-result.png") });
+          }
           const result = sidebar.getByRole("link", { name: destination, exact: true });
           await expect(result).toBeVisible();
           await result.click();
@@ -51,7 +57,9 @@ suite.define(() => {
           const heading = page.getByRole("heading", { name: destination, exact: true });
           await expect(heading).toBeInViewport();
           await expect.poll(async () => (await heading.boundingBox())?.y).toBeLessThan(500);
-          await page.screenshot({ path: path.join(artifacts, "search-destination.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(artifacts, "search-destination.png") });
+          }
           expect(await gateway.getRequests("config.set")).toHaveLength(0);
           expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         },

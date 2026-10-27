@@ -171,7 +171,9 @@ it("settles a stale-build turn when a lost shared node rejects its stop acknowle
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
     expect(failure).toBeInstanceOf(Error);
     expect(warn).toHaveBeenCalledWith(
-      `Worker environment reconcile failed (${ENVIRONMENT_ID}, ${provider.id})`,
+      expect.stringContaining(
+        `Worker environment reconcile failed (${ENVIRONMENT_ID}, ${provider.id})`,
+      ),
     );
   } finally {
     rejectStop = false;

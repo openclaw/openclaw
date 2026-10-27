@@ -1,4 +1,3 @@
-import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -113,6 +112,7 @@ vi.mock("./shared.js", async (importOriginal) => ({
   resolveNodeRunner: vi.fn(() => "/usr/bin/node"),
 }));
 
+import { writeFixtureJson, writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
@@ -131,6 +131,16 @@ function complete(overrides: Partial<Parameters<typeof completePostCorePluginUpd
 
 function completeUnchanged(overrides: Parameters<typeof complete>[0] = {}) {
   return complete({ pluginUpdate: { ...pluginUpdate, changed: false }, ...overrides });
+}
+
+function runDoctor(
+  overrides: Partial<Parameters<typeof runUpdateFinalizationDoctorInFreshProcess>[0]> = {},
+) {
+  return runUpdateFinalizationDoctorInFreshProcess({
+    ...updateOptions,
+    phase: "pre-plugin",
+    ...overrides,
+  });
 }
 
 const doctorArgs = [
@@ -164,7 +174,7 @@ const expectNoCalls = (...spies: unknown[]) => {
 };
 async function writeConfig(configPath: string, config: unknown) {
   await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, JSON.stringify(config));
+  await writeFixtureJson(configPath, config);
 }
 async function useRealConfig() {
   const owner =
@@ -194,6 +204,8 @@ describe("post-plugin update readiness", () => {
       ...readinessExit,
       stdout: JSON.stringify({ ok: true, checksRun: 1, checksSkipped: 0, findings: [] }),
     });
+    vi.mocked(defaultRuntime.log).mockClear();
+    vi.mocked(defaultRuntime.error).mockClear();
   });
 
   it.each([
@@ -214,13 +226,11 @@ describe("post-plugin update readiness", () => {
       });
       const onWarnings = vi.fn();
       mocks.command.mockImplementationOnce(async (_command, _args, options) => {
-        await fs.writeFile(
+        await writeFixtureJson(
           options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
-          JSON.stringify(
-            kind === "deferred"
-              ? { status: "ok", warnings: [warning], maintenanceRefusal: refusal }
-              : { status: "error", failureFacts: [], maintenanceRefusal: refusal },
-          ),
+          kind === "deferred"
+            ? { status: "ok", warnings: [warning], maintenanceRefusal: refusal }
+            : { status: "error", failureFacts: [], maintenanceRefusal: refusal },
         );
         if (kind === "data-at-risk") {
           throw childFailure;
@@ -228,9 +238,7 @@ describe("post-plugin update readiness", () => {
         return emptyOutput;
       });
       const run =
-        phase === "pre-plugin"
-          ? runUpdateFinalizationDoctorInFreshProcess({ ...updateOptions, phase, onWarnings })
-          : complete({ onWarnings });
+        phase === "pre-plugin" ? runDoctor({ phase, onWarnings }) : complete({ onWarnings });
       await expect(run).rejects.toMatchObject(
         kind === "deferred"
           ? { refusal, message: warning }
@@ -258,13 +266,7 @@ describe("post-plugin update readiness", () => {
         },
       };
       await expect(
-        revoked
-          ? complete({ opts })
-          : runUpdateFinalizationDoctorInFreshProcess({
-              ...updateOptions,
-              opts,
-              phase: "post-plugin",
-            }),
+        revoked ? complete({ opts }) : runDoctor({ opts, phase: "post-plugin" }),
       ).rejects.toThrow(revoked ? "requester-revoked" : "original update executor");
       if (revoked) {
         expect(isCurrent).toHaveBeenCalledTimes(1);
@@ -286,9 +288,7 @@ describe("post-plugin update readiness", () => {
         return "/opt/openclaw/dist/index.js";
       });
       try {
-        const run = runUpdateFinalizationDoctorInFreshProcess({
-          ...updateOptions,
-          phase: "pre-plugin",
+        const run = runDoctor({
           opts: { timeout: "5" },
           serviceInspectionDeadlineAtMs: 1_500,
         });
@@ -334,8 +334,7 @@ describe("post-plugin update readiness", () => {
         });
         return result;
       });
-      await runUpdateFinalizationDoctorInFreshProcess({
-        ...updateOptions,
+      await runDoctor({
         phase,
         opts: { timeout },
         root: tempDirs.make("fresh-doctor-policy-"),
@@ -361,7 +360,6 @@ describe("post-plugin update readiness", () => {
     "records the fresh Doctor's traced sections without printing the trace (%s)",
     async (outcome, phase, exitCode) => {
       vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", undefined);
-      vi.mocked(defaultRuntime.error).mockClear();
       const stderr = [
         "[gateway] startup trace: doctor.config-flow 4100.0ms total=4200.0ms start=100.0ms\n",
         "real Doctor warning\n",
@@ -395,8 +393,7 @@ describe("post-plugin update readiness", () => {
         return { stdout: "", stderr };
       });
       const onDoctorStep = vi.fn();
-      const pending = runUpdateFinalizationDoctorInFreshProcess({
-        ...updateOptions,
+      const pending = runDoctor({
         phase,
         onDoctorStep,
         root: tempDirs.make("fresh-doctor-sections-"),
@@ -645,8 +642,6 @@ describe("post-plugin update readiness", () => {
         ...metadata,
       }),
     );
-    vi.mocked(defaultRuntime.log).mockClear();
-    vi.mocked(defaultRuntime.error).mockClear();
 
     const { pluginUpdate: result } = await completeUnchanged();
 
@@ -735,9 +730,7 @@ describe("post-plugin update readiness", () => {
         return await runNormally(command, args, options);
       });
       if (status === "error") {
-        await expect(
-          runUpdateFinalizationDoctorInFreshProcess({ ...updateOptions, phase: "pre-plugin" }),
-        ).rejects.toMatchObject({ failureFacts, exitCode: 23 });
+        await expect(runDoctor()).rejects.toMatchObject({ failureFacts, exitCode: 23 });
       }
       const result = await complete({ onWarnings });
       expect(result.pluginUpdate).toMatchObject(
@@ -769,10 +762,7 @@ describe("post-plugin update readiness", () => {
           { failed: true, exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE, timedOut },
         );
       });
-      const run = runUpdateFinalizationDoctorInFreshProcess({
-        ...updateOptions,
-        phase: "pre-plugin",
-      });
+      const run = runDoctor();
       if (timedOut || captureFailed) {
         await expect(run).rejects.toThrow("Doctor advisory");
       } else {
@@ -815,7 +805,7 @@ describe("post-plugin update readiness", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-    writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local" } }));
+    writeFixtureJsonSync(configPath, { gateway: { mode: "local" } });
     const filename = openOpenClawStateDatabase({ env: process.env }).path;
     closeOpenClawStateDatabaseForTest();
     const db = new DatabaseSync(filename);
@@ -1006,8 +996,6 @@ describe("post-plugin update readiness", () => {
       const before = getUpdateRun(run.runId);
       const beforeDoctor = vi.fn(async () => undefined);
       mocks.readConfig.mockResolvedValue({ ...validConfigSnapshot, valid: false });
-      vi.mocked(defaultRuntime.log).mockClear();
-      vi.mocked(defaultRuntime.error).mockClear();
 
       const result = await completeUnchanged({ runId: run.runId, beforeDoctor });
 

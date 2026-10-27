@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
@@ -35,6 +36,8 @@ import {
 } from "./store.js";
 
 export type { AuthProfileAuthorization } from "./authorization-contract.js";
+
+const authorizationCaptureTails = new Map<string, Promise<void>>();
 
 /**
  * Capture a persisted credential lifetime through its canonical owner, without bearer material.
@@ -204,97 +207,107 @@ export async function captureAuthProfileAuthorization(params: {
         selectedPath === requestedPath && selected.type !== "oauth" ? [requestedPath] : paths;
       return { rows, selectedPath, lineagePaths };
     };
-    const assertFacts = () => {
-      assertOwners();
-      for (const target of targets) {
-        if (!target.incarnation) {
-          continue;
-        }
-        const fact = target.observation.readFact();
-        if (!fact || fact.incarnation !== target.incarnation) {
-          retired = true;
-          throw new AuthProfileAuthorizationError("retired");
-        }
-        if (target.databasePath === selectedPath) {
-          if (
-            fact.status === "retired" ||
-            fact.status === "absent" ||
-            (fact.expires !== undefined && fact.expires <= Date.now())
-          ) {
-            retired = true;
-            throw new AuthProfileAuthorizationError("retired");
+    // First-use enrollment writes owner rows. Overlapping captures must finish enrollment
+    // before another capture reads them; every caller still receives its own live authority.
+    return await enqueueKeyedTask({
+      tails: authorizationCaptureTails,
+      keys: paths,
+      task: async () => {
+        const assertFacts = () => {
+          assertOwners();
+          for (const target of targets) {
+            if (!target.incarnation) {
+              continue;
+            }
+            const fact = target.observation.readFact();
+            if (!fact || fact.incarnation !== target.incarnation) {
+              retired = true;
+              throw new AuthProfileAuthorizationError("retired");
+            }
+            if (target.databasePath === selectedPath) {
+              if (
+                fact.status === "retired" ||
+                fact.status === "absent" ||
+                (fact.expires !== undefined && fact.expires <= Date.now())
+              ) {
+                retired = true;
+                throw new AuthProfileAuthorizationError("retired");
+              }
+              if (fact.status === "pending") {
+                throw new AuthProfileAuthorizationError("unavailable");
+              }
+            }
           }
-          if (fact.status === "pending") {
+        };
+        let initial = await readCanonical();
+        const enrollment = initial.rows.flatMap(({ store }, index) =>
+          initial.lineagePaths.includes(targets[index]!.databasePath) &&
+          !readAuthProfileAuthorizationLifetime(
+            store.status === "readable" ? store.raw : undefined,
+            profileId,
+          )
+            ? [{ target: targets[index]!, store }]
+            : [],
+        );
+        if (enrollment.length) {
+          // Release absent-file readers before the actual agent owner creates its first-use row.
+          await closeReaders();
+          for (const { target, store } of enrollment) {
+            await enrollOwnedAuthProfileAuthorization({
+              databasePath: target.databasePath,
+              agentId: target.agentId,
+              env,
+              context,
+              input: { profileId, expected: store },
+              assertCurrent: assertRoot,
+            });
+            assertRoot();
+          }
+          initial = await readCanonical();
+        }
+        const selectedPath = initial.selectedPath;
+        const lineage = targets.filter((target) =>
+          initial.lineagePaths.includes(target.databasePath),
+        );
+        for (const target of lineage) {
+          target.incarnation = target.observation.readFact()?.incarnation;
+          if (!target.incarnation) {
             throw new AuthProfileAuthorizationError("unavailable");
           }
         }
-      }
-    };
-    let initial = await readCanonical();
-    const enrollment = initial.rows.flatMap(({ store }, index) =>
-      initial.lineagePaths.includes(targets[index]!.databasePath) &&
-      !readAuthProfileAuthorizationLifetime(
-        store.status === "readable" ? store.raw : undefined,
-        profileId,
-      )
-        ? [{ target: targets[index]!, store }]
-        : [],
-    );
-    if (enrollment.length) {
-      // Release absent-file readers before the actual agent owner creates its first-use row.
-      await closeReaders();
-      for (const { target, store } of enrollment) {
-        await enrollOwnedAuthProfileAuthorization({
-          databasePath: target.databasePath,
-          agentId: target.agentId,
-          env,
-          context,
-          input: { profileId, expected: store },
-          assertCurrent: assertRoot,
-        });
-        assertRoot();
-      }
-      initial = await readCanonical();
-    }
-    const selectedPath = initial.selectedPath;
-    const lineage = targets.filter((target) => initial.lineagePaths.includes(target.databasePath));
-    for (const target of lineage) {
-      target.incarnation = target.observation.readFact()?.incarnation;
-      if (!target.incarnation) {
-        throw new AuthProfileAuthorizationError("unavailable");
-      }
-    }
-    assertFacts();
-    // Hash only opaque owner-issued incarnations, never credential or token material.
-    // Preserve the original namespace so existing MCP bindings survive this owner extraction.
-    const authorizationId = createHash("sha256")
-      .update(
-        JSON.stringify([
-          "mcp-auth-profile-v1",
-          profileId,
-          selectedPath,
-          ...lineage.map((target) => [target.databasePath, target.incarnation]),
-        ]),
-      )
-      .digest("hex");
-    return {
-      authorizationId,
-      assertCurrent: assertFacts,
-      async revalidate() {
-        // The credential writer publishes replacement, refresh, and revocation facts.
-        // External writers require exclusive offline custody; no foreign-commit probe.
         assertFacts();
+        // Hash only opaque owner-issued incarnations, never credential or token material.
+        // Preserve the original namespace so existing MCP bindings survive this owner extraction.
+        const authorizationId = createHash("sha256")
+          .update(
+            JSON.stringify([
+              "mcp-auth-profile-v1",
+              profileId,
+              selectedPath,
+              ...lineage.map((target) => [target.databasePath, target.incarnation]),
+            ]),
+          )
+          .digest("hex");
+        return {
+          authorizationId,
+          assertCurrent: assertFacts,
+          async revalidate() {
+            // The credential writer publishes replacement, refresh, and revocation facts.
+            // External writers require exclusive offline custody; no foreign-commit probe.
+            assertFacts();
+          },
+          dispose() {
+            if (disposed) {
+              return;
+            }
+            release();
+            void trackAsyncWork(closeReaders).catch(() => {
+              authProfilesLog.warn("Auth-profile reader cleanup failed");
+            });
+          },
+        };
       },
-      dispose() {
-        if (disposed) {
-          return;
-        }
-        release();
-        void trackAsyncWork(closeReaders).catch(() => {
-          authProfilesLog.warn("Auth-profile reader cleanup failed");
-        });
-      },
-    };
+    });
   } catch (error) {
     try {
       await cleanup?.();

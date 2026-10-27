@@ -150,22 +150,6 @@ function buildBody(family: Family, text: string, dims?: number): string {
   }
 }
 
-function buildCohereBody(
-  family: Family,
-  texts: string[],
-  inputType: "search_query" | "search_document",
-  dims?: number,
-): string {
-  const body: Record<string, unknown> = { texts, input_type: inputType, truncate: "END" };
-  if (family === "cohere-v4") {
-    body.embedding_types = ["float"];
-    if (dims != null) {
-      body.output_dimension = dims;
-    }
-  }
-  return JSON.stringify(body);
-}
-
 type BedrockEmbeddingResponseJson = {
   embedding?: unknown;
   embeddings?: unknown;
@@ -305,7 +289,15 @@ export async function createBedrockEmbeddingProvider(
     inputType: "search_query" | "search_document",
     signal?: AbortSignal,
   ): Promise<number[][]> => {
-    const raw = await invoke(buildCohereBody(family, texts, inputType, client.dimensions), signal);
+    const dims = client.dimensions;
+    const body: Record<string, unknown> = { texts, input_type: inputType, truncate: "END" };
+    if (family === "cohere-v4") {
+      body.embedding_types = ["float"];
+      if (dims != null) {
+        body.output_dimension = dims;
+      }
+    }
+    const raw = await invoke(JSON.stringify(body), signal);
     return parseCohereBatch(family, raw).map(sanitizeAndNormalizeEmbedding);
   };
 

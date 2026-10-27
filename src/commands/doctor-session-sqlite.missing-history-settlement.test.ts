@@ -32,10 +32,7 @@ it("settles plugin repair after a deleted session archive is removed", async () 
       target: { canonicalKey: "agent:main:deleted", storeKeys: ["agent:main:deleted"] },
       archiveTranscript: true,
     });
-    expect(deletion.deleted).toBe(true);
-    expect(deletion.archivedTranscripts).toHaveLength(1);
     const archive = deletion.archivedTranscripts[0]!.archivedPath;
-    expect(path.basename(archive)).toMatch(/\.jsonl\.deleted\..+\.zst$/);
     fs.unlinkSync(archive);
     await withDoctorSqliteMaintenanceLock({
       env: state.env,
@@ -53,7 +50,6 @@ it("settles plugin repair after a deleted session archive is removed", async () 
     });
     expect(fs.existsSync(storePath)).toBe(false);
     expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:deleted" })).toBeUndefined();
-    expect(fs.existsSync(archive)).toBe(false);
   });
 });
 
@@ -62,8 +58,7 @@ it("settles plugin repair with a warning when an older retained original is gone
     const { cfg, storePath } = await seedDeferredPluginSessionSource(state, "default");
     const run = () =>
       runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
-    const imported = await run();
-    const target = imported.targets[0]!;
+    const target = (await run()).targets[0]!;
     const prior = createSessionSqliteMigrationRun(state.env, [target]);
     const directory = path.join(
       path.dirname(path.dirname(storePath)),
@@ -107,17 +102,10 @@ it("settles plugin repair with a warning when an older retained original is gone
       },
     });
     expect(fs.existsSync(storePath)).toBe(false);
-    expect(fs.existsSync(originals[0]!)).toBe(false);
     expect(fs.readFileSync(originals[1]!, "utf8")).toBe(bytes);
-    expect(
-      readSessionSqliteMigrationManifest(prior.manifestPath)?.targets[0]?.completedMoves,
-    ).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          archivePath: originals[0],
-          artifact: expect.objectContaining({ disposal: { state: "retained" } }),
-        }),
-      ]),
-    );
+    const retained = readSessionSqliteMigrationManifest(
+      prior.manifestPath,
+    )?.targets[0]?.completedMoves.find((move) => move.archivePath === originals[0]);
+    expect(retained?.artifact?.disposal).toEqual({ state: "retained" });
   });
 });

@@ -69,6 +69,7 @@ suite.define(() => {
     }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       deferredMethods: ["chat.startup", "chat.startup"],
       historyMessages: [timedText("assistant", "Shared cold startup proof.")],
       methodResponses: { "sessions.list": chatSessionListResponse() },
@@ -195,6 +196,7 @@ suite.define(() => {
     const { page, gateway } = await chatFixture(
       suite,
       {
+        subscriptionInitialHistory: false,
         historyMessages: [timedText("assistant", "Split toolbar proof.")],
         methodResponses: { "sessions.list": chatSessionListResponse() },
         sessionKey: "agent:main:session-a",
@@ -649,7 +651,7 @@ suite.define(() => {
     expect(activeWeight).toBe(inactiveWeight);
     expect(inactiveWeight).toBe("500");
 
-    const filterAndSort = page.getByRole("button", { name: "Filter & sort", exact: true });
+    const filterAndSort = page.getByRole("button", { name: /^Filter & sort · /, exact: true });
     await filterAndSort.click();
     await chooseSidebarMenuOption(page, "Sort by", "Last updated");
     await closeSidebarMenu(page);
@@ -686,6 +688,7 @@ suite.define(() => {
     );
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
+      sessions,
       methodResponses: {
         "sessions.list": {
           cases: [

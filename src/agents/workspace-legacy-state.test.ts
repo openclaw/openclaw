@@ -83,42 +83,34 @@ describe("legacy workspace reset cleanup", () => {
     expect(await fs.readFile(siblingPath, "utf8")).toBe(shortMarker);
   });
 
-  it.each(["owned", "preview", "malformed"] as const)(
-    "cleans %s legacy candidates",
-    async (kind) => {
-      await fs.mkdir(workspaceDir, { recursive: true });
-      const setupPath = paths.setupStatePaths[0]!;
-      const statePath = paths.stateDirAttestationPaths[0]!;
-      const lastStateClaim = paths.stateDirAttestationPaths.at(-1)! + ".doctor-importing";
-      const sibling = paths.siblingAttestationPaths[0]!;
-      const candidates =
-        kind === "malformed"
-          ? [statePath, lastStateClaim]
-          : kind === "preview"
-            ? [setupPath, sibling]
-            : [
-                setupPath,
-                setupPath + ".doctor-importing",
-                statePath,
-                lastStateClaim,
-                sibling,
-                sibling + ".doctor-importing",
-              ];
-      await writeCandidates(candidates, kind === "malformed" ? "truncated marker\n" : undefined);
-      const result = await removeLegacyWorkspaceStateForReset(prepare(), {
-        dryRun: kind === "preview",
-      });
-      expect(result.warnings).toEqual([]);
-      expect(new Set(result.removedPaths)).toEqual(new Set(candidates));
-      if (kind === "preview") {
-        for (const candidate of candidates) {
-          await expect(fs.lstat(candidate)).resolves.toBeDefined();
-        }
-      } else {
-        await expectMissing(candidates);
-      }
-    },
-  );
+  it("cleans owned legacy candidates, including malformed reserved state", async () => {
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const setup = paths.setupStatePaths[0]!;
+    const sibling = paths.siblingAttestationPaths[0]!;
+    const reserved = [
+      paths.stateDirAttestationPaths[0]!,
+      paths.stateDirAttestationPaths.at(-1)! + ".doctor-importing",
+    ];
+    const candidates = [
+      setup,
+      setup + ".doctor-importing",
+      sibling,
+      sibling + ".doctor-importing",
+      ...reserved,
+    ];
+    await writeCandidates(candidates);
+    await writeCandidates(reserved, "truncated marker\n");
+    const preview = await removeLegacyWorkspaceStateForReset(prepare(), { dryRun: true });
+    expect(preview.warnings).toEqual([]);
+    expect(new Set(preview.removedPaths)).toEqual(new Set(candidates));
+    for (const candidate of candidates) {
+      await expect(fs.lstat(candidate)).resolves.toBeDefined();
+    }
+    const result = await removeLegacyWorkspaceStateForReset(prepare());
+    expect(result.warnings).toEqual([]);
+    expect(new Set(result.removedPaths)).toEqual(new Set(candidates));
+    await expectMissing(candidates);
+  });
 
   it("preserves a malformed sibling claim and foreign marker", async () => {
     const siblingPath = paths.siblingAttestationPaths[0]!;

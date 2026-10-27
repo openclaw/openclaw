@@ -28,6 +28,7 @@ import { QUESTIONS_SCOPE } from "./method-scopes.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
+import type { SessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 import {
   listCurrentWebPushTargets,
   withCurrentWebPushAuthority,
@@ -124,7 +125,10 @@ function resolveEventWebPushNotification(
 }
 
 /** Routes attention events to offline browsers without expanding live session visibility. */
-export function createEventWebPushDelivery(getRuntimeConfig: () => OpenClawConfig) {
+export function createEventWebPushDelivery(
+  getRuntimeConfig: () => OpenClawConfig,
+  viewers?: Pick<SessionViewerPresenceDeclarations, "isViewedOnDevice">,
+) {
   const deliver = (
     notification: EventNotification,
     event: string,
@@ -180,6 +184,8 @@ export function createEventWebPushDelivery(getRuntimeConfig: () => OpenClawConfi
                 : [READ_SCOPE],
             ...(mention ? { visibilityScopes: [ADMIN_SCOPE] } : {}),
           });
+          // Only an unambiguous session can be matched against one device's viewer declarations.
+          const viewedSessionKey = sessionKeys.length === 1 ? sessionKeys[0] : undefined;
           const agentLabel = normalizeWebPushDisplayLabel(agentId);
           const agentIcon = currentWebPushAgentIcon(cfg, preparedIcon);
           const groups = new Map<
@@ -220,6 +226,14 @@ export function createEventWebPushDelivery(getRuntimeConfig: () => OpenClawConfi
             }
             if (cfg.gateway?.roles && sessionKeys.length === 0) {
               // Multi-user events without an authoritative session owner are not broadcast offline.
+              continue;
+            }
+            if (
+              notification.category === "agent-finished" &&
+              viewedSessionKey !== undefined &&
+              viewers?.isViewedOnDevice(target.subscription.deviceId, viewedSessionKey) === true
+            ) {
+              // This device already shows the reply; other devices and categories still notify.
               continue;
             }
             const prefix = preferences.label ? `${preferences.label} · ` : "";

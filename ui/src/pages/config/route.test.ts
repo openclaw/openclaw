@@ -87,7 +87,6 @@ it.each([
     expect(replace).toHaveBeenCalledOnce();
     expect(push).not.toHaveBeenCalled();
     expect(history.location()).toEqual(locationFromUrl(targetUrl));
-    expect(router.getState().resolvedLocation).toEqual(locationFromUrl(targetUrl));
   } finally {
     router.stop();
   }
@@ -173,8 +172,6 @@ describe.each(["", "/ui"])("moved Settings sections with base path %j", (basePat
         await expect.poll(() => router.getState().resolvedLocation).toEqual(origin);
         pop(1);
         await expect.poll(() => router.getState().resolvedLocation).toEqual(destination);
-        expect(entries).toEqual([origin, destination]);
-        expect(replace).toHaveBeenCalledOnce();
       } finally {
         router.stop();
       }

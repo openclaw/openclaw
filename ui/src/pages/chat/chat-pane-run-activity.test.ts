@@ -1,10 +1,10 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
+/* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
@@ -21,13 +21,7 @@ import {
 } from "./components/chat-transcript.test-support.ts";
 
 function sessionsResult(rows: GatewaySessionRow[]): SessionsListResult {
-  return {
-    ts: 1,
-    path: "",
-    count: rows.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: rows,
-  };
+  return sessionListResult(1, rows);
 }
 
 describe.each([false, true])("chat run activity (recovery ready: %s)", (recoveryScopeReady) => {
@@ -196,13 +190,11 @@ describe("composer run status", () => {
       expect(container.querySelector(".chat-working-indicator .chat-reading-indicator")).toBeNull();
       expect(container.querySelector(".chat-subagent-activity")).toBeNull();
       expect(container.querySelector("openclaw-working-phrase")).toBeNull();
-      expect(container.textContent).not.toContain("Backend implementation");
-      const count = container.querySelector<HTMLButtonElement>(
-        ".chat-working-indicator__subagents",
-      );
-      expect(count?.textContent).toBe("1 subagent running");
-      count?.click();
-      expect(onOpenSubagents).toHaveBeenCalledExactlyOnceWith();
+      // A handoff's wait names the session it waits on in place of a running count.
+      const wait = () =>
+        container.querySelector(".chat-subagent-wait")?.textContent?.replace(/\s+/gu, " ").trim();
+      expect(wait()).toBe("Waiting on Backend implementation · 1m 5s");
+      expect(container.querySelector(".chat-working-indicator__subagents")).toBeNull();
       const timer = container.querySelector(".chat-working-indicator openclaw-elapsed-time");
       expect(timer?.textContent).toBe("1m 5s");
 
@@ -210,9 +202,12 @@ describe("composer run status", () => {
         child,
         { ...child, key: "agent:main:subagent:frontend", label: "Frontend implementation" },
       ]);
-      expect(container.querySelector(".chat-working-indicator__subagents")?.textContent).toBe(
-        "2 subagents running",
-      );
+      expect(
+        container
+          .querySelector(".chat-subagent-wait button[aria-expanded]")
+          ?.textContent?.replace(/\s+/gu, " ")
+          .trim(),
+      ).toBe("Waiting on 2 sessions · 1m 5s");
       expect(
         container.querySelectorAll(".chat-working-indicator openclaw-elapsed-time"),
       ).toHaveLength(1);
@@ -220,7 +215,7 @@ describe("composer run status", () => {
 
       await draw([{ ...child, hasActiveRun: false }]);
       expect(container.querySelector(".chat-subagent-activity")).toBeNull();
-      expect(container.querySelector(".chat-working-indicator__subagents")).toBeNull();
+      expect(container.querySelector(".chat-subagent-wait")).toBeNull();
     },
   );
 

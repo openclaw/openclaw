@@ -105,6 +105,7 @@ import type { ResponsesContinuationRequest } from "./openai-responses-continuati
 import { OpenAIResponsesWebSocketPostDispatchError } from "./openai-responses-contracts.js";
 import { responsesLoopbackModel } from "./openai-responses-loopback.test-support.js";
 import { createOpenAIResponsesWebSocketStream } from "./openai-responses-websocket.js";
+import { completedResponse } from "./openai-stream-cases.test-support.js";
 
 const client = {
   apiKey: "test-key",
@@ -132,10 +133,7 @@ const output = (text: string, id = "msg_1") => ({
 const completed = (
   id: string,
   result: Array<ReturnType<typeof output> | ReturnType<typeof makeToolCall>> = [output("answer")],
-) => ({
-  type: "response.completed",
-  response: { id, status: "completed", output: result },
-});
+) => completedResponse(id, result);
 const accepted = {
   type: "response.steer.accepted",
   steer: { id: "steer_1", previous_response_id: "resp_1" },

@@ -83,6 +83,21 @@ preload completion may extend the window. Coverage mode records V8 evaluation
 and rejects a panel that evaluates before its action. Cold readiness and
 coverage remain bounded before this optional warmup.
 
+Use `--routes advanced --interactions settings-security-immediate` or
+`settings-security-idle` for one independent native Settings → Security visit.
+Run each action in its own command and fresh contexts; do not combine them.
+The idle case has a fixed 2,000 ms post-ready minimum and does not wait longer
+for preloads. Both record actual modulepreload links, resource completion,
+config/schema receipt counts, and V8 evaluation before/after the native click.
+Security readiness requires its checked Browser toggle and four enabled tool
+profiles with no override selected. The action precedes artifact analysis and
+screenshots; `readinessToActionMs` records observation/automation overhead.
+Cold Advanced coverage remains frozen at its own readiness. Use separate
+coverage and timing runs, both localhost and 100 ms HTTP, with the same A/A
+control and CPU rules above. HTTP shaping does not add synthetic RPC latency.
+A route's declared next interaction is its only automatic idle choice; after
+it completes, New Session still warms on intent or on routes without a declaration.
+
 ## Media load, remount, and disposal
 
 `bench-control-ui-media.ts` compares **already-built** base and head bundles with
@@ -95,8 +110,29 @@ runs both localhost and 100 ms RTT / 10 Mbps profiles by default:
 NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-media.ts \
   --bundle-dir /absolute/base/control-ui \
   --compare-bundle-dir /absolute/head/control-ui \
-  --pairs 10 --output /absolute/proof/media
+  --engine chromium --pairs 10 --output /absolute/proof/media
 ```
+
+Repeat with `--engine webkit` for the same media workload in WebKit. Chromium
+is the default; WebKit records wall timings, request counts, blob lifetimes, and
+feature-detected layout shifts without CDP CPU, heap, or trace metrics. Unsupported
+native Layout Instability is recorded as `nativeLayoutShiftSupported: false` and
+`cls: null` / `mediaCls: null`; it is never presented as zero CLS.
+
+Use `--dimensions canonical` to include the persisted `__openclaw.media` image
+width/height and inline slot mapping. The default `--dimensions missing` preserves
+the original metadata-free cohort. Compare the same cohort on base and head;
+known-dimension reservation cannot prove zero shift for absent dimensions.
+
+For attribution, add `--geometry --pairs 1` in a separate diagnostic run. It captures
+all DOM element rectangles before and after the held-media release, including
+row keys, classes, scroll geometry, and image decode dimensions. During that
+fixed-viewport load interval only, an rAF sampler records changed visible
+transcript row, image, frame, footer, and footer-descendant rectangles with
+timestamps and source classes. Insertions and removals have a null previous or
+current rectangle. Sampling stops before scrolling; these rectangle changes are
+not a synthetic CLS score. The geometry reads add layout work, so do not mix
+these diagnostic timings with uninstrumented timing runs.
 
 The initial viewport is settled while media is held. Releasing those requests
 measures media-induced CLS separately from scrolling. Each measured phase allows
@@ -111,11 +147,12 @@ Per-sample JSON records request counts by full URL (including revision, ticket,
 and size queries), method, kind and opaque auth-context identity; credentials are
 never recorded. Cumulative before/stable/scroll/disposal snapshots and separate
 boot/steady duplicate counts distinguish request ownership from bootstrap work.
-Duration metrics use Chrome’s `threadTicks` clock to measure thread CPU time,
+Chromium duration metrics use its `threadTicks` clock to measure thread CPU time,
 excluding time descheduled by other work on the host. Wall-clock load/scroll
 timings remain separate.
 
-It also records CLS source rectangles and media attribution, object URL
+It also records native CLS source rectangles, timestamps, and media attribution when
+the engine supports Layout Instability, object URL
 creation/revocation and remaining DOM consumers, CDP script/task/layout/style
 duration, and JS heap before scrolling and after forced GC immediately before
 and after host disconnection, including unreferenced favicon blob URLs. The
@@ -131,12 +168,14 @@ pairs with median regression ≤5% and p95 not worse. On a loaded host, repeat w
 the same base directory supplied as both bundles for an A/A control, then use
 20 interleaved pairs and CDP CPU plus structural counters if wall timing is noisy.
 
-Use a separate `--trace --pairs 1` run for decode/paint attribution; tracing adds
+Use a separate Chromium `--trace --pairs 1` run for decode/paint attribution; tracing adds
 overhead and must not be mixed with the untraced timing samples. The trace and
 named-event duration sums are retained per sample. CDP JS heap excludes native
-decoded-image/GPU memory. The mock RPC transport has no RTT; static HTTP uses CDP
-throttling and routed media uses equivalent explicit delay because Playwright
-fulfillment bypasses it. Routing disables the HTTP cache, so duplicate counts
+decoded-image/GPU memory. The mock RPC transport has no RTT; Chromium static HTTP
+uses CDP throttling, while WebKit static HTTP is unthrottled. Both engines use
+the same explicit routed-media delay because Playwright fulfillment bypasses
+network emulation. Load measurement starts after static assets are ready; this
+is not a cross-engine cold-navigation comparison. Routing disables the HTTP cache, so duplicate counts
 measure application request reuse rather than disk-cache behavior. These are
 renderer/media results, not real-Gateway throughput or process-memory results.
 
@@ -161,6 +200,10 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
 
 Twenty runs alternate ten base/head pairs. Supply a second copy of the base
 bundle for an A/A control. `--boot-route new` measures the New Session composer.
+Cold New Session omits owner registration and sidebar counters because it has no
+Chat owner to finish registration. The effective `ownerProbes` and
+`sidebarCounters` flags are recorded in `summary.json`; other routes and warm
+reloads retain their existing instrumentation.
 Browser storage and HTTP caches are cleared between samples; Gateway asset
 caches stay warm for each immutable bundle. Each bundle's index is read before
 sampling to initialize the shared file reader outside the first timed reload.
@@ -464,6 +507,12 @@ Every reload replays the warm visit's persisted sidebar and trimmed v8 transcrip
 serves synthetic HTTP fixtures natively so production JS/CSS can use the browser's
 cache during warm reloads. Without that option, Playwright's synthetic HTTP routes
 disable caching: "warm" then describes persisted application state only.
+Warm-up captures each build's native local/session storage writes after the
+application exits, including page-exit-only cache hints. Measured repeats replay
+those frozen inputs without carrying writes from a prior measured run.
+Empty reset documents use temporary interception; build switches unload to
+`about:blank`. No reset route remains active during a measured navigation, since
+Playwright routing disables the browser HTTP cache.
 `http.waterfall[].transferBytes` records the actual transfer.
 
 `--warm-reload` adds self-contained cache/paint diagnostics. An optional
@@ -474,6 +523,12 @@ hello, live catch-up, enabled input, layout shifts, mutation batches, and retain
 row elements, duplicate visible row keys, and the same visible row's viewport offset
 at the cached-to-live handoff. Visibility and enabled-input milestones are DOM observations;
 FCP is the browser's paint metric. Diagnostic runs also save filmstrip frames.
+Live catch-up recognizes both `chat.startup` and initial history in a
+`sessions.messages.subscribe` reply, so cross-revision runs do not label live rows
+as cached rows after the subscription starts carrying history.
+The benchmark enables `subscriptionInitialHistory`; requested initial history uses
+the shared startup-response fixture owner. Older clients still make a separate
+startup request. Scenarios testing that fallback set `subscriptionInitialHistory: false`.
 Use `--untraced` for timing comparisons without boot tracing or CPU sampling,
 then collect separate traced runs for the storyboard and attribution.
 
@@ -559,8 +614,9 @@ clocks. The result records created/active observers, observed targets, callbacks
 intervals, media queries, and global listeners before and after each action.
 Run timing comparisons separately without instrumentation, with
 `--thread-cpu-time --pairs 20 --compare-bundle-dir <other-build>` and an A/A
-control on a loaded host. Hidden idle requires `--headed`: the runner minimizes
-its own Chromium window and verifies native document visibility. Hidden samples
+control on a loaded host. Hidden idle runs headless: the runner launches full
+Chrome for Testing with `--headless=new`, minimizes its own window, and verifies
+native document visibility; no window appears on screen. Hidden samples
 use a fresh runner-owned profile and Playwright's `noDefaults` connection so its
 normal focus emulation cannot override native visibility. The profile and process
 are removed after each sample. A browser that
@@ -619,6 +675,17 @@ cycles with `--bundle-dir <baseline> --compare-bundle-dir <candidate> --runs 20
 --streaming-reply --transcript-messages 400 --face chat --untraced`. The benchmark
 restores each build's warm state before each run. Streaming comparisons do not
 require the separate `--warm-reload` diagnostics or external probe scripts.
+The native typing probe appends to the existing draft and verifies that every
+dispatched character survives streaming; `streaming.typing` retains the count
+and final synthetic draft alongside the timing evidence.
+
+Use `--transcript-messages 2000` for the long-session stream. Add
+`--streaming-content tool-code` to grow an open TypeScript fence alongside an
+expanded tool card, or `--streaming-panes 2` to stream two independent sessions
+in the native split layout. Each pane must retain its typed draft, show the
+complete reply, and follow its own growing tail. `streaming.panes` and
+`streaming.typingByPane` retain these results; the original first-pane fields
+remain available. The default Markdown fixture is still 645 deltas.
 
 Add `--streaming-allocations` to sample JavaScript allocations during the stream
 with CDP HeapProfiler at a 4 KiB interval, retaining samples collected by both

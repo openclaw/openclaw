@@ -1,4 +1,4 @@
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../../infra/plugin-approvals.js";
@@ -426,5 +426,19 @@ export function createLocalApprovalPromptTestFixture(params: {
         }
       },
     },
+  };
+}
+
+export function createNativeApprovalRuntimeStub(): NonNullable<
+  ChannelApprovalCapability["nativeRuntime"]
+> {
+  return {
+    availability: { isConfigured: vi.fn(), shouldHandle: vi.fn() },
+    presentation: {
+      buildPendingPayload: vi.fn(),
+      buildResolvedResult: vi.fn(),
+      buildExpiredResult: vi.fn(),
+    },
+    transport: { prepareTarget: vi.fn(), deliverPending: vi.fn() },
   };
 }

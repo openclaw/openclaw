@@ -5,13 +5,49 @@
 
 /* Native mobile presentation is supplied by the pane, independently of width. */
 .agent-chat__composer-shell[data-mobile-composer="true"] {
-  --chat-composer-bottom-gap: 10px;
+  --chat-composer-bottom-gap: 6px;
   --chat-composer-top-margin: 0px;
 
   gap: 6px;
   /* The app already consumes safe area, including keyboard dismissal. */
   margin-block: 0 var(--chat-composer-bottom-gap);
   font-family: var(--font-body);
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"]
+  .agent-chat__disabled-banner:has(> .agent-chat__disabled-banner-icon--archive) {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 0 10px;
+
+  > .agent-chat__disabled-banner-icon {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  > .callout__content {
+    display: contents;
+  }
+
+  .agent-chat__disabled-banner-title {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .agent-chat__disabled-banner-detail {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .agent-chat__disabled-banner-title + .agent-chat__disabled-banner-detail {
+    grid-column: 1 / 3;
+    grid-row: 2;
+  }
+
+  > .btn {
+    grid-column: 3;
+    grid-row: 1 / 3;
+  }
 }
 
 /* One floating stack retains native notices/questions/recovery above the mobile
@@ -24,7 +60,9 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-height: 0;
+  /* One 36px activity row plus its 4px vertical insets. Its metadata arrives
+     after the saved transcript; reserve the same clearance while it is empty. */
+  min-height: 44px;
   max-height: max(0px, calc(100cqh - 100% - 8px));
   pointer-events: none;
 }
@@ -55,7 +93,7 @@
   .agent-chat__input {
   --chat-composer-radius: calc(22px * var(--openclaw-corner-radius-scale));
   --chat-composer-min-height: 52px;
-  --chat-composer-editor-line: 22px;
+  --chat-composer-editor-line: 24px;
   --chat-composer-editor-inset-block: 0px;
   --chat-composer-control-size: 32px;
   --chat-composer-chip-height: 32px;
@@ -71,12 +109,31 @@
   border-radius: calc(28px * var(--openclaw-corner-radius-scale));
 }
 
+/* A stacked composer keeps its normal corners; only the bare row is a capsule. */
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__input:has(.composer-context-strip, .chat-attachments-preview) {
+  border-radius: var(--chat-composer-radius);
+}
+
 /* Replies, attachments, pending reads, Goal mode and Talk keep their real height. */
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
   .agent-chat__composer-lede {
   grid-column: 1 / -1;
   grid-row: 1;
   align-self: stretch;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__composer-lede
+  > .composer-context-strip {
+  margin-inline: -8px;
+  margin-block-end: 6px;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__composer-lede
+  > .composer-context-strip:first-child {
+  margin-block-start: -7px;
 }
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
@@ -96,14 +153,14 @@
   max-height: 24px;
   padding: 0;
   font-family: var(--font-body);
-  font-weight: 500;
-  line-height: 22px;
+  line-height: var(--chat-composer-editor-line);
 }
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
   .agent-chat__composer-combobox
   > textarea {
   overflow: hidden;
+  scrollbar-gutter: auto;
   white-space: nowrap;
 }
 
@@ -133,12 +190,17 @@
   display: none;
 }
 
-/* Keep the hint and typed text in the same type style across both layouts. */
+/* The compact prediction row already supplies its text inset. */
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__composer-prediction-actions {
+  padding-inline: 0;
+}
+
+/* Keep typed drafts and their hint on the same font as desktop. */
 .agent-chat__composer-shell[data-mobile-composer="true"]
   .agent-chat__composer-combobox
   > :is(textarea, .agent-chat__composer-placeholder) {
   font-family: var(--font-body);
-  font-weight: 500;
 }
 
 /* The editable row uses its final geometry during the surface reveal. */
@@ -183,10 +245,6 @@
   overscroll-behavior: contain;
 }
 
-.agent-chat__composer-shell[data-mobile-composer="true"] .chat-queue__text {
-  font-weight: 500;
-}
-
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
   .agent-chat__input-btn--attach {
   width: 32px;
@@ -200,6 +258,6 @@
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
   .agent-chat__input-btn--attach
   svg {
-  width: 20px;
-  height: 20px;
+  width: var(--chat-composer-plus-icon-size);
+  height: var(--chat-composer-plus-icon-size);
 }

@@ -29,6 +29,8 @@ export async function resolveAgentRuntimePrompt(params: {
   chatType?: ChatType;
   requesterProfileId?: string;
   remoteWorkspace?: boolean;
+  /** Blind spawned child: the rendered prompt omits its model, identity and workspace path. */
+  blind?: boolean;
 }) {
   const channelPromptContext = resolveRuntimeChannelPromptContext({
     cfg: params.config,
@@ -77,6 +79,7 @@ export async function resolveAgentRuntimePrompt(params: {
       chatType: params.chatType,
       capabilities: runtimeCapabilities,
       customInlineButtonHint: channelPromptContext.customInlineButtonHint,
+      blind: params.blind,
     },
   });
 

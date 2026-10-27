@@ -21,6 +21,7 @@ import {
   type NativeMessageGroupOptions,
 } from "./chat-message-group-view.tsx";
 import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
+import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
 
 it("shares the mobile layout query while preserving initial and updated message actions", () => {
@@ -222,7 +223,7 @@ it("keeps distinct peer avatars and focused message content across group updates
   expect(avatars[0]).not.toBe(avatars[1]);
   avatars.forEach((avatar, index) => {
     expect(avatar.closest(".chat-bubble")).toBe(bubbles[index]);
-    expect(avatar.querySelector('[aria-label="Peer"]')).not.toBeNull();
+    expect(avatar.getAttribute("aria-label")).toBe("Peer");
   });
   const control = view.getByRole("button", { name: "Open image Peer image" });
   const image = control.querySelector("img")!;
@@ -255,7 +256,7 @@ it("keeps distinct peer avatars and focused message content across group updates
   expect(updatedAvatars).toHaveLength(2);
   expect(updatedAvatars[0]).not.toBe(updatedAvatars[1]);
   expect(
-    updatedAvatars.every((avatar) => avatar.querySelector('[aria-label="Peer Updated"]') !== null),
+    updatedAvatars.every((avatar) => avatar.getAttribute("aria-label") === "Peer Updated"),
   ).toBe(true);
 });
 
@@ -573,6 +574,34 @@ describe("owned message controls", () => {
     );
     expect(document.activeElement).toBe(timestamp);
   });
+});
+
+it("prepares the detailed timestamp only when metadata exposes its label", () => {
+  const title = new Date(1000).toLocaleString([], {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "short",
+  });
+  const calendarFormat = vi.spyOn(Date.prototype, "toLocaleString");
+  const [metadata, setMetadata] = createSignal(false);
+  const view = mountSolid(() => (
+    <ChatTimestamp timestamp={1000} metadata={metadata() ? [<span>Usage</span>] : undefined} />
+  ));
+  try {
+    expect(calendarFormat.mock.calls.filter(([, options]) => options?.weekday)).toHaveLength(0);
+    setMetadata(true);
+    flush();
+    expect(view.getByRole("button").getAttribute("aria-label")).toContain(title);
+    expect(calendarFormat.mock.calls.filter(([, options]) => options?.weekday)).toHaveLength(1);
+  } finally {
+    view.unmount();
+    calendarFormat.mockRestore();
+  }
 });
 
 it("leaves timestamp attributes untouched when only message usage changes", () => {

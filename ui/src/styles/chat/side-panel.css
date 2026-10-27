@@ -175,7 +175,7 @@
 }
 
 .side-panel__header .tabstrip-tab[active] .tabstrip-tab__icon {
-  color: var(--text);
+  color: var(--icon-active, var(--text));
 }
 
 .side-panel__header .tabstrip-tab__icon svg,
@@ -322,7 +322,6 @@ openclaw-chat-detail-panel,
   max-width: min(320px, calc(100vw - 24px));
   padding: var(--menu-padding);
   border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
   box-shadow: var(--shadow-md);
 }
 
@@ -424,7 +423,10 @@ openclaw-chat-detail-panel,
 .side-panel-launcher__heading {
   margin: 0 12px 12px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: calc(var(--control-ui-text-sm) * 0.875);
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0;
   text-align: start;
 }
 
@@ -443,6 +445,9 @@ openclaw-chat-detail-panel,
   border: 0;
   color: var(--text);
   font-size: var(--control-ui-text-sm);
+  font-weight: 450;
+  line-height: 1.4;
+  letter-spacing: 0;
   text-align: start;
   cursor: var(--cursor-action);
 }
@@ -452,34 +457,29 @@ openclaw-chat-detail-panel,
   gap: 12px 8px;
   padding: 14px 12px;
   border-radius: var(--radius-lg);
-  background: var(--bg-accent);
+  background: var(--surface-selected);
 }
 
-.sidebar-region--desktop .side-panel-launcher__card[aria-disabled="true"] {
-  background: var(--bg-accent);
+:is(.side-panel-launcher__card, .side-panel-launcher__item):not(:disabled, [aria-disabled="true"])
+  .side-panel-type-option__icon {
+  color: color-mix(in srgb, var(--muted) 92%, transparent);
+}
+
+:is(.side-panel-launcher__card, .side-panel-launcher__item):is(:disabled, [aria-disabled="true"]) {
   color: var(--muted);
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.sidebar-region--desktop .side-panel-launcher__card .shortcut-kbd {
-  border-color: transparent;
-  background: transparent;
+.side-panel-launcher__item .shortcut-kbd {
+  border: 0;
+  background: var(--surface-selected);
 }
 
-/* Desktop-panels' approved .panel-shortcut; Quick access keeps its own hints. */
-.sidebar-region--desktop .side-panel-launcher__item .shortcut-kbd {
-  padding: 2px 5px;
-  border: 1px solid var(--card-highlight);
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--card-highlight) 87.5%, transparent);
-  color: var(--muted);
-  opacity: 0.75;
-  font:
-    500 10px / 1.2 system-ui,
-    sans-serif;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
+.side-panel-launcher__card .shortcut-kbd {
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .side-panel-launcher__card .side-panel-type-option__label {
@@ -494,19 +494,21 @@ openclaw-chat-detail-panel,
 }
 
 .side-panel-launcher__item {
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  gap: 12px;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 8px;
   min-height: 44px;
   padding: 8px 12px;
   border-radius: var(--radius-md);
   background: transparent;
 }
 
-.side-panel-launcher__card:hover,
-.side-panel-launcher__card:focus-visible,
-.side-panel-launcher__item:hover,
-.side-panel-launcher__item:focus-visible {
-  background: var(--bg-hover);
+.side-panel-launcher__card:not(:disabled, [aria-disabled="true"]):is(:hover, :focus-visible) {
+  background: var(--surface-selected-hover);
+  color: var(--text);
+}
+
+.side-panel-launcher__item:not(:disabled, [aria-disabled="true"]):is(:hover, :focus-visible) {
+  background: var(--surface-hover);
   color: var(--text);
 }
 
@@ -516,7 +518,7 @@ openclaw-chat-detail-panel,
   }
 
   .side-panel-launcher__card {
-    grid-template-columns: 24px minmax(0, 1fr) auto;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
   }
 
   .side-panel-launcher__card .side-panel-type-option__label {
@@ -529,14 +531,14 @@ openclaw-chat-detail-panel,
   }
 }
 
+.sidebar-region--desktop .side-panel__header {
+  background: transparent;
+}
+
 .sidebar-region--desktop .side-panel__header--occupied {
   /* Balance the bottom divider so the controls stay on the shared header axis. */
   padding-top: var(--rail-divider-size);
   border-bottom: var(--rail-divider-size) solid var(--rail-divider-color);
-}
-
-.sidebar-region--desktop .side-panel__frame-action {
-  color: var(--muted);
 }
 
 .sidebar-region--desktop .side-panel__frame-action > .oc-menu-item__label {
@@ -568,7 +570,7 @@ openclaw-chat-detail-panel,
   .side-panel-launcher__quick
   .side-panel-launcher__card {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   text-align: start;

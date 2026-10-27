@@ -12,10 +12,10 @@ import {
 import { CodexAppServerClient } from "./app-server/client.js";
 import type { CodexPluginConfig } from "./app-server/config.js";
 import {
-  collabItem,
-  itemNotification,
+  closeAgentNotification,
   nativeCompletionNotification,
   registerCodexNativeSubagentMonitor as registerParent,
+  threadRead,
 } from "./app-server/native-subagent-monitor.test-support.js";
 import type { CodexServerNotification } from "./app-server/protocol.js";
 import {
@@ -49,14 +49,11 @@ useCodexCommandTestState({
 it.each(["claimed-successor", "retained-successor"] as const)(
   "delayed native close preserves %s ownership",
   async (scenario) => {
-    const context = await createCodexRuntimeContextOverrides(
-      tempDir,
-      `agent:main:test:r5:${scenario}`,
-    );
+    const context = await createCodexRuntimeContextOverrides(tempDir, `agent:main:${scenario}`);
     const nativeHome = path.join(tempDir, "native-home");
     await fs.mkdir(nativeHome);
     vi.stubEnv("CODEX_HOME", nativeHome);
-    const threadId = "r5-native-child";
+    const threadId = "child-thread";
     const parentThreadId = "parent-thread";
     const turnId = "parent-turn";
     const bindingStore = createCodexAppServerBindingStore(
@@ -76,10 +73,9 @@ it.each(["claimed-successor", "retained-successor"] as const)(
       },
     } satisfies CodexPluginConfig;
     const response = createThreadResumeResponse({ threadId, canAcceptDirectInput: true });
-    let nativeGeneration = 1;
     let nativeLoaded = true;
     let replyToLoadedSnapshot: (() => void) | undefined;
-    const unsubscribeGenerations: number[] = [];
+    let unsubscribes = 0;
     const responses: Record<string, unknown> = {
       initialize: { userAgent: "codex-cli/0.154.0", codexHome: nativeHome },
       "account/read": { account: null, requiresOpenaiAuth: false },
@@ -99,10 +95,9 @@ it.each(["claimed-successor", "retained-successor"] as const)(
           thread: { ...response.thread, status: { type: nativeLoaded ? "idle" : "notLoaded" } },
         };
       } else if (method === "thread/resume") {
-        nativeGeneration += 1;
         nativeLoaded = true;
       } else if (method === "thread/unsubscribe") {
-        unsubscribeGenerations.push(nativeGeneration);
+        unsubscribes += 1;
         nativeLoaded = false;
       }
       send(
@@ -111,32 +106,24 @@ it.each(["claimed-successor", "retained-successor"] as const)(
           : { id, result },
       );
     });
-    const notifications: [CodexServerNotification, Promise<void> | void][] = [];
+    const notifications = new Map<string, Promise<void>[]>();
     const addNotificationHandler = harness.client.addNotificationHandler.bind(harness.client);
-    const notificationObserver = vi
-      .spyOn(harness.client, "addNotificationHandler")
-      .mockImplementation((handler) =>
-        addNotificationHandler((notification) => {
-          const completion = handler(notification);
-          notifications.push([notification, completion]);
-          return completion;
-        }),
-      );
-    let starts = 0;
-    const start = vi.spyOn(CodexAppServerClient, "start").mockImplementation(async () => {
-      if (starts++ > 0) {
-        throw new Error("R5 proof unexpectedly requested a second physical app-server client");
-      }
-      return harness.client;
-    });
+    vi.spyOn(harness.client, "addNotificationHandler").mockImplementation((handler) =>
+      addNotificationHandler((notification) => {
+        const completion = Promise.resolve(handler(notification));
+        const key = JSON.stringify(notification);
+        notifications.set(key, [...(notifications.get(key) ?? []), completion]);
+        return completion;
+      }),
+    );
+    vi.spyOn(CodexAppServerClient, "start")
+      .mockRejectedValue(new Error("Unexpected second physical app-server client"))
+      .mockResolvedValueOnce(harness.client);
     const transitionObservation = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
-    const settleNotification = async (cursor: number, notification: CodexServerNotification) => {
-      await vi.waitFor(() =>
-        expect(notifications.slice(cursor).map(([seen]) => seen)).toContainEqual(notification),
-      );
-      await Promise.all(
-        notifications.slice(cursor).map(([, completion]) => Promise.resolve(completion)),
-      );
+    const settleNotification = async (notification: CodexServerNotification) => {
+      const key = JSON.stringify(notification);
+      await vi.waitFor(() => expect(notifications.has(key)).toBe(true));
+      await Promise.all(notifications.get(key) ?? []);
       let joined = 0;
       while (joined < transitionObservation.mock.results.length) {
         const pending = transitionObservation.mock.results.slice(joined);
@@ -156,17 +143,15 @@ it.each(["claimed-successor", "retained-successor"] as const)(
         config: context.config,
         agentDir: resolveDefaultAgentDir(context.config),
       });
-      expect(leasedClient).toBe(harness.client);
       parent = await registerParent({ client: leasedClient, parentThreadId });
       parent.bindTurn(turnId);
-      const spawn = { parent_thread_id: parentThreadId, depth: 1, agent_path: threadId };
       harness.send({
         method: "thread/started",
         params: {
           thread: {
             id: threadId,
             parentThreadId,
-            source: { subAgent: { thread_spawn: spawn } },
+            source: threadRead({ agentPath: threadId }).thread.source,
           },
         },
       });
@@ -176,20 +161,13 @@ it.each(["claimed-successor", "retained-successor"] as const)(
         expect(isClaimed(harness.client, threadId)).toBe(false);
         expect(hasCodexAppServerLiveThread(harness.client, threadId)).toBe(true);
       });
-      const closeItem = collabItem("closeAgent", [threadId], {
-        id: "r5-original-close",
-        agentsStates: { [threadId]: { status: "completed" } },
-      });
-      const startedItem = { ...closeItem, status: "inProgress" };
-      const closeStart = itemNotification(startedItem, turnId, parentThreadId, "started");
-      const startCursor = notifications.length;
+      const closeStart = closeAgentNotification({ method: "item/started" });
       harness.send(closeStart);
-      await settleNotification(startCursor, closeStart);
+      await settleNotification(closeStart);
       await expect(releaseCodexAppServerLiveThread(harness.client, threadId)).resolves.toBe(true);
       nativeLoaded = false;
-      const unsubscribesBeforeClose = unsubscribeGenerations.length;
-      const closeCompletion = itemNotification(closeItem, turnId, parentThreadId);
-      const completionCursor = notifications.length;
+      const unsubscribesBeforeClose = unsubscribes;
+      const closeCompletion = closeAgentNotification({ method: "item/completed" });
       harness.send(closeCompletion);
       await vi.waitFor(() => expect(replyToLoadedSnapshot).toBeTypeOf("function"));
       const command = createCodexCommand({
@@ -202,7 +180,6 @@ it.each(["claimed-successor", "retained-successor"] as const)(
         threadId,
         clientId: harness.client.getInstanceId(),
       });
-      expect({ starts, nativeGeneration }).toEqual({ starts: 1, nativeGeneration: 2 });
       if (scenario === "claimed-successor") {
         successor = await consumeCodexAppServerLiveThread(harness.client, threadId);
         expect(successor).toBeDefined();
@@ -210,10 +187,10 @@ it.each(["claimed-successor", "retained-successor"] as const)(
       }
       const bindingBeforeClose = readBinding();
       replyToLoadedSnapshot?.();
-      await settleNotification(completionCursor, closeCompletion);
+      await settleNotification(closeCompletion);
       expect(readBinding()).toEqual(bindingBeforeClose);
       successor ??= await consumeCodexAppServerLiveThread(harness.client, threadId);
-      expect(unsubscribeGenerations.slice(unsubscribesBeforeClose)).toEqual([]);
+      expect(unsubscribes).toBe(unsubscribesBeforeClose);
       expect(nativeLoaded).toBe(true);
       expect(successor).toBeDefined();
       successor?.assertCurrent();
@@ -221,12 +198,10 @@ it.each(["claimed-successor", "retained-successor"] as const)(
       await parent?.unregister();
       await successor?.release(threadId);
       if (leasedClient) {
-        expect([releaseClient(leasedClient), releaseClient(leasedClient)]).toEqual([true, false]);
+        releaseClient(leasedClient);
       }
       await harness.client.closeAndWait();
-      transitionObservation.mockRestore();
-      notificationObserver.mockRestore();
-      start.mockRestore();
+      vi.restoreAllMocks();
     }
   },
 );

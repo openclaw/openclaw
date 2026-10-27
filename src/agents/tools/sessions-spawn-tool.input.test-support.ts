@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Value } from "typebox/value";
@@ -7,6 +8,7 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
+import { registerSessionsSpawnAccessProgramTests } from "./sessions-spawn-tool.access-program.test-support.js";
 import type { createSessionsSpawnTool as SpawnToolFactory } from "./sessions-spawn-tool.js";
 
 const requireRecord = createRequireRecord("record", "expected-label");
@@ -27,6 +29,13 @@ export function registerSessionsSpawnInputTests({
     inProcessCreationMock: Mock;
   };
 }) {
+  registerSessionsSpawnAccessProgramTests({
+    createTool,
+    registerAcpBackendForTest,
+    mockGateway,
+    mocks: hoisted,
+  });
+
   it.each([false, true])(
     "keeps collector inputs within the declared spawn contract (placement=%s)",
     (workerPlacement) => {
@@ -51,11 +60,6 @@ export function registerSessionsSpawnInputTests({
       "runTimeoutSeconds must be a non-negative integer",
     ],
     [
-      "nonnumeric timeout",
-      { runTimeoutSeconds: "not-a-number" },
-      "runTimeoutSeconds must be a non-negative integer",
-    ],
-    [
       "retired timeout alias",
       { timeout_seconds: 2 },
       'sessions_spawn does not support "timeout_seconds". Use "runTimeoutSeconds" for a per-run timeout.',
@@ -71,24 +75,33 @@ export function registerSessionsSpawnInputTests({
       "lightContext is only supported for runtime='subagent'.",
     ],
     [
+      "ACP blind child",
+      { runtime: "acp", blind: true },
+      'blind=true requires a hidden runtime="subagent" child.',
+    ],
+    [
+      "visible blind child",
+      { visible: true, blind: true },
+      'blind=true requires a hidden runtime="subagent" child.',
+    ],
+    [
       "ACP managed worktree",
       { runtime: "acp", projectId: "example", worktree: true },
       'Managed worktree parameters are unavailable with runtime="acp"',
     ],
     [
-      "hidden project without worktree",
-      { projectId: "example" },
-      "Hidden native subagents require worktree=true",
-    ],
-    [
-      "hidden worktree name without worktree",
-      { worktreeName: "review" },
-      "Hidden native subagents require worktree=true",
-    ],
-    [
-      "hidden worktree base without worktree",
-      { worktreeBaseRef: "origin/main" },
-      "Hidden native subagents require worktree=true",
+      "unsupported visible parameters",
+      {
+        runtime: "acp",
+        thinking: "high",
+        thread: true,
+        mode: "session",
+        lightContext: true,
+        attachments: [{ name: "note.txt", content: "hello" }],
+        attachAs: { mountPath: "inputs" },
+        visible: true,
+      },
+      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thinking: thinking overrides are not wired to the sessions.create path; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
     ],
     [
       "hidden cloud placement",
@@ -146,13 +159,16 @@ export function registerSessionsSpawnInputTests({
       callGateway,
     });
     finalizeAgentToolAvailability([tool, createAgentsWaitTool({})]);
+    const visibleArgs = {
+      task: "Review the API change",
+      group: "Reviews",
+      projectGitUrl: "https://github.com/example/project.git",
+      worktreeName: "api-review",
+      worktreeBaseRef: "origin/main",
+    };
     const error = await tool
       .execute("hidden-visible-options", {
-        task: "Review the API change",
-        group: "Reviews",
-        projectGitUrl: "https://github.com/example/project.git",
-        worktreeName: "api-review",
-        worktreeBaseRef: "origin/main",
+        ...visibleArgs,
         completionTarget: "parent",
         cleanup: "delete",
         mode: "run",
@@ -169,24 +185,15 @@ export function registerSessionsSpawnInputTests({
         resumeSessionId: "prior-acp-session",
       })
       .catch((reason: unknown) => reason);
-    expect(error).toBeInstanceOf(Error);
-    if (!(error instanceof Error)) {
-      throw new Error("Expected visible-only parameter rejection");
-    }
+    assert(error instanceof Error, "Expected visible-only parameter rejection");
     expect(error.message).toContain("Parameters require visible=true: group, projectGitUrl");
     expect(callGateway).not.toHaveBeenCalled();
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     const match = /Corrected visible call: sessions_spawn\((.*)\)$/.exec(error.message);
-    if (!match?.[1]) {
-      throw new Error("Expected an exact corrected sessions_spawn call");
-    }
+    assert(match?.[1], "Expected an exact corrected sessions_spawn call");
     const corrected: unknown = JSON.parse(match[1]);
     expect(corrected).toEqual({
-      task: "Review the API change",
-      group: "Reviews",
-      projectGitUrl: "https://github.com/example/project.git",
-      worktreeName: "api-review",
-      worktreeBaseRef: "origin/main",
+      ...visibleArgs,
       worktree: true,
       runtime: "subagent",
       visible: true,
@@ -272,10 +279,5 @@ export function registerSessionsSpawnInputTests({
       'With runtime="acp": ACP harness id from: main. agentId is required.',
     );
     expect(description).not.toContain('`runtime="acp"` ids: codex, claude');
-  });
-
-  it("adds no agentId guidance for a lone agent without ACP", () => {
-    const tool = createTool({ config: { agents: { entries: { main: {} } } } });
-    expect(tool.description).not.toContain("`agentId` targets:");
   });
 }

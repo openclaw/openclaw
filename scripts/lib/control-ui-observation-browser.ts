@@ -8,14 +8,12 @@ export async function launchControlUiObservationBrowser(options: {
   viewport: { width: number; height: number };
   artifactDir: string;
   artifactPrefix: string;
-  headless: boolean;
   colorScheme: "light" | "dark";
   isMobile?: boolean;
   hasTouch?: boolean;
 }) {
   const server = await chromium.launchServer({
     executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
-    headless: options.headless,
     host: "127.0.0.1",
   });
   const child = server.process();

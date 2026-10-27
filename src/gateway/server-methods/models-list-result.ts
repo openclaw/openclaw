@@ -10,6 +10,7 @@ import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
+import { projectModelCatalogAccessPrograms } from "../../agents/model-catalog-access-programs.js";
 import {
   createModelCatalogDecisions,
   prepareModelCatalogDecisions,
@@ -518,6 +519,17 @@ export async function prepareModelsListResult({
             ? { supportsServiceTierRecovery: true }
             : {}),
           ...(serviceTiers === undefined ? {} : { serviceTiers }),
+          ...(view === "provider-config"
+            ? {}
+            : projectModelCatalogAccessPrograms({
+                config: cfg,
+                agentId,
+                snapshot: projectionSnapshot,
+                entry,
+                evaluation,
+                runtimeId: preparedEntry.agentRuntime?.id ?? "openclaw",
+                isCurrent: projectionIsCurrent,
+              })),
           ...(serviceTierObservations?.length
             ? {
                 serviceTierObservation: serviceTierObservations.at(-1),

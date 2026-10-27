@@ -2,7 +2,14 @@ import { once } from "node:events";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
-import { mocks, resetRunnerTestState, runNodeHost } from "./runner.test-support.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { CliPluginInvocationResources } from "../cli/plugin-invocation-resources.js";
+import {
+  mocks,
+  resetRunnerTestState,
+  runNodeHost,
+  withReadyNodeHost,
+} from "./runner.test-support.js";
 
 const { GatewayClient } =
   await vi.importActual<typeof import("../gateway/client.js")>("../gateway/client.js");
@@ -19,13 +26,42 @@ describe("node runner shutdown", () => {
     vi.restoreAllMocks();
   });
 
+  it.for(["before entry", "during config read"])(
+    "honors CLI cancellation %s",
+    async (stage, { signal }) => {
+      mocks.useRealGatewayClient = false;
+      mocks.startGatewayClientWhenEventLoopReady.mockResolvedValue(mocks.readiness(true));
+      const previousExitCode = process.exitCode;
+      const on = vi.spyOn(process, "on");
+      const resources = new CliPluginInvocationResources();
+      const cancel = () =>
+        resources.beginClose(new DOMException("CLI stopping (SIGTERM)", "AbortError"));
+      if (stage === "during config read") {
+        mocks.loadNodeHostConfig.mockImplementationOnce(async () => {
+          cancel();
+          return null;
+        });
+      }
+      const running = resources.run(() => {
+        if (stage === "before entry") {
+          cancel();
+        }
+        return runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
+      });
+      try {
+        await expect(withinTest(running, signal)).resolves.toBeUndefined();
+        expect(mocks.activeRuntime.close).toHaveBeenCalledTimes(stage === "before entry" ? 0 : 1);
+      } finally {
+        on.mock.calls.find(([event]) => event === "SIGTERM")?.[1]?.("SIGTERM");
+        await running;
+        await resources.release();
+        process.exitCode = previousExitCode;
+      }
+    },
+  );
+
   it("does not restart runtime cleanup when the stopped transport closes", async () => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    const processOn = vi.spyOn(process, "on");
-    const previousExitCode = process.exitCode;
-    let running: Promise<void> | undefined;
-    const stop = () =>
-      processOn.mock.calls.find(([event]) => event === "SIGTERM")?.[1]?.("SIGTERM");
     try {
       await once(server, "listening");
       const address = server.address();
@@ -47,27 +83,27 @@ describe("node runner shutdown", () => {
       mocks.activeRuntime.cancelAll.mockImplementation(async () => {
         cleanupRestartedAfterClose ||= runtimeClosed;
       });
-      running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: address.port });
-      await vi.waitFor(() => expect(server.clients.size).toBe(1));
-      const socket = await connected;
-      const socketClosed = once(socket, "close");
-      stop();
-      await running;
-      await socketClosed;
-      await setImmediate();
-
-      expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
-      expect(cleanupRestartedAfterClose).toBe(false);
+      await withReadyNodeHost(
+        async ({ running, stop }) => {
+          await vi.waitFor(() => expect(server.clients.size).toBe(1));
+          const socket = await connected;
+          const socketClosed = once(socket, "close");
+          stop();
+          await running;
+          await socketClosed;
+          await setImmediate();
+          expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
+          expect(cleanupRestartedAfterClose).toBe(false);
+        },
+        { gatewayPort: address.port },
+      );
     } finally {
-      stop();
-      await running;
       for (const socket of server.clients) {
         socket.terminate();
       }
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
-      process.exitCode = previousExitCode;
     }
   });
 

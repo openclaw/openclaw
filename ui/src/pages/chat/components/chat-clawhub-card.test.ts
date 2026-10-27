@@ -1,20 +1,23 @@
 /* @vitest-environment jsdom */
 
 import { createComponent, createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
 import { i18n } from "../../../i18n/index.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
+  createInspectResult,
   createPluginCapabilities,
   createClient,
   createContext,
   createGateway,
 } from "../../plugins/plugins-page.test-support.ts";
+import { subscribeClawHubCardUpdates } from "./chat-clawhub-card-updates.ts";
 import { ChatClawHubCard } from "./chat-clawhub-card.tsx";
 
 const iconFetch = vi.hoisted(() => ({ catalog: vi.fn(), plugin: vi.fn() }));
@@ -108,6 +111,105 @@ describe("ClawHub chat recommendations", () => {
     vi.unstubAllGlobals();
   });
 
+  it("shares card wakeups and skips snapshots that cannot change load admission", () => {
+    const { client } = createClient(async () => detail(false));
+    const harness = createGateway(client);
+    const subscribe = vi.spyOn(harness.gateway, "subscribe");
+    const documentListen = vi.spyOn(document, "addEventListener");
+    const windowListen = vi.spyOn(window, "addEventListener");
+    let visible = true;
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() =>
+      visible ? "visible" : "hidden",
+    );
+    const notify = vi.fn();
+    const stops = Array.from({ length: 100 }, () =>
+      subscribeClawHubCardUpdates(harness.gateway, document, notify),
+    );
+    onTestFinished(() => stops.forEach((stop) => stop()));
+    expect(subscribe).toHaveBeenCalledOnce();
+    expect(documentListen.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(
+      1,
+    );
+    expect(windowListen.mock.calls.filter(([type]) => type === "focus")).toHaveLength(1);
+
+    harness.emit(client, true, { lastError: "Unrelated status", sessionKey: "another-session" });
+    expect(notify).not.toHaveBeenCalled();
+    harness.emit(client, false);
+    expect(notify.mock.calls).toEqual(Array.from({ length: 100 }, () => [false]));
+    notify.mockClear();
+    window.dispatchEvent(new Event("focus"));
+    expect(notify).not.toHaveBeenCalled();
+    harness.emit(client, true);
+    expect(notify).toHaveBeenCalledTimes(100);
+    notify.mockClear();
+
+    visible = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
+    expect(notify).not.toHaveBeenCalled();
+    visible = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
+    window.dispatchEvent(new Event("focus"));
+    expect(notify.mock.calls).toEqual(Array.from({ length: 300 }, () => [true]));
+
+    notify.mockClear();
+    stops.slice(0, 99).forEach((stop) => stop());
+    window.dispatchEvent(new Event("focus"));
+    expect(notify).toHaveBeenCalledOnce();
+    stops[99]!();
+    notify.mockClear();
+    window.dispatchEvent(new Event("focus"));
+    harness.emit(client, false);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("delivers a synchronous connection retirement when a callback replaces the snapshot", () => {
+    const { client } = createClient(async () => detail(false));
+    const harness = createGateway(client);
+    let replaced = false;
+    const stopFirst = subscribeClawHubCardUpdates(harness.gateway, document, () => {
+      if (!replaced) {
+        replaced = true;
+        harness.emit(client, false, { lastError: "Nested publication" });
+      }
+    });
+    const notify = vi.fn();
+    const stopSecond = subscribeClawHubCardUpdates(harness.gateway, document, notify);
+    onTestFinished(() => {
+      stopFirst();
+      stopSecond();
+    });
+    harness.emit(client, false);
+    expect(notify).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("isolates card callbacks and skips subscribers retired during the same wakeup", () => {
+    const { client } = createClient(async () => detail(false));
+    const harness = createGateway(client);
+    const report = vi.fn();
+    vi.stubGlobal("reportError", report);
+    const retired = vi.fn();
+    const surviving = vi.fn();
+    let stopRetired = () => {};
+    const failure = new Error("Card refresh failed");
+    const stopFirst = subscribeClawHubCardUpdates(harness.gateway, document, () => {
+      stopRetired();
+      throw failure;
+    });
+    stopRetired = subscribeClawHubCardUpdates(harness.gateway, document, retired);
+    const stopLast = subscribeClawHubCardUpdates(harness.gateway, document, surviving);
+    onTestFinished(() => {
+      stopFirst();
+      stopRetired();
+      stopLast();
+    });
+    harness.emit(client, false);
+    expect(retired).not.toHaveBeenCalled();
+    expect(surviving).toHaveBeenCalledExactlyOnceWith(false);
+    expect(report).toHaveBeenCalledExactlyOnceWith(failure);
+  });
+
   it("refreshes translated actions without reloading catalog status", async () => {
     const translate = i18n.t.bind(i18n);
     const subscribe = i18n.subscribe.bind(i18n);
@@ -160,6 +262,40 @@ describe("ClawHub chat recommendations", () => {
     expect(part(card, "install")).toBeNull();
     expect(part(card, "dismiss")).toBeNull();
     expect(part(card, "listing")).not.toBeNull();
+  });
+
+  it("offers sign-in for an installed plugin until its account is connected", async () => {
+    let state: "requires-authorization" | "authorized" = "requires-authorization";
+    const { card, context, request, harness, client } = mount(async (method) =>
+      method === "plugins.inspect"
+        ? createInspectResult({ mcpAuth: [{ serverName: "whatsapp", state }] })
+        : detail(true, {}, { pluginId: "whatsapp" }),
+    );
+    // Without the sign-in method there is nowhere to send the operator.
+    await vi.waitFor(() => expect(part(card, "installed")?.textContent).toContain("Installed"));
+    expect(request.mock.calls.some(([method]) => method === "plugins.inspect")).toBe(false);
+
+    const hello = gatewayHelloForMethods(["plugins.inspect", "mcp.authLogin"]);
+    harness.emit(client, false);
+    harness.emit(client, true, { hello });
+    await vi.waitFor(() => expect(part(card, "sign-in")?.textContent?.trim()).toBe("Sign in"));
+    expect(request).toHaveBeenCalledWith(
+      "plugins.inspect",
+      { pluginId: "whatsapp" },
+      expect.anything(),
+    );
+    expect(part(card, "installed")).toBeNull();
+    part(card, "sign-in")!.click();
+    expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
+      pathname: `/plugins/${recommendation.id}`,
+      search: "",
+    });
+
+    state = "authorized";
+    harness.emit(client, false);
+    harness.emit(client, true, { hello });
+    await vi.waitFor(() => expect(part(card, "installed")?.textContent).toContain("Installed"));
+    expect(part(card, "sign-in")).toBeNull();
   });
 
   it("rechecks official status before offering installation from an old card", async () => {

@@ -10,15 +10,6 @@ import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
-export type ChatSessionSuggestionsProps = {
-  suggestions: readonly SessionSuggestion[];
-  role?: SessionSharingRole;
-  busyIds: ReadonlySet<string>;
-  archived: boolean;
-  canResolve: boolean;
-  onResolve: (suggestion: SessionSuggestion, resolution: SessionSuggestionResolution) => void;
-};
-
 const actions: readonly [SessionSuggestionResolution, string, IconName][] = [
   ["send", "sendNow", "arrowUp"],
   ["queue", "queue", "check"],
@@ -26,7 +17,14 @@ const actions: readonly [SessionSuggestionResolution, string, IconName][] = [
   ["dismiss", "dismiss", "trash"],
 ];
 
-export function ChatSessionSuggestions(props: ChatSessionSuggestionsProps) {
+export function ChatSessionSuggestions(props: {
+  suggestions: readonly SessionSuggestion[];
+  role?: SessionSharingRole;
+  busyIds: ReadonlySet<string>;
+  archived: boolean;
+  canResolve: boolean;
+  onResolve: (suggestion: SessionSuggestion, resolution: SessionSuggestionResolution) => void;
+}) {
   const canResolve = () => props.canResolve && (props.role === "owner" || props.role === "admin");
   return (
     <Show when={props.suggestions.length > 0}>

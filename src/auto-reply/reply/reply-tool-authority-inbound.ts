@@ -35,17 +35,13 @@ import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 export function projectReplyToolAuthorityInput(
   snapshot: ReplyToolAuthorityInput,
   caller: ReplyToolAuthorityCaller | undefined,
+  requesterPrincipalKey: string | undefined,
 ): ReplyToolAuthorityInput {
   const continuation = caller && "kind" in caller ? caller : undefined;
   const participant: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester | undefined =
     caller && "kind" in caller
       ? { ...caller.caller, traceAuthorized: snapshot.run.traceAuthorized === true }
       : caller;
-  const requesterPrincipalKey = resolveRequesterPrincipalKey({
-    ...snapshot.run,
-    messageChannel: snapshot.originatingChannel,
-    operatorAuthority: snapshot.operatorAuthority,
-  });
   const incomingRequester =
     participant && !("requesterOrigin" in participant) && participant.allowCollaborativeSteering
       ? resolveRequesterPrincipalKey({

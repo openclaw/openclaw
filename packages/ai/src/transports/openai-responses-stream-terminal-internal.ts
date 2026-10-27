@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ResponseOutputItem,
   ResponseOutputMessage,
@@ -382,6 +383,18 @@ export function createResponsesTerminalController(params: {
     responseId = response.id,
   ) => {
     options?.onServiceTier?.(response.service_tier, response);
+    // The provider may omit access-program reporting. Never fill it from the request.
+    const cyber = asOptionalRecord(asOptionalRecord(response)?.access_programs)?.cyber;
+    if (
+      cyber === null ||
+      cyber === "standard" ||
+      cyber === "daybreak_blue" ||
+      cyber === "daybreak_red"
+    ) {
+      output.responseAccessProgram = cyber;
+    } else {
+      delete output.responseAccessProgram;
+    }
     output.responseId = responseId || output.responseId;
     output.responseModel = options?.resolveResponseModel
       ? options.resolveResponseModel()?.trim() || undefined

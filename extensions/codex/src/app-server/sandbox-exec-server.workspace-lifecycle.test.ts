@@ -32,12 +32,7 @@ import type { ManagedProcess } from "./sandbox-exec-server/types.js";
 
 function createFixture(overrides: Parameters<typeof createSandboxContext>[0] = {}) {
   const child = createSandboxChild();
-  let current = true;
-  const assertCurrent = () => {
-    if (!current) {
-      throw new Error("workspace revoked");
-    }
-  };
+  const assertCurrent = vi.fn<() => void>();
   spawnMock.mockReturnValue(child);
   const sandbox = createSandboxContext({
     buildExecSpec: async () => ({
@@ -62,7 +57,9 @@ function createFixture(overrides: Parameters<typeof createSandboxContext>[0] = {
       };
     },
     revoke: () => {
-      current = false;
+      assertCurrent.mockImplementation(() => {
+        throw new Error("workspace revoked");
+      });
     },
     start: (params: { tty?: boolean; pipeStdin?: boolean } = {}) =>
       startProcess(server, processes, vi.fn<ManagedProcess["emitNotification"]>(), {

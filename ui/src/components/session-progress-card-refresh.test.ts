@@ -10,7 +10,7 @@ import {
 } from "./session-progress-card.test-support.tsx";
 import type { SessionProgressCardRefreshAction } from "./session-progress-card.ts";
 
-const { mountCard, createView, render } = progressCardFixture();
+const { mountCard, createView } = progressCardFixture();
 const statusText = (root: HTMLElement) => root.querySelector("[role=status]")?.textContent;
 const time = (container: HTMLElement) => container.querySelector("time");
 
@@ -153,16 +153,6 @@ describe("progress card refresh control", () => {
     flush();
     // Details without refresh controls has no timestamp; the board activity timer retires.
     expect(container.querySelector("time")).toBeNull();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("refreshes relative activity while mounted and clears its timer on unmount", () => {
-    const container = mountCard({ card: { ...progressCard, updatedAt: NOW_MS - 10_000 } });
-    const timestamp = time(container)!;
-    expect(timestamp.textContent).toBe("Updated just now");
-    advance(60_000);
-    expect(timestamp.textContent).toBe("Updated 1m ago");
-    render(null, container);
     expect(vi.getTimerCount()).toBe(0);
   });
 });

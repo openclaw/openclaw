@@ -54,32 +54,30 @@ export function createReplyTurnParticipants(
       // Accepted input stays ambiguous even if its source was revoked at acceptance.
       retentionFailed = true;
     }
-    participants.set(
-      authority.profileId,
-      Object.freeze({
-        profileId: authority.profileId,
-        senderId,
-        name,
-        operatorAuthority: authority,
-        requesterOrigin: input.requesterOrigin,
-        gatewayUiCommandTarget: input.gatewayUiCommandTarget
-          ? Object.freeze({ ...input.gatewayUiCommandTarget })
-          : undefined,
-        assertCurrent: () => {
-          if (closed) {
-            throw new Error("This turn has ended; ask again in a new turn.");
+    // The map owns this record; resolve() publishes a copy.
+    participants.set(authority.profileId, {
+      profileId: authority.profileId,
+      senderId,
+      name,
+      operatorAuthority: authority,
+      requesterOrigin: input.requesterOrigin,
+      gatewayUiCommandTarget: input.gatewayUiCommandTarget
+        ? Object.freeze({ ...input.gatewayUiCommandTarget })
+        : undefined,
+      assertCurrent: () => {
+        if (closed) {
+          throw new Error("This turn has ended; ask again in a new turn.");
+        }
+        try {
+          if (retentionFailed) {
+            throw new Error("Participant authority could not be retained");
           }
-          try {
-            if (retentionFailed) {
-              throw new Error("Participant authority could not be retained");
-            }
-            authority.assertCurrent();
-          } catch {
-            throw new Error(`${name}'s access changed; ask them again`);
-          }
-        },
-      }),
-    );
+          authority.assertCurrent();
+        } catch {
+          throw new Error(`${name}'s access changed; ask them again`);
+        }
+      },
+    });
   };
   if (owner) {
     add(owner);

@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   registerActiveManagedProxyUrl,
@@ -11,11 +8,12 @@ import {
   addActiveManagedProxyTlsOptions,
   resolveActiveManagedProxyTlsOptions,
 } from "./managed-proxy-undici.js";
+import { useProxyCaFiles } from "./proxy-ca.test-support.js";
 
 describe("managed proxy undici TLS options", () => {
   const managedProxy = "https://managed.example:8443";
   const otherProxy = "https://account-proxy.example:8443";
-  const tempDirs: string[] = [];
+  const writeTempCa = useProxyCaFiles();
   const activeRegistrations: ActiveManagedProxyRegistration[] = [];
 
   beforeEach(() => {
@@ -30,9 +28,6 @@ describe("managed proxy undici TLS options", () => {
   afterEach(() => {
     for (const registration of activeRegistrations.splice(0)) {
       stopActiveManagedProxyRegistration(registration);
-    }
-    for (const dir of tempDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
     }
     vi.unstubAllEnvs();
   });
@@ -58,10 +53,7 @@ describe("managed proxy undici TLS options", () => {
   });
 
   it("loads inherited proxy CA trust only for the inherited proxy URL", () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-managed-proxy-ca-"));
-    tempDirs.push(dir);
-    const caFile = path.join(dir, "proxy-ca.pem");
-    writeFileSync(caFile, "inherited-managed-ca", "utf8");
+    const caFile = writeTempCa("inherited-managed-ca");
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
     vi.stubEnv("https_proxy", managedProxy);
     vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);

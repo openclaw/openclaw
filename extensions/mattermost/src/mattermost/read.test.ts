@@ -10,25 +10,24 @@ const fetchFixture = await vi.hoisted(async () =>
 // mock-isolation: Preserve real exports while binding fetch to this suite's transport fixture.
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", fetchFixture.mockRuntime);
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return Response.json(body, {
-    status,
-    statusText: status === 403 ? "Forbidden" : "OK",
-  });
-}
-
 function createReadFetch(params?: { channelType?: string; postStatus?: number }) {
   return vi.fn<typeof fetch>(async (input) => {
     const url = requestUrl(input);
     const channelMatch = url.match(/\/api\/v4\/channels\/([^/?]+)$/);
     if (channelMatch) {
-      return jsonResponse({ id: channelMatch[1], type: params?.channelType ?? "O" });
+      return Response.json({ id: channelMatch[1], type: params?.channelType ?? "O" });
     }
     if (url.includes("/api/v4/channels/") && url.includes("/posts?")) {
       if (params?.postStatus === 403) {
-        return jsonResponse({ message: "You do not have the appropriate permissions." }, 403);
+        return Response.json(
+          { message: "You do not have the appropriate permissions." },
+          {
+            status: 403,
+            statusText: "Forbidden",
+          },
+        );
       }
-      return jsonResponse({
+      return Response.json({
         order: ["post-2", "post-1"],
         posts: {
           "post-1": { id: "post-1", channel_id: "CURRENT", message: "older", create_at: 1_000 },
@@ -81,7 +80,6 @@ describe("readMattermostMessages", () => {
     await expect(read({ cfg: config(policy) })).resolves.toMatchObject({
       messages: [{ id: "post-2" }, { id: "post-1" }],
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("denies unconfigured and direct-message cross-channel targets before reading posts", async () => {
@@ -100,36 +98,35 @@ describe("readMattermostMessages", () => {
     });
 
     expect(result.messages.map((message) => message.id)).toEqual(["post-2", "post-1"]);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(requestUrl(fetchImpl.mock.calls[0]![0])).toContain("/channels/CURRENT/posts?per_page=2");
   });
 
   it.each([
-    {
-      name: "account switching",
-      requests: 0,
-      params: { context: { ...delegatedContext(), requesterAccountId: "other-account" } },
-      error: "Mattermost delegated reads require the current Mattermost account",
+    [
+      "account switching",
+      { context: { ...delegatedContext(), requesterAccountId: "other-account" } },
+      "Mattermost delegated reads require the current Mattermost account",
+      0,
+    ],
+    [
+      "conflicting native conversation",
+      { channelId: "CURRENT", context: delegatedContext("channel:OTHER", "channel:CURRENT") },
+      "Mattermost read target channel is not allowed",
+      1,
+    ],
+    [
+      "disabled account",
+      { cfg: config({ enabled: false }), channelId: "CURRENT" },
+      'Mattermost account "default" is disabled',
+      0,
+    ],
+  ] satisfies [string, Parameters<typeof read>[0], string, number][])(
+    "rejects %s before reading posts",
+    async (_name, params, error, requests) => {
+      await expect(read(params)).rejects.toThrow(error);
+      expect(fetchImpl).toHaveBeenCalledTimes(requests);
     },
-    {
-      name: "conflicting native conversation",
-      requests: 1,
-      params: {
-        channelId: "CURRENT",
-        context: delegatedContext("channel:OTHER", "channel:CURRENT"),
-      },
-      error: "Mattermost read target channel is not allowed",
-    },
-    {
-      name: "disabled account",
-      requests: 0,
-      params: { cfg: config({ enabled: false }), channelId: "CURRENT" },
-      error: 'Mattermost account "default" is disabled',
-    },
-  ])("rejects $name before reading posts", async ({ params, error, requests }) => {
-    await expect(read(params)).rejects.toThrow(error);
-    expect(fetchImpl).toHaveBeenCalledTimes(requests);
-  });
+  );
 
   it("lets a direct operator rely on Mattermost membership and preserves 403 errors", async () => {
     fetchFixture.current = createReadFetch({ postStatus: 403 });

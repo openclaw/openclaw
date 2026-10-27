@@ -4,7 +4,6 @@ import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createFixtureDiagnostics } from "../../../test/helpers/fixture-diagnostics.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
@@ -126,11 +125,7 @@ describe("workspace upload byte stream", () => {
     });
     expect(await fs.readdir(f.temporaryRoot)).toEqual([]);
   });
-  it("uploads and applies a result larger than the former total byte limit", async ({
-    onTestFailed,
-  }) => {
-    const diagnostics = createFixtureDiagnostics("workspace-large-upload");
-    onTestFailed(() => diagnostics.report("failure"));
+  it("uploads and applies a result larger than the former total byte limit", async () => {
     const local = temporary.make("workspace-large-upload-local-");
     const chunk = Buffer.alloc(1024 * 1024, 0x61);
     // Exercise the upload size limit without generating a 540 MiB Git text patch.
@@ -157,14 +152,12 @@ describe("workspace upload byte stream", () => {
         yield* chunks;
       }
     }
-    diagnostics.stage("upload");
     const upload = await f.upload(
       body(),
       f.headers.reduce((size, buffer) => size + buffer.length, 0) +
         entries.length * (8 + fileBytes),
     );
     const stagedResultRef = workerWorkspaceResultRef("large-upload");
-    diagnostics.stage("stage-result");
     await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
       root: local,
       stagingRoot: upload.stagingRoot,
@@ -175,14 +168,12 @@ describe("workspace upload byte stream", () => {
       currentManifestRaw: upload.currentRaw,
     });
     const commit = vi.fn(async () => {});
-    diagnostics.stage("apply-result");
     const result = await applyStagedWorkerWorkspaceResult({
       root: local,
       stagedResultRef,
       expectedBaseManifestRef: upload.baseManifestRef,
       journal: { load: noop, begin: noop, commit, abort: noop },
     });
-    diagnostics.stage("assertions");
     expect(result.manifestRef).toBe(upload.currentManifestRef);
     expect(commit).toHaveBeenCalledWith(upload.currentManifestRef);
     for (const entry of entries) {

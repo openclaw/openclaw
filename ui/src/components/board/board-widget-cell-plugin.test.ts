@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -26,6 +26,28 @@ vi.mock("../../lib/board/widgets/report.tsx", async (importOriginal) => {
         throw new Error("Report temporarily unavailable");
       }
       return actual.ReportWidget(props);
+    },
+  };
+});
+
+const resourceAcquisitions = vi.hoisted(() => ({ frame: vi.fn(), mcp: vi.fn() }));
+vi.mock("./board-widget-frame.tsx", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./board-widget-frame.tsx")>();
+  return {
+    ...actual,
+    createBoardWidgetFrame: (...args: Parameters<typeof actual.createBoardWidgetFrame>) => {
+      resourceAcquisitions.frame();
+      return actual.createBoardWidgetFrame(...args);
+    },
+  };
+});
+vi.mock("./board-mcp-app-lifecycle.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./board-mcp-app-lifecycle.ts")>();
+  return {
+    ...actual,
+    createBoardMcpAppLifecycle: (...args: Parameters<typeof actual.createBoardMcpAppLifecycle>) => {
+      resourceAcquisitions.mcp();
+      return actual.createBoardMcpAppLifecycle(...args);
     },
   };
 });
@@ -111,6 +133,81 @@ function progressResponse(
 }
 
 describe("plugin board widget cells", () => {
+  it("refreshes a ticket added to a native widget in place on a board revision", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    resourceAcquisitions.frame.mockClear();
+    resourceAcquisitions.mcp.mockClear();
+    const native = createBoardWidget({
+      contentKind: "plugin",
+      pluginKind: "fixture:native",
+    });
+    const refreshFrame = vi.fn(async () => undefined);
+    const cell = mountCell(native, {
+      boardRevision: 1,
+      callbacks: callbacks({ frameLoadFailed: refreshFrame }),
+    });
+    await cell.updateComplete;
+    expect(resourceAcquisitions.frame).not.toHaveBeenCalled();
+    expect(resourceAcquisitions.mcp).not.toHaveBeenCalled();
+
+    native.viewTicket = "native-ticket";
+    native.viewTicketTtlMs = 16_000;
+    cell.boardRevision = 2;
+    await cell.updateComplete;
+    expect(resourceAcquisitions.frame).toHaveBeenCalledOnce();
+    expect(resourceAcquisitions.mcp).toHaveBeenCalledOnce();
+
+    native.title = "Updated native widget";
+    cell.boardRevision = 3;
+    await cell.updateComplete;
+    expect(resourceAcquisitions.frame).toHaveBeenCalledOnce();
+    expect(resourceAcquisitions.mcp).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(refreshFrame).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshFrame).toHaveBeenCalledExactlyOnceWith(native.name);
+  });
+
+  it("acquires the external owner pair only once after a native cell needs a frame", async () => {
+    resourceAcquisitions.frame.mockClear();
+    resourceAcquisitions.mcp.mockClear();
+    const native = createBoardWidget({
+      contentKind: "plugin",
+      pluginKind: "fixture:native",
+    });
+    const cell = mountCell(native, {
+      active: false,
+      widgetFrameUrl: () => "/synthetic-frame",
+    });
+    await cell.updateComplete;
+    expect(resourceAcquisitions.frame).not.toHaveBeenCalled();
+    expect(resourceAcquisitions.mcp).not.toHaveBeenCalled();
+
+    cell.widget = { ...native, contentKind: "html", revision: 2 };
+    await cell.updateComplete;
+    await waitForSolid(() => expect(cell.querySelector("iframe")).not.toBeNull());
+    expect(resourceAcquisitions.frame).toHaveBeenCalledOnce();
+    expect(resourceAcquisitions.mcp).toHaveBeenCalledOnce();
+    const frame = cell.querySelector("iframe");
+
+    cell.active = true;
+    await cell.updateComplete;
+    cell.active = false;
+    await cell.updateComplete;
+    expect(cell.querySelector("iframe")).toBe(frame);
+    cell.widget = { ...native, revision: 3 };
+    await cell.updateComplete;
+    expect(cell.querySelector("iframe")).toBeNull();
+    cell.widget = { ...native, contentKind: "html", revision: 4 };
+    await cell.updateComplete;
+    await waitForSolid(() => expect(cell.querySelector("iframe")).not.toBeNull());
+    expect(resourceAcquisitions.frame).toHaveBeenCalledOnce();
+    expect(resourceAcquisitions.mcp).toHaveBeenCalledOnce();
+  });
+
   it("shares rendering subscriptions across native and inactive frame cells with independent lifetimes", async () => {
     function application() {
       const { context, publish } = createSessionOwnerMenuHarness();

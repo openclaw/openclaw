@@ -40,10 +40,6 @@ export type PluginHookToolContext = {
    * closed when a required field is absent.
    */
   requester?: PluginHookToolRequesterContext;
-  /**
-   * What initiated this run (for example "user", "cron" or "memory"). Host maintenance
-   * runs such as the memory flush keep the source turn's requester, so a sender-aware
-   * hook reads this to tell them from the turn itself.
-   */
+  /** Run origin (for example "user", "cron", or "memory"); metadata, not authorization. */
   trigger?: string;
 };

@@ -13,6 +13,7 @@ import {
   resolveCronJobsStorePathFromConfig,
   saveCronJobsStore,
 } from "../cron/store.js";
+import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -74,7 +75,11 @@ function migrate(cfg: OpenClawConfig, shouldRepair = true) {
 
 function receipt(storePath: string, agentId = "main") {
   return withExistingOpenClawStateDatabaseReadOnly(({ db }) =>
-    readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId),
+    readDefaultProactiveJobReceiptInDatabase(
+      db,
+      resolveCronStoreKeyInDatabase(db, storePath),
+      agentId,
+    ),
   );
 }
 

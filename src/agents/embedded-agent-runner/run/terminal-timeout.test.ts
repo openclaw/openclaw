@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
-import { deriveGatewaySessionLifecycleSnapshot } from "../../../gateway/session-lifecycle-state.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "../../../gateway/session-lifecycle-projection.js";
 import * as agentEvents from "../../../infra/agent-events.js";
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
 import {

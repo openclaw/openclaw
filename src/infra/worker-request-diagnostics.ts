@@ -13,7 +13,24 @@ import {
   classifySqliteWorkerExecute,
   sqliteWorkerRequestClasses,
 } from "./sqlite-worker-request-class.js";
+import { workerScriptName } from "./worker-diagnostic-script.js";
 import type { WorkerRequestKind } from "./worker-request-kind.js";
+
+const workerStarts = resolveGlobalSingleton(
+  Symbol.for("openclaw.workerStartObservation"),
+  () => new AsyncLocalStorage<(script: string) => void>(),
+);
+
+/** Startup observations inherit caller scope without changing worker lifetime ownership. */
+export function runWithWorkerStartObserver<T>(observer: (script: string) => void, run: () => T): T {
+  return workerStarts.run(observer, run);
+}
+
+/** Carry only the diagnostic callback across the pool's detached construction boundary. */
+export function captureWorkerStartObserver(url: URL): (() => void) | undefined {
+  const observer = workerStarts.getStore();
+  return observer ? () => observer(workerScriptName(url)) : undefined;
+}
 
 export type WorkerRequestObservation = {
   timing?: DiagnosticWorkerRequestFields["timing"];
@@ -93,6 +110,7 @@ const coreCommands = new Set([
   "session.maintenance.size",
   "session.rowTranscript.backfill",
   "usageCache.writeRollup",
+  "usageCache.writeQuarters",
   "usageCache.prune",
   "trajectory.events.append",
   "trajectory.retention.begin",

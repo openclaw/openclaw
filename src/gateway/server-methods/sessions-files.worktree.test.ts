@@ -17,6 +17,8 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { prepareSessionFileWorkspace } from "../session-file-workspace.js";
+import * as workspaceRoots from "../session-workspace-roots.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   createSessionFileDownloadClient,
@@ -34,10 +36,10 @@ vi.mock("../worker-environments/local-workspace-projection.js", async (importOri
     await importOriginal<typeof import("../worker-environments/local-workspace-projection.js")>();
   return {
     ...actual,
-    withSettledLocalWorkspacePath: (async (params, operation) => {
+    checkpointLocalWorkspacePath: (async (params) => {
       await hooks.duringSettlement?.();
-      return await actual.withSettledLocalWorkspacePath(params, operation);
-    }) satisfies typeof actual.withSettledLocalWorkspacePath,
+      return await actual.checkpointLocalWorkspacePath(params);
+    }) satisfies typeof actual.checkpointLocalWorkspacePath,
   };
 });
 
@@ -153,6 +155,34 @@ function seedReplicaPressure(env: NodeJS.ProcessEnv) {
 }
 
 describe("sessions.files for managed-worktree sessions", () => {
+  it("derives one current workspace policy per admission and revalidation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const entry = await seedWorktreeSession(state.workspaceDir);
+      const cfg = {
+        agents: { defaults: { sandbox: { workspaceRoot: state.path("sandboxes") } } },
+      };
+      using roots = vi.spyOn(workspaceRoots, "resolveSessionWorkspaceRoots");
+      const workspace = await prepareSessionFileWorkspace(cfg, "main", key, entry);
+      expect(workspace).toMatchObject({ root: entry.spawnedCwd, historical: false });
+      expect(roots).toHaveBeenCalledOnce();
+      roots.mockClear();
+      workspace.assertCurrent(cfg, entry);
+      expect(roots).toHaveBeenCalledOnce();
+
+      cfg.agents.defaults.sandbox.workspaceRoot = state.path("replacement-sandboxes");
+      expect(() => workspace.assertCurrent(cfg, entry)).toThrow(
+        "Session workspace changed during file access",
+      );
+      cfg.agents.defaults.sandbox.workspaceRoot = state.path("sandboxes");
+      expect(() =>
+        workspace.assertCurrent(cfg, {
+          ...entry,
+          worktree: { ...entry.worktree, id: "replacement-worktree" },
+        }),
+      ).toThrow("Session workspace changed during file access");
+    });
+  });
+
   it("refuses a changed file lookup root inside the same managed workspace", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const entry = await seedWorktreeSession(state.workspaceDir);

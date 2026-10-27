@@ -1,10 +1,19 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CODEX_NATIVE_PROFILE_IMPORT_COMMAND,
   formatCodexAuthProfileUnavailableMessage,
 } from "./app-server/auth-profile-recovery.js";
+
+const loadAgentRuntime = createLazyRuntimeModule(async () => {
+  const { loadAuthProfileStoreForRuntimeAsync } = await import("openclaw/plugin-sdk/agent-runtime");
+  return { loadAuthProfileStoreForRuntimeAsync };
+});
+const loadAgentScopeRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/agent-scope-runtime"),
+);
 
 const CHECK_ID = "codex/native-profile-recovery";
 const PROFILE_ID = "openai:default";
@@ -18,10 +27,7 @@ async function collectFindings(
     return [];
   }
   const [{ loadAuthProfileStoreForRuntimeAsync }, { listAgentIds, resolveAgentDir }] =
-    await Promise.all([
-      import("openclaw/plugin-sdk/agent-runtime"),
-      import("openclaw/plugin-sdk/agent-scope-runtime"),
-    ]);
+    await Promise.all([loadAgentRuntime(), loadAgentScopeRuntime()]);
   const findings: HealthFinding[] = [];
   const missing: string[] = [];
   for (const agentId of listAgentIds(config)) {

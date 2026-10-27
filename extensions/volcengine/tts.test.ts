@@ -8,27 +8,9 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-const PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
-
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
-
-function requireFirstGuardedFetchCall(): unknown {
-  const [call] = fetchWithSsrFGuardMock.mock.calls;
-  if (!call) {
-    throw new Error("expected Volcengine guarded fetch call");
-  }
-  return call[0];
-}
-
-function makeProviderConfig(overrides?: Record<string, unknown>) {
-  return {
-    apiKey: "test-api-key",
-    voice: "en_female_anna_mars_bigtts",
-    ...overrides,
-  };
-}
 
 function mockResponse(
   response = Response.json({ code: 0, data: Buffer.from("voice-audio").toString("base64") }),
@@ -39,6 +21,9 @@ function mockResponse(
 }
 
 const directivePolicy = createSpeechDirectivePolicy();
+const provider = buildVolcengineSpeechProvider();
+const isConfigured = (providerConfig: Record<string, unknown> = {}) =>
+  provider.isConfiguredAsync?.({ providerConfig, timeoutMs: 30000 });
 
 const TTS_ENV_KEYS = [
   "BYTEPLUS_SEED_SPEECH_API_KEY",
@@ -54,42 +39,30 @@ beforeEach(() => {
   }
 });
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.unstubAllEnvs());
 
-async function synthesize(providerConfig: Record<string, unknown>) {
-  const result = await buildVolcengineSpeechProvider().synthesize({
+function synthesize(
+  providerConfig: Record<string, unknown> = { apiKey: "test-api-key" },
+  overrides: Partial<Parameters<typeof provider.synthesize>[0]> = {},
+) {
+  return provider.synthesize({
     text: "hello",
     cfg: {},
     providerConfig,
     target: "audio-file",
     timeoutMs: 1000,
+    ...overrides,
   });
-  return result.audioBuffer;
-}
-
-function makeOversizedStreamResponse(): Response {
-  return new Response(
-    createClosedChunkStream([new Uint8Array(PROVIDER_RESPONSE_MAX_BYTES), new Uint8Array(1)]),
-  );
 }
 
 describe("Volcengine speech provider", () => {
-  const provider = buildVolcengineSpeechProvider();
-
   it("reports configured for legacy appId and token in providerConfig", async () => {
-    expect(
-      await provider.isConfiguredAsync?.({
-        providerConfig: { appId: "test-app-id", token: "test-token" },
-        timeoutMs: 30000,
-      }),
-    ).toBe(true);
+    expect(await isConfigured({ appId: "test-app-id", token: "test-token" })).toBe(true);
   });
 
   it("falls back to env vars for credentials", async () => {
     vi.stubEnv("BYTEPLUS_SEED_SPEECH_API_KEY", "env-api-key");
-    expect(await provider.isConfiguredAsync?.({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
+    expect(await isConfigured()).toBe(true);
   });
 
   it("rejects blank Seed and legacy credentials before requests", async () => {
@@ -98,28 +71,15 @@ describe("Volcengine speech provider", () => {
     }
     const providerConfig = { apiKey: "   ", appId: "   ", token: "   " };
 
-    expect(await provider.isConfiguredAsync?.({ providerConfig, timeoutMs: 30_000 })).toBe(false);
-    await expect(
-      provider.synthesize({
-        text: "hello",
-        cfg: {},
-        providerConfig,
-        target: "audio-file",
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toThrow("Volcengine TTS credentials missing");
+    expect(await isConfigured(providerConfig)).toBe(false);
+    await expect(synthesize(providerConfig)).rejects.toThrow("Volcengine TTS credentials missing");
 
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
   it("lists voices with locale and gender", async () => {
-    const listVoices = provider.listVoices;
-    if (!listVoices) {
-      throw new Error("Expected Volcengine provider listVoices");
-    }
-    const voices = await listVoices({});
-    expect(voices.length).toBeGreaterThan(0);
-    expect(voices[0]).toEqual({
+    const voices = await provider.listVoices?.({});
+    expect(voices?.[0]).toEqual({
       id: "en_female_anna_mars_bigtts",
       name: "anna",
       locale: "en-US",
@@ -127,38 +87,26 @@ describe("Volcengine speech provider", () => {
     });
   });
 
-  it("rejects non-decimal speedRatio directive values", () => {
-    expect(
-      provider.parseDirectiveToken?.({
-        key: "speed",
-        value: "0x1",
-        policy: directivePolicy,
-      }),
-    ).toEqual({
-      handled: true,
-      warnings: ['invalid Volcengine speedRatio "0x1"'],
-    });
-  });
-
   it("sends the documented Seed Speech API key payload and returns voice-note Opus metadata", async () => {
     const release = mockResponse();
 
-    const result = await provider.synthesize({
-      text: "hello",
-      cfg: {},
-      providerConfig: makeProviderConfig({ emotion: "happy", speedRatio: 1.2 }),
-      target: "voice-note",
-      providerOverrides: { voice: "zh_male_aojiao_mars_bigtts", speedRatio: 0.9 },
-      timeoutMs: 1234,
+    const result = await synthesize(
+      { apiKey: "test-api-key", emotion: "happy", speedRatio: 1.2 },
+      {
+        target: "voice-note",
+        providerOverrides: { voice: "zh_male_aojiao_mars_bigtts", speedRatio: 0.9 },
+        timeoutMs: 1234,
+      },
+    );
+
+    expect(result).toEqual({
+      audioBuffer: Buffer.from("voice-audio"),
+      outputFormat: "opus",
+      fileExtension: ".opus",
+      voiceCompatible: true,
     });
 
-    expect(result.audioBuffer.toString()).toBe("voice-audio");
-    expect(result.outputFormat).toBe("opus");
-    expect(result.fileExtension).toBe(".opus");
-    expect(result.voiceCompatible).toBe(true);
-
-    const call = requireFirstGuardedFetchCall();
-    expect(call).toEqual({
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
       url: "https://voice.ap-southeast-1.bytepluses.com/api/v3/tts/unidirectional",
       init: {
         method: "POST",
@@ -174,10 +122,7 @@ describe("Volcengine speech provider", () => {
           req_params: {
             text: "hello",
             speaker: "zh_male_aojiao_mars_bigtts",
-            audio_params: {
-              format: "ogg_opus",
-              sample_rate: 24000,
-            },
+            audio_params: { format: "ogg_opus", sample_rate: 24000 },
             speed_ratio: 0.9,
             emotion: "happy",
           },
@@ -193,24 +138,19 @@ describe("Volcengine speech provider", () => {
   it("drops malformed speed ratios before synthesis", async () => {
     mockResponse();
 
-    await provider.synthesize({
-      text: "hello",
-      cfg: {},
-      providerConfig: makeProviderConfig({ speedRatio: 4 }),
-      target: "audio-file",
-      providerOverrides: { speedRatio: -1 },
-      timeoutMs: 1234,
-    });
+    await synthesize(
+      { apiKey: "test-api-key", speedRatio: 4 },
+      {
+        providerOverrides: { speedRatio: -1 },
+      },
+    );
 
-    const call = requireFirstGuardedFetchCall() as { init: { body: string } };
-    const body = JSON.parse(call.init.body) as {
-      req_params?: { speed_ratio?: number };
-    };
+    const body: { req_params?: { speed_ratio?: number } } = JSON.parse(
+      fetchWithSsrFGuardMock.mock.calls[0]![0].init.body,
+    );
     expect(body.req_params).not.toHaveProperty("speed_ratio");
   });
-});
 
-describe("Volcengine provider response handling", () => {
   it("joins streamed Seed Speech audio frames", async () => {
     const release = mockResponse(
       new Response(
@@ -223,12 +163,9 @@ describe("Volcengine provider response handling", () => {
       ),
     );
 
-    const audio = await synthesize({
-      apiKey: "secret-api-key",
-      voice: "zh_female_xiaohe_uranus_bigtts",
-    });
+    const { audioBuffer } = await synthesize();
 
-    expect(audio.toString()).toBe("audio-1audio-2");
+    expect(audioBuffer.toString()).toBe("audio-1audio-2");
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -252,69 +189,51 @@ describe("Volcengine provider response handling", () => {
       error: "Volcengine TTS error 3001: load grant failed",
     },
   ])("$name responses", ({ name, code, params, secret, failure, status, error }) => {
-    it("rejects malformed base64 and releases the request", async () => {
-      const release = mockResponse(Response.json({ code, data: "%%%not-base64!!" }));
-      await expect(synthesize(params)).rejects.toThrow(
+    it.each([
+      [
+        "malformed base64",
+        () => Response.json({ code, data: "%%%not-base64!!" }),
         `${name} TTS returned malformed base64 audio data`,
-      );
-      expect(release).toHaveBeenCalledTimes(1);
-    });
-
-    it("rejects invalid UTF-8 and releases the request", async () => {
-      const release = mockResponse(
-        new Response(
-          Buffer.concat([
-            Buffer.from(`{"code":${code},"message":"bad`),
-            Buffer.from([0xff]),
-            Buffer.from(`","data":"${Buffer.from("audio").toString("base64")}"}`),
-          ]),
-        ),
-      );
-      await expect(synthesize(params)).rejects.toThrow(TypeError);
-      expect(release).toHaveBeenCalledTimes(1);
-    });
-
-    it("reports provider errors without exposing credentials", async () => {
-      const release = mockResponse(Response.json(failure, { status }));
+      ],
+      ["invalid UTF-8", () => new Response(new Uint8Array([0xff])), TypeError],
+      ["provider error", () => Response.json(failure, { status }), error],
+      [
+        "oversized response",
+        () =>
+          new Response(
+            createClosedChunkStream([new Uint8Array(16 * 1024 * 1024), new Uint8Array(1)]),
+          ),
+        `${name} TTS response exceeds 16777216 bytes`,
+      ],
+    ] as const)("rejects %s; redacts and releases", async (_label, response, expected) => {
+      const release = mockResponse(response());
       await expect(synthesize(params)).rejects.toSatisfy((err: unknown) => {
-        expect(err).toBeInstanceOf(Error);
-        expect(err).toHaveProperty("message", error);
+        expect(err).toBeInstanceOf(typeof expected === "string" ? Error : expected);
+        if (typeof expected === "string") {
+          expect(err).toHaveProperty("message", expected);
+        }
         expect(err).not.toHaveProperty("message", expect.stringContaining(secret));
         return true;
       });
       expect(release).toHaveBeenCalledTimes(1);
     });
-
-    it("bounds success response reads and releases the request", async () => {
-      const release = mockResponse(makeOversizedStreamResponse());
-      await expect(synthesize(params)).rejects.toThrow(
-        `${name} TTS response exceeds 16777216 bytes`,
-      );
-      expect(release).toHaveBeenCalledTimes(1);
-    });
   });
 
   it.each([
-    { key: "speed", value: "0.2", expected: 0.2 },
-    { key: "speedratio", value: "1.25", expected: 1.25 },
-    { key: "speed_ratio", value: "3", expected: 3 },
-  ])(
-    "returns the $key=$value patch without mutating prior overrides",
-    ({ key, value, expected }) => {
-      const provider = buildVolcengineSpeechProvider();
-      const currentOverrides = Object.freeze({ voice: "retained", speedRatio: 0.75 });
-      const result = provider.parseDirectiveToken?.({
-        key,
-        value,
-        currentOverrides,
-        policy: directivePolicy,
-      });
-      expect(result).toEqual({
-        handled: true,
-        overrides: { speedRatio: expected },
-      });
-      expect(result?.overrides).not.toBe(currentOverrides);
-      expect(currentOverrides).toEqual({ voice: "retained", speedRatio: 0.75 });
-    },
-  );
+    ["speed", "0.2", { overrides: { speedRatio: 0.2 } }],
+    ["speedratio", "1.25", { overrides: { speedRatio: 1.25 } }],
+    ["speed_ratio", "3", { overrides: { speedRatio: 3 } }],
+    ["speed", "0x1", { warnings: ['invalid Volcengine speedRatio "0x1"'] }],
+  ] as const)("parses %s=%s without mutating prior overrides", (key, value, expected) => {
+    const currentOverrides = Object.freeze({ voice: "retained", speedRatio: 0.75 });
+    const result = provider.parseDirectiveToken?.({
+      key,
+      value,
+      currentOverrides,
+      policy: directivePolicy,
+    });
+    expect(result).toEqual({ handled: true, ...expected });
+    expect(result?.overrides).not.toBe(currentOverrides);
+    expect(currentOverrides).toEqual({ voice: "retained", speedRatio: 0.75 });
+  });
 });

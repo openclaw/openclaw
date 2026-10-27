@@ -4,6 +4,15 @@ import { createReadabilityWebContentExtractor } from "./web-content-extractor.js
 const SAMPLE_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Example Article</title></head><body><nav><ul><li><a href="/home">Home</a></li><li><a href="/about">About</a></li></ul></nav><main><article>
 <h1>Example Article</h1><p>Main content starts here with enough words to satisfy readability.</p><p>Second paragraph for a bit more signal.</p><p><a href="../next">Continue reading</a></p></article></main><footer>Footer text</footer></body></html>`;
 
+const MINIFIED_BLOCKS_HTML =
+  "<!doctype html><html><head><title>Results</title></head><body><article>" +
+  "<h1>Heading</h1>" +
+  "<p>Para 0. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p>" +
+  "<p>Para 1. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p>" +
+  "<ul><li>alpha</li><li>beta</li></ul>" +
+  "<p>Para 2. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p>" +
+  "</article></body></html>";
+
 async function extractArticle(html: string, extractMode: "text" | "markdown" = "text") {
   const result = await createReadabilityWebContentExtractor().extract({
     html,
@@ -22,6 +31,22 @@ describe("web readability extractor", () => {
     expect(extracted.text).toContain("Main content starts here");
     expect(extracted.text).toContain("[Continue reading](https://example.com/next)");
     expect(extracted.title).toBe("Example Article");
+  });
+
+  it("keeps block boundaries in text mode for minified HTML", async () => {
+    const extracted = await extractArticle(MINIFIED_BLOCKS_HTML, "text");
+    expect(extracted.text).toContain("Heading\nPara 0.");
+    expect(extracted.text).toContain("\nPara 1.");
+    expect(extracted.text).toContain("\nalpha\nbeta\n");
+    expect(extracted.title).toBe("Results");
+  });
+
+  it("keeps minified block structure in markdown mode", async () => {
+    const extracted = await extractArticle(MINIFIED_BLOCKS_HTML, "markdown");
+    expect(extracted.text).toContain("# Heading");
+    expect(extracted.text).toContain("Para 0.");
+    expect(extracted.text).toContain("- alpha\n- beta");
+    expect(extracted.title).toBe("Results");
   });
 
   it("excludes double-escaped script prose in text mode", async () => {

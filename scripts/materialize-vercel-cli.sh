@@ -8,7 +8,7 @@ github_output="${3:-}"
 cli_label=Vercel
 cli_package=vercel
 expected_version=64.4.0
-expected_lock_sha256="2b811581752c9e8b4aefebb6a984049a746c6dea254421549f7da1c3406ad7e2"
+expected_lock_sha256="dc677fe4341e938feb9c7a938bcf7f449cfb436fd241b0d90aeece2e497da95f"
 expected_integrity="sha512-7MePR4liAcnMGLmlsP5DbBu1vIimakgNfzEqGTWOsBGIMk4gZ4qwRIPDandTecJM5fF7cgTtwHv+ev4gHxHSHg=="
 # Use Sandbox directly: Vercel's sandbox wrapper overwrites failed remote exits.
 additional_bin=sandbox_cli=sandbox

@@ -676,7 +676,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--muted);
+  color: var(--icon-interactive, var(--muted));
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
@@ -693,7 +693,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   padding: 0;
   border: 0;
   border-radius: var(--radius-md);
-  background: var(--accent);
+  background: var(--sidebar-rail-action-bg);
   color: var(--accent-foreground);
   text-decoration: none;
 }
@@ -704,7 +704,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .header-new-session:hover:not(:disabled, [aria-disabled="true"]) {
-  background: var(--accent-hover);
+  background: var(--sidebar-rail-action-hover-bg);
   color: var(--accent-foreground);
 }
 
@@ -750,10 +750,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   display: none;
 }
 
-/* Keep the full resize target on the content side of the boundary so it
-   cannot intercept the sidebar scrollbar. The shell owns the resting line. */
+/* Keep the native-width target on the content side so it clears the sidebar
+   scrollbar without covering controls at the content edge. The shell owns the line. */
 .sidebar-resizer {
-  --resize-handle-size: 14px;
   --resize-handle-rest-color: transparent;
   --resize-handle-line-inline: 0%;
   grid-area: nav;
@@ -873,6 +872,35 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
      both values share --sidebar-pad-x so they cannot drift. */
   margin-right: calc(-1 * var(--sidebar-pad-x));
   padding-right: var(--sidebar-pad-x);
+  scrollbar-color: color-mix(in srgb, var(--muted) 10%, transparent) transparent;
+}
+
+.sidebar-shell:hover .sidebar-shell__body {
+  scrollbar-color: color-mix(in srgb, var(--muted) 16%, transparent) transparent;
+}
+
+@supports selector(::-webkit-scrollbar) {
+  .sidebar-shell__body {
+    /* Native scrollbar colors override the separate thumb-hover treatment. */
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  .sidebar-shell:hover .sidebar-shell__body {
+    scrollbar-color: auto;
+  }
+
+  .sidebar-shell__body::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--muted) 10%, transparent);
+  }
+
+  .sidebar-shell:hover .sidebar-shell__body::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--muted) 16%, transparent);
+  }
+
+  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
 }
 
 /* The footer bleeds past the sidebar gutters without moving the content frame. */
@@ -958,7 +986,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted);
+  color: var(--icon-interactive, var(--muted));
   transition:
     opacity var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -972,24 +1000,22 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   opacity: 0.55;
 }
 
-.sidebar-session-toolbar .sidebar-recent-sessions__label-text {
-  flex: 0 0 auto;
+.sidebar-session-toolbar__button:not(:disabled, [aria-disabled="true"]) {
+  opacity: var(--sidebar-toolbar-action-opacity, 0.55);
 }
 
-.sidebar-session-toolbar__button.sidebar-session-sort {
-  margin-left: auto;
+.sidebar-session-toolbar .sidebar-recent-sessions__label-text {
+  flex: 0 0 auto;
 }
 
 .sidebar-session-toolbar__button:hover,
 .sidebar-session-toolbar__button:focus-visible,
 .sidebar-session-toolbar__button[aria-haspopup][aria-expanded="true"] {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+  opacity: 1;
 }
 
-/* The filter summary names the active filter; the funnel only keeps its dot. */
-.sidebar-session-toolbar__button:hover,
-.sidebar-session-toolbar__button:focus-visible,
-.sidebar-session-toolbar__button[aria-haspopup][aria-expanded="true"],
 .sidebar-session-toolbar__button.sidebar-session-sort--filtered {
   color: var(--text);
   opacity: 1;
@@ -1124,6 +1150,16 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   color: var(--text);
 }
 
+/* Personal groups has a static heading, not a draggable session row. */
+.personal-session-groups__heading:hover,
+.personal-session-groups__heading .sidebar-session-toolbar__button:is(:hover, :focus-visible) {
+  background: transparent;
+}
+
+.personal-session-groups__heading .sidebar-session-toolbar__button {
+  margin-inline-start: auto;
+}
+
 .sidebar-recent-sessions__head--draggable {
   cursor: grab;
 }
@@ -1237,8 +1273,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   opacity: 0.7;
 }
 
-.sidebar-session-group-count--error svg,
-.sidebar-child-session__status svg {
+.sidebar-session-group-count--error svg {
   width: 12px;
   height: 12px;
   stroke-width: 1.8px;
@@ -1302,6 +1337,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .sidebar-session-sort {
   position: relative;
+  margin-left: auto;
+  font-size: 12px;
 }
 
 .sidebar-session-sort--filtered::after {
@@ -1328,15 +1365,18 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)) .sidebar-session-group-actions,
 .sidebar-session-group-actions[aria-expanded="true"],
 .sidebar-session-group-actions.sidebar-session-sort--filtered {
-  opacity: 0.55;
+  opacity: var(--sidebar-toolbar-action-opacity, 1);
   pointer-events: auto;
 }
 
 .sidebar-session-group-actions:is(:hover, :focus-visible),
 .sidebar-session-group-actions[aria-expanded="true"] {
-  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
   opacity: 1;
+
+  &:not(.sidebar-new-session) {
+    background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  }
 }
 
 /* Trailing header actions read as one cluster: 2px apart, not the 8px header gap.
@@ -1359,7 +1399,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   }
 
   .sidebar-session-group-actions {
-    opacity: 0.55;
+    opacity: var(--sidebar-toolbar-action-opacity, 1);
     pointer-events: auto;
   }
 }
@@ -1394,6 +1434,11 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+.sidebar-session-window {
+  /* The virtual window owns anchoring while its rows mount and unmount. */
+  overflow-anchor: none;
 }
 
 .sidebar-recent-sessions__list {
@@ -1454,6 +1499,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-session-catalog-host__label,
 .session-menu__text,
 .sidebar-session-catalog-project__label,
+.sidebar-session-sort__status,
 .activity-feed__selected-person,
 .activity-feed__git-label,
 .activity-feed__session-headline,
@@ -1714,14 +1760,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   outline-offset: -2px;
 }
 
-/* A single selected owner's sessions sit directly under the owner picker:
-   titles start at the picker's leading edge, so the link inset only offsets
-   the list's negative inline margin. Status moves to the trailing edge
-   instead of shifting titles, and an empty status slot takes no room. */
-.sidebar-recent-sessions__group--inline-owner
-  .sidebar-recent-session:not(.sidebar-recent-session--child)
-  > .sidebar-recent-session__link
-  > .sidebar-session-indicator {
+/* State-only indicators belong to the row edge in every native list layout.
+   Artwork and owner avatars keep their leading attribution slot. */
+.sidebar-recent-session > .sidebar-recent-session__link > .sidebar-session-indicator--state-only {
   position: absolute;
   inset-inline-end: calc(6px + (24px - var(--sidebar-lead)) / 2);
   top: 50%;
@@ -1732,12 +1773,25 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   }
 }
 
-/* Keep activity at the row edge, after hover actions and the child toggle.
-   Empty indicators leave the full title width available. */
+/* Keep the normal title column aligned with rows that have artwork. Only the
+   headerless Person layout deliberately starts titles at the owner picker. */
+.sidebar-session-indicator--state-only + .sidebar-recent-session__text {
+  margin-inline-start: calc(var(--sidebar-lead) + var(--sidebar-row-gap));
+}
+
 .sidebar-recent-sessions__group--inline-owner
-  .sidebar-recent-session:not(.sidebar-recent-session--child):has(
-    > .sidebar-recent-session__link > .sidebar-session-indicator:not(:empty)
-  ) {
+  .sidebar-recent-session:not(.sidebar-recent-session--child)
+  > .sidebar-recent-session__link
+  > .sidebar-session-indicator--state-only
+  + .sidebar-recent-session__text {
+  margin-inline-start: 0;
+}
+
+/* Keep state after hover actions and child controls, without reserving a
+   trailing slot for idle rows or moving an avatar's activity ring. */
+.sidebar-recent-session:has(
+  > .sidebar-recent-session__link > .sidebar-session-indicator--state-only:not(:empty)
+) {
   --sidebar-session-state-reserve: 24px;
 }
 
@@ -1753,15 +1807,17 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   padding-inline-start: 6px;
 }
 
-/* Row actions overlay the link's trailing edge (on hover, or always on the
-   mobile drawer); reserve that space on the link instead of the title so the
-   text and metadata stay clear of them. Status has its own fixed row slot. */
+/* Root-row actions overlay the link's trailing edge (on hover, or always on
+   the mobile drawer). Children already reserve their aside in flow. Keep the
+   overlay space on the root link; status has its own fixed row slot. */
 .shell:not(.shell--mobile-nav)
-  .sidebar-recent-sessions__group--inline-owner
-  .sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within),
+  .sidebar-recent-session:not(.sidebar-recent-session--child):has(
+    > .sidebar-recent-session__link > .sidebar-session-indicator--state-only
+  ):is(:hover, :focus-within),
 .shell--mobile-nav
-  .sidebar-recent-sessions__group--inline-owner
-  .sidebar-recent-session:not(.sidebar-recent-session--child) {
+  .sidebar-recent-session:not(.sidebar-recent-session--child):has(
+    > .sidebar-recent-session__link > .sidebar-session-indicator--state-only
+  ) {
   > .sidebar-recent-session__link {
     padding-inline-end: var(--session-row-actions-reserve);
   }
@@ -2009,7 +2065,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-recent-session--single-line:not(.sidebar-recent-session--child):is(:hover, :focus-within)
   :is(
     .session-row-badge--pull-request,
-    .session-row-badges:has(> openclaw-tooltip:only-child > .session-row-badge--pull-request)
+    .session-row-badges:has(> .session-row-badge--pull-request:only-child)
   ) {
   display: none;
 }
@@ -2050,21 +2106,91 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .sidebar-online__row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
+  column-gap: 8px;
   min-width: 0;
+  padding-inline: 8px;
   border-radius: var(--radius-md);
 }
 
-.sidebar-online__person {
-  flex: 1;
+/* The menu shares the name track, not a permanently reserved action column. */
+.sidebar-online__menu {
+  grid-area: 1 / 2;
+  justify-self: end;
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sidebar-online__row:is(:hover, :focus-within) .sidebar-online__menu,
+.sidebar-online__menu:has([aria-expanded="true"]) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sidebar-online__row:is(:hover, :focus-within):has(.sidebar-online__menu)
+  .sidebar-online__person-name {
+  padding-inline-end: 28px;
+}
+
+.sidebar-online__menu-trigger.oc-menu-trigger {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
+  place-items: center;
+  width: 24px;
+  height: 28px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--muted);
+}
+
+.sidebar-online__menu-trigger svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sidebar-online__menu .oc-menu-item__icon,
+.sidebar-online__menu .oc-menu-item__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sidebar-online__menu-separator {
+  margin: 4px;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-online__menu {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .sidebar-online__row:has(.sidebar-online__menu) .sidebar-online__person-name {
+    padding-inline-end: 36px;
+  }
+
+  .sidebar-online__menu-trigger.oc-menu-trigger {
+    width: 32px;
+    height: 40px;
+  }
+}
+
+.sidebar-online__person {
+  grid-area: 1 / 1 / 2 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
   align-items: baseline;
   gap: 8px;
-  width: 100%;
+  width: auto;
   min-width: 0;
   min-height: 32px;
+  margin-inline: -8px;
   padding: 4px 8px;
   border: 0;
   border-radius: var(--radius-md);
@@ -2079,7 +2205,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
     opacity var(--duration-fast) ease;
 }
 
-.sidebar-online__person:hover,
+.sidebar-online__row:hover .sidebar-online__person,
 .sidebar-online__person:focus-visible {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
@@ -2297,7 +2423,7 @@ openclaw-session-menu[popover] {
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
+  background: var(--popover);
   box-shadow: var(--overlay-shadow);
   position: fixed;
   z-index: 121;
@@ -2333,29 +2459,13 @@ openclaw-session-menu[popover] {
   color: var(--muted);
 }
 
-/* Keycap hint, not content: the app's quiet mono shortcut idiom, fixed-width so
-   letters and digits share one rail. Identity-menu chords use the system UI face
-   below because theme body fonts are not guaranteed to cover modifier glyphs. */
+/* Wrappers can contain multiple keycaps and an alias separator. The shared
+   keyboard stylesheet owns the badge skin, including modifier-glyph coverage. */
 .session-menu__shortcut,
-.side-panel-type-option__shortcut,
-.chat-controls__model-option-action kbd {
+.side-panel-type-option__shortcut {
   flex: 0 0 auto;
-  min-width: 12px;
-  color: var(--muted);
-  font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
-  line-height: 1;
   text-align: center;
-}
-
-.session-menu__shortcut,
-.side-panel-type-option__shortcut {
-  text-align: end;
-}
-
-.sidebar-identity-menu .session-menu__shortcut,
-.side-panel-type-option__shortcut {
-  font-family: var(--font-shortcut);
 }
 
 /* Sidebar destinations act as app controls, but stay anchors for native
@@ -2457,13 +2567,14 @@ a:is(
 .settings-sidebar__item--active:hover,
 .nav-item--active:hover,
 .nav-item.active:hover {
+  color: var(--text-strong);
   background: var(--surface-selected-hover);
 }
 
 .nav-item.active .nav-item__icon,
 .nav-item--active .nav-item__icon {
   opacity: 1;
-  color: var(--accent);
+  color: var(--navigation-selected-icon, var(--accent));
 }
 
 /* Pinned sessions share the page-nav chrome (hover/active fill, muted glyphs and
@@ -3537,7 +3648,7 @@ html.openclaw-native-web-chrome
   font-weight: 650;
   letter-spacing: -0.03em;
   line-height: 1.2;
-  color: var(--accent);
+  color: var(--text-strong);
 }
 
 .page-subtitle {
@@ -3771,12 +3882,6 @@ html.openclaw-native-web-chrome
 
 .sidebar-session-attention__icon--error {
   color: var(--danger);
-}
-
-.sidebar-session-attention__icon svg {
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.8px;
 }
 
 .sidebar-recent-session.sidebar-recent-session--attention-amber .sidebar-recent-session__name,

@@ -314,10 +314,7 @@ export function createFollowupRunner(
             storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
             sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
             entry: turn.session.current(),
-            writer:
-              execution.execution.outcome.kind === "settled"
-                ? execution.execution.outcome.sessionWriter
-                : undefined,
+            writer: execution.execution.outcome.sessionWriter,
             operation: turn.operation,
             prepareRestartClaimCleanup:
               execution.execution.outcome.kind === "settled"

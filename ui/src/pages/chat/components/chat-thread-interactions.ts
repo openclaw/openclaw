@@ -158,7 +158,8 @@ export type ChatThreadProps = Omit<
     loadFullAssistantMessage?: SidebarFullMessageLoader | null;
     mediaPolicyEpoch?: number;
     autoExpandToolCalls?: boolean;
-    realtimeTalkConversation?: RealtimeTalkConversationEntry[];
+    /** Live captions update their retained row independently of the pane frame. */
+    readRealtimeTalkConversation?: () => readonly RealtimeTalkConversationEntry[];
     typingActors?: readonly ChatTypingActorView[];
     typingOverflow?: ChatTypingOverflow;
     onOpenSidebar?: (content: SidebarContent) => void;
@@ -361,6 +362,74 @@ function toggleTouchMessageMeta(event: PointerEvent, messageElements: Iterable<H
   } else {
     revealedMessages.delete(transcript);
   }
+}
+
+export function handleTranscriptSelectionMouseDown(event: MouseEvent) {
+  const thread = event.currentTarget;
+  const target = event.target;
+  if (
+    event.button !== 0 ||
+    event.detail < 2 ||
+    !(thread instanceof HTMLElement) ||
+    !(target instanceof Element) ||
+    target.closest("a, button, input, select, textarea, summary, [contenteditable]")
+  ) {
+    return undefined;
+  }
+  const bubble = target.closest(".chat-bubble");
+  const view = thread.ownerDocument.defaultView;
+  if (!bubble || !thread.contains(bubble) || !view) {
+    return undefined;
+  }
+  // Capture the pressed message before mouseup/dblclick can target a common
+  // ancestor, including when the drag is released outside this transcript.
+  const listeners = new AbortController();
+  const stop = () => listeners.abort();
+  listen(
+    view,
+    "mouseup",
+    () => {
+      stop();
+      if (thread.isConnected && thread.contains(bubble)) {
+        boundMessageSelection(bubble);
+      }
+    },
+    { once: true, signal: listeners.signal },
+  );
+  listen(view, "blur", stop, { once: true, signal: listeners.signal });
+  return stop;
+}
+
+function boundMessageSelection(bubble: Element) {
+  const selection = bubble.ownerDocument.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount !== 1) {
+    return;
+  }
+  const range = selection.getRangeAt(0);
+  if (
+    !range.intersectsNode(bubble) ||
+    (bubble.contains(range.startContainer) && bubble.contains(range.endContainer))
+  ) {
+    return;
+  }
+  // Intersect only this multi-click gesture; ordinary drags and Select All stay native.
+  const backwards =
+    selection.anchorNode === range.endContainer && selection.anchorOffset === range.endOffset;
+  const bounded = range.cloneRange();
+  const contents = bubble.ownerDocument.createRange();
+  contents.selectNodeContents(bubble);
+  if (bounded.compareBoundaryPoints(Range.START_TO_START, contents) < 0) {
+    bounded.setStart(contents.startContainer, contents.startOffset);
+  }
+  if (bounded.compareBoundaryPoints(Range.END_TO_END, contents) > 0) {
+    bounded.setEnd(contents.endContainer, contents.endOffset);
+  }
+  selection.setBaseAndExtent(
+    backwards ? bounded.endContainer : bounded.startContainer,
+    backwards ? bounded.endOffset : bounded.startOffset,
+    backwards ? bounded.startContainer : bounded.endContainer,
+    backwards ? bounded.startOffset : bounded.endOffset,
+  );
 }
 
 export function handleTranscriptPointerUp(

@@ -29,12 +29,21 @@ vi.mock("./update-git-runtime.js", () => ({ readBuiltGatewayBuildId: probes.buil
 
 const { observeInterruptedUpdateGateway } = await import("./update-run-interruption-health.js");
 const candidate = { version: "1.0.0", buildId: "b1" };
-async function observe() {
+async function observe(advanceMs?: number) {
   const deadline = createGatewayRestartDeadline({
     timeoutMs: INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS,
   });
   try {
-    return await observeInterruptedUpdateGateway(candidate, { deadline });
+    let completed = false;
+    const result = observeInterruptedUpdateGateway(candidate, { deadline }).then((value) => {
+      completed = true;
+      return value;
+    });
+    if (advanceMs !== undefined) {
+      await vi.advanceTimersByTimeAsync(advanceMs);
+      expect(completed).toBe(true);
+    }
+    return await result;
   } finally {
     deadline.dispose();
   }
@@ -66,17 +75,6 @@ function after<T>(ms: number, value: T): Promise<T> {
   });
 }
 
-async function expireObservation() {
-  let completed = false;
-  const result = observe().then((value) => {
-    completed = true;
-    return value;
-  });
-  await vi.advanceTimersByTimeAsync(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS);
-  expect(completed).toBe(true);
-  return result;
-}
-
 // The reporter's measured total was 25,431 ms; the phase distribution here is synthetic.
 it("settles a managed candidate taking 25,431 ms across setup and reconciliation", async () => {
   const elapsedMs = 25_431;
@@ -84,9 +82,7 @@ it("settles a managed candidate taking 25,431 ms across setup and reconciliation
   probes.context.mockImplementation(() => after(2_000, { config: {} }));
   probes.wait.mockImplementation(() => after(elapsedMs - 5_000, healthy));
   probes.http.mockImplementation(() => after(2_000, { healthz: 200, readyz: 200 }));
-  const result = observe();
-  await vi.advanceTimersByTimeAsync(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS);
-  expect(await result).toMatchObject({
+  expect(await observe(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS)).toMatchObject({
     outcome: "settled",
     elapsedMs,
     waitOutcome: "healthy",
@@ -104,7 +100,7 @@ it.each([
 ] as const)("bounds a stalled %s read and records %s", async (probe, phase) => {
   const pending = createDeferredCore<never>();
   probes[probe].mockReturnValueOnce(pending.promise);
-  expect(await expireObservation()).toMatchObject({
+  expect(await observe(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS)).toMatchObject({
     outcome: "timed-out",
     elapsedMs: INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS,
     phase,
@@ -121,7 +117,7 @@ it("keeps HTTP readiness in the original budget after a slow healthy settle", as
     after(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS - 2_500, healthy),
   );
   probes.http.mockImplementation(() => after(4_000, { healthz: 200, readyz: 200 }));
-  expect(await expireObservation()).toMatchObject({
+  expect(await observe(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS)).toMatchObject({
     outcome: "timed-out",
     elapsedMs: INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS,
     phase: "reconciliation:http",
@@ -131,33 +127,24 @@ it("keeps HTTP readiness in the original budget after a slow healthy settle", as
   expect(probes.http).toHaveBeenCalledTimes(1);
 });
 
-it.each(["wait", "http", "installed"])(
-  "does not settle with changed %s evidence",
-  async (change) => {
-    if (change === "wait") {
-      probes.wait.mockResolvedValue({
-        ...healthy,
-        healthy: false,
-        waitOutcome: "build-id-mismatch",
-      });
-    } else if (change === "http") {
-      probes.http.mockResolvedValue({ healthz: 200, readyz: 503 });
-    } else {
-      probes.build.mockResolvedValue("other-build");
-    }
-    const result = await observe();
-    expect(result.outcome).toBe("unverified");
-    expect(result.verification).toBeUndefined();
-    if (change === "wait") {
-      expect(result).toMatchObject({
-        elapsedMs: 0,
-        phase: "health-wait",
-        waitOutcome: "build-id-mismatch",
-      });
-      expect(probes.http).not.toHaveBeenCalled();
-    }
-  },
-);
+it.each([
+  ["wait", { ...healthy, healthy: false, waitOutcome: "build-id-mismatch" }],
+  ["http", { healthz: 200, readyz: 503 }],
+  ["build", "other-build"],
+] as const)("does not settle with changed %s evidence", async (probe, value) => {
+  probes[probe].mockResolvedValue(value);
+  const result = await observe();
+  expect(result.outcome).toBe("unverified");
+  expect(result.verification).toBeUndefined();
+  if (probe === "wait") {
+    expect(result).toMatchObject({
+      elapsedMs: 0,
+      phase: "health-wait",
+      waitOutcome: "build-id-mismatch",
+    });
+    expect(probes.http).not.toHaveBeenCalled();
+  }
+});
 
 it("preserves command cleanup uncertainty for the reconciliation owner", async () => {
   const failure = new CommandProcessCleanupError();

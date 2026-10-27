@@ -9,13 +9,16 @@ import { readRuntimePromptImageFactIndexes } from "../../../media/runtime-prompt
 import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { convertToLlm } from "../../sessions/messages.js";
 import { suppressedInlineImageFacts } from "./image-media-facts.test-support.js";
 import {
+  buildPromptImageFailureNotice,
   detectAndLoadPromptImages,
   detectImageReferences,
   hydratePromptMediaMessages,
   materializeProviderContext,
 } from "./images.js";
+import { promptImageSessionKey } from "./prompt-image-decisions.js";
 import type { MediaImageLayout } from "./prompt-image-metadata.js";
 
 let workspaceDir: string;
@@ -60,6 +63,48 @@ const layout = (slots: MediaImageLayout["slots"], suppressedFactIndexes: number[
 afterEach(() => vi.restoreAllMocks());
 
 describe("structured prompt media replay", () => {
+  it("keeps an omitted image omitted when the source becomes readable on a later request", async () => {
+    const imagePath = path.join(workspaceDir, "late.png");
+    const message = persistedMessage("inspect", mediaAt(imagePath));
+    const sessionOptions = {
+      ...options(),
+      workspaceOnly: true,
+      imageSessionKey: promptImageSessionKey({ sessionId: "first", agentId: "main", workspaceDir }),
+    };
+    const first = await hydratePromptMediaMessages([message], {
+      ...sessionOptions,
+      onCurrentTurnImageFailure: () => {},
+    });
+    const firstRequest = await materializeProviderContext({
+      ...sessionOptions,
+      context: { messages: convertToLlm(first) },
+    });
+    await writeImage(workspaceDir, "late.png");
+    for (const scope of [
+      { sessionId: "second", agentId: "main" },
+      { sessionId: "first", agentId: "other" },
+    ]) {
+      const independent = await hydratePromptMediaMessages([structuredClone(message)], {
+        ...sessionOptions,
+        imageSessionKey: promptImageSessionKey({ ...scope, workspaceDir }),
+      });
+      expect(contentOf(independent[0])).toContainEqual(image());
+    }
+    const replay = await hydratePromptMediaMessages(
+      [structuredClone(message), { role: "user", content: "next", timestamp: 2 }],
+      sessionOptions,
+    );
+    const secondRequest = await materializeProviderContext({
+      ...sessionOptions,
+      context: { messages: convertToLlm(replay) },
+    });
+    expect(secondRequest.messages[0]).toEqual(firstRequest.messages[0]);
+    expect(secondRequest.messages[0]?.content).toEqual([
+      { type: "text", text: "inspect" },
+      { type: "text", text: buildPromptImageFailureNotice(1) },
+    ]);
+  });
+
   it.each`
     name                                                                               | params                                                                                                                                                                                                                                                                               | expected
     ${"attributes a suppressed-plus-inline sanitization failure to the inline fact"}   | ${{ media: suppressedInlineImageFacts(), existingImages: [image("%%%")], imageOrder: ["inline"] }}                                                                                                                                                                                   | ${{ loadedCount: 0, failedMediaCount: 1, images: [], imageFactIndexes: [] }}
@@ -109,6 +154,26 @@ describe("structured prompt media replay", () => {
       __openclaw: { media: [expect.objectContaining({ path: missingPath })] },
     });
     expect(result).toHaveProperty("content", [{ type: "text", text }]);
+  });
+
+  it("asks the active turn to resend a recorded image it cannot read", async () => {
+    const media = mediaAt(path.join(workspaceDir, "missing.png"));
+    const message = {
+      role: "user",
+      content: "here",
+      __openclaw: { media, mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] } },
+    } as unknown as AgentMessage;
+    const onCurrentTurnImageFailure = vi.fn();
+    const result = await hydratePromptMediaMessages([message], {
+      ...options(),
+      workspaceOnly: true,
+      onCurrentTurnImageFailure,
+    });
+    expect(onCurrentTurnImageFailure).toHaveBeenCalledExactlyOnceWith(1);
+    expect(result[0]).toHaveProperty("content", [
+      { type: "text", text: "here" },
+      { type: "text", text: buildPromptImageFailureNotice(1) },
+    ]);
   });
 
   it("dedupes the rendered alias of a private macOS path", async () => {

@@ -48,7 +48,7 @@
   font: inherit;
 }
 .mcp-app-confirm__actions .mcp-app-confirm__accept {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-foreground);
 }

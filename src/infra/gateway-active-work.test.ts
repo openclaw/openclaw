@@ -6,6 +6,7 @@ import {
   createEmbeddedRunHandle,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.test-support.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import { scheduleFollowupDrain } from "../auto-reply/reply/queue/drain.js";
 import { enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
@@ -16,7 +17,6 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewayActiveWorkSnapshot,
   waitForGatewayActiveWork,
@@ -76,12 +76,8 @@ describe("waitForGatewayActiveWork", () => {
       run.run.sessionKey = key;
       const cancellation = new AbortController();
       run.abortSignal = cancellation.signal;
-      const started = createDeferredCore();
-      const release = createDeferredCore();
-      const execute = vi.fn(async () => {
-        started.resolve();
-        await release.promise;
-      });
+      const executionGate = createEnteredGate();
+      const execute = vi.fn(executionGate.wait);
       const notifyCancellation = vi.fn();
       const runFollowup = async (source: FollowupRun) => {
         if (isFollowupRunAborted(source)) {
@@ -103,9 +99,9 @@ describe("waitForGatewayActiveWork", () => {
           cancellation.abort();
         } else {
           await vi.advanceTimersByTimeAsync(500);
-          await started.promise;
+          await executionGate.entered;
           expect((await waitForGatewayActiveWork(0)).drained).toBe(false);
-          release.resolve();
+          executionGate.release();
         }
         await run.controllerInput!.settlement.promise;
         await run.controllerInput!.claim?.settlement.promise;
@@ -126,7 +122,7 @@ describe("waitForGatewayActiveWork", () => {
           expect((await waitForGatewayActiveWork(0)).drained).toBe(true);
         }
       } finally {
-        release.resolve();
+        executionGate.release();
         clearFollowupQueue(key);
         await run.controllerInput?.settlement.promise;
       }

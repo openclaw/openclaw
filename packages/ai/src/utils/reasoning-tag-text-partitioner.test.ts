@@ -47,6 +47,9 @@ describe("createReasoningTagTextPartitioner", () => {
     expect(deltas.filter((delta) => delta.kind === "thinking")).toEqual([]);
     expect(Date.now() - startedAt).toBeLessThan(limit);
   }
+  function pushChunks(chunks: string[]) {
+    return [...chunks.flatMap((chunk) => partitioner.pushVisible(chunk)), ...partitioner.flush()];
+  }
   function expectCompactedProse(chunk: string, prefix: string, length: number) {
     const startedAt = Date.now();
     const emittedLength = (text: string) =>
@@ -61,160 +64,48 @@ describe("createReasoningTagTextPartitioner", () => {
     expect(Date.now() - startedAt).toBeLessThan(5_000);
   }
   it.each([
-    {
-      name: "self-closing tags are depth-neutral",
-      input: "Before<thinking/>After",
-      text: "BeforeAfter",
-    },
-    {
-      name: "adjacent orphan closes keep prior valid output",
-      input: "Before<think>x</think></think>After",
-      text: "Before</think>After",
-      thinking: "x",
-    },
-    {
-      name: "quoted greater-than delimiters do not end tags",
-      input: 'Before <think data-x=">">hidden</think> After',
-      text: "Before  After",
-      thinking: "hidden",
-    },
-    {
-      name: "provider tags retain the previous Unicode whitespace grammar",
-      input: "<think\u00a0>hidden</think>After",
-      text: "After",
-      thinking: "hidden",
-    },
-    {
-      name: "unequal backtick runs do not own reasoning",
-      input: "before ```<think>private</think>`` after",
-      text: "before ````` after",
-      thinking: "private",
-    },
-    {
-      name: "a closing backtick run is not stable before its following byte",
-      input: "`<think>x</think> ```a```",
-      text: "` ```a```",
-      thinking: "x",
-    },
-    {
-      name: "a stable code span does not release a later unresolved delimiter",
-      input: "    `|\n``<think>x</think>\n``",
-    },
-    {
-      name: "a stable inline span does not carry code certainty across a new block",
-      input: "`x`\n>     ~~~<think>x</think>- <thinking/>\n\n",
-    },
-    {
-      name: "tag release retains a partial indentation prefix for the next chunk",
-      input: "\na<thinking/>\n\n\n    ~~~<thinking/>- \n",
-      text: "\na\n\n\n    ~~~<thinking/>- \n",
-    },
-    {
-      name: "a lone carriage return invalidates same-line code certainty",
-      input: "a<thinking/>\r\r    <think>x</think>",
-      text: "a\r\r    <think>x</think>",
-    },
-    {
-      name: "one CRLF is not mistaken for a blank block boundary",
-      input: "a\r\n    <think>x</think>",
-      text: "a\r\n    ",
-      thinking: "x",
-    },
-    {
-      name: "a whitespace-only CRLF blank line starts a new indented code block",
-      input: "a\r\n \t\r\n    <think>x</think>",
-    },
-    {
-      name: "compaction retains context for a following empty list item",
-      input: "    `\n\n-\n      <think>x</think>",
-      text: "    `\n\n-\n      ",
-      thinking: "x",
-    },
-    {
-      name: "paragraph-to-list transitions end inline code",
-      input: "Paragraph `literal\n- <think>private</think> `visible",
-      text: "Paragraph `literal\n-  `visible",
-      thinking: "private",
-    },
-    {
-      name: "soft line breaks retain inline-code ownership",
-      input: "Paragraph `literal\ncontinued <think>example</think>` after",
-    },
-    {
-      name: "fast-path tags stop before later inline code",
-      input: "<thinking/> text `<think>literal</think>`",
-      text: " text `<think>literal</think>`",
-    },
-    {
-      name: "fast-path tags stop before newline-owned code",
-      input: "- aa <thinking/>\n\n1.       <think>literal</think>",
-      text: "- aa \n\n1.       <think>literal</think>",
-    },
-    {
-      name: "blockquote inline code retains its container context",
-      input: "> Before `<think>literal</think>\n> after` tail",
-    },
-    {
-      name: "list-item inline code retains its container context",
-      input: "- Before `\n  <think>literal</think>\n  after` tail",
-    },
-    {
-      name: "list continuation indentation retains its container context",
-      input: "- item\n\n    <think>private</think>\n",
-      text: "- item\n\n    \n",
-      thinking: "private",
-    },
-    {
-      name: "blockquote fences preserve literal tags",
-      input: "> ```xml\n> <think>literal</think>\n> ```\n> tail",
-    },
-    {
-      name: "blockquote-relative indented code preserves literal tags",
-      input: ">     <think>literal</think>",
-    },
-    {
-      name: "list-owned tilde fences preserve literal tags",
-      input: "- ~~~xml\n  <think>literal</think>\n  ~~~\n",
-    },
-    {
-      name: "indented code preserves literal tags",
-      input: "    <think>literal</think>",
-    },
-    {
-      name: "late indented-code events do not replay the next paragraph",
-      input: "    code\n<think>private</think>\n",
-      text: "    code\n\n",
-      thinking: "private",
-    },
-    {
-      name: "a closing fence is not reused as context for the next block",
-      input: " ```\ncode\n```\n\n<think>private</think>",
-      text: " ```\ncode\n```\n\n",
-      thinking: "private",
-    },
-    {
-      name: "GFM table code spans preserve literal tags",
-      input: "| a | b |\n| - | - |\n| `<think>literal</think>` | y |",
-    },
-    {
-      name: "escaped backticks do not own reasoning",
-      input: "before \\`<think>private</think>\\` after",
-      text: "before \\`\\` after",
-      thinking: "private",
-    },
-    {
-      name: "link destinations do not create code spans",
-      input: "[label](url`x) <think>private</think> (y`) after",
-      text: "[label](url`x)  (y`) after",
-      thinking: "private",
-    },
-    {
-      name: "table cells do not share inline-code ownership",
-      input: "| A | B |\n| - | - |\n| `x | <think>private</think> |\n| y` | z |",
-      text: "| A | B |\n| - | - |\n| `x |  |\n| y` | z |",
-      thinking: "private",
-    },
-  ])("is invariant at every chunk boundary: $name", ({ input, text = input, thinking = "" }) => {
+    ["Before<thinking/>After", "BeforeAfter"],
+    ["Before<think>x</think></think>After", "Before</think>After", "x"],
+    ['Before <think data-x=">">hidden</think> After', "Before  After", "hidden"],
+    ["<think\u00a0>hidden</think>After", "After", "hidden"],
+    ["before ```<think>private</think>`` after", "before ````` after", "private"],
+    ["`<think>x</think> ```a```", "` ```a```", "x"],
+    ["    `|\n``<think>x</think>\n``"],
+    ["`x`\n>     ~~~<think>x</think>- <thinking/>\n\n"],
+    ["\na<thinking/>\n\n\n    ~~~<thinking/>- \n", "\na\n\n\n    ~~~<thinking/>- \n"],
+    ["a<thinking/>\r\r    <think>x</think>", "a\r\r    <think>x</think>"],
+    ["a\r\n    <think>x</think>", "a\r\n    ", "x"],
+    ["a\r\n \t\r\n    <think>x</think>"],
+    ["    `\n\n-\n      <think>x</think>", "    `\n\n-\n      ", "x"],
+    [
+      "Paragraph `literal\n- <think>private</think> `visible",
+      "Paragraph `literal\n-  `visible",
+      "private",
+    ],
+    ["Paragraph `literal\ncontinued <think>example</think>` after"],
+    ["<thinking/> text `<think>literal</think>`", " text `<think>literal</think>`"],
+    [
+      "- aa <thinking/>\n\n1.       <think>literal</think>",
+      "- aa \n\n1.       <think>literal</think>",
+    ],
+    ["> Before `<think>literal</think>\n> after` tail"],
+    ["- Before `\n  <think>literal</think>\n  after` tail"],
+    ["- item\n\n    <think>private</think>\n", "- item\n\n    \n", "private"],
+    ["> ```xml\n> <think>literal</think>\n> ```\n> tail"],
+    [">     <think>literal</think>"],
+    ["- ~~~xml\n  <think>literal</think>\n  ~~~\n"],
+    ["    <think>literal</think>"],
+    ["    code\n<think>private</think>\n", "    code\n\n", "private"],
+    [" ```\ncode\n```\n\n<think>private</think>", " ```\ncode\n```\n\n", "private"],
+    ["| a | b |\n| - | - |\n| `<think>literal</think>` | y |"],
+    ["before \\`<think>private</think>\\` after", "before \\`\\` after", "private"],
+    ["[label](url`x) <think>private</think> (y`) after", "[label](url`x)  (y`) after", "private"],
+    [
+      "| A | B |\n| - | - |\n| `x | <think>private</think> |\n| y` | z |",
+      "| A | B |\n| - | - |\n| `x |  |\n| y` | z |",
+      "private",
+    ],
+  ])("is invariant at every chunk boundary: %j", (input, text = input, thinking = "") => {
     const expected = { text, thinking };
     expect(collectVisibleMode(input, [])).toEqual(expected);
     for (let split = 0; split <= input.length; split += 1) {
@@ -297,12 +188,9 @@ describe("createReasoningTagTextPartitioner", () => {
     expect(partitioner.flush()).toEqual([]);
   });
   it("retains unresolved link context after releasing a stable code span", () => {
-    const deltas = [
-      ...partitioner.pushVisible("Use `code` now [label]("),
-      ...partitioner.pushVisible("url`x) <think>private</think> (y`) after"),
-      ...partitioner.flush(),
-    ];
-    expect(collect(deltas)).toEqual({
+    expect(
+      collect(pushChunks(["Use `code` now [label](", "url`x) <think>private</think> (y`) after"])),
+    ).toEqual({
       text: "Use `code` now [label](url`x)  (y`) after",
       thinking: "private",
     });
@@ -316,25 +204,16 @@ describe("createReasoningTagTextPartitioner", () => {
     expect(partitioner.flush()).toEqual([]);
   });
   it("waits for GFM table lookahead before releasing a header code span", () => {
-    const deltas = [
-      ...partitioner.pushVisible("| `x | <think>private</think> | y` |\n"),
-      ...partitioner.pushVisible("| - | - | - |\n"),
-      ...partitioner.pushVisible("tail"),
-      ...partitioner.flush(),
-    ];
-    expect(collect(deltas)).toEqual({
+    expect(
+      collect(pushChunks(["| `x | <think>private</think> | y` |\n", "| - | - | - |\n", "tail"])),
+    ).toEqual({
       text: "| `x |  | y` |\n| - | - | - |\ntail",
       thinking: "private",
     });
   });
   it("does not compact an unclosed top-level fence at a blank line", () => {
     const input = ["~~~xml\n<think>literal1</think>\n\n", "<think>literal2</think>\n~~~\n", "tail"];
-    const deltas = [
-      ...partitioner.pushVisible(input[0] ?? ""),
-      ...partitioner.pushVisible(input[1] ?? ""),
-      ...partitioner.pushVisible(input[2] ?? ""),
-      ...partitioner.flush(),
-    ];
+    const deltas = pushChunks(input);
     expect(collect(deltas).text).toBe(input.join(""));
     expect(deltas.filter((delta) => delta.kind === "thinking")).toEqual([]);
   });

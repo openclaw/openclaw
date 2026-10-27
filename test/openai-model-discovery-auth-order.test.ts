@@ -312,10 +312,15 @@ describe("Provider model discovery auth preparation", () => {
         });
       const requests: string[] = [];
       const outcomes: ProviderCatalogOutcome[] = [];
-      vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
         events.push("catalog");
         requests.push(new Headers(init?.headers).get("authorization") ?? "");
-        return Response.json({ data: [{ id: modelId, object: "model" }] });
+        const url = new URL(input instanceof Request ? input.url : input);
+        return Response.json(
+          url.hostname === "chatgpt.com"
+            ? { models: [] }
+            : { data: [{ id: modelId, object: "model" }] },
+        );
       });
 
       const plan = await planCatalog(config, store, {
@@ -332,7 +337,12 @@ describe("Provider model discovery auth preparation", () => {
       );
       expectRefresh(refresh, providerId, "rejected-oauth-a", "refresh-a");
       const resolvedProfile = source === "profile" ? profileB : undefined;
-      expect(events).toEqual(["refresh:rejected-oauth-a", `resolve:${resolvedProfile}`, "catalog"]);
+      const catalogRequests = providerId === "openai" ? 2 : 1;
+      expect(events).toEqual([
+        "refresh:rejected-oauth-a",
+        "resolve:" + resolvedProfile,
+        ...Array.from({ length: catalogRequests }, () => "catalog"),
+      ]);
       expect({
         runtimeProfiles: runtimeAuth.mock.calls.map(([params]) => ({
           profileId: params.profileId,
@@ -345,7 +355,7 @@ describe("Provider model discovery auth preparation", () => {
         runtimeProfiles: [
           { profileId: resolvedProfile, lockedProfile: resolvedProfile ? true : undefined },
         ],
-        requests: [`Bearer ${keyB}`],
+        requests: Array.from({ length: catalogRequests }, () => "Bearer " + keyB),
         outcomes: [
           {
             provider: providerId,

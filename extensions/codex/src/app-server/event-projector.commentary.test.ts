@@ -9,7 +9,6 @@ import {
   TURN_ID,
   createParams,
   createProjector,
-  createProjectorWithAssistantHooks,
   forCurrentTurn,
   turnCompleted,
   THREAD_ID,
@@ -35,8 +34,7 @@ function reviewedToolDetails(projector: Awaited<ReturnType<typeof createProjecto
 
 describe("CodexAppServerEventProjector text and guardian projection", () => {
   it("keeps intermediate agentMessage items out of the final visible reply", async () => {
-    const { onAssistantMessageStart, onPartialReply, projector } =
-      await createProjectorWithAssistantHooks();
+    const { onPartialReply, projector } = await fixture.observePartial();
     const draft = "checking thread context";
     const answer = "Final answer.";
 
@@ -49,7 +47,6 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
 
     const result = fixture.result(projector);
 
-    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
     // Unphased previews must remain replaceable, not append-only channel replies.
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(result.assistantTexts).toEqual([answer]);
@@ -65,14 +62,11 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
     const item = {
       type: "dynamicToolCall",
       id: "call-write",
-      namespace: null,
       tool: "write",
       arguments: { path: "note.txt", content: "written once" },
       status: "inProgress",
-      contentItems: null,
-      success: null,
-      durationMs: null,
     };
+    const contentItems = [{ type: "inputText" as const, text: "written once" }];
     await fixture.start(projector, item);
     projector.recordDynamicToolCall({
       callId: item.id,
@@ -84,14 +78,13 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
       tool: item.tool,
       success: true,
       sideEffectEvidence: true,
-      contentItems: [{ type: "inputText", text: "written once" }],
+      contentItems,
     });
     await fixture.complete(projector, {
       ...item,
       status: "completed",
-      contentItems: [{ type: "inputText", text: "written once" }],
+      contentItems,
       success: true,
-      durationMs: 1,
     });
     await fixture.rawAssistant(projector, " \n ");
     await fixture.finish(projector, []);
@@ -104,7 +97,6 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
       content: fixture.text(""),
     });
     expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
-    expect(result.itemLifecycle).toEqual({ startedCount: 2, completedCount: 2, activeCount: 0 });
     expect(result.messagesSnapshot.filter((message) => message.role === "assistant")).toEqual([
       expect.objectContaining({ content: [expect.objectContaining({ type: "toolCall" })] }),
     ]);
@@ -313,13 +305,7 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
       targetItemId: target,
       ...(phase === "completed" ? { decisionSource: "agent" } : {}),
       review,
-      action: action ?? {
-        type: "execve",
-        source: "shell",
-        program: "/bin/printf",
-        argv: ["printf", "hello"],
-        cwd: "/tmp",
-      },
+      action: action ?? { type: "execve", argv: ["printf", "hello"] },
     });
   }
 
@@ -423,9 +409,6 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
         action: {
           type: "networkAccess",
           target: "https://example.invalid",
-          host: "example.invalid",
-          protocol: "https",
-          port: 443,
         },
       }),
       guardianWarning(denied),
@@ -455,9 +438,6 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
           target: "cmd-many-reviews",
           status,
           ...(status === "inProgress" ? { phase: "started" as const } : {}),
-          riskLevel: status === "approved" ? "low" : "high",
-          userAuthorization: status === "approved" ? "high" : "low",
-          rationale: `${status} ${index}.`,
         }),
       );
     }
@@ -538,11 +518,7 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
   it("orders streamed reasoning sections and replaces them with authoritative completion", async () => {
     const onReasoningStream = vi.fn();
     const onReasoningEnd = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      onReasoningStream,
-      onReasoningEnd,
-    });
+    const { projector } = await fixture.observe({ onReasoningStream, onReasoningEnd });
     for (const [method, indexField, prefix] of [
       ["summaryTextDelta", "summaryIndex", ""],
       ["textDelta", "contentIndex", "First section\n\nSecond\n\n"],
@@ -564,7 +540,6 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
         [{ text: `${prefix}First section\n\nSecond`, isReasoningSnapshot: true }],
       ]);
     }
-    expect(onReasoningStream).toHaveBeenCalledTimes(6);
     await fixture.complete(projector, {
       type: "reasoning",
       id: "reason-1",

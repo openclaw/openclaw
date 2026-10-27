@@ -1,24 +1,33 @@
 /* Absolutely palette; selected by index.html and app/theme.ts. */
 
+:root[data-theme="absolutely"],
+:root[data-theme="absolutely-light"] {
+  --accent-foreground: #ffffff;
+  --chat-send-foreground: var(--accent-foreground);
+  --sidebar-rail-action-stroke-width: 2.15px;
+  --sidebar-rail-surface: color-mix(in srgb, var(--text) 4%, var(--bg-content));
+  --bg: color-mix(in srgb, var(--text) 2%, var(--bg-content));
+  --bg-muted: color-mix(in srgb, var(--text) 4%, var(--bg-content));
+  --inline-code-bg: color-mix(in srgb, var(--text) 5%, var(--bg-content));
+  --card: var(--bg-elevated);
+  --popover: var(--bg-elevated);
+  --panel-strong: var(--bg-content);
+  --input: var(--border);
+  --overlay-border: var(--border);
+  --secondary: var(--bg-accent);
+  /* Components draw their own contour; elevation adds only the two soft shadows. */
+  --shadow-md: 0 3px 7.5px rgba(0, 0, 0, 0.04), 0 0 20px rgba(0, 0, 0, 0.05);
+  --overlay-shadow: var(--shadow-md);
+  /* Typography is this theme's signature: a grotesque for chrome, a reading
+     serif for chat prose (styles/fonts.css self-hosts both). The stacks keep
+     system fallbacks so a failed font load degrades instead of blanking text. */
+  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-chat: "Lora", Georgia, "Times New Roman", serif;
+}
+
 :root[data-theme="absolutely"] {
   --shell-divider-size: calc(var(--resize-handle-line-size) / 2);
-  /*
-   * Accent — terracotta clay on warm graphite
-   *
-   * WCAG 2.1 AA audit (bg = #1c1c1a, relative luminance ≈ 0.0115):
-   *   --accent #d97757  L ≈ 0.257  contrast ≈ 5.5:1  AA text ✓
-   *   --accent-hover #e68b6b  L ≈ 0.338  contrast ≈ 6.7:1  ✓
-   *   --primary-foreground #241f1b on #d97757 button: 5.2:1 AA ✓
-   *   --primary-foreground #241f1b on #e68b6b hover: 6.4:1 AA ✓
-   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
-   *   focus-ring at 75% opacity: ≈ 3.6:1 against bg ✓ (non-text 3:1 required)
-   *
-   * The surface ramp sits a step below the original #262624 launch palette,
-   * which was the lightest dark theme in the set by a wide margin. Every
-   * pairing improved: worst text 4.68 -> 5.42:1, accent on --card 4.47 ->
-   * 5.05:1 (AA where it previously was not). The accent still dims below AA on
-   * --bg-muted (4.3:1), so it stays a fill/indicator color there, not body copy.
-   */
+  /* Terracotta stays the accent; neutral graphite keeps nested surfaces clear. */
   --ring: #d97757;
   --accent: #d97757;
   --accent-hover: #e68b6b;
@@ -28,7 +37,15 @@
   --primary: #d97757;
   --primary-hover: #e68b6b;
   --primary-foreground: #241f1b;
-  --accent-foreground: #241f1b;
+  /* White action glyphs keep their contrast when hover and press step the fill. */
+  --chat-send-hover-bg: color-mix(in srgb, var(--primary) 86%, var(--primary-foreground));
+  --sidebar-rail-action-hover-bg: var(--chat-send-hover-bg);
+  --sidebar-rail-action-active-bg: color-mix(
+    in srgb,
+    var(--sidebar-rail-action-hover-bg) 90%,
+    var(--primary-foreground)
+  );
+  --selection-bg: #5b7694;
 
   /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
   --destructive: #d32f2f;
@@ -38,122 +55,95 @@
   --focus: rgba(217, 119, 87, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 75%, transparent);
 
-  /* Surfaces — warm graphite, a shade off true neutral */
-  --bg: #1c1c1a;
-  --bg-accent: #232320;
-  --bg-elevated: #292825;
-  --bg-hover: #302f2b;
-  --bg-muted: #302f2b;
+  /* Keep reading deep; floating panels lift, and the composer lifts further. */
+  --bg-content: #1b1b1a;
+  --bg-accent: color-mix(in srgb, var(--text) 4%, var(--bg-content));
+  --bg-elevated: color-mix(in srgb, var(--text) 8%, var(--bg-content));
+  --bg-hover: color-mix(in srgb, var(--text) 10%, var(--bg-content));
+  --chat-composer-surface: color-mix(in srgb, var(--text) 14%, var(--bg-content));
+  --chat-user-surface: color-mix(in srgb, var(--accent) 14%, var(--bg-content));
 
-  --card: #232320;
-  --card-foreground: #ede8dd;
-  --card-highlight: rgba(255, 246, 232, 0.04);
-  --popover: #292825;
-  --popover-foreground: #ede8dd;
+  --card-foreground: #e8e8e2;
+  --card-highlight: rgba(255, 255, 248, 0.04);
+  --popover-foreground: #e8e8e2;
 
-  --panel: #1c1c1a;
-  --panel-strong: #292825;
-  --panel-hover: #302f2b;
-  --chrome: rgba(28, 28, 26, 0.96);
-  --chrome-strong: rgba(28, 28, 26, 0.98);
+  --panel: var(--bg-content);
+  --panel-hover: color-mix(in srgb, var(--text) 14%, var(--bg-content));
+  --chrome: rgba(31, 31, 30, 0.96);
+  --chrome-strong: rgba(31, 31, 30, 0.98);
 
-  --text: #e4dfd4;
-  --text-strong: #f5f1e8;
-  --chat-text: #e4dfd4;
-  --muted: #aba498;
-  --muted-strong: #b8b1a4;
-  --muted-foreground: #aba498;
+  --text: #ddddd7;
+  --text-strong: #f3f3ee;
+  --chat-text: #ddddd7;
+  --muted: #a09f98;
+  --muted-strong: #bebdb6;
+  --muted-foreground: #a09f98;
 
-  --border: #2e2c27;
-  --border-strong: #3d3a33;
-  --border-hover: #514d44;
-  --input: #2e2c27;
+  --border: color-mix(in srgb, var(--text) 12%, var(--bg-content));
+  --border-strong: rgba(249, 249, 247, 0.143);
+  --border-hover: color-mix(in srgb, var(--text) 26%, var(--bg-content));
 
-  --secondary: #232320;
-  --secondary-foreground: #ede8dd;
+  --secondary-foreground: #e8e8e2;
   --accent-2: #b8926a;
   --accent-2-muted: rgba(184, 146, 106, 0.7);
   --accent-2-subtle: rgba(184, 146, 106, 0.12);
 
-  --shadow-sm: 0 1px 2px rgba(12, 10, 8, 0.35);
-  --shadow-md: 0 4px 16px rgba(12, 10, 8, 0.45);
-  --shadow-lg: 0 12px 32px rgba(12, 10, 8, 0.55);
-  --overlay-shadow: var(--shadow-md);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
 
-  --grid-line: rgba(255, 246, 232, 0.03);
-  /* Typography is this theme's signature: a grotesque for chrome, a reading
-     serif for chat prose (styles/fonts.css self-hosts both). The stacks keep
-     system fallbacks so a failed font load degrades instead of blanking text. */
-  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-chat: "Lora", Georgia, "Times New Roman", serif;
+  --grid-line: rgba(255, 255, 248, 0.03);
 }
 
 :root[data-theme="absolutely-light"] {
   --shell-divider-size: calc(var(--resize-handle-line-size) / 2);
-  /*
-   * Accent — burnt clay on ivory paper
-   *
-   * WCAG 2.1 AA audit (bg = #faf9f5, relative luminance ≈ 0.934):
-   *   --accent #a8452a  L ≈ 0.126  contrast ≈ 5.6:1  AA text ✓
-   *   --accent-hover #8e3822  L ≈ 0.086  contrast ≈ 7.3:1  ✓
-   *   --primary-foreground #ffffff on #a8452a button: 5.9:1 AA ✓
-   *   focus-ring at 70% opacity: ≈ 3.2:1 against ivory bg ✓
-   */
-  --ring: #a8452a;
-  --accent: #a8452a;
-  --accent-hover: #8e3822;
-  --accent-muted: #a8452a;
-  --accent-subtle: rgba(168, 69, 42, 0.1);
-  --accent-glow: rgba(168, 69, 42, 0.14);
-  --primary: #a8452a;
-  --primary-hover: var(--accent-hover);
-  --accent-foreground: var(--primary-foreground);
+  /* Keep the soft accent; primary fills are deeper so white labels stay readable. */
+  --ring: #cc7d5d;
+  --accent: #cc7d5d;
+  --accent-hover: #c37353;
+  --accent-muted: #cc7d5d;
+  --accent-subtle: rgba(204, 125, 93, 0.1);
+  --accent-glow: rgba(204, 125, 93, 0.14);
+  --primary: #a5654b;
+  --primary-hover: #995d45;
+  --primary-foreground: #ffffff;
+  --link: color-mix(in srgb, var(--accent) 50%, var(--text));
 
-  /* Surfaces — ivory paper with a faint warm cast */
-  --bg: #faf9f5;
-  --bg-accent: #f3f1e9;
-  --bg-hover: #edeae0;
-  --bg-muted: #edeae0;
-  --bg-content: #f3f1e9;
+  /* Navigation recedes; the reading canvas and elevated controls stay distinct. */
+  --bg-accent: var(--bg);
+  --bg-elevated: color-mix(in srgb, var(--bg-content) 50%, white);
+  --bg-hover: color-mix(in srgb, var(--text) 5%, var(--bg-content));
+  --bg-content: #f7f6f5;
+  --chat-user-surface: color-mix(in srgb, var(--accent) 12%, var(--bg-content));
 
-  --card-foreground: #1f1d1a;
-  --card-highlight: rgba(60, 50, 30, 0.02);
-  --popover-foreground: #1f1d1a;
+  --card-foreground: #20201e;
+  --card-highlight: rgba(30, 30, 24, 0.02);
+  --popover-foreground: #20201e;
 
-  --panel: #faf9f5;
-  --panel-strong: #f3f1e9;
-  --panel-hover: #e6e2d6;
-  --chrome: rgba(250, 249, 245, 0.96);
-  --chrome-strong: rgba(250, 249, 245, 0.98);
+  --panel: var(--bg);
+  --panel-hover: color-mix(in srgb, var(--text) 8%, var(--bg-content));
+  --chrome: rgba(243, 242, 241, 0.96);
+  --chrome-strong: rgba(243, 242, 241, 0.98);
 
-  --text: #3d3a33;
-  --text-strong: #1f1d1a;
-  --chat-text: #3d3a33;
-  --muted: #6b655b;
-  --muted-strong: #555047;
-  --muted-foreground: #6b655b;
+  --text: #353531;
+  --text-strong: #20201e;
+  --chat-text: #353531;
+  --muted: #5e5e58;
+  --muted-strong: #52524c;
+  --muted-foreground: #5e5e58;
 
   --resize-handle-rest-color: color-mix(in srgb, var(--text) 10%, transparent);
-  --border: #e3dfd2;
-  --border-strong: #cdc7b6;
-  --border-hover: #ada694;
-  --input: #e3dfd2;
+  --border: color-mix(in srgb, var(--text) 7%, var(--bg-content));
+  --border-strong: rgba(45, 45, 43, 0.111);
+  --inline-code-border: rgba(45, 45, 43, 0.13);
+  --border-hover: color-mix(in srgb, var(--text) 18%, var(--bg-content));
 
-  --secondary: #f3f1e9;
-  --secondary-foreground: #3d3a33;
+  --secondary-foreground: #353531;
   --accent-2: #8a6a44;
   --accent-2-muted: rgba(138, 106, 68, 0.75);
   --accent-2-subtle: rgba(138, 106, 68, 0.1);
 
-  --shadow-sm: 0 1px 2px rgba(60, 50, 30, 0.05);
-  --shadow-md: 0 4px 12px rgba(60, 50, 30, 0.07);
-  --shadow-lg: 0 12px 28px rgba(60, 50, 30, 0.09);
-  --overlay-shadow: var(--shadow-md);
+  --shadow-sm: 0 1px 2px rgba(30, 30, 24, 0.05);
+  --shadow-lg: 0 12px 28px rgba(30, 30, 24, 0.09);
 
-  --grid-line: rgba(60, 50, 30, 0.04);
-  /* Typography is this theme's signature: a grotesque for chrome, a reading
-     serif for chat prose (styles/fonts.css self-hosts both). The stacks keep
-     system fallbacks so a failed font load degrades instead of blanking text. */
-  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-chat: "Lora", Georgia, "Times New Roman", serif;
+  --grid-line: rgba(30, 30, 24, 0.04);
 }

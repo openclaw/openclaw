@@ -1,6 +1,6 @@
+import { formatConfigFilePath } from "../config/logging.js";
 import { info } from "../globals.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import { shortenHomePath } from "../utils.js";
 
 export type ConfigSetDryRunInputMode = "value" | "json" | "builder" | "unset";
 
@@ -64,7 +64,7 @@ export function printConfigDryRunResult(
   }
   runtime.log(
     info(
-      `Dry run successful: ${result.operations} update(s) validated against ${shortenHomePath(result.configPath)}.`,
+      `Dry run successful: ${result.operations} update(s) validated against ${formatConfigFilePath(result.configPath)}.`,
     ),
   );
 }

@@ -11,9 +11,9 @@ import {
 } from "./provider-usage-plugin-runtime.test-mocks.js";
 import { loadProviderUsageSummary } from "./provider-usage.load.js";
 import { ignoredErrors } from "./provider-usage.shared.js";
-import { usageNow } from "./provider-usage.test-support.js";
 import type { ProviderUsageSnapshot, UsageSummary } from "./provider-usage.types.js";
 
+const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);
 const resolveProviderUsageAuthWithPluginMock = getProviderUsageAuthWithPluginMock();
 const resolveProviderUsageSnapshotWithPluginMock = getProviderUsageSnapshotWithPluginMock();
 const claude: ProviderUsageSnapshot = { provider: "anthropic", displayName: "Claude", windows: [] };

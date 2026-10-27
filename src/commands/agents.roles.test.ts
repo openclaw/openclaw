@@ -20,6 +20,64 @@ import { ensureOnboardingAgent } from "./onboard-agent.js";
 
 const specialists = ["researcher", "writer", "reviewer"];
 
+it.skipIf(process.platform === "win32")(
+  "escapes terminal controls in team output without changing workspace directories",
+  async () => {
+    const workspaceRoot = path.join(root, "café\u001b[31m\nforged\tend\rrow\u0007");
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    await agentsTeamCreateCommand({ workspaceRoot, nonInteractive: true });
+    const output = log.mock.calls.flat().join("\n");
+    expect(output).toContain("café\\nforged\\tend\\rrow");
+    expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+    expect(output).not.toContain("\nforged");
+    const entries = (await readConfig()).agents?.entries ?? {};
+    for (const id of ["coordinator", ...specialists]) {
+      const workspace = path.join(workspaceRoot, id);
+      expect(entries[id]?.workspace).toBe(workspace);
+      expect((await fs.stat(workspace)).isDirectory()).toBe(true);
+    }
+  },
+);
+
+it.each([false, true])(
+  "escapes terminal controls only in human ambient-owner notes (json=%s)",
+  async (json) => {
+    const ambientOwnerId = "ambient\n\t\r\u0007";
+    const initial = existingFleet();
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        ...initial,
+        agents: {
+          ...initial.agents,
+          defaults: { ...initial.agents?.defaults, systemAgent: { agentId: ambientOwnerId } },
+        },
+      }),
+    );
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    await agentsTeamCreateCommand({
+      workspaceRoot: path.join(root, "team"),
+      nonInteractive: true,
+      json,
+    });
+    if (json) {
+      expect(writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ambientOwnerId,
+          note: `ambient owner stays ${ambientOwnerId}; talk to the coordinator by name`,
+        }),
+        2,
+      );
+    } else {
+      expect(log).toHaveBeenCalledWith(
+        "ambient owner stays ambient\\n\\t\\r; talk to the coordinator by name",
+      );
+    }
+    expect((await readConfig()).agents?.defaults?.systemAgent?.agentId).toBe(ambientOwnerId);
+  },
+);
+
 let root: string, configPath: string;
 it.aroundEach(async (runTest) => {
   await withOpenClawTestState(

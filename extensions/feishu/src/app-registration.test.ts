@@ -7,8 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { beginAppRegistration, pollAppRegistration, printQrCode } from "./app-registration.js";
 import { readRequestBody, stripDispatcher, writeOversizedJson } from "./http.test-support.js";
 
-const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
-
 const { renderQrTerminalMock } = vi.hoisted(() => ({
   renderQrTerminalMock: vi.fn(async () => "terminal-qr"),
 }));
@@ -31,6 +29,8 @@ function mockRegistrationFetch(options: RegistrationFetchOptions): void {
 }
 
 const hermeticPublicLookup: LookupFn = async () => [{ address: "93.184.216.34", family: 4 }];
+const pendingFetch = () =>
+  withFetchPreconnect(vi.fn(async () => Response.json({ error: "authorization_pending" })));
 
 async function withRegistrationServer(
   handler: (req: IncomingMessage, res: ServerResponse) => void,
@@ -96,7 +96,8 @@ describe("Feishu app registration", () => {
       },
       async () => {
         await expect(beginAppRegistration("feishu")).resolves.toMatchObject({
-          ...beginResult,
+          deviceCode: "dev",
+          interval: 5,
           expireIn: 600,
         });
       },
@@ -105,26 +106,18 @@ describe("Feishu app registration", () => {
 
   it("ends the registration poll at its monotonic deadline when the wall clock rewinds", async () => {
     vi.useFakeTimers();
-    const fetchMock = vi.fn(async () => Response.json({ error: "authorization_pending" }));
-    mockRegistrationFetch({ fetchImpl: withFetchPreconnect(fetchMock) });
-    // Settlement observer is attached before fake time advances, so the
-    // recorded outcome can be asserted without leaving real timers behind.
-    let outcome: string | undefined;
+    mockRegistrationFetch({ fetchImpl: pendingFetch() });
+    const settled = vi.fn();
     const poll = pollAppRegistration({ ...pollParams, interval: 5, expireIn: 30 }).then(
-      (result) => {
-        outcome = `settled:${result.status}`;
-      },
-      () => {
-        outcome = "settled:rejected";
-      },
+      settled,
+      () => settled("rejected"),
     );
     await vi.advanceTimersByTimeAsync(0);
     // NTP correction or VM resume rewinds the wall clock mid-poll.
     vi.setSystemTime(Date.now() - 10 * 60_000);
     await vi.advanceTimersByTimeAsync(35_000);
-    expect(outcome).toBe("settled:timeout");
+    expect(settled).toHaveBeenCalledExactlyOnceWith({ status: "timeout" });
     await poll;
-    vi.useRealTimers();
   });
 
   it("clamps unsafe poll sleeps from provider intervals", async () => {
@@ -148,29 +141,25 @@ describe("Feishu app registration", () => {
 
   it("stops polling promptly when abortSignal fires during the poll interval", async () => {
     vi.useFakeTimers();
-    const fetchMock = vi.fn(async () => Response.json({ error: "authorization_pending" }));
+    const fetchImpl = pendingFetch();
     const controller = new AbortController();
-    let outcome: Awaited<ReturnType<typeof pollAppRegistration>> | undefined;
-    mockRegistrationFetch({
-      fetchImpl: withFetchPreconnect(fetchMock),
-    });
+    const settled = vi.fn();
+    mockRegistrationFetch({ fetchImpl });
     const poll = pollAppRegistration({
       ...pollParams,
       abortSignal: controller.signal,
-    }).then((result) => {
-      outcome = result;
-    });
+    }).then(settled);
 
     try {
       await vi.advanceTimersByTimeAsync(0);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(outcome).toBeUndefined();
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(settled).not.toHaveBeenCalled();
 
       controller.abort();
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(outcome).toEqual({ status: "timeout" });
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(settled).toHaveBeenCalledExactlyOnceWith({ status: "timeout" });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
     } finally {
       controller.abort();
       // Join the poll even when a regression leaves its interval asleep after abort.
@@ -211,7 +200,7 @@ describe("Feishu app registration", () => {
       (_req, res) => {
         clientClosed = writeOversizedJson(
           res,
-          FEISHU_JSON_MAX_BYTES,
+          16 * 1024 * 1024,
           '{"device_code":"dev","padding":"',
         );
       },

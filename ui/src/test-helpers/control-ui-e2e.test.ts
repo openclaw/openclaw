@@ -134,13 +134,15 @@ describe("shared proof capture", () => {
   );
 
   it.each([
-    { stall: "script", paused: true, metrics: true },
-    { stall: "native", paused: false, metrics: true },
-    { stall: "unavailable metrics", paused: true, metrics: false },
+    { stall: "passive", captureStack: false, paused: false, metrics: true },
+    { stall: "script", captureStack: true, paused: true, metrics: true },
+    { stall: "native", captureStack: true, paused: false, metrics: true },
+    { stall: "unavailable metrics", captureStack: true, paused: true, metrics: false },
   ])(
     "publishes $stall renderer stall evidence without page origins",
-    async ({ paused, metrics }) => {
+    async ({ captureStack, paused, metrics }) => {
       const { parent } = diagnosticFixture();
+      vi.stubEnv("OPENCLAW_CAPTURE_UI_PROOF", captureStack ? "1" : "0");
       const sent: string[] = [];
       let samples = 0;
       const session = Object.assign(new EventEmitter(), {
@@ -231,8 +233,14 @@ describe("shared proof capture", () => {
         },
       });
       expect(JSON.stringify(report)).not.toMatch(/token=private|private\.invalid|private-session/u);
-      expect(sent).toContain("Debugger.pause");
-      expect(sent.slice(-2)).toEqual(["Debugger.resume", "detach"]);
+      if (captureStack) {
+        expect(sent).toContain("Debugger.pause");
+        expect(sent.slice(-2)).toEqual(["Debugger.resume", "detach"]);
+      } else {
+        expect(sent).not.toContain("Debugger.enable");
+        expect(sent).not.toContain("Debugger.pause");
+        expect(sent.at(-1)).toBe("detach");
+      }
       expect(session.listenerCount("Debugger.scriptParsed")).toBe(0);
       expect(vi.getTimerCount()).toBe(0);
       stalled.resolve(null);

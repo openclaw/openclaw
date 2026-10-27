@@ -65,28 +65,26 @@ type RetainedScrollPosition = {
   presented: boolean;
   ready: boolean;
 };
-type ScrollPositionRequest =
-  | {
-      retain: RetainedScrollPosition | undefined;
-      reset?: never;
-      reveal?: never;
-      restore?: never;
-    }
-  | {
-      retain?: never;
-      reset?: ScrollTarget;
-      reveal?: ScrollTarget;
-      restore?: {
-        identity: readonly unknown[];
-        target: HTMLElement | null | undefined;
-        top?: number;
-        left?: number | "end";
-      };
-    };
-
 /** Apply identity-driven scroll commands; resolve targets after DOM commit or in the requested frame. */
 export function createScrollPosition(
-  read: () => ScrollPositionRequest,
+  read: () =>
+    | {
+        retain: RetainedScrollPosition | undefined;
+        reset?: never;
+        reveal?: never;
+        restore?: never;
+      }
+    | {
+        retain?: never;
+        reset?: ScrollTarget;
+        reveal?: ScrollTarget;
+        restore?: {
+          identity: readonly unknown[];
+          target: HTMLElement | null | undefined;
+          top?: number;
+          left?: number | "end";
+        };
+      },
   options: {
     region?: () => HTMLElement;
     revealTiming?: "animation-frame";

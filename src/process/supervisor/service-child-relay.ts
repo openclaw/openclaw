@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, createWriteStream } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
+import { stripNodeStartupHooks } from "../../../node-runtime-env.mjs";
 import {
   registerSealedRuntimeProcessEntrypoints,
   resolveRuntimeProcessEntrypointUrl,
@@ -159,6 +160,9 @@ function runServiceChildRelay(): void {
     try {
       const executable = resolveLaunchableNodePath();
       const env = resolveRuntimeWorkerEnv(anchorUrl, process.env);
+      if (env.NODE_OPTIONS !== undefined) {
+        env.NODE_OPTIONS = stripNodeStartupHooks(env.NODE_OPTIONS);
+      }
       if (start.nativeProcessOwner) {
         // The admitted host owns this entry; portable relays have no embedded image inventory.
         delete env.BUN_BE_BUN;

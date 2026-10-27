@@ -598,8 +598,9 @@ it.each(["child", "parent"] as const)(
       const row = expectDefined(read.describe(child), "prepared child row");
       return exact.ancestorRows(row)?.map(({ key }) => key);
     });
+    const select = vi.fn(() => [child]);
     try {
-      const prepared = exact.withPreparedExactRows(() => [child], consume, {
+      const prepared = exact.withPreparedExactRows(select, consume, {
         includeAncestors: true,
       });
       await Promise.race([placementStarted.promise, prepared]);
@@ -616,6 +617,8 @@ it.each(["child", "parent"] as const)(
       await expect(prepared).resolves.toEqual([parent.key]);
       expect(prepareMembership).toHaveBeenCalledOnce();
       expect(consume).toHaveBeenCalledOnce();
+      // One initial selection, one after placement yields, one after membership yields.
+      expect(select).toHaveBeenCalledTimes(3);
     } finally {
       placementReply.resolve(snapshot);
       membershipReady.resolve();

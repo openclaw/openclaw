@@ -1,5 +1,6 @@
 import { createAccountListHelpers, mergeAccountConfig } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { resolveAccountKey } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import type { XAccountConfig } from "./config-schema.js";
@@ -11,7 +12,15 @@ const accounts = createAccountListHelpers<XAccountConfig>("x", {
   implicitDefaultAccount: { channelKeys: ["userId", "clientId", "refreshToken"] },
 });
 export const listXAccountIds = accounts.listAccountIds;
+export const listXRuntimeAccountIds = (cfg: OpenClawConfig) => [
+  ...new Set(listXAccountIds(cfg).map(normalizeAccountId)),
+];
 export const resolveDefaultXAccountId = accounts.resolveDefaultAccountId;
+/** Config keys keep their authored case; this finds the key `resolveXAccount` reads. */
+export function resolveXAccountKey(cfg: OpenClawConfig, accountId: string) {
+  const id = normalizeAccountId(accountId);
+  return resolveAccountKey(cfg.channels?.x?.accounts, id, undefined, undefined, { channelId: "x" });
+}
 export function resolveXAccount(cfg: OpenClawConfig, requested?: string | null) {
   const accountId = normalizeAccountId(requested ?? resolveDefaultXAccountId(cfg));
   const config = accounts.resolveAccountConfig(cfg, accountId);

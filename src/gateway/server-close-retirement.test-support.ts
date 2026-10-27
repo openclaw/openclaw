@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
@@ -17,7 +17,55 @@ type GatewayCloseHandler = ReturnType<ReturnType<typeof createGatewayCloseTestHa
 
 export function registerGatewayResourceRetirementTests(
   createGatewayCloseHandler: (overrides?: Partial<GatewayCloseParams>) => GatewayCloseHandler,
+  {
+    mocks,
+    sharedStateLifecycle,
+  }: {
+    mocks: Pick<
+      typeof import("./server-close.mocks.test-support.js").mocks,
+      | "disposeAllSessionMcpRuntimes"
+      | "disposeAllBundleLspRuntimes"
+      | "drainRetainedEmbeddingProviders"
+      | "closeProviderTransportDispatcherPool"
+    >;
+    sharedStateLifecycle: ReadonlyMap<string, boolean>;
+  },
 ): void {
+  it.each([
+    { label: "bundle-mcp", dispose: mocks.disposeAllSessionMcpRuntimes },
+    { label: "embedding-providers", dispose: mocks.drainRetainedEmbeddingProviders },
+  ])(
+    "continues independent teardown while $label cleanup is pending",
+    async ({ label, dispose }) => {
+      vi.useFakeTimers();
+      const cleanup = createDeferredCore();
+      dispose.mockReturnValue(cleanup.promise);
+      const httpClose = vi.fn((callback: (error?: Error | null) => void) => callback(null));
+      const close = createGatewayCloseHandler({
+        httpServer: { close: httpClose, closeIdleConnections: vi.fn() } as never,
+      });
+      const closePromise = close({ reason: "test shutdown" });
+      try {
+        if (label === "bundle-mcp") {
+          await vi.advanceTimersByTimeAsync(0);
+          expect(mocks.disposeAllBundleLspRuntimes).toHaveBeenCalledOnce();
+          expect(dispose.mock.invocationCallOrder[0]).toBeLessThan(
+            mocks.disposeAllBundleLspRuntimes.mock.invocationCallOrder[0]!,
+          );
+        }
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(httpClose).toHaveBeenCalledOnce();
+        expect(sharedStateLifecycle.has("open")).toBe(true);
+        expect(mocks.closeProviderTransportDispatcherPool).not.toHaveBeenCalled();
+      } finally {
+        cleanup.resolve();
+        await closePromise;
+      }
+      expect((await closePromise).warnings).toContain(label);
+      expect(mocks.closeProviderTransportDispatcherPool).toHaveBeenCalledOnce();
+    },
+  );
+
   it("retires warm CLI processes and joins their resource cleanup during shutdown", async () => {
     const context = buildPreparedCliRunContext({ sessionId: "shutdown-warm-cli" });
     const admission = prepareSystemAgentRunAdmission(

@@ -99,7 +99,10 @@ AOT artifacts select the `embedded-aot` [runtime execution profile](/concepts/ru
 Host Code Mode using the Node executor, QA expressions, and plugins fetched after
 the build run interpreted. Each feature emits one performance notice per process;
 use a JIT build for full speed. Fetched CJS/TypeScript plugins load from disk
-through the normal loader against the compiled SDK. Missing runtime modules and
+through the normal loader against the compiled SDK in both emitted-JavaScript
+and original-TypeScript AOT builds. The loader transfers compiled SDK exports to
+interpreted plugins; virtual SDK paths do not contain readable source files.
+Missing runtime modules and
 builds with `--disallow-code-generation-from-strings=strict` still report actionable
 guidance. Guest runtimes keep their own qualification requirements; OpenClaw
 does not silently switch executors.
@@ -165,6 +168,13 @@ AOT-only options apply to either input mode:
   `=strict` also denies VM string execution. The strict option breaks host NodeVM
   execution. These settings do not prohibit every guest interpreter.
 - `--explain[=<report>]` writes compiler diagnostics. It can be repeated.
+- `--aot-disable <name,...>` forwards Bun's supported compiler-step opt-outs and
+  can be repeated. For large graphs whose whole-program analysis exceeds the
+  build's memory budget, `--aot-disable=flow-results` skips that analysis and its
+  optimizations. Code still compiles ahead of time, with the same runtime behavior
+  and hardening options; the executable can be larger or slower. Bun validates
+  the names. Qualify the resulting artifact and record this option in build
+  comparisons.
 - `--aot-log-type-mismatches` inventories mismatches and changes generated code;
   rebuild without it for performance measurements.
 
@@ -398,6 +408,70 @@ exercise native plugin loading. See [macOS signing](/platforms/mac/signing).
 
 ## Update the complete artifact
 
+### Desktop app artifacts
+
+The Tauri companion in `apps/linux` can embed a prebuilt AOT standalone artifact
+on glibc Linux x64/arm64 or Apple silicon macOS. Its build input defaults to
+`OPENCLAW_DESKTOP_RUNTIME=jit`; select AOT explicitly:
+
+```sh
+cd apps/linux/src-tauri
+OPENCLAW_DESKTOP_RUNTIME=aot \
+OPENCLAW_DESKTOP_AOT_ARTIFACT=/absolute/path/to/standalone-aot \
+  pnpm dlx @tauri-apps/cli@2.11.4 build --bundles app \
+  --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```
+
+This command packages a macOS Tauri app. Linux builds use `--bundles deb,appimage`
+with the [AppImage preparation steps](https://github.com/openclaw/openclaw/blob/main/apps/linux/README.md#packaging).
+The normal app workflow never builds the AOT compiler. Produce and qualify the
+standalone artifact separately, then supply the directory containing its
+`manifest.json`, executable, and `runtime/` sidecar. Its OpenClaw version and
+target must match the app build. Keep the recorded source and compiler identity;
+a matching version number alone does not establish qualification.
+
+The desktop manifest embeds the standalone facts alongside `runtime.flavor` and
+an inventory of the staged files. Seeding verifies those bytes; launch selection,
+CLI installation, and Gateway activation follow that manifest. Changing the
+input back to `jit` packages the pinned Bun and matching OpenClaw package. After
+updating an existing app, use **Use bundled runtime…** to activate its runtime.
+The service and CLI retain their current selection until that action succeeds.
+
+AOT remains experimental. Qualify native addons, fetched plugins, and child
+processes against the exact signed executable and sidecar. Linux payloads must
+meet the app's glibc 2.35 and GLIBCXX_3.4.30 floor; packaging cannot lower a
+payload's ABI requirement. macOS Tauri builds require macOS 26.2 or later, with
+hardened runtime and no `allow-jit` or unsigned executable-memory entitlement
+for AOT. macOS Intel uses JIT.
+
+The native macOS app is not switched by this Tauri input. A future native adapter
+can consume the same standalone executable, sidecar, target, source/compiler
+identity, and hashes: select AOT for `darwin-arm64`, keep JIT for `darwin-x64`,
+and let its existing runtime owner handle seeding, launch, and updates. That
+adoption is a separate reviewed app change; all current app defaults remain JIT.
+
+### Managed Gateway service
+
+Install a complete standalone artifact as the managed Gateway runtime with:
+
+```sh
+./standalone-aot/openclaw gateway install --runtime standalone --runtime-path /absolute/path/to/standalone-aot/openclaw
+```
+
+The service launches `<executable> gateway ...` directly. It does not add a loose
+JavaScript entrypoint or Bun flags. Installation probes the executable's embedded
+runtime-check entry, including SQLite capabilities, and records the exact runtime
+path. Renaming the executable is supported when its adjacent `manifest.json`
+names it correctly. Keep that manifest and the complete `runtime/` directory
+together; older artifacts without the embedded runtime-check entry must be rebuilt.
+
+Reinstallation and Doctor retain an explicit standalone selection. To switch
+artifacts, install the newly verified complete directory with the same two flags
+and `--force`; retain the previous directory until the Gateway and CLI no longer
+reference it. Desktop applications own this handoff for their bundled artifacts.
+
+### Artifact replacement
+
 The standalone executable is not a package-manager or git installation.
 `openclaw update` refuses to modify it and displays a next step: update the owning
 desktop application, or rebuild and replace the standalone output.
@@ -438,8 +512,8 @@ The sealed single-file update-recovery helper uses its existing in-process hashi
 fallback so its recorded recovery artifact remains self-contained. Normal
 installations use the declared hashing workers.
 
-Browser MCP and remote repository bootstrap scripts are generated from typed
-sources into bundled script assets. Regenerate them with `pnpm runtime:scripts:gen`;
+Browser MCP, widget keyboard shortcuts, and remote repository bootstrap scripts are
+generated from typed sources into bundled script assets. Regenerate them with `pnpm runtime:scripts:gen`;
 `pnpm runtime:scripts:check` verifies freshness before building. The runtime does
 not need to serialize function bodies or retain loose JavaScript for these scripts.
 

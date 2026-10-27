@@ -107,6 +107,99 @@ describe("security audit exec surface findings", () => {
     }
   });
 
+  // #183541: the audit must judge host exec the way the runtime runs it. An
+  // unsandboxed agent with unset security runs security=full, ask=off.
+  const defaultFullAgents = (
+    researcher?: { tools: { exec: { ask: "off" } } },
+    sandbox?: { mode: "non-main" | "all" },
+  ) => ({
+    tools: { exec: { strictInlineEval: true } },
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { systemAgent: { agentId: "main" }, sandbox },
+      entries: {
+        main: { tools: { exec: { mode: "ask" as const } } },
+        researcher: { workspace: "/tmp/ws-researcher", ...researcher },
+      },
+    },
+  });
+
+  it("keeps a bare default-full agent out of security_full_configured without open channels", async () => {
+    const findings = await collectSecurityAuditFindings(defaultFullAgents());
+    expect(findings.some((f) => f.checkId === "tools.exec.security_full_configured")).toBe(false);
+    expect(findings.some((f) => f.checkId === "security.exposure.open_channels_with_exec")).toBe(
+      false,
+    );
+  });
+
+  it.each([undefined, { mode: "non-main" }] as const)(
+    "reports host exec with disabled approvals (sandbox=%j)",
+    async (sandbox) => {
+      const findings = await collectSecurityAuditFindings(
+        defaultFullAgents({ tools: { exec: { ask: "off" } } }, sandbox),
+      );
+      const finding = requireFinding(findings, "tools.exec.security_full_configured", {
+        severity: "warn",
+      });
+      expect(finding.detail).toContain("researcher");
+    },
+  );
+
+  it.each([
+    ["bare default", undefined, undefined],
+    ["ask off", { tools: { exec: { ask: "off" as const } } }, undefined],
+    ["non-main sandbox", undefined, { mode: "non-main" }],
+  ] as const)(
+    "rates open DMs reaching a default-full agent as critical (%s)",
+    async (_name, researcher, sandbox) => {
+      const findings = await collectSecurityAuditFindings({
+        ...defaultFullAgents(researcher, sandbox),
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      });
+      const exposure = requireFinding(findings, "security.exposure.open_channels_with_exec", {
+        severity: "critical",
+      });
+      expect(exposure.detail).toContain("researcher: security=full");
+      expect(
+        findings.some(
+          (finding) =>
+            finding.checkId === "tools.exec.security_full_configured" &&
+            finding.severity === "critical",
+        ),
+      ).toBe(researcher !== undefined);
+    },
+  );
+
+  it("does not report full exec when every session is sandboxed", async () => {
+    const findings = await collectSecurityAuditFindings({
+      ...defaultFullAgents({ tools: { exec: { ask: "off" } } }, { mode: "all" }),
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    expect(
+      findings.some((finding) => finding.checkId === "tools.exec.security_full_configured"),
+    ).toBe(false);
+    requireFinding(findings, "security.exposure.open_channels_with_exec", { severity: "warn" });
+  });
+
+  it("does not invent exec exposure for an explicit fleet whose agents deny exec", async () => {
+    const findings = await collectSecurityAuditFindings({
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { tools: { exec: { mode: "deny" } } },
+          researcher: { tools: { exec: { mode: "deny" } } },
+        },
+      },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    expect(
+      findings.some((finding) => finding.checkId === "security.exposure.open_channels_with_exec"),
+    ).toBe(false);
+    expect(
+      findings.some((finding) => finding.checkId === "tools.exec.security_full_configured"),
+    ).toBe(false);
+  });
+
   it("uses configured plugin and selected channel policies throughout the audit", async () => {
     const stateDir = path.join(process.env.OPENCLAW_HOME!, ".openclaw");
     const pluginDir = path.join(stateDir, "extensions", "audit-fixture");

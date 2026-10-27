@@ -381,17 +381,14 @@ describe("skills cli commands", () => {
         { ...baseSkill, name: "plain", emoji: undefined },
       ],
     });
-    const style = vi.spyOn(theme, "command").mockImplementation(new Chalk({ level: 1 }).cyan);
-    try {
-      await run("list");
-      expect(stdout).toHaveLength(1);
-      expect(stdout[0]).toContain("🎛\uFE0F \u001b[36mcalendar\u001b[39m");
-      expect(stdout[0]).toContain("\u001b[36mplain\u001b[39m");
-      expect(stdout[0]).not.toContain("\u009f");
-      expect(stdout[0]).not.toContain("📦");
-    } finally {
-      style.mockRestore();
-    }
+    using _ = vi.spyOn(theme, "command").mockImplementation(new Chalk({ level: 1 }).cyan);
+
+    await run("list");
+    expect(stdout).toHaveLength(1);
+    expect(stdout[0]).toContain("🎛\uFE0F \u001b[36mcalendar\u001b[39m");
+    expect(stdout[0]).toContain("\u001b[36mplain\u001b[39m");
+    expect(stdout[0]).not.toContain("\u009f");
+    expect(stdout[0]).not.toContain("📦");
   });
   it.each([
     ["weather", "skills.entries.weather.apiKey"],

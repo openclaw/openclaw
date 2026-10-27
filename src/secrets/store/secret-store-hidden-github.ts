@@ -62,9 +62,11 @@ export async function readHiddenGitHubSecretRecord(params: {
 
 /** Lists each live hidden authorization record in one owner snapshot. */
 export async function listHiddenGitHubSecretRecords(params: {
-  prefix: HiddenGitHubStorePrefix;
+  prefix?: HiddenGitHubStorePrefix;
 }): Promise<Array<{ name: string; value: string }>> {
-  hiddenGitHubStoreKindFromPrefix(params.prefix);
+  if (params.prefix !== undefined) {
+    hiddenGitHubStoreKindFromPrefix(params.prefix);
+  }
   const context = captureOpenClawStateReadWorkerContext();
   const rows =
     (await runOpenClawStateWorkerOperation(

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  expectElement,
   connectionSchemaFixture,
   renderObjectFixture,
   renderArrayFixture,
@@ -7,14 +8,6 @@ import {
 import { flush } from "../test-helpers/solid-settle.ts";
 
 const errorSelector = ".cfg-structured-draft__error [role='alert']";
-
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element instanceof Element, label).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${label}`);
-  }
-  return element;
-}
 
 function field(root: ParentNode, name: string) {
   return expectElement(root.querySelector<HTMLInputElement>(`input[aria-label='${name}']`), name);

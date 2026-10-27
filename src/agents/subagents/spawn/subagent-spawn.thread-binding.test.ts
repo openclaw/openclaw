@@ -215,7 +215,7 @@ describe("spawnSubagentDirect thread binding", () => {
         spawnMode: "session",
       });
       expect(result.note).toMatch(/directly to the bound thread/i);
-      expect(agentParams().extraSystemPrompt).toMatch(/directly to the bound thread/i);
+      expect(agentParams().message).toMatch(/directly to the bound thread/i);
     },
   );
 

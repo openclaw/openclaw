@@ -264,10 +264,13 @@ export async function runSessionStartupMigration(params: {
           undefined,
           params.assertCurrent,
         ),
-    migrateLegacyMainSessionKeys({ cfg: params.cfg, env, mode: "detect" }),
+    // Fleet-wide guidance belongs to boot; a deferred agent must not wait on other stores.
+    params.agentIds
+      ? undefined
+      : migrateLegacyMainSessionKeys({ cfg: params.cfg, env, mode: "detect" }),
   ] as const);
   params.assertCurrent?.();
-  if (result.warnings.length > 0) {
+  if (result && result.warnings.length > 0) {
     params.log.warn(
       `session: retired main-agent session migration warnings:\n${result.warnings.map((warning) => `- ${warning}`).join("\n")}`,
     );

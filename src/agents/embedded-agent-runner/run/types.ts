@@ -249,6 +249,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   registerPluginRuntimeRefreshConsumer?: (isCurrent: () => boolean) => void;
   /** Completed native attempt results excluded by the original admission read fence. */
   pluginRuntimeRefreshMessages?: AgentMessage[];
+  /**
+   * Set on a plugin-runtime refresh continuation: the logical turn's user prompt.
+   * Prompt hooks see it instead of the synthetic continuation prompt, and turn-start
+   * work (next-turn injections, agent_turn_prepare) is not repeated.
+   */
+  pluginRuntimeRefreshUserPrompt?: string;
   /** Host-owned same-turn recovery context; never a new user turn or execution authority. */
   continuation?: {
     /** Original current request, retained outside bounded historical projections. */
@@ -289,6 +295,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 };
 
 export type EmbeddedRunAttemptResult = {
+  cyberAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red";
   terminal: AgentRunAttemptTerminal;
   preparedTerminalReply?: PreparedAgentRunTerminalReply;
   /** Prepared policy that explains unavailable tools without another session read. */

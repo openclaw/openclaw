@@ -9,11 +9,16 @@ import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { inspectScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
 import { prepareAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
+import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
+import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import * as agentSchema from "../state/openclaw-agent-db-schema.js";
 import { getOpenClawAgentDatabaseValidationForTransfer } from "../state/openclaw-agent-db-validation-cache.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { preflightOpenClawDatabaseSchemas } from "../state/openclaw-database-preflight.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
@@ -62,6 +67,53 @@ function migrationParams(
     })),
   };
 }
+
+it("attributes version and additive schema preparation before admitting retained readers", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    openOpenClawStateDatabase({ env: state.env });
+    const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
+    {
+      using database = openLegacyDatabase(pathname);
+      database.exec("PRAGMA journal_mode = WAL; ALTER TABLE session_nodes DROP COLUMN project_id");
+    }
+    const warnings: string[] = [];
+    const generations = readUpdateDatabaseGenerations([pathname]);
+    const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
+      env: state.env,
+      signal: new AbortController().signal,
+      warn: (message) => warnings.push(message),
+    })!;
+    await withMaintenance(async () => {
+      await capture.admit();
+      await capture.run(async () => {
+        const result = await prepareDoctorDatabaseMigrations(
+          migrationParams(state.env, [
+            {
+              kind: "agent",
+              agentId: "main",
+              path: pathname,
+              foundVersion: 26,
+              supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+            },
+          ]),
+        );
+        expect(result.warnings).toEqual([]);
+        using reader = new DatabaseSync(pathname, { readOnly: true });
+        expect(reader.prepare("SELECT project_id FROM session_nodes").all()).toEqual([]);
+        const admitted = openOpenClawAgentDatabase({
+          agentId: "main",
+          path: pathname,
+          env: state.env,
+        });
+        expect(admitted.db.prepare("SELECT project_id FROM session_nodes").all()).toEqual([]);
+        await closeOpenClawAgentDatabasesAsync();
+      });
+      await capture.settle();
+    });
+    expect(warnings).toEqual([]);
+    expect(capture.receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
+  });
+});
 
 it.each([
   { version: 24, check: undefined },

@@ -1,74 +1,53 @@
-import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import {
   emitTrustedDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expect, test } from "vitest";
 import {
+  collectTestMetrics,
   installRealOtelSdkTestHarness,
   installTestMeter,
 } from "./service.real-sdk.test-support.js";
 import { MODEL_CALL_FIXTURE, startOtelService } from "./service.test-helpers.js";
 
 const sdk = installRealOtelSdkTestHarness();
-
 const RESPONSE_MODEL = "z-ai/glm-5.3";
 const SECRET_SHAPED_MODEL =
   "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBJKg\n-----END PRIVATE KEY-----";
-
-function spansNamed(spans: ReadableSpan[], name: string) {
-  return spans.filter((span) => span.name === name);
+type ModelEvent = Extract<
+  Parameters<typeof emitTrustedDiagnosticEvent>[0],
+  { type: "model.call.completed" }
+>;
+function finishCall(overrides: Partial<ModelEvent> = {}) {
+  emitTrustedDiagnosticEvent({
+    type: "model.call.completed",
+    ...MODEL_CALL_FIXTURE,
+    durationMs: 50,
+    ...overrides,
+  });
 }
 
 test("exports the provider-reported response model on model.call spans only", async () => {
   const { reader } = installTestMeter();
   await startOtelService({ traces: true, metrics: true });
-
-  // Routed call: the preset id was requested, the provider reports the served model.
   emitTrustedDiagnosticEvent({ type: "model.call.started", ...MODEL_CALL_FIXTURE });
-  emitTrustedDiagnosticEvent({
-    type: "model.call.completed",
-    ...MODEL_CALL_FIXTURE,
-    durationMs: 50,
-    responseModel: RESPONSE_MODEL,
-  });
+  finishCall({ responseModel: RESPONSE_MODEL });
   emitTrustedDiagnosticEvent({
     type: "model.call.error",
     ...MODEL_CALL_FIXTURE,
-    callId: "call-routed-error",
     durationMs: 60,
+    callId: "call-routed-error",
     errorCategory: "TimeoutError",
     responseModel: RESPONSE_MODEL,
   });
-  // No observed response model: the span must not mint one from the request.
-  emitTrustedDiagnosticEvent({
-    type: "model.call.completed",
-    ...MODEL_CALL_FIXTURE,
-    callId: "call-unrouted",
-    durationMs: 55,
-  });
-  // Redaction: a secret-shaped response id is redacted exactly like the request id.
-  emitTrustedDiagnosticEvent({
-    type: "model.call.completed",
-    ...MODEL_CALL_FIXTURE,
+  finishCall({ callId: "call-unrouted" });
+  finishCall({
     callId: "call-secret-shaped",
     model: SECRET_SHAPED_MODEL,
-    durationMs: 65,
     responseModel: SECRET_SHAPED_MODEL,
   });
-  for (const [callId, observationUnit, responseModel] of [
-    ["call-turn", "turn", RESPONSE_MODEL],
-    ["call-blank", "request", "  "],
-  ] as const) {
-    emitTrustedDiagnosticEvent({
-      type: "model.call.completed",
-      ...MODEL_CALL_FIXTURE,
-      callId,
-      observationUnit,
-      responseModel,
-      durationMs: 5,
-    });
-  }
+  finishCall({ callId: "call-turn", observationUnit: "turn", responseModel: RESPONSE_MODEL });
+  finishCall({ callId: "call-blank", responseModel: "  " });
   emitTrustedDiagnosticEvent({
     type: "model.usage",
     provider: "openai",
@@ -78,59 +57,36 @@ test("exports the provider-reported response model on model.call spans only", as
   });
   await waitForDiagnosticEventsDrained();
 
-  const spans = sdk.exporter.getFinishedSpans();
-  const modelCallSpans = spansNamed(spans, "openclaw.model.call");
-  expect(modelCallSpans).toHaveLength(6);
-  for (const span of modelCallSpans.slice(4)) {
-    expect(span.attributes).not.toHaveProperty("gen_ai.response.model");
+  const spansNamed = (name: string) =>
+    sdk.exporter.getFinishedSpans().filter((span) => span.name === name);
+  const calls = spansNamed("openclaw.model.call");
+  expect(calls).toHaveLength(6);
+  for (const span of calls.slice(0, 2)) {
+    expect(span.attributes).toMatchObject({
+      "gen_ai.system": "openai",
+      "gen_ai.request.model": "gpt-5.4",
+      "gen_ai.response.model": RESPONSE_MODEL,
+    });
   }
-  // gen_ai.request.model keeps the requested id; gen_ai.response.model carries
-  // the provider-reported id on completed and error terminal spans alike.
-  expect(modelCallSpans[0]?.attributes).toMatchObject({
-    "gen_ai.system": "openai",
-    "gen_ai.request.model": "gpt-5.4",
-    "gen_ai.response.model": RESPONSE_MODEL,
-  });
-  expect(modelCallSpans[1]?.attributes).toMatchObject({
-    "gen_ai.request.model": "gpt-5.4",
-    "gen_ai.response.model": RESPONSE_MODEL,
-  });
-  expect(modelCallSpans[2]?.attributes).toMatchObject({
-    "gen_ai.request.model": "gpt-5.4",
-  });
-  expect(modelCallSpans[2]?.attributes).not.toHaveProperty("gen_ai.response.model");
-  const redactedRequestModel = modelCallSpans[3]?.attributes["gen_ai.request.model"];
-  const redactedResponseModel = modelCallSpans[3]?.attributes["gen_ai.response.model"];
-  expect(String(redactedRequestModel)).toContain("…redacted…");
-  expect(String(redactedRequestModel)).not.toContain("MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBJKg");
-  expect(redactedResponseModel).toBe(redactedRequestModel);
+  expect(calls[2]?.attributes).toMatchObject({ "gen_ai.request.model": "gpt-5.4" });
+  for (const index of [2, 4, 5]) {
+    expect(calls[index]?.attributes).not.toHaveProperty("gen_ai.response.model");
+  }
+  const redactedRequest = calls[3]?.attributes["gen_ai.request.model"];
+  expect(String(redactedRequest)).toContain("…redacted…");
+  expect(String(redactedRequest)).not.toContain("MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBJKg");
+  expect(calls[3]?.attributes["gen_ai.response.model"]).toBe(redactedRequest);
 
-  // Aggregate usage spans never carry the per-request response model.
-  const modelUsageSpans = spansNamed(spans, "openclaw.model.usage");
-  expect(modelUsageSpans).toHaveLength(1);
-  expect(modelUsageSpans[0]?.attributes).toMatchObject({ "gen_ai.request.model": "gpt-5.4" });
-  expect(modelUsageSpans[0]?.attributes).not.toHaveProperty("gen_ai.response.model");
+  const usage = spansNamed("openclaw.model.usage");
+  expect(usage).toHaveLength(1);
+  expect(usage[0]?.attributes).toMatchObject({ "gen_ai.request.model": "gpt-5.4" });
+  expect(usage[0]?.attributes).not.toHaveProperty("gen_ai.response.model");
 
-  // Metric labels never carry the response model: unbounded cardinality.
-  const { resourceMetrics } = await reader.collect();
-  const dataPoints = resourceMetrics.scopeMetrics
-    .flatMap((scope) => scope.metrics)
-    .flatMap((metric) =>
-      metric.dataPoints.map((point) => ({
-        name: metric.descriptor.name,
-        attributes: point.attributes,
-      })),
-    )
-    .filter((point) =>
-      [
-        "openclaw.model_call.duration_ms",
-        "gen_ai.client.operation.duration",
-        "gen_ai.client.token.usage",
-        "openclaw.tokens",
-      ].includes(point.name),
-    );
-  expect(dataPoints).not.toHaveLength(0);
-  for (const { attributes } of dataPoints) {
-    expect(attributes).not.toHaveProperty("gen_ai.response.model");
+  const metrics = await collectTestMetrics(reader);
+  expect(metrics.some((metric) => metric.dataPoints.length > 0)).toBe(true);
+  for (const metric of metrics) {
+    for (const { attributes } of metric.dataPoints) {
+      expect(attributes).not.toHaveProperty("gen_ai.response.model");
+    }
   }
 });

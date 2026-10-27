@@ -36,6 +36,7 @@ export const optimisticSessionRowFields = [
   "archiveReason",
   "thinkingLevel",
   "fastMode",
+  "cyberAccessProgram",
   "effectiveFastMode",
   "contextWindow",
 ] as const;
@@ -65,6 +66,7 @@ export type SessionPatchRowFact = {
     | (SessionPinFields & SessionReadFields)
     | SessionArchiveFields
     | Pick<GatewaySessionRow, "fastMode">
+    | Pick<GatewaySessionRow, "cyberAccessProgram">
     | Pick<
         GatewaySessionRow,
         | "model"
@@ -334,6 +336,7 @@ export function createOptimisticRowField<
     | "category"
     | "unread"
     | "thinkingLevel"
+    | "cyberAccessProgram"
     | "contextWindow",
 >(host: PendingRowCopyHost, field: Field) {
   return createOptimisticRowPatches(host, {
@@ -369,6 +372,7 @@ export function createOptimisticPinPatches(host: PendingRowCopyHost) {
 /** Settings share the row-intent owner; their token group is captured before queued dispatch. */
 export function createOptimisticSettingsPatches(host: PendingRowCopyHost) {
   const thinking = createOptimisticRowField(host, "thinkingLevel");
+  const accessProgram = createOptimisticRowField(host, "cyberAccessProgram");
   const fastMode = createOptimisticRowPatches(host, {
     read: (row): SessionFastModeFields => ({
       fastMode: row?.fastMode,
@@ -389,26 +393,37 @@ export function createOptimisticSettingsPatches(host: PendingRowCopyHost) {
   });
   const contextWindow = createOptimisticRowField(host, "contextWindow");
   return {
-    owners: [thinking, fastMode, contextWindow] as const,
+    owners: [thinking, fastMode, contextWindow, accessProgram] as const,
     read(identity: string) {
       const thinkingValue = thinking.read(identity);
       const speedValue = fastMode.read(identity);
       const contextValue = contextWindow.read(identity);
-      return thinkingValue || speedValue || contextValue
+      const accessProgramValue = accessProgram.read(identity);
+      return thinkingValue || speedValue || contextValue || accessProgramValue
         ? {
             ...(thinkingValue ? { thinkingLevel: thinkingValue.next } : {}),
             ...speedValue?.next,
+            ...(accessProgramValue ? { cyberAccessProgram: accessProgramValue.next } : {}),
             ...(contextValue ? { contextWindow: contextValue.next } : {}),
           }
         : undefined;
     },
     prepare(
-      patch: Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow">,
+      patch: Pick<
+        SessionPatch,
+        "thinkingLevel" | "fastMode" | "contextWindow" | "cyberAccessProgram"
+      >,
       isCurrent: () => boolean,
     ) {
       const starts: Array<
         readonly [Pick<typeof thinking, "settle" | "owns">, ReturnType<typeof thinking.prepare>]
       > = [];
+      if (patch.cyberAccessProgram !== undefined) {
+        starts.push([
+          accessProgram,
+          accessProgram.prepare(() => patch.cyberAccessProgram ?? undefined, isCurrent),
+        ]);
+      }
       if (patch.thinkingLevel !== undefined) {
         starts.push([
           thinking,

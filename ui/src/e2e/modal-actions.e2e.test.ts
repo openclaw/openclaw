@@ -141,7 +141,7 @@ suite.define(() => {
         const available = { channel: "stable", currentVersion: "1.0.0", latestVersion: "2.0.0" };
         const gateway = await installMockGateway(page, { deferredMethods: ["update.run"] });
         await page.goto(suite.server.baseUrl + "chat");
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await gateway.setMethodResponse("update.status", { updateAvailable: available });
         await gateway.emitGatewayEvent("update.available", { updateAvailable: available });
         await page.locator(".sidebar-issues-button:visible").click();

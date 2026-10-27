@@ -6,6 +6,7 @@ import {
   resolveNonNegativeIntegerOption,
 } from "../../packages/normalization-core/src/number-coercion.js";
 import { computeBackoffSchedule } from "../../packages/retry/src/index.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { sleep } from "../utils/sleep.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "./errors.js";
 import {
@@ -44,7 +45,7 @@ export type DeliveryRecoveryDrainDecision = {
   bypassBackoff?: boolean;
 };
 
-export type ActiveDeliveryRecoveryClaimResult<T> =
+type ActiveDeliveryRecoveryClaimResult<T> =
   | { status: "claimed"; value: T }
   | { status: "claimed-by-other-owner" };
 
@@ -64,6 +65,7 @@ type DeliveryRecoveryScanOptions<T extends DeliveryRecoveryEntry> = {
   onDeadlineExceeded?: () => void;
   onClaimConflict?: (entry: T) => void;
   onMissingEntry?: (entry: T) => void;
+  laneKey?: (entry: T) => string;
 };
 
 export function createEmptyDeliveryRecoverySummary(): DeliveryRecoverySummary {
@@ -284,13 +286,13 @@ function createRecoveryReplayPacer() {
     });
 }
 
-function createRecoveryClaim() {
+function createRecoveryClaim(limit = Number.POSITIVE_INFINITY) {
   const activeEntries = new Set<string>();
   return async <Result>(
     entryId: string,
     run: () => Promise<Result>,
   ): Promise<ActiveDeliveryRecoveryClaimResult<Result>> => {
-    if (activeEntries.has(entryId)) {
+    if (activeEntries.has(entryId) || activeEntries.size >= limit) {
       return { status: "claimed-by-other-owner" };
     }
     activeEntries.add(entryId);
@@ -303,9 +305,12 @@ function createRecoveryClaim() {
 }
 
 /** Own one queue namespace's live claims, drain exclusion, and replay pacing. */
-export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntry>() {
+export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntry>(scheduling?: {
+  maxConcurrentLanes: number;
+}) {
   const withClaim = createRecoveryClaim();
   const withDrainClaim = createRecoveryClaim();
+  const withLaneClaim = createRecoveryClaim(scheduling?.maxConcurrentLanes);
 
   return {
     withClaim,
@@ -315,29 +320,71 @@ export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntr
     },
 
     async scan(options: DeliveryRecoveryScanOptions<T>): Promise<void> {
-      for (const entry of options.entries.toSorted((a, b) => a.enqueuedAt - b.enqueuedAt)) {
-        if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) {
-          options.onDeadlineExceeded?.();
-          break;
-        }
-
-        // Claim before the authoritative reload so a stale startup snapshot
-        // can never race a reconnect drain or recipient-visible live send.
-        const claim = await withClaim(entry.id, async () => {
-          const current = await options.loadEntry(entry.id);
-          if (!current) {
-            options.onMissingEntry?.(entry);
-            return "continue" as const;
+      let stopped = false;
+      const scanEntries = async (entries: readonly T[]) => {
+        for (const entry of entries) {
+          if (stopped) {
+            break;
           }
-          return (await options.onEntry(current)) ?? "continue";
-        });
-        if (claim.status === "claimed-by-other-owner") {
-          options.onClaimConflict?.(entry);
-          continue;
+          if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) {
+            stopped = true;
+            options.onDeadlineExceeded?.();
+            break;
+          }
+
+          // Claim before the authoritative reload so a stale startup snapshot
+          // can never race a reconnect drain or recipient-visible live send.
+          const claim = await withClaim(entry.id, async () => {
+            const current = await options.loadEntry(entry.id);
+            if (!current) {
+              options.onMissingEntry?.(entry);
+              return "continue" as const;
+            }
+            return (await options.onEntry(current)) ?? "continue";
+          });
+          if (claim.status === "claimed-by-other-owner") {
+            options.onClaimConflict?.(entry);
+            continue;
+          }
+          if (claim.value === "stop") {
+            stopped = true;
+            break;
+          }
         }
-        if (claim.value === "stop") {
-          break;
+      };
+      const sorted = options.entries.toSorted((a, b) => a.enqueuedAt - b.enqueuedAt);
+      if (!scheduling) {
+        await scanEntries(sorted);
+        return;
+      }
+      const lanes = new Map<string, T[]>();
+      for (const entry of sorted) {
+        const key = options.laneKey?.(entry) ?? "default";
+        const lane = lanes.get(key);
+        if (lane) {
+          lane.push(entry);
+        } else {
+          lanes.set(key, [entry]);
         }
+      }
+      const result = await runTasksWithConcurrency({
+        limit: scheduling.maxConcurrentLanes,
+        errorMode: "stop",
+        onTaskError: () => {
+          stopped = true;
+        },
+        // Startup and reconnect share the cap and domain claim. A competing
+        // scan leaves busy domains untouched for the owner's next retry pass.
+        tasks: Array.from(
+          lanes,
+          ([key, entries]) =>
+            () =>
+              withLaneClaim(key, () => scanEntries(entries)),
+        ),
+      });
+      // Join every admitted send before surfacing an error to lifecycle teardown.
+      if (result.hasError) {
+        throw result.firstError;
       }
     },
 

@@ -2,10 +2,16 @@ import { createSignal, flush } from "solid-js";
 import { vi } from "vitest";
 import type { SystemAgentSetupDetectResult } from "../../../api/types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import type { ModelSetupViewProps } from "../view-types.ts";
+import type { ModelSetupViewProps as ViewProps } from "../view-types.ts";
 import { ModelSetupView } from "../view.tsx";
 
-export type { ModelSetupViewProps } from "../view-types.ts";
+const provider = (id: string, label: string) => ({ id, brandId: id, label });
+
+const ollama = {
+  ...provider("ollama", "Ollama"),
+  icon: "https://cdn.simpleicons.org/ollama",
+  website: "https://ollama.com/download",
+};
 
 export const detected: SystemAgentSetupDetectResult = {
   candidates: [
@@ -17,85 +23,36 @@ export const detected: SystemAgentSetupDetectResult = {
       modelRef: "openai/gpt-5",
       recommended: true,
       credentials: true,
-      icon: "https://cdn.example.com/codex.png",
     },
   ],
   manualProviders: [
     {
-      id: "gemini-api-key",
+      ...provider("gemini-api-key", "Google AI Studio API key"),
       brandId: "google",
       groupLabel: "Google",
-      label: "Google AI Studio API key",
       hint: "Supported API-key access from aistudio.google.com/apikey",
     },
-    {
-      id: "openai",
-      brandId: "openai",
-      groupLabel: "OpenAI",
-      label: "OpenAI",
-      hint: "Use a project API key.",
-      icon: "https://cdn.example.com/openai.png",
-    },
+    provider("openai", "OpenAI"),
   ],
   authOptions: [
-    {
-      id: "openai-oauth",
-      brandId: "openai",
-      label: "OpenAI",
-      kind: "oauth",
-      featured: true,
-      hint: "Continue in your browser.",
-      icon: "https://cdn.example.com/openai.png",
-    },
-    {
-      id: "other-device",
-      label: "Other provider",
-      kind: "device-code",
-      featured: false,
-    },
+    { id: "openai-oauth", label: "OpenAI", kind: "oauth", featured: true },
+    { id: "other-device", label: "Other provider", kind: "device-code", featured: false },
   ],
-  prepareOptions: [
-    {
-      id: "ollama",
-      brandId: "ollama",
-      label: "Ollama",
-      hint: "Connect to an Ollama server and select a cloud or local model",
-      actionLabel: "Choose connection",
-      icon: "https://cdn.simpleicons.org/ollama",
-      website: "https://ollama.com/download",
-    },
-    {
-      id: "lmstudio",
-      brandId: "lmstudio",
-      label: "LM Studio",
-      hint: "Connect to a running LM Studio server and use an already loaded model",
-      actionLabel: "Connect server",
-      icon: "https://cdn.simpleicons.org/lmstudio",
-      website: "https://lmstudio.ai/download",
-    },
-    {
-      id: "llama-cpp",
-      brandId: "llama-cpp",
-      label: "llama.cpp",
-      hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
-      actionLabel: "Set up model",
-    },
-  ],
-  recommendedInstalls: [
-    {
-      id: "ollama",
-      brandId: "ollama",
-      label: "Ollama",
-      hint: "Run open models locally",
-      website: "https://ollama.com/download",
-      icon: "https://cdn.simpleicons.org/ollama",
-    },
-  ],
+  prepareOptions: (
+    [
+      ["ollama", "Ollama", "Choose connection"],
+      ["lmstudio", "LM Studio", "Connect server"],
+      ["llama-cpp", "llama.cpp", "Set up model"],
+    ] as const
+  ).map(([id, label, actionLabel]) =>
+    Object.assign(provider(id, label), { actionLabel, hint: "Local model" }),
+  ),
+  recommendedInstalls: [{ ...ollama, hint: "Run open models locally" }],
   workspace: "/tmp/workspace",
   setupComplete: false,
 };
 
-export function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProps {
+export function props(overrides: Partial<ViewProps> = {}): ViewProps {
   return {
     detectionIdentity: () => undefined,
     page: { phase: "ready", result: detected },
@@ -115,11 +72,7 @@ export function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupV
     manualError: null,
     moreSignInOpen: false,
     firstRun: false,
-    iconUrls: {
-      "https://cdn.example.com/codex.png": "blob:codex",
-      "https://cdn.example.com/openai.png": "blob:openai",
-      "https://cdn.simpleicons.org/ollama": "blob:ollama",
-    },
+    iconUrls: {},
     onDetect: vi.fn(),
     onVerify: vi.fn(),
     onActivateCandidate: vi.fn(),
@@ -140,12 +93,9 @@ export function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupV
   };
 }
 
-const roots = new Map<
-  HTMLElement,
-  { update: (view: ModelSetupViewProps) => void; dispose: () => void }
->();
+const roots = new Map<HTMLElement, { update: (view: ViewProps) => void; dispose: () => void }>();
 
-export function renderSetup(view: ModelSetupViewProps, container: HTMLElement): void {
+export function renderSetup(view: ViewProps, container: HTMLElement): void {
   const root = roots.get(container);
   if (root) {
     root.update({ ...view });
@@ -164,9 +114,8 @@ export function disposeViews(): void {
   roots.clear();
 }
 
-export function mount(viewProps: ModelSetupViewProps): HTMLDivElement {
-  const container = document.createElement("div");
-  document.body.append(container);
+export function mount(viewProps: ViewProps): HTMLDivElement {
+  const container = document.body.appendChild(document.createElement("div"));
   renderSetup(viewProps, container);
   return container;
 }

@@ -6,10 +6,8 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-} from "../chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "../chat-application-context.test-support.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
 import {
@@ -584,6 +582,22 @@ it("desktop browses lazy directories and restores activity after global search c
     expect(listFiles.mock.calls.map(([, options]) => options?.path)).toEqual(["", "docs"]);
     expect(mounted.container.textContent).toContain(
       "Showing the first matching files. Refine the search to narrow results.",
+    );
+    const directory = getSessionWorkspace(state).directories!.docs!;
+    directory.browser = {
+      ...directory.browser!,
+      entries: [{ path: "docs/refreshed.md", name: "refreshed.md", kind: "file" }],
+    };
+    sessionWorkspaceForHost(state).publish();
+    await vi.waitFor(() => expect(button(mounted.container, "docs/refreshed.md")).not.toBeNull());
+    expect(button(mounted.container, "docs/untouched.md")).toBeNull();
+    directory.browser = {
+      ...directory.browser,
+      entries: [{ path: "docs/refreshed.md", name: "renamed.md", kind: "file" }],
+    };
+    sessionWorkspaceForHost(state).publish();
+    await vi.waitFor(() =>
+      expect(button(mounted.container, "docs/refreshed.md")?.textContent).toContain("renamed.md"),
     );
     props().onSetFilter("changed");
     flush();

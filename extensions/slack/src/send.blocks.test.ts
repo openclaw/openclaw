@@ -1,5 +1,6 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as blocksFallback from "./blocks-fallback.js";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 import { SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
 import {
@@ -117,6 +118,37 @@ describe("sendMessageSlack chunking", () => {
 });
 
 describe("sendMessageSlack blocks", () => {
+  it.each([false, true])(
+    "uses the ordered accessibility text without rendering a discarded fallback (native=%s)",
+    async (native) => {
+      const fallback = vi.spyOn(blocksFallback, "buildSlackCompleteBlocksFallbackText");
+      const blocks = native
+        ? [table()]
+        : [{ type: "section", text: { type: "plain_text", text: "Account: Acme" } }];
+      try {
+        await send("Overview", {
+          blocks,
+          ...(native ? {} : { authoredTextPlacement: "outside-blocks" as const }),
+        });
+
+        expect(client.chat.postMessage).toHaveBeenCalledOnce();
+        expect(postedMessage()).toEqual({
+          channel: "C123",
+          text: native
+            ? "Overview\n\nPipeline (table)\nAccount\nAcme"
+            : "Overview\n\nAccount: Acme",
+          blocks,
+          mrkdwn: false,
+          unfurl_links: false,
+        });
+        expect(postedMessage().blocks).toBe(blocks);
+        expect(fallback).not.toHaveBeenCalled();
+      } finally {
+        fallback.mockRestore();
+      }
+    },
+  );
+
   it("uses resolved-limit blockless chunks for oversized native data with no survivors", async () => {
     const caption = "c".repeat(41_000);
     await send("", { blocks: [table(caption)] as never });

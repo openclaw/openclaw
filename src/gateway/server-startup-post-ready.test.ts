@@ -1,15 +1,10 @@
 import fs from "node:fs";
-import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import type { GatewaySchedulerClock } from "../infra/gateway-scheduler.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
-import {
-  createPluginNativeCaptureRoot,
-  retainPluginNativeCapturePath,
-} from "../plugins/plugin-source-capture-directory.js";
 import { pluginProcessRuntimeEntrypoints } from "../plugins/process-runtime.test-support.js";
 import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { createGatewaySchedulerClock } from "../test-utils/gateway-scheduler-clock.js";
@@ -146,7 +141,7 @@ it.each(["settles", "closes", "repair-closes"] as const)(
           const captureModule = resolveRuntimeWorkerUrl(
             pluginProcessRuntimeEntrypoints.captureDirectory,
           );
-          const produceCaptures = async <T extends string>(names: T[]) => {
+          const produceOrphan = async () => {
             const producer = await runNodeScript(
               (argv) => [
                 ...argv(captureModule).slice(0, -1),
@@ -155,16 +150,12 @@ it.each(["settles", "closes", "repair-closes"] as const)(
                 `import fs from "node:fs";
                import path from "node:path";
                import { createPluginNativeCaptureRoot } from ${JSON.stringify(captureModule.href)};
-               const fixtures = {};
-               for (const name of ${JSON.stringify(names)}) {
-                 const root = createPluginNativeCaptureRoot();
-                 const file = path.join(root.directory, name + ".node");
-                 fs.writeFileSync(file, "synthetic " + name);
-                 root.commit();
-                 await root.disposeAsync();
-                 fixtures[name] = { directory: root.directory, file };
-               }
-               process.stdout.write(JSON.stringify(fixtures));`,
+               const root = createPluginNativeCaptureRoot();
+               const file = path.join(root.directory, "orphan.node");
+               fs.writeFileSync(file, "synthetic orphan");
+               root.commit();
+               await root.disposeAsync();
+               process.stdout.write(JSON.stringify({ file }));`,
               ],
               process.env,
               undefined,
@@ -172,60 +163,25 @@ it.each(["settles", "closes", "repair-closes"] as const)(
             );
             expect(producer.error).toBeUndefined();
             expect(producer.status, producer.stderr).toBe(0);
-            return JSON.parse(producer.stdout) as Record<T, { directory: string; file: string }>;
+            return JSON.parse(producer.stdout) as { file: string };
           };
-          const { installed, retained } = await produceCaptures(["installed", "retained"]);
-          const releaseRetained = retainPluginNativeCapturePath(retained.file);
-          const live = createPluginNativeCaptureRoot(state.stateDir);
-          const liveFile = path.join(live.directory, "live.node");
-          fs.writeFileSync(liveFile, "synthetic live");
-          const expectProtectedCaptures = () => {
-            for (const [file, name] of [
-              [liveFile, "live"],
-              [installed.file, "installed"],
-              [retained.file, "retained"],
-            ]) {
-              expect(fs.readFileSync(file!, "utf8")).toBe(`synthetic ${name}`);
-            }
-          };
-          try {
-            const index = createInstalledPluginIndex();
-            index.plugins[0]!.sourceAdmissions = {
-              fixture: {
-                signature: "fixture",
-                sourceDigest: "a".repeat(64),
-                nativeArtifacts: {
-                  native: {
-                    sourceIdentity: "fixture",
-                    contentHash: "b".repeat(64),
-                    sizeBytes: 19,
-                    capturedPath: installed.file,
-                    namespace: installed.directory,
-                    capturedIdentity: "fixture",
-                  },
-                },
-                nativeNamespaces: {},
-              },
-            };
-            await writePersistedInstalledPluginIndex(index, { stateDir: state.stateDir });
-            await clock.advanceBy(30_000);
-            expect(cleanup).toHaveBeenCalledOnce();
-            expectProtectedCaptures();
-            const { orphan } = await produceCaptures(["orphan"]);
-            expect(fs.readFileSync(orphan.file, "utf8")).toBe("synthetic orphan");
-            await clock.advanceBy(60 * 60_000);
-            // Other due Gateway work can occupy the hourly wake; allow its idle retry.
-            await clock.advanceBy(30_000);
-            expect(fs.existsSync(orphan.file)).toBe(false);
-            expectProtectedCaptures();
-            expect(cleanup).toHaveBeenCalledTimes(2);
-            await server.close();
-            await clock.advanceBy(60 * 60_000);
-            expect(cleanup).toHaveBeenCalledTimes(2);
-          } finally {
-            releaseRetained();
-            await live.disposeAsync();
-          }
+          // Receipt/retainer/live-custody protection belongs to the cleanup owner's tests.
+          // Here prove scheduled cleanup discovers a later, separately produced orphan.
+          await writePersistedInstalledPluginIndex(createInstalledPluginIndex({ plugins: [] }), {
+            stateDir: state.stateDir,
+          });
+          await clock.advanceBy(30_000);
+          expect(cleanup).toHaveBeenCalledOnce();
+          const orphan = await produceOrphan();
+          expect(fs.readFileSync(orphan.file, "utf8")).toBe("synthetic orphan");
+          await clock.advanceBy(60 * 60_000);
+          // Other due Gateway work can occupy the hourly wake; allow its idle retry.
+          await clock.advanceBy(30_000);
+          expect(fs.existsSync(orphan.file)).toBe(false);
+          expect(cleanup).toHaveBeenCalledTimes(2);
+          await server.close();
+          await clock.advanceBy(60 * 60_000);
+          expect(cleanup).toHaveBeenCalledTimes(2);
         }
       }
     } finally {

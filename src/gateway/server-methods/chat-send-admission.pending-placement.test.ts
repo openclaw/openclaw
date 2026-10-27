@@ -59,7 +59,7 @@ function cleanupAdmission(
   clearAgentRunContext(runId);
 }
 
-it.each(["restart", "stop"] as const)(
+it.each(["restart", "stop", "interruption", "timeout"] as const)(
   "preserves client retry only when an unstarted chat admission is interrupted by %s",
   async (reason) => {
     const cfg: OpenClawConfig = { agents: mainAgents() };
@@ -97,7 +97,11 @@ it.each(["restart", "stop"] as const)(
         reason:
           reason === "restart"
             ? createAgentRunRestartAbortError()
-            : createAgentRunDirectAbortError(),
+            : reason === "stop"
+              ? createAgentRunDirectAbortError()
+              : reason === "timeout"
+                ? Object.assign(new Error("Session work timed out"), { name: "TimeoutError" })
+                : new Error("Session effect interrupted"),
       }).released;
       expect(await pending).toMatchObject({ ok: false });
       expect(rpcSourceTesting.has(runId)).toBe(false);
@@ -117,7 +121,11 @@ it.each(["restart", "stop"] as const)(
       } else {
         expect(respond).toHaveBeenCalledWith(
           true,
-          expect.objectContaining({ runId, status: "timeout", stopReason: "rpc" }),
+          expect.objectContaining({
+            runId,
+            status: "timeout",
+            stopReason: reason === "stop" ? "rpc" : reason === "timeout" ? "timeout" : "aborted",
+          }),
           undefined,
           expect.objectContaining({ cached: true }),
         );

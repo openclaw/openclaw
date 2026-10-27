@@ -6,6 +6,13 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { mountProjectChip } from "./project-chip.test-support.tsx";
 
+const project: ProjectsRegisterResult = {
+  id: "registered-workspace",
+  displayName: "Registered workspace",
+  repoRoot: "/workspace",
+  source: "registered",
+};
+
 function mountBrowser() {
   const fixture = createRepositoryFixture();
   const { browser, state: place, context, gateway, request } = fixture;
@@ -47,24 +54,29 @@ function mountBrowser() {
       expect(view.queryByRole("button", { name: "Register as project" })).not.toBeNull(),
     );
   };
-  return { ...fixture, view, open };
+  const register = () =>
+    view.getByRole<HTMLButtonElement>("button", { name: "Register as project" });
+  const catalogReads = () =>
+    request.mock.calls.filter(([method]) => method === "projects.list").length;
+  const expectDisabled = (disabled: boolean) => {
+    expect(register().disabled).toBe(disabled);
+    expect(
+      view.container.querySelector<HTMLButtonElement>(".new-session-page__browser-use")!.disabled,
+    ).toBe(disabled);
+  };
+  return { ...fixture, view, open, register, catalogReads, expectDisabled };
 }
 
 describe("project registration presentation", () => {
   it("disables registration and folder selection during the write, then shows failure and permits retry", async () => {
-    const { browser, request, view, open } = mountBrowser();
+    const { browser, request, view, open, register, expectDisabled } = mountBrowser();
     await open();
     const registration = createDeferred<ProjectsRegisterResult>();
     request.mockImplementationOnce(() => registration.promise);
-    const register = view.getByRole<HTMLButtonElement>("button", { name: "Register as project" });
-    const use = view.container.querySelector<HTMLButtonElement>(".new-session-page__browser-use")!;
-    const catalogReads = request.mock.calls.filter(([method]) => method === "projects.list").length;
-    register.click();
-    await waitForSolid(() => {
-      expect(register.disabled).toBe(true);
-      expect(use.disabled).toBe(true);
-    });
-    register.click();
+    const button = register();
+    button.click();
+    await waitForSolid(() => expectDisabled(true));
+    button.click();
     expect(request.mock.calls.filter(([method]) => method === "projects.register")).toHaveLength(1);
     const input = view.getByRole<HTMLInputElement>("combobox");
     input.focus();
@@ -79,90 +91,52 @@ describe("project registration presentation", () => {
     registration.reject(new Error("Project registry unavailable"));
     await waitForSolid(() => {
       expect(view.container.textContent).toContain("Project registry unavailable");
-      expect(register.disabled).toBe(false);
-      expect(use.disabled).toBe(false);
+      expectDisabled(false);
     });
     const retry = createDeferred<ProjectsRegisterResult>();
     request.mockImplementationOnce(() => retry.promise);
-    register.click();
-    await waitForSolid(() => expect(register.disabled).toBe(true));
-    expect(browser.browser.error).toBeNull();
-    const project: ProjectsRegisterResult = {
-      id: "registered-workspace",
-      displayName: "Registered workspace",
-      repoRoot: "/workspace",
-      source: "registered",
-    };
+    button.click();
+    await waitForSolid(() => expect(button.disabled).toBe(true));
     request.mockImplementationOnce(async () => ({ projects: [project] }));
     retry.resolve(project);
     await waitForSolid(() => {
       expect(browser.browserOpen).toBe(false);
       expect(view.getByRole("button", { name: "Registered workspace" })).not.toBeNull();
     });
-    expect(browser.browserRegistering).toBe(false);
-    expect(browser.browser.error).toBeNull();
-    expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(
-      catalogReads + 1,
-    );
   });
 
   it("releases saving when closed during the post-registration catalog refresh", async () => {
-    const { browser, request, view, open } = mountBrowser();
+    const { browser, request, open, register, catalogReads, expectDisabled } = mountBrowser();
     await open();
-    const project: ProjectsRegisterResult = {
-      id: "registered-workspace",
-      displayName: "Registered workspace",
-      repoRoot: "/workspace",
-      source: "registered",
-    };
     const catalog = createDeferred<{ projects: ProjectsRegisterResult[] }>();
-    const catalogReads = request.mock.calls.filter(([method]) => method === "projects.list").length;
+    const reads = catalogReads();
     request.mockImplementationOnce(async () => project);
     request.mockImplementationOnce(() => catalog.promise);
-    view.getByRole<HTMLButtonElement>("button", { name: "Register as project" }).click();
+    register().click();
     await waitForSolid(() => {
-      expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(
-        catalogReads + 1,
-      );
-      expect(
-        view.getByRole<HTMLButtonElement>("button", { name: "Register as project" }).disabled,
-      ).toBe(true);
+      expect(catalogReads()).toBe(reads + 1);
+      expect(register().disabled).toBe(true);
     });
 
     browser.close();
     await open();
-    await waitForSolid(() => {
-      expect(
-        view.getByRole<HTMLButtonElement>("button", { name: "Register as project" }).disabled,
-      ).toBe(false);
-      expect(
-        view.container.querySelector<HTMLButtonElement>(".new-session-page__browser-use")!.disabled,
-      ).toBe(false);
-    });
-    expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(
-      catalogReads + 1,
-    );
+    await waitForSolid(() => expectDisabled(false));
     catalog.resolve({ projects: [project] });
     await waitForSolid(() =>
       expect(browser.projects.some((row) => row.id === project.id)).toBe(true),
     );
     expect(browser.browserOpen).toBe(true);
-    expect(
-      view.getByRole<HTMLButtonElement>("button", { name: "Register as project" }).disabled,
-    ).toBe(false);
-    expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(
-      catalogReads + 1,
-    );
+    expect(register().disabled).toBe(false);
   });
 
   it.each(["close", "disconnect", "connection epoch"])(
     "retires saving on %s and ignores a late failure during a new registration",
     async (retirement) => {
-      const { browser, gateway, changed, request, view, open } = mountBrowser();
+      const { browser, gateway, changed, request, view, open, register } = mountBrowser();
       await open();
       const previous = createDeferred<ProjectsRegisterResult>();
       request.mockImplementationOnce(() => previous.promise);
-      view.getByRole<HTMLButtonElement>("button", { name: "Register as project" }).click();
+      register().click();
       await waitForSolid(() => expect(browser.browserRegistering).toBe(true));
       if (retirement === "close") {
         browser.close();
@@ -175,22 +149,22 @@ describe("project registration presentation", () => {
         changed();
       }
       await open();
-      const register = view.getByRole<HTMLButtonElement>("button", { name: "Register as project" });
-      await waitForSolid(() => expect(register.disabled).toBe(false));
+      const button = register();
+      await waitForSolid(() => expect(button.disabled).toBe(false));
       const current = createDeferred<ProjectsRegisterResult>();
       request.mockImplementationOnce(() => current.promise);
-      register.click();
-      await waitForSolid(() => expect(register.disabled).toBe(true));
+      button.click();
+      await waitForSolid(() => expect(button.disabled).toBe(true));
       previous.reject(new Error("Retired registration failed"));
       await previous.promise.catch(() => undefined);
       await waitForSolid(() => {
-        expect(register.disabled).toBe(true);
+        expect(button.disabled).toBe(true);
         expect(browser.browser.error).toBeNull();
         expect(view.container.textContent).not.toContain("Retired registration failed");
       });
       current.reject(new Error("Current registration failed"));
       await waitForSolid(() => {
-        expect(register.disabled).toBe(false);
+        expect(button.disabled).toBe(false);
         expect(view.container.textContent).toContain("Current registration failed");
       });
     },

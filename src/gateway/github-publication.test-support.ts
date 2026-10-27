@@ -22,8 +22,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import type { GitHubPublicationRequesterSnapshot } from "../state/github-publication-requester.js";
 import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
+import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -124,7 +126,8 @@ vi.mock("../agents/git-coauthor-attribution.js", () => ({
   prepareGitCoauthorAttribution: mocks.prepareAttribution,
 }));
 
-vi.mock("../agents/worktrees/service.js", () => ({
+vi.mock("../agents/worktrees/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/worktrees/service.js")>()),
   managedWorktrees: {
     findLiveByOwner: mocks.findWorktree,
     findLiveById: mocks.findWorktreeById,
@@ -311,49 +314,44 @@ export function seedLocalPublication(
     repositoryFingerprint?: string;
     headCommit?: string | null;
     requester?: GitHubPublicationRequesterSnapshot | null;
+    createdAtMs?: number;
   },
 ): void {
   ensureGitHubPublicationSchema(database.db);
+  // Omitted nullable columns retain the schema's NULL defaults.
+  const row = {
+    request_id: params.requestId,
+    idempotency_key: `idempotency-${params.requestId}`,
+    request_digest: `digest-${params.requestId}`,
+    session_id: SESSION_ID,
+    session_key: SESSION_KEY,
+    agent_id: "main",
+    worktree_id: "worktree-1",
+    repository_fingerprint: params.repositoryFingerprint ?? "fingerprint-1",
+    identity_source: "system-configured",
+    identity_profile_id: "ghp_11111111111111111111111111111111",
+    identity_account_id: 42,
+    identity_login: "roboclaw-bot",
+    title: "Resume the publication",
+    body: "Recovered after Gateway restart.",
+    status: params.status,
+    gateway_instance_id: params.headCommit === null ? null : "previous-gateway-instance",
+    repository: params.headCommit === null ? null : "openclaw/openclaw",
+    branch: BRANCH,
+    base_branch: params.headCommit === null ? null : "main",
+    source_head_commit: OLD_HEAD,
+    source_index_tree: WORKSPACE_TREE,
+    workspace_tree: WORKSPACE_TREE,
+    head_commit: params.headCommit === undefined ? NEW_HEAD : params.headCommit,
+    created_at_ms: params.createdAtMs ?? 1_000,
+    updated_at_ms: 1_001,
+  };
+  const columns = Object.keys(row);
   database.db
     .prepare(
-      `INSERT INTO github_publication_requests (
-        request_id, idempotency_key, request_digest, session_id, session_key, agent_id,
-        worktree_id, repository_fingerprint, claim_id, run_id, environment_id, owner_epoch,
-        placement_generation, identity_source, identity_profile_id, identity_account_id,
-        identity_login, title, body, status, gateway_instance_id, repository, branch,
-        base_branch, source_head_commit, source_index_tree, workspace_tree, head_commit,
-        pull_request_url,
-        error_code, next_action, created_at_ms, updated_at_ms, reported_at_ms
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL)`,
+      `INSERT INTO github_publication_requests (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
     )
-    .run(
-      params.requestId,
-      `idempotency-${params.requestId}`,
-      `digest-${params.requestId}`,
-      SESSION_ID,
-      SESSION_KEY,
-      "main",
-      "worktree-1",
-      params.repositoryFingerprint ?? "fingerprint-1",
-      "system-configured",
-      "ghp_11111111111111111111111111111111",
-      42,
-      "roboclaw-bot",
-      "Resume the publication",
-      "Recovered after Gateway restart.",
-      params.status,
-      params.headCommit === null ? null : "previous-gateway-instance",
-      params.headCommit === null ? null : "openclaw/openclaw",
-      BRANCH,
-      params.headCommit === null ? null : "main",
-      OLD_HEAD,
-      WORKSPACE_TREE,
-      WORKSPACE_TREE,
-      params.headCommit === undefined ? NEW_HEAD : params.headCommit,
-      1_000,
-      1_001,
-    );
+    .run(...Object.values(row));
   insertGitHubPublicationSessionLifecycle(database.db, {
     publicationKind: "shared",
     requestId: params.requestId,
@@ -494,13 +492,18 @@ export async function persistClaimPublicationWorkspace() {
   await persistPublicationTestSession(REQUEST.sessionKey);
 }
 
+async function closePublicationTestAgentDatabases() {
+  withEngineStoreAdmission(() => closeOpenClawAgentDatabases());
+  await closeOpenClawAgentDatabasesAsync();
+}
+
 export function installGitHubPublicationTestHarness(
   harnessOptions: { creatorEmail?: string; sandbox?: "required"; realWorktree?: boolean } = {},
 ): void {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterAll(async () => {
       // Agent close releases leases through shared state; drain it before shared state.
-      await closeOpenClawAgentDatabasesAsync();
+      await closePublicationTestAgentDatabases();
       closeOpenClawAgentDatabasesForTest();
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
@@ -693,20 +696,22 @@ export function installGitHubPublicationTestHarness(
     setRuntimeConfigSnapshot({
       agents: { entries: { main: { workspace: "/repo/worktree" } } },
     });
-    for (const sessionKey of [SESSION_KEY, REQUEST.sessionKey]) {
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey },
-        { ...mocks.loadSession(sessionKey).entry, updatedAt: Date.now() },
-      );
-    }
+    withEngineStoreAdmission(() => {
+      for (const sessionKey of [SESSION_KEY, REQUEST.sessionKey]) {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey },
+          { ...mocks.loadSession(sessionKey).entry, updatedAt: Date.now() },
+        );
+      }
+    });
     // Custody remains persisted for policy reads; release its writer lease so
     // receipt-only tests can observe a genuinely cold shared database.
-    await closeOpenClawAgentDatabasesAsync();
+    await closePublicationTestAgentDatabases();
     systemPublicationRequester = (await createSystemGitHubPublicationRequesterFixture()).requester;
   });
 
   afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
+    await closePublicationTestAgentDatabases();
     clearRuntimeConfigSnapshot();
     closeOpenClawAgentDatabasesForTest();
     vi.unstubAllEnvs();

@@ -1,5 +1,6 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
 import type { contract } from "./contract.js";
+import { button, el } from "./page-dom.js";
 import { icon as glyph, type IconName } from "./ui-icons.js";
 
 type Ontology = FeatureOutput<typeof contract, "ontology"> & {
@@ -83,22 +84,6 @@ const relationshipGroups: (Category & { names: string[] })[] = [
     names: [],
   },
 ];
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string) {
-  const node = document.createElement(tag);
-  if (text !== undefined) {
-    node.textContent = text;
-  }
-  if (className) {
-    node.className = className;
-  }
-  return node;
-}
-function button(label: string, action: () => void, className?: string) {
-  const node = el("button", label, className);
-  node.type = "button";
-  node.addEventListener("click", action);
-  return node;
-}
 
 /** A human-facing projection of the shared contract; diagnostics remain in agent operations. */
 export function ontologyView(
@@ -114,7 +99,7 @@ export function ontologyView(
         "p",
         "Your records are still readable, but their types can’t be checked until the ontology is fixed.",
       ),
-      button("Review issues", browseIssues),
+      button("Review issues", browseIssues, ""),
     );
     return root;
   }
@@ -127,7 +112,7 @@ export function ontologyView(
         "span",
         `${data.totalIssues} ${data.totalIssues === 1 ? "issue needs" : "issues need"} attention in this vault.`,
       ),
-      button("Review issues", browseIssues),
+      button("Review issues", browseIssues, ""),
     );
     root.append(notice);
   }
@@ -137,8 +122,8 @@ export function ontologyView(
   switcher.setAttribute("aria-label", "Ontology vocabulary");
   let mode: "page" | "relationship" = "page",
     selected = "all";
-  const pageButton = button("Page types", () => switchMode("page")),
-    relationshipButton = button("Relationships", () => switchMode("relationship"));
+  const pageButton = button("Page types", () => switchMode("page"), ""),
+    relationshipButton = button("Relationships", () => switchMode("relationship"), "");
   switcher.append(pageButton, relationshipButton);
   controls.append(switcher);
   const layout = el("div", undefined, "knowledge-ontology-layout"),
@@ -215,7 +200,7 @@ export function ontologyView(
     if (d.recordCount) {
       const records = el("div", undefined, "knowledge-type-records");
       for (const record of d.records ?? []) {
-        records.append(button(record.title, () => openRecord(record.id)));
+        records.append(button(record.title, () => openRecord(record.id), ""));
       }
       if (d.recordsTruncated) {
         records.append(
@@ -259,10 +244,14 @@ export function ontologyView(
       const count = definitions.filter(
         (d) => group.id === "all" || categoryOf(d) === group.id,
       ).length;
-      const control = button("", () => {
-        selected = group.id;
-        render();
-      });
+      const control = button(
+        "",
+        () => {
+          selected = group.id;
+          render();
+        },
+        "",
+      );
       control.dataset.category = group.id;
       control.setAttribute("aria-pressed", String(selected === group.id));
       const icon = el("span", undefined, "knowledge-category-icon");

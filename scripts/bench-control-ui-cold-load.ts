@@ -8,14 +8,20 @@
 // --viewport desktop|mobile: 1719×1179 (default) or 390×844 browser viewport.
 // --allocations --untraced --live-events: collected-object renderer bytes per event.
 // --streaming-allocations: sampled allocation bytes including collected objects during deltas.
+// --streaming-content tool-code grows an expanded tool card and code fence together.
+// --streaming-panes 2 streams independent sessions in the native split layout.
 // Sampling inflates timings: never compare profiled runs with unprofiled runs.
 // --session-event-duration-ms 135000 --session-event-ancestor-refs extends the native churn.
 // Pair built bundles with --fixture-now-ms and --live-start-at-ms (one run per process).
 // OPENCLAW_CONTROL_UI_BUILD_ID supplies the matching identity outside a Git checkout.
 // --gateway-url uses real Gateway HTTP serving with synthetic bootstrap/RPC fixtures.
-// --gateway-http serves paired bundles through the Gateway HTTP owner on loopback.
+// --gateway-http serves paired bundles, including layout cells, through the Gateway HTTP owner.
 // --first-load skips warm-up and clears client state; external Gateway URL runs stay single-sample.
 // --sidebar-persistent-children keeps expanded rows outside root windows for staggered handoff proof.
+// --boot-route chat|new|sessions|settings selects the measured reload destination.
+// --layout-matrix covers routes, themes, viewports and cold/warm reloads; --runs is per bundle/cell.
+// Repeat --layout-cell mobile:light:chat:cold to isolate cells with their matrix setup intact.
+// --sidebar-presentation adds badges/avatars; --sidebar-presentation-probe records visible waves.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
 // --critical-path-intent-ms 150 includes hover/focus prefetch before route activation.
@@ -26,6 +32,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import { chromium, type Browser, type CDPSession, type Page } from "playwright";
 import { buildSandboxHostPath } from "../src/agents/sandbox-host.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../src/gateway/control-ui-bootstrap-contract.ts";
@@ -39,7 +46,6 @@ import {
   createControlUiMockBootstrapConfig,
   installControlUiMockBootstrapDocument,
   createControlUiMockGatewayInitScript,
-  controlUiSessionPath,
   controlUiSessionUrl,
   controlUiBundledSettingsStorageKey,
   prepareControlUiMockGatewayScenario,
@@ -50,6 +56,9 @@ import {
 import { navigationDrawerToggle } from "../ui/src/test-helpers/control-ui-navigation.ts";
 import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
+import { sidebarPresentationProbe } from "../ui/src/test-helpers/control-ui-sidebar-presentation-probe.test-support.ts";
+import { installTeamScaleSidebarPresentation } from "../ui/src/test-helpers/control-ui-sidebar-presentation.test-support.ts";
+import { revealSidebarTarget } from "../ui/src/test-helpers/control-ui-sidebar-window.ts";
 import {
   createControlUiStreamingReply,
   createStreamingReplyProbeInitScript,
@@ -63,6 +72,7 @@ import {
 } from "./lib/control-ui-bench-warm-state.ts";
 import {
   compareCpuTables,
+  controlUiScriptAssetUrl,
   formatCpuTables,
   medianCpuTables,
   readCpuProfileReport,
@@ -98,6 +108,7 @@ import {
   type InteractionStyleSheet,
 } from "./lib/control-ui-interaction-trace.ts";
 import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
+import { installPaneChromeProbe } from "./lib/control-ui-pane-chrome-probe.ts";
 import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
 import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,
@@ -248,12 +259,21 @@ function summarizeSidebarWindows(
 
 const { values } = parseArgs({
   options: {
+    "new-session-first-token": { type: "boolean", default: false },
+    "new-session-token-ms": { type: "string", default: "1500" },
+    "new-session-worker": { type: "boolean", default: false },
+    "new-session-filmstrip": { type: "boolean", default: false },
+    "new-session-list-mode": { type: "string", default: "normal" },
     "cpu-profile": { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
     "cpu-profile-compare": { type: "string" },
     "thread-cpu-time": { type: "boolean", default: false },
+    "no-owner-probes": { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
+    "row-facts": { type: "boolean", default: false },
+    "pane-chrome-probe": { type: "boolean", default: false },
+    "archived-session": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
@@ -262,6 +282,10 @@ const { values } = parseArgs({
     "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
     "filmstrip-only": { type: "boolean", default: false },
+    "layout-matrix": { type: "boolean", default: false },
+    "layout-route": { type: "string", multiple: true, default: [] },
+    "layout-cell": { type: "string", multiple: true, default: [] },
+    "layout-start": { type: "string", default: "0" },
     "hold-boot-assets": { type: "boolean", default: false },
     "history-validator-delay-ms": { type: "string", default: "0" },
     "dashboard-paint-marker": { type: "boolean", default: false },
@@ -273,6 +297,8 @@ const { values } = parseArgs({
     "streaming-allocations": { type: "boolean", default: false },
     "streaming-burst-size": { type: "string", default: "1" },
     "streaming-rate": { type: "string", default: "30" },
+    "streaming-content": { type: "string", default: "markdown" },
+    "streaming-panes": { type: "string", default: "1" },
     "session-switch": { type: "boolean", default: false },
     "critical-path": { type: "boolean", default: false },
     "critical-path-route": { type: "string", multiple: true, default: [] },
@@ -282,6 +308,9 @@ const { values } = parseArgs({
     "sidebar-list-churn": { type: "boolean", default: false },
     "sidebar-live-churn": { type: "boolean", default: false },
     "sidebar-avatars": { type: "boolean", default: false },
+    "transcript-avatars": { type: "boolean", default: false },
+    "sidebar-presentation": { type: "boolean", default: false },
+    "sidebar-presentation-probe": { type: "boolean", default: false },
     "sidebar-expanded": { type: "boolean", default: false },
     "sidebar-persistent-children": { type: "boolean", default: false },
     "omit-hello-self-presence": { type: "boolean", default: false },
@@ -322,6 +351,9 @@ const { values } = parseArgs({
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
   },
 });
+if (values["pane-chrome-probe"] && !values["warm-reload"]) {
+  throw new Error("pane-chrome-probe requires warm-reload for the first transcript paint boundary");
+}
 if (values["selector-stats"] && (values.untraced || values["filmstrip-only"])) {
   throw new Error("selector-stats requires tracing; exclude untraced and filmstrip-only");
 }
@@ -330,6 +362,9 @@ if (values["streaming-reply"] && values["live-events"]) {
 }
 if (values["streaming-allocations"] && !values["streaming-reply"]) {
   throw new Error("streaming-allocations requires streaming-reply");
+}
+if (values["sidebar-presentation-probe"] && !values["sidebar-presentation"]) {
+  throw new Error("sidebar-presentation-probe requires sidebar-presentation");
 }
 if (values["sidebar-list-churn"] && !values["live-events"]) {
   throw new Error("sidebar-list-churn requires live-events");
@@ -389,7 +424,61 @@ const baselineCpu = values["cpu-profile-compare"]
     ])
   : undefined;
 const cpuRuns: Record<string, ColdLoadCpuTables[]> = {};
-const runs = Number(values.runs);
+const layoutStart = Number(values["layout-start"]);
+if (
+  !Number.isInteger(layoutStart) ||
+  layoutStart < 0 ||
+  layoutStart > 31 ||
+  values["layout-cell"].some(
+    (cell) =>
+      !/^(desktop|mobile):(light|dark):(chat|new|sessions|settings):(cold|warm)$/u.test(cell),
+  ) ||
+  values["layout-route"].some((route) => !["chat", "new", "sessions", "settings"].includes(route))
+) {
+  throw new Error(
+    "Expected layout-start 0–31, a known layout-route, and layout-cell viewport:theme:route:cold|warm",
+  );
+}
+if (
+  values["layout-matrix"] &&
+  (values["first-load"] || values["critical-path"] || values["gateway-url"])
+) {
+  throw new Error(
+    "layout-matrix owns cold/warm setup and route readiness; exclude first-load, critical-path and external gateway-url modes",
+  );
+}
+const layoutCells = values["layout-matrix"]
+  ? (["desktop", "mobile"] as const)
+      .flatMap((cellViewport) =>
+        (["light", "dark"] as const).flatMap((cellColorScheme) =>
+          (["chat", "new", "sessions", "settings"] as const).flatMap((route) =>
+            [true, false].map((cold) => ({
+              viewport: cellViewport,
+              colorScheme: cellColorScheme,
+              route,
+              cold,
+            })),
+          ),
+        ),
+      )
+      .filter(
+        ({ route }) => !values["layout-route"].length || values["layout-route"].includes(route),
+      )
+      .filter(
+        (cell) =>
+          !values["layout-cell"].length ||
+          values["layout-cell"].includes(
+            `${cell.viewport}:${cell.colorScheme}:${cell.route}:${cell.cold ? "cold" : "warm"}`,
+          ),
+      )
+      .slice(layoutStart)
+  : [];
+if (values["layout-matrix"] && !layoutCells.length) {
+  throw new Error("Layout filters and layout-start must leave at least one matrix cell");
+}
+const layoutVariants = values["layout-matrix"] ? values["compare-bundle-dir"].length + 1 : 1;
+const requestedRuns = Number(values.runs);
+const runs = requestedRuns * (layoutCells.length || 1) * layoutVariants;
 const gatewayUrl = values["gateway-url"] ? new URL(values["gateway-url"]) : undefined;
 const firstLoad = values["first-load"];
 if (
@@ -399,10 +488,20 @@ if (
   throw new Error("hold-boot-assets requires one first-load filmstrip-only run without comparison");
 }
 const bootRoute = values["boot-route"];
-if (bootRoute !== "chat" && bootRoute !== "new") {
-  throw new Error("Expected boot-route chat or new");
+if (
+  bootRoute !== "chat" &&
+  bootRoute !== "new" &&
+  bootRoute !== "sessions" &&
+  bootRoute !== "settings"
+) {
+  throw new Error("Expected boot-route chat, new, sessions or settings");
 }
 const navigationRoutes: CriticalPathRoute[] = [];
+// Cold New has no Chat owner to complete registration, so omit the unused WeakMap shim.
+const captureOwnerRegistration = !values["no-owner-probes"] && (!firstLoad || bootRoute !== "new");
+const ownerProbes =
+  captureOwnerRegistration && !cpuProfile && !allocations && !values["session-event-churn"];
+const sidebarCounters = captureOwnerRegistration && !cpuProfile;
 for (const route of values["critical-path-route"]) {
   const matched = criticalPathRoutes.find((candidate) => candidate === route);
   if (!matched || navigationRoutes.includes(matched)) {
@@ -420,21 +519,36 @@ if (!Number.isFinite(criticalPathIntentMs) || criticalPathIntentMs < 0) {
 if (values["critical-path-intent-ms"] !== undefined && !values["critical-path"]) {
   throw new Error("critical-path-intent-ms requires critical-path");
 }
-if (values["critical-path"] && !navigationRoutes.length && bootRoute !== "new") {
+if (values["critical-path"] && !navigationRoutes.length && bootRoute === "chat") {
   navigationRoutes.push(...criticalPathRoutes);
 }
 if (
-  bootRoute === "new" &&
-  (!firstLoad ||
-    values["live-events"] ||
+  bootRoute !== "chat" &&
+  (values["live-events"] ||
     values["session-switch"] ||
     values["streaming-reply"] ||
     values["overlay-probe"])
 ) {
-  throw new Error("boot-route new requires first-load without chat interaction phases");
+  throw new Error("Non-chat boot routes exclude chat interaction phases");
 }
+const {
+  latencyProfile,
+  downloadKbps: profileDownloadKbps,
+  latencyMs,
+  frameGapMs,
+  connectNotBeforeMs,
+  methodLatencyMs,
+  sidebarQueryLatencyMs,
+} = resolveColdLoadLatency({
+  profile: values["latency-profile"],
+  latencyMs: values["latency-ms"],
+  frameGapMs: values["frame-gap-ms"],
+  connectNotBeforeMs: values["connect-not-before-ms"],
+  methodLatencyMs: values["method-latency-ms"],
+  sidebarQueryLatencyMs: values["sidebar-query-latency-ms"],
+});
 const networkLatencyMs = Number(values["network-latency-ms"] ?? 0);
-const downloadKbps = Number(values["download-kbps"] ?? 0);
+const downloadKbps = Number(values["download-kbps"] ?? profileDownloadKbps);
 const cpuThrottle = Number(values["cpu-throttle"] ?? 1);
 if (
   (gatewayUrl &&
@@ -462,21 +576,7 @@ if (
     "gateway-url requires an HTTP origin, bundle-dir and one first-load run without comparison; gateway-http requires bundle-dir without gateway-url; first-load requires sidebar-view=sessions without warm-reload; network limits must be nonnegative and cpu-throttle at least 1",
   );
 }
-const {
-  latencyProfile,
-  latencyMs,
-  frameGapMs,
-  connectNotBeforeMs,
-  methodLatencyMs,
-  sidebarQueryLatencyMs,
-} = resolveColdLoadLatency({
-  profile: values["latency-profile"],
-  latencyMs: values["latency-ms"],
-  frameGapMs: values["frame-gap-ms"],
-  connectNotBeforeMs: values["connect-not-before-ms"],
-  methodLatencyMs: values["method-latency-ms"],
-  sidebarQueryLatencyMs: values["sidebar-query-latency-ms"],
-});
+
 const historyValidatorDelayMs = Number(values["history-validator-delay-ms"]);
 if (
   !Number.isFinite(historyValidatorDelayMs) ||
@@ -498,6 +598,17 @@ const transcriptMessages =
   values["transcript-messages"] === undefined ? undefined : Number(values["transcript-messages"]);
 const streamingBurstSize = Number(values["streaming-burst-size"]);
 const streamingRate = Number(values["streaming-rate"]);
+const streamingContent = values["streaming-content"];
+const streamingPanes = Number(values["streaming-panes"]);
+if (streamingContent !== "markdown" && streamingContent !== "tool-code") {
+  throw new Error("streaming-content must be markdown or tool-code");
+}
+if (streamingPanes !== 1 && streamingPanes !== 2) {
+  throw new Error("streaming-panes must be 1 or 2");
+}
+if ((streamingContent !== "markdown" || streamingPanes !== 1) && !values["streaming-reply"]) {
+  throw new Error("streaming-content and streaming-panes require streaming-reply");
+}
 if (!Number.isFinite(streamingRate) || streamingRate <= 0) {
   throw new Error("streaming-rate must be a positive number of deltas per second");
 }
@@ -530,9 +641,9 @@ if (
   );
 }
 if (
-  !Number.isInteger(runs) ||
-  runs < 1 ||
-  runs > (values["compare-bundle-dir"].length ? 60 : 20) ||
+  !Number.isInteger(requestedRuns) ||
+  requestedRuns < 1 ||
+  requestedRuns > (values["compare-bundle-dir"].length ? 60 : 20) ||
   !Number.isFinite(latencyMs) ||
   latencyMs < 0 ||
   !Number.isFinite(connectNotBeforeMs) ||
@@ -609,6 +720,7 @@ const server =
       ? await startBuiltControlUiE2eServer(bundleDir, undefined, port)
       : await startProductionControlUiE2eServer(bundleDir, buildId);
 const baseUrl = gatewayUrl?.origin ?? gatewayHttpServer?.baseUrl ?? server!.baseUrl;
+const coldResetUrl = new URL("/__control-ui-bench-cold-reset__", baseUrl).href;
 const usesGatewayHttp = Boolean(gatewayUrl || gatewayHttpServer);
 const comparisonBundleDirs = values["compare-bundle-dir"].map((directory) =>
   path.resolve(directory),
@@ -620,22 +732,25 @@ async function selectComparisonBundle(index: number, page?: Page) {
   if (!comparisonBundleDirs.length || activeBundle === index) {
     return;
   }
+  const nextBuildId = explicitBuildId ?? (await readBundleBuildId(bundleSlots[index]!));
+  if (page) {
+    await page.evaluate((id) => {
+      const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+      if (!gateway) {
+        throw new Error("Mock Gateway is not installed");
+      }
+      gateway.setServerBuildId(id);
+    }, nextBuildId);
+    // Retire lazy imports from the old page before its assets leave the served root.
+    await page.goto("about:blank");
+  }
   if (gatewayHttpServer) {
     await gatewayHttpServer.selectBuild(bundleSlots[index]!);
   } else {
     await server!.replaceBuild(bundleSlots[index]!, bundleSlots[activeBundle]!);
   }
   activeBundle = index;
-  buildId =
-    explicitBuildId ??
-    (await readBundleBuildId(gatewayHttpServer ? bundleSlots[index]! : bundleDir));
-  await page?.evaluate((id) => {
-    const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-    if (!gateway) {
-      throw new Error("Mock Gateway is not installed");
-    }
-    gateway.setServerBuildId(id);
-  }, buildId);
+  buildId = nextBuildId;
 }
 const dashboardFont = values["dashboard-widget"]
   ? await readFile("ui/public/fonts/space-grotesk-latin.woff2")
@@ -670,6 +785,8 @@ const fixture = createControlUiTeamScaleFixture({
   sidebarListChurn: values["sidebar-list-churn"],
   sidebarLiveChurn: values["sidebar-live-churn"],
   sidebarAvatars: values["sidebar-avatars"],
+  transcriptAvatars: values["transcript-avatars"],
+  sidebarPresentation: values["sidebar-presentation"],
   sidebarPersistentChildren: values["sidebar-persistent-children"],
   sessionEventChurn: values["session-event-churn"],
   sessionEventDurationMs,
@@ -680,17 +797,48 @@ const fixture = createControlUiTeamScaleFixture({
     : undefined,
   closedMenuMembers: values["closed-menu-members"],
   largeSnapshot: values["large-snapshot"],
+  rowFacts: values["row-facts"],
   offRosterSession: values["off-roster-route"],
+  archivedSession: values["archived-session"],
   transcriptMessages,
   dashboardWidgetFontUrl: dashboardFont
     ? `http://127.0.0.1:${address.port}${dashboardFontPath}`
     : undefined,
-  historyStateReceipt: historyValidatorDelayMs > 0,
   dashboardPaintMarker: values["dashboard-paint-marker"],
 });
 const streamingReply = values["streaming-reply"]
-  ? createControlUiStreamingReply(streamingRate)
+  ? createControlUiStreamingReply(streamingRate, streamingContent)
   : undefined;
+const streamingSessions = streamingReply
+  ? Array.from({ length: streamingPanes }, (_, index) => ({
+      sessionKey: index === 0 ? fixture.selectedSessionKey : fixture.pinnedKeys[1]!,
+      runId: `${fixture.scenario.inFlightRun!.runId}${index === 0 ? "" : "-pane-2"}`,
+    }))
+  : [];
+const streamingSplitLayout =
+  streamingPanes === 2
+    ? {
+        activePaneId: "streaming-pane-1",
+        columnWeights: [0.5, 0.5],
+        columns: streamingSessions.map((session, index) => ({
+          id: `streaming-column-${index + 1}`,
+          paneWeights: [1],
+          panes: [{ id: `streaming-pane-${index + 1}`, sessionKey: session.sessionKey }],
+        })),
+      }
+    : undefined;
+if (streamingSplitLayout) {
+  for (const session of streamingSessions) {
+    Object.assign(
+      fixture.scenario.sessions!.find((row) => row.key === session.sessionKey)!,
+      {
+        hasActiveRun: true,
+        status: "running",
+        activeRunIds: [session.runId],
+      },
+    );
+  }
+}
 const extraInitScripts = await Promise.all(
   values["init-script"].map((file) => readFile(file, "utf8")),
 );
@@ -720,16 +868,35 @@ try {
   const settingsCoreSchema = values["settings-core-schema"]
     ? (await import("../src/config/schema.ts")).buildConfigSchemaCore()
     : undefined;
+  const agentsResponse = fixture.scenario.methodResponses?.["agents.list"];
+  const workerAgents =
+    values["new-session-worker"] && agentsResponse && typeof agentsResponse === "object"
+      ? {
+          ...agentsResponse,
+          sessionPlacement: { requiredProfile: { id: "l247-worker", providerId: "crabbox" } },
+        }
+      : undefined;
   const prepared = await prepareControlUiMockGatewayScenario({
     ...fixture.scenario,
-    ...(settingsCoreSchema
+    ...(streamingSplitLayout
       ? {
-          methodResponses: {
-            ...fixture.scenario.methodResponses,
-            "config.schema": settingsCoreSchema,
-          },
+          sessionTranscripts: Object.fromEntries(
+            streamingSessions.map((session) => [
+              session.sessionKey,
+              {
+                messages: fixture.scenario.historyMessages!,
+                inFlightRun: { ...fixture.scenario.inFlightRun!, runId: session.runId },
+              },
+            ]),
+          ),
         }
       : {}),
+    subscriptionInitialHistory: true,
+    methodResponses: {
+      ...fixture.scenario.methodResponses,
+      ...(workerAgents ? { "agents.list": workerAgents } : {}),
+      ...(settingsCoreSchema ? { "config.schema": settingsCoreSchema } : {}),
+    },
     terminalEnabled,
     serverBuildId: buildId,
     serverVersion: JSON.parse(await readFile("package.json", "utf8")).version,
@@ -764,6 +931,7 @@ try {
         firstEnabledComposerMs: null as number | null,
         firstComposerFocusMs: null as number | null,
         firstNonemptyTranscriptMs: null as number | null,
+        firstRouteReadyMs: null as number | null,
         fontLoadEventsMs: [] as number[],
         staticShellGeometry: null as Record<string, unknown> | null,
         firstLiveShellGeometry: null as Record<string, unknown> | null,
@@ -772,6 +940,7 @@ try {
           value: number;
           hadRecentInput: boolean;
           sources: Array<{
+            nodeName: string | null;
             element: string | null;
             previousRect: unknown;
             currentRect: unknown;
@@ -806,14 +975,17 @@ try {
             atMs: entry.startTime,
             value,
             hadRecentInput,
-            sources: sources.map(({ node, previousRect, currentRect }) => ({
-              element:
-                node instanceof Element
-                  ? `${node.localName}${node.id ? `#${node.id}` : ""}.${[...node.classList].join(".")}`
+            sources: sources.map(({ node, previousRect, currentRect }) => {
+              const element = node instanceof Element ? node : node?.parentElement;
+              return {
+                nodeName: node?.nodeName ?? null,
+                element: element
+                  ? `${element.localName}${element.id ? `#${element.id}` : ""}.${[...element.classList].join(".")}`
                   : null,
-              previousRect: previousRect.toJSON(),
-              currentRect: currentRect.toJSON(),
-            })),
+                previousRect: previousRect.toJSON(),
+                currentRect: currentRect.toJSON(),
+              };
+            }),
           });
           if (!hadRecentInput) {
             milestones.nonRecentInputShiftSum += value;
@@ -863,6 +1035,35 @@ try {
           }),
         );
       const sample = () => {
+        const route = location.pathname.split("/")[1] || measuredRoute;
+        const readySelector =
+          route === "new"
+            ? ".new-session-page__message"
+            : route === "sessions"
+              ? ".sessions-toolbar__refresh"
+              : route === "settings"
+                ? "#settings-font-chat"
+                : ".chat-pane-cache__pane--active .chat-virtual-row .chat-text";
+        const readyControl = document.querySelector(readySelector);
+        const activePane = document.querySelector(".chat-pane-cache__pane--active");
+        const routeDataReady =
+          route === "chat" || route === "dashboard"
+            ? activePane &&
+              Reflect.get(activePane, "transcriptReady") === true &&
+              activePane.querySelector("textarea:not(:disabled)")
+            : route === "sessions"
+              ? document.querySelector("openclaw-sessions-page .session-link")
+              : readyControl;
+        if (
+          milestones.firstRouteReadyMs === null &&
+          readyControl &&
+          routeDataReady &&
+          visible(routeDataReady) &&
+          visible(readyControl) &&
+          !readyControl.matches(":disabled")
+        ) {
+          milestones.firstRouteReadyMs = performance.now();
+        }
         const staticShell = document.querySelector("#openclaw-boot-shell");
         if (milestones.firstStaticShellMs === null && staticShell && visible(staticShell)) {
           milestones.firstStaticShellMs = performance.now();
@@ -878,15 +1079,14 @@ try {
           milestones.firstLiveShellGeometry === null &&
           shell &&
           visible(shell) &&
-          chatInput &&
-          visible(chatInput)
+          (chatInput ? visible(chatInput) : readyControl && visible(readyControl))
         ) {
           milestones.firstLiveShellMs = performance.now();
           milestones.firstLiveShellGeometry = geometry(shell, {
             sidebar: ".shell-nav",
-            header: ".chat-pane__header, .agent-chat__header--mobile",
-            transcript: ".chat-thread",
-            composer: ".agent-chat__input",
+            header: ".chat-pane__header, .agent-chat__header--mobile, .content-header, .topbar",
+            transcript: ".chat-thread, main.content",
+            composer: ".agent-chat__input, .new-session-page__message",
           });
         }
         if (
@@ -919,9 +1119,11 @@ try {
           milestones.firstNonemptyTranscriptMs = performance.now();
         }
         if (
-          milestones.firstShellInteractiveMs === null ||
-          milestones.firstEnabledComposerMs === null ||
-          (measuredRoute === "chat" && milestones.firstNonemptyTranscriptMs === null)
+          milestones.firstRouteReadyMs === null ||
+          milestones.firstLiveShellGeometry === null ||
+          (milestones.firstShellInteractiveMs === null &&
+            shell &&
+            !shell.classList.contains("shell--mobile-nav"))
         ) {
           requestAnimationFrame(sample);
         }
@@ -1053,6 +1255,7 @@ try {
     if (
       values["sidebar-live-churn"] ||
       values["sidebar-avatars"] ||
+      values["sidebar-presentation"] ||
       values["closed-menu-members"]
     ) {
       await page.route("**/api/users/*/avatar?*", async (route) => {
@@ -1068,14 +1271,20 @@ try {
         }
         return route.fulfill(response);
       });
+      if (values["sidebar-presentation"]) {
+        await page.route("**/avatar/*", (route) => {
+          const asset = fixture.assets.get(new URL(route.request().url()).pathname);
+          return asset ? route.fulfill(asset) : route.fallback();
+        });
+      }
     }
   }
   await page.addInitScript(
-    ({ key, pins, mode, bootstrap, bootstrapAttribute, fixtureUrl }) => {
+    ({ key, pins, mode, bootstrap, bootstrapAttribute, fixtureUrl, splitLayout }) => {
       if (window !== window.top || location.protocol === "about:") {
         return;
       }
-      if (fixtureUrl) {
+      if (fixtureUrl && location.pathname === "/chat") {
         history.replaceState(null, "", fixtureUrl);
       }
       if (bootstrap) {
@@ -1096,13 +1305,15 @@ try {
           observer.observe(document, { childList: true });
         }
       }
-      if (!localStorage.getItem(key)) {
+      if (!localStorage.getItem(key) || splitLayout) {
         localStorage.setItem(
           key,
           JSON.stringify({
+            ...(splitLayout ? JSON.parse(localStorage.getItem(key) ?? "{}") : {}),
             sidebarAgentsMode: mode,
             railShortcuts: pins,
             navigationByProfile: { "team-person-001": { railShortcuts: pins } },
+            ...(splitLayout ? { chatSplitLayout: splitLayout } : {}),
           }),
         );
       }
@@ -1110,15 +1321,14 @@ try {
     {
       key: controlUiBundledSettingsStorageKey(baseUrl),
       fixtureUrl: usesGatewayHttp
-        ? bootRoute === "new"
-          ? new URL("/new", baseUrl).href
-          : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face)
+        ? controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face)
         : null,
       bootstrap: usesGatewayHttp
         ? JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario))
         : null,
       bootstrapAttribute: CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
       pins: fixture.sidebarEntries,
+      splitLayout: streamingSplitLayout,
       mode:
         !values["session-event-ancestor-refs"] &&
         (values["sidebar-list-churn"] ||
@@ -1128,12 +1338,21 @@ try {
           : "chip",
     },
   );
-  const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
+  const paneChromeScript = values["pane-chrome-probe"]
+    ? `const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome);`
+    : "";
+  const warmProbes =
+    values["warm-reload"] || firstLoad
+      ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"] })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
+      : "";
+  const presentationProbes = fixture.sidebarPresentation
+    ? `\n(${installTeamScaleSidebarPresentation.toString()})(${JSON.stringify(fixture.sidebarPresentation)});${values["sidebar-presentation-probe"] ? `\n(${sidebarPresentationProbe.toString()})();` : ""}`
+    : "";
   const boardTickets = values["dashboard-widget"]
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !allocations && !values["session-event-churn"], sidebarCounters: !cpuProfile })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] || latencyProfile === "live-capped" ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes}${presentationProbes} })();`,
   });
   if (values["critical-path"]) {
     await page.addInitScript({
@@ -1142,18 +1361,35 @@ try {
   }
   // Fetch the real public document; the init script selects the synthetic session.
   // Session-entry authorization is outside this static-delivery benchmark.
-  const url = usesGatewayHttp
-    ? new URL(bootRoute === "new" ? "/new" : "/chat", baseUrl).href
-    : bootRoute === "new"
-      ? new URL("/new", baseUrl).href
-      : values["full-uuid-route"]
-        ? new URL(
-            `/${face}/main/${fixture.selectedSessionKey.split(":").at(-1)!.replaceAll("-", "")}`,
-            baseUrl,
-          ).href
-        : values["short-route"]
-          ? new URL(controlUiSessionPath(fixture.selectedSessionKey, "", face), baseUrl).href
-          : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face);
+  const shortSessionUrl = (namespace: "chat" | "dashboard") => {
+    const pathname = buildControlUiSessionPath({
+      namespace,
+      sessionKey: fixture.selectedSessionKey,
+      fallbackAgentId: "main",
+      shortIdLength: values["off-roster-route"] ? 8 : 32,
+    });
+    if (!pathname) {
+      throw new Error("Fixture session has no short route");
+    }
+    return new URL(pathname, baseUrl).href;
+  };
+  const chatDashboardUrl = values["short-route"]
+    ? shortSessionUrl("chat")
+    : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, "chat");
+  const chatUrl = usesGatewayHttp
+    ? new URL("/chat", baseUrl).href
+    : values["full-uuid-route"]
+      ? new URL(
+          `/${face}/main/${fixture.selectedSessionKey.split(":").at(-1)!.replaceAll("-", "")}`,
+          baseUrl,
+        ).href
+      : values["short-route"]
+        ? shortSessionUrl(face)
+        : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face);
+  const url =
+    bootRoute === "chat"
+      ? chatUrl
+      : new URL(bootRoute === "settings" ? "/settings/appearance" : `/${bootRoute}`, baseUrl).href;
   let releaseBootAssets: (() => void) | undefined;
   const heldBootAssets: Array<{ url: string; type: string }> = [];
   if (values["hold-boot-assets"]) {
@@ -1169,12 +1405,6 @@ try {
       await route.fallback();
     });
   }
-  const coldResetUrl = new URL("/__control-ui-bench-cold-reset__", baseUrl).href;
-  if (firstLoad) {
-    await page.route(coldResetUrl, (route) =>
-      route.fulfill({ body: "", contentType: "text/html" }),
-    );
-  }
   async function resetColdState(cdp: CDPSession, bundleIndex: number) {
     // Retire pagehide writers before clearing the measured origin's persistent state.
     await page.goto("about:blank");
@@ -1185,39 +1415,50 @@ try {
     await cdp.send("Network.clearBrowserCache");
     await selectComparisonBundle(bundleIndex);
     // The empty same-origin document seeds only the existing mock's build identity.
+    await page.route(coldResetUrl, (route) =>
+      route.fulfill({ body: "", contentType: "text/html" }),
+    );
     await page.goto(coldResetUrl);
+    await page.unroute(coldResetUrl);
     await page.evaluate((id) => {
       localStorage.clear();
       sessionStorage.clear();
       Reflect.get(window, "openclawControlUiE2eGateway").setServerBuildId(id);
     }, buildId);
   }
-  async function settle() {
+  async function settle(route = bootRoute) {
     try {
-      if (bootRoute === "new") {
-        await page.locator(".new-session-page__message").waitFor();
-        await page.waitForFunction(() => {
+      const mobile = (page.viewportSize()?.width ?? viewport.width) <= 900;
+      if (route !== "chat") {
+        const selector =
+          route === "new"
+            ? ".new-session-page__message"
+            : route === "sessions"
+              ? ".sessions-toolbar__refresh"
+              : "#settings-font-chat";
+        await page.locator(selector).waitFor();
+        await page.waitForFunction((readySelector) => {
           const state = Reflect.get(window, "__coldLoad")?.read();
-          const composer = document.querySelector<HTMLTextAreaElement>(
-            ".new-session-page__message",
-          );
+          const control = document.querySelector(readySelector);
+          const readyAt = Reflect.get(window, "__coldLoadPresentation")?.firstRouteReadyMs;
           return (
-            composer &&
-            !composer.disabled &&
+            control?.checkVisibility() &&
+            !control.matches(":disabled") &&
+            typeof readyAt === "number" &&
             state &&
             !state.pending &&
             !state.queued &&
             state.idleMs > 750
           );
-        });
+        }, selector);
         return;
       }
       await page
-        .locator(viewportName === "mobile" ? ".agent-chat__header--mobile" : ".chat-pane__header")
+        .locator(mobile ? ".agent-chat__header--mobile" : ".chat-pane__header")
         .first()
         .waitFor();
       // A closed mobile drawer parks its sidebar rows; they are not part of responsive boot.
-      if (viewportName === "desktop") {
+      if (!mobile) {
         if (values["session-event-ancestor-refs"]) {
           await page
             .locator(
@@ -1300,16 +1541,37 @@ try {
     }
     if (fixture.sidebarPersistentChildren) {
       const { parentKey, childKeys } = fixture.sidebarPersistentChildren;
-      const toggle = page.locator(`[data-child-session-toggle="${parentKey}"]`);
+      const reveal = async (selector: string) => {
+        const target = page.locator(selector);
+        await revealSidebarTarget(page.locator(".sidebar-shell__body"), target, 30_000);
+        return target;
+      };
+      const toggle = await reveal(`[data-child-session-toggle="${parentKey}"]`);
       if ((await toggle.getAttribute("aria-expanded")) !== "true") {
         await toggle.click();
       }
+      await page.waitForFunction(
+        (expectedParent) =>
+          Reflect.get(window, "__coldLoad")
+            .read()
+            .rpcs.some(
+              (rpc: { method: string; params: { spawnedBy?: string } }) =>
+                rpc.method === "sessions.list" && rpc.params.spawnedBy === expectedParent,
+            ),
+        parentKey,
+      );
       for (const key of childKeys) {
-        await page.locator(`.sidebar-session-content [data-session-key="${key}"]`).waitFor();
+        await reveal(`.sidebar-session-content [data-session-key="${key}"]`);
       }
     }
-    const expansionSaved = async (expanded: boolean) => {
-      type SavedRow = { key: string; children?: SavedRow[] };
+    const expansionSaved = async ({
+      expanded,
+      persistentChildren,
+    }: {
+      expanded: boolean;
+      persistentChildren?: { parentKey: string; childKeys: string[] };
+    }) => {
+      type SavedRow = { key: string; children?: SavedRow[]; childrenDisplayMode?: string };
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
         const request = indexedDB.open("openclaw-chat-snapshots");
         request.addEventListener("success", () => resolve(request.result), { once: true });
@@ -1322,7 +1584,10 @@ try {
       try {
         const records = await new Promise<
           Array<{
-            model: { sections: Array<{ visibleLimit: number; rows: SavedRow[] }> };
+            model: {
+              pinnedSessions: SavedRow[];
+              sections: Array<{ visibleLimit: number; rows: SavedRow[] }>;
+            };
           }>
         >((resolve, reject) => {
           const request = database
@@ -1341,15 +1606,24 @@ try {
         ].map((row) => row.getAttribute("data-session-key"));
         return records.some(({ model }) => {
           const savedKeys = new Set<string>();
+          let parentExpanded = !persistentChildren;
           const collect = (rows: SavedRow[]) => {
             for (const row of rows) {
               savedKeys.add(row.key);
+              if (row.key === persistentChildren?.parentKey) {
+                parentExpanded =
+                  row.childrenDisplayMode === "expanded" ||
+                  row.childrenDisplayMode === "expanded-fully";
+              }
               collect(row.children ?? []);
             }
           };
+          collect(model.pinnedSessions);
           collect(model.sections.flatMap((section) => section.rows));
           return (
             (!expanded || model.sections.some(({ visibleLimit }) => visibleLimit > 10)) &&
+            parentExpanded &&
+            (persistentChildren?.childKeys.every((key) => savedKeys.has(key)) ?? true) &&
             visibleKeys.every((key) => key !== null && savedKeys.has(key))
           );
         });
@@ -1358,7 +1632,7 @@ try {
       }
     };
     // Sticky live rows can exceed ten without an explicit Show more selection.
-    if (values["sidebar-expanded"] && !(await page.evaluate(expansionSaved, true))) {
+    if (values["sidebar-expanded"] && !(await page.evaluate(expansionSaved, { expanded: true }))) {
       await page
         .locator(".sidebar-session-content .sidebar-session-pagination__button")
         .filter({ hasText: "Show more" })
@@ -1367,19 +1641,41 @@ try {
     }
     // waitForFunction treats an async predicate's Promise as truthy.
     const deadline = Date.now() + 30_000;
-    while (!(await page.evaluate(expansionSaved, values["sidebar-expanded"]))) {
+    while (
+      !(await page.evaluate(expansionSaved, {
+        expanded: values["sidebar-expanded"],
+        persistentChildren: fixture.sidebarPersistentChildren,
+      }))
+    ) {
       if (Date.now() >= deadline) {
         throw new Error("Expanded sidebar membership was not persisted");
       }
       await page.evaluate(() => new Promise(requestAnimationFrame));
     }
+    await page.locator(".sidebar-shell__body").evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await page
+      .locator(`.sidebar-session-content [data-session-key="${fixture.pinnedKeys[1]}"]`)
+      .waitFor();
   }
   const warmStates: Array<Awaited<ReturnType<typeof persistColdLoadWarmState>>["storage"]> = [];
   const snapshotSaves: Array<
     Omit<Awaited<ReturnType<typeof persistColdLoadWarmState>>, "storage">
   > = [];
+  const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
+    sessionKey: fixture.selectedSessionKey,
+    rowFacts: values["row-facts"],
+    offRosterSession: values["off-roster-route"],
+    sidebarView: sidebarView === "online" ? "online" : "sessions",
+  };
   if (!firstLoad) {
-    await page.goto(url);
+    await page.goto(chatUrl);
+    const ownerFilter = values["session-event-ancestor-refs"]
+      ? "all"
+      : fixture.sidebarPersistentChildren
+        ? `owner:${fixture.sidebarListInput.viewerProfileId}`
+        : "involving-me";
     try {
       if (viewportName === "mobile") {
         await navigationDrawerToggle(page).click();
@@ -1387,9 +1683,7 @@ try {
       }
       await page.locator("#sidebar-session-owner-title").click();
       await page
-        .locator(
-          `.sidebar-session-owner-filter [role="option"][data-value="${values["session-event-ancestor-refs"] ? "all" : "involving-me"}"]`,
-        )
+        .locator(`.sidebar-session-owner-filter [role="option"][data-value="${ownerFilter}"]`)
         .click();
     } catch (error) {
       await writeFile(
@@ -1406,7 +1700,7 @@ try {
     if (sidebarView === "online") {
       await page.locator('[data-navigation-view="online"]').click();
     }
-    await settle();
+    await settle("chat");
     await expandSidebar();
     if (viewportName === "mobile") {
       await page.keyboard.press("Escape");
@@ -1440,17 +1734,12 @@ try {
       if (values["chat-dashboard-route"]) {
         await page.evaluate(
           (deepLink) => history.replaceState(null, "", deepLink),
-          controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, "chat"),
+          chatDashboardUrl,
         );
       }
-      await settle();
+      await settle("chat");
     }
     await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor({ state: "attached" });
-    const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
-      sessionKey: fixture.selectedSessionKey,
-      offRosterSession: values["off-roster-route"],
-      sidebarView: sidebarView === "online" ? "online" : "sessions",
-    };
     const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
       persistColdLoadWarmState,
       warmInput,
@@ -1458,14 +1747,32 @@ try {
     warmStates.push(warmStorage);
     snapshotSaves.push(snapshotSave);
     for (let index = 1; index < bundleSlots.length; index++) {
-      await restoreColdLoadWarmState(page, warmStorage);
+      await restoreColdLoadWarmState(page, warmStorage, warmStates[index - 1]);
+      const reloadUrl = page.url();
       await selectComparisonBundle(index, page);
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await settle();
+      await page.goto(reloadUrl, { waitUntil: "domcontentloaded" });
+      await settle("chat");
+      if (viewportName === "mobile") {
+        await navigationDrawerToggle(page).click();
+        await page.locator(".shell--nav-drawer-open").waitFor();
+      }
       await expandSidebar();
       const { storage, ...saved } = await page.evaluate(persistColdLoadWarmState, warmInput);
       warmStates.push(storage);
       snapshotSaves.push(saved);
+      if (viewportName === "mobile") {
+        await page.keyboard.press("Escape");
+        await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+      }
+    }
+    await restoreColdLoadWarmState(page, warmStorage, warmStates.at(-1));
+    if (values["sidebar-presentation-probe"]) {
+      for (const [index, storage] of warmStates.entries()) {
+        await writeFile(
+          path.join(artifactDir, `warm-sidebar-${index}.json`),
+          JSON.stringify({ records: storage.records.sidebarSnapshots }),
+        );
+      }
     }
   }
   let historyValidatorRequests = 0;
@@ -1486,8 +1793,45 @@ try {
       await route.fallback();
     });
   }
-  await selectComparisonBundle(0, page);
   for (let run = 0; run < runs; run++) {
+    const bundleIndex = run % bundleSlots.length;
+    // Compare every bundle under the same route and roster conditions.
+    const bundleCycle = Math.floor(run / bundleSlots.length);
+    const layoutCell = layoutCells[bundleCycle % layoutCells.length];
+    const runRoute = layoutCell?.route ?? bootRoute;
+    const cold = layoutCell?.cold ?? firstLoad;
+    const runUrl =
+      runRoute === "chat"
+        ? values["chat-dashboard-route"] && !cold
+          ? chatDashboardUrl
+          : chatUrl
+        : new URL(runRoute === "settings" ? "/settings/appearance" : `/${runRoute}`, baseUrl).href;
+    let reloadStorage = warmStates[bundleIndex];
+    if (layoutCell) {
+      await selectComparisonBundle(bundleIndex, page);
+      await page.setViewportSize(
+        layoutCell.viewport === "mobile"
+          ? { width: 390, height: 844 }
+          : { width: 1719, height: 1179 },
+      );
+      await page.emulateMedia({ colorScheme: layoutCell.colorScheme });
+      if (!layoutCell.cold) {
+        // Cold Settings never opens the chat database. Let its native owner
+        // create the schema before restoring the saved warm fixture.
+        await page.goto(chatUrl, { waitUntil: "domcontentloaded" });
+        await settle("chat");
+        await restoreColdLoadWarmState(page, warmStates[bundleIndex]!);
+        await page.goto(chatUrl, { waitUntil: "domcontentloaded" });
+        await settle("chat");
+        // Save through the native owner at this viewport. Reusing the desktop
+        // seed would measure a width-change restore instead of a warm reload.
+        reloadStorage = (await page.evaluate(persistColdLoadWarmState, warmInput)).storage;
+        if (runRoute !== "chat") {
+          await page.goto(runUrl, { waitUntil: "domcontentloaded" });
+          await settle(runRoute);
+        }
+      }
+    }
     const hostLoadAverage = loadavg();
     const cpuPhases: Record<string, ColdLoadCpuTables> = {};
     async function recordCpu(phase: string, profile: Parameters<typeof mapColdLoadCpuProfile>[0]) {
@@ -1515,13 +1859,12 @@ try {
       );
       return { ...mapped, summary };
     }
-    const bundleIndex = run % bundleSlots.length;
     const validatorRequestsBeforeReload = historyValidatorRequests;
     const cdp = await context.newCDPSession(page);
-    if (firstLoad) {
+    if (cold) {
       await resetColdState(cdp, bundleIndex);
     } else {
-      await restoreColdLoadWarmState(page, warmStates[bundleIndex]!);
+      await restoreColdLoadWarmState(page, reloadStorage!, layoutCell && reloadStorage);
       await selectComparisonBundle(bundleIndex, page);
     }
     runTransfer =
@@ -1547,7 +1890,11 @@ try {
     if (values["cold-http-cache"]) {
       await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
     }
-    if (values["network-latency-ms"] !== undefined || values["download-kbps"] !== undefined) {
+    if (
+      values["network-latency-ms"] !== undefined ||
+      values["download-kbps"] !== undefined ||
+      profileDownloadKbps > 0
+    ) {
       await cdp.send("Network.emulateNetworkConditions", {
         offline: false,
         latency: networkLatencyMs,
@@ -1668,15 +2015,24 @@ try {
         releaseBootAssets?.();
         await page.waitForLoadState("domcontentloaded");
       }
-    } else if (firstLoad || values["critical-path"]) {
-      await page.goto(url, { waitUntil: "domcontentloaded" });
+    } else if (
+      layoutCell ||
+      firstLoad ||
+      values["critical-path"] ||
+      values["new-session-first-token"] ||
+      bootRoute !== "chat" ||
+      // Typing in the second pane changes the URL; restore the fixture's primary route.
+      streamingPanes > 1 ||
+      comparisonBundleDirs.length
+    ) {
+      await page.goto(runUrl, { waitUntil: "domcontentloaded" });
     } else {
       await page.reload({ waitUntil: "domcontentloaded" });
     }
-    await settle();
+    await settle(runRoute);
     const coverage = values.coverage
       ? (await page.coverage.stopJSCoverage())
-          .filter((entry) => URL.parse(entry.url)?.pathname.startsWith("/assets/"))
+          .filter((entry) => controlUiScriptAssetUrl(entry.url, new URL("assets/", baseUrl)))
           .map((entry) =>
             Object.assign(
               { url: entry.url, functions: entry.functions },
@@ -1728,6 +2084,9 @@ try {
               ["layoutMs", "LayoutDuration"],
               ["styleMs", "RecalcStyleDuration"],
               ["threadMs", "ThreadTime"],
+              ["compileMs", "V8CompileDuration"],
+              ["devtoolsMs", "DevToolsCommandDuration"],
+              ["otherTaskMs", "TaskOtherDuration"],
             ].map(([key, name]) => {
               const before = threadCpuBefore.find((metric) => metric.name === name)?.value;
               const after = threadCpuAfter.find((metric) => metric.name === name)?.value;
@@ -1759,6 +2118,11 @@ try {
         transferBytes: entry.transferSize,
       }));
       return {
+        display: {
+          width: innerWidth,
+          height: innerHeight,
+          colorScheme: document.documentElement.dataset.themeMode,
+        },
         ...Reflect.get(window, "__coldLoad").read(),
         bootRpcs: Reflect.get(window, "__coldLoad")
           .read()
@@ -1805,6 +2169,13 @@ try {
           rowKeys: rows?.map((row) => row.getAttribute("data-virtual-row-key")) ?? null,
           sessionKey: pane ? Reflect.get(pane, "sessionKey") : null,
           ready: pane ? Reflect.get(pane, "transcriptReady") === true : false,
+          historyErrorPresent: pane ? pane.querySelector(".chat-history-error") !== null : null,
+          reactionRows: pane
+            ? [...pane.querySelectorAll<HTMLElement>(".chat-message-reactions")].map((element) => ({
+                messageId: element.dataset.messageId,
+                visible: element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
+              }))
+            : [],
         },
       };
     });
@@ -1817,8 +2188,27 @@ try {
     if (historyValidatorDelayMs && metrics.historyValidatorResources.length !== 1) {
       throw new Error("Measured reload lacks the delayed validator resource timing");
     }
-    const warmReload = values["warm-reload"]
-      ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
+    const warmReload =
+      values["warm-reload"] || firstLoad
+        ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
+        : undefined;
+    const paneChrome = values["pane-chrome-probe"]
+      ? {
+          ...(await page.evaluate(
+            (firstPaint) => Reflect.get(window, "__paneChrome").read(firstPaint),
+            warmReload?.milestones.firstTranscriptPaint ?? null,
+          )),
+          snapshotBytes: Buffer.byteLength(
+            JSON.stringify(
+              reloadStorage!.records.snapshots.find((record) =>
+                record.sessionKey.endsWith(`\u0000${fixture.selectedSessionKey}`),
+              )!.snapshot,
+            ),
+          ),
+        }
+      : undefined;
+    const sidebarPresentation = values["sidebar-presentation-probe"]
+      ? await page.evaluate(() => Reflect.get(window, "__sidebarPresentation").read())
       : undefined;
     if (cpuProfile) {
       await writeFile(
@@ -1826,7 +2216,19 @@ try {
         JSON.stringify((await cdp.send("Performance.getMetrics")).metrics),
       );
     }
-    await writeFile(path.join(artifactDir, `run-${run + 1}.metrics.json`), JSON.stringify(metrics));
+    await writeFile(
+      path.join(artifactDir, `run-${run + 1}.metrics.json`),
+      JSON.stringify({
+        ...metrics,
+        layoutCell,
+        variant: ["base", "candidate", "candidate-2"][bundleIndex],
+        hostLoadAverage,
+        threadCpu,
+        threadCpuSamples: threadCpuBefore
+          ? { before: threadCpuBefore, after: threadCpuAfter }
+          : undefined,
+      }),
+    );
     const profile = !traced && !cpuProfile ? undefined : await cdp.send("Profiler.stop");
     if (captureTrace) {
       const complete = new Promise<void>((resolve) => {
@@ -1835,11 +2237,15 @@ try {
       await cdp.send("Tracing.end");
       await complete;
     }
-    await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.png`) });
-    await writeFile(
-      path.join(artifactDir, `run-${run + 1}.trace.json`),
-      JSON.stringify({ traceEvents: rawTrace }),
-    );
+    if (!layoutCells.length || run < layoutCells.length * bundleSlots.length) {
+      await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.png`) });
+    }
+    if (captureTrace) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.trace.json`),
+        JSON.stringify({ traceEvents: rawTrace }),
+      );
+    }
     if (profile) {
       await writeFile(
         path.join(artifactDir, `run-${run + 1}.cpuprofile`),
@@ -2048,8 +2454,54 @@ try {
     }
     let streaming;
     if (streamingReply) {
-      const composer = page.locator(".agent-chat__composer-combobox textarea").last();
-      await composer.focus();
+      await page.waitForFunction(
+        (sessions) =>
+          sessions.every(({ sessionKey }) =>
+            Array.from(document.querySelectorAll("openclaw-chat-pane")).some(
+              (pane) =>
+                Reflect.get(pane, "sessionKey") === sessionKey &&
+                pane.getClientRects().length &&
+                pane.querySelector(".chat-bubble.streaming") &&
+                pane.querySelector(".agent-chat__composer-combobox textarea"),
+            ),
+          ),
+        streamingSessions,
+      );
+      const panes = page.locator(
+        streamingSplitLayout
+          ? "openclaw-chat-pane.chat-split-view__pane"
+          : "openclaw-chat-pane.chat-pane-cache__pane--active",
+      );
+      const composers = panes.locator(".agent-chat__composer-combobox textarea");
+      const initialDrafts = await composers.evaluateAll((inputs) =>
+        inputs.map((input) => (input instanceof HTMLTextAreaElement ? input.value : "")),
+      );
+      if (initialDrafts.length !== streamingPanes) {
+        throw new Error(
+          `Expected ${streamingPanes} streaming composers, found ${initialDrafts.length}`,
+        );
+      }
+      if (streamingReply.growingTool) {
+        await page.evaluate((input) => Reflect.get(window, "__streamingReply").prepare(input), {
+          streams: streamingSessions,
+          growingTool: true,
+        });
+        for (let index = 0; index < streamingPanes; index++) {
+          const tool = panes
+            .nth(index)
+            .locator(".chat-tool-msg-collapse")
+            .filter({ hasText: "verify-streaming" })
+            .last();
+          await tool.locator("button.chat-tool-row[aria-expanded='false']").click();
+          await tool.locator(".chat-tool-term__out").waitFor({ state: "visible" });
+        }
+      }
+      await composers.first().focus();
+      await composers
+        .first()
+        .evaluate((input: HTMLTextAreaElement) =>
+          input.setSelectionRange(input.value.length, input.value.length),
+        );
       await cdp.send("Performance.enable", { timeDomain: performanceTimeDomain });
       let previousCpu = (await cdp.send("Performance.getMetrics")).metrics;
       let previousDelivered = 0;
@@ -2082,13 +2534,23 @@ try {
         ...streamingReply,
         burstSize: streamingBurstSize,
         observeTextVisibility: captureTrace,
-        sessionKey: fixture.selectedSessionKey,
-        runId: fixture.scenario.inFlightRun!.runId,
+        streams: streamingSessions,
       });
       const streamingInput = new AbortController();
+      const typedCharacters = initialDrafts.map(() => 0);
       const nativeInput = (async () => {
+        let inputIndex = 0;
         while (!streamingInput.signal.aborted) {
+          const index = inputIndex++ % streamingPanes;
+          if (streamingPanes > 1) {
+            const composer = composers.nth(index);
+            await composer.focus();
+            await composer.evaluate((input: HTMLTextAreaElement) =>
+              input.setSelectionRange(input.value.length, input.value.length),
+            );
+          }
           await page.keyboard.press("x");
+          typedCharacters[index]!++;
           await new Promise((resolve) => {
             setTimeout(resolve, 500);
           });
@@ -2098,7 +2560,7 @@ try {
         for (let quartile = 1; quartile <= 4; quartile++) {
           await page.waitForFunction(
             (count) => Reflect.get(window, "__streamingReply").read().delivered >= count,
-            Math.floor((streamingReply.deltas.length * quartile) / 4),
+            Math.floor((streamingReply.deltas.length * streamingPanes * quartile) / 4),
             { timeout: 60_000, polling: 50 },
           );
           await page.evaluate(
@@ -2186,7 +2648,14 @@ try {
         ...(await page.evaluate(() => Reflect.get(window, "__streamingReply").finish())),
         cpu,
         allocations: streamingAllocations,
+        typingByPane: await Promise.all(
+          typedCharacters.map(async (characters, index) => ({
+            characters,
+            draft: await composers.nth(index).inputValue(),
+          })),
+        ),
       };
+      streaming = { ...streaming, typing: streaming.typingByPane[0]! };
       if (allocationProfile) {
         await writeFile(
           path.join(artifactDir, `run-${run + 1}.streaming.heapprofile`),
@@ -2204,6 +2673,8 @@ try {
             chars: streamingReply.text.length,
             deltasPerSecond: streamingReply.deltasPerSecond,
             burstSize: streamingBurstSize,
+            content: streamingContent,
+            paneCount: streamingPanes,
             ...streaming,
           },
           null,
@@ -2211,13 +2682,44 @@ try {
         ),
       );
       await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.streaming.png`) });
-      if (
-        streaming.tailPosition.scrollHeight <= streaming.tailPosition.initialScrollHeight ||
-        Math.abs(streaming.tailPosition.distanceFromBottom) > 2
-      ) {
-        throw new Error(
-          `Streaming tail did not grow and stay followed: ${JSON.stringify(streaming.tailPosition)}`,
-        );
+      for (const [index, typing] of streaming.typingByPane.entries()) {
+        if (
+          !typing.characters ||
+          typing.draft !== initialDrafts[index] + "x".repeat(typing.characters)
+        ) {
+          throw new Error(
+            `Streaming pane ${index + 1} lost composer input: ${JSON.stringify(typing)}`,
+          );
+        }
+      }
+      for (const pane of streaming.panes) {
+        const expected = streamingReply.growingTool
+          ? "Streaming code complete."
+          : "The result is ready for the next checkpoint.";
+        const finalBlock = streamingReply.growingTool
+          ? "export const checkpoint180 = 180;"
+          : "Checkpoint 24";
+        if (
+          !pane.visible ||
+          !pane.finalText?.trimEnd().endsWith(expected) ||
+          !pane.finalText.includes(finalBlock)
+        ) {
+          throw new Error(`Streaming pane ${pane.sessionKey} did not show the complete reply`);
+        }
+        if (
+          streamingReply.growingTool &&
+          !pane.toolOutput?.includes(`Tool progress ${streamingReply.deltas.length}`)
+        ) {
+          throw new Error(
+            `Streaming pane ${pane.sessionKey} did not show the complete tool output`,
+          );
+        }
+        if (
+          pane.tailPosition.scrollHeight <= pane.tailPosition.initialScrollHeight ||
+          Math.abs(pane.tailPosition.distanceFromBottom) > 2
+        ) {
+          throw new Error(`Streaming tail did not grow and stay followed: ${JSON.stringify(pane)}`);
+        }
       }
     }
     let live;
@@ -2475,15 +2977,28 @@ try {
       : undefined;
     let sessionSwitch;
     if (values["session-switch"]) {
+      if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+        await navigationDrawerToggle(page).click();
+        await page.locator(".shell--nav-drawer-open").waitFor();
+      }
       if (sidebarView !== "sessions") {
         await page.locator('[data-navigation-view="sessions"]').click();
       }
-      // The next owner cycle is a direct chat visible in the fixture's Involving me window.
-      const target = fixture.scenario.sessions![fixture.counts.owners]!;
+      // Cold runs keep the default My sessions filter until this phase.
+      await page.locator("#sidebar-session-owner-title").click();
+      await page
+        .locator('.sidebar-session-owner-filter [role="option"][data-value="involving-me"]')
+        .click();
+      // The first non-main chat is in the initial Involving me page.
+      const target = fixture.scenario.sessions![1]!;
       const link = page.locator(
         `.sidebar-recent-session[data-session-key="${target.key}"] a.sidebar-recent-session__link`,
       );
-      await link.waitFor({ state: "visible" });
+      await link.scrollIntoViewIfNeeded();
+      await page.waitForFunction(() => {
+        const state = Reflect.get(window, "__coldLoad").read();
+        return !state.pending && !state.queued && state.idleMs > 750;
+      });
       const rpcOffset = await page.evaluate(
         () => Reflect.get(window, "__coldLoad").read().rpcs.length,
       );
@@ -2660,8 +3175,24 @@ try {
         await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.${route}.png`) });
       }
     }
+    const newSessionFirstToken = values["new-session-first-token"]
+      ? await (
+          await import("./lib/control-ui-new-session-first-token.ts")
+        ).measureNewSession(page, artifactDir, run + 1, {
+          initialHistory: fixture.scenario.methodResponses?.["chat.startup"],
+          viewerId: fixture.sidebarListInput.viewerProfileId,
+          tokenDelayMs: Number(values["new-session-token-ms"]),
+          worker: values["new-session-worker"],
+          filmstrip: values["new-session-filmstrip"],
+          held:
+            values["new-session-list-mode"] === "held" ||
+            (values["new-session-list-mode"] === "alternate" && bundleCycle % 2 === 1),
+        })
+      : undefined;
     await cdp.detach();
     const result = {
+      newSessionFirstToken,
+      layoutCell,
       run: run + 1,
       hostLoadAverage,
       ...(comparisonBundleDirs.length
@@ -2700,6 +3231,8 @@ try {
       sessionSwitch,
       criticalPath,
       warmReload,
+      paneChrome,
+      sidebarPresentation,
       historyValidatorRequests: historyValidatorRequests - validatorRequestsBeforeReload,
       snapshotSave: snapshotSaves[bundleIndex],
       overlays,
@@ -2710,6 +3243,7 @@ try {
     console.log(
       JSON.stringify({
         run: result.run,
+        layoutCell,
         variant: result.variant,
         hostLoadAverage,
         presentation: {
@@ -2800,11 +3334,15 @@ try {
         fixture: fixture.counts,
         sidebarView,
         sidebarAvatars: values["sidebar-avatars"],
+        sidebarPresentation: values["sidebar-presentation"],
+        sidebarPresentationProbe: values["sidebar-presentation-probe"],
         sidebarExpanded: values["sidebar-expanded"],
         sidebarPersistentChildren: fixture.sidebarPersistentChildren,
         omitHelloSelfPresence: values["omit-hello-self-presence"],
         streamingReply: values["streaming-reply"],
         streamingAllocations: values["streaming-allocations"],
+        streamingContent,
+        streamingPanes,
         sessionSwitch: values["session-switch"],
         criticalPathRoutes: values["critical-path"] ? navigationRoutes : undefined,
         criticalPathIntentMs: values["critical-path"] ? criticalPathIntentMs : undefined,
@@ -2825,6 +3363,8 @@ try {
         chromiumArgs,
         isolatedSandboxOrigin,
         cpuProfile,
+        ownerProbes,
+        sidebarCounters,
         metricTimeDomain: performanceTimeDomain,
         cpuProfileCompare: values["cpu-profile-compare"],
         sidebarRowTransfer,
@@ -2837,6 +3377,7 @@ try {
         sidebarQueryLatencyMs,
         connectNotBeforeMs,
         dashboardWidget: values["dashboard-widget"],
+        rowFacts: values["row-facts"],
         face,
         shortRoute: values["short-route"],
         fullUuidRoute: values["full-uuid-route"],

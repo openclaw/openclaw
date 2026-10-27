@@ -442,7 +442,11 @@ export async function installPluginDirectoryIntoExtensions(params: {
   const transactionRequest = resolvePluginInstallTransactionRequest(params);
   const installRes = await runtime.installPackageDir(
     transactionRequest
-      ? requestDeferredPackageDirInstall(packageInstallParams, transactionRequest.assertOwned)
+      ? requestDeferredPackageDirInstall(
+          packageInstallParams,
+          transactionRequest.assertOwned,
+          transactionRequest.prepareSettlement,
+        )
       : packageInstallParams,
   );
   if (!installRes.ok) {

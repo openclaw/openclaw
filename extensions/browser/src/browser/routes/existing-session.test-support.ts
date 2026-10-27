@@ -12,6 +12,8 @@ import type { BrowserDispatchRequest, BrowserDispatchResponse } from "./dispatch
 import type { BrowserRequest, BrowserResponse } from "./types.js";
 
 const makeTab = () => ({ targetId: "7", url: "https://example.com" });
+type Policy = { readonly allowPrivateNetwork: false } | null;
+type SafeUrlRequest = Parameters<typeof import("./agent.shared.js").resolveSafeRouteTabUrl>[0];
 
 export const existingSessionRouteState = {
   profileCtx: {
@@ -29,24 +31,17 @@ export function createExistingSessionAgentSharedModule() {
       withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
     ),
     handleRouteError: vi.fn((res: BrowserResponse, err: unknown) => {
-      res.status(400);
-      res.json({ error: err instanceof Error ? err.message : String(err) });
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }),
     readBody: vi.fn((req: BrowserRequest) => req.body ?? {}),
     requirePwAi: vi.fn(async () => {
       throw new Error("Playwright should not be used for existing-session tests");
     }),
     resolveProfileContext: vi.fn(() => existingSessionRouteState.profileCtx),
-    resolveSafeRouteTabUrl: vi.fn(
-      async (params: {
-        profileCtx: typeof existingSessionRouteState.profileCtx;
-        targetId: string;
-        fallbackUrl?: string;
-      }) => {
-        const tabs = await params.profileCtx.listTabs();
-        return tabs.find((tab) => tab.targetId === params.targetId)?.url ?? params.fallbackUrl;
-      },
-    ),
+    resolveSafeRouteTabUrl: vi.fn(async (params: SafeUrlRequest) => {
+      const tabs = await params.profileCtx.listTabs();
+      return tabs.find((tab) => tab.targetId === params.targetId)?.url ?? params.fallbackUrl;
+    }),
     withPlaywrightRouteContext: vi.fn(),
     withRouteTabContext: vi.fn(
       async (options: {
@@ -56,14 +51,12 @@ export function createExistingSessionAgentSharedModule() {
         run: (args: unknown) => Promise<void>;
       }) => {
         const { ctx, enforceCurrentUrlAllowed, req, run } = options;
-        if (enforceCurrentUrlAllowed) {
-          const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
-          if (ssrfPolicyOpts.ssrfPolicy) {
-            await assertBrowserNavigationResultAllowed({
-              url: existingSessionRouteState.tab.url,
-              ...ssrfPolicyOpts,
-            });
-          }
+        const policy = enforceCurrentUrlAllowed ? ctx.state().resolved.ssrfPolicy : undefined;
+        if (policy) {
+          await assertBrowserNavigationResultAllowed({
+            url: existingSessionRouteState.tab.url,
+            ...withBrowserNavigationPolicy(policy),
+          });
         }
         await run({
           profileCtx: existingSessionRouteState.profileCtx,
@@ -81,12 +74,9 @@ export function createExistingSessionAgentSharedModule() {
 
 export function createExistingSessionClientHarness(
   dispatch: Mock<(request: BrowserDispatchRequest) => Promise<BrowserDispatchResponse>>,
-  actRoute: (
-    policy: { readonly allowPrivateNetwork: false } | null,
-  ) => Parameters<typeof startRoute>[0],
+  actRoute: (policy: Policy) => Parameters<typeof startRoute>[0],
   browserAct: typeof import("../client-actions.js").browserAct,
 ) {
-  type Policy = { readonly allowPrivateNetwork: false } | null;
   const clientControllers: AbortController[] = [];
   async function startClientAction(body: BrowserActRequest, ssrfPolicy: Policy = null) {
     const handler = actRoute(ssrfPolicy);
@@ -123,17 +113,16 @@ export function createExistingSessionClientHarness(
     return { completion, settled };
   }
 
-  async function expectClientError(
-    request: Awaited<ReturnType<typeof startClientAction>>,
-    message: string,
-  ) {
-    expect(await request.completion).toMatchObject({
-      error: expect.objectContaining({ message: expect.stringContaining(message) }),
-    });
+  type ClientAction = Awaited<ReturnType<typeof startClientAction>>;
+  async function expectClientError(request: ClientAction, message: string) {
+    expect(await request.completion).toHaveProperty(
+      "error.message",
+      expect.stringContaining(message),
+    );
   }
 
   async function expectPendingThenSuccess(
-    request: Awaited<ReturnType<typeof startClientAction>>,
+    request: ClientAction,
     pendingMs: number,
     remainingMs: number,
     result: object,
@@ -146,7 +135,7 @@ export function createExistingSessionClientHarness(
   }
 
   async function expectDeadline(
-    request: Awaited<ReturnType<typeof startClientAction>>,
+    request: ClientAction,
     signal: AbortSignal | undefined,
     message: string,
   ) {
@@ -177,6 +166,7 @@ export function delayed<T>(ms: number, value: T, completed = () => {}) {
 }
 
 export async function launchChromiumRoutePage(profileDir: string, args: string[] = []) {
+  const { readTargetId } = await import("../pw-chromium.test-support.js");
   const { getFreePort } = await import("../test-port.js");
   const { getPlaywrightCore } = await import("../playwright-core.runtime.js");
   const port = await getFreePort();
@@ -188,10 +178,7 @@ export async function launchChromiumRoutePage(profileDir: string, args: string[]
   });
   try {
     const page = context.pages()[0] ?? (await context.newPage());
-    const session = await context.newCDPSession(page);
-    const { targetInfo } = await session.send("Target.getTargetInfo");
-    await session.detach();
-    return { context, page, cdpUrl, targetId: targetInfo.targetId };
+    return { context, page, cdpUrl, targetId: await readTargetId(page) };
   } catch (error) {
     await context.close();
     throw error;

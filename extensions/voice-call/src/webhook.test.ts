@@ -4,7 +4,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import * as webhookRequestGuards from "openclaw/plugin-sdk/webhook-request-guards";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { normalizeVoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
@@ -43,11 +43,11 @@ vi.mock("./realtime-transcription.runtime.js", () => ({
 }));
 // mock-isolation: Exercise webhook delivery without running a real agent response.
 vi.mock("./response-generator.js", () => ({ generateVoiceResponse: mocks.generate }));
-beforeEach(() => {
+beforeEach(() =>
   onTestFinished(() => {
     vi.restoreAllMocks();
-  });
-});
+  }),
+);
 
 const provider: VoiceCallProvider = {
   name: "mock",
@@ -96,9 +96,7 @@ function fixture(
     ...overrides,
   } as unknown as CallManager;
   const messages: string[] = [];
-  const capture = (message: string) => {
-    messages.push(message);
-  };
+  const capture = (message: string) => void messages.push(message);
   const config = normalizeVoiceCallConfig(input);
   config.serve.port = 0;
   const server = new VoiceCallWebhookServer(
@@ -153,6 +151,23 @@ function internals(server: VoiceCallWebhookServer) {
       socket: { remoteAddress?: string };
     }) => string | undefined;
   };
+}
+function runPipeline(
+  server: VoiceCallWebhookServer,
+  url = "/voice/webhook",
+  headers: Record<string, string> = twilioHeaders,
+  remoteAddress?: string,
+) {
+  return internals(server).runWebhookPipeline(
+    { method: "POST", url, headers, socket: { remoteAddress } } as unknown as IncomingMessage,
+    "/voice/webhook",
+  );
+}
+function fakeTime() {
+  vi.useFakeTimers();
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
 }
 const media = (server: VoiceCallWebhookServer) =>
   (server.getMediaStreamHandler() as unknown as { config: MediaStreamConfig }).config;
@@ -233,19 +248,13 @@ it("rejects non-Twilio media before looking up the call", async () => {
   notCalled(getCallByProviderCallId);
 });
 
-it.each<[string, boolean, string[], string, string]>([
-  ["forwarding disabled", false, ["127.0.0.1"], "127.0.0.1", "127.0.0.1"],
-  ["untrusted remote", true, ["203.0.113.10"], "127.0.0.1", "127.0.0.1"],
-  [
-    "mapped trusted proxy",
-    true,
-    ["127.0.0.1", "203.0.113.10"],
-    "::ffff:127.0.0.1",
-    "198.51.100.10",
-  ],
+it.each<[boolean, string[], string, string]>([
+  [false, ["127.0.0.1"], "127.0.0.1", "127.0.0.1"],
+  [true, ["203.0.113.10"], "127.0.0.1", "127.0.0.1"],
+  [true, ["127.0.0.1", "203.0.113.10"], "::ffff:127.0.0.1", "198.51.100.10"],
 ])(
-  "resolves media client IP: %s",
-  (_name, trustForwardingHeaders, trustedProxyIPs, remoteAddress, expected) => {
+  "resolves media client IP (forwarding=%s, proxies=%s, remote=%s)",
+  (trustForwardingHeaders, trustedProxyIPs, remoteAddress, expected) => {
     const { server } = fixture(
       {
         webhookSecurity: {
@@ -268,79 +277,73 @@ it.each<[string, boolean, string[], string, string]>([
   },
 );
 
-describe("timed webhook lifecycle", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-  it("preserves answered calls and drains hangups alongside handler shutdown", async () => {
-    const hangup = createDeferred<{ success: boolean }>();
-    const closed = createDeferred<void>();
-    const close = vi.fn(() => closed.promise);
-    const stale = callRecord({ startedAt: Date.now() - 60_000 });
-    const { server, endCall } = fixture({ staleCallReaperSeconds: 1 }, provider, [
-      stale,
-      callRecord({
-        callId: "answered",
-        state: "answered",
-        answeredAt: Date.now() - 90_000,
-        startedAt: Date.now() - 90_000,
-      }),
-    ]);
-    endCall.mockImplementation(() => hangup.promise);
-    realtime(server, vi.fn(), close);
-    let stopped = false;
-    try {
-      await server.start();
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(endCall).toHaveBeenCalledExactlyOnceWith(stale.callId);
-      const stopping = server.stop();
-      void stopping.then(() => {
-        stopped = true;
-      });
-      closed.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(stopped).toBe(false);
-      hangup.resolve({ success: true });
-      await stopping;
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(endCall).toHaveBeenCalledOnce();
-    } finally {
-      closed.resolve();
-      hangup.resolve({ success: true });
-      await server.stop();
-    }
-    expect(stopped).toBe(true);
-  });
-  it("ignores old disconnects after reconnect and hangs up only the current stream", async () => {
-    const call = callRecord({ providerCallId: "CA-stream-1", startedAt: Date.now() - 1_000 });
-    const carrier = new TwilioProvider({ accountSid: "AC123", authToken: "stream-test" });
-    const speakInitialMessage = vi.fn(async () => {});
-    const { server, endCall, messages } = fixture(streamConfig, carrier, [call], {
-      getCallByProviderCallId: (id) => (id === call.providerCallId ? call : undefined),
-      speakInitialMessage,
-    });
-    endCall.mockResolvedValue({ success: false, error: "carrier unavailable" });
+it("preserves answered calls and drains hangups alongside handler shutdown", async () => {
+  fakeTime();
+  const hangup = createDeferred<{ success: boolean }>();
+  const closed = createDeferred<void>();
+  const close = vi.fn(() => closed.promise);
+  const stale = callRecord({ startedAt: Date.now() - 60_000 });
+  const { server, endCall } = fixture({ staleCallReaperSeconds: 1 }, provider, [
+    stale,
+    callRecord({
+      callId: "answered",
+      state: "answered",
+      answeredAt: Date.now() - 90_000,
+      startedAt: Date.now() - 90_000,
+    }),
+  ]);
+  endCall.mockImplementation(() => hangup.promise);
+  realtime(server, vi.fn(), close);
+  let stopped = false;
+  try {
     await server.start();
-    const callbacks = media(server);
-    callbacks.onConnect?.("CA-stream-1", "MZ-old");
-    callbacks.onDisconnect?.("CA-stream-1", "MZ-old");
-    await vi.advanceTimersByTimeAsync(1_000);
-    callbacks.onConnect?.("CA-stream-1", "MZ-new");
-    callbacks.onDisconnect?.("CA-stream-1", "MZ-old");
-    await vi.advanceTimersByTimeAsync(2_100);
-    notCalled(endCall, speakInitialMessage);
-    callbacks.onTranscriptionReady?.("CA-stream-1", "MZ-new");
-    expect(speakInitialMessage).toHaveBeenCalledExactlyOnceWith("CA-stream-1");
-    callbacks.onDisconnect?.("CA-stream-1", "MZ-new");
-    callbacks.onDisconnect?.("CA-stream-1", "MZ-new");
-    await vi.advanceTimersByTimeAsync(2_100);
-    expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId);
-    expect(messages.join(" ")).toContain("carrier unavailable");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(endCall).toHaveBeenCalledExactlyOnceWith(stale.callId);
+    const stopping = server.stop();
+    void stopping.then(() => {
+      stopped = true;
+    });
+    closed.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).toBe(false);
+    hangup.resolve({ success: true });
+    await stopping;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(endCall).toHaveBeenCalledOnce();
+  } finally {
+    closed.resolve();
+    hangup.resolve({ success: true });
     await server.stop();
+  }
+  expect(stopped).toBe(true);
+});
+it("ignores old disconnects after reconnect and hangs up only the current stream", async () => {
+  fakeTime();
+  const call = callRecord({ providerCallId: "CA-stream-1", startedAt: Date.now() - 1_000 });
+  const carrier = new TwilioProvider({ accountSid: "AC123", authToken: "stream-test" });
+  const speakInitialMessage = vi.fn(async () => {});
+  const { server, endCall, messages } = fixture(streamConfig, carrier, [call], {
+    getCallByProviderCallId: (id) => (id === call.providerCallId ? call : undefined),
+    speakInitialMessage,
   });
+  endCall.mockResolvedValue({ success: false, error: "carrier unavailable" });
+  await server.start();
+  const callbacks = media(server);
+  callbacks.onConnect?.("CA-stream-1", "MZ-old");
+  callbacks.onDisconnect?.("CA-stream-1", "MZ-old");
+  await vi.advanceTimersByTimeAsync(1_000);
+  callbacks.onConnect?.("CA-stream-1", "MZ-new");
+  callbacks.onDisconnect?.("CA-stream-1", "MZ-old");
+  await vi.advanceTimersByTimeAsync(2_100);
+  notCalled(endCall, speakInitialMessage);
+  callbacks.onTranscriptionReady?.("CA-stream-1", "MZ-new");
+  expect(speakInitialMessage).toHaveBeenCalledExactlyOnceWith("CA-stream-1");
+  callbacks.onDisconnect?.("CA-stream-1", "MZ-new");
+  callbacks.onDisconnect?.("CA-stream-1", "MZ-new");
+  await vi.advanceTimersByTimeAsync(2_100);
+  expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId);
+  expect(messages.join(" ")).toContain("carrier unavailable");
+  await server.stop();
 });
 
 it.each([
@@ -378,15 +381,7 @@ it("ignores a malformed Host when matching the webhook and constructing its cont
   const { server } = fixture({}, { ...provider, verifyWebhook, parseWebhookEvent });
   vi.spyOn(webhookRequestGuards, "readRequestBodyWithLimit").mockResolvedValue(speechBody);
   expect(
-    await internals(server).runWebhookPipeline(
-      {
-        method: "POST",
-        url: "/voice/webhook?type=status",
-        headers: { host: "[" },
-        socket: { remoteAddress: "127.0.0.1" },
-      } as unknown as IncomingMessage,
-      "/voice/webhook",
-    ),
+    await runPipeline(server, "/voice/webhook?type=status", { host: "[" }, "127.0.0.1"),
   ).toMatchObject({ statusCode: 200 });
   expect(verifyWebhook).toHaveBeenCalledOnce();
   expect(parseWebhookEvent).toHaveBeenCalledOnce();
@@ -626,15 +621,7 @@ it.each([false, true])(
         const response = await post(url, body, twilioHeaders);
         return { statusCode: response.status, body: await response.text() };
       }
-      return internals(server).runWebhookPipeline(
-        {
-          method: "POST",
-          url: "/voice/webhook",
-          headers: twilioHeaders,
-          socket: { remoteAddress: undefined },
-        } as unknown as IncomingMessage,
-        "/voice/webhook",
-      );
+      return runPipeline(server);
     };
     try {
       const pending = Array.from({ length: 8 }, () => send("CallSid=CA123"));

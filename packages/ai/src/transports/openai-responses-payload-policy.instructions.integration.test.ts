@@ -1,8 +1,8 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { promisify } from "node:util";
 import type { Context } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { listenLoopback } from "../../../../test/helpers/gateway-integration-fixtures.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import {
@@ -35,17 +35,14 @@ async function runOnce(compat?: Record<string, boolean>) {
       );
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const baseUrl = await listenLoopback(server);
   try {
-    const { port } = server.address() as AddressInfo;
     const model = Object.assign(
       createModel({
         id: "scripted-model",
         name: "Scripted Model",
         provider: "custom-provider",
-        baseUrl: `http://127.0.0.1:${port}/v1`,
+        baseUrl: `${baseUrl}/v1`,
         ...(compat ? { compat } : {}),
       }),
       {

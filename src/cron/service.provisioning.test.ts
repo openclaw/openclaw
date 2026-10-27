@@ -78,7 +78,7 @@ it.each(["restart", "local publication", "foreign commit readback"] as const)(
   async (mode) => {
     const fixture = await createFixture();
     const { cron, state, clock, scheduler, job, events, runCommandJob, commitJob } = fixture;
-    using loads = vi.spyOn(cronStore, "loadCronJobsStoreWithConfigJobs");
+    using loads = vi.spyOn(cronStore, "loadCronJobsStoreWithConfigJobsByKey");
     try {
       await cron.start();
       expect((await cron.status()).nextWakeAtMs).toBeNull();

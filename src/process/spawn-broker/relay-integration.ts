@@ -1,5 +1,6 @@
 import type { ChildProcess, Serializable, SpawnOptions } from "node:child_process";
 import type { Duplex } from "node:stream";
+import { stripNodeStartupHooks } from "../../../node-runtime-env.mjs";
 import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viability.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -136,6 +137,9 @@ export function spawnServiceChildRelay(params: {
     "service.relay",
     () => {
       const env = resolveRuntimeWorkerEnv(params.workerUrl, params.env);
+      if (env.NODE_OPTIONS !== undefined) {
+        env.NODE_OPTIONS = stripNodeStartupHooks(env.NODE_OPTIONS);
+      }
       // The admitted owner can select a native entry without the caller's image inventory.
       if (params.nativeProcessOwner === params.workerUrl.href) {
         delete env.BUN_BE_BUN;

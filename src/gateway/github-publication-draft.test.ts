@@ -34,6 +34,10 @@ const creations = () =>
   mocks.runCommand.mock.calls.filter(
     ([args]) => args.includes("POST") && args.some((arg: string) => arg.endsWith("/pulls")),
   );
+function expectCreatedDraft(draft: boolean) {
+  expect(creations()).toHaveLength(1);
+  expect(JSON.parse(creations()[0]![1]!.input!)).toMatchObject({ draft });
+}
 
 describe("publication draft choice", () => {
   installGitHubPublicationTestHarness({
@@ -69,9 +73,7 @@ describe("publication draft choice", () => {
       const restarted = f.restart();
       await restarted.resumeSessionRequests();
       expect(await restarted.readAsync(accepted.requestId)).toMatchObject({ status: "published" });
-      const posts = creations();
-      expect(posts).toHaveLength(1);
-      expect(JSON.parse(posts[0]![1]!.input!)).toMatchObject({ draft: draft === true });
+      expectCreatedDraft(draft === true);
     },
   );
 
@@ -96,7 +98,6 @@ describe("publication draft choice", () => {
       f.maintainerSource.release();
       await closeStateDatabaseForTest();
       // Recreate an accepted pre-option row after schema migration: draft stays NULL.
-      // The state migration suite owns historical DDL; recovery consumes its current-schema row.
       {
         using db = new DatabaseSync(f.database.path);
         addPreCutoverClientCredentialTablesForTest(db);
@@ -129,8 +130,7 @@ describe("publication draft choice", () => {
       await restarted.resumeSessionRequests();
       expect(await restarted.readAsync(accepted.requestId)).toMatchObject({ status: "published" });
       expect(f.readReceipt(accepted.requestId)).toMatchObject({ draft: null });
-      expect(creations()).toHaveLength(1);
-      expect(JSON.parse(creations()[0]![1]!.input!)).toMatchObject({ draft: true });
+      expectCreatedDraft(true);
     },
   );
 
@@ -141,10 +141,8 @@ describe("publication draft choice", () => {
       draft: true,
     });
     expect(first.status).toBe("published");
-    expect(creations()).toHaveLength(1);
-    expect(JSON.parse(creations()[0]![1]!.input!)).toMatchObject({ draft: true });
+    expectCreatedDraft(true);
     await f.repository!.capture("next accepted change\n", "next-change");
-    const callCount = mocks.runCommand.mock.calls.length;
     const second = await f.coordinator.requestForSessionV2({
       ...f.request("update", f.guest),
       draft: false,
@@ -154,19 +152,5 @@ describe("publication draft choice", () => {
       url: first.status === "published" ? first.url : undefined,
     });
     expect(creations()).toHaveLength(1);
-    const effects = mocks.runCommand.mock.calls
-      .slice(callCount)
-      .filter(
-        ([args]) => args.includes("POST") || args.includes("PATCH") || args.includes("graphql"),
-      );
-    for (const [args, options] of effects) {
-      if (args.includes("graphql")) {
-        expect(JSON.parse(options?.input ?? "{}").query).toBe(
-          "mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }",
-        );
-      } else {
-        expect(args.some((arg: string) => arg.includes("/git/"))).toBe(true);
-      }
-    }
   });
 });

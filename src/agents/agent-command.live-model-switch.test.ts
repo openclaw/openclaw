@@ -21,6 +21,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { reduceSessionEntryPatch } from "../config/sessions/session-entry-patch-operation.js";
 import { withInstallationTarget } from "../infra/installation-target-context.js";
+import { useBundledProviderPolicyArtifactsForTest } from "../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { startSessionControllerInterruption } from "../sessions/session-controller.lifecycle.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
@@ -553,24 +554,28 @@ vi.mock("../utils/message-channel.js", () => ({
       .toLowerCase(),
 }));
 
+vi.mock("./agent-scope-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
+  resolveSessionAgentIds: () => ({ defaultAgentId: "default", sessionAgentId: "default" }),
+}));
+
+vi.mock("./model-selection-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-selection-config.js")>()),
+  resolveEffectiveModelFallbacks: (...args: unknown[]) =>
+    state.resolveEffectiveModelFallbacksMock(...args),
+}));
+
 vi.mock("./agent-scope.js", async () => {
-  const { resolveAgentModelFallbacksOverride, resolveSubagentSpawnModelFallbacksOverride } =
-    await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
+  const actual = await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
   const { createTestAgentScope } = await import("./agent-command.live-model-switch.test-mocks.js");
-  return createTestAgentScope(state, {
-    resolveAgentModelFallbacksOverride,
-    resolveSubagentSpawnModelFallbacksOverride,
-  });
+  return { ...actual, ...createTestAgentScope(state, actual) };
 });
 
-vi.mock("./auth-profiles.js", async () => {
-  const actual = await vi.importActual<typeof import("./auth-profiles.js")>("./auth-profiles.js");
-  return {
-    ...actual,
-    ensureAuthProfileStore: () => ({ profiles: {} }),
-    ensureAuthProfileStoreAsync: async () => ({ profiles: {} }),
-  };
-});
+vi.mock("./auth-profiles.js", async () => ({
+  ...(await vi.importActual<typeof import("./auth-profiles.js")>("./auth-profiles.js")),
+  ensureAuthProfileStore: () => ({ profiles: {} }),
+  ensureAuthProfileStoreAsync: async () => ({ profiles: {} }),
+}));
 
 vi.mock("./auth-profiles/store-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./auth-profiles/store-runtime.js")>(
@@ -729,6 +734,8 @@ let commandPaths: ReturnType<typeof createCommandSessionPaths>;
 let agentCommand: typeof import("./agent-command.js").agentCommand;
 let prepareAgentCommandExecution: typeof import("./command/prepare.js").prepareAgentCommandExecution;
 let agentCommandFromSystem: typeof import("./agent-command.js").agentCommandFromSystem;
+
+useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);
 
 beforeAll(async () => {
   const mod = await import("./agent-command.js");
@@ -3137,22 +3144,22 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runtimeConfigMock = createConfiguredModelCompatRuntimeConfig(true, true);
     setupSuccessfulAttempt("gmn", "gpt-5.4");
 
-    await runBasicAgentCommand({
-      thinking: "xhigh",
-    });
+    await runBasicAgentCommand({ thinking: "xhigh" });
 
     const thinkingArgs = requireRecord(
       mockCallArg(state.isThinkingLevelSupportedMock),
       "thinking args",
     );
-    expect(thinkingArgs.provider).toBe("gmn");
-    expect(thinkingArgs.model).toBe("gpt-5.4");
+    expect([thinkingArgs.provider, thinkingArgs.model]).toEqual(["gmn", "gpt-5.4"]);
     expect(thinkingArgs.level).toBe("xhigh");
     const catalog = requireArray(thinkingArgs.catalog, "thinking catalog");
     expectRecordFields(catalog[0], {
       provider: "gmn",
       id: "gpt-5.4",
-      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+      },
     });
   });
 
@@ -3465,14 +3472,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     await runBasicAgentCommand();
 
-    const autoPinnedSwitchWrites = persistedEntries().filter((entry) => {
-      return (
+    const autoPinnedSwitchWrites = persistedEntries().filter(
+      (entry) =>
         entry?.providerOverride === "openai" &&
         entry?.modelOverride === "gpt-5.4" &&
         entry?.modelOverrideSource === "auto" &&
-        entry?.modelOverrideFallbackOriginProvider === "anthropic"
-      );
-    });
+        entry?.modelOverrideFallbackOriginProvider === "anthropic",
+    );
     expect(autoPinnedSwitchWrites).toHaveLength(0);
     expectRecordFields(mockCallArg(state.updateSessionStoreAfterAgentRunMock), {
       fallbackProvider: "openai",
@@ -4039,4 +4045,3 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

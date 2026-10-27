@@ -1,4 +1,5 @@
 import { hash } from "node:crypto";
+import { memoizeFrozenPlainDataProjection } from "../shared/immutable-data.js";
 
 export type SessionRowDeltaFields = {
   readonly fingerprints: ReadonlyMap<string, number | boolean | null | bigint>;
@@ -20,6 +21,35 @@ function canonicalJson(value: unknown): string | undefined {
   );
 }
 
+function hashJson(encoded: string | undefined): bigint | undefined {
+  if (encoded === undefined) {
+    return undefined;
+  }
+  // Seven ASCII characters plus a leading sentinel fit exactly in a JS number.
+  // Negative integers retain no text and cannot collide with unsigned SHA fingerprints.
+  if (encoded.length <= 7) {
+    let packed = 1;
+    for (let i = 0; i < encoded.length; i++) {
+      const code = encoded.charCodeAt(i);
+      if (code > 127) {
+        packed = 0;
+        break;
+      }
+      packed = packed * 128 + code;
+    }
+    if (packed) {
+      return -BigInt(packed);
+    }
+  }
+  // Accepted: a 64-bit collision can omit a changed field, ~2^-64 per comparison.
+  return hash("sha256", encoded, "buffer").readBigUInt64BE();
+}
+
+// Frozen field identities survive row clock/revision changes; retain only their hashes.
+const fingerprintObject = memoizeFrozenPlainDataProjection((value: object) =>
+  hashJson(canonicalJson(value)),
+);
+
 /** Presented row identity is immutable; fingerprints retain no row objects or text. */
 export function prepareSessionRowDeltaFields(row: Record<string, unknown>): SessionRowDeltaFields {
   const cached = preparedRows.get(row);
@@ -35,10 +65,10 @@ export function prepareSessionRowDeltaFields(row: Record<string, unknown>): Sess
       // JSON treats nonfinite numbers as null and both zero signs identically.
       fingerprints.set(field, Number.isFinite(value) ? value : null);
     } else {
-      const encoded = typeof value === "object" ? canonicalJson(value) : JSON.stringify(value);
-      if (encoded !== undefined) {
-        // Accepted: a 64-bit collision can omit a changed field, ~2^-64 per comparison.
-        fingerprints.set(field, hash("sha256", encoded, "buffer").readBigUInt64BE());
+      const valueFingerprint =
+        typeof value === "object" ? fingerprintObject(value) : hashJson(JSON.stringify(value));
+      if (valueFingerprint !== undefined) {
+        fingerprints.set(field, valueFingerprint);
       }
     }
   }

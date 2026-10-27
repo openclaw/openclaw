@@ -72,71 +72,6 @@ export function refuseVersion(db: DatabaseSync, version: number) {
   );
 }
 
-type Migration = {
-  database: DatabaseSync;
-  pathname: string;
-  env: NodeJS.ProcessEnv;
-  scope: string[];
-  migrate: () => void;
-};
-
-async function migrateWithOutcome(
-  { database, env, scope, migrate }: Migration,
-  outcome: string,
-  target: number,
-) {
-  if (outcome === "rollback") {
-    refuseVersion(database, target);
-  }
-  try {
-    await withAgentDatabaseMaintenanceLease({ env }, async () => {
-      await assertSqliteMigrationScopePreserved(database, scope, () => {
-        if (outcome === "rollback") {
-          expect(migrate).toThrow(/authoriz/u);
-        } else {
-          migrate();
-        }
-      });
-    });
-  } finally {
-    database.setAuthorizer(null);
-  }
-}
-
-async function restoreScopedMigration(
-  { database, pathname, env, scope, migrate }: Migration,
-  predecessor: number,
-  target: number,
-  capture: () => unknown,
-) {
-  const before = capture();
-  const beforeStatistics = statistics(database);
-  const backupPath = `${pathname}.scoped.bak`;
-  expect(
-    resolveSchemaMigrationBackupTables({
-      kind: "agent",
-      foundVersion: predecessor,
-      supportedVersion: target,
-    }),
-  ).toEqual(scope);
-  await withAgentDatabaseMaintenanceLease({ env }, async (lease) => {
-    await createScopedMigrationSnapshot({
-      sourcePath: pathname,
-      targetPath: backupPath,
-      tables: scope,
-      beforePublish: () => lease.assertOwned(),
-    });
-    migrate();
-  });
-  database.exec("UPDATE cache_entries SET blob = X'BEEF' WHERE scope = 'unrelated'");
-  await assertSqliteMigrationScopePreserved(database, scope, () =>
-    restoreDoctorMigrationBackup({ sourcePath: pathname, backupPath, env }),
-  );
-  expect(capture()).toEqual(before);
-  expect(statistics(database)).toEqual(beforeStatistics);
-  expect(row(database, "SELECT hex(blob) AS bytes FROM cache_entries")).toEqual({ bytes: "BEEF" });
-}
-
 type MigrationFixture = {
   database: DatabaseSync;
   migrate: (outcome?: string) => Promise<void>;
@@ -159,25 +94,66 @@ export function migrationFixture(config: {
       const pathname = location === "state" ? state.statePath(filename) : state.path(filename);
       using database = new DatabaseSync(pathname);
       config.seed(database);
-      const migration = {
-        database,
-        pathname,
-        env: state.env,
-        scope: config.scope,
-        migrate: () =>
-          config.admission
-            ? ensureOpenClawAgentDatabaseSchema(database, {
-                agentId: "main",
-                path: pathname,
-                env: state.env,
-              })
-            : ensureOpenClawAgentSchema(database, "main", pathname, config.target),
-      };
+      const { env } = state;
+      const { scope, predecessor, target } = config;
+      const withLease = (operation: Parameters<typeof withAgentDatabaseMaintenanceLease>[1]) =>
+        withAgentDatabaseMaintenanceLease({ env }, operation);
+      const preserve = (operation: () => unknown) =>
+        assertSqliteMigrationScopePreserved(database, scope, operation);
+      const migrate = () =>
+        config.admission
+          ? ensureOpenClawAgentDatabaseSchema(database, { agentId: "main", path: pathname, env })
+          : ensureOpenClawAgentSchema(database, "main", pathname, target);
       await run({
         database,
-        migrate: (outcome = "commit") => migrateWithOutcome(migration, outcome, config.target),
-        restore: (capture) =>
-          restoreScopedMigration(migration, config.predecessor, config.target, capture),
+        async migrate(outcome = "commit") {
+          if (outcome === "rollback") {
+            refuseVersion(database, target);
+          }
+          try {
+            await withLease(async () =>
+              preserve(() => {
+                if (outcome === "rollback") {
+                  expect(migrate).toThrow(/authoriz/u);
+                } else {
+                  migrate();
+                }
+              }),
+            );
+          } finally {
+            database.setAuthorizer(null);
+          }
+        },
+        async restore(capture) {
+          const before = capture();
+          const beforeStatistics = statistics(database);
+          const backupPath = `${pathname}.scoped.bak`;
+          expect(
+            resolveSchemaMigrationBackupTables({
+              kind: "agent",
+              foundVersion: predecessor,
+              supportedVersion: target,
+            }),
+          ).toEqual(scope);
+          await withLease(async (lease) => {
+            await createScopedMigrationSnapshot({
+              sourcePath: pathname,
+              targetPath: backupPath,
+              tables: scope,
+              beforePublish: () => lease.assertOwned(),
+            });
+            migrate();
+          });
+          database.exec("UPDATE cache_entries SET blob = X'BEEF' WHERE scope = 'unrelated'");
+          await preserve(() =>
+            restoreDoctorMigrationBackup({ sourcePath: pathname, backupPath, env }),
+          );
+          expect(capture()).toEqual(before);
+          expect(statistics(database)).toEqual(beforeStatistics);
+          expect(row(database, "SELECT hex(blob) AS bytes FROM cache_entries")).toEqual({
+            bytes: "BEEF",
+          });
+        },
       });
     });
 }

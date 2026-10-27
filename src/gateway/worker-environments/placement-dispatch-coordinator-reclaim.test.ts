@@ -12,64 +12,28 @@ import {
   REQUEST,
 } from "./placement-dispatch-coordinator.test-support.js";
 
-it.each(["targeted sweep", "recovery"] as const)(
-  "reclaims independent sessions while %s handles a busy session",
-  async (kind) => {
-    const dispatchGate = createOperationGate(undefined);
-    const reclaimGate = createOperationGate(undefined);
-    const events: string[] = [];
-    const stopped = { ...REQUEST, sessionId: "stopped", sessionKey: "agent:main:stopped" };
-    const recover = async () => {
-      events.push("recovery");
-    };
-    const coordinated = createCoordinatedService({
-      dispatch: async (request) => {
+it("reclaims an independent session while another Stop is blocked", async () => {
+  const gate = createOperationGate(undefined);
+  const coordinated = createCoordinatedService({
+    reclaim: async (request, _authorize, _beforeDrain, serialize) =>
+      serialize!(async () => {
         if (request.sessionId === REQUEST.sessionId) {
-          await dispatchGate.run();
+          await gate.run();
         }
-        return { ...ACTIVE_PLACEMENT, ...request };
-      },
-      reconcileActive: async (_environmentId, admit) => {
-        await admit!([REQUEST.sessionId], async (mode) => {
-          expect(mode).toBe("results-only");
-          await recover();
-        });
-      },
-      resumeProvisioning: admittedRecovery(recover),
-      reclaim: async (request, _authorize, _beforeDrain, serialize) =>
-        await serialize!(async () => {
-          events.push(`reclaim:${request.sessionId}`);
-          if (request.sessionId === stopped.sessionId) {
-            await reclaimGate.run();
-          }
-          return { ...LOCAL_PLACEMENT, ...request };
-        }),
+        return { ...LOCAL_PLACEMENT, ...request };
+      }),
+  });
+  const stopping = coordinated.reclaim(REQUEST);
+  await gate.entered;
+  try {
+    await expect(coordinated.reclaim({ ...REQUEST, sessionId: "other" })).resolves.toMatchObject({
+      sessionId: "other",
     });
-    const dispatch = coordinated.dispatch(REQUEST);
-    await dispatchGate.entered;
-    const recovery =
-      kind === "targeted sweep"
-        ? coordinated.reconcileActive("worker-active")
-        : coordinated.resumeProvisioning({ ...PROVISIONING_PLACEMENT, ...REQUEST }, async () => {});
-    const stop = coordinated.reclaim(stopped);
-    await reclaimGate.entered;
-    await coordinated.reclaim({ ...stopped, sessionId: "other-stop" });
-    expect(events).toEqual([
-      ...(kind === "targeted sweep" ? ["recovery"] : []),
-      "reclaim:stopped",
-      "reclaim:other-stop",
-    ]);
-    dispatchGate.release();
-    await Promise.all([dispatch, recovery]);
-    expect(events).toEqual(
-      kind === "targeted sweep"
-        ? ["recovery", "reclaim:stopped", "reclaim:other-stop"]
-        : ["reclaim:stopped", "reclaim:other-stop", "recovery"],
-    );
-    reclaimGate.release();
-    await stop;
-  },
-);
+  } finally {
+    gate.release();
+    await stopping;
+  }
+});
 
 it.each([false, true])(
   "same-session provisioning recovery follows an admitted Stop (Stop fails=%s)",
@@ -195,7 +159,6 @@ it.each(["sweep", "recovery"] as const)(
     recoveryGate.release();
     await reclaimGate.entered;
     expect(events).toEqual(["recovery:start", "recovery:finish", "reclaim:start"]);
-    expect(dispatch).toHaveBeenCalledOnce();
     reclaimGate.release();
     await Promise.all([recovering, stopping, same]);
     expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual([

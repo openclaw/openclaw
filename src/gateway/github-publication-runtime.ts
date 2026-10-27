@@ -91,7 +91,10 @@ export function createGitHubPublicationRuntime(params: {
         updatePending(key, pending);
       }
       // This invocation can skip empty recovery only until a receipt changes the loaded facts.
-      return () => repository.length === 0 && updates.size === 0 && pendingKnown;
+      return (kind: "shared" | "repository") =>
+        (kind === "shared" ? shared : repository).length === 0 &&
+        updates.size === 0 &&
+        pendingKnown;
     } catch (error) {
       pendingKnown = false;
       throw error;
@@ -167,7 +170,7 @@ export function createGitHubPublicationRuntime(params: {
       return;
     }
     try {
-      const isRepositoryPendingEmpty = !pendingKnown ? await loadPendingRequests() : undefined;
+      const isPendingEmpty = !pendingKnown ? await loadPendingRequests() : undefined;
       if (isStopping?.()) {
         return;
       }
@@ -178,9 +181,9 @@ export function createGitHubPublicationRuntime(params: {
       }
       reconcileNeeded = false;
       try {
-        await coordinator.deferOrphanedRequestsAsync(isRepositoryPendingEmpty);
+        await coordinator.deferOrphanedRequestsAsync(isPendingEmpty);
         if (!isStopping?.()) {
-          await coordinator.resumeSessionRequests(isStopping, isRepositoryPendingEmpty);
+          await coordinator.resumeSessionRequests(isStopping, isPendingEmpty);
         }
       } catch (error) {
         reconcileNeeded = true;

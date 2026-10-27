@@ -42,6 +42,7 @@ suite.define(() => {
         "openclaw-chat-page, .agent-chat__input textarea, openclaw-toast-host .app-toast";
       expect(await page.locator(suppressed).count()).toBe(0);
       expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(0);
 
       await currentSession.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");

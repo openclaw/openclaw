@@ -17,7 +17,8 @@
 }
 
 .session-hovercard__section--metadata,
-.session-hovercard__section--prs {
+.session-hovercard__section--prs,
+.session-hovercard__error {
   padding-block: 0 11px;
 }
 
@@ -272,7 +273,7 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 
 .session-hovercard__context-icon {
   align-self: center;
-  color: var(--muted);
+  color: var(--icon-decorative, var(--muted));
 }
 
 .session-hovercard__context-icon svg,

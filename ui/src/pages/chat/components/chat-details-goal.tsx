@@ -36,6 +36,7 @@ export type ChatDetailsGoalProps = {
   connected: boolean;
   /** Native composer write availability, including admission and pending-operation guards. */
   canAct: boolean;
+  resumeBusy?: boolean;
   recovery?: ChatGoalRecovery;
   onGoalAction?: (goalId: string, action: ChatGoalAction) => void;
   onGoalSubmit?: (draft: ChatGoalDraft, submissionAction?: Event) => Promise<boolean>;
@@ -317,6 +318,7 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
               <ChatGoalActions
                 goal={props.goal!}
                 canAct={canAct()}
+                resumeBusy={props.resumeBusy}
                 connected={props.connected && props.presented}
                 resumeRecovery={resumeRecovery()}
                 onGoalAction={props.onGoalAction}

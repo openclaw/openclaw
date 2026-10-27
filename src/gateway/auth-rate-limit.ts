@@ -302,12 +302,10 @@ export function createGatewayAuthRateLimiter(
 
   function scheduleRelease(key: string, deadline: number): ReturnType<typeof setTimeout> {
     // Auth responses still settle while Gateway maintenance is stopping.
-    const timer = setTimeout(
+    return setTimeout(
       () => releaseLoopbackWaiters(key),
       Math.max(0, deadline - scheduler.now()),
-    );
-    timer.unref?.();
-    return timer;
+    ).unref();
   }
 
   function releaseLoopbackWaiters(key: string): void {

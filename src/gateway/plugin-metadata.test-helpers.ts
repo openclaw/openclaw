@@ -1,9 +1,5 @@
 import assert from "node:assert/strict";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
-import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
-import { rebasePluginMetadataSnapshotManifestRegistry } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 
 function ownerEntries(value: ReadonlyMap<string, readonly string[]>) {
@@ -13,17 +9,14 @@ function ownerEntries(value: ReadonlyMap<string, readonly string[]>) {
 /** Verifies the manifest-derived fields of a trimmed metadata fixture agree. */
 export function assertPluginMetadataSnapshotConsistency(snapshot: PluginMetadataSnapshot): void {
   const plugins = snapshot.manifestRegistry.plugins;
-  const pluginIds = plugins.map((plugin) => plugin.id);
   assert.deepEqual(
     snapshot.plugins.map((plugin) => plugin.id),
-    pluginIds,
-    "fixture plugin IDs",
+    plugins.map((plugin) => plugin.id),
   );
-  assert.equal(snapshot.metrics.manifestPluginCount, plugins.length, "fixture manifest count");
-  assert.equal(
-    snapshot.metrics.indexPluginCount,
-    snapshot.index.plugins.length,
-    "fixture index count",
+  assert.deepEqual(
+    [snapshot.metrics.manifestPluginCount, snapshot.metrics.indexPluginCount],
+    [plugins.length, snapshot.index.plugins.length],
+    "fixture manifest/index counts",
   );
 
   const expectedProviderOwners = new Map<string, string[]>();
@@ -73,37 +66,4 @@ export function assertPluginMetadataSnapshotConsistency(snapshot: PluginMetadata
     ownerEntries(snapshot.owners.cliBackends),
     ownerEntries(expectedCliBackendOwners),
   );
-}
-
-export function createGatewayPluginMetadataSnapshot(
-  config: OpenClawConfig,
-): PluginMetadataSnapshot {
-  const policyHash = resolveInstalledPluginIndexPolicyHash(config);
-  const emptySnapshot = createEmptyPluginMetadataSnapshot();
-  emptySnapshot.policyHash = emptySnapshot.index.policyHash = policyHash;
-  emptySnapshot.index.generatedAtMs = 0;
-  return rebasePluginMetadataSnapshotManifestRegistry(emptySnapshot, {
-    plugins: [
-      {
-        id: "openai",
-        channels: [],
-        providers: ["openai"],
-        cliBackends: [],
-        syntheticAuthRefs: [],
-        providerAuthChoices: [
-          { provider: "openai", method: "oauth", choiceId: "openai" },
-          { provider: "openai", method: "device-code", choiceId: "openai-device-code" },
-          { provider: "openai", method: "api-key", choiceId: "openai-api-key" },
-        ],
-        modelSupport: { modelPrefixes: ["gpt-", "o1", "o3", "o4"] },
-        skills: [],
-        hooks: [],
-        origin: "bundled",
-        rootDir: "/test/openai",
-        source: "/test/openai/index.ts",
-        manifestPath: "/test/openai/openclaw.plugin.json",
-      },
-    ],
-    diagnostics: [],
-  });
 }

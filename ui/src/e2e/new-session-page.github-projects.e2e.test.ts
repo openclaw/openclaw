@@ -303,6 +303,7 @@ suite.define(() => {
       },
     };
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       deferredMethods: ["chat.startup"],
       workspace: WORKSPACE,
       workspaceGit: !missingCheckout,

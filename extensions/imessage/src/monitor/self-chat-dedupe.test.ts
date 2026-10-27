@@ -107,6 +107,44 @@ describe("self-chat dedupe", () => {
       expectDecision(await resolveDecision({ message, mediaFacts, echoCache }), reason);
     },
   );
+  it.each([false, true])("drops chat_id self-chat replies (pending=%s)", async (pending) => {
+    await rememberPersistedIMessageEcho({
+      scope: "default:chat_id:42",
+      text: "Stub reply",
+      ...(pending ? { ttlMs: 60_000, pending: true } : { messageId: "GUID-agent-reply" }),
+    });
+    expectDecision(
+      await resolveDecision({
+        echoCache,
+        message: selfChatMessage({
+          id: 123710,
+          chat_id: 42,
+          guid: "GUID-agent-reply",
+          text: "Stub reply",
+        }),
+      }),
+      "agent echo in self-chat",
+    );
+  });
+
+  it("answers another person's same-text direct message", async () => {
+    await rememberPersistedIMessageEcho({ scope: "default:chat_id:42", text: "OK" });
+    expectDecision(
+      await resolveDecision({
+        echoCache,
+        message: {
+          id: 123712,
+          chat_id: 42,
+          sender: "+15550001111",
+          chat_identifier: "+15550001111",
+          destination_caller_id: SELF_CHAT_HANDLE,
+          guid: "GUID-friend-ok",
+          text: "OK",
+        },
+      }),
+    );
+  });
+
   it("drops DM false positives even when participant lists include the local handle", async () => {
     expect(
       await resolveDecision({

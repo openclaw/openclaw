@@ -1,10 +1,11 @@
 import { expect, it, vi, type Mock } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { defaultRuntime } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
 import { captureBackendEvents } from "./embedded-backend.stream.test-support.js";
-import { deferred, flushMicrotasks, sendMainChat } from "./embedded-backend.test-helpers.js";
+import { flushMicrotasks, sendMainChat } from "./embedded-backend.test-helpers.js";
 
 type EmbeddedAgentResult = { payloads: Array<{ text: string }>; meta: Record<string, unknown> };
 
@@ -63,7 +64,7 @@ export function registerEmbeddedBackendShutdownTests({
 
   it("rejects a send paused in session lookup when shutdown begins", async () => {
     const first = deferred<EmbeddedAgentResult>();
-    const firstStarted = deferred<void>();
+    const firstStarted = deferred();
     agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal: AbortSignal }) => {
       opts.abortSignal.addEventListener("abort", () => first.resolve({ payloads: [], meta: {} }));
       firstStarted.resolve();
@@ -75,8 +76,8 @@ export function registerEmbeddedBackendShutdownTests({
     await firstStarted.promise;
     const worker = await import("../gateway/session-utils-store-worker.js");
     const readEntry = worker.loadGatewaySessionEntryReadOnlyInWorker;
-    const lookupStarted = deferred<void>();
-    const releaseLookup = deferred<void>();
+    const lookupStarted = deferred();
+    const releaseLookup = deferred();
     const lookup = vi
       .spyOn(worker, "loadGatewaySessionEntryReadOnlyInWorker")
       .mockImplementationOnce(async (opts) => {

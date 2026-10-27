@@ -34,7 +34,7 @@ export function scheduleSkillExperienceReview(
   params: Omit<SkillExperienceReviewParams, "workshopMutated">,
 ): void {
   const runId = params.ctx.runId?.trim();
-  if (resolveSkillWorkshopConfig(params.config).autonomous.mode !== "auto" || !runId) {
+  if (resolveSkillWorkshopConfig(params.config).autonomous.mode === "off" || !runId) {
     defaultScheduler.schedule(params);
     return;
   }

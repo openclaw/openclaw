@@ -44,53 +44,28 @@ describe("createWebChannelStatusController", () => {
     });
   });
 
-  it("clears watchdog recovery history once the socket is healthy again", () => {
-    controller.noteClose({
-      at: 2000,
-      statusCode: 499,
-      error: "status=499",
-      reconnectAttempts: 1,
-      healthState: "reconnecting",
-      watchdogRecovery: true,
-    });
-    expect(patches.at(-1)!.lastDisconnect).toEqual({
-      at: 2000,
-      status: 499,
-      error: "status=499",
-      loggedOut: false,
-    });
-    controller.noteConnected(3000);
-
-    expect(patches.at(-1)).toMatchObject({
-      connected: true,
-      healthState: "healthy",
-      reconnectAttempts: 0,
-      lastDisconnect: null,
-    });
-  });
-
-  it("keeps non-watchdog reconnect history after the socket reconnects", () => {
-    controller.noteClose({
-      at: 2000,
-      statusCode: 408,
-      error: "status=408",
-      reconnectAttempts: 1,
-      healthState: "reconnecting",
-    });
-    controller.noteConnected(3000);
-
-    expect(patches.at(-1)).toMatchObject({
-      connected: true,
-      healthState: "healthy",
-      reconnectAttempts: 1,
-    });
-    expect(patches.at(-1)!.lastDisconnect).toEqual({
-      at: 2000,
-      status: 408,
-      error: "status=408",
-      loggedOut: false,
-    });
-  });
+  it.each([true, false])(
+    "reconnect clears history only for watchdog recovery: %s",
+    (watchdogRecovery) => {
+      const disconnect = { at: 2000, status: 499, error: "status=499", loggedOut: false };
+      controller.noteClose({
+        at: disconnect.at,
+        statusCode: disconnect.status,
+        error: disconnect.error,
+        reconnectAttempts: 1,
+        healthState: "reconnecting",
+        watchdogRecovery,
+      });
+      expect(patches.at(-1)!.lastDisconnect).toEqual(disconnect);
+      controller.noteConnected(3000);
+      expect(patches.at(-1)).toMatchObject({
+        connected: true,
+        healthState: "healthy",
+        reconnectAttempts: watchdogRecovery ? 0 : 1,
+      });
+      expect(patches.at(-1)!.lastDisconnect).toEqual(watchdogRecovery ? null : disconnect);
+    },
+  );
 
   it("publishes stopped lifecycle after a reconnecting stop", () => {
     const error = "WhatsApp connection timed out";
@@ -109,18 +84,12 @@ describe("createWebChannelStatusController", () => {
       terminalDisconnect: false,
       lastError: error,
       reconnectAttempts: 1,
-      lastDisconnect: {
-        at: 2000,
-        status: 408,
-        error,
-      },
+      lastDisconnect: { at: 2000, status: 408, error },
     };
-
-    controller.markStopped(2100);
-    expect(patches.at(-1)).toMatchObject(stoppedStatus);
-
-    controller.markStopped(2200);
-    expect(patches.at(-1)).toMatchObject(stoppedStatus);
+    for (const at of [2100, 2200]) {
+      controller.markStopped(at);
+      expect(patches.at(-1)).toMatchObject(stoppedStatus);
+    }
   });
 
   it("clears terminalDisconnect on reconnect after a logged-out stop", () => {
@@ -131,28 +100,22 @@ describe("createWebChannelStatusController", () => {
       reconnectAttempts: 0,
       healthState: "logged-out",
     });
-    controller.markStopped(2100);
-    expect(patches.at(-1)).toMatchObject({ terminalDisconnect: true, lifecycle: "blocked" });
-
-    controller.markStopped(2200);
-    expect(patches.at(-1)).toMatchObject({ terminalDisconnect: true, lifecycle: "blocked" });
+    for (const at of [2100, 2200]) {
+      controller.markStopped(at);
+      expect(patches.at(-1)).toMatchObject({ terminalDisconnect: true, lifecycle: "blocked" });
+    }
 
     controller.noteConnected(3000);
     expect(patches.at(-1)!.terminalDisconnect).toBeUndefined();
     expect(patches.at(-1)).toMatchObject({ healthState: "healthy", lifecycle: "ready" });
 
-    controller.markStopped(3100);
-    expect(patches.at(-1)).toMatchObject({
-      healthState: "stopped",
-      lifecycle: "stopped",
-      terminalDisconnect: false,
-    });
-
-    controller.markStopped(3200);
-    expect(patches.at(-1)).toMatchObject({
-      healthState: "stopped",
-      lifecycle: "stopped",
-      terminalDisconnect: false,
-    });
+    for (const at of [3100, 3200]) {
+      controller.markStopped(at);
+      expect(patches.at(-1)).toMatchObject({
+        healthState: "stopped",
+        lifecycle: "stopped",
+        terminalDisconnect: false,
+      });
+    }
   });
 });

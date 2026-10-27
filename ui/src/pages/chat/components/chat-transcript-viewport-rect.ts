@@ -4,7 +4,7 @@ import {
   syncScrollMargin,
   type createPositionRailGutter,
 } from "./chat-transcript-geometry.ts";
-import { unscaledBorderBox } from "./chat-transcript-layout-owner.ts";
+import { type TranscriptLayoutOwner, unscaledBorderBox } from "./chat-transcript-layout-owner.ts";
 
 type ViewportRectOwner = {
   getScrollElement(): HTMLDivElement | null;
@@ -14,6 +14,7 @@ type ViewportRectOwner = {
   measureConnectedRows(): boolean;
   queueRowMeasure(): void;
   onViewportResize(): void;
+  layout: TranscriptLayoutOwner;
   invalidate(): void;
 };
 
@@ -84,6 +85,14 @@ export class TranscriptViewportRect {
       // The host supplies only the header height already compensated by its render.
       syncScrollMargin(instance, scrollMargin);
       callback(rect);
+      if (railGeometry) {
+        this.owner.layout.restoreRows(
+          instance,
+          railGeometry.columnWidth,
+          rect.width,
+          railGeometry.gutter,
+        );
+      }
       if (widthChanged) {
         // Preserve offscreen estimates; connected resizeItem measurements own scroll compensation.
         this.owner.measureConnectedRows();

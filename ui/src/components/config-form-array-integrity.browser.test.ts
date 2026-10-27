@@ -1,16 +1,8 @@
 // Control UI tests cover array draft recovery and repeated-item constraints.
 import { describe, expect, it, vi } from "vitest";
-import { renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
+import { expectElement, renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
-
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element instanceof Element, label).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${label}`);
-  }
-  return element;
-}
 
 function findAddButton(container: Element): HTMLButtonElement | undefined {
   return Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(

@@ -4,6 +4,8 @@ import type {
   UserProfile,
   ProjectsCheckoutOptionsResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import type { ApprovalHistoryResult } from "../../../packages/gateway-protocol/src/schema/approvals.ts";
+import type { ExecApprovalGrantsListResult } from "../../../packages/gateway-protocol/src/schema/exec-approvals.ts";
 import type { SystemAgentChatHistoryResult } from "../../../packages/gateway-protocol/src/schema/openclaw.ts";
 import type {
   PluginsCatalogBrowseResult,
@@ -106,6 +108,8 @@ export function createControlUiDefaultResponses(scenario: {
   const now = new Date();
   const date = now.toISOString().slice(0, 10);
   return {
+    "approval.history": { items: [] } satisfies ApprovalHistoryResult,
+    "exec.approval.grants.list": { grants: [] } satisfies ExecApprovalGrantsListResult,
     "openclaw.chat.history": { turns: [] } satisfies SystemAgentChatHistoryResult,
     "sessions.usage": {
       updatedAt: now.getTime(),

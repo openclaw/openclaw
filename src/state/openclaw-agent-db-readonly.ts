@@ -4,6 +4,10 @@ import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  retainAgentDatabase,
+} from "./openclaw-agent-db-borrower.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -12,7 +16,6 @@ import {
   createOpenClawAgentDatabaseClaim,
   type OpenClawAgentDatabaseClaim,
 } from "./openclaw-agent-db-identity.js";
-import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import {
   openOpenClawAgentDatabaseReadOnly,
   readOpenClawAgentDatabase,
@@ -27,7 +30,6 @@ import {
   type OpenClawAgentDatabaseReadOnlyBehavior,
   OpenClawAgentDatabaseReadOnlyScope,
 } from "./openclaw-agent-db-readonly-scope.js";
-import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,

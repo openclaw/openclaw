@@ -494,9 +494,6 @@ describe("gateway connection state", () => {
         replace("suggest", 2);
         expectDeliveryWithoutSql(2);
         await projection.ensureMaterialized();
-        expect(
-          projection.describe({ agentId: scope.agentId, key: scope.sessionKey })?.membership.size,
-        ).toBe(0);
         const publicationDirtyRows: number[] = [];
         broadcastDuringPublication = () =>
           withoutSql(() => {
@@ -530,19 +527,12 @@ describe("gateway connection state", () => {
       setRuntimeConfigSnapshot(cfg);
       const reader = ensureProfileForEmail("presence-reader@example.test");
       const sharedKey = "agent:main:presence-shared";
-      const draftKey = "agent:main:presence-draft";
       const incognitoKey = "agent:main:dashboard:incognito-presence";
-      const missingKey = "agent:main:presence-missing";
-      for (const [sessionKey, visibility] of [
-        [sharedKey, "shared"],
-        [draftKey, "draft"],
-        [incognitoKey, "shared"],
-        ["global", "shared"],
-      ] as const) {
+      for (const sessionKey of [sharedKey, incognitoKey, "global"]) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           {
-            ...humanEntry(sessionKey, visibility, "other-owner"),
+            ...humanEntry(sessionKey, "shared", "other-owner"),
             ...(sessionKey === incognitoKey ? { incognito: true } : {}),
           },
         );
@@ -561,7 +551,7 @@ describe("gateway connection state", () => {
       const presenceKey = "presence-boundary-watcher";
       upsertPresence(presenceKey, {
         text: presenceKey,
-        watchedSessions: [sharedKey, draftKey, incognitoKey, missingKey, "agent:main:global"],
+        watchedSessions: [sharedKey, incognitoKey, "agent:main:global"],
       });
       try {
         await projection.ensureMaterialized();
@@ -575,7 +565,7 @@ describe("gateway connection state", () => {
             for (const [index, peer] of peers.entries()) {
               const watchedSessions =
                 index === 1
-                  ? [sharedKey, draftKey, incognitoKey, "agent:main:global"]
+                  ? [sharedKey, incognitoKey, "agent:main:global"]
                   : [...(sharedVisible ? [sharedKey] : []), "agent:main:global"];
               const expected = expect.arrayContaining([
                 expect.objectContaining({ text: presenceKey, watchedSessions }),
@@ -609,17 +599,11 @@ describe("gateway connection state", () => {
         verify(true);
         replaceSessionEntrySync(scope, humanEntry(sharedKey, "draft", "other-owner", 2));
         verify(false);
-        replaceSessionEntrySync(scope, {
-          sessionId: sharedKey,
-          updatedAt: 3,
-          visibility: "shared",
-        });
+        const replace = (visibility: "shared" | "draft", updatedAt: number) =>
+          replaceSessionEntrySync(scope, { sessionId: sharedKey, updatedAt, visibility });
+        replace("shared", 3);
         peers[0]!.send.mockImplementationOnce(() => {
-          replaceSessionEntrySync(scope, {
-            sessionId: sharedKey,
-            updatedAt: 4,
-            visibility: "draft",
-          });
+          replace("draft", 4);
         });
         state.broadcast("presence", { presence: listSystemPresence() });
         const trailing = JSON.parse(String(peers[2]!.send.mock.lastCall?.[0]));

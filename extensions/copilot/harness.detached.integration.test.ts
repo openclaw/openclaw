@@ -3,10 +3,9 @@ import path from "node:path";
 import type { CopilotClient } from "@github/copilot-sdk";
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   loadUserTurnTranscriptRecorderFactoryForTest,
   runInHarnessToolAuthorityForTest,
@@ -19,6 +18,7 @@ import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, expect, it, vi } from "vitest";
 import { asAttemptParams } from "./harness.test-support.js";
 import plugin from "./index.js";
+import { awaitAttemptStage, createAttemptGate } from "./src/attempt.test-support.js";
 import { createCopilotTestHostCapabilities } from "./src/host-capability.test-support.js";
 
 const transport = vi.hoisted(() => ({
@@ -84,27 +84,16 @@ async function fixture() {
   const openKeyedStore = vi.fn((options: OpenKeyedStoreOptions) =>
     createPluginStateKeyedStoreForTests("copilot", { ...options, env: state.env }),
   );
-  let harness: AgentHarnessV2 | undefined;
+  const registerAgentHarness = vi.fn<NonNullable<TestPluginApiInput["registerAgentHarness"]>>();
   plugin.register(
     createTestPluginApi({
       id: "copilot",
-      name: "Copilot",
-      source: "test",
-      config: {},
-      registrationMode: "full",
       runtime: { state: { openKeyedStore } } as never,
-      registerAgentHarness: (registered) => {
-        harness = registered as AgentHarnessV2;
-      },
+      registerAgentHarness,
     }),
   );
-  if (!harness) {
-    throw new Error("Copilot harness was not registered");
-  }
-  const registered = harness;
-  cleanups.push(async () => {
-    await registered.dispose?.();
-  });
+  const registered = registerAgentHarness.mock.calls[0]![0] as AgentHarnessV2;
+  cleanups.push(async () => registered.dispose?.());
   const manager = SessionManager.inMemory(directory);
   const params = asAttemptParams({
     agentId: "main",
@@ -151,47 +140,38 @@ async function fixture() {
       return result;
     });
   };
-  return { directory, manager, openKeyedStore, run, registered };
+  return { directory, manager, openKeyedStore, run };
 }
 
 function replyOk() {
-  return new Response(
-    JSON.stringify({
-      id: "chatcmpl-fixture",
-      object: "chat.completion",
-      created: 1,
-      model: "fixture-model",
-      choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-    }),
-    { status: 200, headers: { "content-type": "application/json" } },
-  );
+  return Response.json({
+    id: "chatcmpl-fixture",
+    object: "chat.completion",
+    created: 1,
+    model: "fixture-model",
+    choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  });
 }
+
+const nativePath = (directory: string, sessionId: string) =>
+  path.join(directory, "copilot", "session-state", sessionId);
+const sessionIds = async (client: CopilotClient) =>
+  (await client.listSessions()).map((entry) => entry.sessionId);
 
 it.each(["success", "failure", "cancel", "cleanup-failure"] as const)(
   "does not retain detached native history or touch bindings after %s",
   async (outcome) => {
     const { directory, manager, openKeyedStore, run } = await fixture();
-    const requested = createDeferred<void>();
-    const response = createDeferred<Response>();
+    const response = createAttemptGate<Response>();
     const controller = new AbortController();
-    transport.reply = async () => {
-      requested.resolve();
-      return response.promise;
-    };
+    transport.reply = response.wait;
     const pending = run({ sessionPersistence: "detached", abortSignal: controller.signal });
-    await Promise.race([
-      requested.promise,
-      pending.then((result) => {
-        throw new Error(
-          `Attempt ended before provider request: ${JSON.stringify(result.terminal)} ${result.terminal.kind === "failed" ? String(result.terminal.error) : ""}`,
-        );
-      }),
-    ]);
+    await awaitAttemptStage(response.entered, pending);
     const client = transport.clients[0]!;
     expect(transport.sessionId).toBeDefined();
-    const nativePath = path.join(directory, "copilot", "session-state", transport.sessionId!);
-    expect((await fs.readdir(nativePath)).length).toBeGreaterThan(0);
+    const sessionPath = nativePath(directory, transport.sessionId!);
+    expect((await fs.readdir(sessionPath)).length).toBeGreaterThan(0);
     const cleanupFailure = new Error("synthetic native deletion failure");
     if (outcome === "cleanup-failure") {
       vi.spyOn(client, "deleteSession").mockRejectedValueOnce(cleanupFailure);
@@ -199,11 +179,9 @@ it.each(["success", "failure", "cancel", "cleanup-failure"] as const)(
     if (outcome === "cancel") {
       controller.abort();
     }
-    response.resolve(
+    response.release(
       outcome === "failure"
-        ? new Response(JSON.stringify({ error: { message: "synthetic provider failure" } }), {
-            status: 400,
-          })
+        ? Response.json({ error: { message: "synthetic provider failure" } }, { status: 400 })
         : replyOk(),
     );
     const result = await pending;
@@ -212,20 +190,16 @@ it.each(["success", "failure", "cancel", "cleanup-failure"] as const)(
     );
     if (outcome === "success") {
       expect(result.assistantTexts).toEqual(["OK"]);
-      expect(
-        manager.getEntries().filter((entry) => entry.type === "message").length,
-      ).toBeGreaterThan(0);
+      expect(manager.getEntries().some((entry) => entry.type === "message")).toBe(true);
     }
     expect(openKeyedStore).not.toHaveBeenCalled();
     if (outcome === "cleanup-failure") {
       expect(result.terminal).toMatchObject({ kind: "failed", error: cleanupFailure });
-      expect((await client.listSessions()).map((entry) => entry.sessionId)).toEqual([
-        transport.sessionId,
-      ]);
+      expect(await sessionIds(client)).toEqual([transport.sessionId]);
       return;
     }
     expect(await client.listSessions()).toEqual([]);
-    await expect(fs.stat(nativePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(sessionPath)).rejects.toMatchObject({ code: "ENOENT" });
   },
 );
 
@@ -241,14 +215,10 @@ it("keeps caller-owned memory conversations resumable without marking them detac
   expect(await store.lookup("caller-owned-session")).toMatchObject({
     sdkSessionId: native!.sessionId,
   });
-  expect(
-    (await fs.readdir(path.join(directory, "copilot", "session-state", native!.sessionId))).length,
-  ).toBeGreaterThan(0);
+  expect((await fs.readdir(nativePath(directory, native!.sessionId))).length).toBeGreaterThan(0);
   const second = await run({ runId: "fixture-turn-2", prompt: "Reply OK again" });
   expect(second.terminal.kind).toBe("ok");
-  expect((await client.listSessions()).map((entry) => entry.sessionId)).toEqual([
-    native!.sessionId,
-  ]);
+  expect(await sessionIds(client)).toEqual([native!.sessionId]);
   const binding = await store.lookup("caller-owned-session");
   const accesses = openKeyedStore.mock.calls.length;
   const lookup = vi.spyOn(store, "lookup");
@@ -261,9 +231,7 @@ it("keeps caller-owned memory conversations resumable without marking them detac
   });
   expect(detached.terminal.kind).toBe("ok");
   expect(transport.sessionId).not.toBe(native!.sessionId);
-  expect((await client.listSessions()).map((entry) => entry.sessionId)).toEqual([
-    native!.sessionId,
-  ]);
+  expect(await sessionIds(client)).toEqual([native!.sessionId]);
   expect(lookup).not.toHaveBeenCalled();
   expect(register).not.toHaveBeenCalled();
   expect(remove).not.toHaveBeenCalled();

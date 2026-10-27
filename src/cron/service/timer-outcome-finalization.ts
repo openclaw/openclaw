@@ -1,8 +1,8 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { clearCronJobActive, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
+import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { getCronJobsStoreRevision, noteCronJobsStoreCommit } from "../store.js";
-import { cronStoreKey } from "../store/key.js";
 import { cronRunResultEvent } from "../store/run-result.js";
 import { isDeferredCronAdmission } from "./admission-deferred.js";
 import { needsCronTimerMaintenance } from "./jobs-scheduling.js";
@@ -61,7 +61,7 @@ export async function finalizeCompletedCronRunOutcomes(
   const context =
     outcomes.find((outcome) => outcome.runReceiptContext)?.runReceiptContext ??
     captureOpenClawStateWorkerContext();
-  const storeKey = cronStoreKey(state.deps.storePath);
+  const storeKey = state.deps.storeKey;
   const canPublish = (outcome: TimedCronRunOutcome) =>
     !(state.stopped && opts?.discardWhenStopped) &&
     isCronActiveJobMarkerCurrent(outcome.activeJobMarker);
@@ -85,6 +85,11 @@ export async function finalizeCompletedCronRunOutcomes(
             outcomes: outcomes.map(
               ({ activeJobMarker, runReceiptContext: _context, request, ...completed }) => ({
                 ...completed,
+                errorReason: resolveCronRunErrorReason(
+                  cronRunResultEvent(completed.job, completed).error,
+                  completed.provider,
+                  completed.errorClassification,
+                ),
                 activeJobMarker: activeJobMarker && {
                   jobRemoved: activeJobMarker.jobRemoved,
                   scheduleMutated: activeJobMarker.scheduleMutated,

@@ -298,7 +298,7 @@ describe("Code Mode search", () => {
     expectToolCalls(1, plugin, client);
   });
 
-  function setup(maxSearchLimit = 50) {
+  it("keeps discovery intact beyond the display budget and leaves narrowed discovery callable", async () => {
     const targets = Array.from({ length: 50 }, (_, index) =>
       pluginTool(
         `shipment_${String(index).padStart(2, "0")}_${"long_name_".repeat(5)}`,
@@ -306,14 +306,11 @@ describe("Code Mode search", () => {
       ),
     );
     const { ctx } = createCatalogCodeModeHarness(targets, {
-      codeMode: { maxOutputBytes: 1024, maxSearchLimit },
+      codeMode: { maxOutputBytes: 1024, maxSearchLimit: 50 },
     });
     const run = (code: string) => runCodeModeScriptHeadless({ ctx, code });
-    return { run, targets };
-  }
-
-  it("keeps discovery intact beyond the display budget and leaves narrowed discovery callable", async () => {
-    const { run, targets } = setup();
+    const missing = await run('return await catalog.search("zzzz_missing_tool", { limit: 50 });');
+    expectCompleted(missing, []);
     const overflow = await run(
       'const matches = await catalog.search("shipment", { limit: 50 }); return { count: matches.length, callable: matches.every(tool => typeof tool === "function") };',
     );
@@ -328,18 +325,6 @@ describe("Code Mode search", () => {
     expectCompleted(narrowed, { name: targets[0]?.name, input: { value: "ship" } });
     expect(targets[0]?.execute).toHaveBeenCalledOnce();
     expectToolCalls(0, ...targets.slice(1));
-    expect(testing.activeRuns.size).toBe(0);
-    expect(testing.resumingRunIds.size).toBe(0);
-  });
-
-  it("returns no callable matches for an unknown tool", async () => {
-    const { run, targets } = setup();
-    const result = await run(`
-      const matches = await catalog.search("zzzz_missing_tool", { limit: 50 });
-      return { count: matches.length, frozen: Object.isFrozen(matches), callable: matches.every(tool => typeof tool === "function") };
-    `);
-    expectCompleted(result, { count: 0, frozen: true, callable: true });
-    expectToolCalls(0, ...targets);
   });
 });
 
@@ -770,7 +755,7 @@ describe("session store bridge", () => {
       for (const key of ["a", "b", "c", "d"]) await store(key, max);
       const errors = [];
       for (const [key, value] of [["a", max + "x"], ["a", "é".repeat(128 * 1024)], ["e", 1]]) {
-        try { await store(key, value); } catch (error) { errors.push(error instanceof RangeError); }
+        try { await store(key, value); } catch (error) { errors.push(error instanceof RangeError && error.code === "store_range" && /unchanged/.test(error.message)); }
       }
       const unchanged = (await load("a")).length;
       await store("b", undefined);
@@ -808,10 +793,13 @@ describe("session store bridge", () => {
     expectFailure(
       result,
       "bridge",
-      "internal_error",
+      set ? "internal_error" : "invalid_input",
       set
         ? { error: expect.stringContaining("repair the session") }
-        : { bridgeDispatchStarted: true, error: expect.stringMatching(/^RangeError/) },
+        : {
+            bridgeDispatchStarted: true,
+            error: expect.stringMatching(/^RangeError:.*save a summary/),
+          },
     );
     expect(log).toHaveBeenCalledExactlyOnceWith(
       set ? expect.objectContaining({ cause: expect.any(cause) }) : expect.any(cause),

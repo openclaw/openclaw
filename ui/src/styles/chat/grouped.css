@@ -83,7 +83,7 @@
   max-width: none;
 }
 
-.chat-group-messages
+:is(.chat-group-messages, .chat-agent-run-body)
   > :is(
     .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
     .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell
@@ -91,8 +91,7 @@
   margin-block-start: var(--chat-message-type-boundary-gap);
 }
 
-.chat-group
-  > .chat-group-messages
+:is(.chat-group > .chat-group-messages, .chat-agent-run-body)
   > :is(
     .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
     .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell,
@@ -109,7 +108,7 @@
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
   display: block;
-  padding-inline-start: var(--chat-avatar-gutter);
+  padding-inline-start: calc(var(--chat-group-inset-start) + var(--chat-avatar-gutter));
 }
 
 /* Tool activity, completed work and live narration are blocks inside a turn,
@@ -151,12 +150,17 @@
 .chat-group:hover .chat-group-footer,
 .chat-group:focus-within .chat-group-footer,
 .chat-group-footer:has(.msg-meta[open]) {
+  --chat-footer-disclosure-opacity: 1;
+  --chat-footer-disclosure-pointer-events: auto;
   opacity: 1;
   pointer-events: auto;
 }
 
 /* Delivery recovery stays visible even when identity metadata is collapsed. */
 .chat-group-footer.chat-group-footer--send-status {
+  --chat-footer-detail-position: static;
+  --chat-footer-disclosure-opacity: 1;
+  --chat-footer-disclosure-pointer-events: auto;
   opacity: 1;
   pointer-events: auto;
 }
@@ -262,10 +266,49 @@
   align-items: center;
   gap: 4px;
   margin-top: 6px;
+  pointer-events: auto;
+}
+
+.chat-group-footer > .chat-message-reactions,
+.chat-message-actions-row > .chat-message-reactions {
+  min-width: 0;
+  margin-top: 0;
+}
+
+/* One chip and its add button stay together while metadata yields width.
+   Longer reaction inventories retain their wrapping layout. */
+.chat-group-footer > .chat-message-reactions--single,
+.chat-message-actions-row > .chat-message-reactions--single {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
+/* Reactions share the reserved footer row without inheriting its hover fade.
+   Metadata and actions retain their own disclosure and keyboard access. */
+.chat-group-footer:has(> .chat-message-reactions) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chat-group-footer:has(> .chat-message-reactions)
+  > :is(.chat-group-footer__meta, .chat-group-footer-actions) {
+  opacity: var(--chat-footer-disclosure-opacity, 0);
+  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
+  transition: opacity 120ms ease-out;
+}
+
+.chat-group-footer--persistent-identity:has(> .chat-message-reactions) > .chat-group-footer__meta {
+  opacity: var(--chat-persistent-footer-opacity, 1);
 }
 
 .chat-group.user:not(.chat-group--peer) .chat-message-reactions {
   justify-content: flex-end;
+}
+
+.chat-group.user:not(.chat-group--peer)
+  :is(.chat-group-footer, .chat-message-actions-row)
+  > .chat-message-reactions {
+  order: 1;
 }
 
 .chat-reaction-chip {
@@ -401,6 +444,12 @@
   text-decoration: none;
 }
 
+:where(.chat-group.user) .chat-sender-name.person-activity-link,
+:where(.chat-group.user) .chat-sender-name.person-activity-link:hover,
+:where(.chat-group.user) .chat-sender-name.person-activity-link:focus-visible {
+  color: var(--chat-sender-name-color);
+}
+
 .chat-message-source {
   color: var(--muted);
   font-size: 12px;
@@ -476,13 +525,8 @@
   letter-spacing: -0.02em;
 }
 
-.chat-author-avatar__fallback,
 .chat-author-avatar.is-fallback .chat-author-avatar__image {
   display: none;
-}
-
-.chat-author-avatar.is-fallback .chat-author-avatar__fallback {
-  display: inline-flex;
 }
 
 .chat-group-timestamp {
@@ -929,19 +973,20 @@ img.chat-avatar.user {
 }
 
 .chat-avatar-slot > .chat-avatar {
+  display: grid;
+  grid-area: 1 / 1;
   width: 100%;
   height: 100%;
   margin-bottom: 0;
 }
 
-.chat-avatar-slot > :not(img, .identity-avatar__hat),
+.chat-avatar-slot > img.chat-avatar {
+  z-index: 1;
+}
+
 .chat-avatar-slot.is-fallback > img.chat-avatar,
 .chat-avatar-slot.is-fallback > .identity-avatar__hat {
   display: none;
-}
-
-.chat-avatar-slot.is-fallback > :not(img, .identity-avatar__hat) {
-  display: grid;
 }
 
 .chat-avatar.assistant,
@@ -1396,9 +1441,17 @@ button.chat-reply-attribution__target:disabled {
   box-shadow: none;
 }
 
+.chat-group:is(.user, .chat-group--forwarded) .chat-bubble:not(.chat-bubble--tool-shell) {
+  --chat-text-link: var(--chat-participant-link, var(--chat-canvas-link, var(--link)));
+  --chat-text-link-hover: var(
+    --chat-participant-link-hover,
+    var(--chat-canvas-link-hover, var(--link-hover))
+  );
+}
+
 /* User bubbles have different styling */
 .chat-group.user .chat-bubble {
-  --chat-bubble-background: var(--accent-subtle);
+  --chat-bubble-background: var(--chat-participant-surface);
   background: var(--chat-bubble-background);
 
   :where(.shell[data-background-managed]) & {
@@ -1423,7 +1476,6 @@ button.chat-reply-attribution__target:disabled {
 
 /* Theme selection must not outrank the bare sent-media shell below. */
 :where(:root[data-theme-mode="light"]) .chat-group.user .chat-bubble {
-  --chat-bubble-background: color-mix(in srgb, var(--accent) 15%, var(--bg));
   border-color: transparent;
   background: var(--chat-bubble-background);
 
@@ -1445,13 +1497,9 @@ button.chat-reply-attribution__target:disabled {
   box-shadow: none;
 }
 
-/* Sender bubble tint: --chat-sender-hue is the user or source session's stable
-   identity hue (same seed as avatar initials). Only hue varies; saturation/
-   lightness/alpha are fixed per theme mode so bubble text keeps contrast for
-   every hue. Order contract: stays below the light-mode reset above — the
-   dark rule outranks it by specificity, so light mode needs its own skin. */
+/* Participant colors are resolved by the shared theme presentation owner. */
 .chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint .chat-bubble {
-  --chat-bubble-background: hsl(var(--chat-sender-hue) 48% 42% / 0.16);
+  --chat-bubble-background: var(--chat-participant-surface);
   background: var(--chat-bubble-background);
 
   :where(.shell[data-background-managed]) & {
@@ -1465,22 +1513,9 @@ button.chat-reply-attribution__target:disabled {
   border-color: transparent;
 }
 
-.chat-group.user.chat-group--sender-tint .chat-sender-name {
-  --chat-sender-name-color: hsl(var(--chat-sender-hue) 45% 70%);
-}
-
-:where(:root[data-theme-mode="light"]) .chat-group.user.chat-group--sender-tint .chat-bubble {
-  --chat-bubble-background: hsl(var(--chat-sender-hue) 65% 94%);
-}
-
-/* Keep tinted user turns borderless when the generic light hover skin applies. */
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
   border-color: transparent;
   box-shadow: none;
-}
-
-:root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-sender-name {
-  --chat-sender-name-color: hsl(var(--chat-sender-hue) 60% 36%);
 }
 
 /* Ephemeral drafts share sent-turn geometry, typography, and identity tint. */
@@ -1625,10 +1660,10 @@ button.chat-reply-attribution__target:disabled {
 .agent-chat__typing-caret::after {
   content: "";
   position: absolute;
+  /* Stretch to the inline font box, matching its ascent/descent at any text size. */
+  inset-block: 0;
   inset-inline-start: 0;
-  bottom: -0.12em;
   width: 2px;
-  height: 1em;
   background: currentColor;
   animation: chat-typing-pulse 1s step-end infinite;
 }
@@ -1945,8 +1980,11 @@ button.chat-reply-attribution__target:disabled {
     --chat-footer-disclosure-opacity: 0;
     --chat-footer-disclosure-pointer-events: none;
     --chat-footer-action-opacity: 0;
-    opacity: var(--chat-footer-disclosure-opacity);
     pointer-events: var(--chat-footer-disclosure-pointer-events);
+  }
+
+  .chat-group.user.chat-group--peer .chat-message-footer:not(:has(> .chat-message-reactions)) {
+    opacity: var(--chat-footer-disclosure-opacity);
   }
 
   .chat-group.user.chat-group--peer
@@ -2097,18 +2135,27 @@ button.chat-reply-attribution__target:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 6px;
   width: auto;
   max-width: 100%;
-  min-height: 28px;
-  padding: 4px 0;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted);
-  font-size: 12px;
   list-style: none;
   cursor: var(--cursor-action);
+}
+
+.chat-bubble-activity__summary {
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-activity-group--bubble > .chat-activity-group__summary {
+  gap: 4px;
+  padding: 0;
+  color: var(--chat-tool-activity-color, var(--muted));
 }
 
 .chat-bubble-activity--working > .chat-bubble-activity__summary,

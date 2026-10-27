@@ -33,8 +33,7 @@ import {
 import { buildExecApprovalContinuationFallbackPrompt } from "./bash-tools.exec-approval-output.js";
 import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import {
-  formatExecDeniedUserMessage,
-  isExecDeniedResultText,
+  formatExecDeniedReasonMessage,
   parseExecApprovalResultText,
 } from "./exec-approval-result.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -184,15 +183,14 @@ async function isExecApprovalFollowupDirectDeliveryStale(params: {
 }
 
 function formatDirectExecApprovalFollowupText(
-  resultText: string,
+  parsed: ReturnType<typeof parseExecApprovalResultText>,
   opts: { allowDenied?: boolean } = {},
 ): string | null {
-  const parsed = parseExecApprovalResultText(resultText);
   if (parsed.kind === "other" && !parsed.raw) {
     return null;
   }
   if (parsed.kind === "denied") {
-    return opts.allowDenied ? formatExecDeniedUserMessage(parsed.raw) : null;
+    return opts.allowDenied ? formatExecDeniedReasonMessage(parsed.metadata) : null;
   }
 
   const metadata =
@@ -308,12 +306,12 @@ export async function sendExecApprovalFollowup(
       : undefined;
   // Trimmed text only classifies empty/denied results; the raw text is what reaches the
   // agent so command whitespace survives the follow-up.
-  const trimmedResultText = params.resultText.trim();
-  if (!trimmedResultText) {
+  const parsed = parseExecApprovalResultText(params.resultText);
+  if (!parsed.raw) {
     return false;
   }
   const resultText = params.resultText;
-  const isDenied = isExecDeniedResultText(trimmedResultText);
+  const isDenied = parsed.kind === "denied";
   let internalRuntimeHandoffId = params.internalRuntimeHandoffId;
   let idempotencyKey = params.idempotencyKey;
   if (!isDenied && sessionKey && params.direct !== true && !internalRuntimeHandoffId) {
@@ -355,7 +353,7 @@ export async function sendExecApprovalFollowup(
         sessionKey,
         message: isDenied
           ? buildExecDeniedFollowupPrompt(resultText)
-          : buildExecApprovalContinuationFallbackPrompt(resultText),
+          : buildExecApprovalContinuationFallbackPrompt(resultText, parsed),
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: sessionKey,
@@ -444,13 +442,13 @@ export async function sendExecApprovalFollowup(
     return false;
   }
 
-  const directText = formatDirectExecApprovalFollowupText(resultText, {
+  const directText = formatDirectExecApprovalFollowupText(parsed, {
     allowDenied: isDenied || sessionError !== null,
   });
   if (deliveryTarget.deliver && directText) {
-    const parsed = !isDenied && sessionError ? parseExecApprovalResultText(resultText) : undefined;
     const prefix =
-      parsed &&
+      !isDenied &&
+      sessionError &&
       (parsed.kind !== "finished" ||
         !normalizeLowercaseStringOrEmpty(parsed.metadata).includes("code 0"))
         ? "Automatic session resume failed, so sending the status directly.\n\n"

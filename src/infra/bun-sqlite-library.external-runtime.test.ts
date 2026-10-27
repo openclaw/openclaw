@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { standaloneManifestFixture } from "../daemon/standalone-manifest.test-support.js";
 import {
   ensureSqliteLibrarySelected,
   mockBunSqliteNativeBoundary,
@@ -15,14 +16,7 @@ it("selects bundled SQLite from a renamed standalone executable in generic mode"
   const bundled = path.join(root, "runtime", "lib", "libsqlite3.dylib");
   fs.writeFileSync(
     path.join(root, "manifest.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      mode: "aot",
-      executable: { path: "renamed-openclaw" },
-      runtime: { path: "runtime" },
-      openclaw: { version: "1" },
-      bun: { version: "1" },
-    }),
+    JSON.stringify(standaloneManifestFixture("aot", "renamed-openclaw", "1", "1")),
   );
   const native = mockBunSqliteNativeBoundary();
   const originalExecutable = process.execPath;

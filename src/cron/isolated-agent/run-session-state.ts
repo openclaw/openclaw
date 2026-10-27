@@ -354,7 +354,7 @@ export function createCronRunContinuationSession(params: {
     delete source.previousSessionId;
     delete source.forkSource;
     delete source.usageFamilySessionIds;
-    const snapshot = { source, continuation: structuredClone(continuation) };
+    const snapshot = { source, continuation: { ...continuation } };
     if (phase === "running" && isDeepStrictEqual(snapshot, persistedSnapshot)) {
       return;
     }

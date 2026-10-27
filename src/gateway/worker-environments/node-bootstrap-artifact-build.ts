@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { constants as fsConstants, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { finished, pipeline } from "node:stream/promises";
+import { StringDecoder } from "node:string_decoder";
 import { isDeepStrictEqual } from "node:util";
-import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { valid } from "semver";
 import * as tar from "tar";
 import { listBundleDependencies } from "../../../scripts/lib/package-bundle-dependencies.mts";
@@ -45,7 +46,6 @@ import {
   type WorkerBundleHashEntry,
 } from "../../shared/worker-bundle-hash.js";
 import { MAX_WORKER_BUNDLE_ARCHIVE_BYTES } from "../../shared/worker-bundle-limits.js";
-import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import type {
   NodeBootstrapArtifactOptions,
   NodeBootstrapArtifact,
@@ -56,22 +56,6 @@ import {
 } from "./node-bootstrap-prebuilt.js";
 import { resolveNodeBootstrapRuntimeChunks } from "./node-bootstrap-runtime-chunks.js";
 
-const BOOTSTRAP_LAUNCHER_FILES = [
-  "openclaw.mjs",
-  "node-version.mjs",
-  "node-sqlite.mjs",
-  "node-runtime-update.mjs",
-  "node-runtime-recovery.mjs",
-  "cli-parent-lifetime.mjs",
-  "node-runtime-env.mjs",
-  "cli-invocation.mjs",
-  "cli-root-options.mjs",
-  "gateway-run-argv.mjs",
-  "gateway-shutdown-budget.mjs",
-  "node-host-launcher.mjs",
-  "node-compile-cache.mjs",
-];
-const READ_CONCURRENCY = 16;
 const IGNORED_PLUGIN_DIRECTORIES = new Set(["node_modules", "src", "test", "tests"]);
 // Shared runtime chunks that the plugin npm build publishes under this hidden dist
 // directory (see scripts/lib/plugin-npm-runtime-build.mts chunkFileNames).
@@ -308,9 +292,17 @@ export async function prepareNodeBootstrapArtifact(
       planEntry(`${prefix}${relative}`, { source: { root, relative }, scope });
     }
   };
-  const readEntry = async (entry: BootstrapEntry) => {
+  const readEntry = async (
+    entry: BootstrapEntry,
+    consume: (
+      chunks: AsyncIterable<Buffer> | Iterable<Buffer>,
+      size: number,
+      mode: number,
+    ) => Promise<void>,
+  ) => {
     if ("contents" in entry) {
-      return { contents: entry.contents, mode: modes[0]! };
+      await consume([entry.contents], entry.contents.byteLength, modes[0]!);
+      return;
     }
     const { root, relative } = entry.source;
     const source = path.join(root, relative);
@@ -324,10 +316,22 @@ export async function prepareNodeBootstrapArtifact(
         throw new Error(`Invalid node distribution file: ${relative}`);
       }
       reserveFile(before.size);
-      const contents = await readFileHandleBounded(handle, before.size);
+      async function* chunks() {
+        let remaining = before.size;
+        while (remaining >= 0) {
+          // Read one extra byte to detect growth without allocating for a growing file.
+          const buffer = Buffer.allocUnsafe(Math.min(remaining + 1, 64 * 1024));
+          const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+          if (!bytesRead) {
+            return;
+          }
+          remaining -= bytesRead;
+          yield buffer.subarray(0, bytesRead);
+        }
+      }
+      await consume(chunks(), before.size, modes[(before.mode & 0o111) !== 0 ? 1 : 0]!);
       const current = await fs.lstat(source);
       if (
-        contents.byteLength !== before.size ||
         current.isSymbolicLink() ||
         current.dev !== before.dev ||
         current.ino !== before.ino ||
@@ -335,7 +339,6 @@ export async function prepareNodeBootstrapArtifact(
       ) {
         throw new Error(`Node distribution changed while packaging: ${relative}`);
       }
-      return { contents, mode: modes[(before.mode & 0o111) !== 0 ? 1 : 0]! };
     } finally {
       await handle.close();
     }
@@ -355,13 +358,18 @@ export async function prepareNodeBootstrapArtifact(
       !relative.startsWith("dist/control-ui/") &&
       !externalPluginPrefixes.some((prefix) => relative.startsWith(prefix)),
   );
-  const scripts = (sourcePackage.files ?? []).filter(
+  // The package owns runtime helpers as well as lifecycle scripts; a second
+  // launcher inventory drifts and makes every retry rebuild an invalid archive.
+  const runtimeFiles = (sourcePackage.files ?? []).filter(
     (relative) =>
-      relative.startsWith("scripts/") && !relative.includes("*") && !relative.endsWith("/"),
+      (relative.startsWith("scripts/") || /\.[cm]?[jt]s$/u.test(relative)) &&
+      !relative.startsWith("!") &&
+      !relative.includes("*") &&
+      !relative.endsWith("/"),
   );
   const { files, sourceFacts } = await resolveNodeBootstrapRuntimeChunks(
     packageRoot,
-    [...BOOTSTRAP_LAUNCHER_FILES, ...publicFiles, ...scripts].filter(
+    [...runtimeFiles, ...publicFiles].filter(
       (relative) => relative !== LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
     ),
     packageJson.files ?? [],
@@ -545,45 +553,82 @@ export async function prepareNodeBootstrapArtifact(
           void entryConsumed.catch(() => undefined);
         },
       });
+  const archiveHash = createHash("sha256");
   const archiveDone = pack
-    ? pipeline(pack, createWriteStream(tarballPath, { flags: "wx" }))
+    ? pipeline(
+        pack,
+        async function* (chunks: AsyncIterable<Buffer>) {
+          for await (const chunk of chunks) {
+            archiveHash.update(chunk);
+            yield chunk;
+          }
+        },
+        createWriteStream(tarballPath, { flags: "wx" }),
+      )
     : Promise.resolve();
-  // Observe output errors immediately, but join the pipeline after in-flight reads drain.
-  void archiveDone.catch(() => undefined);
+  const archiveAbort = new AbortController();
+  void archiveDone.catch((error: unknown) => archiveAbort.abort(error));
   const manifest: WorkerBundleHashEntry[] = [];
   try {
-    // One batch holds at most 16 source buffers under the existing expanded-byte budget.
-    // Pack's jobs limit does not bound ReadEntry input, so consume each output entry below.
-    for (let offset = 0; offset < ordered.length; offset += READ_CONCURRENCY) {
-      const batch = ordered.slice(offset, offset + READ_CONCURRENCY);
-      const read = await runTasksWithConcurrency({
-        tasks: batch.map(
-          ([, entry]) =>
-            () =>
-              readEntry(entry),
-        ),
-        limit: READ_CONCURRENCY,
-        errorMode: "stop",
-      });
-      if (read.hasError) {
-        throw read.firstError;
-      }
-      for (let index = 0; index < batch.length; index += 1) {
-        const [relative, entry] = batch[index]!;
-        const { contents, mode } = read.results[index]!;
+    for (const [relative, entry] of ordered) {
+      await readEntry(entry, async (chunks, size, mode) => {
         const importerPath = relative.slice(entry.scope.prefix.length);
-        if (path.posix.basename(relative) === "package.json") {
-          const text = contents.toString("utf8");
+        const inspected = sourceFacts.get(relative);
+        const packageMetadata = path.posix.basename(relative) === "package.json";
+        const includeTypeScript = entry.scope === mainScope && runtimeFiles.includes(relative);
+        // Only uninspected JavaScript and package metadata need a complete source string.
+        const needsText =
+          packageMetadata ||
+          (!inspected &&
+            !entry.scope.patchedMcp &&
+            (/\.[cm]?js$/u.test(importerPath) ||
+              (includeTypeScript && /\.[cm]?ts$/u.test(importerPath))));
+        const decoder = needsText ? new StringDecoder("utf8") : undefined;
+        let text = "";
+        const input = pack
+          ? new tar.ReadEntry(
+              new tar.Header({
+                path: `package/${relative}`,
+                size,
+                mode,
+                type: "File",
+              }),
+            )
+          : undefined;
+        if (input && pack) {
+          pack.add(input);
+        }
+        const hash = createHash("sha256");
+        let bytes = 0;
+        for await (const chunk of chunks) {
+          archiveAbort.signal.throwIfAborted();
+          bytes += chunk.byteLength;
+          if (bytes > size) {
+            throw new Error(`Node distribution changed while packaging: ${relative}`);
+          }
+          hash.update(chunk);
+          if (decoder) {
+            text += decoder.write(chunk);
+          }
+          if (input && !input.write(chunk)) {
+            await once(input, "drain", { signal: archiveAbort.signal });
+          }
+        }
+        if (bytes !== size) {
+          throw new Error(`Node distribution changed while packaging: ${relative}`);
+        }
+        input?.end();
+        text += decoder?.end() ?? "";
+        if (packageMetadata) {
           mainScope.packageJsons.set(relative, text);
           entry.scope.packageJsons.set(importerPath, text);
         }
         const identity = {
           path: `package/${relative}`,
-          size: contents.byteLength,
+          size,
           mode: process.platform === "win32" ? WORKER_BUNDLE_ARTIFACT_MODE : mode,
-          sha256: createHash("sha256").update(contents).digest("hex"),
+          sha256: hash.digest("hex"),
         };
-        const inspected = sourceFacts.get(relative);
         if (entry.scope.patchedMcp) {
           entry.scope.patchedMcp.hashes.set(importerPath, identity.sha256);
         } else {
@@ -591,28 +636,18 @@ export async function prepareNodeBootstrapArtifact(
             ...(inspected?.imports ??
               collectPackageDistImports({
                 files: [importerPath],
+                includeTypeScript,
                 packageJsons: entry.scope.packageJsons,
-                readText: () => contents.toString("utf8"),
+                readText: () => text,
               })),
           );
         }
         manifest.push(identity);
-        if (!pack) {
-          continue;
+        if (pack) {
+          // Pack's jobs limit does not bound ReadEntry input; drain this entry first.
+          await Promise.race([entryConsumed, archiveDone]);
         }
-        const input = new tar.ReadEntry(
-          new tar.Header({
-            path: identity.path,
-            size: identity.size,
-            mode,
-            type: "File",
-          }),
-        );
-        pack.add(input);
-        input.end(contents);
-        // Wait for tar's output entry, not merely the input buffer, before feeding another.
-        await Promise.race([entryConsumed, archiveDone]);
-      }
+      });
     }
     for (const scope of [...scopes, mainScope]) {
       const errors = scope.patchedMcp
@@ -652,8 +687,13 @@ export async function prepareNodeBootstrapArtifact(
       return await prepareNodeBootstrapArtifact(options, temporaryRoot, false);
     }
   }
-  await using handle = await fs.open(tarballPath, "r");
-  const { digest: tarballSha256 } = await sha256File(handle);
+  let tarballSha256: string;
+  if (pack) {
+    tarballSha256 = archiveHash.digest("hex");
+  } else {
+    await using handle = await fs.open(tarballPath, "r");
+    tarballSha256 = (await sha256File(handle)).digest;
+  }
   return {
     tarballPath,
     tarballSha256,

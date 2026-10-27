@@ -17,16 +17,16 @@ import { callAgentHandler } from "../src/gateway/server-methods/agents-mutate.te
 import {
   createModelsListTestContext,
   catalogEntry,
-  WITHOUT_OPENAI_ENV_AUTH,
 } from "../src/gateway/server-methods/models-list-result.openai-routes.test-support.js";
 import { modelsHandlers } from "../src/gateway/server-methods/models.js";
 import { roleConfig } from "../src/gateway/server-methods/sessions-reactions.test-support.js";
-import { usersAuthConnectHandlers } from "../src/gateway/server-methods/users-auth-connect.js";
+import { usersHandlers as usersAuthConnectHandlers } from "../src/gateway/server-methods/users.js";
 import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../src/gateway/server-model-catalog-auth.js";
 import { createOperatorWsClient } from "../src/gateway/server/ws-connection/authenticated-request-dispatch.test-support.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../src/gateway/test-helpers.env.js";
 import { fetchWithSsrFGuard } from "../src/infra/net/fetch-guard.js";
 import { clearLiveCatalogCacheForTests } from "../src/plugin-sdk/provider-catalog-shared.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";

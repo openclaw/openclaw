@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { Headers as UndiciHeaders } from "undici";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import type { DebugProxySettings } from "./env.js";
@@ -328,14 +329,10 @@ it("gives up on a stalled response body and lets the caller's cancellation settl
   try {
     initializeDebugProxyCapture("test", settings, deps);
     // A stalled tee holds caller cancellation open until capture cancels too.
-    const upstream = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("partial"));
-        },
-      }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
+    const upstream = new Response(makeStallingStream([new TextEncoder().encode("partial")]), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
     // Capture must own the only clone; a third unread branch would never cancel.
     captureHttp({ url: "https://api.example.test/stalls", method: "GET", response: upstream });
 

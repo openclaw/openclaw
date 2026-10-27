@@ -46,7 +46,7 @@ export type SubagentCompletionRequest = {
   triggerCleanup: boolean;
   startedAt?: number;
   suppressSessionEffects?: boolean;
-  recoverInterrupted?: true;
+  recoverInterrupted?: true | "failed";
   /** Prepare database currency asynchronously; publication rechecks live host authority. */
   recoveryCurrent?: SubagentRecoveryCurrent;
   /** Child effects may be fenced while the recorded result still owes requester delivery. */

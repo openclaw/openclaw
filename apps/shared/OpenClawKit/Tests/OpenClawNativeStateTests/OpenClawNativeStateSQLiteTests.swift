@@ -6,6 +6,8 @@ import Darwin.membership
 #endif
 
 struct OpenClawNativeStateSQLiteTests {
+    private static let currentSharedSchemaVersion: Int64 = 35
+
     @Test(arguments: [OpenClawNativeStateCanonicalTable.deviceIdentities, .deviceAuthTokens])
     func `shared adapter refuses credential creation`(_ table: OpenClawNativeStateCanonicalTable) throws {
         try self.withDatabase { database in
@@ -31,7 +33,10 @@ struct OpenClawNativeStateSQLiteTests {
                 INSERT INTO macos_port_guardian_records VALUES (4242,18789,'synthetic-command','remote',10);
                 """)
                 try self.createConfigMachineState(writer)
-                try writer.execute("PRAGMA user_version = 32; UPDATE schema_meta SET schema_version = 32")
+                try writer.execute("""
+                PRAGMA user_version = \(Self.currentSharedSchemaVersion);
+                UPDATE schema_meta SET schema_version = \(Self.currentSharedSchemaVersion)
+                """)
             }
             let original = try Data(contentsOf: url)
             let database = try OpenClawNativeStateSQLite(
@@ -62,17 +67,22 @@ struct OpenClawNativeStateSQLiteTests {
                 }
                 #expect(try database.scalarText("SELECT command FROM macos_port_guardian_records") == "changed-command")
             }
-            #expect(try database.scalarInt64("PRAGMA user_version") == 32)
-            #expect(try database.scalarInt64("SELECT schema_version FROM schema_meta") == 32)
+            #expect(try database.scalarInt64("PRAGMA user_version") == Self.currentSharedSchemaVersion)
+            #expect(try database.scalarInt64("SELECT schema_version FROM schema_meta") == Self
+                .currentSharedSchemaVersion)
         }
     }
 
     @Test(arguments: [false, true])
     func `future shared schema refuses retained table admission`(readOnly: Bool) throws {
+        let futureSchemaVersion = Self.currentSharedSchemaVersion + 1
         try self.withDatabaseURL { writer, url in
             try writer.ensureCanonicalTable(.macosPortGuardianRecords)
             try self.createConfigMachineState(writer)
-            try writer.execute("PRAGMA user_version = 33; UPDATE schema_meta SET schema_version = 33")
+            try writer.execute("""
+            PRAGMA user_version = \(futureSchemaVersion);
+            UPDATE schema_meta SET schema_version = \(futureSchemaVersion)
+            """)
             let original = try Data(contentsOf: url)
 
             #expect {

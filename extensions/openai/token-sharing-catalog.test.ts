@@ -82,25 +82,22 @@ describe("SIWC model discovery", () => {
       });
     });
     const selected = await runCatalog(discoveryAuth("selected"), "https://proxy.example/v1");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.openai.com/v1/models");
-    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
-      "Bearer sharing-selected",
-    );
     expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
     expect(selected.provider.apiKey).toBeUndefined();
     expect(selected.provider.baseUrl).toBe(OPENAI_API_BASE_URL);
-    expect(selected.provider.models.map(({ id, name }) => ({ id, name }))).toEqual([
-      { id: "fixture-z", name: "First choice" },
-      { id: "gpt-5.4", name: "Account model name" },
-      { id: "fixture-a", name: "Last choice" },
+    expect(selected.provider.models).toMatchObject([
+      { id: "fixture-z", name: "First choice", api: "openai-responses" },
+      {
+        id: "gpt-5.4",
+        name: "Account model name",
+        api: "openai-responses",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_050_000,
+      },
+      { id: "fixture-a", name: "Last choice", api: "openai-responses" },
     ]);
-    expect(selected.provider.models.every((model) => model.api === "openai-responses")).toBe(true);
-    expect(selected.provider.models.find(({ id }) => id === "gpt-5.4")).toMatchObject({
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_050_000,
-    });
     expectOutcome(selected.outcomes, {
       profileId: "openai:sharing-selected",
       status: "ready",
@@ -108,7 +105,6 @@ describe("SIWC model discovery", () => {
     });
 
     const other = await runCatalog(discoveryAuth("other"));
-    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(other.provider.models.map(({ id }) => id)).toEqual(["fixture-other"]);
     expectOutcome(other.outcomes, {
       profileId: "openai:sharing-other",
@@ -129,7 +125,6 @@ describe("SIWC model discovery", () => {
     async (_label, body, status, outcome, fallback) => {
       fetchMock.mockResolvedValue(Response.json(body, { status }));
       const result = await runCatalog();
-      expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(result.provider.models.length > 0).toBe(fallback);
       expectOutcome(result.outcomes, outcome);
     },

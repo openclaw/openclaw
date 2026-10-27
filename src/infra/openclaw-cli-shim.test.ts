@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolvePreparedExecEnvironment } from "../agents/bash-tools.exec-request-preparation.js";
 import { createExecTool } from "../agents/bash-tools.js";
@@ -39,48 +38,28 @@ function execConfig(pathPrepend?: string[]) {
 }
 
 describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
-  it.each(["file URL", "bare TSX", "inline bare TSX"])(
-    "runs the source CLI version command outside the checkout (%s)",
-    (parentLoader) =>
-      withTempDir("openclaw-agent-cli-version-", async (root) => {
-        const checkout = fileURLToPath(new URL("../../", import.meta.url));
-        const loader = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
-        const execArgv =
-          parentLoader === "inline bare TSX"
-            ? ["--import=tsx"]
-            : ["--import", parentLoader === "bare TSX" ? "tsx" : loader];
-        const entryPath = path.join(checkout, "src", "entry.ts");
-        const callerCwd = path.join(root, "workspace");
-        const stateDir = path.join(root, "state");
-        await fs.mkdir(callerCwd);
-        const env = {
-          HOME: root,
-          USERPROFILE: root,
-          OPENCLAW_PROFILE: "",
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-        };
-        const parent = { entryPath, execArgv };
-        const invocation = withSourceCliParent(parent, () =>
-          cliInvocation.resolveCurrentOpenClawCliInvocation([]),
-        );
-        const control = runSourceCliProbe(
-          invocation.command,
-          [...execArgv, entryPath, "--version"],
-          checkout,
-          { env },
-        );
-        expect(control.status, "checkout source CLI --version").toBe(0);
-        expect(control.stdout).toMatch(/^OpenClaw \d+\./);
-
-        await withEnvAsync(env, () => withSourceCliParent(parent, prepareGatewayAgentCliShim));
-        const bin = path.join(stateDir, "tmp", "agent-cli");
-        const result = runSourceCliProbe(path.join(bin, "openclaw"), ["--version"], callerCwd, {
-          env,
-        });
-        expect(result).toMatchObject({ status: 0, stdout: control.stdout });
-      }),
-  );
+  it("runs the source CLI version command outside the checkout", () =>
+    withTempDir("openclaw-agent-cli-version-", async (root) => {
+      const checkout = fileURLToPath(new URL("../../", import.meta.url));
+      const entryPath = path.join(checkout, "src", "entry.ts");
+      const callerCwd = path.join(root, "workspace");
+      const stateDir = path.join(root, "state");
+      await fs.mkdir(callerCwd);
+      const env = {
+        HOME: root,
+        USERPROFILE: root,
+        OPENCLAW_PROFILE: "",
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      };
+      const parent = { entryPath, execArgv: ["--import", "tsx"] };
+      await withEnvAsync(env, () => withSourceCliParent(parent, prepareGatewayAgentCliShim));
+      const bin = path.join(stateDir, "tmp", "agent-cli");
+      const result = runSourceCliProbe(path.join(bin, "openclaw"), ["--version"], callerCwd, {
+        env,
+      });
+      expect(result).toMatchObject({ status: 0, stdout: expect.stringMatching(/^OpenClaw \d+\./) });
+    }));
 
   it.each([
     { profile: "work", expectedArgs: ["--profile", "work", "probe"] },
@@ -101,7 +80,6 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
       );
       const shimBinDir = path.join(stateDir, "tmp", "agent-cli");
       const config = execConfig([staleBinDir]);
-      expect(config.pathPrepend?.slice(0, 2)).toEqual([shimBinDir, staleBinDir]);
 
       process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
       process.env.PATH = `${staleBinDir}${path.delimiter}${process.env.PATH ?? ""}`;

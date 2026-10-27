@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { parse as parseToml } from "smol-toml";
@@ -44,6 +45,8 @@ import {
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
 import { resolveCodexPromptError } from "./usage-limit-error.js";
+
+const loadSharedClient = createLazyRuntimeModule(() => import("./shared-client.js"));
 
 const CODEX_APP_SERVER_ARGS_ENV_KEY = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const CODEX_BOUNDED_THREAD_CONFIG: JsonObject = {
@@ -193,7 +196,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     assertCurrent: params.assertCurrent,
     ...(params.signal ? { abandonSignal: params.signal } : {}),
   };
-  const client = await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
+  const client = await loadSharedClient().then(({ createIsolatedCodexAppServerClient }) =>
     createIsolatedCodexAppServerClient({
       ...clientOptions,
       authProfileStore: params.authProfileStore,

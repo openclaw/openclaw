@@ -1,11 +1,6 @@
 import { normalizeOptionalString as normalized } from "@openclaw/normalization-core/string-coerce";
 import type { PresenceEntry } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 
-type PresenceUserGroup = NonNullable<PresenceEntry["user"]> & {
-  watchedSessions: readonly string[];
-  entries: readonly PresenceEntry[];
-};
-
 function firstSorted(values: Iterable<string | null | undefined>): string | undefined {
   return [...values]
     .map(normalized)
@@ -36,7 +31,10 @@ export function presenceUserKey(
 
 /** Online people use the identity namespace established by authentication. */
 export function groupPresenceUsers(entries: readonly PresenceEntry[]): {
-  users: readonly PresenceUserGroup[];
+  users: readonly (NonNullable<PresenceEntry["user"]> & {
+    watchedSessions: readonly string[];
+    entries: readonly PresenceEntry[];
+  })[];
 } {
   const grouped = new Map<string, PresenceEntry[]>();
   for (const entry of entries) {

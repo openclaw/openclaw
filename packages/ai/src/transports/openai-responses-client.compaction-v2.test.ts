@@ -8,6 +8,7 @@ import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-clien
 import { requestPreparedOpenAIResponsesCompaction } from "./openai-responses-compact-request.js";
 import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
+import { outputItem } from "./openai-stream-cases.test-support.js";
 const initialHost = getAiTransportHost();
 const model = fixtures.createModel({
   id: "gpt-5.4",
@@ -41,11 +42,8 @@ const syntheticMessages = convertToLlm([
     timestamp: 3,
   },
 ]);
-const checkpoint = (value = "opaque") => ({
-  type: "response.output_item.done",
-  output_index: 0,
-  item: { type: "compaction", id: "cmp_provider_id", encrypted_content: value },
-});
+const checkpoint = (value = "opaque") =>
+  outputItem("done", { type: "compaction", id: "cmp_provider_id", encrypted_content: value });
 const completed = (status = "completed") =>
   fixtures.completedResponse("resp-test", [], {
     status,

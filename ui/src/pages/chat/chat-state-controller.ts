@@ -230,9 +230,23 @@ export function createChatState<TState extends ChatPageHost>(
       });
       // Continuing text leaves composer persistence and pane activity unchanged.
       const releaseStateEffects = presentation.subscribeNonText(publishStateEffects);
+      let previousCaptions = state.realtimeTalk.snapshot.realtimeTalkConversationState.entries;
+      const releaseCaptions = state.realtimeTalk.subscribe(() => {
+        const captions = state.realtimeTalk.snapshot.realtimeTalkConversationState.entries;
+        if (captions === previousCaptions) {
+          return;
+        }
+        previousCaptions = captions;
+        // Row ResizeObserver owns geometric follow; same-height captions still
+        // announce new content to a reader who has left the end.
+        if (captions.length > 0 && state.chatFollowLocked) {
+          state.chatNewMessagesBelow = true;
+        }
+      });
       releaseRunPublication = () => {
         releaseScroll();
         releaseStateEffects();
+        releaseCaptions();
       };
       // Queue transitions synchronously update pane retention and shell activity,
       // independently of whether the pane's projected frame is currently observed.
@@ -630,6 +644,7 @@ export function createChatState<TState extends ChatPageHost>(
     }
     const state = stateValue;
     if (state) {
+      state.accessPreferences?.disconnect();
       disposeSelectedSessionMessageSubscription(state);
       releaseChatMediaResourceOwner(state);
       chatRunPresentation(state).cancelFrame();

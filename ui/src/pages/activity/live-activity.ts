@@ -24,6 +24,8 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
   let rows: readonly GatewaySessionRow[] = [];
   let client = gateway.snapshot.client;
   let visible = document.visibilityState !== "hidden";
+  let pendingEvents: NonNullable<ReturnType<typeof parseActivityEvent>>[] = [];
+  let scheduledFlush: ReturnType<typeof setTimeout> | undefined;
   const subscriptions = new Map<string, ReturnType<SessionCapability["subscribeMessages"]>>();
   const release = (key: string) => {
     const pending = subscriptions.get(key);
@@ -76,6 +78,7 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
     }
   };
   const handleVisibility = (event: Event) => {
+    flushPending();
     visible = event.type !== "pagehide" && document.visibilityState !== "hidden";
     syncSubscriptions();
   };
@@ -100,6 +103,26 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
     }
   };
 
+  const cancelFlush = () => {
+    if (scheduledFlush !== undefined) {
+      clearTimeout(scheduledFlush);
+      scheduledFlush = undefined;
+    }
+  };
+  const flushPending = () => {
+    cancelFlush();
+    if (pendingEvents.length === 0) {
+      return;
+    }
+    const batch = pendingEvents;
+    pendingEvents = [];
+    let next = entries;
+    for (const event of batch) {
+      next = updateToolActivity(next, event);
+    }
+    publish(next);
+  };
+
   const retireChangedContext = () => {
     const revision = gateway.eventLogRevision;
     const nextPresentationScope = gatewayPresentationScope(gateway);
@@ -108,6 +131,8 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
     }
     eventLogRevision = revision;
     presentationScope = nextPresentationScope;
+    pendingEvents = [];
+    cancelFlush();
     rows = [];
     syncSubscriptions();
     publish([], true);
@@ -117,6 +142,7 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
   const stopGateway = gateway.subscribe(() => {
     if (!disposed) {
       retireChangedContext();
+      flushPending();
       syncSubscriptions();
     }
   });
@@ -143,12 +169,22 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
         currentWorkIdentity({ key: activityEvent.sessionKey, agentId: activityEvent.agentId }),
       )
     ) {
-      publish(updateToolActivity(entries, activityEvent));
+      // Admission stays synchronous and ordered. Only this feed's presentation
+      // work moves off transport delivery; chat/sidebar still receive every event.
+      // A task boundary yields without waiting an extra display frame in WebKit.
+      pendingEvents.push(activityEvent);
+      scheduledFlush ??= setTimeout(() => {
+        scheduledFlush = undefined;
+        retireChangedContext();
+        flushPending();
+      }, 0);
     }
   });
 
   return {
     get snapshot() {
+      // Plain owner callers retain synchronous mutate-then-read semantics.
+      flushPending();
       return snapshot;
     },
     subscribe(listener: (snapshot: LiveActivitySnapshot) => void) {
@@ -161,6 +197,7 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
       if (rows === nextRows) {
         return;
       }
+      flushPending();
       rows = nextRows;
       syncSubscriptions();
     },
@@ -171,10 +208,14 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
       syncSubscriptions();
     },
     clear() {
+      pendingEvents = [];
+      cancelFlush();
       publish([], true);
     },
     dispose() {
       disposed = true;
+      pendingEvents = [];
+      cancelFlush();
       syncSubscriptions();
       stopVisibility();
       stopPageHide();

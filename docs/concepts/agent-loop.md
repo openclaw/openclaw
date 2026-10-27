@@ -63,6 +63,8 @@ Finalization and retry owners retain access to the results while processing them
 Settled tool invocations release their pending-input observers from inherited
 async contexts. Those contexts keep assistant and tool-call attribution without
 keeping the completed agent and its transcript manager alive through the observer.
+Attempt teardown also releases abort and deferred-lifecycle callbacks, even when a
+retained cancellation reason keeps their completed owners reachable.
 
 ## Queueing and concurrency
 
@@ -308,6 +310,10 @@ reasoning. To tolerate long hidden-reasoning phases, Responses uses a 15-minute
 model-progress deadline, or the effective idle budget when larger. Real progress
 resets this deadline; ordinary network silence retains the existing idle budget.
 Computation that emits only bookkeeping can still time out at this long ceiling.
+The session watchdog follows the request guard's current deadline with a recovery
+margin derived from its warning interval. Request stalls therefore surface as
+transient timeouts for bounded retry and configured model fallback before the
+watchdog stops the whole reply. Explicit execution deadlines still apply.
 
 The built-in OpenClaw harness publishes the current model attempt's execution
 deadline to the queue. When an attempt times out, configured fallback can start

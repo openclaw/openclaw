@@ -1464,8 +1464,7 @@ describe("talk.config handler", () => {
       speakerVoice: "marin",
       speakerVoiceId: "voice-id",
     });
-    const providers = realtime.providers as Record<string, unknown> | undefined;
-    expectRecordFields(providers?.openai, {
+    expectRecordFields((realtime.providers as Record<string, unknown> | undefined)?.openai, {
       apiKey: redactedSecretRef,
       azureEndpoint: "https://example.openai.azure.com",
       azureDeployment: "realtime-prod",
@@ -1475,6 +1474,8 @@ describe("talk.config handler", () => {
       rawConfig: { apiKey: "runtime-azure-secret", model: "gpt-realtime" },
     });
     expect(JSON.stringify(response)).not.toContain("runtime-azure-secret");
+    // Source values supply the wire projection; provider discovery belongs to runtime config.
+    expect(mocks.listRealtimeVoiceProviders).not.toHaveBeenCalledWith(sourceConfig);
   });
 
   it("passes runtime-resolved tts provider secrets to strict provider resolvers", async () => {

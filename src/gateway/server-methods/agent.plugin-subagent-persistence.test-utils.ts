@@ -11,6 +11,7 @@ import {
 import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import {
   seedPersistedSubagentRunForAgentTest,
+  pluginSubagentClient,
   withPluginSubagentTestState,
 } from "./agent.spawned-child.test-support.js";
 import {
@@ -85,14 +86,7 @@ export function registerPluginSubagentPersistenceFailureTest() {
             context,
             reqId: runId,
             respond,
-            client: {
-              connect: baseClient.connect,
-              internal: {
-                ...baseClient.internal,
-                agentRunTracking: "plugin_subagent",
-                pluginRuntimeOwnerId: "memory-core",
-              },
-            },
+            client: pluginSubagentClient(baseClient),
           },
         );
 
@@ -139,14 +133,7 @@ export function registerPluginSubagentPersistenceFailureTest() {
             context,
             reqId: adoptionRunId,
             respond: adoptionRespond,
-            client: {
-              connect: baseClient.connect,
-              internal: {
-                ...baseClient.internal,
-                agentRunTracking: "plugin_subagent",
-                pluginRuntimeOwnerId: "memory-core",
-              },
-            },
+            client: pluginSubagentClient(baseClient),
           },
         );
 
@@ -182,14 +169,7 @@ export function registerPluginSubagentPersistenceFailureTest() {
           {
             context,
             reqId: retryRunId,
-            client: {
-              connect: baseClient.connect,
-              internal: {
-                ...baseClient.internal,
-                agentRunTracking: "plugin_subagent",
-                pluginRuntimeOwnerId: "memory-core",
-              },
-            },
+            client: pluginSubagentClient(baseClient),
           },
         );
 

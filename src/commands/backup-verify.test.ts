@@ -223,6 +223,47 @@ const agentPayload = (role: string, agentId: string) =>
   });
 
 describe("backupVerifyCommand", () => {
+  it.skipIf(process.platform === "win32")(
+    "escapes terminal controls in verification output while preserving JSON metadata",
+    async () => {
+      const archive = path.join(
+        tempDirs.make("openclaw-backup-terminal-"),
+        "café\u001b[31m\nforged\tend\rrow\u0007.tar.gz",
+      );
+      const payloadPath = `${STATE_ROOT}/note.txt`;
+      const manifest = {
+        ...createBackupManifest(payloadPath),
+        runtimeVersion: "café\u001b[31m\nforged\tend\rrow\u0007",
+      };
+      await fs.writeFile(
+        archive,
+        gzipSync(
+          Buffer.concat([
+            encodeTarEntry({
+              path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+              contents: JSON.stringify(manifest),
+            }),
+            encodeTarEntry({ path: payloadPath, contents: "payload\n" }),
+            Buffer.alloc(1024),
+          ]),
+        ),
+      );
+      const runtime = createTestRuntime();
+      const result = await backupVerifyCommand(runtime, { archive });
+      const report = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+      expect(report).toContain("café\\nforged\\tend\\rrow.tar.gz");
+      expect(report).toContain("Runtime version: café\\nforged\\tend\\rrow");
+      expect(report.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+      expect(result.archivePath).toBe(archive);
+      vi.mocked(runtime.log).mockClear();
+      await backupVerifyCommand(runtime, { archive, json: true });
+      expect(JSON.parse(String(vi.mocked(runtime.log).mock.lastCall?.[0]))).toMatchObject({
+        archivePath: archive,
+        runtimeVersion: manifest.runtimeVersion,
+      });
+    },
+  );
+
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.mocked(tar.t).mockReset().mockImplementation(actualTar.t);

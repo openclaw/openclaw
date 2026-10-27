@@ -3,6 +3,7 @@ import { afterEach, assert, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE } from "../../config/sessions/lifecycle.js";
+import { createRestartRecoveryTombstoneFixture } from "../../config/sessions/main-session-recovery-fixtures.test-support.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -115,16 +116,7 @@ const interruptedEntry = {
   mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
 } satisfies Partial<SessionEntry>;
 const tombstoneEntry = {
-  mainRestartRecovery: {
-    cycleId: "cycle-1",
-    revision: 4,
-    chargedAttempts: 3,
-    tombstone: {
-      reason: "automatic recovery exhausted",
-      recoveredSessionId: "dashboard-successor",
-      recoveredSessionKey: "agent:main:dashboard:successor",
-    },
-  },
+  mainRestartRecovery: createRestartRecoveryTombstoneFixture(),
 } satisfies Partial<SessionEntry>;
 async function holdMutation(storePath: string, run: () => Promise<unknown> = async () => {}) {
   const started = createDeferred();

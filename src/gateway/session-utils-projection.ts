@@ -107,11 +107,14 @@ export function buildProjectedSubagentActivity(
 
 /** Child presentation needs live ownership and sharing facts, never the child's stored payload. */
 export function projectSessionRowChildLinks(links: readonly SessionChildLink[] | undefined) {
-  return links?.map(({ key, entry }) => ({
+  return links?.map(({ key, entry, agentId, storePath }) => ({
     key,
+    agentId,
+    storePath,
     parsedKey: parseAgentSessionKey(key),
     entry: {
       sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
       updatedAt: entry.updatedAt,
       archivedAt: entry.archivedAt,
       status: entry.status,
@@ -119,6 +122,7 @@ export function projectSessionRowChildLinks(links: readonly SessionChildLink[] |
       endedAt: entry.endedAt,
       spawnedBy: entry.spawnedBy,
       parentSessionKey: entry.parentSessionKey,
+      sidebarRoot: entry.sidebarRoot,
       createdActor: entry.createdActor,
       visibility: entry.visibility,
       incognito: entry.incognito,
@@ -133,10 +137,12 @@ export function reuseSessionRowChildLinks(
 ) {
   return previous &&
     previous.length === links.length &&
-    links.every(({ key, entry }, index) => {
+    links.every(({ key, entry, agentId, storePath }, index) => {
       const before = previous[index]!;
       return (
         key === before.key &&
+        agentId === before.agentId &&
+        storePath === before.storePath &&
         // SAFETY: projectSessionRowChildLinks creates this compact entry with only SessionEntry keys.
         (Object.keys(before.entry) as (keyof typeof before.entry)[]).every(
           (field) =>

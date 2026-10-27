@@ -119,7 +119,6 @@ function totalValue(items: Array<{ value: number }>): number {
 function sanitizeLabel(value: string): string {
   return value
     .replace(/[^a-zA-Z0-9/_.:-]+/g, " ")
-    .replace(/\s+/g, " ")
     .trim()
     .toUpperCase();
 }

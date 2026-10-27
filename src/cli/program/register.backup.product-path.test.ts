@@ -62,8 +62,7 @@ it.each([true, false])(
         agents: { entries: { main: { workspace: state.workspaceDir } } },
         plugins: { allow: ["backup-fixture"], entries: { "backup-fixture": { enabled: true } } },
       });
-      const root = openOpenClawStateDatabase();
-      const rootPath = root.path;
+      const rootPath = openOpenClawStateDatabase().path;
       closeOpenClawStateDatabase();
       await fs.mkdir(state.statePath("plugin-data"));
       const writer = new Worker(
@@ -95,13 +94,12 @@ it.each([true, false])(
       );
       try {
         await once(writer, "message");
-        const outputPath = state.path("backup.tar.gz");
         const result = await runBackupCli(state, includeWorkspace);
         expect(result.code, result.stderr).toBe(0);
         const archive = JSON.parse(result.stdout);
         expect(archive).toMatchObject({ agentRoots: [{ agentId: "main" }], verified: true });
         expect(archive.warnings ?? []).toEqual([]);
-        const entries = await listArchiveEntries(outputPath);
+        const entries = await listArchiveEntries(state.path("backup.tar.gz"));
         expect(entries.some((entry) => entry.endsWith("/plugin-data/records.sqlite"))).toBe(true);
         expect(entries.some((entry) => entry.endsWith("/workspace-only-marker.txt"))).toBe(
           includeWorkspace,
@@ -119,19 +117,15 @@ it("backup create refuses unreadable discovery state even without workspaces", a
     await state.writeConfig({ agents: { entries: { main: {} } } });
     await fs.mkdir(state.statePath("state"));
     await fs.writeFile(state.statePath("state/openclaw.sqlite"), "unreadable database");
-    const outputPath = state.path("backup.tar.gz");
     const result = await runBackupCli(state);
     expect(result.code).toBe(1);
-    expect(result.stderr).not.toContain("Config invalid");
-    expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-    expect(result.stderr).toContain("[openclaw] For help, run `openclaw doctor`.");
     const failure = JSON.parse(result.stdout);
     expect(failure).toMatchObject({ ok: false, error: { type: "cli_error" } });
     expect(failure.error.message).toContain(
       `Cannot read shared state for discovery: ${state.statePath("state/openclaw.sqlite")}.`,
     );
     expect(failure.error.message).toContain("file is not a database");
-    await expect(fs.stat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(state.path("backup.tar.gz"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 

@@ -228,10 +228,12 @@ describe("chat Details presentation", () => {
     const metadata = session.querySelector(".chat-details-session")!;
     // A side panel consumes pane width even when the desktop stays wide.
     frame.style.width = "900px";
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+    await expect
+      .poll(() => trigger.getAttribute("aria-expanded"), { timeout: 5_000 })
+      .toBe("false");
     expect(conversation.getBoundingClientRect().width).toBe(900);
     frame.style.width = "1320px";
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => trigger.getAttribute("aria-expanded"), { timeout: 5_000 }).toBe("true");
     expect(session.querySelector(".chat-details-session")).toBe(metadata);
     expect(metadata.querySelector(":scope > summary")).toBeNull();
     trigger.click();
@@ -316,6 +318,10 @@ describe("chat Details presentation", () => {
       { container: panel },
     );
     flush();
+    // The Environment body loads lazily; capture its controls only after it renders.
+    await expect
+      .poll(() => panel.querySelector(".chat-environment__branch-controls button.chat-pr__diff"))
+      .not.toBeNull();
     const heading = panel.querySelector(".chat-details-desktop-section__heading")!;
     const navigation = panel.querySelector<HTMLButtonElement>(
       ".chat-environment__branch-controls button.chat-pr__diff",

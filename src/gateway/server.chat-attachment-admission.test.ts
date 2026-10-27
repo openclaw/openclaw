@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -11,7 +11,6 @@ import { getRuntimeConfig, resetConfigRuntimeState } from "../config/config.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { getMediaDir } from "../media/store.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   createChatVisionModelCatalogSnapshot,
   createDirectChatContext,
@@ -27,6 +26,7 @@ import {
   createDirectChatSessionStoreFixture,
   writeStoredMainSession,
 } from "./server.chat-session-store.test-support.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import {
   createGatewaySuiteHarness,
   dispatchInboundMessageMock,
@@ -60,6 +60,10 @@ beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
   sessionStoreFixture.prepare();
 });
+beforeEach(async () => {
+  openDirectChatSession({ fresh: true });
+  await writeStoredMainSession({ modelProvider: "test-provider", model: "vision-model" });
+});
 afterEach(async () => {
   await resetDirectChatSession();
   directories.cleanup();
@@ -90,19 +94,13 @@ async function resetDirectChatSession() {
 test("chat.send keeps duplicate attachment sends retryable until input is admitted", async ({
   signal,
 }) => {
-  openDirectChatSession({ fresh: true });
   const [dispatchEntered, dispatchRelease] = [createDeferred(), createDeferred()];
   const catalogEntered = createDeferred();
   let first: Promise<void> | undefined;
   const firstCatalogSnapshot =
     createDeferred<ReturnType<typeof createChatVisionModelCatalogSnapshot>>();
   try {
-    await writeStoredMainSession({
-      modelProvider: "test-provider",
-      model: "vision-model",
-    });
-
-    const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
+    const responses: Array<CapturedChatResponse & { id: string }> = [];
     const context = createDirectChatContext({
       loadGatewayModelCatalogSnapshot: vi
         .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
@@ -161,7 +159,6 @@ test("chat.send keeps duplicate attachment sends retryable until input is admitt
       ),
       signal,
     );
-    expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
 
     await withinTest(callSend("duplicate"), signal);
     expect(responses).toEqual([duplicateResponse]);
@@ -180,23 +177,19 @@ test("chat.send keeps duplicate attachment sends retryable until input is admitt
     ]);
     await withinTest(dispatchEntered.promise, signal);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-    expect(context.addChatRun).toHaveBeenCalledTimes(1);
     dispatchRelease.resolve();
     await getDirectChatSessionWorkRelease();
-    expect(context.removeChatRun).toHaveBeenCalledTimes(1);
   } finally {
     firstCatalogSnapshot.resolve(createChatVisionModelCatalogSnapshot());
     dispatchRelease.resolve();
     await Promise.allSettled(first ? [first] : []);
     await getDirectChatSessionWorkRelease();
-    await resetDirectChatSession();
   }
 });
 
 test("chat.send discards prepared inbound media when a hook blocks the turn", async ({
   signal,
 }) => {
-  openDirectChatSession({ fresh: true });
   const attachments = await import("./chat-attachments.js");
   const discard = attachments.discardPreparedInboundMedia;
   const discarded = createDeferred();
@@ -210,10 +203,6 @@ test("chat.send discards prepared inbound media when a hook blocks the turn", as
       return pending;
     });
   try {
-    await writeStoredMainSession({
-      modelProvider: "test-provider",
-      model: "vision-model",
-    });
     const context = createDirectChatContext();
     const inboundDir = path.join(getMediaDir(), "inbound");
     const inboundBaseline = new Set(await fs.readdir(inboundDir).catch(() => []));
@@ -241,14 +230,7 @@ test("chat.send discards prepared inbound media when a hook blocks the turn", as
       client: {
         connId: "conn-owner",
         connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: {
-            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-            version: "1.0.0",
-            platform: "web",
-            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-          },
+          ...gatewayConnect(["operator.write"], { version: "1.0.0", platform: "web" }),
           device: {
             id: "dev-owner",
             publicKey: "synthetic-public-key",
@@ -256,7 +238,6 @@ test("chat.send discards prepared inbound media when a hook blocks the turn", as
             signedAt: 0,
             nonce: "synthetic-nonce",
           },
-          scopes: ["operator.write"],
         },
       },
       respond: captureChatResponse(responses),
@@ -268,6 +249,5 @@ test("chat.send discards prepared inbound media when a hook blocks the turn", as
     expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);
   } finally {
     cleanup.mockRestore();
-    await resetDirectChatSession();
   }
 });

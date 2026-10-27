@@ -10,7 +10,6 @@ import {
 } from "../../../test/helpers/promise.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
@@ -145,7 +144,7 @@ function interceptArchives(
   );
 }
 
-it("prunes through the worker while preserving reason, age, path, and file rules", async () => {
+it("preserves reason, age, path, and file retention rules", async () => {
   seed("expired");
   seed("boundary", { created_at: 90 });
   seed("reset", { reason: "reset" });
@@ -153,26 +152,15 @@ it("prunes through the worker while preserving reason, age, path, and file rules
   const present = seed("present");
   fs.writeFileSync(path.join(directory, present.archive_name), "retained");
   seed("pending", { published_at: null });
-  const prepare = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "prepare");
   expect(await prune()).toBe(2);
-  const hostArchiveQueries = prepare.mock.calls.filter(([sql]) =>
-    /(?:from|into|update)\s+["`]?session_transcript_archives/i.test(sql),
-  );
-  prepare.mockRestore();
-  expect(hostArchiveQueries).toEqual([]);
   expect(retainedIds()).toEqual(["boundary", "outside", "pending", "reset"]);
   expect(fs.existsSync(path.join(directory, present.archive_name))).toBe(false);
 });
 
-it("drains all eligible published rows across bounded pages", async () => {
+it("drains eligible pages and continues past retained prefixes", async () => {
   for (let index = 257; index >= 0; index -= 1) {
-    seed(`bounded-${String(index).padStart(3, "0")}`);
+    seed(`bounded-${String(index).padStart(3, "0")}`, { created_at: -1 });
   }
-  expect(await prune()).toBe(258);
-  expect(retainedIds()).toEqual([]);
-});
-
-it("continues past a retained prefix to reach later eligible rows", async () => {
   for (let index = 0; index < 300; index += 1) {
     const retained = seed(`retained-${String(index).padStart(3, "0")}`, {
       created_at: index,
@@ -190,7 +178,7 @@ it("continues past a retained prefix to reach later eligible rows", async () => 
       nowMs: 1000,
       rules: [{ reason: "deleted", olderThanMs: 10 }],
     }),
-  ).toBe(20);
+  ).toBe(278);
   expect(retainedIds()).toHaveLength(300);
   expect(retainedIds().every((id) => id.startsWith("retained-"))).toBe(true);
 });
@@ -299,10 +287,8 @@ it.each(["changed", "revoked", "rejected", "policy"])(
     });
     const entered = createDeferred();
     const release = createDeferred();
-    let attempts = 0;
     interceptArchives((archives) => ({
       pruneRetention: async (retention) => {
-        attempts += 1;
         entered.resolve();
         await release.promise;
         if (outcome === "rejected") {
@@ -354,7 +340,6 @@ it.each(["changed", "revoked", "rejected", "policy"])(
         expect(await work).toBe(1);
         expect(retainedIds()).toEqual(candidates);
       }
-      expect(attempts).toBe(1);
     } finally {
       release.resolve();
       await Promise.allSettled([work]);

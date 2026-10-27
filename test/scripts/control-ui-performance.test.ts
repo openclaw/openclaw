@@ -11,16 +11,19 @@ import {
   evaluateControlUiPerformanceBudgets as evaluateBudgets,
   formatControlUiPerformanceReport as formatReport,
 } from "../../scripts/check-control-ui-performance.mts";
+import { prepareControlUiSettings } from "../../scripts/lib/prepare-control-ui-settings.mts";
 import { extractControlUiStartupAssetPaths as extractStartupAssets } from "../../ui/config/control-ui-startup-assets.ts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
+import { installDistArtifactScripts } from "./dist-artifact-fixture.js";
 
 const tsxImport = new URL("../../scripts/tsx.mjs", import.meta.url).href;
 const performanceSources = [
   "scripts/check-control-ui-performance.mts",
   "ui/config/control-ui-startup-assets.ts",
   "src/gateway/control-ui-route-preloads.ts",
+  "src/shared/non-packaged-plugin-dirs.ts",
   ...[
     "check-limits.mts",
     "control-ui-i18n-config.ts",
@@ -44,7 +47,7 @@ function compileFixture(root: string, entry: string[], options: Parameters<typeo
     dts: false,
     clean: false,
     treeshake: false,
-    deps: { neverBundle: ["pako"] },
+    deps: { neverBundle: ["pako", "@openclaw/fs-safe"] },
     outExtensions: () => ({ js: ".js" }),
     outputOptions: { entryFileNames: "[name].js", chunkFileNames: "[name].js" },
     logLevel: "silent",
@@ -318,20 +321,19 @@ describe("Control UI performance budgets", () => {
 
   it("bounds stylesheet growth at the fixed CSS ceilings", () => {
     const { distDir, writeAsset } = createStartupFixture();
+    const base = collectMetrics(distDir);
+    const raw = CONTROL_UI_PERFORMANCE_BUDGETS.totalCssRawBytes - base.total.css.rawBytes;
+    const gzip = CONTROL_UI_PERFORMANCE_BUDGETS.totalCssGzipBytes - base.total.css.gzipBytes;
     for (let index = 0; index < 6; index++) {
       writeAsset(
         "css-" + index + ".css",
-        index === 0 ? 265_570 : 265_567,
-        index === 0 ? 50_422 : 50_418,
+        Math.floor(raw / 6) + (index < raw % 6 ? 1 : 0),
+        Math.floor(gzip / 6) + (index < gzip % 6 ? 1 : 0),
       );
     }
-    const base = collectMetrics(distDir);
-    const headerRaw = CONTROL_UI_PERFORMANCE_BUDGETS.totalCssRawBytes - base.total.css.rawBytes;
-    const headerGzip = CONTROL_UI_PERFORMANCE_BUDGETS.totalCssGzipBytes - base.total.css.gzipBytes;
-    writeAsset("mobile-header.css", headerRaw, headerGzip);
     const accepted = collectMetrics(distDir);
     expect(evaluateBudgets(accepted, undefined, null, 512, base)).toEqual([]);
-    writeAsset("mobile-header.css", headerRaw + 1, headerGzip + 1);
+    writeAsset("overflow.css", 1, 1);
     expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, base)).toEqual([
       expect.objectContaining({ metric: "total CSS gzip" }),
       expect.objectContaining({ metric: "total CSS raw" }),
@@ -375,9 +377,9 @@ describe("Control UI performance budgets", () => {
 
   it("rejects the renderer in route boot preloads", () => {
     const { distDir, writeAsset, writeHtml } = createStartupFixture();
-    writeHtml(startupHtml + routeTemplate("chat", [preload("mermaid.min-a.js")]));
+    writeHtml(startupHtml + routeTemplate("chat", [preload("pele.min-a.js")]));
     writeAsset("lazy-b.js", 200, 70, 55);
-    writeAsset("mermaid.min-a.js", 200, 200_000, 100);
+    writeAsset("pele.min-a.js", 200, 200_000, 100);
     const metrics = collectMetrics(distDir);
     expect(evaluateBudgets(metrics).map((entry) => entry.metric)).toEqual([
       "startup Mermaid JS assets",
@@ -750,6 +752,9 @@ export function createControlUiPrecompressedAssetVariants(fileName, source) {
 export default {
   build: { outDir, emptyOutDir: true },
   plugins: [{ name: "fixture-precompression", writeBundle(_options, bundle) {
+    fs.writeFileSync(path.join(outDir, ".build-inputs.json"), JSON.stringify(
+      [...this.getModuleIds()].filter((file) => path.isAbsolute(file) && !file.includes("node_modules/")).map((file) => path.relative(path.resolve(import.meta.dirname, ".."), file))
+    ));
     fs.appendFileSync(process.env.OPENCLAW_TEST_BUILD_IDENTITY_CAPTURE, JSON.stringify({
       identity: ["GIT_COMMIT", "OPENCLAW_BUILD_TIMESTAMP", "GIT_BRANCH", "OPENCLAW_CONTROL_UI_BUILD_ID", "OPENCLAW_CONTROL_UI_RELEASE_BUILD"].map((key) => process.env[key]),
       gitDisabled: !fs.existsSync(process.env.GIT_DIR ?? "") && spawnSync("git", ["rev-parse", "HEAD"]).status !== 0,
@@ -815,6 +820,7 @@ export default {
     };
     fs.mkdirSync(scratch, { recursive: true });
     fs.mkdirSync(at("extensions"), { recursive: true });
+    installDistArtifactScripts(root, [], { compiler: false });
     for (const [file, source] of performanceSources) {
       write(file, source);
     }
@@ -842,7 +848,8 @@ export default {
       "vendor/base-only-library/package.json":
         '{"name":"base-only-library","version":"1.0.0","type":"module","exports":"./index.js"}',
       "vendor/base-only-library/index.js": 'export const value = "base dependency";',
-      "pnpm-workspace.yaml": 'packages: ["ui", "packages/*"]\n',
+      "extensions/fixture/package.json": '{"name":"fixture"}',
+      "pnpm-workspace.yaml": 'packages: ["ui", "packages/styles", "packages/workspace-value"]\n',
       "ui/package.json": '{"name":"ui-budget-proof-ui","type":"module"}',
       "ui/index.html": '<script type="module" src="/main.js"></script>',
       "ui/main.js": brokenSource
@@ -860,6 +867,15 @@ export default {
       "packages/styles/node_modules/sizing-library/style.css": ".package-style{display:flex}",
       "ui/vite.config.ts": baseConfig,
       "ui/style.css": css(1_000),
+      "scripts/build-plugin-control-ui.mts": `
+import fs from "node:fs";
+import path from "node:path";
+const output = path.join(process.argv[3], "dist/extensions/fixture");
+fs.mkdirSync(path.join(output, "dist/control-ui"), { recursive: true });
+fs.writeFileSync(path.join(output, "package.json"), '{"name":"fixture"}');
+fs.writeFileSync(path.join(output, "openclaw.plugin.json"), '{"id":"fixture","controlUi":{"entry":"dist/control-ui/index.js"}}');
+fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presenter");
+`,
     })) {
       write(file, source);
     }
@@ -893,6 +909,14 @@ export default {
     for (const directory of ["node_modules", "ui/node_modules"]) {
       fs.rmSync(at(directory), { recursive: true, force: true });
     }
+    for (const name of ["tsx", "@openclaw/fs-safe"]) {
+      fs.mkdirSync(path.dirname(at("node_modules", name)), { recursive: true });
+      fs.symlinkSync(
+        fs.realpathSync(path.join(repoRoot, "node_modules", name)),
+        at("node_modules", name),
+        "junction",
+      );
+    }
     const uiDependencies = at("ui/node_modules");
     fs.mkdirSync(uiDependencies);
     for (const name of ["vite", "pako"]) {
@@ -911,7 +935,7 @@ export default {
     const { bundles } = await compileFixture(
       root,
       [...cliNames.map((name) => `scripts/${name}.mts`), "ui/vite.config.ts"],
-      { deps: { neverBundle: ["pako"] } },
+      { deps: { neverBundle: ["pako", "@openclaw/fs-safe"] } },
     );
     for (const bundle of bundles) {
       await bundle[Symbol.asyncDispose]();
@@ -955,7 +979,7 @@ export default {
         packageVersion: string;
         entryCode: string;
       }>;
-    return { temporaryRoot, at, base, write, commit, runComparison, readIdentities };
+    return { temporaryRoot, root, at, base, write, commit, runComparison, readIdentities };
   }
 
   function test(
@@ -1034,6 +1058,34 @@ export default { plugins: [{ name: "signal", buildStart() { process.kill(process
       "Base Control UI source does not build with the candidate toolchain",
     );
   });
+
+  test(
+    "reuses identical inputs but rebuilds source-specific Settings changes",
+    {},
+    async (repo) => {
+      repo.write("ui/src/unused.test.ts", "export const fixture = 1;\n");
+      const base = await repo.commit("matching production inputs");
+      repo.write("ui/src/unused.test.ts", "export const fixture = 2;\n");
+      await prepareControlUiSettings(repo.root, path.join(repo.root, "scripts"));
+      const unchanged = await repo.runComparison(base, 0);
+      expect(unchanged.output).toContain("identical build inputs; reusing candidate as base");
+      expect(unchanged.output).toMatch(/startup JS gzip vs base: \d+ B -> \d+ B \(\+0 B\)/u);
+      expect(repo.readIdentities()).toHaveLength(1);
+
+      const builder = fs.readFileSync(repo.at("scripts/build-plugin-control-ui.mts"), "utf8");
+      repo.write(
+        "scripts/build-plugin-control-ui.mts",
+        builder.replace("native presenter", "updated native presenter"),
+      );
+      await prepareControlUiSettings(repo.root, path.join(repo.root, "scripts"));
+      const changed = await repo.runComparison(base, 0);
+      expect(changed.output).not.toContain("identical build inputs; reusing candidate as base");
+      expect(repo.readIdentities()).toHaveLength(2);
+      expect(
+        fs.readFileSync(repo.at("dist/extensions/fixture/dist/control-ui/index.js"), "utf8"),
+      ).toBe("updated native presenter");
+    },
+  );
 
   test("refuses symlinked output roots without mutating targets", {}, async (repo) => {
     const protectedRoot = path.join(repo.temporaryRoot, "protected");

@@ -9,7 +9,8 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 

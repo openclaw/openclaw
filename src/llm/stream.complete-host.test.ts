@@ -1,7 +1,6 @@
 import { fileURLToPath } from "node:url";
-import { createApiRegistry, createLlmRuntime, getAiTransportHost } from "@openclaw/ai";
-import { getEventStreamCompletion } from "@openclaw/ai/internal/runtime";
-import type { AssistantMessage, Context, Model, SimpleStreamOptions } from "@openclaw/llm-core";
+import { createApiRegistry, createLlmRuntime } from "@openclaw/ai";
+import type { AssistantMessage, Context, SimpleStreamOptions } from "@openclaw/llm-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
@@ -9,12 +8,13 @@ import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-
 import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { bindModelLlmRuntime } from "./model-runtime-binding.js";
 import { withModelTransportContext } from "./model-transport-context.js";
+import { admitProviderRateLimitStream } from "./provider-rate-limit-stream.js";
+import { withProviderRateLimitRetryDeadline } from "./provider-rate-limit.js";
 import { complete, completeSimple, streamSimple } from "./stream.js";
 import { createAssistantMessageEventStream } from "./utils/event-stream.js";
 
 afterEach(() => vi.useRealTimers());
 const emptyContext: Context = { messages: [] };
-type Dispatch = (model: Model, context: Context, options?: SimpleStreamOptions) => void;
 
 function responseStream(message: AssistantMessage, emit = true) {
   const output = createAssistantMessageEventStream();
@@ -29,7 +29,7 @@ function responseStream(message: AssistantMessage, emit = true) {
   return output;
 }
 
-function createCompletionRuntime(onDispatch?: Dispatch) {
+function createCompletionRuntime(wrap = false) {
   const registry = createApiRegistry();
   const runtime = createLlmRuntime(registry);
   const model = makeProviderModelFixture({
@@ -43,18 +43,35 @@ function createCompletionRuntime(onDispatch?: Dispatch) {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    timestamp: Date.now(),
   });
-  const providerStream = vi.fn((...args: Parameters<Dispatch>) => {
-    onDispatch?.(...args);
-    return responseStream(message);
-  });
+  const providerStream = vi.fn((..._args: Parameters<typeof streamSimple>) =>
+    responseStream(message),
+  );
   registry.registerApiProvider({
     api: model.api,
     stream: providerStream,
     streamSimple: providerStream,
   });
-  const boundModel = bindModelLlmRuntime(model, runtime);
+  const boundModel = bindModelLlmRuntime(
+    wrap
+      ? attachModelProviderRuntimePluginHandle(model, {
+          provider: model.provider,
+          plugin: {
+            id: model.provider,
+            label: "Completion fixture",
+            auth: [],
+            wrapSimpleCompletionStreamFn: ({ streamFn }) =>
+              streamFn &&
+              ((target, context, options) =>
+                streamFn(target, context, {
+                  ...options,
+                  headers: { ...options?.headers, "x-runtime-host": "prepared" },
+                })),
+          },
+        })
+      : model,
+    runtime,
+  );
   const run = (options?: SimpleStreamOptions, assertCurrent?: () => void) =>
     completeSimple(boundModel, emptyContext, options, assertCurrent);
   const rateLimit = (organization: string, retryAfterMs: number): AssistantMessage => ({
@@ -65,7 +82,20 @@ function createCompletionRuntime(onDispatch?: Dispatch) {
   });
   const limit = (organization: string, retryAfterMs: number) =>
     responseStream(rateLimit(organization, retryAfterMs), false);
-  return { model: boundModel, runtime, message, providerStream, run, limit, rateLimit };
+  const embedded = async (apiKey: string, transport = streamSimple, signal?: AbortSignal) => {
+    const { resolveEmbeddedAgentStream } =
+      await import("../agents/embedded-agent-runner/stream-resolution.js");
+    return resolveEmbeddedAgentStream({
+      model: boundModel,
+      llmRuntime: runtime,
+      currentStreamFn: transport,
+      providerStreamFn: transport,
+      sessionId: "seed",
+      resolvedApiKey: apiKey,
+      signal,
+    }).streamFn;
+  };
+  return { model: boundModel, runtime, message, providerStream, run, limit, rateLimit, embedded };
 }
 
 async function createLimitedRuntime(organization: string, options: SimpleStreamOptions) {
@@ -77,59 +107,14 @@ async function createLimitedRuntime(organization: string, options: SimpleStreamO
   return fixture;
 }
 
-it("installs runtime transport ports before direct preparation and bare completion", async () => {
-  const inertWrapper = getAiTransportHost().plugin.wrapSimpleCompletionStream;
-  const { model, runtime, message, providerStream } = createCompletionRuntime(
-    (_runtimeModel, context) => {
-      expect(getAiTransportHost().plugin.wrapSimpleCompletionStream).not.toBe(inertWrapper);
-      expect(context.messages).toEqual([]);
-    },
-  );
-
-  const directModel = bindModelLlmRuntime(
-    attachModelProviderRuntimePluginHandle(model, {
-      provider: model.provider,
-      plugin: {
-        id: model.provider,
-        label: "Completion fixture",
-        auth: [],
-        wrapSimpleCompletionStreamFn: ({ streamFn }) =>
-          streamFn &&
-          ((target, context, options) =>
-            streamFn(target, context, {
-              ...options,
-              headers: { ...options?.headers, "x-runtime-host": "prepared" },
-            })),
-      },
-    }),
-    runtime,
-  );
-  const { completeWithPreparedSimpleCompletionModel } =
-    await import("../agents/simple-completion-execution.js");
-  await expect(
-    completeWithPreparedSimpleCompletionModel({
-      model: directModel,
-      auth: { apiKey: "fixture-key", source: "test", mode: "api-key" },
-      context: emptyContext,
-    }),
-  ).resolves.toEqual(message);
-  await expect(completeSimple(model, emptyContext)).resolves.toEqual(message);
-  await expect(complete(model, emptyContext)).resolves.toEqual(message);
-  expect(providerStream.mock.calls.map((call) => call[2]?.headers)).toEqual([
-    { "x-runtime-host": "prepared" },
-    undefined,
-    undefined,
-  ]);
-});
-
 it.each(
-  (["host-prepared", "full"] as const).flatMap((entry) =>
+  (["prepared", "full"] as const).flatMap((entry) =>
     (["current", "retired", "aborted"] as const).map((authority) => ({ entry, authority })),
   ),
 )(
   "checks $authority $entry authority after transport initialization",
   async ({ entry, authority }) => {
-    const { model, message, providerStream } = createCompletionRuntime();
+    const { model, message, providerStream } = createCompletionRuntime(entry === "prepared");
     const controller = new AbortController();
     const authorityError = new Error("Completion owner retired.");
     let current = true;
@@ -143,23 +128,12 @@ it.each(
       entry === "full"
         ? complete(model, emptyContext, options, assertCurrent)
         : (
-            await import("../agents/host-prepared-isolated-completion.js")
-          ).runHostPreparedIsolatedCompletion({
-            provider: model.provider,
-            modelId: model.id,
-            authorization: {
-              owner: "host",
-              model,
-              auth: { mode: "api-key", source: "test", apiKey: "synthetic-completion-key" },
-            },
-            config: {},
-            agentId: "main",
-            agentDir: "/test/agent",
-            workspaceDir: "/test/workspace",
-            systemPrompt: "Return a brief title.",
-            prompt: "Title this chat.",
-            timeoutMs: 10_000,
-            abortSignal: controller.signal,
+            await import("../agents/simple-completion-execution.js")
+          ).completeWithPreparedSimpleCompletionModel({
+            model,
+            auth: { mode: "api-key", source: "test", apiKey: "synthetic-completion-key" },
+            context: emptyContext,
+            options,
             assertCurrent,
           });
     // Even a warm transport host yields before it invokes the provider.
@@ -169,95 +143,121 @@ it.each(
     }
 
     if (authority === "current") {
-      await expect(completion).resolves.toEqual(
-        entry === "full" ? message : { assistant: message },
-      );
-      expect(providerStream).toHaveBeenCalledOnce();
-      const [, sentContext, sentOptions] = providerStream.mock.calls[0]!;
-      if (entry === "full") {
-        expect(sentContext.messages).toEqual([]);
-        expect(sentOptions).toBe(options);
-      } else {
-        expect(sentContext.messages).toEqual([
-          { role: "user", content: "Title this chat.", timestamp: expect.any(Number) },
-        ]);
-        expect(sentOptions).toMatchObject({ apiKey: "synthetic-completion-key" });
-        expect(sentOptions).not.toHaveProperty("assertCurrent");
+      await expect(completion).resolves.toEqual(message);
+      if (entry === "prepared") {
+        expect(providerStream.mock.calls[0]?.[2]).toMatchObject({
+          apiKey: "synthetic-completion-key",
+          headers: { "x-runtime-host": "prepared" },
+        });
       }
     } else {
       await expect(completion).rejects.toBe(authorityError);
       expect(providerStream).not.toHaveBeenCalled();
     }
-    expect(controller.signal.aborted).toBe(authority === "aborted");
   },
 );
+it("leaves unkeyed and inherited stream consumers intact while gating a changed account", async () => {
+  const { model, message, rateLimit } = createCompletionRuntime();
+  const unkeyed = responseStream(message);
+  const iterate = unkeyed[Symbol.asyncIterator];
+  const result = unkeyed.result.bind(unkeyed);
+  unkeyed.result = result;
+  expect(await admitProviderRateLimitStream(model, undefined, () => unkeyed)).toBe(unkeyed);
+  expect(unkeyed[Symbol.asyncIterator]).toBe(iterate);
+  expect(unkeyed).toHaveProperty("result", result);
+  await expect(unkeyed.result()).resolves.toBe(message);
+
+  vi.useFakeTimers();
+  const source = responseStream(rateLimit("changed-account", 1000));
+  const sourceIterate = source[Symbol.asyncIterator];
+  const sourceResult = source.result.bind(source);
+  source.result = sourceResult;
+  const sameAccount = await admitProviderRateLimitStream(
+    model,
+    { apiKey: "synthetic-outer-account" },
+    async (admittedOptions) => {
+      const inherited = await admitProviderRateLimitStream(model, admittedOptions, (forwarded) => {
+        expect(forwarded).toBe(admittedOptions);
+        return source;
+      });
+      expect(inherited[Symbol.asyncIterator]).toBe(sourceIterate);
+      expect(inherited).toHaveProperty("result", sourceResult);
+      // A delegated request using a different account still owns its observation.
+      const changedOptions = { ...admittedOptions, apiKey: "synthetic-changed-account" };
+      return admitProviderRateLimitStream(model, changedOptions, (forwarded) => {
+        expect(forwarded).not.toBe(changedOptions);
+        expect(forwarded.apiKey).toBe(changedOptions.apiKey);
+        return inherited;
+      });
+    },
+  );
+  const events = [];
+  for await (const event of sameAccount) {
+    events.push(event);
+  }
+  expect(events).toEqual([
+    { type: "error", reason: "error", error: rateLimit("changed-account", 1000) },
+  ]);
+  await expect(sameAccount.result()).resolves.toEqual(rateLimit("changed-account", 1000));
+  const start = vi.fn(() => responseStream(message));
+  await expect(
+    admitProviderRateLimitStream(
+      model,
+      { apiKey: "synthetic-changed-account", maxRetryDelayMs: 1 },
+      start,
+    ),
+  ).rejects.toMatchObject({ status: 429 });
+  expect(start).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(61000);
+});
+
 it("paces 30 shared-account sessions once per request and admits interactive work first", async () => {
-  const { model, runtime, message, providerStream, run, rateLimit } = createCompletionRuntime();
+  const { model, message, providerStream, run, rateLimit, embedded } = createCompletionRuntime();
   await run();
-  const { resolveEmbeddedAgentStream } =
-    await import("../agents/embedded-agent-runner/stream-resolution.js");
   vi.useFakeTimers();
   vi.setSystemTime(0);
-  const calls: string[] = [];
-  let limited = true;
-  providerStream.mockImplementation((_model, _context, options) => {
-    calls.push(options?.sessionId ?? "seed");
-    return responseStream(
-      limited ? { ...rateLimit("priority", 1000), errorCode: "rate_limit_exceeded" } : message,
+  providerStream
+    .mockClear()
+    .mockImplementationOnce(() =>
+      responseStream({ ...rateLimit("priority", 1000), errorCode: "rate_limit_exceeded" }),
     );
-  });
-  const embedded = resolveEmbeddedAgentStream({
-    model,
-    llmRuntime: runtime,
-    currentStreamFn: streamSimple,
-    providerStreamFn: streamSimple,
-    sessionId: "seed",
-    resolvedApiKey: "synthetic-priority-key",
-  }).streamFn;
-  const seed = await embedded(model, emptyContext);
-  await expect(getEventStreamCompletion(seed)).resolves.toMatchObject({ stopReason: "error" });
-  for await (const event of seed) {
-    expect(event.type).toBe("error");
-  }
-  await seed.result();
-  limited = false;
+  const calls = () => providerStream.mock.calls.map((call) => call[2]?.sessionId ?? "seed");
+  const embeddedStream = await embedded("synthetic-priority-key");
+  const seed = await embeddedStream(model, emptyContext);
+  await expect(seed.result()).resolves.toMatchObject({ stopReason: "error" });
   await run({ apiKey: "unrelated-account-key", sessionId: "other-account" });
   const background = Array.from({ length: 20 }, (_, index) =>
     run({ apiKey: "synthetic-priority-key", sessionId: `background-${index}` }),
   );
-  const waits: number[] = [];
   const stoppedWaiting = vi.fn();
+  const onRateLimitWait = vi.fn(() => stoppedWaiting);
   const interactive = Array.from({ length: 10 }, (_, index) =>
     withModelTransportContext(
       {
         requestId: `interactive-${index}`,
         priority: "interactive",
-        onRateLimitWait: (retryAt) => {
-          waits.push(retryAt);
-          return stoppedWaiting;
-        },
+        onRateLimitWait,
       },
       async () =>
         (
-          await embedded(
-            bindModelLlmRuntime({ ...model, id: "fallback-sibling" }, runtime),
-            emptyContext,
-            { apiKey: "synthetic-priority-key", sessionId: `interactive-${index}` },
-          )
+          await embeddedStream(model, emptyContext, {
+            apiKey: "synthetic-priority-key",
+            sessionId: `interactive-${index}`,
+          })
         ).result(),
     ),
   );
   await vi.advanceTimersByTimeAsync(999);
-  expect(calls).toEqual(["seed", "other-account"]);
-  expect(waits).toHaveLength(10);
+  expect(calls()).toEqual(["seed", "other-account"]);
+  expect(onRateLimitWait).toHaveBeenCalledTimes(10);
   await vi.advanceTimersByTimeAsync(1);
-  expect(calls).toEqual(["seed", "other-account", "interactive-0"]);
+  expect(calls()).toEqual(["seed", "other-account", "interactive-0"]);
   expect(stoppedWaiting).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(7500);
   await expect(Promise.all([...background, ...interactive])).resolves.toEqual(
     Array.from({ length: 30 }, () => message),
   );
-  expect(calls.slice(2)).toEqual([
+  expect(calls().slice(2)).toEqual([
     ...Array.from({ length: 10 }, (_, index) => `interactive-${index}`),
     ...Array.from({ length: 20 }, (_, index) => `background-${index}`),
   ]);
@@ -271,8 +271,39 @@ it("paces 30 shared-account sessions once per request and admits interactive wor
   await vi.advanceTimersByTimeAsync(1001);
   const recovered = [0, 1].map(() => run({ apiKey: "synthetic-priority-key" }));
   await vi.advanceTimersByTimeAsync(0);
-  expect(calls).toHaveLength(35);
+  expect(calls()).toHaveLength(35);
   await Promise.all(recovered);
+});
+
+it("shares TPM waits across runs of one model without delaying another model on the same organization", async () => {
+  const { model, runtime, message, providerStream, run, limit } = createCompletionRuntime();
+  await run();
+  vi.useFakeTimers();
+  const options = {
+    apiKey: "synthetic-model-scoped-key",
+    headers: { "OpenAI-Organization": "org-synthetic-model-scoped" },
+  };
+  providerStream.mockImplementationOnce(() => limit("model-scoped", 1000));
+  await run(options);
+  providerStream.mockClear();
+  const primary = run({ ...options, sessionId: "another-primary-run" });
+  const fallbackModel = bindModelLlmRuntime({ ...model, id: "fallback-sibling" }, runtime);
+  const fallback = completeSimple(fallbackModel, emptyContext, {
+    ...options,
+    sessionId: "fallback-run",
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(providerStream.mock.calls.map((call) => call[2]?.sessionId)).toEqual(["fallback-run"]);
+  await expect(fallback).resolves.toEqual(message);
+  await vi.advanceTimersByTimeAsync(999);
+  expect(providerStream).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(1);
+  await expect(primary).resolves.toEqual(message);
+  expect(providerStream.mock.calls.map((call) => call[2]?.sessionId)).toEqual([
+    "fallback-run",
+    "another-primary-run",
+  ]);
+  await vi.advanceTimersByTimeAsync(60_000);
 });
 
 it("merges credentials identified by the same organization and extends queued waits", async () => {
@@ -325,27 +356,43 @@ it("returns excessive shared floors to failover, including a floor extended whil
   await vi.advanceTimersByTimeAsync(60_000);
 });
 
+it("bounds retry admission while shared floors extend and interactive peers remain queued", async () => {
+  const options = { apiKey: "synthetic-deadline-key" };
+  const { providerStream, run, limit } = await createLimitedRuntime("deadline", options);
+  providerStream.mockClear();
+  const retry = withProviderRateLimitRetryDeadline(Date.now() + 1200, () =>
+    run({ ...options, sessionId: "bounded-retry" }),
+  );
+  const failed = expect(retry).rejects.toMatchObject({ reason: "rate_limit", status: 429 });
+  await vi.advanceTimersByTimeAsync(100);
+  providerStream.mockImplementationOnce(() => limit("deadline", 1000));
+  await run({ apiKey: "synthetic-deadline-second-key" });
+  const peers = Array.from({ length: 5 }, (_, index) =>
+    withModelTransportContext({ requestId: `peer-${index}`, priority: "interactive" }, () =>
+      run({ ...options, sessionId: `peer-${index}` }),
+    ),
+  );
+  await vi.advanceTimersByTimeAsync(1100);
+  await failed;
+  expect(providerStream.mock.calls.some((call) => call[2]?.sessionId === "bounded-retry")).toBe(
+    false,
+  );
+  await vi.advanceTimersByTimeAsync(2000);
+  await Promise.all(peers);
+  await vi.advanceTimersByTimeAsync(60_000);
+});
+
 it("cancels admission and rechecks authority without sending queued requests", async () => {
-  const { resolveEmbeddedAgentStream } =
-    await import("../agents/embedded-agent-runner/stream-resolution.js");
   const options = { apiKey: "synthetic-cancel-key" };
-  const { model, runtime, providerStream, run } = await createLimitedRuntime("cancel", options);
+  const { model, providerStream, run, embedded } = await createLimitedRuntime("cancel", options);
   providerStream.mockClear();
   const controller = new AbortController();
   const aborted = run({ ...options, signal: controller.signal });
   const abortProof = expect(aborted).rejects.toThrow("stopped");
-  const embedded = resolveEmbeddedAgentStream({
-    model,
-    llmRuntime: runtime,
-    currentStreamFn: providerStream,
-    providerStreamFn: providerStream,
-    sessionId: "cancel-run-signal",
-    resolvedApiKey: options.apiKey,
-    signal: controller.signal,
-  }).streamFn;
-  const embeddedAbortProof = expect(Promise.resolve(embedded(model, emptyContext))).rejects.toThrow(
-    "stopped",
-  );
+  const embeddedStream = await embedded(options.apiKey, providerStream, controller.signal);
+  const embeddedAbortProof = expect(
+    Promise.resolve(embeddedStream(model, emptyContext)),
+  ).rejects.toThrow("stopped");
   let current = true;
   const retired = run(options, () => {
     if (!current) {
@@ -362,7 +409,7 @@ it("cancels admission and rechecks authority without sending queued requests", a
   await vi.advanceTimersByTimeAsync(60_000);
 });
 
-it("releases request callbacks while completed streams remain readable", async ({ signal }) => {
+it("releases callbacks across completion, retry, and abandoned consumption", async ({ signal }) => {
   // V8 collection proof runs in Node even when the surrounding suite uses Bun.
   const result = await runNodeScript(
     [
@@ -370,10 +417,8 @@ it("releases request callbacks while completed streams remain readable", async (
       "--import",
       "./scripts/tsx.mjs",
       "scripts/perf/provider-rate-limit-retention.ts",
-      "--turns",
-      "4",
-      "--payload-bytes",
-      "8",
+      "--turns=11",
+      "--payload-bytes=8",
     ],
     { ...process.env, NODE_OPTIONS: "" },
     15_000,
@@ -384,10 +429,9 @@ it("releases request callbacks while completed streams remain readable", async (
       requireProcessTreeExit: process.platform !== "win32",
     },
   );
-  expect(result.error, result.stderr).toBeUndefined();
-  expect(result.status, result.stderr).toBe(0);
+  expect([result.error, result.status], result.stderr).toEqual([undefined, 0]);
   expect(JSON.parse(result.stdout)).toMatchObject({
-    turns: 4,
+    turns: 11,
     retainedCallbacks: 0,
     retainedPayloadBytes: 0,
   });

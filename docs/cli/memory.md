@@ -152,7 +152,15 @@ indexes before result limits are applied. Ordinary synchronization removes their
 stale index records without `--force` or re-embedding unchanged conversations.
 Historical transcripts without a recognizable helper identity remain eligible.
 
+When a memory file changes, indexing can reuse unchanged chunks from the published
+index of that same file and source, even when their line numbers shift or the
+embedding cache is disabled. Reuse requires matching provider settings, model, input
+format, and vector dimensions; conflicting published vectors are embedded again
+unless the cache already holds a valid match. This does not remove existing cache
+rows or change cache retention.
+
 Full rebuilds wait for temporary database cleanup before reporting completion.
+Searches remain available against the published index while a rebuild finishes.
 File removal runs asynchronously so cleanup does not block the Gateway event loop.
 SQLite background rebuilds retain completed work when foreground activity interrupts
 indexing. The next sync resumes the rebuild, incorporating source changes before

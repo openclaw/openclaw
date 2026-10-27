@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import * as tar from "tar";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   recordArchiveSymbolicLink,
   resolvePortableArchivePathKey,
@@ -50,17 +51,17 @@ type SqliteSnapshotEntry = NormalizedArchiveEntry & SqliteSnapshotOwner;
 
 function formatResult(result: BackupVerifyResult): string {
   return [
-    `Backup archive OK: ${result.archivePath}`,
-    `Archive root: ${result.archiveRoot}`,
-    `Created at: ${result.createdAt}`,
-    `Runtime version: ${result.runtimeVersion}`,
-    `Assets verified: ${result.assetCount}`,
-    `Archive entries scanned: ${result.entryCount}`,
-    `Symbolic links checked: ${result.symlinkCount}`,
+    terminalText`Backup archive OK: ${result.archivePath}`,
+    terminalText`Archive root: ${result.archiveRoot}`,
+    terminalText`Created at: ${result.createdAt}`,
+    terminalText`Runtime version: ${result.runtimeVersion}`,
+    terminalText`Assets verified: ${result.assetCount}`,
+    terminalText`Archive entries scanned: ${result.entryCount}`,
+    terminalText`Symbolic links checked: ${result.symlinkCount}`,
     result.sqliteInventoryVerified
       ? "SQLite database inventory verified."
       : "SQLite database coverage unknown: this legacy archive has no database inventory.",
-    ...(result.warnings ?? []),
+    ...(result.warnings ?? []).map((warning) => terminalText`${warning}`),
   ].join("\n");
 }
 

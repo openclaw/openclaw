@@ -29,6 +29,7 @@ import {
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { expectText } from "../../test-utils/text-assertions.js";
 import type { ReplyPayload } from "../types.js";
 import { buildSubagentsStatusLine } from "./commands-status-subagents.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
@@ -48,15 +49,6 @@ function requireReplyText(reply: ReplyPayload | undefined): string {
     throw new Error("expected reply text");
   }
   return reply.text;
-}
-
-function expectText(text: string, included: string[], excluded: string[] = []) {
-  for (const value of included) {
-    expect(text).toContain(value);
-  }
-  for (const value of excluded) {
-    expect(text).not.toContain(value);
-  }
 }
 
 function commandRun(fields: SubagentRunRecordOverrides): SubagentRunRecord {

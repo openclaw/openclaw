@@ -21,7 +21,6 @@ type EntryFrame = { time: number; samples: EntrySample[] };
 type EntryRecorder = { enabled: boolean; done: boolean; frames: EntryFrame[] };
 const homeKey = "agent:main:main";
 const entryKey = "agent:main:entry-proof";
-const chooseSession = "Choose the session in the sidebar.";
 const text = (value: string) => ({ type: "text", text: value });
 
 declare global {
@@ -37,7 +36,7 @@ const suite = createControlUiE2eSuite({
     args: ["--font-render-hinting=none", "--force-color-profile=srgb"],
   },
 });
-const scenarios = (["boot", "direct", "sidebar"] as const).flatMap((entry) =>
+const scenarios = (["boot", "direct"] as const).flatMap((entry) =>
   [4, 160].flatMap((count) =>
     [1440, 390].flatMap((width) =>
       // Theme does not change entry geometry; cover both without replaying every case.
@@ -166,7 +165,7 @@ function assertEntryFrames(frames: EntryFrame[], lastEntryId: string) {
 
 suite.define(() => {
   for (const [entry, count, width, reducedMotion, colorScheme] of scenarios) {
-    it(`opens the session frame at its final position: ${entry}, ${count} messages, ${width} px, ${reducedMotion}, ${colorScheme}`, async () => {
+    it(`opens the session frame at its final position: ${entry === "boot" ? "boot and sidebar" : entry}, ${count} messages, ${width} px, ${reducedMotion}, ${colorScheme}`, async () => {
       await suite.withPage(
         {
           ...createControlUiE2eContextOptions(),
@@ -192,12 +191,15 @@ suite.define(() => {
           const gateway = await installMockGateway(page, {
             sessionKey: target,
             sessionTranscripts:
-              entry === "sidebar"
+              entry === "boot"
                 ? {
                     [homeKey]: {
-                      messages: [{ role: "assistant", content: [text(chooseSession)] }],
+                      messages: messages.map((message, index) => ({
+                        ...message,
+                        __openclaw: { id: `entry-home-${index}`, seq: index + 1 },
+                      })),
                     },
-                    [target]: { messages },
+                    [entryKey]: { messages },
                   }
                 : { [target]: { messages } },
             sessions: [
@@ -219,52 +221,70 @@ suite.define(() => {
           );
           await page.addInitScript(recordEntryFrames, {
             target,
-            enabled: entry !== "sidebar",
-            lastEntryId: `entry-${count - 1}`,
+            enabled: true,
+            lastEntryId: `${entry === "boot" ? "entry-home" : "entry"}-${count - 1}`,
           });
-          const url = controlUiSessionUrl(
-            suite.server.baseUrl,
-            entry === "sidebar" ? homeKey : target,
-          );
+          const url = controlUiSessionUrl(suite.server.baseUrl, target);
           await page.goto(entry === "boot" ? `${suite.server.baseUrl}chat` : url);
-          if (entry === "sidebar") {
-            await page.getByText(chooseSession).waitFor();
+          const observeEntry = async (observedEntry: "boot" | "direct" | "sidebar") => {
+            await page.waitForFunction(() => window.sessionEntryRecorder.done, undefined, {
+              timeout: controlUiE2eWaitTimeoutMs,
+            });
+            expect(pageErrors).toEqual([]);
+            const frames = await page.evaluate(() => window.sessionEntryRecorder.frames);
+            await writeFile(
+              path.join(
+                suite.artifactDir,
+                `entry-${observedEntry}-${count}-${width}-${reducedMotion}-frames.json`,
+              ),
+              JSON.stringify(frames, null, 2),
+            );
+            expect(
+              await page.evaluate(() => ({
+                width: innerWidth,
+                theme: document.documentElement.dataset.themeMode,
+                reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+                colorScheme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+              })),
+            ).toEqual({
+              width,
+              theme: colorScheme,
+              reducedMotion: reducedMotion === "reduce",
+              colorScheme,
+            });
+            expect(
+              (
+                await gateway.getRequests("sessions.messages.subscribe", {
+                  key: observedEntry === "boot" ? homeKey : entryKey,
+                })
+              ).length,
+            ).toBeGreaterThan(0);
+            assertEntryFrames(
+              frames,
+              `${observedEntry === "boot" ? "entry-home" : "entry"}-${count - 1}`,
+            );
+          };
+          await observeEntry(entry);
+          if (entry === "boot") {
+            // Reuse the settled Home document, but observe the target's first entry.
+            await page.evaluate(recordEntryFrames, {
+              target: entryKey,
+              enabled: false,
+              lastEntryId: `entry-${count - 1}`,
+            });
             if (width === 390) {
               await navigationDrawerToggle(page).click();
             }
             const link = page.locator(
-              `[data-session-key="${target}"] a.sidebar-recent-session__link`,
+              `[data-session-key="${entryKey}"] a.sidebar-recent-session__link`,
             );
             await link.waitFor();
             await page.evaluate(() => {
               window.sessionEntryRecorder.enabled = true;
             });
             await link.click();
+            await observeEntry("sidebar");
           }
-          await page.waitForFunction(() => window.sessionEntryRecorder.done, undefined, {
-            timeout: controlUiE2eWaitTimeoutMs,
-          });
-          expect(pageErrors).toEqual([]);
-          const frames = await page.evaluate(() => window.sessionEntryRecorder.frames);
-          await writeFile(
-            path.join(suite.artifactDir, "entry-frames.json"),
-            JSON.stringify(frames, null, 2),
-          );
-          expect(
-            await page.evaluate(() => ({
-              width: innerWidth,
-              theme: document.documentElement.dataset.themeMode,
-              reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
-              colorScheme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
-            })),
-          ).toEqual({
-            width,
-            theme: colorScheme,
-            reducedMotion: reducedMotion === "reduce",
-            colorScheme,
-          });
-          expect((await gateway.getRequests("chat.startup")).length).toBeGreaterThan(0);
-          assertEntryFrames(frames, `entry-${count - 1}`);
         },
       );
     });

@@ -1,9 +1,21 @@
 import type { Locator, Page } from "playwright";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 
+const button = (scope: Locator, name: string | RegExp) =>
+  scope.getByRole("button", { name, exact: true });
+const mobileHeader = (pane: Locator) => pane.locator(".agent-chat__header--mobile");
+const panelsToggle = (pane: Locator, mobile: boolean) =>
+  button(mobile ? mobileHeader(pane) : pane.locator(".sidebar-region__panels-toggle"), "Panels");
+
+async function waitForPanelLayout(pane: Locator): Promise<void> {
+  const headers = ".agent-chat__header--mobile, .sidebar-region__header, [data-region-header]";
+  await pane.locator(headers).filter({ visible: true }).first().waitFor();
+  await waitForLayoutSettled(pane.page(), "openclaw-chat-pane :is(" + headers + ")");
+}
+
 export async function openChatDashboardMenu(scope: Page | Locator): Promise<Locator> {
   const menu = nativePane(scope).locator(".chat-dashboard-menu").filter({ visible: true });
-  const trigger = menu.getByRole("button", { name: "Dashboard options", exact: true });
+  const trigger = button(menu, "Dashboard options");
   if ((await trigger.getAttribute("aria-expanded")) !== "true") {
     await trigger.click();
   }
@@ -51,15 +63,11 @@ export async function openChatPanels(
   presentation: "mobile" | "desktop",
 ): Promise<Locator> {
   const pane = nativePane(scope);
-  const headers = ".agent-chat__header--mobile, .sidebar-region__header, [data-region-header]";
-  await pane.locator(headers).filter({ visible: true }).first().waitFor();
-  await waitForLayoutSettled(pane.page(), "openclaw-chat-pane :is(" + headers + ")");
+  await waitForPanelLayout(pane);
   // The scenario owns its target layout; old controls may remain visible during a viewport change.
   if (presentation === "mobile") {
-    await pane.locator(".agent-chat__header--mobile").waitFor({ state: "visible" });
-    const trigger = pane
-      .locator(".agent-chat__header--mobile")
-      .getByRole("button", { name: "Panels", exact: true });
+    await mobileHeader(pane).waitFor({ state: "visible" });
+    const trigger = panelsToggle(pane, true);
     if (await trigger.isVisible()) {
       if (!(await pane.locator(".chat-mobile-host").isVisible())) {
         await trigger.click();
@@ -70,9 +78,7 @@ export async function openChatPanels(
     await menu.getByRole("menuitem", { name: "Panels", exact: true }).click();
     return menu.locator(".chat-header-session-menu__trigger");
   }
-  const trigger = pane
-    .locator(".sidebar-region__panels-toggle")
-    .getByRole("button", { name: "Panels", exact: true });
+  const trigger = panelsToggle(pane, false);
   await trigger.waitFor({ state: "visible" });
   if ((await trigger.getAttribute("aria-expanded")) !== "true") {
     await trigger.click();
@@ -89,20 +95,12 @@ async function selectMenuItem(menu: Locator, name: string | RegExp): Promise<voi
 }
 
 async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): Promise<void> {
-  const headers = ".agent-chat__header--mobile, .sidebar-region__header, [data-region-header]";
-  await pane.locator(headers).filter({ visible: true }).first().waitFor();
-  await waitForLayoutSettled(pane.page(), "openclaw-chat-pane :is(" + headers + ")");
+  await waitForPanelLayout(pane);
   const matches = (label: string) => (typeof name === "string" ? name === label : name.test(label));
-  const mobile = await pane.locator(".agent-chat__header--mobile").isVisible();
+  const mobile = await mobileHeader(pane).isVisible();
   const host = pane.locator(".chat-mobile-host");
   const side = pane.locator('[data-region-header="side"]');
-  const toggle = mobile
-    ? pane
-        .locator(".agent-chat__header--mobile")
-        .getByRole("button", { name: "Panels", exact: true })
-    : pane
-        .locator(".sidebar-region__panels-toggle")
-        .getByRole("button", { name: "Panels", exact: true });
+  const toggle = panelsToggle(pane, mobile);
 
   if (
     matches("Side panel") ||
@@ -110,10 +108,7 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
     (typeof name === "string" && name.startsWith("Collapse "))
   ) {
     if (mobile && (await host.isVisible())) {
-      await host
-        .locator(".chat-mobile-host__header")
-        .getByRole("button", { name: "Close", exact: true })
-        .click();
+      await button(host.locator(".chat-mobile-host__header"), "Close").click();
     } else if (mobile) {
       await openChatPanels(pane, "mobile");
     } else {
@@ -122,38 +117,27 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
     return;
   }
   const panels = [
-    ["Review", "Review"],
-    ["Review", "Show session changes"],
-    ["Files", "Show session files"],
-    ["Files", "Collapse session workspace"],
-    ["Side chat", "Show side chat"],
-    ["Side chat", "Collapse side chat"],
-    ["Browser", "Toggle browser panel"],
-    ["Desktop", "Toggle desktop panel"],
-    ["Terminal", "Toggle terminal"],
-    ["Subagents", "Subagents"],
-    ["Processes", "Processes"],
-    ["Dashboard", "Dashboard"],
-    ["Desktop", "Desktop"],
+    ["Review", "Review", "detail"],
+    ["Review", "Show session changes", "detail"],
+    ["Files", "Show session files", "workspace"],
+    ["Files", "Collapse session workspace", "workspace"],
+    ["Side chat", "Show side chat", "companion"],
+    ["Side chat", "Collapse side chat", "companion"],
+    ["Browser", "Toggle browser panel", "browser"],
+    ["Desktop", "Toggle desktop panel", "desktop"],
+    ["Terminal", "Toggle terminal", "terminal"],
+    ["Subagents", "Subagents", "subagents"],
+    ["Processes", "Processes", "processes"],
+    ["Dashboard", "Dashboard", "dashboard"],
+    ["Desktop", "Desktop", "desktop"],
   ] as const;
   const panel = panels.find(([, action]) => matches(action));
   if (panel) {
     await openChatPanels(pane, mobile ? "mobile" : "desktop");
     if (mobile) {
-      await host.getByRole("button", { name: "Panels", exact: true }).click();
+      await button(host, "Panels").click();
     }
-    const slots: Record<string, string> = {
-      Review: "detail",
-      Files: "workspace",
-      "Side chat": "companion",
-      Browser: "browser",
-      Desktop: "desktop",
-      Terminal: "terminal",
-      Subagents: "subagents",
-      Processes: "processes",
-      Dashboard: "dashboard",
-    };
-    const retained = pane.locator('[data-panel-slot="' + slots[panel[0]] + '"]');
+    const retained = pane.locator('[data-panel-slot="' + panel[2] + '"]');
     const contentId = (await retained.count()) ? await retained.first().getAttribute("id") : null;
     if (contentId) {
       const tab = side
@@ -165,13 +149,13 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
       }
     }
     const launcher = pane.locator(mobile ? ".chat-panel-launcher-mobile" : ".side-panel-launcher");
-    const newTab = side.getByRole("button", { name: "New tab", exact: true });
+    const newTab = button(side, "New tab");
     await launcher.or(newTab).filter({ visible: true }).first().waitFor();
     if (!(await launcher.isVisible())) {
       await newTab.click();
     }
     const option = mobile
-      ? launcher.getByRole("button", { name: panel[0], exact: true })
+      ? button(launcher, panel[0])
       : launcher.getByRole("button").filter({
           has: pane
             .page()
@@ -187,32 +171,26 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
     ["Move side panel below", "Below"],
   ].find(([action]) => matches(action!));
   if (dock) {
-    await side.getByRole("button", { name: "Panel position", exact: true }).click();
+    await button(side, "Panel position").click();
     await pane.getByRole("menuitemradio", { name: dock[1], exact: true }).click();
     await pane.locator(".side-panel-position-menu:visible").waitFor({ state: "hidden" });
     return;
   }
   if (matches("Restore split") || (typeof name === "string" && name.startsWith("Expand "))) {
     if (mobile) {
-      await host
-        .locator(".chat-mobile-host__header")
-        .getByRole("button", {
-          name: matches("Restore split") ? "Restore" : "Expand Side panel",
-          exact: true,
-        })
-        .click();
+      await button(
+        host.locator(".chat-mobile-host__header"),
+        matches("Restore split") ? "Restore" : "Expand Side panel",
+      ).click();
       return;
     }
-    const action = side.getByRole("button", {
-      name: matches("Restore split") ? "Restore split" : "Expand Side panel",
-      exact: true,
-    });
+    const action = button(side, matches("Restore split") ? "Restore split" : "Expand Side panel");
     if (await action.isVisible()) {
       await action.click();
       return;
     }
     const dashboard = pane.locator(".chat-dashboard-menu").filter({ visible: true });
-    await dashboard.getByRole("button", { name: "Dashboard options", exact: true }).click();
+    await button(dashboard, "Dashboard options").click();
     await selectMenuItem(dashboard, name);
     return;
   }
@@ -221,9 +199,10 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
     if (!mobile && (await dashboard.isVisible())) {
       await selectMenuItem(await openChatDashboardMenu(pane), "Expand Dashboard");
     } else {
-      await (mobile ? host.locator(".chat-mobile-host__header") : side)
-        .getByRole("button", { name: "Expand Side panel", exact: true })
-        .click();
+      await button(
+        mobile ? host.locator(".chat-mobile-host__header") : side,
+        "Expand Side panel",
+      ).click();
     }
     return;
   }
@@ -232,7 +211,7 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
     if (await dashboard.isVisible()) {
       await selectMenuItem(await openChatDashboardMenu(pane), /^Swap /);
     } else {
-      await side.getByRole("button", { name: "Panel position", exact: true }).click();
+      await button(side, "Panel position").click();
       await pane.getByRole("menuitem", { name, exact: true }).click();
       await pane.locator(".side-panel-position-menu:visible").waitFor({ state: "hidden" });
     }
@@ -246,7 +225,7 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
   if (matches("Close pane")) {
     if (mobile) {
       await menu.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-      await host.getByRole("button", { name: "Close pane", exact: true }).click();
+      await button(host, "Close pane").click();
       await host.waitFor({ state: "hidden" });
       return;
     }

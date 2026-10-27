@@ -8,7 +8,7 @@ import * as operationAdmission from "../infra/sqlite-worker-operation-admission.
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { withoutMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   commitPluginInstallRecordsOnly,
   commitPluginInstallRecordsWithConfig,
@@ -63,17 +63,6 @@ function revocableAuthority() {
       }
     },
   };
-}
-
-async function withoutMainThreadSql<T>(run: () => Promise<T>): Promise<T> {
-  const sql = observeMainThreadSql();
-  try {
-    const result = await run();
-    sql.expectIdle();
-    return result;
-  } finally {
-    sql.restore();
-  }
 }
 
 function afterAcknowledgedIndexCommand(

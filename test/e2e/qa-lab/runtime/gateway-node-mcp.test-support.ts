@@ -102,7 +102,8 @@ export function startMcpGateway(
       executablePath: process.execPath,
       argsPrefix: ["dist/index.js"],
       cwd: repoRoot,
-      usePackagedPlugins: true,
+      // MCP transport recovery needs no packaged-install repair.
+      usePackagedPlugins: false,
     },
     transportBaseUrl: "http://127.0.0.1",
     controlUiEnabled: false,

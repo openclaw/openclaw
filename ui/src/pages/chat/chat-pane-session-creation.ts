@@ -8,7 +8,7 @@ import {
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveSessionCreateParams } from "../../lib/sessions/session-create-params.ts";
 import {
   isSubagentSessionKey,
@@ -75,6 +75,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     selectedSession: GatewaySessionRow | undefined;
     sessionKey: string;
     unarchiveAccess: SessionMethodAccess;
+    cached?: boolean;
   }) {
     if (
       params.selectedSession?.classification === "subagent" ||
@@ -134,6 +135,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         text: t("chat.archivedSessionDisabled"),
         icon: "archive" as const,
         actionLabel: t("common.unarchive"),
+        actionPending: params.cached,
         disabledReason: !params.selectedSessionId
           ? "Session lifecycle action requires a durable session identity."
           : params.unarchiveAccess.allowed

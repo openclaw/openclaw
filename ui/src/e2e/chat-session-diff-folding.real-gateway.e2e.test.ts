@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import type { SessionsDiffResult } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
 import {
   createOpenClawTestInstance,
@@ -12,6 +13,7 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import {
   activateChatHeaderPanelAction,
   focusChatSidePanel,
@@ -34,6 +36,7 @@ const after = before.map((line) =>
   line.replace('"before"', '"after"').replace("label + count", "label + count * 2"),
 );
 let instance: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>> | undefined;
 let workspace: string;
 let longBefore: string[], longAfter: string[];
 
@@ -62,6 +65,14 @@ async function expectLines(file: Locator, selector: string, lines: (string | und
 const suite = createControlUiE2eSuite({
   name: "manual code folding through a real Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     const owner = await createOpenClawTestInstance({
       name: profile,
@@ -119,36 +130,26 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("folds actual sessions.diff source without concealing edits in expanded files", async () => {
-    const rpc = async (method: string, params: object) => {
-      const result = await instance.cli([
-        "gateway",
-        "call",
-        method,
-        "--params",
-        JSON.stringify(params),
-        "--json",
-      ]);
-      if (result.code !== 0) {
-        throw new Error(
-          method + " failed: " + result.stderr.replaceAll(instance.gatewayToken, "[fixture token]"),
-        );
-      }
-      return JSON.parse(result.stdout);
-    };
-    const created = await rpc("sessions.create", {
+    const gateway = client;
+    if (!gateway) {
+      throw new Error("Gateway fixture client is not connected");
+    }
+    const created = await gateway.request("sessions.create", {
       agentId: "main",
       key,
       label: "Manual code folding proof",
       cwd: workspace,
     });
     expect(created.ok).toBe(true);
-    const diff = await rpc("sessions.diff", { sessionKey: key });
+    const diff = await gateway.request<SessionsDiffResult>("sessions.diff", { sessionKey: key });
     expect(diff.files.map((file: { path: string }) => file.path)).toEqual([
       "example.ts",
       "gapped.ts",
       "large.ts",
     ]);
-    const handoff = await rpc("health", {}).then(() => instance.cli(["dashboard", "--json"]));
+    const handoff = await gateway
+      .request("health", {})
+      .then(() => instance.cli(["dashboard", "--json"]));
     expect(handoff.code).toBe(0);
     const dashboard = JSON.parse(handoff.stdout);
     const url = new URL("chat/main/~key/folding-proof", suite.server.baseUrl);

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hermeticEnv } from "../commands/doctor-plugin-registry.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
@@ -56,15 +57,6 @@ function writeManifestlessClaudeBundle(rootDir: string, entries: readonly string
     fs.mkdirSync(path.join(rootDir, entry), { recursive: true });
     fs.writeFileSync(path.join(rootDir, entry, "README.md"), `# ${entry}\n`, "utf-8");
   }
-}
-
-function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
-    OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_VERSION: "2026.4.25",
-    VITEST: "true",
-    ...overrides,
-  };
 }
 
 function loadInstalledPluginIndex(params: Parameters<typeof loadIndex>[0]) {

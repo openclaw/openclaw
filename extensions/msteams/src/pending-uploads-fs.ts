@@ -87,14 +87,11 @@ async function registerUploadRows(
   await pruneUploadStore(metaStore, chunkStore, chunkCount);
   for (let index = 0; index < chunkCount; index += 1) {
     const chunk = buffer.subarray(index * RAW_CHUNK_BYTES, (index + 1) * RAW_CHUNK_BYTES);
-    await chunkStore.register(
-      buildChunkKey(record.id, index),
-      toPluginJsonValue({
-        id: record.id,
-        index,
-        dataBase64: chunk.toString("base64"),
-      }),
-    );
+    await chunkStore.register(buildChunkKey(record.id, index), {
+      id: record.id,
+      index,
+      dataBase64: chunk.toString("base64"),
+    });
   }
   await metaStore.register(
     buildMetaKey(record.id),
@@ -258,9 +255,6 @@ export async function setPendingUploadActivityIdFs(id: string, activityId: strin
     if (!record || Date.now() - record.createdAt > PENDING_UPLOAD_TTL_MS) {
       return;
     }
-    await metaStore.register(
-      buildMetaKey(id),
-      toPluginJsonValue({ ...record, consentCardActivityId: activityId }),
-    );
+    await metaStore.register(buildMetaKey(id), { ...record, consentCardActivityId: activityId });
   });
 }

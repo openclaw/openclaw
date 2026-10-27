@@ -28,6 +28,7 @@ async function startSubagentFixture(plugin: string, packaged = false) {
   });
   const gateway = await owner.start({
     repoRoot: REPO_ROOT,
+    initializeCurrentRuntimeState: true,
     providerBaseUrl: `${mock.baseUrl}/v1`,
     providerMode: "mock-openai",
     transport,

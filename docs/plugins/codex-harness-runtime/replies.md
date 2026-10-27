@@ -69,7 +69,10 @@ Recovery reserves its existing limits for the complete current turn, then keeps
 the nearest whole earlier exchanges that fit. Older exchanges can be omitted,
 including a whole exchange that is too large. A notice identifies missing history
 when space permits; the finalizer is always instructed to state uncertainty about
-missing facts. Current evidence that exceeds the limits, invalid tool pairs, or
+missing facts. If an earlier tool exchange remains unfinished at the verified
+current-turn boundary, recovery omits all earlier context rather than splitting
+the exchange at a user steering message. Current evidence that exceeds the limits,
+invalid tool pairs, or
 unsupported content still makes recovery unavailable. Existing conversation
 history stays intact, and completed actions are never repeated.
 

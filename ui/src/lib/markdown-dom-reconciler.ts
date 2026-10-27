@@ -174,6 +174,7 @@ function parseCanonical(
         ((!incremental && !hasMedia) ||
           (sessionTitles && element.matches(SESSION_TITLE_TARGET_SELECTOR)) ||
           element.classList.contains("markdown-mermaid") ||
+          element.hasAttribute("data-code-highlight") ||
           element.localName.includes("-")),
       );
       return {

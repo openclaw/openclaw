@@ -16,17 +16,26 @@ import "../test-helpers/app-sidebar-suite.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "./app-sidebar.tsx";
 import { loadMoreSessionCatalog } from "./session-data-catalog.ts";
+import type { SessionCatalogDataOwner } from "./session-data-catalog.ts";
 
 beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] }));
 afterEach(() => vi.useRealTimers());
 
-function fresh(ids: string[], nextCursor?: string) {
-  const page = catalogPage(
+function catalogFixture(ids: string[], nextCursor?: string) {
+  return catalogPage(
     ids.map((threadId) => ({ threadId, name: threadId })),
     nextCursor,
   );
-  page.catalogs[0]!.requiresFreshList = true;
-  return page;
+}
+
+function fresh(ids: string[], nextCursor?: string) {
+  const result = catalogFixture(ids, nextCursor);
+  result.catalogs[0]!.requiresFreshList = true;
+  return result;
+}
+
+function expectRows(owner: SessionCatalogDataOwner, ids: string[]) {
+  expect(owner.sessionCatalogs[0]?.hosts[0]?.sessions.map((row) => row.threadId)).toEqual(ids);
 }
 
 function freshHosts(
@@ -89,9 +98,7 @@ it("withdraws fresh rows and rejects a superseded refresh and its progressive pu
     progressId: oldProgress,
     catalog: fresh(["revoked"]).catalogs[0],
   });
-  expect(owner.sessionCatalogs[0]?.hosts[0]?.sessions.map((row) => row.threadId)).toEqual([
-    "current",
-  ]);
+  expectRows(owner, ["current"]);
 });
 
 it("reauthorizes the expanded window before Load More and withdraws it on failure", async () => {
@@ -113,10 +120,7 @@ it("reauthorizes the expanded window before Load More and withdraws it on failur
   expect(owner.sessionCatalogs[0]?.hosts[0]?.sessions).toEqual([]);
   deep.resolve(fresh(["new-deep"]));
   await more;
-  expect(owner.sessionCatalogs[0]?.hosts[0]?.sessions.map((row) => row.threadId)).toEqual([
-    "new-head",
-    "new-deep",
-  ]);
+  expectRows(owner, ["new-head", "new-deep"]);
   await owner.refreshSessionCatalogs();
   expect(owner.sessionCatalogs[0]?.hosts[0]).toMatchObject({
     sessions: [],
@@ -131,10 +135,7 @@ it("reauthorizes the expanded window before Load More and withdraws it on failur
   expect(retry?.textContent?.trim()).toBe("Retry");
   retry!.click();
   await vi.advanceTimersByTimeAsync(0);
-  expect(owner.sessionCatalogs[0]?.hosts[0]?.sessions.map((row) => row.threadId)).toEqual([
-    "retry-head",
-    "retry-deep",
-  ]);
+  expectRows(owner, ["retry-head", "retry-deep"]);
   expect(request).toHaveBeenCalledTimes(6);
   expect(owner.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("still-more");
 });
@@ -158,10 +159,7 @@ it("replays an expanded window when a fresh host arrives after the aggregate res
     catalog: fresh(["new-head"], "next").catalogs[0],
   });
   await vi.advanceTimersByTimeAsync(0);
-  expect(owner.sessionCatalogs[0]?.hosts[0]?.sessions.map((row) => row.threadId)).toEqual([
-    "new-head",
-    "new-deep",
-  ]);
+  expectRows(owner, ["new-head", "new-deep"]);
 });
 
 it("keeps a progressive host published while a sibling expanded page is still pending", async () => {
@@ -205,24 +203,20 @@ it("keeps a progressive host published while a sibling expanded page is still pe
 });
 
 it("rejects an ordinary hidden-page reply after a new root reuses its cursor", async () => {
-  const page = createDeferred<ReturnType<typeof catalogPage>>();
+  const pendingPage = createDeferred<ReturnType<typeof catalogPage>>();
   const request = createGatewayRequestMock()
-    .mockResolvedValueOnce(catalogPage([{ threadId: "first", name: "First" }]))
-    .mockResolvedValueOnce(catalogPage([], "same-cursor"))
-    .mockReturnValueOnce(page.promise)
-    .mockResolvedValueOnce(
-      catalogPage([{ threadId: "replacement", name: "Replacement" }], "same-cursor"),
-    );
+    .mockResolvedValueOnce(catalogFixture(["first"]))
+    .mockResolvedValueOnce(catalogFixture([], "same-cursor"))
+    .mockReturnValueOnce(pendingPage.promise)
+    .mockResolvedValueOnce(catalogFixture(["replacement"], "same-cursor"));
   const { owner } = await mountTab(request);
   const previous = owner.refreshSessionCatalogs();
   await vi.advanceTimersByTimeAsync(0);
   expect(request).toHaveBeenCalledTimes(3);
   await owner.refreshSessionCatalogs();
-  page.resolve(catalogPage([{ threadId: "obsolete-page", name: "Obsolete" }]));
+  pendingPage.resolve(catalogFixture(["obsolete-page"]));
   await previous;
-  expect(owner.sessionCatalogs[0]?.hosts[0]?.sessions.map((row) => row.threadId)).toEqual([
-    "replacement",
-  ]);
+  expectRows(owner, ["replacement"]);
   expect(owner.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("same-cursor");
   expect(owner.loadingMoreSessionCatalogIds.size).toBe(0);
 });

@@ -18,10 +18,8 @@ import { computeBackoff } from "../../../infra/backoff.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isSessionMutationActive } from "../../../sessions/session-controller.lifecycle-projections.js";
-import {
-  recordGatewaySessionRunFailure,
-  resolveSessionRunError,
-} from "../../../sessions/session-run-error.js";
+import { resolveSessionRunError } from "../../../sessions/session-run-error-format.js";
+import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";

@@ -18,6 +18,7 @@ import {
   Show,
 } from "solid-js";
 import { createTranslator } from "./i18n/index.ts";
+import { loadMessages } from "./i18n/locales.ts";
 import "./memories.css";
 
 type SearchResult = MemorySearchResponse["results"][number];
@@ -376,12 +377,19 @@ function MemoryMemories(props: MemoryMemoriesProps) {
 export const memoriesView: ControlUiSettingsView = {
   placement: { section: "memory", panel: "memories" },
   mount(container, context) {
+    void loadMessages(context.props.locale);
     // Only the host's imperative lifetime writes this presentation projection.
     const [snapshot, setSnapshot] = createSignal(context.props, { ownedWrite: true });
     const dispose = render(
       () => <MemoryMemories context={context} snapshot={snapshot()} />,
       container,
     );
-    return { update: setSnapshot, dispose };
+    return {
+      update(next) {
+        void loadMessages(next.locale);
+        setSnapshot(next);
+      },
+      dispose,
+    };
   },
 };

@@ -4,16 +4,16 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { formatCliJsonFailure } from "../failure-output.js";
 import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 
 type DatabaseOutputOptions = { json?: boolean };
 
 function writeDatabaseError(error: unknown, json: boolean): void {
-  const message = formatErrorMessage(error);
   if (json) {
-    writeRuntimeJson(defaultRuntime, { error: message });
+    writeRuntimeJson(defaultRuntime, formatCliJsonFailure(error));
   } else {
-    defaultRuntime.error(message);
+    defaultRuntime.error(formatErrorMessage(error));
   }
   defaultRuntime.exit(1);
 }

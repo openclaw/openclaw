@@ -7,6 +7,7 @@ import {
   projectLiveSessionMessage,
 } from "../../packages/gateway-client/src/session-projection.js";
 import { getMediaDir } from "../media/store.js";
+import * as assistantDisplay from "../shared/assistant-display-content.js";
 import { readRunFailureNotice } from "../shared/run-failure-notice.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
 import {
@@ -16,6 +17,52 @@ import {
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 
 const text = (value: string) => ({ type: "text", text: value });
+
+it("admits display content once before sanitizing a history page", () => {
+  const messages = [
+    { role: "user", content: "Show the report" },
+    {
+      role: "assistant",
+      content: [text("model-only")],
+      openclawDisplayContent: [text("Visible report")],
+      providerReplay: { private: "replay" },
+    },
+    { role: "toolResult", toolCallId: "read-1", content: [text("Tool output")] },
+  ];
+  const original = structuredClone(messages);
+  const admission = vi.spyOn(assistantDisplay, "projectAssistantDisplayContent");
+  try {
+    const projected = projectChatDisplayMessages([null, ...messages, "invalid"]);
+    expect(JSON.stringify(projected)).toBe(
+      JSON.stringify([
+        messages[0],
+        { role: "assistant", content: [text("Visible report")] },
+        messages[2],
+      ]),
+    );
+    expect(messages).toEqual(original);
+    expect(admission).toHaveBeenCalledTimes(messages.length);
+  } finally {
+    admission.mockRestore();
+  }
+});
+
+it("preserves model-change labels without exposing other custom-message details", () => {
+  const message = {
+    role: "custom",
+    customType: "session-model-change",
+    display: true,
+    content: "Model changed from Demo model A to Demo model B.",
+    details: { from: "Demo model A", to: "Demo model B", diagnostic: "PRIVATE_DETAIL" },
+  };
+  expect(projectStable([message])).toEqual([
+    { ...message, details: { from: "Demo model A", to: "Demo model B" } },
+  ]);
+  for (const details of [{ from: "Demo model A" }, { from: 1, to: "Demo model B" }]) {
+    const projected = projectStable([{ ...message, details }]);
+    expect(projected[0]).not.toHaveProperty("details");
+  }
+});
 
 it("preserves catalog text that resembles an OpenClaw reply-control token", () => {
   expect(

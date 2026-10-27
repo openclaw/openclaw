@@ -76,9 +76,10 @@ suite.define(() => {
         await openPicker();
         await expect.poll(() => writer.getAttribute("aria-checked")).toBe("true");
         expect(await selected.locator(".agent-select__option-check").count()).toBe(0);
-        const writerCheck = await writer.locator(".agent-select__option-check svg").boundingBox();
-        expect(writerCheck?.width).toBe(check!.width);
-        expect(writerCheck?.height).toBe(check!.height);
+        await writer.locator(".agent-select__option-check svg").waitFor({ state: "visible" });
+        await expect
+          .poll(() => writer.locator(".agent-select__option-check svg").boundingBox())
+          .toMatchObject({ width: check!.width, height: check!.height });
         expect((await writer.boundingBox())?.height).toBeCloseTo(otherRow!.height, 0);
       },
     );

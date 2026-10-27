@@ -1,6 +1,15 @@
-import { MODEL_APIS } from "../config/types.models.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  MODEL_APIS,
+  type ModelDefinitionConfig,
+  type ModelProviderConfig,
+} from "../config/types.models.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
+import {
+  isVllmQwenThinkingCompat,
+  modelTransportRoutesMatch,
+  normalizeCatalogRouteBaseUrl,
+} from "./model-compat-catalog.js";
 import {
   readModelServingContextWindow,
   type ModelServingContextLimit,
@@ -144,4 +153,53 @@ export function enrichHarnessRows(
       ...(compat ? { compat } : {}),
     };
   });
+}
+
+/** Projects authored fields while retaining discovery capabilities only for their exact route. */
+export function configuredModelCatalogEntry(params: {
+  provider: string;
+  id: string;
+  model: ModelDefinitionConfig;
+  providerConfig: ModelProviderConfig;
+  accepted?: ModelCatalogEntry;
+}): ModelCatalogEntry {
+  const { provider: providerId, id, model, providerConfig: provider, accepted } = params;
+  const api = model.api ?? accepted?.api ?? provider.api;
+  const baseUrl = model.baseUrl ?? accepted?.baseUrl ?? provider.baseUrl;
+  const routed =
+    accepted && modelTransportRoutesMatch(accepted, { api, baseUrl }) ? accepted : undefined;
+  const parameterCount = model.parameterCount ?? routed?.parameterCount;
+  const family = model.family ?? routed?.family;
+  const name = normalizeOptionalString(model?.name) || id;
+  const contextWindow =
+    typeof model?.contextWindow === "number" && model.contextWindow > 0
+      ? model.contextWindow
+      : undefined;
+  const contextTokens =
+    typeof model?.contextTokens === "number" && model.contextTokens > 0
+      ? model.contextTokens
+      : undefined;
+  const input = model.input;
+  const reasoning =
+    model.reasoning ?? (isVllmQwenThinkingCompat(providerId, model.compat) ? true : undefined);
+  return {
+    provider: providerId,
+    id,
+    name,
+    api,
+    ...(baseUrl ? { baseUrl } : {}),
+    contextWindow,
+    contextTokens,
+    ...(parameterCount !== undefined ? { parameterCount } : {}),
+    ...(family ? { family } : {}),
+    ...((model.inference ?? routed?.inference)
+      ? { inference: model.inference ?? routed?.inference }
+      : {}),
+    reasoning,
+    ...(typeof model?.reasoning === "boolean" ? { configuredReasoning: model.reasoning } : {}),
+    ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+    input,
+    ...(model.params ? { params: model.params } : {}),
+    compat: model.compat,
+  };
 }

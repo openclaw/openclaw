@@ -34,6 +34,7 @@ let hooks;
 let initialize;
 let turn = 0;
 let user;
+let synthetic;
 let privateContext;
 let lateDecision;
 let pendingInputUuid;
@@ -87,7 +88,7 @@ const stoppedFinalPreToolUse = (id, name, input) => preTool(id, name, input, id 
   cwd: process.cwd(), tool_use_id: id + "-tool",
 });
 const result = (detail = {}) => nativeResult(
-  JSON.stringify({ pid: process.pid, turn, user, privateContext, injectedRerunContext, initialize, argv: process.argv.slice(2), ...detail }), {
+  JSON.stringify({ pid: process.pid, turn, user, synthetic, privateContext, injectedRerunContext, initialize, argv: process.argv.slice(2), ...detail }), {
   ...(detail.injectedContext ? { user_message_uuid: pendingInputUuid } : {}),
   ...((!replayReceipts || scenario === "background-bash-overlap") && detail.finalBackgroundAnswer ? {
     origin: { kind: "task-notification", producer: "session-task" }, num_turns: 1, stop_reason: "end_turn",
@@ -111,6 +112,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     assert.ok(hooks);
     turn++;
     user = message.message.content;
+    synthetic = message.isSynthetic === true;
     writeFileSync("user.received", user);
     if ((capturedStopped || backgroundAgent) && turn > 1) {
       result();
@@ -118,7 +120,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     }
     if (scenario.startsWith("late-child")) {
       // Captured Claude Code 2.1.289/2.1.296 order: the Agent returns once its child Bash
-      // is auto-backgrounded; the child finishes during the next input and resumes that Agent.
+      // is auto-backgrounded; that child would finish during a later input and resume the Agent.
       // 2.1.296 adds run_id/origin.runId and parent_task_id; 2.1.289 has neither.
       const runIds = scenario.endsWith("-run-ids");
       const run = (id) => (runIds ? { run_id: id } : {});
@@ -146,35 +148,6 @@ for await (const line of createInterface({ input: process.stdin })) {
         notified(agent("agent-run-1"));
         send({ type: "system", subtype: "background_tasks_changed", tasks: [child] });
         notificationResult("agent-run-1", { childLaunched: true });
-      } else if (turn === 2) {
-        const warm = { task_id: "warm-bash", task_type: "local_bash", ...run("warm-run") };
-        send({ type: "system", subtype: "task_started", ...warm, tool_use_id: "tool-warm", is_backgrounded: false });
-        notified(child);
-        send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
-        send({ type: "system", subtype: "background_tasks_changed", tasks: [agent("agent-run-2")] });
-        send({ type: "system", subtype: "task_started", ...agent("agent-run-2"), tool_use_id: "tool-agent", is_backgrounded: true });
-        // The resumed Agent starts another child that outlives this input too.
-        send({ type: "system", subtype: "task_started", task_id: "old-child-2", task_type: "local_bash",
-          ...run("child-run-2"), ...(runIds ? { parent_task_id: "old-agent" } : {}), tool_use_id: "tool-child-2",
-          owned_by_subagent: true, is_backgrounded: true });
-        // A foreground Bash answers in its own tool result; no notification query follows.
-        notified(warm);
-        notified(agent("agent-run-2"));
-        send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
-        inputResult({ warmAnswer: true });
-        // The resumed Agent's notification query runs after the warm input, before the next one starts.
-        notificationResult("agent-run-2", { staleAgentAnswer: true });
-      } else {
-        const next = { task_id: "new-agent", task_type: "local_agent", ...run("new-agent-run") };
-        send({ type: "system", subtype: "background_tasks_changed", tasks: [next] });
-        send({ type: "system", subtype: "task_started", ...next, tool_use_id: "tool-new-agent", is_backgrounded: true });
-        inputResult({ newAgentLaunched: true });
-        notified({ task_id: "old-child-2", task_type: "local_bash", ...run("child-run-2") });
-        notified(next);
-        send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
-        // Native can defer a prior turn's notification query behind the next input.
-        if (runIds) notificationResult("agent-run-2", { staleAgentAnswer: true });
-        notificationResult("new-agent-run", { finalBackgroundAnswer: true });
       }
       continue;
     }

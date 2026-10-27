@@ -1,6 +1,6 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { setConfiguredMcpServer, unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
-import { withClawMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
+import { withMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
 import { canonicalizeConfiguredMcpServer } from "../config/mcp-config-normalize.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { digestClawValue } from "./digest.js";
@@ -29,6 +29,13 @@ export function digestClawMcpServer(server: Record<string, unknown>): string {
   return digestClawValue(canonicalizeConfiguredMcpServer(server));
 }
 
+/** A rejected write may still have committed; claim it only when the stored config matches. */
+async function isClawMcpServerCommitted(name: string, configDigest: string): Promise<boolean> {
+  const listed = await listConfiguredMcpServers().catch(() => null);
+  const current = listed?.ok ? listed.mcpServers[name] : undefined;
+  return current !== undefined && digestClawMcpServer(current) === configDigest;
+}
+
 /** Add a shared MCP requirement without creating a Claw ownership record. */
 export async function installClawMcpServersStateless(
   plan: ClawAddPlan,
@@ -39,9 +46,9 @@ export async function installClawMcpServersStateless(
 ): Promise<PersistedClawMcpServerRef[]> {
   const refs: PersistedClawMcpServerRef[] = [];
   for (const action of plan.actions.filter((candidate) => candidate.kind === "mcpServer")) {
-    await withClawMcpLifecycleLease(action.id, options, async (assertOwned) => {
+    await withMcpLifecycleLease(action.id, options, async (lease) => {
       const assertCurrent = () => {
-        assertOwned();
+        lease.assertCurrent();
         options.assertCurrent?.();
         options.assertForwardCurrent?.();
       };
@@ -86,6 +93,11 @@ export async function installClawMcpServersStateless(
             createOnly: true,
             skipLifecycleLease: true,
             assertCurrent,
+            assertCurrentAsync: async () => {
+              await options.prepareEffect?.();
+              await lease.assertOwned();
+              assertCurrent();
+            },
           });
           if (!result.ok) {
             throw new ClawMcpInstallError(result.error, refs);
@@ -95,6 +107,11 @@ export async function installClawMcpServersStateless(
         } catch (error) {
           if (error instanceof ClawMcpInstallError) {
             throw error;
+          }
+          // The config write can commit before a later step fails (post-commit assertion, OAuth
+          // cleanup, or a lost acknowledgement); claim the entry so the caller can roll it back.
+          if (!refs.includes(ref) && (await isClawMcpServerCommitted(action.id, configDigest))) {
+            refs.push(ref);
           }
           throw new ClawMcpInstallError(coerceErrorMessage(error), refs);
         }
@@ -118,9 +135,9 @@ export async function rollbackStatelessClawMcpServers(
       continue;
     }
     try {
-      await withClawMcpLifecycleLease(ref.name, options, async (assertOwned) => {
+      await withMcpLifecycleLease(ref.name, options, async (lease) => {
         const assertCurrent = () => {
-          assertOwned();
+          lease.assertCurrent();
           options.assertCurrent?.();
         };
         const listed = await listConfiguredMcpServers();
@@ -141,6 +158,11 @@ export async function rollbackStatelessClawMcpServers(
           expectedServer: configured,
           skipLifecycleLease: true,
           assertCurrent,
+          assertCurrentAsync: async () => {
+            await options.prepareEffect?.();
+            await lease.assertOwned();
+            assertCurrent();
+          },
         });
         assertCurrent();
         if (!removed.ok) {

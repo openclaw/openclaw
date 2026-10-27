@@ -38,6 +38,48 @@ afterEach(async () => {
 });
 const readOwner = () => fs.readFileSync(ownerPath, "utf8");
 
+it("waits for an empty ownership record being published before acquiring", async () => {
+  fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
+  fs.writeFileSync(ownerPath, "");
+  acquire.mockImplementation(async (...args) => {
+    try {
+      return await actual.acquireFileLock(...args);
+    } catch (error) {
+      // Finish the creator's release after a real contention attempt observes
+      // the empty file exposed between exclusive creation and payload write.
+      fs.unlinkSync(ownerPath);
+      acquire.mockImplementation(actual.acquireFileLock);
+      throw error;
+    }
+  });
+  await withDistArtifactOwnership(root, callback, controller.signal);
+  expect(callback).toHaveBeenCalledOnce();
+  expect(fs.existsSync(ownerPath)).toBe(false);
+});
+
+it.for([false, true])(
+  "retains an empty abandoned ownership record (unjoined=%s)",
+  async (unjoined) => {
+    fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
+    fs.writeFileSync(ownerPath, "");
+    if (unjoined) {
+      fs.writeFileSync(
+        path.join(path.dirname(ownerPath), "unjoined"),
+        "Unverified child cleanup.\n",
+      );
+    } else {
+      fs.utimesSync(ownerPath, new Date(0), new Date(0));
+    }
+    await expect(
+      withDistArtifactOwnership(root, callback, controller.signal),
+    ).rejects.toMatchObject({
+      cause: { code: "file_lock_stale" },
+    });
+    expect(callback).not.toHaveBeenCalled();
+    expect(readOwner()).toBe("");
+  },
+);
+
 it("cancels an already contended same-process waiter without disturbing the owner", async () => {
   const enteredOwner = createDeferred();
   const releaseOwner = createDeferred();

@@ -5,7 +5,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-model-shared";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { makeModel } from "./model-contract-cases.test-support.js";
 import {
   createAnthropicBetaHeadersWrapper,
@@ -225,6 +225,35 @@ describe("anthropic stream wrappers", () => {
 
     expect(captured.headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
+  });
+
+  it("deduplicates beta headers once while preserving caller headers and first occurrence order", () => {
+    const streamingBeta = "fine-grained-tool-streaming-2025-05-14";
+    const thinkingBeta = "interleaved-thinking-2025-05-14";
+    const headers = { "Anthropic-Beta": `existing,${streamingBeta}`, "x-request": "unchanged" };
+    const betas = [thinkingBeta, "custom", "custom", CONTEXT_1M_BETA];
+    const model = makeModel("claude-sonnet-4-6");
+    let sentHeaders: Parameters<StreamFn>[2];
+    const stream = createAnthropicBetaHeadersWrapper((_model, _context, options) => {
+      sentHeaders = options;
+      return {} as never;
+    }, betas);
+    const add = vi.spyOn(Set.prototype, "add");
+    let additions: number;
+    try {
+      void stream(model, { messages: [] }, { headers });
+      additions = add.mock.calls.length;
+    } finally {
+      add.mockRestore();
+    }
+
+    expect(sentHeaders?.headers).toEqual({
+      "Anthropic-Beta": `existing,${streamingBeta},${thinkingBeta},custom`,
+      "x-request": "unchanged",
+    });
+    expect(headers["Anthropic-Beta"]).toBe(`existing,${streamingBeta}`);
+    expect(betas).toEqual([thinkingBeta, "custom", "custom", CONTEXT_1M_BETA]);
+    expect(additions).toBe(7);
   });
 
   it("leaves auto unresolved and falls back from Ultrafast to Fast at the provider boundary", () => {

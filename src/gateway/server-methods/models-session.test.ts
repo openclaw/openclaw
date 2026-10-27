@@ -41,12 +41,12 @@ import {
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { buildGatewaySessionRow } from "../session-utils-row.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
   connectChatMetadataAccount,
   createChatMetadataOwner,
   createOpenAIChatMetadataConfig,
 } from "./chat-metadata-runtime.test-support.js";
-import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 import { modelsHandlers } from "./models.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
