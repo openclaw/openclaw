@@ -5,7 +5,10 @@ import {
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createChannelRunQueue,
+  resolveChannelMessageSourceReplyDeliveryMode,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -385,10 +388,28 @@ export function createDiscordMessageDispatcher(
     ]);
     const ctx = await preflightMessage(data, client, { abortSignal });
     // Durable receipt is not send authority; use current preflight policy at the effect.
-    if (!ctx || abortSignal.aborted || !lifecycleActive || ctx.isPolicyCurrent?.() !== true) {
+    if (
+      !ctx ||
+      abortSignal.aborted ||
+      !lifecycleActive ||
+      ctx.isPolicyCurrent?.() !== true ||
+      resolveChannelMessageSourceReplyDeliveryMode({
+        cfg: readConfig(),
+        ctx: {
+          ChatType: ctx.isDirectMessage
+            ? "direct"
+            : ctx.isGroupDm
+              ? "group"
+              : ctx.isGuildMessage
+                ? "channel"
+                : undefined,
+          InboundEventKind: ctx.inboundEventKind,
+        },
+      }) === "message_tool_only"
+    ) {
       params.runtime.error(
         danger(
-          `discord ingress: dead-letter notice suppressed for ${data.message.id} (access denied or authority expired)`,
+          `discord ingress: dead-letter notice suppressed for ${data.message.id} (access or reply policy denied, or authority expired)`,
         ),
       );
       return;

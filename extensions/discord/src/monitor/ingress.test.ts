@@ -22,6 +22,7 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAsyncGate } from "../../../test-support/async-gate.test-support.js";
 import * as ingressRuntime from "./ingress.js";
 import type { DiscordIngressLifecycle } from "./ingress.js";
 const createDiscordIngressMonitor = ingressRuntime.createDiscordIngressMonitor;
@@ -106,15 +107,13 @@ describe("Discord durable ingress", () => {
       content: "PRIVATE_PAYLOAD_SENTINEL",
       attachments: [{ id: "upload", url: "https://example.invalid/private-upload" }],
     } as unknown as APIMessage;
-    const prepared = createDeferred<void>();
-    const release = createDeferred<void>();
+    const preparation = createAsyncGate();
     const policyOrder: string[] = [];
     installIngressTransform(async (input) => {
       const message = (input as { event: APIMessage }).event;
       policyOrder.push(message.id);
       if (message.id === raw.id) {
-        prepared.resolve();
-        await release.promise;
+        await preparation.wait();
       }
       return { event: { ...message, content: "[redacted]", attachments: [] } };
     });
@@ -123,11 +122,11 @@ describe("Discord durable ingress", () => {
     const admission = monitor.accept(raw);
     let follower: Promise<void> | undefined;
     try {
-      await Promise.race([prepared.promise, admission]);
+      await Promise.race([preparation.entered, admission]);
       follower = monitor.accept({ ...raw, id: "privacy-follower" });
       expect(policyOrder).toEqual([raw.id]);
       expect(await queue.listPending()).toEqual([]);
-      release.resolve();
+      preparation.release();
       await Promise.all([admission, follower]);
       expect(policyOrder).toEqual([raw.id, "privacy-follower"]);
       const pending = await queue.listPending();
@@ -155,7 +154,7 @@ describe("Discord durable ingress", () => {
       }
       expect(dispatch).not.toHaveBeenCalled();
     } finally {
-      release.resolve();
+      preparation.release();
       await Promise.all([admission, follower]);
     }
   });
@@ -273,12 +272,8 @@ describe("Discord durable ingress", () => {
   });
 
   it("does not normalize or dispatch before the durable append completes", async () => {
-    const appendGate = createDeferred<void>();
-    const appendStarted = createDeferred<void>();
-    const gateAppend = vi.fn(async () => {
-      appendStarted.resolve();
-      await appendGate.promise;
-    });
+    const appendGate = createAsyncGate();
+    const gateAppend = vi.fn(appendGate.wait);
     // An idle monitor admits a fresh singleton through the fused append-and-claim.
     const enqueueAndClaim = queue.enqueueAndClaim?.bind(queue);
     const gatedQueue: ChannelIngressQueue<DiscordIngressPayload> = {
@@ -300,16 +295,16 @@ describe("Discord durable ingress", () => {
     const monitor = createMonitor(dispatch, gatedQueue);
     const accepted = monitor.accept(createRawMessage("1001"));
     try {
-      await Promise.race([appendStarted.promise, accepted]);
+      await Promise.race([appendGate.entered, accepted]);
       expect(gateAppend).toHaveBeenCalledTimes(1);
 
       expect(dispatch).not.toHaveBeenCalled();
 
-      appendGate.resolve();
+      appendGate.release();
       await accepted;
       await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
     } finally {
-      appendGate.resolve();
+      appendGate.release();
       await accepted;
     }
   });

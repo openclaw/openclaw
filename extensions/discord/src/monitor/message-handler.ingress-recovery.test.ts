@@ -119,7 +119,10 @@ function createHandler(params: {
   client?: Parameters<typeof createDiscordMessageHandler>[0]["client"];
 }) {
   const handlerParams = params.handlerParams ?? createDiscordHandlerParams();
-  handlerParams.cfg.messages = { inbound: { debounceMs: params.debounceMs ?? 0 } };
+  handlerParams.cfg.messages = {
+    ...handlerParams.cfg.messages,
+    inbound: { debounceMs: params.debounceMs ?? 0 },
+  };
   vi.spyOn(ingressRuntime, "createDiscordIngressMonitor").mockImplementation((monitorParams) =>
     createDiscordIngressMonitor({
       ...monitorParams,
@@ -253,7 +256,14 @@ describe("Discord durable ingress settlement", () => {
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["preflight", "authentication", "disabled-dm", "excluded", "revoked"] as const)(
+  it.each([
+    "preflight",
+    "authentication",
+    "disabled-dm",
+    "excluded",
+    "revoked",
+    "tool-only",
+  ] as const)(
     "authorizes a dead-letter notice through current Discord policy: %s",
     async (phase) => {
       vi.useFakeTimers();
@@ -274,6 +284,9 @@ describe("Discord durable ingress settlement", () => {
           guildEntries: {
             [phase === "excluded" ? "excluded-guild" : "guild-1"]: { requireMention: false },
           },
+        };
+        handlerParams.cfg.messages = {
+          visibleReplies: phase === "tool-only" ? "message_tool" : "automatic",
         };
         setRuntimeConfigSnapshot(handlerParams.cfg, handlerParams.cfg);
         preflightMock.mockImplementation(async (params: PreflightParams) => {
