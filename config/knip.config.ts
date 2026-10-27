@@ -626,6 +626,7 @@ const repositoryScriptEntries = [
   "scripts/perf/codex-catalog-lines.ts!",
   "scripts/perf/codex-request-imports.ts!",
   "scripts/perf/empty-checkout-diff-measure.ts!",
+  "scripts/perf/project-checkout-options-measure.ts!",
   "scripts/perf/main-module-census-report.mjs!",
   "scripts/perf/module-import-measure.mjs!",
   "scripts/perf/plugin-resolve-hooks-measure.ts!",
