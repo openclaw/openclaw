@@ -5,6 +5,7 @@ import { registerModelControlsEnglish } from "../../i18n/locales/en-model-contro
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import {
   readSessionMethodAccess,
+  readSessionMethodScopeAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -86,6 +87,12 @@ export function readChatPaneMutationAccess(
       session,
     });
   return {
+    composeScope: readSessionMethodScopeAccess(snapshot.hello?.auth, {
+      method: "chat.send",
+      requiredScope: "operator.write",
+      sessionScope: true,
+      session,
+    }),
     model: scopedPatchAccess({ model: null }),
     effort: scopedPatchAccess({ thinkingLevel: null }),
     contextWindow: readSessionMethodAccess(snapshot, {

@@ -84,6 +84,8 @@ export type ChatComposerDisabledBanner = {
   busy?: boolean;
   busyLabel?: string;
   disabledReason?: string;
+  /** Cached presentation retains its appearance until live mutation authority arrives. */
+  actionPending?: boolean;
   /** Existing pane run action, relocated into the desktop subagent notice. */
   stop?: { onAbort: () => void };
 } & ({ actionLabel: string; onAction: () => void } | { actionLabel?: never; onAction?: never });

@@ -61,11 +61,19 @@ export async function prepareAttachment(input: AttachmentInput): Promise<Prepare
       mime = `${mime}; charset=${classification.charset}`;
     }
   }
-  // The existing attachment worker owns large base64 decodes and header scans.
-  // Preserve displayed axes (including EXIF rotation) without decoding pixels.
+  // PNG dimensions fit in 24 bytes. Check the signature and IHDR length, not MIME
+  // hints; other formats can need later headers (including JPEG EXIF rotation).
   const dimensions =
     mime.startsWith("image/") && facts.decodedBytes <= MAX_IMAGE_BYTES
-      ? readImageMetadataFromHeader(buffer ?? Buffer.from(input.base64, "base64"))
+      ? readImageMetadataFromHeader(
+          buffer ??
+            Buffer.from(
+              input.base64.startsWith("iVBORw0KGgoAAAAN")
+                ? input.base64.slice(0, 32)
+                : input.base64,
+              "base64",
+            ),
+        )
       : null;
   return { sizeBytes: facts.decodedBytes, mime, buffer, ...dimensions };
 }

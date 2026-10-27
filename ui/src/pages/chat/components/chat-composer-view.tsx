@@ -160,10 +160,18 @@ export function renderChatComposerView(
               <button
                 type="button"
                 class={["btn btn--sm", banner().actionStyle]}
-                disabled={Boolean(banner().disabledReason) || banner().busy}
+                disabled={
+                  !banner().actionPending && (Boolean(banner().disabledReason) || banner().busy)
+                }
+                aria-disabled={banner().actionPending ? "true" : undefined}
+                data-authority-pending={banner().actionPending ? "" : undefined}
                 aria-busy={banner().busy ? "true" : "false"}
                 title={banner().disabledReason ?? undefined}
-                onClick={() => onAction()()}
+                onClick={() => {
+                  if (!banner().actionPending && !banner().disabledReason && !banner().busy) {
+                    onAction()();
+                  }
+                }}
               >
                 {banner().busy ? (
                   <>

@@ -255,6 +255,8 @@ export function filterSessionEntries(
   const agentFilter = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   // Excluded rows must not participate in search or ownership resolution.
   const titleSearch = search && normalizeSessionSearchText(search);
+  const matchesLiteralField = (field: string) => field.includes(search);
+  const matchesTitleField = (field: string) => field.includes(titleSearch);
   const searchRunState =
     search &&
     [...SessionRunStatusSchema.anyOf.map((status) => status.const), "live running", "idle"].some(
@@ -313,8 +315,8 @@ export function filterSessionEntries(
           staticSearchFields.set(entry, fields);
         }
         if (
-          fields.literal.some((field) => field.includes(search)) ||
-          (titleSearch && fields.titles.some((field) => field.includes(titleSearch)))
+          fields.literal.some(matchesLiteralField) ||
+          (titleSearch && fields.titles.some(matchesTitleField))
         ) {
           return true;
         }

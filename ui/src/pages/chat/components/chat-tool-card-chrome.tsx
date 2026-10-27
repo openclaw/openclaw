@@ -4,6 +4,14 @@ import { iconData } from "../../../components/icon-data.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 
+const TOOL_ICON_CLASSES: Partial<Record<IconName, string>> = {
+  pencil: "chat-tool-icon--diagonal",
+  penLine: "chat-tool-icon--diagonal",
+  key: "chat-tool-icon--diagonal",
+  wrench: "chat-tool-icon--diagonal",
+  paperclip: "chat-tool-icon--diagonal",
+};
+
 export function syncToolDisclosureOverflow(event: Event, content: HTMLElement | undefined): void {
   const disclosure = event.currentTarget;
   if (!(disclosure instanceof HTMLElement)) {
@@ -25,7 +33,10 @@ export function ToolIcon(props: {
     return (Object.hasOwn(iconData, props.name) ? props.name : "puzzle") as IconName;
   };
   return (
-    <Show when={activityIcon()} fallback={<Icon name={fallbackIcon()} />}>
+    <Show
+      when={activityIcon()}
+      fallback={<Icon name={fallbackIcon()} class={TOOL_ICON_CLASSES[fallbackIcon()]} />}
+    >
       {(icon) => (
         <Show
           when={icon().branding}
