@@ -425,18 +425,9 @@ describe("startup recovery admission", () => {
         sessionId: "other-session",
         pendingFinalDelivery: makePendingFinalDelivery(),
       });
-      const executionWait = createDeferred();
-      const wait = gatewayRuntime.waitForAgent;
-      const waitSpy = vi
-        .spyOn(gatewayRuntime, "waitForAgent")
-        .mockImplementation(async <T>(request: Record<string, unknown>, timeoutMs?: number) => {
-          if (typeof request.timeoutMs === "number" && request.timeoutMs > 0) {
-            executionWait.resolve();
-            await dispatchSettlement.promise;
-            return { status: "ok", endedAt: Date.now() } as T;
-          }
-          return await wait<T>(request, timeoutMs);
-        });
+      const waitSpy = vi.spyOn(gatewayRuntime, "waitForAgent").mockImplementation(() => {
+        throw new Error("Startup preparation must not wait for execution");
+      });
       const prepared = createDeferred();
       const releasePreparation = createDeferred();
       const read = transcriptReaders.readSessionMessagesAsync;
@@ -469,7 +460,7 @@ describe("startup recovery admission", () => {
       }
       releasePreparation.resolve();
       // Execution remains held by dispatchSettlement until this test's cleanup.
-      await withinTest(Promise.race([passFinished.promise, executionWait.promise]), signal);
+      await withinTest(passFinished.promise, signal);
       await stopping;
       expect(preparation.peak).toBe(1);
       expect(callGateway).toHaveBeenCalledTimes(action === "stop" ? 0 : 2);

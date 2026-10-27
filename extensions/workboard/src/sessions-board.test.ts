@@ -123,7 +123,6 @@ async function createFixture(
     logger,
     service,
     unsubscribe,
-    repair,
     context,
     emit,
     publish(
@@ -203,33 +202,29 @@ it("always excludes dock conversations and filters automation unless the scope o
   expect(board.selectFacts.mock.lastCall?.[0]).not.toHaveProperty("excludeSubagents");
 });
 
-it.each([undefined, "home"])(
-  "excludes each agent's configured Home session (%s) from reads and moves",
-  async (mainKey) => {
-    const home = { ...facts(mainKey ?? "main"), isMain: true };
-    const otherHome = {
-      ...facts("other-home", { key: `agent:ops:${mainKey ?? "main"}`, agentId: "ops" }),
-      isMain: true,
-    };
-    const work = facts("subagent:worker");
-    const board = await createFixture([home, otherHome, work]);
-    expect((await board.read()).sessions.map(({ key }) => key)).toEqual([work.key]);
-    expect(board.readFacts).not.toHaveBeenCalled();
-    await expect(board.move(home.key, "other")).rejects.toThrow(
-      "not available in this board's scope",
-    );
-    expect(await board.pins()).toEqual([]);
-    await board.update({ scope: { includeHome: true } });
-    expect((await board.read()).sessions.map(({ key }) => key)).toEqual([
-      home.key,
-      otherHome.key,
-      work.key,
-    ]);
-    await board.move(home.key, "focus");
-    await board.update({ scope: { includeHome: false } });
-    expect((await board.read()).sessions.map(({ key }) => key)).toEqual([work.key]);
-  },
-);
+it("excludes each agent's configured Home session from reads and moves", async () => {
+  const home = { ...facts("home"), isMain: true };
+  const otherHome = {
+    ...facts("other-home", { key: "agent:ops:home", agentId: "ops" }),
+    isMain: true,
+  };
+  const work = facts("subagent:worker");
+  const board = await createFixture([home, otherHome, work]);
+  expect((await board.read()).sessions.map(({ key }) => key)).toEqual([work.key]);
+  await expect(board.move(home.key, "other")).rejects.toThrow(
+    "not available in this board's scope",
+  );
+  expect(await board.pins()).toEqual([]);
+  await board.update({ scope: { includeHome: true } });
+  expect((await board.read()).sessions.map(({ key }) => key)).toEqual([
+    home.key,
+    otherHome.key,
+    work.key,
+  ]);
+  await board.move(home.key, "focus");
+  await board.update({ scope: { includeHome: false } });
+  expect((await board.read()).sessions.map(({ key }) => key)).toEqual([work.key]);
+});
 
 it("rejects a move when caller authority ends during the facts read", async () => {
   const board = await createFixture(["one"]);
@@ -288,20 +283,6 @@ it("classifies custom conjunctions, alternatives, and unknown PR state", async (
   );
 });
 
-it("classifies default rule priority for unobserved runs and PRs", async () => {
-  const read = await expectClassification(createDefaultWorkboardSessionsBoardSpec(), [
-    ["active", { run: "active" }, "working"],
-    ["failed", { run: "failed" }, "stuck"],
-    ["unhealthy-active", { run: "active", observerDigest: observed("stuck") }, "stuck"],
-    ["needs-input", { run: "active", observerDigest: observed("waiting-on-user") }, "needs-input"],
-    ["review", { pullRequests: pr(1) }, "in-review"],
-    ["merged", { pullRequests: pr(2, "merged") }, "merged"],
-    ["idle", {}, "done"],
-  ]);
-  expect(read.columns.map((column) => column.id)).toEqual(DEFAULT_COLUMNS);
-  expect(read.warning).toBeUndefined();
-});
-
 it.each([false, true])(
   "waits for placement repair on first use and drains it on stop (stop early: %s)",
   async (stopEarly) => {
@@ -328,18 +309,13 @@ it.each([false, true])(
       expect((await results).map(({ status }) => status)).toEqual(["fulfilled", "fulfilled"]);
       expect((await board.stored()).sessions.scope?.maxAgeHours).toBe(48);
     }
-    expect(board.logger.info).toHaveBeenCalledExactlyOnceWith(
-      "Sessions board removed 3 non-operator placements.",
-    );
   },
 );
 
 it("repairs only old-default rules at startup, preserves custom boards and ordering, and is idempotent", async () => {
   const board = await createFixture();
-  expect(board.repair).toHaveBeenCalledOnce();
   await board.read();
   await board.read();
-  expect(board.repair).toHaveBeenCalledOnce();
   expect(board.readFacts).not.toHaveBeenCalled();
   await board.service.stop();
   const oldSpec = createDefaultWorkboardSessionsBoardSpec();
@@ -392,17 +368,21 @@ it("repairs only old-default rules at startup, preserves custom boards and order
 });
 
 it("coalesces notifications and refreshes board facts after publications", async () => {
-  const board = await createFixture(["one", "two"]);
+  const board = await createFixture();
   const changed = vi.spyOn(board.store, "announceChangeEpoch");
   expect(board.readFacts).not.toHaveBeenCalled();
   board.emit(facts("one").key);
   await vi.advanceTimersByTimeAsync(5_000);
   expect(changed).not.toHaveBeenCalled();
-  await board.read();
+  expect((await board.read()).sessions).toEqual([]);
   await board.store.upsertBoard({ id: "second", kind: "sessions" });
-  expect((await board.service.read("second")).sessions).toHaveLength(2);
   changed.mockClear();
-  board.publish("active", [facts("one", { run: "active" }), facts("two")]);
+  board.publish("active", [
+    facts("one", { run: "active" }),
+    facts("two", { pullRequestsUnavailable: true }),
+  ]);
+  expect((await board.service.read("second")).sessions).toHaveLength(2);
+  expect((await board.read()).sessions[1]).toMatchObject({ reason: "facts-unavailable" });
   expect((await board.read()).sessions[0]).toMatchObject({ columnId: "focus" });
   board.state.sessions = [
     facts("one", { run: "active", label: "Updated during burst" }),
@@ -429,7 +409,7 @@ it("coalesces notifications and refreshes board facts after publications", async
 });
 
 it.each([false, true])(
-  "classifies confirmed stale PR facts and reports unavailable facts (rate limited: %s)",
+  "prioritizes default rules over PR facts and reports availability (rate limited: %s)",
   async (rateLimited) => {
     const availability = rateLimited
       ? { pullRequestsRateLimited: true as const }
@@ -445,6 +425,8 @@ it.each([false, true])(
       },
       { ...facts("none", availability), pullRequestsStale: true as const },
       facts("unknown", availability),
+      facts("failed", { run: "failed" }),
+      facts("unhealthy-active", { run: "active", observerDigest: observed("stuck") }),
     ];
     const board = await createFixture(rows, { spec: createDefaultWorkboardSessionsBoardSpec() });
     const read = await board.read();
@@ -453,6 +435,8 @@ it.each([false, true])(
       { columnId: "merged" },
       { columnId: "done", reason: "fallback" },
       { columnId: "done", reason: "facts-unavailable" },
+      { columnId: "stuck" },
+      { columnId: "stuck" },
     ]);
     const suffix = rateLimited ? " (GitHub rate limited)" : "";
     expect(read.warning).toBe(

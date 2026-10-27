@@ -9,9 +9,9 @@ import {
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
 } from "../../../../src/config/sessions/session-accessor.js";
 import type { SessionTranscriptReadScope } from "../../../../src/config/sessions/session-accessor.types.js";
+import { withSessionActorStorage } from "../../../../src/config/sessions/session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
-  withSessionActorStorage,
   type SelectedSessionActorStorageBinding,
 } from "../../../../src/config/sessions/session-actor-storage-binding.js";
 import { warnPluginSdkDeprecation } from "../../../../src/plugins/sdk-deprecation.js";

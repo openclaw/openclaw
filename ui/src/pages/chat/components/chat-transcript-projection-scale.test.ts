@@ -494,6 +494,7 @@ describe("transcript projection", () => {
     const read = vi.fn(() => 700);
     props.widgetLayout = {
       read,
+      readRows: () => undefined,
       write: vi.fn(),
       writeRows: vi.fn(),
       invalidateRow: vi.fn(),

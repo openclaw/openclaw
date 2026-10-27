@@ -3,8 +3,9 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { deserialize } from "node:v8";
+import { deserialize, serialize } from "node:v8";
 import { Worker } from "node:worker_threads";
+import { inflateRawSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
@@ -22,6 +23,7 @@ import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
 } from "../../infra/sqlite-worker-contract.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -31,7 +33,11 @@ import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-leas
 import * as stateRead from "../../state/openclaw-state-read-operation.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
-import { encodeLocalWorkspaceTreePacks, localWorkspaceDigestBytes } from "./local-workspace-cas.js";
+import {
+  localWorkspaceDigestBytes,
+  prepareLocalWorkspaceTreePacks,
+  type LocalWorkspacePreparation,
+} from "./local-workspace-cas.js";
 import {
   prepareLocalWorkspaceContentInDatabase,
   readLocalWorkspaceTree,
@@ -79,6 +85,47 @@ function readManifestRows(db: EngineConnection, worktreeId: string) {
         .toSorted((left, right) => left.path.localeCompare(right.path))
     : [];
 }
+
+function prepareTreePacks(
+  db: EngineConnection,
+  records: Parameters<typeof prepareLocalWorkspaceTreePacks>[0],
+) {
+  for (const batch of prepareLocalWorkspaceTreePacks(records)) {
+    const preparation = deserialize(inflateRawSync(batch)) as LocalWorkspacePreparation;
+    prepareLocalWorkspaceContentInDatabase(db, preparation);
+  }
+}
+
+it("looks up workspace identity without returning pending recovery payloads", async () => {
+  const worktreeId = randomUUID();
+  const fixture = {
+    ...localWorkspaceProjectionFixture(worktreeId, root),
+    lifecycle_revision: "workspace-generation",
+    pending_ref: "refs/openclaw/results/pending",
+    journal_json: "{}",
+    journal_pack: Buffer.alloc(1024 * 1024, 7),
+  };
+  await withLocalWorkspaceStore({ worktreeId, env }, (store) => store.create(fixture));
+  const result = await executeExistingOpenClawStateRead(
+    { env },
+    {
+      type: "localWorkspace.byProjectionPath",
+      input: { projectionPath: fixture.projection_path },
+    },
+    { current: true, live: true },
+  );
+  expect(serialize(result).byteLength).toBeLessThan(1024);
+  expect(result?.projection).toEqual({
+    worktree_id: worktreeId,
+    agent_id: fixture.agent_id,
+    session_key: fixture.session_key,
+    session_id: fixture.session_id,
+    lifecycle_revision: fixture.lifecycle_revision,
+  });
+  const recovered = await readLocalWorkspaceProjection(worktreeId, env);
+  expect(recovered?.pending_ref).toBe(fixture.pending_ref);
+  expect(Buffer.from(recovered!.journal_pack!)).toEqual(fixture.journal_pack);
+});
 
 it.each(["absent", "same", "distinct"] as const)(
   "checks each workspace authority once per synchronous assertion (%s worker guard)",
@@ -267,9 +314,7 @@ it("materializes a manifest snapshot after its database closes", async () => {
         kind: "create",
         row: localWorkspaceProjectionFixture(worktreeId, root),
       });
-      prepareLocalWorkspaceContentInDatabase(database, {
-        packs: encodeLocalWorkspaceTreePacks(records),
-      });
+      prepareTreePacks(database, records);
       mutateProjection(database, worktreeId, {
         kind: "update",
         revision: 0,

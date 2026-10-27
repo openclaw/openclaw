@@ -586,15 +586,22 @@ export function finalizeTransportStream(params: {
   stream.end();
 }
 
+type TransportFailureDiagnostic = {
+  abortReason?: string;
+  incompleteReason?: string;
+};
+
 /** Assign terminal fields and record silent transport failures before partial-call cleanup. */
 export function assignTransportErrorDetails(
   output: AssistantMessage,
   error: unknown,
   signal?: AbortSignal,
+  diagnostic?: TransportFailureDiagnostic,
 ): ProviderErrorProjection {
-  if (!signal?.aborted) {
-    // Provider prose and response bodies can echo prompts and tool results.
-    try {
+  try {
+    const host = getAiTransportHost();
+    if (!signal?.aborted && host.isLogEnabled?.("provider-error", "warn") !== false) {
+      // Provider prose and response bodies can echo prompts and tool results.
       const record = asOptionalRecord(error);
       const response = asOptionalRecord(record?.response);
       const cause = asOptionalRecord(record?.cause);
@@ -602,9 +609,11 @@ export function assignTransportErrorDetails(
         asOptionalRecord(record?.error) ??
         asOptionalRecord(response?.error) ??
         asOptionalRecord(asOptionalRecord(record?.payload)?.error);
-      getAiTransportHost().logWarn("provider-error", "Model request failed", {
+      const metadata: Record<string, string | number | undefined> = {
         provider: output.provider,
         model: output.model,
+        name: readTransportDiagnosticLabel(record?.name),
+        ...diagnostic,
         status: readTransportDiagnosticLabel(
           record?.status ?? record?.statusCode ?? response?.status,
         ),
@@ -616,10 +625,16 @@ export function assignTransportErrorDetails(
         responseId: readTransportDiagnosticLabel(
           record?.responseId ?? response?.id ?? output.responseId,
         ),
-      });
-    } catch {
-      // Diagnostic accessors and log sinks cannot replace the original failure.
+      };
+      for (const key in metadata) {
+        if (metadata[key] === undefined) {
+          delete metadata[key];
+        }
+      }
+      host.logWarn("provider-error", "Model request failed", metadata);
     }
+  } catch {
+    // Diagnostic accessors and log sinks cannot replace the original failure.
   }
   const projection = projectProviderError(error, signal);
   Object.assign(output, projection);
@@ -641,7 +656,7 @@ export function assignTransportErrorDetails(
     projection.stopReason === "error" &&
     output.content.length === 0 &&
     isTransientNetworkError(projectDiagnosticValue(error)) &&
-    !output.diagnostics?.some((diagnostic) => diagnostic.type === "provider_transport_failure")
+    !output.diagnostics?.some((entry) => entry.type === "provider_transport_failure")
   ) {
     // Recovery consumes this fact, not error-text guesses. Reuse the bounded,
     // redacted terminal message so diagnostics cannot expose the original throw.
@@ -661,10 +676,11 @@ export function failTransportStream(params: {
   output: AssistantMessage;
   signal?: AbortSignal;
   error: unknown;
+  diagnostic?: TransportFailureDiagnostic;
   cleanup?: () => void;
 }): void {
   const { stream, output, signal, error, cleanup } = params;
-  const projection = assignTransportErrorDetails(output, error, signal);
+  const projection = assignTransportErrorDetails(output, error, signal, params.diagnostic);
   cleanup?.();
   stream.push({ type: "error", reason: projection.stopReason, error: output });
   stream.end();

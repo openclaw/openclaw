@@ -6,6 +6,8 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
+import type { createReplyOperation } from "../../../sessions/session-controller.operation.js";
+import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
 import {
   createSessionEntry,
   waitForFast,
@@ -13,6 +15,7 @@ import {
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
+import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -187,5 +190,113 @@ export function registerForcedCollectorCompletionSettlementTests({
     expect(entry?.pauseReason).toBeUndefined();
     expect(entry?.collectorCompletion?.structured).toEqual({ answer: 42 });
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+}
+
+export function registerTimeoutSuccessAnnouncementTest({
+  getRegistry,
+  mocks,
+  findRequesterRun,
+  mockPendingAgentWait,
+  holdChildExecution,
+  getLifecycleHandler,
+  settleLifecycle,
+}: RegistryTestContext<"persistRegistryRows" | "runSubagentAnnounceFlow"> &
+  RequesterLookup & {
+    mockPendingAgentWait: () => void;
+    holdChildExecution: (
+      runId: string,
+      sessionKey: string,
+      sessionId: string,
+    ) => { operation: ReturnType<typeof createReplyOperation>; releaseExecution: () => void };
+    getLifecycleHandler: () => (
+      event: Pick<AgentEventPayload, "runId" | "stream" | "data">,
+    ) => void;
+    settleLifecycle: (event: Pick<AgentEventPayload, "runId" | "stream" | "data">) => Promise<void>;
+  }): void {
+  it("suppresses stale timeout announces when the same child run later finishes successfully", async () => {
+    const mod = getRegistry();
+    mockPendingAgentWait();
+    mocks.persistRegistryRows.mockImplementation(saveSubagentRegistryChangesToSqlite);
+    const { subagentRuns } = await import("./subagent-registry-memory.js");
+    const { prepareSubagentRunsSnapshotForRunIds } = await vi.importActual<
+      typeof import("./subagent-registry-state.js")
+    >("./subagent-registry-state.js");
+
+    const { operation, releaseExecution } = holdChildExecution(
+      "run-timeout-then-ok",
+      "agent:main:subagent:child",
+      "sess-child",
+    );
+    const settleRootWork = observeRootWork();
+    try {
+      await mod.registerSubagentRun({
+        runId: "run-timeout-then-ok",
+        expectsCompletionMessage: true,
+      });
+
+      const lifecycleHandler = getLifecycleHandler();
+
+      await settleLifecycle({
+        runId: "run-timeout-then-ok",
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 1_000, aborted: true },
+      });
+      await vi.advanceTimersByTimeAsync(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
+      await waitForFast(() =>
+        expect(findRequesterRun("run-timeout-then-ok")?.killReconciliation).toBeDefined(),
+      );
+
+      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+
+      lifecycleHandler?.({
+        runId: "run-timeout-then-ok",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 1_250,
+          terminalReply: { disposition: "visible", text: "Finished successfully." },
+        },
+      });
+      await waitForFast(() => {
+        expect(findRequesterRun("run-timeout-then-ok")?.execution.outcome).toMatchObject({
+          status: "ok",
+          endedAt: 1_250,
+        });
+      });
+      const prepared = await prepareSubagentRunsSnapshotForRunIds(subagentRuns, [
+        "run-timeout-then-ok",
+      ]);
+      expect(prepared.consume((rows) => rows.get("run-timeout-then-ok"))).toMatchObject({
+        ready: true,
+        value: {
+          execution: { outcome: { status: "ok", endedAt: 1_250 } },
+          completion: {
+            terminalReply: { disposition: "visible", text: "Finished successfully." },
+          },
+        },
+      });
+
+      operation.complete();
+      releaseExecution();
+      await operation.ownerSettlement;
+      await waitForFast(() => {
+        expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      });
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          childRunId: "run-timeout-then-ok",
+          outcome: expect.objectContaining({ status: "ok", endedAt: 1_250 }),
+        }),
+      );
+
+      await mod.testing.sweepOnceForTests();
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseExecution();
+      operation.complete();
+      await operation.ownerSettlement;
+      await settleRootWork();
+    }
   });
 }

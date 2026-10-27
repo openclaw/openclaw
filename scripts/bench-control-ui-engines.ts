@@ -33,6 +33,7 @@ import {
   type EngineMetrics,
 } from "./lib/control-ui-engine-metrics.ts";
 import { createEnginePluginMemoryScenarios } from "./lib/control-ui-engine-plugin-memory-scenarios.ts";
+import { createEngineStreamingScenarios } from "./lib/control-ui-engine-streaming-scenarios.ts";
 import { createEngineStyleScenarios } from "./lib/control-ui-engine-style-scenarios.ts";
 import { frames } from "./lib/control-ui-interaction-navigation.ts";
 import {
@@ -53,10 +54,10 @@ const { values } = parseArgs({
   options: {
     "bundle-dir": { type: "string", default: "dist/control-ui" },
     "compare-bundle-dir": { type: "string" },
-    "control-bundle-dir": { type: "string" },
+    "control-bundle-dir": { type: "string", multiple: true },
     "source-root": { type: "string", default: "." },
     "compare-source-root": { type: "string" },
-    "control-source-root": { type: "string" },
+    "control-source-root": { type: "string", multiple: true },
     output: { type: "string", default: ".artifacts/control-ui-engines" },
     engines: { type: "string", default: "chromium,webkit" },
     viewport: { type: "string", default: "both" },
@@ -79,7 +80,7 @@ if (!Number.isInteger(pairs) || pairs < 1 || new Set(engines).size !== engines.l
 if (!["desktop", "mobile", "both"].includes(values.viewport)) {
   throw new Error("Invalid viewport");
 }
-if (values["control-bundle-dir"] && !values["compare-bundle-dir"]) {
+if (values["control-bundle-dir"]?.length && !values["compare-bundle-dir"]) {
   throw new Error("--control-bundle-dir requires --compare-bundle-dir");
 }
 if (values.trace && values["cpu-only"]) {
@@ -95,12 +96,12 @@ const viewports = [
 const directories = [
   values["bundle-dir"],
   values["compare-bundle-dir"],
-  values["control-bundle-dir"],
+  ...(values["control-bundle-dir"] ?? []),
 ].filter((directory): directory is string => Boolean(directory));
 const sourceRoots = [
   values["source-root"],
   values["compare-source-root"],
-  values["control-source-root"],
+  ...(values["control-source-root"] ?? []),
 ];
 const needsWorkboard = values.steps?.split(",").some((id) => id.startsWith("workboard-"));
 if (needsWorkboard && directories.some((_, index) => !sourceRoots[index])) {
@@ -226,6 +227,7 @@ try {
     ...createEngineStyleScenarios(),
     ...createEngineMemoryScenarios(),
     ...createEnginePluginMemoryScenarios(),
+    ...createEngineStreamingScenarios(),
     ...interactionScenarios.filter(
       (scenario) =>
         ids?.includes(scenario.id) ||
@@ -340,6 +342,7 @@ try {
             const errors: Array<{ message: string; phase: string }> = [];
             let phase = "setup";
             page.on("pageerror", (error: Error) => errors.push({ message: error.message, phase }));
+            let tracingStarted = false;
             let measurement: Awaited<ReturnType<typeof startEngineMeasurement>> | undefined;
             let memory: Awaited<ReturnType<typeof createEngineMemoryCollector>> | undefined;
             try {
@@ -381,17 +384,18 @@ try {
                 });
               }
               await page.addInitScript(
-                ({ key, gatewayUrl }: { key: string; gatewayUrl: string }) => {
+                ({ key, gatewayUrl, settings }) => {
                   if (window === window.top) {
                     localStorage.setItem(
                       key,
-                      JSON.stringify({ gatewayUrl, lobsterPetVisits: false }),
+                      JSON.stringify({ ...settings, gatewayUrl, lobsterPetVisits: false }),
                     );
                   }
                 },
                 {
                   key: controlUiBundledSettingsStorageKey(slot.server.baseUrl),
                   gatewayUrl: controlUiBundledGatewayUrl(slot.server.baseUrl),
+                  settings: scenario.settings,
                 },
               );
               const fixture: ReturnType<typeof createScenarioFixture> = scenario.fixture
@@ -448,6 +452,7 @@ try {
                   snapshots: false,
                   sources: true,
                 });
+                tracingStarted = true;
               }
               measurement = await startEngineMeasurement(page, engine, {
                 trace: values.trace,
@@ -552,7 +557,7 @@ try {
                 if (pair === 0 || observation.status === "failed") {
                   await page.screenshot({ path: path.join(artifactDir, `${artifactPrefix}.png`) });
                 }
-                if (values.trace) {
+                if (tracingStarted) {
                   await context.tracing.stop({
                     path: path.join(artifactDir, `${artifactPrefix}.trace.zip`),
                   });

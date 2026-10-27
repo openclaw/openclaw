@@ -222,6 +222,10 @@ export function bootstrapApplication(): ApplicationRuntime {
   if (bootRecord) {
     prewarmBootChat(bootRecord, settings.sessionKey, applicationLocation, basePath);
   }
+  if (startsApplicationRouter && !firstRunDefaultLanding) {
+    // Explicit routes download alongside snapshot reads, before shell construction.
+    warmApplicationRouteModule(router, applicationLocation, basePath);
+  }
   const stopWarmBootConnection = ownsWarmBoot
     ? subscribeWarmBootConnection(gateway, bootRecord, () => {
         warmBoot = false;
@@ -645,11 +649,6 @@ export function bootstrapApplication(): ApplicationRuntime {
           return () => plugins.dispose();
         },
       ];
-      if (startsApplicationRouter && !firstRunDefaultLanding) {
-        // Download explicit-route chunks alongside startup. Default landing must
-        // wait for setup's decision before fetching the Chat workspace graph.
-        steps.unshift(() => warmApplicationRouteModule(router, applicationLocation, basePath));
-      }
       // Native bridge parsers and listeners stay out of browser startup.
       // SAFETY: WebKit supplies the optional handler map; the native initializer checks each callable.
       const nativeWindow = window as Window & { webkit?: { messageHandlers?: unknown } };

@@ -15,10 +15,8 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { runSessionActorCommand } from "./session-actor-scope.js";
-import {
-  acquireSessionActorStorage,
-  captureSessionActorStorageOwner,
-} from "./session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { getSessionInputActor, throwSessionInputActorFailure } from "./session-input-actor.js";
 import { prepareMemoryPendingInputStore } from "./session-pending-input-memory-store.js";
 import {
@@ -280,19 +278,23 @@ export async function preparePendingInputStore(
               inputActor.actor,
               authority,
               async (snapshot) => {
-                const hot = snapshot ?? (await inputActor.actor.read(authority));
-                if (!hot.entry) {
+                let hot = snapshot;
+                let entry = hot?.entry ?? inputActor.actor.snapshotEntry(authority)?.entry;
+                if (!entry) {
+                  hot ??= await inputActor.actor.read(authority);
+                  entry = hot.entry;
+                }
+                if (!entry) {
                   throw new Error("Input actor lost its staged session");
                 }
                 // Select lifecycle facts inside the FIFO, then retain them across version rebasing.
                 const resume = input.expected.existing ? undefined : lifecycleAdmission;
-                expectedState ??=
-                  resume?.expectedState ?? buildRestartRecoveryExpectedState(hot.entry);
+                expectedState ??= resume?.expectedState ?? buildRestartRecoveryExpectedState(entry);
                 return inputActor.actor.acceptInput(
                   {
                     commandId: randomUUID(),
                     phaseId: `accept:${input.runId}`,
-                    expected: hot.version,
+                    expected: hot?.version,
                     pending: input,
                     lifecycle: resume?.lifecycle ?? {},
                     expectedState,

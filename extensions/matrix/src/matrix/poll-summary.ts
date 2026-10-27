@@ -10,12 +10,7 @@ import {
 } from "./poll-types.js";
 import type { MatrixClient, MatrixRawEvent } from "./sdk.js";
 
-export type MatrixPollSnapshot = {
-  pollEventId: string;
-  triggerEvent: MatrixRawEvent;
-  rootEvent: MatrixRawEvent;
-  text: string;
-};
+export type MatrixPollSnapshot = NonNullable<Awaited<ReturnType<typeof fetchMatrixPollSnapshot>>>;
 
 export function resolveMatrixPollRootEventId(
   event: Pick<MatrixRawEvent, "event_id" | "type" | "content">,
@@ -56,7 +51,7 @@ export async function fetchMatrixPollSnapshot(
   client: MatrixClient,
   roomId: string,
   event: MatrixRawEvent,
-): Promise<MatrixPollSnapshot | null> {
+) {
   if (!isPollEventType(event.type)) {
     return null;
   }

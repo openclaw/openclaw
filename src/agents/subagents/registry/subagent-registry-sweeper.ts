@@ -13,6 +13,7 @@ import {
   blockSubagentCompletionDelivery,
   reconcileRetiredSubagentCancellation,
 } from "../completion/subagent-completion-admission.store.js";
+import { settleSubagentCompletionReservation } from "./subagent-controller-inputs.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { retryDeferredSubagentCompletionSource } from "./subagent-registry-gateway-owner.js";
@@ -274,20 +275,20 @@ export function createSubagentRegistrySweeper(params: {
         if (!selected || !isSameSubagentRunOwner(selected, snapshot)) {
           continue;
         }
-        let entry: SubagentRunRecord = selected;
-        if (getRecordedSubagentChildAuthority(entry).status === "mismatch") {
-          continue;
-        }
-        if (isRestoredQueuedFailureSettlementClaimed(entry)) {
+        if (isRestoredQueuedFailureSettlementClaimed(selected)) {
           // The restored FIFO callback owns this row until durable settlement.
           continue;
         }
+        if (await settleSubagentCompletionReservation(selected, now, params)) {
+          continue;
+        }
         if (
-          (entry.delivery?.status === "pending" || entry.delivery?.status === "in_progress") &&
-          subagentRuns.isCompletionAuthorityRetired(entry)
+          (selected.delivery?.status === "pending" ||
+            selected.delivery?.status === "in_progress") &&
+          subagentRuns.isCompletionAuthorityRetired(selected)
         ) {
           await blockSubagentCompletionDelivery({
-            subagent: entry,
+            subagent: selected,
             reason: "store replaced",
             suspendedReason: "permanent_failure",
             storeReplaced: true,
@@ -295,16 +296,16 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         if (
-          entry.killReconciliation &&
-          (await reconcileRetiredSubagentCancellation(entry, now)) === false
+          selected.killReconciliation &&
+          (await reconcileRetiredSubagentCancellation(selected, now)) === false
         ) {
           continue;
         }
         const reconciled = runs.get(runId);
-        if (!reconciled || !isSameSubagentRunOwner(reconciled, entry)) {
+        if (!reconciled || !isSameSubagentRunOwner(reconciled, selected)) {
           continue;
         }
-        entry = reconciled;
+        let entry = reconciled;
         // A yielded run no continuation can reach settles instead of parking forever.
         if (
           isYieldedSubagentRun(entry) &&

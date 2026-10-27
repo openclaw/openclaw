@@ -41,7 +41,7 @@
   padding: 12px;
   border: 0;
   border-radius: 12px;
-  background: var(--bg-accent);
+  background: var(--surface-selected);
   color: inherit;
   font: inherit;
   font-size: 14px;
@@ -57,8 +57,8 @@
   min-height: 72px;
 }
 
-.chat-panel-launcher-mobile__option:active {
-  background: color-mix(in srgb, var(--text) 9%, var(--popover));
+.chat-panel-launcher-mobile__option:not(:disabled):is(:hover, :focus-visible, :active) {
+  background: var(--surface-selected-hover);
 }
 
 .chat-panel-launcher-mobile__option:focus-visible {

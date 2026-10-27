@@ -17,7 +17,7 @@ import {
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import type { ChatHistoryPageParams } from "./session-history-types.js";
 import { withTranscriptDatabase } from "./session-transcript-fixture.test-support.js";
 import type {

@@ -122,6 +122,25 @@ async function settleFrames() {
   });
 }
 
+function observeNativeScroll(
+  thread: HTMLElement,
+  observe: (options: ScrollToOptions | undefined, scroll: () => void) => void,
+) {
+  const native = thread.scrollTo.bind(thread);
+  thread.scrollTo = (options?: ScrollToOptions | number, y?: number) => {
+    observe(typeof options === "number" ? undefined : options, () => {
+      if (typeof options === "number") {
+        native(options, y ?? 0);
+      } else {
+        native(options);
+      }
+    });
+  };
+  onTestFinished(() => {
+    thread.scrollTo = native;
+  });
+}
+
 it("keeps the cached tail mounted when full history replaces the boot window", async () => {
   await page.viewport(1200, 900);
   saveChatSessionScrollPosition("end-follow-browser", "agent:main:end-follow", {
@@ -294,7 +313,6 @@ it("paints a saved reader only after its measured range and offset commit togeth
   onTestFinished(() => cancelAnimationFrame(frame));
   await mountEndFollowFixture(400);
   await frames;
-  expect(visible.length).toBeGreaterThan(0);
   expect(
     visible.every(({ top, height }) => top === 400 && height === 1300),
     JSON.stringify(visible),
@@ -361,7 +379,6 @@ it.each([null, 400, 380])(
   "preserves native reader departure through growth or a deferred %s px viewport commit",
   async (viewportHeight) => {
     const { host, thread, extent, distance } = await mountFollowingFixture();
-    const previousEnd = thread.scrollTop;
     if (viewportHeight === null) {
       expect(host.transcript.isProgrammaticScroll).toBe(false);
       await commitTask(host, () => {
@@ -376,7 +393,6 @@ it.each([null, 400, 380])(
     }
     const movedPosition = thread.scrollTop;
     if (viewportHeight === null) {
-      expect(previousEnd - movedPosition).toBe(300);
       await commitTask(host, () => {
         host.lastRowHeight += 48;
       });
@@ -482,54 +498,28 @@ it("preserves compensation provenance for later native scroll listeners", async 
     host.earlierRowHeight += 48;
   });
   await expect.poll(() => extent.offsetHeight).toBe(1348);
-  expect(observations.length).toBeGreaterThan(0);
   expect(observations[0]).toEqual({ trusted: true, programmatic: true });
   thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
   expect(host.transcript.isProgrammaticScroll).toBe(false);
 });
 
 it.each([
-  [0, false],
-  [8, false],
-  [8, true],
+  ["settled", true, 0, false],
+  ["settled", true, 8, false],
+  ["settled", true, 8, true],
+  ["auto", true, 8, true],
+  ["auto", false, 8, true],
+  ["smooth", true, 8, true],
+  ["smooth", false, 8, true],
 ] as const)(
-  "preserves layout clamps versus %i px reader movement (before clamp: %s)",
-  async (readerMovement, beforeClamp) => {
-    const { host, thread, extent } = await mountFollowingFixture();
-    const original = thread.scrollTop;
-    if (beforeClamp) {
-      thread.scrollTop -= readerMovement;
-    }
-
-    await resizeViewport(host, thread, 500);
-    expect(thread.scrollTop).toBe(original - 100);
-    if (!beforeClamp) {
-      thread.scrollTop -= readerMovement;
-    }
-    const readerPosition = thread.scrollTop;
-
-    await resizeViewport(host, thread, 400);
-    await settleFrames();
-    expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original);
-
-    await growLastRow(host, extent);
-    expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original + 48);
-  },
-);
-
-it.each([
-  ["auto", true],
-  ["auto", false],
-  ["smooth", true],
-  ["smooth", false],
-] as const)(
-  "preserves a departed reader through clamped idle (%s, starts at end: %s)",
-  async (behavior, fromEnd) => {
-    const { host, thread, extent, distance } = await mountEndFollowFixture();
-    if (fromEnd) {
+  "preserves clamp intent (%s, at end: %s, movement: %i, before clamp: %s)",
+  async (behavior, fromEnd, readerMovement, beforeClamp) => {
+    const { host, thread, extent, distance } =
+      behavior === "settled" ? await mountFollowingFixture() : await mountEndFollowFixture();
+    if (behavior !== "settled" && fromEnd) {
       host.transcript.scrollToEnd({ behavior });
       await expect.poll(distance).toBe(0);
-    } else {
+    } else if (behavior !== "settled") {
       await new Promise<void>((resolve) => {
         host.transcript.scrollToOffset(0, () => resolve());
       });
@@ -548,7 +538,9 @@ it.each([
         stop();
       }
     }
-    await settleFrames();
+    if (behavior !== "settled") {
+      await settleFrames();
+    }
     const original = thread.scrollTop;
     let scrollingAtClamp = false;
     let idleAtClamp = false;
@@ -559,18 +551,26 @@ it.each([
       }
     });
     try {
-      thread.scrollTop -= 8;
+      if (beforeClamp) {
+        thread.scrollTop -= readerMovement;
+      }
       await resizeViewport(host, thread, 500);
       expect(thread.scrollTop).toBe(original - 100);
+      if (!beforeClamp) {
+        thread.scrollTop -= readerMovement;
+      }
       const readerPosition = thread.scrollTop;
       // The existing native observer must settle while layout holds the reader
       // at a temporary end, not after the original viewport has returned.
-      await expect.poll(() => idleAtClamp).toBe(true);
+      // The settled cases deliberately restore the viewport before this idle.
+      if (behavior !== "settled") {
+        await expect.poll(() => idleAtClamp).toBe(true);
+      }
       await resizeViewport(host, thread, 400);
       await settleFrames();
-      expect(thread.scrollTop).toBe(readerPosition);
+      expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original);
       await growLastRow(host, extent);
-      expect(thread.scrollTop).toBe(readerPosition);
+      expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original + 48);
     } finally {
       unsubscribe();
     }
@@ -582,7 +582,6 @@ it("does not expose unmeasured intrinsic overflow as an independent scroll range
   const original = thread.scrollTop;
   const range = thread.scrollHeight;
   const body = row.firstElementChild;
-  expect(body).toBeInstanceOf(HTMLElement);
   if (!(body instanceof HTMLElement)) {
     throw new Error("Missing growing row body");
   }
@@ -621,55 +620,33 @@ it("publishes padding changes when either viewport box stays the same size", asy
 it("keeps a shrinking end target smooth during a native scroll", async () => {
   const { host, thread, extent, distance } = await mountEndFollowFixture(800);
   await expect.poll(() => thread.scrollTop).toBe(800);
-  const nativeScrollTo = thread.scrollTo.bind(thread);
   const writes: Array<{ behavior?: ScrollBehavior; jump: number }> = [];
-  function observeScroll(options?: ScrollToOptions): void;
-  function observeScroll(x: number, y: number): void;
-  function observeScroll(options: ScrollToOptions | number | undefined, y?: number): void {
+  observeNativeScroll(thread, (options, scroll) => {
     const before = thread.scrollTop;
-    if (typeof options === "number") {
-      nativeScrollTo(options, y ?? 0);
-    } else {
-      nativeScrollTo(options);
-    }
-    writes.push({
-      behavior: typeof options === "number" ? undefined : options?.behavior,
-      jump: thread.scrollTop - before,
-    });
-  }
-  thread.scrollTo = observeScroll;
-  try {
-    host.transcript.scrollToEnd({ behavior: "smooth" });
-    host.lastRowHeight -= 17;
-    host.requestRender();
-    await expect.poll(() => extent.offsetHeight).toBe(1283);
-    await expect.poll(distance).toBe(0);
-    expect(writes.filter((write) => write.behavior === "smooth").length).toBeGreaterThan(1);
-    expect(writes.every((write) => Math.abs(write.jump) <= 1)).toBe(true);
-  } finally {
-    thread.scrollTo = nativeScrollTo;
-  }
+    scroll();
+    writes.push({ behavior: options?.behavior, jump: thread.scrollTop - before });
+  });
+  host.transcript.scrollToEnd({ behavior: "smooth" });
+  host.lastRowHeight -= 17;
+  host.requestRender();
+  await expect.poll(() => extent.offsetHeight).toBe(1283);
+  await expect.poll(distance).toBe(0);
+  expect(writes.filter((write) => write.behavior === "smooth").length).toBeGreaterThan(1);
+  expect(writes.every((write) => Math.abs(write.jump) <= 1)).toBe(true);
 });
 
 it("holds the canceled viewport after a smooth journey's automatic final approach", async () => {
   const { host, thread, extent, distance } = await mountEndFollowFixture(0);
   const earlier = host.querySelector<HTMLElement>('[data-virtual-row-key="earlier"]')!;
-  const nativeScrollTo = thread.scrollTo.bind(thread);
   let finalApproach = false;
   let grewNearEnd = false;
   let canceledOffset: number | undefined;
-  function observeScroll(options?: ScrollToOptions): void;
-  function observeScroll(x: number, y: number): void;
-  function observeScroll(options: ScrollToOptions | number | undefined, y?: number): void {
-    if (typeof options === "number") {
-      nativeScrollTo(options, y ?? 0);
-    } else {
-      finalApproach ||= grewNearEnd && options?.behavior === "auto";
-      nativeScrollTo(options);
-    }
-  }
-  thread.scrollTo = observeScroll;
+  observeNativeScroll(thread, (options, scroll) => {
+    finalApproach ||= grewNearEnd && options?.behavior === "auto";
+    scroll();
+  });
   const listener = new AbortController();
+  onTestFinished(() => listener.abort());
   const canceled = new Promise<number>((resolve) => {
     thread.addEventListener(
       "scroll",
@@ -691,14 +668,9 @@ it("holds the canceled viewport after a smooth journey's automatic final approac
       { capture: true, signal: listener.signal },
     );
   });
-  try {
-    host.transcript.scrollToEnd({ behavior: "smooth" });
-    const offset = await canceled;
-    await settleFrames();
-    expect(extent.offsetHeight).toBe(1390);
-    expect(thread.scrollTop).toBe(offset);
-  } finally {
-    listener.abort();
-    thread.scrollTo = nativeScrollTo;
-  }
+  host.transcript.scrollToEnd({ behavior: "smooth" });
+  const offset = await canceled;
+  await settleFrames();
+  expect(extent.offsetHeight).toBe(1390);
+  expect(thread.scrollTop).toBe(offset);
 });

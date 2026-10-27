@@ -618,10 +618,12 @@ describe("subagent progress drafts", () => {
   }
 
   it.each([
-    ["a visible answer", [DONE], false],
-    ["successful external NO_REPLY", ["NO_REPLY"], true],
-    ["successful internal NO_REPLY", ["NO_REPLY"], false],
-  ] as const)("settles the progress card according to %s", async (_name, replies, external) => {
+    ["a visible answer", DONE, false],
+    ["external NO_REPLY", "NO_REPLY", true],
+    ["internal NO_REPLY", "NO_REPLY", false],
+    ["external empty reply", "", true],
+    ["internal empty reply", "", false],
+  ] as const)("settles the progress card once after %s", async (_name, reply, external) => {
     const requesterOrigin = external
       ? { channel: "telegram", to: "12345", accountId: "default" }
       : undefined;
@@ -640,19 +642,33 @@ describe("subagent progress drafts", () => {
       );
     }
     const draft = await adoptCohort(["a", "b"], requesterOrigin);
-    const wakes = answerWakes(draft, replies);
+    const wakes = answerWakes(draft, [reply]);
 
     await endRun("a");
     expect(wakes).toEqual([]);
     expect(draft.retire).not.toHaveBeenCalled();
 
     await endRun("b");
-    expect(wakes.map(({ retiredBefore }) => retiredBefore)).toEqual(replies.map(() => 0));
+    expect(wakes).toEqual([{ runId: expect.any(String), retiredBefore: 0 }]);
     expectCard(draft);
-    expect(subagentRuns.get("b")?.requesterSettleWake).toBeUndefined();
+    const persisted = loadSubagentRegistryFromSqlite();
+    for (const runId of ["a", "b"]) {
+      const entry = persisted.get(runId);
+      expect(entry?.requesterSettleWake).toBeUndefined();
+      expect(entry).toMatchObject({
+        delivery: { status: "delivered" },
+        completion: { resultText: CHILD_RESULT },
+      });
+    }
     expect(draft.push).toHaveBeenCalledWith(
       expect.objectContaining({ itemId: "b", kind: "subagent", status: "completed" }),
     );
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(Date.now() + 120_000);
+    await registryTesting.sweepOnceForTests();
+    await fixture.settle();
+    expect(wakes).toHaveLength(1);
+    expectCard(draft);
   });
 
   it("rejects a delivered cohort without any prior card", async () => {
@@ -664,24 +680,6 @@ describe("subagent progress drafts", () => {
     const stale = newDraft();
     expect(adoptSubagentProgressDraft(spawns, stale)).toBe(false);
     expect(stale.push).not.toHaveBeenCalled();
-  });
-
-  it("does not re-wake a settled silent parent through periodic admission", async () => {
-    const draft = await adoptCohort(["a"]);
-    const wakes = answerWakes(draft, ["NO_REPLY"]);
-    await endRun("a");
-    expect(wakes).toHaveLength(1);
-    expectCard(draft);
-    expect(subagentRuns.get("a")?.requesterSettleWake).toBeUndefined();
-
-    const later = Date.now() + 10 * 60_000;
-    using clock = vi.spyOn(Date, "now");
-    clock.mockReturnValue(later);
-    await registryTesting.sweepOnceForTests();
-    await fixture.settle();
-    expect(wakes).toHaveLength(1);
-    expectCard(draft);
-    expect(subagentRuns.get("a")?.requesterSettleWake).toBeUndefined();
   });
 
   it.each([

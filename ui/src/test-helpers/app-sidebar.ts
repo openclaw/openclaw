@@ -6,6 +6,7 @@ import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import { registerListener } from "../../../src/shared/listeners.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -30,10 +31,12 @@ import {
 } from "../lib/sessions/index.ts";
 import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
 import { createSessionArchiveState } from "../lib/sessions/session-archive-state.ts";
+import { createSessionState as emptySessionState } from "../lib/sessions/session-capability.ts";
 import type { SessionRequestClient } from "../lib/sessions/session-capability.ts";
 import { createSessionRowProvenance } from "../lib/sessions/session-row-provenance.ts";
 import { createSidebarContextLifecycle } from "./app-sidebar-context-lifecycle.ts";
 import { seedSidebarEveryonePreference } from "./app-sidebar-setup.ts";
+import { createApplicationGatewaySnapshot } from "./application-context-fixtures.ts";
 import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
@@ -84,19 +87,21 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     }
     return originalRequest<T>(...args);
   };
-  let snapshot: ApplicationGatewaySnapshot = {
+  let snapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: sidebarGatewayHello(),
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<(event: { event: string; payload: unknown }) => void>();
+  const publish = (patch: Partial<ApplicationGatewaySnapshot>) => {
+    snapshot = { ...snapshot, ...patch };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+  };
   const gateway = {
     get snapshot() {
       return snapshot;
@@ -109,34 +114,22 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     },
     connectionRevision: 0,
     setSessionKey: () => undefined,
-    subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    subscribeEvents(listener: (event: { event: string; payload: unknown }) => void) {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
+    subscribe: (listener: (next: ApplicationGatewaySnapshot) => void) =>
+      registerListener(listeners, listener),
+    subscribeEvents: (listener: (event: { event: string; payload: unknown }) => void) =>
+      registerListener(eventListeners, listener),
     updateSelfUser(
       patch: Partial<Omit<NonNullable<ApplicationGatewaySnapshot["selfUser"]>, "id">>,
     ) {
       if (!snapshot.selfUser) {
         return;
       }
-      snapshot = { ...snapshot, selfUser: { ...snapshot.selfUser, ...patch } };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      publish({ selfUser: { ...snapshot.selfUser, ...patch } });
     },
   } as unknown as ApplicationGateway;
   return {
     gateway,
-    publish(patch: Partial<ApplicationGatewaySnapshot>) {
-      snapshot = { ...snapshot, ...patch };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
+    publish,
     publishEvent(event: string, payload: unknown) {
       for (const listener of eventListeners) {
         listener({ event, payload });
@@ -163,15 +156,9 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
     })),
   } satisfies SessionsListResult;
   return {
+    ...emptySessionState(),
     result,
     agentId,
-    modelOverrides: {},
-    loading: false,
-    error: null,
-    deletedSessions: [],
-    groups: [],
-    groupSettings: [],
-    sectionOrder: [],
   };
 }
 
@@ -308,10 +295,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     isConnectionScopeCurrent: (
       scope: Parameters<SessionCapability["isConnectionScopeCurrent"]>[0],
     ) => scopedSessions?.isConnectionScopeCurrent(scope) ?? false,
-    subscribe(listener: (next: SessionState) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener: (next: SessionState) => void) => registerListener(listeners, listener),
     subscribeCreated: () => () => undefined,
     isPreparedWorkSession: () => false,
     isRunVisuallyActive: (row: GatewaySessionRow) =>

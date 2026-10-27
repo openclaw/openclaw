@@ -157,6 +157,35 @@ it.each([false, true])(
   },
 );
 
+it.each([false, true])(
+  "finishes retirement before binding removal (retained=%s)",
+  async (orphaned) => {
+    mocks.read.mockResolvedValue({ entries: [] });
+    retained = orphaned ? [{ name: "gone", id }] : [];
+    const authority = new AbortController();
+    const custody = await quiesce({ assertCurrent: () => authority.signal.throwIfAborted() });
+    await custody.retire();
+    expect(retained).toEqual([]);
+    expect(persist.mock.calls).toEqual(orphaned ? [[[]]] : []);
+    authority.abort(new Error("workspace removed"));
+    await expect(custody.resume()).resolves.toBeUndefined();
+    expect(mocks.command).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps receipt recovery available when retirement cleanup fails", async () => {
+  mocks.read.mockResolvedValue({ entries: [] });
+  retained = [{ name: "gone", id }];
+  persist.mockImplementationOnce(() => {
+    throw new Error("receipt cleanup failed");
+  });
+  const custody = await quiesce();
+  await expect(custody.retire()).rejects.toThrow("receipt cleanup failed");
+  expect(retained).toEqual([{ name: "gone", id }]);
+  await custody.resume();
+  expect(retained).toEqual([]);
+});
+
 it("records each released generation before a later resume failure and re-fences running recovery", async () => {
   const otherId = "b".repeat(64);
   let failFirst = true;

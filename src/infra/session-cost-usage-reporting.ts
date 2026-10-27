@@ -21,10 +21,8 @@ import {
   resolveSessionFilePathCore,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { loadSessionTranscriptEvents } from "../config/sessions/session-transcript-events.js";

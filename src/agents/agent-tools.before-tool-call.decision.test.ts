@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getInternalToolExecutionPreparer } from "../../packages/agent-core/src/internal-hooks.js";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
 import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
@@ -27,7 +28,6 @@ import {
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";

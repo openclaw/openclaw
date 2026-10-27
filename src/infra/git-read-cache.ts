@@ -49,9 +49,10 @@ type ReadSlot<T> = {
 };
 
 function gitEnvironment() {
-  return Object.entries(process.env)
-    .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
-    .toSorted(([left], [right]) => left.localeCompare(right));
+  return Object.keys(process.env)
+    .filter((key) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
+    .toSorted((left, right) => left.localeCompare(right))
+    .map((key) => [key, process.env[key]]);
 }
 
 function diffRevisionMissReason(previous: string, current: string): DiffReadCacheMissReason {
@@ -131,13 +132,18 @@ function createReadCache<Input, Output>(
       }
     }
   };
-  const read = async (input: Input, options: GitReadOptions = {}): Promise<Output> => {
+  const read = async (
+    input: Input,
+    options: GitReadOptions = {},
+    preparedEnvironment?: ReturnType<typeof gitEnvironment>,
+    preparedKey?: string,
+  ): Promise<Output> => {
     options.signal?.throwIfAborted();
     using completedTiming = polling ? startDiffReadTiming("checkout.diff") : undefined;
     const timing = completedTiming ?? options.diffTiming;
     const validationStarted = timing ? performance.now() : 0;
-    const environment = gitEnvironment();
-    const key = JSON.stringify([input, environment]);
+    const environment = preparedEnvironment ?? gitEnvironment();
+    const key = preparedKey ?? JSON.stringify([input, environment]);
     let entry = entries.get(key)?.entry;
     const waitingToRetry = !options.refresh && (entry?.retryAt ?? 0) > Date.now();
     let currentRevision: string | null | undefined;
@@ -330,14 +336,15 @@ function createReadCache<Input, Output>(
         }
         return polling.empty();
       };
-      const key = JSON.stringify([input, gitEnvironment()]);
+      const environment = gitEnvironment();
+      const key = JSON.stringify([input, environment]);
       const slot = entries.get(key) ?? {};
       if (slot.poll && !slot.poll.pending && slot.poll.expiresAt <= Date.now()) {
         releasePoll(key, slot);
       }
       let poll = slot.poll;
       if (!poll && slot.entry?.value) {
-        return read(input, options);
+        return read(input, options, environment, key);
       }
       if (!poll) {
         if (pollCount >= maxEntries) {

@@ -28,6 +28,18 @@ export const TEAM_SCALE_COUNTS = {
   presenceEvents: 12,
 } as const;
 
+export function createTeamScaleCounts(options: {
+  transcriptMessages?: number;
+  largeSnapshot?: boolean;
+}) {
+  return {
+    ...TEAM_SCALE_COUNTS,
+    transcriptMessages:
+      options.transcriptMessages ??
+      (options.largeSnapshot ? 1_100 : TEAM_SCALE_COUNTS.transcriptMessages),
+  };
+}
+
 type TeamScaleSession = GatewaySessionRow & { updatedAt: number; sessionId: string };
 
 export function createTeamScaleSessionInventory({

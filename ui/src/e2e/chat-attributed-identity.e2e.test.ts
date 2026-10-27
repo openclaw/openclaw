@@ -767,10 +767,8 @@ suite.define(() => {
 
       await gateway.deferNext("chat.send");
       await group.getByRole("button", { name: "Retry queued message" }).click();
-      await expect(group.locator(".chat-send-status")).toHaveAttribute(
-        "data-send-state",
-        "sending",
-      );
+      await expect(group.locator(".chat-send-status")).toHaveCount(0);
+      await expect(group.locator("time.chat-group-timestamp")).toHaveCount(1);
       await expect(group.getByRole("button", { name: "Retry queued message" })).toHaveCount(0);
       await expect(group).toBeVisible();
       await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(2);

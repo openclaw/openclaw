@@ -11,8 +11,8 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.types.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
   runWithSessionActorStorage,

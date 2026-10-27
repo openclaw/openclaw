@@ -1,7 +1,7 @@
-import type { Model } from "@openclaw/llm-core";
+import type { AssistantMessage, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readTransportDiagnosticLabel } from "../utils/provider-error.js";
-import { resolveModelPayloadDebugMode } from "./model-transport-debug.js";
+import { emitModelTransportError, resolveModelPayloadDebugMode } from "./model-transport-debug.js";
 import { RESPONSE_FAILED_NO_DETAILS_MESSAGE } from "./openai-responses-contracts.js";
 import { log } from "./openai-transport-shared.js";
 import { redactIdentifier, sha256Hex } from "./transport-utils.js";
@@ -282,9 +282,7 @@ export class ResponsesStreamFailure extends Error {
   }
 }
 
-export function logResponsesFailedNoDetails(
-  observation: ResponsesFailedNoDetailsObservation,
-): void {
+function logResponsesFailedNoDetails(observation: ResponsesFailedNoDetailsObservation): void {
   const requestIds = observation.requestIdHashes.join(",");
   const metadataKeys = observation.metadataKeys.join(",");
   log.warn(
@@ -349,6 +347,20 @@ const ABORT_REASON_LABELS = new Map([
   ["AGENT_RUN_SUPERSEDED_ABORT", "superseded"],
 ]);
 
+function resolveOpenAITransportAbortReason(signal?: AbortSignal): string | undefined {
+  if (!signal?.aborted) {
+    return undefined;
+  }
+  const reason = isRecord(signal.reason) ? signal.reason : undefined;
+  const defaultReason = reason?.name === "TimeoutError" ? "request_deadline" : "caller_abort";
+  // Only classify the request signal; provider errors can echo message/tool content.
+  const reasonKey = reason?.code ?? reason?.name;
+  return (
+    (typeof reasonKey === "string" ? ABORT_REASON_LABELS.get(reasonKey) : undefined) ??
+    defaultReason
+  );
+}
+
 export function summarizeOpenAITransportError(error: unknown, signal?: AbortSignal): string {
   const record = isRecord(error) ? error : undefined;
   const cause =
@@ -356,24 +368,48 @@ export function summarizeOpenAITransportError(error: unknown, signal?: AbortSign
       ? (record.cause as Record<string, unknown>)
       : undefined;
   const parts = record
-    ? [
-        `name=${safeDebugValue(readTransportDiagnosticLabel(record.name))}`,
-        `status=${safeDebugValue(readTransportDiagnosticLabel(record.status))}`,
-        `code=${safeDebugValue(readTransportDiagnosticLabel(record.code))}`,
-        `type=${safeDebugValue(readTransportDiagnosticLabel(record.type))}`,
-        `causeName=${safeDebugValue(readTransportDiagnosticLabel(cause?.name))}`,
-        `causeCode=${safeDebugValue(readTransportDiagnosticLabel(cause?.code))}`,
-      ]
+    ? Object.entries({
+        name: readTransportDiagnosticLabel(record.name),
+        status: readTransportDiagnosticLabel(record.status),
+        code: readTransportDiagnosticLabel(record.code),
+        type: readTransportDiagnosticLabel(record.type),
+        causeName: readTransportDiagnosticLabel(cause?.name),
+        causeCode: readTransportDiagnosticLabel(cause?.code),
+      }).flatMap(([key, value]) => (value === undefined ? [] : [`${key}=${value}`]))
     : [`type=${typeof error}`];
-  if (signal?.aborted) {
-    const reason = isRecord(signal.reason) ? signal.reason : undefined;
-    const defaultReason = reason?.name === "TimeoutError" ? "request_deadline" : "caller_abort";
-    // Only classify the request signal; provider errors can echo message/tool content.
-    const reasonKey = reason?.code ?? reason?.name;
-    const abortReason =
-      (typeof reasonKey === "string" ? ABORT_REASON_LABELS.get(reasonKey) : undefined) ??
-      defaultReason;
+  const abortReason = resolveOpenAITransportAbortReason(signal);
+  if (abortReason) {
     parts.push(`abortReason=${abortReason}`);
   }
   return parts.join(" ");
+}
+
+/** Protocol-specific labels join the shared failure line; caller aborts keep their own diagnostic. */
+export function observeResponsesTransportFailure(params: {
+  error: unknown;
+  model: Model;
+  output: AssistantMessage;
+  signal?: AbortSignal;
+  requestSignal?: AbortSignal;
+}) {
+  const { error, model, output, signal, requestSignal } = params;
+  if (error instanceof ResponsesStreamFailure && error.observation) {
+    logResponsesFailedNoDetails(error.observation);
+  }
+  const incomplete = output.diagnostics?.find(({ type }) => type === "openai_responses_terminal")
+    ?.details?.incompleteReason;
+  const incompleteReason = typeof incomplete === "string" ? incomplete : undefined;
+  if (signal?.aborted) {
+    emitModelTransportError(
+      log,
+      "responses",
+      () =>
+        `provider=${model.provider} api=${model.api} model=${model.id} ` +
+        summarizeOpenAITransportError(error, requestSignal) +
+        (incompleteReason ? ` incompleteReason=${incompleteReason}` : ""),
+      signal,
+    );
+    return undefined;
+  }
+  return { abortReason: resolveOpenAITransportAbortReason(requestSignal), incompleteReason };
 }

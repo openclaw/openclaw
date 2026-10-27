@@ -2286,6 +2286,10 @@
                     ]
                   },
                   {
+                    "group": "Decision models",
+                    "pages": ["providers/liquid-ai"]
+                  },
+                  {
                     "group": "Speech and audio",
                     "pages": [
                       "providers/azure-speech",

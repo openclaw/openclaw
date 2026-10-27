@@ -30,6 +30,7 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ClawArtwork } from "./claw-artwork.tsx";
 import { searchClaws, type ClawCatalogEntry } from "./claws-catalog-client.ts";
 import "../../styles/agents-home.css";
+import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 
 registerEnglishCatalog(registerClawsEnglish);

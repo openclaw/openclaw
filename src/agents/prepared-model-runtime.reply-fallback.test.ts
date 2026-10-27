@@ -24,6 +24,7 @@ import {
 } from "./harness/runtime-plugin-load-plan.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import * as modelSelectionConfig from "./model-selection-config.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
@@ -56,11 +57,14 @@ describe("prepared reply fallback ownership", () => {
     vi.spyOn(agentScope, "resolveAgentModelFallbacksOverride").mockImplementation(
       actual.resolveAgentModelFallbacksOverride,
     );
-    vi.spyOn(agentScope, "resolveEffectiveModelFallbacks").mockImplementation(
-      actual.resolveEffectiveModelFallbacks,
+    const actualSelection = await vi.importActual<typeof modelSelectionConfig>(
+      "./model-selection-config.js",
     );
-    vi.spyOn(agentScope, "resolveModelFallbackAvailability").mockImplementation(
-      actual.resolveModelFallbackAvailability,
+    vi.spyOn(modelSelectionConfig, "resolveEffectiveModelFallbacks").mockImplementation(
+      actualSelection.resolveEffectiveModelFallbacks,
+    );
+    vi.spyOn(modelSelectionConfig, "resolveModelFallbackAvailability").mockImplementation(
+      actualSelection.resolveModelFallbackAvailability,
     );
     vi.spyOn(agentScope, "resolveSubagentSpawnModelFallbacksOverride").mockImplementation(
       actual.resolveSubagentSpawnModelFallbacksOverride,
@@ -85,6 +89,49 @@ describe("prepared reply fallback ownership", () => {
       loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" }),
     ).resolves.toMatchObject({ agentId: "main" });
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("prepares a reply on the current generation when its captured dispatch generation was replaced", async () => {
+    const previous = { messages: { responsePrefix: "before" } };
+    const current = { messages: { responsePrefix: "after" } };
+    mocks.configuredAgentIds = ["default"];
+    const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+    await refreshPreparedModelRuntimeSnapshots(previous, options);
+    const captured = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    await refreshPreparedModelRuntimeSnapshots(current, options);
+    const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    reply.context.mockResolvedValue({
+      kind: "ready",
+      workspaceDir: captured.workspaceDir,
+      thinkingRuntime: "openclaw",
+    });
+    reply.execute.mockImplementation(async () => {
+      const pluginGeneration = getPreparedModelRuntimePluginGeneration()!;
+      expect(pluginGeneration).not.toBe(captured.pluginGeneration);
+      await using nested = await acquireAgentRunPreparedModelRuntime(
+        {
+          config: current,
+          agentId: published.agentId,
+          agentDir: published.agentDir,
+          workspaceDir: published.workspaceDir,
+        },
+        { pluginGeneration },
+      );
+      expect(nested.snapshot.config).toEqual(current);
+      return { text: "reply completed after reload" };
+    });
+    const execute = bindPreparedReplyDispatchRuntime(captured, () =>
+      runPreparedReply({
+        provider: "custom",
+        model: "model",
+        ctx: {},
+        sessionCtx: {},
+        cfg: previous,
+        agentId: captured.agentId,
+      } as RunPreparedReplyParams),
+    );
+    await expect(execute()).resolves.toEqual({ text: "reply completed after reload" });
+    expect(reply.execute).toHaveBeenCalledOnce();
   });
 
   it("admits a nested reply after its configured context engine falls back to legacy", async () => {

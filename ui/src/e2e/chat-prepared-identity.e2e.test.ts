@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { ModelsSnapshotEvent } from "@openclaw/gateway-protocol";
 import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
 import { expect, it } from "vitest";
@@ -86,6 +88,12 @@ suite.define(() => {
     await expect.poll(() => page.url()).toContain("/chat/main/renamed-after-confirmation-12345678");
     expect(await composer.inputValue()).toBe("Keep the confirmed conversation draft");
     expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
+    const resolutions = await gateway.getRequests("sessions.resolve");
+    await writeFile(
+      path.join(suite.artifactDir, "same-url-resolution-requests.json"),
+      JSON.stringify(resolutions, null, 2),
+    );
+    expect(resolutions).toHaveLength(1);
     await observation.dispose();
   });
 

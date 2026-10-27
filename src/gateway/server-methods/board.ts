@@ -24,10 +24,8 @@ import type { BoardSessionTarget, BoardStore } from "../../boards/board-store.js
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "../../boards/github-actions-capability.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { buildWidgetDocument } from "../../canvas/wrap.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "../../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
+import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";

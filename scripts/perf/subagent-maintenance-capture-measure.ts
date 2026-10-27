@@ -123,7 +123,8 @@ process.env = teamShape?.env ?? {
 
 const [
   { prepareSessionMaintenancePreservation },
-  { subagentRuns, compactSubagentRunForMemory, isSubagentRunPayloadEvicted },
+  { subagentRuns, compactSubagentRunForMemory },
+  { isSubagentRunPayloadEvicted },
   persistence,
   fixture,
   database,
@@ -135,6 +136,7 @@ const [
 ] = await Promise.all([
   import("../../src/config/sessions/store-maintenance-preserve.js"),
   import("../../src/agents/subagents/registry/subagent-registry-memory.js"),
+  import("../../src/agents/subagents/registry/subagent-run-payload-facts.js"),
   import("../../src/agents/subagents/registry/subagent-registry-persistence.js"),
   import("../../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js"),
   import("../../src/state/openclaw-state-db.js"),
