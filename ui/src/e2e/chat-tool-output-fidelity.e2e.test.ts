@@ -10,6 +10,8 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({
   name: "Tool output fidelity",
+  // Native clipboard contents are shared across contexts in the same browser.
+  browserLaunchOptions: { headless: true },
   startServerBeforeBrowser: true,
 });
 const timestamp = Date.UTC(2026, 8, 19, 12);
