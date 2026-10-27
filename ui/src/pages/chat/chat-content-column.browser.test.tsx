@@ -1,6 +1,6 @@
 import { createSignal, For } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { syncControlUiSystemChrome } from "../../app/control-ui-presentation.ts";
 import type { MessageGroup as MessageGroupData } from "../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -285,8 +285,11 @@ it.each(["light", "dark"])(
     onTestFinished(() => {
       root.remove();
       for (const [name, value] of previousAttributes) {
-        if (value === null) documentRoot.removeAttribute(name);
-        else documentRoot.setAttribute(name, value);
+        if (value === null) {
+          documentRoot.removeAttribute(name);
+        } else {
+          documentRoot.setAttribute(name, value);
+        }
       }
       syncControlUiSystemChrome(true);
     });
@@ -344,13 +347,18 @@ it.each(["light", "dark"])(
       const [first, second] = [ink, fill].map(luminance);
       return (Math.max(first!, second!) + 0.05) / (Math.min(first!, second!) + 0.05);
     };
+    // Start in pointer modality; keyboard navigation must establish visible focus.
+    link.addEventListener("click", (event) => event.preventDefault(), { once: true });
+    await page.elementLocator(link).click();
+    await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
     for (const bubble of root.querySelectorAll<HTMLElement>(".chat-bubble")) {
       const fill = getComputedStyle(bubble).backgroundColor;
       expect(
         contrast(getComputedStyle(bubble.querySelector(".chat-text")!).color, fill),
       ).toBeGreaterThanOrEqual(4.5);
       const chip = bubble.querySelector<HTMLElement>(".markdown-github-item")!;
-      chip.focus();
+      bubble.querySelector<HTMLElement>(".chat-text a")!.focus();
+      await userEvent.keyboard("{Tab}");
       expect(chip.matches(":focus-visible")).toBe(true);
       expect(contrast(getComputedStyle(chip).outlineColor, fill)).toBeGreaterThanOrEqual(3);
     }
@@ -359,7 +367,9 @@ it.each(["light", "dark"])(
     ).toBeGreaterThanOrEqual(4.5);
     const unchanged = colors("alice");
     for (const hover of [false, true]) {
-      if (hover) await page.elementLocator(link).hover();
+      if (hover) {
+        await page.elementLocator(link).hover();
+      }
       const token = hover ? "--link-hover" : "--link";
       style.setProperty(token, "#888888");
       syncControlUiSystemChrome(true);
