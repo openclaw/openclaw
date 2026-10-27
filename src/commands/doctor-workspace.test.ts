@@ -56,6 +56,10 @@ describe("root memory repair", () => {
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-root-memory-"));
+    // Canonicalize like the shared temp-dir helpers do: on macOS tmpdir sits
+    // behind a symlink, and the publication failure tests intercept renames by
+    // comparing against the resolved destination the repair publishes to.
+    tmpDir = await fs.realpath(tmpDir);
     canonicalPath = path.join(tmpDir, "MEMORY.md");
     legacyPath = path.join(tmpDir, "memory.md");
     scope = { agentId: "main", workspaceDir: tmpDir, labelAgent: false };
