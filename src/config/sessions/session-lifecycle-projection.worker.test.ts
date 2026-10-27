@@ -171,7 +171,7 @@ it("preserves snapshot authority during lifecycle metadata publication and revok
   });
 });
 
-it("reuses resident lifecycle preimages without retransmitting snapshots or hiding newer writes", async () => {
+it("reuses same-key reply initialization preimages without retransmitting snapshots or hiding newer writes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
     const prompt = "synthetic lifecycle instructions ".repeat(1500);
@@ -186,6 +186,7 @@ it("reuses resident lifecycle preimages without retransmitting snapshots or hidi
         upserts: [
           {
             sessionKey: f.scope.sessionKey,
+            relatedSessionKeys: [f.scope.sessionKey],
             buildEntry: ({ currentEntry, readEntry }) => {
               expect(readEntry(f.scope.sessionKey)).toEqual(currentEntry);
               return { ...currentEntry!, label: "updated" };

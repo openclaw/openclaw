@@ -122,6 +122,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       this.context.runtimeConfig.state,
     );
     const currentAgentId = resolveChatAgentId(state);
+    this.composerCapabilities?.synchronize(state, currentAgentId);
     const sessionScope = scopedAgentParamsForSession(state, state.sessionKey);
     const widgetTarget = { sessionKey: state.sessionKey, ...sessionScope };
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
@@ -546,7 +547,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       toolOverrides: selectedSession?.toolOverrides,
       capabilityMenu: catalogKey
         ? undefined
-        : this.composerCapabilities.props(this.context, state, selectedSession, currentAgentId),
+        : this.composerCapabilityMenu(state, selectedSession, currentAgentId),
       ...childRoster,
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
@@ -678,11 +679,13 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     };
     return {
       providerReviewSource: { state, canWrite: canWriteProgressCard && !selectedSessionArchived },
-      capabilityDialogs: catalogKey
-        ? undefined
-        : {
-            read: () => this.composerCapabilities.dialogView(this.context, state, selectedSession),
-          },
+      capabilityDialogs:
+        catalogKey || !this.composerCapabilities
+          ? undefined
+          : {
+              read: () =>
+                this.composerCapabilities!.dialogView(this.context, state, selectedSession),
+            },
       layout: this.renderChatPaneLayout({
         state,
         selectedSession,

@@ -11,6 +11,10 @@
  * Count lease acquisitions and manifest scans first; timing and main-thread
  * allocation include real storage dispatch. Every burst must have identical
  * results; a later guest write must be present after the next request.
+ * --mode path exercises the file-reader checkpoint entry point. Add --absent
+ * for a registered worktree without a projection; compare 1,024 serial polls
+ * with --requests 1024 --burst 1, using --instrument allocation separately.
+ * Lease broker counts also report a simulated idle minute at 16 serial polls.
  * The synthetic checkout uses a relative Git pointer and fixed file mtimes so
  * independently rooted fixtures return identical Files metadata.
  */
@@ -47,9 +51,11 @@ const { values } = parseArgs({
     files: { type: "string", default: "1000" },
     port: { type: "string", default: "44984" },
     instrument: { type: "string", default: "timing" },
+    absent: { type: "boolean", default: false },
   },
 });
-assert(values.output && ["owner", "gateway"].includes(values.mode!));
+assert(values.output && ["owner", "path", "gateway"].includes(values.mode!));
+assert(!values.absent || values.mode !== "owner");
 const requests = Number(values.requests),
   burst = Number(values.burst),
   files = Number(values.files),
@@ -199,10 +205,10 @@ state.openOpenClawStateDatabase();
 await (
   await import("../../src/agents/worktrees/registry.js")
 ).insertRegistryWorktree(process.env, owner.worktree);
-const workspace = await projection.withLocalWorkspaceProjection(owner, (operations) =>
-  operations.prepare(),
-);
-for (const directory of [canonical, workspace]) {
+const workspace = values.absent
+  ? undefined
+  : await projection.withLocalWorkspaceProjection(owner, (operations) => operations.prepare());
+for (const directory of workspace ? [canonical, workspace] : [canonical]) {
   for (let i = 0; i < files; i++) {
     fs.utimesSync(path.join(directory, `file-${i}.txt`), 1_767_225_600, 1_767_225_600);
   }
@@ -211,17 +217,20 @@ if (values.mode === "gateway") {
   fs.utimesSync(path.join(canonical, ".git"), 1_767_225_600, 1_767_225_600);
 }
 const checkpoint = () =>
-  values.revision
-    ? projection.withLocalWorkspaceProjection(owner, (operations) =>
-        operations.synchronize("canonical"),
-      )
-    : projection.checkpointLocalWorkspace(owner);
+  values.mode === "path"
+    ? projection.checkpointLocalWorkspacePath({ cwd: canonical })
+    : values.revision
+      ? projection.withLocalWorkspaceProjection(owner, (operations) =>
+          operations.synchronize("canonical"),
+        )
+      : projection.checkpointLocalWorkspace(owner);
 let server:
   | Awaited<ReturnType<typeof import("../../src/gateway/server.js").startGatewayServer>>
   | undefined;
 const clients: Array<import("../../src/gateway/client.js").GatewayClient> = [];
 const handlerDurations: number[] = [];
 let stopRpcDiagnostics = () => {};
+let stopLeaseDiagnostics = () => {};
 try {
   if (values.mode === "gateway") {
     const db = agent.openOpenClawAgentDatabase({ agentId: "main" });
@@ -293,6 +302,22 @@ try {
   assert.equal(initial, "synthetic 0\n");
   acquisitions = 0;
   scans = 0;
+  const { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } =
+    await import("../../src/infra/diagnostic-events.js");
+  await waitForDiagnosticEventsDrained();
+  const leaseRequests: Record<string, number> = {};
+  stopLeaseDiagnostics = onInternalDiagnosticEvent(
+    (event) => {
+      if (
+        event.type === "worker.request" &&
+        event.phase === "completed" &&
+        event.requestClass.startsWith("stateLease.")
+      ) {
+        leaseRequests[event.requestClass] = (leaseRequests[event.requestClass] ?? 0) + 1;
+      }
+    },
+    { include: ["worker.request"] },
+  );
   globalThis.gc?.();
   const inspector = values.instrument === "allocation" ? new Session() : undefined;
   inspector?.connect();
@@ -341,6 +366,8 @@ try {
   }
   const elapsedMs = performance.now() - start,
     cpu = process.threadCpuUsage(before);
+  await waitForDiagnosticEventsDrained();
+  stopLeaseDiagnostics();
   stopRpcDiagnostics();
   if (values.mode === "gateway") {
     assert.equal(handlerDurations.length, requests, "Every measured RPC needs a handler sample");
@@ -368,6 +395,10 @@ try {
     hostLoadAfter: loadavg(),
     acquisitions,
     scans,
+    absentProjection: values.absent,
+    leaseRequests,
+    leaseRequestsPerSimulatedIdleMinute:
+      (Object.values(leaseRequests).reduce((sum, count) => sum + count, 0) * 16) / requests,
     elapsedMs,
     cpuMs: (cpu.user + cpu.system) / 1000,
     mainThreadCpuPercent: (cpu.user + cpu.system) / (elapsedMs * 10),
@@ -395,17 +426,22 @@ try {
       JSON.stringify(representativeResult, null, 2),
     );
   }
-  fs.writeFileSync(path.join(workspace, "file-0.txt"), "fresh later guest write\n");
-  await runOne(0);
-  assert.equal(
-    fs.readFileSync(path.join(canonical, "file-0.txt"), "utf8"),
-    "fresh later guest write\n",
-  );
-  const verified = { ...report, freshness: "passed" };
+  if (workspace) {
+    fs.writeFileSync(path.join(workspace, "file-0.txt"), "fresh later guest write\n");
+    await runOne(0);
+    assert.equal(
+      fs.readFileSync(path.join(canonical, "file-0.txt"), "utf8"),
+      "fresh later guest write\n",
+    );
+  } else {
+    assert.equal(fs.readFileSync(path.join(canonical, "file-0.txt"), "utf8"), initial);
+  }
+  const verified = { ...report, freshness: workspace ? "passed" : "absent projection unchanged" };
   fs.writeFileSync(path.join(output, "report.json"), JSON.stringify(verified, null, 2));
   console.log(JSON.stringify(verified));
 } finally {
   stopRpcDiagnostics();
+  stopLeaseDiagnostics();
   for (const client of clients) {
     client.stop();
   }

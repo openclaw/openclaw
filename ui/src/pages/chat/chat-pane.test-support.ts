@@ -16,16 +16,21 @@ import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.
 import { mountSolid as mountSolidRoot } from "../../test-helpers/mount-solid.ts";
 import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import {
+  createGatewayBrowserClientFixture,
   createInitializationContext,
   createSessionContext,
 } from "./chat-application-context.test-support.ts";
+import { buildChatBoardPanel } from "./chat-pane-board-panel.ts";
+import type { ChatBoardPanelSource } from "./chat-pane-panel-source.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   createPaneTestHost as createRuntimeTestHost,
+  getPaneTestRuntime,
   type PaneRuntimeConstructor,
   type PaneTestLifecycle,
 } from "./chat-pane-runtime.test-support.ts";
+import { runChatHeaderSessionAction } from "./chat-pane-session-menu-actions.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
 import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
@@ -57,10 +62,10 @@ type BoardPanelProps = Parameters<typeof ChatBoardPanel>[0];
 export function mountBoardPanel(
   pane: {
     resolveBoardView: () => ResolvedBoardView;
-    renderBoardPanel: (
+    boardPanelSource: (
       board: ResolvedBoardView,
       layout: ChatPageHost["sidebarLayout"],
-    ) => BoardPanelProps | null;
+    ) => ChatBoardPanelSource | null;
   },
   layout: ChatPageHost["sidebarLayout"],
   container: HTMLElement,
@@ -79,7 +84,8 @@ export function mountBoardPanel(
   return {
     ...view,
     draw: () => {
-      setContent(pane.renderBoardPanel(pane.resolveBoardView(), layout));
+      const source = pane.boardPanelSource(pane.resolveBoardView(), layout);
+      setContent(source ? buildChatBoardPanel(source) : null);
       flush();
     },
   };
@@ -93,11 +99,9 @@ export type TestChatPane = HTMLElement &
       ReturnType<typeof createChatState<ChatPageHost>>,
       "attach" | "composerDraft" | "composerPersistence" | "createRenderLifecycle"
     >;
-    context: ApplicationContext;
     state: ChatPageHost;
     connectedClient: GatewayBrowserClient | null;
     applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
-    connectionGeneration: number;
     catalogLoadGeneration: number;
     continueCatalogSession: ChatPaneRuntime["continueCatalogSession"];
     forkFromMessage: (entryId: string) => Promise<void>;
@@ -105,8 +109,6 @@ export type TestChatPane = HTMLElement &
     recoverSession: () => Promise<boolean>;
     restartRecoveryComposerBanner: ChatPaneRuntime["restartRecoveryComposerBanner"];
     restoreArchivedSession: (sessionKey: string, expectedSessionId: string) => Promise<void>;
-    discardStagedAttachments?: () => void;
-    resumeStagedAttachments?: () => void;
     resolveTaskSuggestion: ChatPaneRuntime["resolveTaskSuggestion"];
     copyTaskSuggestionPrompt: ChatPaneRuntime["copyTaskSuggestionPrompt"];
     handleDocumentKeydown: (event: KeyboardEvent) => void;
@@ -144,13 +146,10 @@ export type TestChatPane = HTMLElement &
     resetOlderMessagesViewport: () => void;
     readReplyMessage: (messageId: string) => unknown;
     hasOlderMessages: () => boolean;
-    beginHeaderRename: (row: GatewaySessionRow) => void;
-    handleHeaderSessionAction: ChatPaneRuntime["handleHeaderSessionAction"];
     cancelHeaderRename: () => void;
     commitHeaderRename: () => void;
     handleHeaderMenuAction: ChatPaneRuntime["handleHeaderMenuAction"];
     loadHeaderMenuData: ChatPaneRuntime["loadHeaderMenuData"];
-    changeHeaderPlacement: ChatPaneRuntime["changeHeaderPlacement"];
     markSessionRead: (row: GatewaySessionRow | undefined) => void;
     applySessionsState: (stateValue: ApplicationContext["sessions"]["state"]) => void;
     renderPaneHeader: ChatPaneRuntime["renderPaneHeader"];
@@ -173,10 +172,13 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
 
 export { getPaneTestRuntime, connectPaneTestView } from "./chat-pane-runtime.test-support.ts";
 
-export function createTestChatPane(params: {
-  client: GatewayBrowserClient;
-  sessions?: SessionCapability;
-}) {
+export function createTestChatPane(
+  params: {
+    client?: GatewayBrowserClient;
+    sessions?: SessionCapability;
+  } = {},
+) {
+  const client = params.client ?? createGatewayBrowserClientFixture();
   if (params.sessions) {
     // Panes sharing a synthetic capability must keep the same owner and live getters.
     const defaults = Object.getOwnPropertyDescriptors(
@@ -188,7 +190,7 @@ export function createTestChatPane(params: {
       }
     }
   }
-  const context = createSessionContext(params.client, params.sessions);
+  const context = createSessionContext(client, params.sessions);
   // SAFETY: TestChatPane declares the protected controller surface forwarded by the test host.
   const pane = createPaneTestHost(
     "openclaw-chat-runtime-test",
@@ -214,7 +216,7 @@ export function createTestChatPane(params: {
     {
       agentsList: null,
       assistantAgentId: null,
-      client: params.client,
+      client,
       connected: true,
       connectionEpoch: 4,
       hello: sessionMutationGatewayHello(),
@@ -230,7 +232,7 @@ export function createTestChatPane(params: {
   state.updateSidebarActivePanel = () => {};
   pane.state = state;
   pane.chatState.attach(state);
-  pane.connectedClient = params.client;
+  pane.connectedClient = client;
   pane.connectionGeneration = 4;
   const applyGatewaySnapshot = pane.applyGatewaySnapshot.bind(pane);
   let publishingSnapshot = false;
@@ -272,6 +274,14 @@ export function createTestChatPane(params: {
       emit({ type: "event", event, payload, seq: 1 });
     },
   };
+}
+
+export function runPaneHeaderAction(
+  pane: TestChatPane,
+  action: Parameters<typeof runChatHeaderSessionAction>[1],
+  row: GatewaySessionRow,
+) {
+  return runChatHeaderSessionAction(getPaneTestRuntime(pane), action, row);
 }
 
 type ActivePlacement = Extract<NonNullable<GatewaySessionRow["placement"]>, { state: "active" }>;

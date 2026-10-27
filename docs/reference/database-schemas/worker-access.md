@@ -651,6 +651,12 @@ or per-session ordering.
 Entry receipts follow physical database generations and scoped revisions; they do
 not require the publishing SQLite connection to match the actor worker's connection.
 
+Fresh pending input refreshes profile policy before source preparation, then reads
+session sharing facts once immediately before its message-approval callback.
+Replays still authorize before returning recorded input. The writer checks fresh
+transaction facts again before commit, and acknowledgment still waits for durable
+custody; removing the preliminary sharing read does not reorder the writer FIFO.
+
 Session memory indexing is background work. It batches transcript changes after
 30 seconds without transcript changes or running turns. Pending work keeps its
 original age across turns; after five minutes it can start in the next idle gap
