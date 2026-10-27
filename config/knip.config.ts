@@ -552,6 +552,7 @@ const repositoryScriptEntries = [
   "scripts/perf/agent-directory-recovery-measure.ts!",
   "scripts/perf/agent-event-frame-census-preload.mjs!",
   "scripts/perf/chat-send-attachments-measure.ts!",
+  "scripts/perf/stage-media-measure.ts!",
   "scripts/perf/codex-catalog-lines.ts!",
   "scripts/perf/codex-request-imports.ts!",
   "scripts/perf/empty-checkout-diff-measure.ts!",
