@@ -2,8 +2,8 @@
  * Opt-in real-Gateway proof: a published stable Doctor/Gateway owns the initial
  * SQLite state, then the candidate Gateway reopens that same state. This proves
  * persisted-state compatibility, not the public updater or a live Slack API.
- * Like the neighboring Gateway product proofs, it starts source directly and
- * does not consume a candidate package or require the repository E2E build.
+ * The candidate Doctor uses this checkout's built CLI; the candidate Gateway
+ * starts source directly through the neighboring Gateway product-proof helper.
  *
  * Install an exact published stable package in an isolated prefix first, then run
  * this file with OPENCLAW_CHANNEL_VISIBILITY_STABLE_CLI=/.../openclaw/openclaw.mjs.
@@ -21,14 +21,12 @@ import {
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { isDefaultInstallIdentity } from "../config/paths.js";
 import { updateSessionLastRoute } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
-import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
-import { migrateOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -126,6 +124,7 @@ function isolatedChildEnv(): Record<string, string | undefined> {
         .filter((key) => !retained.has(key))
         .map((key) => [key, undefined]),
     ),
+    OPENCLAW_SERVICE_REPAIR_POLICY: "external",
     OPENCLAW_DISABLE_BONJOUR: "1",
     OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
     OPENCLAW_SKIP_CHANNELS: "1",
@@ -223,6 +222,7 @@ describe.skipIf(!stableCli)("published stable to channel-scoped Gateway recall",
       const baselineVersion = packageJson.version;
       const envKeys = [...GATEWAY_TEST_ENV_KEYS, "OPENCLAW_HOME", "OPENCLAW_DISABLE_BONJOUR"];
       const snapshot = captureEnv(envKeys);
+      const cliEntrypoint = [path.resolve(stableCli)];
       let baseline: OpenClawTestInstance | undefined;
       let candidate: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
 
@@ -230,12 +230,13 @@ describe.skipIf(!stableCli)("published stable to channel-scoped Gateway recall",
         async () => {
           baseline = await createOpenClawTestInstance({
             name: "channel-visibility-stable-upgrade",
-            entrypoint: [path.resolve(stableCli)],
+            entrypoint: cliEntrypoint,
             reserveIdlePort: false,
             gatewayToken: token,
             signal,
             env: isolatedChildEnv(),
           });
+          expect(isDefaultInstallIdentity(baseline.env)).toBe(false);
           const cfg: OpenClawConfig = {
             agents: {
               defaults: { workspace: baseline.state.workspaceDir, skipBootstrap: true },
@@ -309,6 +310,14 @@ describe.skipIf(!stableCli)("published stable to channel-scoped Gateway recall",
             expect(indexed.code, indexed.stderr).toBe(0);
           }
           await baseline.stopGateway();
+          // Doctor owns backed-up shared/client credentials as well as agent data.
+          // Agent-only migration cannot admit the stopped stable state on its own.
+          cliEntrypoint[0] = path.resolve("openclaw.mjs");
+          const candidateDoctor = await baseline.cli(
+            ["doctor", "--fix", "--non-interactive", "--yes"],
+            { timeoutMs: 60_000 },
+          );
+          expect(candidateDoctor.code, candidateDoctor.stderr).toBe(0);
 
           for (const key of envKeys) {
             const value = baseline.env[key];
@@ -335,27 +344,6 @@ describe.skipIf(!stableCli)("published stable to channel-scoped Gateway recall",
               sessions: { visibility: "channel", allowThreadTargets: true },
             },
           };
-          // The candidate's Doctor, not Gateway admission, owns supported schema
-          // upgrades. Reuse its offline lock/lease/migration composition (also used
-          // by doctor-agent-memory-schema) on the stopped fixture state only.
-          const fixtureEnv = baseline.env;
-          await withDoctorSqliteMaintenanceLock({
-            env: fixtureEnv,
-            operation: "channel visibility fixture upgrade",
-            run: () =>
-              withAgentDatabaseMaintenanceLease({ env: fixtureEnv }, async (maintenance) => {
-                for (const agentId of ["main", "second"]) {
-                  await migrateOpenClawAgentDatabaseForMaintenance(
-                    {
-                      agentId,
-                      env: fixtureEnv,
-                      pathname: resolveOpenClawAgentSqlitePath({ agentId, env: fixtureEnv }),
-                    },
-                    maintenance,
-                  );
-                }
-              }),
-          });
           candidate = await startGatewayWithClient({
             cfg: candidateConfig,
             configPath: baseline.configPath,
