@@ -4,6 +4,7 @@ import {
   createAgentDatabaseInspectionRefusal,
   type AgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
+import type { AgentDatabaseCleanupFailure } from "../../state/openclaw-agent-execution.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
@@ -131,22 +132,44 @@ describe("createReadinessChecker", () => {
 
   it("reports a terminal state database failure immediately and discards cached channel health", () => {
     let failure: Error | undefined;
+    let agentCleanup: AgentDatabaseCleanupFailure[] = [];
     const { manager, readiness } = setup(undefined, {
       getStateDatabaseFailure: () => failure,
+      getAgentDatabaseCleanupFailures: () => agentCleanup,
     });
     expect(readiness()).toEqual(readySnapshot());
 
     failure = new Error("newer shared-state schema");
+    agentCleanup = [{ agentId: "main", reason: "retained cleanup", repairHint: "Restart." }];
     expect(readiness()).toEqual({
       ...failingSnapshot(["state-database"]),
       stateDatabase: { reason: "newer shared-state schema" },
+      agentCleanup,
     });
     expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
 
     failure = undefined;
+    agentCleanup = [];
     expect(readiness()).toEqual(readySnapshot());
     expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
   });
+
+  it.each([false, true])(
+    "reports fresh cleanup diagnostics without blocking readiness (skip channels: %s)",
+    (skipChannels) => {
+      let agentCleanup: AgentDatabaseCleanupFailure[] = [];
+      const { manager, readiness } = setup(undefined, {
+        getAgentDatabaseCleanupFailures: () => agentCleanup,
+        shouldSkipChannelReadiness: () => skipChannels,
+      });
+      expect(readiness()).toEqual(readySnapshot());
+      agentCleanup = [{ agentId: "main", reason: "retained cleanup", repairHint: "Retry." }];
+      expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { agentCleanup }));
+      agentCleanup = [];
+      expect(readiness()).toEqual(readySnapshot());
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(skipChannels ? 0 : 1);
+    },
+  );
 
   it("reports plugin replacement recovery immediately and resumes channel readiness after settlement", () => {
     let pluginReload: GatewayPluginReloadStatus | undefined;

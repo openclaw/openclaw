@@ -3297,6 +3297,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ]);
       expect(sumSeconds(selected)).toBe(500);
       expectPlanFiles(selected, targets, requiredPatterns);
+
+      const isolated = required(
+        createSelected(targets, { runnerBackend, isolateSystemRuntime: true }),
+      );
+      const runtime = isolated.filter((job) =>
+        job.groups.some((group) => group.shard_name === "core-runtime-infra-system-runtime"),
+      );
+      expect(runtime).toHaveLength(1);
+      expect(runtime[0]?.planConcurrency).toBe(1);
+      expect(Number(runtime[0]?.env?.OPENCLAW_VITEST_MAX_WORKERS)).toBeLessThanOrEqual(2);
+      expect(runtime[0]?.predictedTestSeconds).toBe(160);
+      expect(runtime[0]?.predictedSeconds).toBe(160);
+      expectPlanFiles(isolated, targets, requiredPatterns);
     },
   );
 

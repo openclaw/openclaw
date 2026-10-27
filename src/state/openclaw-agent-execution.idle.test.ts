@@ -12,11 +12,18 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+} from "./openclaw-agent-db-lifecycle.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import * as native from "./openclaw-agent-execution-native.js";
-import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import {
+  captureOpenClawAgentDatabaseExecution,
+  getOpenClawAgentDatabaseCleanupFailures,
+} from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -141,6 +148,38 @@ it("closes all warm executors on restart drain", async () => {
   expect(opened.every(({ close }) => close.mock.calls.length === 1)).toBe(true);
 });
 
+it("retains revoked cleanup diagnostics across physical aliases until retirement", async () => {
+  const first = await use("first", "second");
+  fs.mkdirSync(path.dirname(first.path), { recursive: true });
+  const alias = path.join(env.OPENCLAW_STATE_DIR!, "alias");
+  fs.symlinkSync(
+    path.dirname(first.path),
+    alias,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const borrowed = capture("first", path.join(alias, path.basename(first.path)));
+  await borrowed.prepare(source);
+  await borrowed.release();
+  expect(opened).toHaveLength(2);
+  const firstExecutor = opened[0];
+  assert(firstExecutor);
+  firstExecutor.close.mockRejectedValueOnce(new Error("controlled aliased cleanup failure"));
+  await expect(closeOpenClawAgentDatabaseByPathAsync(borrowed.path, "first")).rejects.toThrow();
+  const statePath = resolveDatabasePath({ env });
+  expect(getOpenClawAgentDatabaseCleanupFailures(statePath)).toEqual([
+    expect.objectContaining({
+      agentId: "first",
+      reason: expect.stringContaining("controlled aliased cleanup failure"),
+      repairHint: expect.stringContaining("cannot retry on a request"),
+    }),
+  ]);
+  expect(getOpenClawAgentDatabaseCleanupFailures(`${statePath}.other`)).toEqual([]);
+  expect(() => capture("first")).toThrow("admission is closed");
+  await closeOpenClawAgentDatabaseByPathAsync(borrowed.path, "first");
+  expect(getOpenClawAgentDatabaseCleanupFailures(statePath)).toEqual([]);
+  expect(closedAgents()).toEqual(["first"]);
+});
+
 it("keeps a reborrow live while another idle executor is being evicted", async () => {
   await fillIdlePool();
   const evicting = createDeferredCore();
@@ -164,14 +203,21 @@ it("keeps a reborrow live while another idle executor is being evicted", async (
   await borrowed.release();
 });
 
-it("retains failed eviction custody without retaining a fifth idle executor", async () => {
+it("retains failed eviction custody without consuming healthy idle capacity", async () => {
   await fillIdlePool();
   const first = opened[0];
   assert(first);
   first.close.mockRejectedValueOnce(new Error("synthetic cleanup failure"));
   await use("fifth");
-  expect(closedAgents()).toEqual(["first", "fifth"]);
-  await use("sixth");
+  expect(closedAgents()).toEqual(["first"]);
+  for (const agentId of ["second", "fifth", "third", "fourth"]) {
+    await use(agentId);
+  }
+  expect(opened).toHaveLength(5);
+  expect(first.close).toHaveBeenCalledTimes(1);
+
+  await use("first");
   expect(first.close).toHaveBeenCalledTimes(2);
-  expect(closedAgents()).toEqual(["first", "fifth"]);
+  expect(opened).toHaveLength(6);
+  expect(closedAgents()).toEqual(["first", "second"]);
 });

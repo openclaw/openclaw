@@ -2,6 +2,7 @@ import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coe
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import type { AgentDatabaseCleanupFailure } from "../../state/openclaw-agent-execution.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
@@ -21,6 +22,7 @@ type ReadinessResult = {
   eventLoop?: GatewayEventLoopHealth;
   pluginReload?: GatewayPluginReloadStatus;
   agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
+  agentCleanup?: readonly AgentDatabaseCleanupFailure[];
   agentRecovery?: readonly string[];
   stateDatabase?: { reason: string };
 };
@@ -101,6 +103,7 @@ export function createReadinessChecker(
     getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
     getStateDatabaseFailure?: () => Error | undefined;
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
+    getAgentDatabaseCleanupFailures?: () => readonly AgentDatabaseCleanupFailure[];
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
     isChatSendAvailable?: () => boolean;
     getPendingAgentInputRecovery?: () => readonly string[];
@@ -227,6 +230,7 @@ export function createReadinessChecker(
   };
   return () => {
     const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
+    const agentCleanup = deps.getAgentDatabaseCleanupFailures?.();
     const agentRecovery = deps.getPendingAgentInputRecovery?.();
     const result = readReadiness(agentDatabases, agentRecovery ?? []);
     const getEventLoopHealth = deps.getEventLoopHealth;
@@ -234,6 +238,7 @@ export function createReadinessChecker(
     return {
       ...result,
       ...(agentDatabases?.length ? { agentDatabases } : {}),
+      ...(agentCleanup?.length ? { agentCleanup } : {}),
       ...(agentRecovery?.length ? { agentRecovery } : {}),
       ...(eventLoop ? { eventLoop } : {}),
     };
