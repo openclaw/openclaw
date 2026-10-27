@@ -249,36 +249,33 @@ describe("Anthropic provider", () => {
     configureAiTransportHost({});
   });
 
-  it.each([false, true])(
-    "keeps Cloudflare upstream auth with host fetch=%s",
-    async (managedFetch) => {
-      const hostFetch = vi.fn<typeof fetch>(async () => new Response(null, { status: 500 }));
-      configureAiTransportHost({ buildModelFetch: () => (managedFetch ? hostFetch : undefined) });
-      await streamAnthropic(
-        makeAnthropicModel({
-          provider: "cloudflare-ai-gateway",
-          baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic/v1/messages",
-          headers: { "cf-aig-authorization": "Bearer gateway-token" },
-        }),
-        conversation(user("hello", 1)),
-        { apiKey: "sk-ant-provider" },
-      ).result();
-      expect(anthropicMockState.configs).toHaveLength(1);
-      expect(anthropicMockState.configs[0]).toMatchObject({
-        apiKey: "sk-ant-provider",
-        authToken: null,
-        fetch: managedFetch ? expect.any(Function) : undefined,
-        defaultHeaders: { "cf-aig-authorization": "Bearer gateway-token" },
-      });
-      expect(anthropicMockState.configs[0]).not.toHaveProperty("defaultHeaders.x-api-key");
-      const input = "https://provider.invalid";
-      const init = { method: "POST", body: '{"text":"🦞"}' };
-      if (managedFetch) {
-        await anthropicMockState.configs[0]?.fetch?.(input, init);
-        expect(hostFetch).toHaveBeenCalledWith(input, init);
-      }
-    },
-  );
+  it.each([false, true])("keeps auth with host fetch=%s", async (managedFetch) => {
+    const hostFetch = vi.fn<typeof fetch>(async () => new Response(null, { status: 500 }));
+    configureAiTransportHost({ buildModelFetch: () => (managedFetch ? hostFetch : undefined) });
+    await streamAnthropic(
+      makeAnthropicModel({
+        provider: "cloudflare-ai-gateway",
+        baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic/v1/messages",
+        headers: { "cf-aig-authorization": "Bearer gateway-token" },
+      }),
+      conversation(user("hello", 1)),
+      { apiKey: "sk-ant-provider" },
+    ).result();
+    expect(anthropicMockState.configs).toHaveLength(1);
+    expect(anthropicMockState.configs[0]).toMatchObject({
+      apiKey: "sk-ant-provider",
+      authToken: null,
+      fetch: managedFetch ? expect.any(Function) : undefined,
+      defaultHeaders: { "cf-aig-authorization": "Bearer gateway-token" },
+    });
+    expect(anthropicMockState.configs[0]).not.toHaveProperty("defaultHeaders.x-api-key");
+    const input = "https://provider.invalid";
+    const init = { method: "POST", body: '{"text":"🦞"}' };
+    if (managedFetch) {
+      await anthropicMockState.configs[0]?.fetch?.(input, init);
+      expect(hostFetch).toHaveBeenCalledWith(input, init);
+    }
+  });
   it("keeps sentinel-backed Foundry headers on bearer routing", async () => {
     const sentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
     configureAiTransportHost({

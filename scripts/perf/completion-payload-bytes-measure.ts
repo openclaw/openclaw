@@ -59,9 +59,9 @@ const context = {
   })),
 };
 const response =
-  'data: {"type":"message_start","message":{"id":"fixture","usage":{"input_tokens":40,"output_tokens":0}}}\n\n' +
-  'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n' +
-  'data: {"type":"message_stop"}\n\n';
+  'event: message_start\ndata: {"type":"message_start","message":{"id":"fixture","usage":{"input_tokens":40,"output_tokens":0}}}\n\n' +
+  'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n' +
+  'event: message_stop\ndata: {"type":"message_stop"}\n\n';
 let wire = "";
 let reportedBytes = 0;
 let requests = 0;
@@ -95,6 +95,7 @@ async function run(count: number) {
       auth: { apiKey: "synthetic-key", mode: "api-key", source: "benchmark" },
     });
     assert.equal(result.stopReason, "stop");
+    assert.equal(result.usage.output, 1);
     await waitForDiagnosticEventsDrained();
   }
 }
