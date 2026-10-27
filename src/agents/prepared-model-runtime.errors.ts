@@ -37,8 +37,8 @@ export function capturePreparedModelRuntimeRefreshError(value: unknown): Error {
   };
   Object.setPrototypeOf(snapshot, kind?.prototype ?? Error.prototype);
   if (error instanceof PreparedModelRuntimeOwnerNotPublishedError) {
-    // oxlint-disable-next-line typescript/no-unnecessary-boolean-literal-compare -- JavaScript error subclasses can replace this field; retained diagnostics must stay primitive.
-    Object.assign(snapshot, { admissionBlocked: error.admissionBlocked === true });
+    const admissionBlocked: unknown = Reflect.get(error, "admissionBlocked");
+    Object.assign(snapshot, { admissionBlocked: admissionBlocked === true });
   }
   try {
     const code: unknown = Reflect.get(error, "code");
