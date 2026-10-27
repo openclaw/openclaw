@@ -458,14 +458,7 @@ suite.define(() => {
       });
       await ownerTyping(draft);
       await expect(previewBubble).toHaveText(draft);
-      await expect
-        .poll(() =>
-          typingRow
-            .locator(".chat-group")
-            .evaluate((row) => Number.parseFloat(getComputedStyle(row).gridTemplateColumns)),
-        )
-        .toBeGreaterThan(0);
-      await waitForLayoutSettled(page, ".agent-chat__typing-preview-text");
+      await waitForLayoutSettled(page, '[data-virtual-row-key="presence:typing"] .chat-group');
       const beforeSend = await bubbleGeometry(previewBubble);
       await gateway.emitGatewayEvent("session.message", {
         sessionKey: "main",

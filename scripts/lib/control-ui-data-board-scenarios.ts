@@ -92,6 +92,15 @@ function createDataBoardFixture(_sandbox?: InteractionSandbox): InteractionFixtu
   };
 }
 
+function galleryPreviewSnapshot(sample: BoardSnapshot, key: string): BoardSnapshot {
+  return {
+    ...sample,
+    sessionKey: key,
+    tabs: sample.tabs.slice(0, 1),
+    widgets: sample.widgets.slice(0, 1),
+  };
+}
+
 function createGalleryFixture(): InteractionFixtureOverrides {
   const sample = boardSnapshot();
   return {
@@ -114,12 +123,7 @@ function createGalleryFixture(): InteractionFixtureOverrides {
       "board.get": {
         cases: Array.from({ length: galleryCount }, (_, index) => ({
           match: { sessionKey: `agent:main:data-gallery-${index}` },
-          response: {
-            ...sample,
-            sessionKey: `agent:main:data-gallery-${index}`,
-            tabs: sample.tabs.slice(0, 1),
-            widgets: sample.widgets.slice(0, 1),
-          },
+          response: galleryPreviewSnapshot(sample, `agent:main:data-gallery-${index}`),
         })),
       },
     },
@@ -266,6 +270,14 @@ async function waitForBoard(page: Page, tab = 0) {
   await settle(page);
 }
 
+async function boardReportCounts(page: Page) {
+  return page.locator(boardHost).evaluate((host) => ({
+    mountedReports: host.querySelectorAll("openclaw-report-widget").length,
+    widgetCells: host.querySelectorAll("openclaw-board-widget-cell").length,
+    scrollHeight: host.scrollHeight,
+  }));
+}
+
 async function prepareBoard(page: Page) {
   await openInteractionPanel(page);
   await waitForBoard(page);
@@ -274,11 +286,63 @@ async function prepareBoard(page: Page) {
 async function prepareGallery(page: Page) {
   await page.locator(`${galleryHost} [data-dashboard-session]`).first().waitFor();
   await page.waitForFunction(
-    ({ selector, count }) =>
-      document.querySelectorAll(`${selector} [data-dashboard-session]`).length === count,
+    ({ selector, count }) => {
+      const host = document.querySelector(selector);
+      const represented = host?.querySelector(".dashboards-grid > [aria-setsize]");
+      return (
+        Number(represented?.getAttribute("aria-setsize")) === count ||
+        host?.querySelectorAll("[data-dashboard-session]").length === count
+      );
+    },
     { selector: galleryHost, count: galleryCount },
   );
   await settle(page);
+}
+
+async function galleryPresentationCounts(page: Page) {
+  return page.locator(galleryHost).evaluate((host) => {
+    const cards = host.querySelectorAll("[data-dashboard-session]").length;
+    const represented = host.querySelector(".dashboards-grid > [aria-setsize]");
+    return {
+      cards,
+      links: host.querySelectorAll("[data-dashboard-session] a.dashboard-card__main").length,
+      titles: host.querySelectorAll("[data-dashboard-session] h2").length,
+      representedCards: represented ? Number(represented.getAttribute("aria-setsize")) : cards,
+      windowed: represented !== null && cards < Number(represented.getAttribute("aria-setsize")),
+    };
+  });
+}
+
+async function initialGalleryPreviews(page: Page, gateway: MockGatewayControls) {
+  await gateway.waitForRequest("board.get", {
+    match: { sessionKey: "agent:main:data-gallery-0" },
+  });
+  await settle(page);
+  const previewWindow = await page.locator(galleryHost).evaluate((host) => {
+    const cards = Array.from(host.querySelectorAll("[data-dashboard-session]"));
+    // Allow the preview's 200px margin and the grid's two overscan tracks.
+    const margin = 200 + 2 * Math.max(...cards.map((card) => card.getBoundingClientRect().height));
+    return cards
+      .filter((card) => {
+        const bounds = card.getBoundingClientRect();
+        return bounds.bottom >= -margin && bounds.top <= innerHeight + margin;
+      })
+      .map((card) => card.getAttribute("data-dashboard-session"));
+  });
+  const requestedBoardIds = (await gateway.getRequests("board.get")).flatMap(({ params }) =>
+    isRecord(params) &&
+    typeof params.sessionKey === "string" &&
+    params.sessionKey.startsWith("agent:main:data-gallery-")
+      ? [params.sessionKey]
+      : [],
+  );
+  if (
+    requestedBoardIds.length > previewWindow.length ||
+    requestedBoardIds.some((key) => !previewWindow.includes(key))
+  ) {
+    throw new Error("Initial gallery previews fetched outside the viewport and overscan window");
+  }
+  return { requestedBoardIds, initialPreviewWindow: previewWindow.length };
 }
 
 async function prepareWorkspace(page: Page) {
@@ -520,22 +584,174 @@ function workspaceSearchScenario(roundTripMs: 0 | 100): InteractionScenario {
   };
 }
 
-export const dataBoardScenarios: readonly InteractionScenario[] = [
-  {
-    id: "data-dashboards-first-render",
-    dataPage: "dashboards",
-    route: "/new",
-    expected: "Opening Dashboards presents 1,000 cards with only nearby previews active.",
-    fixtureOverrides: createGalleryFixture,
-    rowSelector: "[data-dashboard-session]",
-    prepare: async (page) => {
-      await navigation(page, "pages");
+function galleryRpcLatencyScenario(
+  scenario: InteractionScenario,
+  action: "first-render" | "scroll",
+): InteractionScenario {
+  const firstRender = action === "first-render";
+  let measuring = false;
+  let delayedGalleryLists = 0;
+  let delayedPreviews = 0;
+  return {
+    ...scenario,
+    id: `${scenario.id}-100ms`,
+    explicitOnly: true,
+    expected: `${scenario.expected} Measured Gallery RPC responses are delayed by 100ms.`,
+    createRequestHandlers: (defaults) => {
+      // The harness installs fresh handlers for each serial observation, before setup.
+      measuring = false;
+      delayedGalleryLists = 0;
+      delayedPreviews = 0;
+      const sample = boardSnapshot();
+      return {
+        ...(firstRender
+          ? {
+              "sessions.list": async (params: unknown) => {
+                if (
+                  measuring &&
+                  isRecord(params) &&
+                  params.source === "dashboard" &&
+                  params.rowMode === "dashboard" &&
+                  params.hasBoard === true &&
+                  params.archived === "all"
+                ) {
+                  await new Promise<void>((resolve) => {
+                    setTimeout(resolve, 100);
+                  });
+                  delayedGalleryLists += 1;
+                }
+                return defaults["sessions.list"]!(params);
+              },
+            }
+          : {}),
+        "board.get": async (params: unknown) => {
+          if (
+            !isRecord(params) ||
+            typeof params.sessionKey !== "string" ||
+            !/^agent:main:data-gallery-\d+$/.test(params.sessionKey)
+          ) {
+            throw new Error("Expected a Gallery preview request");
+          }
+          // Setup previews resolve normally; only reads issued during the action wait.
+          if (measuring) {
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 100);
+            });
+            delayedPreviews += 1;
+          }
+          return galleryPreviewSnapshot(sample, params.sessionKey);
+        },
+      };
     },
-    run: async (page) => {
-      await page.getByRole("link", { name: "Dashboards", exact: true }).click();
-      await prepareGallery(page);
+    prepare: async (page, gateway) => {
+      await scenario.prepare(page, gateway);
+      // Pages has a separate active-only catalog under the same source.
+      if (
+        firstRender &&
+        (
+          await gateway.getRequests("sessions.list", {
+            source: "dashboard",
+            rowMode: "dashboard",
+            hasBoard: true,
+            archived: "all",
+          })
+        ).length > 0
+      ) {
+        throw new Error("Gallery list was fetched before the measured navigation");
+      }
     },
+    run: async (page, gateway) => {
+      measuring = true;
+      const evidence = await scenario.run(page, gateway);
+      if ((firstRender && delayedGalleryLists === 0) || delayedPreviews === 0) {
+        throw new Error("Expected measured Gallery RPC response delays");
+      }
+      return { ...evidence, delayedGalleryLists, delayedPreviews };
+    },
+  };
+}
+
+const galleryFirstRenderScenario: InteractionScenario = {
+  id: "data-dashboards-first-render",
+  dataPage: "dashboards",
+  route: "/new",
+  expected: "Opening Dashboards represents 1,000 cards with only nearby previews active.",
+  fixtureOverrides: createGalleryFixture,
+  rowSelector: "[data-dashboard-session]",
+  prepare: async (page) => {
+    await navigation(page, "pages");
   },
+  run: async (page, gateway) => {
+    await page.getByRole("link", { name: "Dashboards", exact: true }).click();
+    await prepareGallery(page);
+    const initialPreviews = await initialGalleryPreviews(page, gateway);
+    // Request receipt alone would finish before the preview response is rendered.
+    await page
+      .locator('[data-dashboard-session="agent:main:data-gallery-0"] openclaw-report-widget svg')
+      .waitFor();
+    await settle(page);
+    return {
+      ...(await galleryPresentationCounts(page)),
+      initialPreviewReads: initialPreviews.requestedBoardIds.length,
+      initialPreviewWindow: initialPreviews.initialPreviewWindow,
+    };
+  },
+};
+
+const galleryScrollScenario: InteractionScenario = {
+  id: "data-dashboards-scroll",
+  dataPage: "dashboards",
+  route: "/dashboards",
+  expected: "Scrolling reveals the final gallery row and records its preview reads.",
+  fixtureOverrides: createGalleryFixture,
+  prepare: prepareGallery,
+  run: async (page, gateway) => {
+    const finalId = `data-gallery-${galleryCount - 1}`;
+    const finalKey = `agent:main:${finalId}`;
+    const initialPreviews = await initialGalleryPreviews(page, gateway);
+    if (initialPreviews.requestedBoardIds.includes(finalKey)) {
+      throw new Error("The offscreen final dashboard fetched its preview before scrolling");
+    }
+    const finalCard = page.locator(`[data-dashboard-session="${finalKey}"]`);
+    const href = await finalCard.locator("a.dashboard-card__main").getAttribute("href");
+    if (href !== `/dashboard/main/${finalId}`) {
+      throw new Error(`Final dashboard has an incorrect native URL: ${href}`);
+    }
+    await finalCard.scrollIntoViewIfNeeded();
+    await gateway.waitForRequest("board.get", {
+      after: 0,
+      match: { sessionKey: finalKey },
+    });
+    await settle(page);
+    await finalCard.scrollIntoViewIfNeeded();
+    await finalCard.locator(".dashboard-card__author").filter({ hasText: "By Author 9" }).waitFor();
+    await finalCard.locator("openclaw-report-widget svg").waitFor();
+    await page.waitForFunction(() => {
+      const card = document.querySelector('[data-dashboard-session="agent:main:data-gallery-999"]');
+      const viewport = card?.closest(".content");
+      if (!card || !viewport) {
+        return false;
+      }
+      const bounds = card.getBoundingClientRect();
+      const visible = viewport.getBoundingClientRect();
+      return bounds.top < visible.bottom && bounds.bottom > visible.top;
+    });
+    const counts = await galleryPresentationCounts(page);
+    if (counts.windowed && counts.cards > 100) {
+      throw new Error("Scrolling mounted an unbounded gallery window");
+    }
+    return {
+      ...counts,
+      initialPreviewReads: initialPreviews.requestedBoardIds.length,
+      initialPreviewWindow: initialPreviews.initialPreviewWindow,
+      previewReads: (await gateway.getRequests("board.get")).length,
+    };
+  },
+};
+
+export const dataBoardScenarios: readonly InteractionScenario[] = [
+  galleryFirstRenderScenario,
+  galleryRpcLatencyScenario(galleryFirstRenderScenario, "first-render"),
   {
     id: "data-board-first-render",
     dataPage: "board",
@@ -548,7 +764,11 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     },
     run: async (page) => {
       await prepareBoard(page);
-      return { visibleWidgets: widgetsPerTab, totalWidgets: tabCount * widgetsPerTab };
+      return {
+        visibleWidgets: widgetsPerTab,
+        totalWidgets: tabCount * widgetsPerTab,
+        ...(await boardReportCounts(page)),
+      };
     },
   },
   {
@@ -562,7 +782,27 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     run: async (page) => {
       await page.locator(`${boardHost} [data-board-tab-id="data-1"]`).click();
       await waitForBoard(page, 1);
-      return { visitedWidgets: widgetsPerTab * 2 };
+      return { visitedWidgets: widgetsPerTab * 2, ...(await boardReportCounts(page)) };
+    },
+  },
+  {
+    id: "data-board-tab-return",
+    dataPage: "board",
+    route: controlUiSessionPath(sessionKey),
+    expected: "Returning to a visited tab preserves its already rendered report bodies.",
+    fixtureOverrides: createDataBoardFixture,
+    rowSelector: "openclaw-report-widget",
+    prepare: async (page) => {
+      await prepareBoard(page);
+      await page.locator(`${boardHost} [data-board-tab-id="data-1"]`).click();
+      await waitForBoard(page, 1);
+      await page.locator(`${boardHost} [data-board-tab-id="data-0"]`).click();
+      await waitForBoard(page);
+    },
+    run: async (page) => {
+      await page.locator(`${boardHost} [data-board-tab-id="data-1"]`).click();
+      await waitForBoard(page, 1);
+      return boardReportCounts(page);
     },
   },
   {
@@ -593,7 +833,13 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     expected: "Scrolling the 250-widget board preserves its mounted reports.",
     fixtureOverrides: createDataBoardFixture,
     prepare: prepareBoard,
-    run: (page) => scrollSurface(page, boardHost),
+    run: async (page) => {
+      const scroll = await scrollSurface(page, boardHost);
+      await page
+        .locator(`${boardHost} [data-widget-name="data-widget-249"] openclaw-report-widget svg`)
+        .waitFor();
+      return { ...scroll, ...(await boardReportCounts(page)) };
+    },
   },
   {
     id: "data-dashboards-search",
@@ -616,7 +862,7 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     id: "data-dashboards-sort",
     dataPage: "dashboards",
     route: "/dashboards",
-    expected: "Sorting all 1,000 dashboards preserves their count and title order.",
+    expected: "Sorting all 1,000 dashboards preserves their represented count and title order.",
     fixtureOverrides: createGalleryFixture,
     rowSelector: "[data-dashboard-session]",
     prepare: prepareGallery,
@@ -629,33 +875,22 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
             ?.getAttribute("data-dashboard-session") === "agent:main:data-gallery-999",
       );
       await settle(page);
+      const counts = await galleryPresentationCounts(page);
+      if (counts.representedCards !== galleryCount || (counts.windowed && counts.cards > 100)) {
+        throw new Error("Sorting lost dashboard results or mounted an unbounded gallery window");
+      }
+      return counts;
     },
   },
-  {
-    id: "data-dashboards-scroll",
-    dataPage: "dashboards",
-    route: "/dashboards",
-    expected: "Scrolling reveals the final gallery row and records its preview reads.",
-    fixtureOverrides: createGalleryFixture,
-    prepare: prepareGallery,
-    run: async (page, gateway) => {
-      await page
-        .locator('[data-dashboard-session="agent:main:data-gallery-999"]')
-        .scrollIntoViewIfNeeded();
-      await gateway.waitForRequest("board.get", {
-        match: { sessionKey: "agent:main:data-gallery-999" },
-      });
-      await settle(page);
-      return { previewReads: (await gateway.getRequests("board.get")).length };
-    },
-  },
+  galleryScrollScenario,
+  galleryRpcLatencyScenario(galleryScrollScenario, "scroll"),
   {
     id: "data-dashboards-responsive-navigation",
     dataPage: "dashboards",
     diagnostic: "Multi-viewport correctness and capture; not a timing comparison.",
     route: "/dashboards",
     expected:
-      "All 1,000 titles and links remain native, the final card reveals its content on focus, and 3/2/1-column layouts fit the viewport.",
+      "All 1,000 results remain represented, mounted links stay native, the final card retains focus after scrolling, and 3/2/1-column layouts fit the viewport.",
     fixtureOverrides: createGalleryFixture,
     prepare: prepareGallery,
     run: async (page) => {
@@ -669,13 +904,40 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
         throw new Error("Final dashboard link is missing before scrolling");
       }
       const viewport = page.viewportSize()!;
+      let maxMountedCards = 0;
+      let windowedAtAllWidths = true;
       try {
+        await finalLink.focus();
+        await settle(page);
         for (const [width, columns] of [
           [1280, 3],
           [900, 2],
           [520, 1],
         ] as const) {
           await page.setViewportSize({ width, height: viewport.height });
+          await settle(page);
+          if (
+            !(await finalLink.evaluate(
+              (link, original) => link === original && document.activeElement === original,
+              originalLink,
+            ))
+          ) {
+            throw new Error(`Resizing lost the focused final dashboard at ${width}px`);
+          }
+          await page
+            .locator('[data-dashboard-session="agent:main:data-gallery-0"] a.dashboard-card__main')
+            .focus();
+          for (let index = 1; index <= 15; index += 1) {
+            await page.keyboard.press("Tab");
+            const focusedKey = await page.evaluate(() =>
+              document.activeElement
+                ?.closest("[data-dashboard-session]")
+                ?.getAttribute("data-dashboard-session"),
+            );
+            if (focusedKey !== `agent:main:data-gallery-${index}`) {
+              throw new Error(`Native Tab skipped dashboard ${index} at ${width}px`);
+            }
+          }
           await finalCard.scrollIntoViewIfNeeded();
           await finalLink.focus();
           await finalCard
@@ -719,20 +981,68 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
                 );
               }
             }, columns);
-          const counts = await page.locator(galleryHost).evaluate((host) => ({
-            cards: host.querySelectorAll("[data-dashboard-session]").length,
-            links: host.querySelectorAll("[data-dashboard-session] a.dashboard-card__main").length,
-            titles: host.querySelectorAll("[data-dashboard-session] h2").length,
-          }));
-          if (Object.values(counts).some((count) => count !== galleryCount)) {
-            throw new Error(`Gallery lost native cards, titles or links at ${width}px`);
+          const counts = await galleryPresentationCounts(page);
+          maxMountedCards = Math.max(maxMountedCards, counts.cards);
+          windowedAtAllWidths &&= counts.windowed;
+          if (
+            counts.representedCards !== galleryCount ||
+            counts.cards !== counts.links ||
+            counts.cards !== counts.titles ||
+            (counts.windowed && counts.cards > 100)
+          ) {
+            throw new Error(
+              `Gallery lost results, native titles/links, or bounded rendering at ${width}px`,
+            );
           }
         }
-        return { cards: galleryCount, responsiveLayouts: 3, retainedFinalLink: true };
+        return {
+          cards: galleryCount,
+          responsiveLayouts: 3,
+          retainedFinalLink: true,
+          focusRetainedThroughResize: true,
+          maxMountedCards,
+          windowedAtAllWidths,
+        };
       } finally {
         await page.setViewportSize(viewport);
         await originalLink.dispose();
       }
+    },
+  },
+  {
+    id: "data-dashboards-native-navigation",
+    dataPage: "dashboards",
+    diagnostic: "Native link activation and destination rendering; not a timing comparison.",
+    route: "/dashboards",
+    expected: "Enter on the final native dashboard link opens its route and saved report.",
+    fixtureOverrides: createGalleryFixture,
+    prepare: prepareGallery,
+    run: async (page) => {
+      const link = page.locator(
+        '[data-dashboard-session="agent:main:data-gallery-999"] a.dashboard-card__main',
+      );
+      await link.scrollIntoViewIfNeeded();
+      await link.focus();
+      await page.keyboard.press("Enter");
+      await page.waitForURL((url) => url.pathname === "/dashboard/main/data-gallery-999");
+      await page.locator(galleryHost).waitFor({ state: "hidden" });
+      const report = page.locator(
+        '.board-session-surface:visible [data-widget-name="data-widget-0"] openclaw-report-widget',
+      );
+      await report.locator("svg").waitFor({ state: "visible" });
+      await report.getByText("Throughput 0", { exact: true }).waitFor({ state: "visible" });
+      await page.waitForFunction(() => {
+        const widget = document.querySelector(
+          '.board-session-surface:not([hidden]) [data-widget-name="data-widget-0"] openclaw-report-widget',
+        );
+        const values = widget?.querySelectorAll(".board-report__values dd");
+        return (
+          values?.length === 12 &&
+          values[0]?.textContent === "10" &&
+          values[11]?.textContent === "87"
+        );
+      });
+      return { activatedFinalLink: true, renderedDestinationReport: true };
     },
   },
   workspaceInitialScenario(0),

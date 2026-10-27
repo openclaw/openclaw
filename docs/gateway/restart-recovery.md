@@ -374,6 +374,11 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+A plain stop (`SIGTERM` or `SIGINT`, such as a service stop) that arrives while
+a restart drains turns that restart into a stop: the Gateway exits after the
+drain instead of starting again. Managed update handoffs keep their own stop
+handling.
+
 A confirmed unavailable child Node runtime follows this same graceful drain when
 the effective native service command's Node can still start. The lifecycle owner
 requests a fresh-process supervisor handoff once; it never uses the in-process

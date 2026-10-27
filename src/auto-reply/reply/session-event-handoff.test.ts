@@ -303,6 +303,13 @@ describe("session event target custody", () => {
   it("rejects deleted-agent events", async ({ nativeState: state }) => {
     const { env } = state;
     const target = await captureTarget("main", sessionKey, { env });
+    {
+      using resolution = vi.spyOn(path, "resolve");
+      for (let index = 0; index < 10_000; index += 1) {
+        assertTargetCurrent(target);
+      }
+      expect(resolution.mock.calls.length).toBe(0);
+    }
     await withAgentDeletion(
       "main",
       async (begin) => {

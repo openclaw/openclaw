@@ -4,18 +4,17 @@ import { button, chip, clock, el } from "./page-dom.js";
 import { openConfirmDialog, openStartDialog, scribeTile } from "./scribe-dialog.js";
 import {
   repairScribe,
-  retryScribe,
   runScribeNow,
   setScribePaused,
   startScribe,
   turnOffScribe,
 } from "./scribes-actions.js";
-import { scribeById, scribeLabel, type ScribeSetup } from "./scribes-catalog.js";
+import { scribeById, scribeLabel } from "./scribes-catalog.js";
 import {
   detectSources,
   loadRuns,
   loadScribes,
-  resultFromText,
+  statusFromText,
   type ScribeDetection,
   type ScribeJob,
   type ScribeRun,
@@ -90,29 +89,6 @@ function scheduleText(job: ScribeJob) {
     return `Once, ${when(Date.parse(schedule.at))}`;
   }
   return schedule.kind === "event" ? "When Knowledge maintenance asks" : schedule.kind;
-}
-
-// The options a scribe was started with, in the dialog's words.
-function optionsText(setup: ScribeSetup) {
-  const { options } = setup;
-  if ("scope" in options) {
-    const since: Record<string, string> = {
-      "30d": "the last 30 days",
-      "90d": "the last 90 days",
-      all: "the beginning",
-      today: "today",
-    };
-    return `${options.scope === "all" ? "Active and archived" : "Active"} conversations, from ${since[options.since] ?? "an unknown start"} · ${setup.mode === "once" ? "once" : "keeps learning"}`;
-  }
-  if ("sources" in options && Array.isArray(options.sources)) {
-    const names: Record<string, string> = {
-      "memory-md": "MEMORY.md",
-      "daily-notes": "daily notes",
-      dreams: "Dreaming diary",
-    };
-    return options.sources.map((source) => names[source] ?? source).join(", ");
-  }
-  return "No options";
 }
 
 // One-line state for an "On" row.
@@ -261,13 +237,12 @@ function start(ui: Page, snapshot: ScribeSnapshot, detection: ScribeDetection) {
   const attempt = crypto.randomUUID();
   openStartDialog({
     scribe: snapshot.scribe,
-    agentId,
     agentName,
     storeName,
     detection,
     canWrite: host.connection.canWrite,
-    start: async (setup) => {
-      await startScribe(host, snapshot, setup, attempt);
+    start: async (prompt) => {
+      await startScribe(host, snapshot, agentId, prompt, attempt);
       ui.announce(`Started ${scribeLabel(snapshot.scribe)}.`);
       openScribe(ui, snapshot.scribe.id);
     },
@@ -402,8 +377,8 @@ function runText(run: ScribeRun) {
   if (run.status === "skipped") {
     return run.error ? `Skipped: ${run.error}` : "Skipped";
   }
-  // A scribe run's summary is its final reply; its result line is the one-sentence summary.
-  return run.summary ? (resultFromText(run.summary)?.summary ?? run.summary) : "Finished";
+  // A scribe run's summary is its final reply; its status line holds the one-sentence summary.
+  return run.summary ? statusFromText(run.summary)?.summary || run.summary : "Finished";
 }
 
 function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
@@ -469,21 +444,12 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
       ),
     );
   }
-  // A failed one-time scribe starts over with its setup; an ongoing one repairs its automation.
-  const once = !job && (snapshot.setup?.mode ?? scribe.modes[0]) === "once";
-  if (status === "failing" && once) {
-    actions.append(
-      control(
-        "Retry",
-        () => retryScribe(host, snapshot, agentId),
-        `Asked ${scribeLabel(scribe)} to start over.`,
-      ),
-    );
-  } else if (status === "reauth" || status === "failing") {
+  // A scribe with an automation repairs it; one without starts over from the start dialog.
+  if (job && (status === "reauth" || status === "failing")) {
     actions.append(
       control(
         "Repair",
-        () => repairScribe(host, snapshot, agentId),
+        () => repairScribe(host, snapshot, job, agentId),
         `Asked ${scribeLabel(scribe)} to repair its setup.`,
       ),
     );
@@ -517,9 +483,9 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
     turnOff.disabled = !canWrite;
     actions.append(turnOff);
   }
-  if (!job && (status === "available" || status === "done")) {
+  if (!job && status !== "starting") {
     const again = button(
-      scribe.startLabel,
+      status === "failing" ? "Start again…" : scribe.startLabel,
       () => start(ui, snapshot, {}),
       "knowledge-button knowledge-primary knowledge-small",
     );
@@ -566,7 +532,7 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
           : "Not run yet",
       ],
     );
-  } else if (snapshot.setup?.mode === "once") {
+  } else if (status === "done") {
     facts.push(["Schedule", "Once, nothing scheduled"]);
   }
   facts.push(
@@ -579,9 +545,6 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
     ["Model", lastRun?.model ?? `${agentName}’s default`],
     ["Store", storeName],
   );
-  if (snapshot.setup) {
-    facts.push(["Options", optionsText(snapshot.setup)]);
-  }
   facts.push(["Follows", `${scribe.skill} skill · ships with Knowledge`]);
   if (job) {
     facts.push([

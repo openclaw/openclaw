@@ -10,6 +10,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
+import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
 import {
   captureChatHistoryRun,
   chatHistoryRequestParams,
@@ -81,15 +82,19 @@ export async function hydrateChatHistory(
   inputRunIds: string[],
   requestKeyPrefix: string,
 ): Promise<ObservedChatHistoryResult | undefined> {
+  const requests = chatHistoryRequests(state);
+  requests.historyRead?.abort();
+  const read = new AbortController();
+  requests.historyRead = read;
   const ownership = beginHistoryRequest(state, client, connectionEpoch, sessionKey, requestAgentId);
-  const isCurrent = () => state.sessions === sessions && acceptsHistoryResult(state, ownership);
+  const isCurrent = () =>
+    !read.signal.aborted && state.sessions === sessions && acceptsHistoryResult(state, ownership);
   const captureRun = () => captureChatHistoryRun(state, isCurrent);
   const previousRunProjections = readRunProjections(state, sessionKey, requestAgentId);
   const previousRunId = state.chatRunId;
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
-  const requests = chatHistoryRequests(state);
   const request = (cursor?: string) => {
     const initialHistory = requests.initialHistory;
     delete requests.initialHistory;
@@ -121,6 +126,7 @@ export async function hydrateChatHistory(
       state,
       {
         isCurrent,
+        signal: read.signal,
         captureRun,
         onRetry: () => {
           if (isCurrent()) {
@@ -137,7 +143,13 @@ export async function hydrateChatHistory(
   try {
     let admission = requests.subscriptionReady;
     while (admission) {
-      const ready = await admission;
+      // Subscription admission owns live/approval custody. Release this read's
+      // wait without aborting that independent subscription's acknowledgement.
+      const ready = await subscribeToSharedRequest(
+        { promise: admission, subscribers: new Set<AbortController>() },
+        read,
+        read.signal,
+      );
       if (!isCurrent()) {
         return undefined;
       }
@@ -467,6 +479,9 @@ export async function hydrateChatHistory(
         (err instanceof GatewayRequestError && err.retryable),
     });
   } finally {
+    if (requests.historyRead === read) {
+      delete requests.historyRead;
+    }
     if (ownsHistoryRequest(state, ownership)) {
       setChatHistoryRetrying(state, "history", false);
       state.chatLoading = false;
