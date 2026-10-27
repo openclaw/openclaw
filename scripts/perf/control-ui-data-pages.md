@@ -185,6 +185,17 @@ both milestones separately; do not call the retained 300-row cache a leak or
 invent a byte cap. A positive heap slope without structural attribution needs
 inspection of the retained snapshots before acceptance.
 
+Run the separate `data-agent-selection-retention` diagnostic with `--retained-heap`
+to distinguish warmed selection cost from accumulation. It first selects agents
+0001, 0149, 0299, then main through the real menu before the first GC checkpoint.
+The measured phase repeats that four-selection cycle ten times and returns to
+main before the second checkpoint, retaining the same 300-agent roster throughout.
+The baseline may replace its inner avatars on each selection; report that
+observationally and require full inner-avatar retention only on the candidate.
+Compare structural counts and post-GC heap growth separately from the constant
+candidate-versus-base heap difference. This is finite selection-lifecycle proof,
+not roster-refresh, whole-page disposal, or arbitrary-duration leak proof.
+
 The workload does not invent sort controls on pages without them. Plugin-provided
 views and heavy iframe documents belong to their separate lane. Mobile coverage
 is available through `--viewport mobile` but is not implied by desktop results.

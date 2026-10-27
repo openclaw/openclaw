@@ -390,6 +390,70 @@ const agentReopenRetentionScenario: InteractionScenario = {
   },
 };
 
+const retentionSelectionIds = ["data-agent-0001", "data-agent-0149", "data-agent-0299", "main"];
+
+async function cycleRetentionSelections(page: Page) {
+  const trigger = page.locator(".settings-sidebar__agent .agent-select__trigger");
+  for (const agentId of retentionSelectionIds) {
+    await trigger.click();
+    await countRows(page, "[data-agent-option]", agentCount);
+    const option = page.locator(`[data-agent-option][value="${agentId}"]`);
+    await option.click();
+    await page
+      .locator(`[data-agent-option][value="${agentId}"][aria-checked="true"]`)
+      .waitFor({ state: "attached" });
+    await page.locator(".agent-select__menu").waitFor({ state: "hidden" });
+    await trigger.locator('.identity-avatar__text[data-avatar="🧪"]').waitFor();
+    await frames(page);
+  }
+}
+
+const agentSelectionRetentionScenario: InteractionScenario = {
+  ...agentSelectionScenario(0),
+  id: "data-agent-selection-retention",
+  explicitOnly: true,
+  diagnostic:
+    "Ten warmed four-selection cycles returning to main; forced-GC snapshots are memory proof only.",
+  expected: "Repeated real selections preserve the 300-agent roster and return to main.",
+  prepare: async (page) => {
+    await prepareAgentSelector(page);
+    // Pay each visited agent's first-use cost before the first retained-heap checkpoint.
+    await cycleRetentionSelections(page);
+  },
+  run: async (page, gateway) => {
+    const identityRequestsBefore = (await gateway.getRequests("agent.identity.get")).length;
+    const references = await agentAvatarReferences(page);
+    try {
+      for (let cycle = 0; cycle < 10; cycle++) {
+        await cycleRetentionSelections(page);
+      }
+      const avatars = await agentAvatarCounts(references);
+      const identityRequests =
+        (await gateway.getRequests("agent.identity.get")).length - identityRequestsBefore;
+      const selectedMain =
+        (await page.locator('[data-agent-option][value="main"][aria-checked="true"]').count()) ===
+        1;
+      if (
+        identityRequests !== 0 ||
+        avatars.agentAvatarsInitial !== agentCount ||
+        avatars.agentAvatarsFinal !== agentCount ||
+        !selectedMain
+      ) {
+        throw new Error("Selection cycles changed the hydrated roster or did not restore main");
+      }
+      return {
+        ...avatars,
+        identityRequests,
+        selectedMain,
+        selectionCycles: 10,
+        selectionsPerCycle: retentionSelectionIds.length,
+      };
+    } finally {
+      await references.dispose();
+    }
+  },
+};
+
 async function waitSyntheticResponse(roundTripMs: 0 | 100) {
   if (roundTripMs) {
     await new Promise<void>((resolve) => {
@@ -762,6 +826,7 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
   agentSelectionScenario(0),
   agentSelectionScenario(100),
   agentReopenRetentionScenario,
+  agentSelectionRetentionScenario,
   {
     ...fixture,
     id: "data-agent-skills-render",
