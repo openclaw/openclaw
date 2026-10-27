@@ -41,6 +41,15 @@ it("backs up a schema-36 store without requiring the later cold archive chunk ta
   ).toBeUndefined();
 });
 
+it("keeps the cold archive chunk table when backing up a schema-37 store", async () => {
+  const descriptor = await loadAgentPortDescriptor(37);
+  const table = "session_transcript_cold_archive_chunks";
+  expect(descriptor.version).toBe(37);
+  expect(descriptor.tables.map(({ name }) => name)).toContain(table);
+  expect(descriptor.expectedCatalog.some((fact) => fact.table === table)).toBe(true);
+  expect(descriptor.preData).toContain(`CREATE TABLE "${table}"`);
+});
+
 it.each([21, currentVersion])(
   "migrates only the private v%s copy, retiring legacy usage partitions",
   async (version) => {

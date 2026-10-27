@@ -237,7 +237,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   const promptSurface = resolveAgentPromptSurfaceForSessionKey(attempt.sessionKey);
   const toolPolicyRestricted = toolPolicyRestrictsTools({ allow: attempt.toolsAllow });
   const effectivePromptMode = toolPolicyRestricted ? ("minimal" as const) : promptMode;
-  const effectiveSkillsPrompt = toolPolicyRestricted ? undefined : params.skillsPrompt;
   phases?.mark("attempt.system-prompt.references");
   const openClawReferences =
     params.referencePaths ??
@@ -413,7 +412,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       extraSystemPrompt,
       ownerNumbers: attempt.ownerNumbers,
       reasoningTagHint,
-      skillsPrompt: effectiveSkillsPrompt,
+      // Finite caps can still read skills; the renderer gates on the callable tools.
+      skillsPrompt: params.skillsPrompt,
       codeModeActive: params.codeModeActive,
       webSearchUnconfigured: params.webSearchUnconfigured?.(),
       docsPath: openClawReferences.docsPath ?? undefined,

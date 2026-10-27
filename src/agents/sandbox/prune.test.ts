@@ -142,6 +142,61 @@ beforeEach(async () => {
 });
 
 describe("maybePruneSandboxes", () => {
+  it.each([
+    { idleHours: 1, maxAgeDays: 0 },
+    { idleHours: 0, maxAgeDays: 1 },
+  ])("rechecks shared runtime expiry without another start (%j)", async (prune) => {
+    const { acquireSandboxRuntimeUse, prepareSandboxRegistryClose } =
+      await import("./registry-lifecycle.js");
+    const { scheduleSandboxPrune } = await import("./prune.js");
+    const gateway = prepareSandboxRegistryClose();
+    const held = await acquireSandboxRuntimeUse({ scopeKey: "shared" });
+    configMocks.getRuntimeConfig.mockReturnValue({
+      agents: { defaults: { sandbox: { mode: "all", prune } } },
+    });
+    registryMocks.readRegistry.mockResolvedValue({
+      entries: [
+        entry("shared-runtime", "main", {
+          sessionKey: "shared",
+          createdAtMs: Date.now() - 2 * 86_400_000,
+        }),
+      ],
+    });
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      scheduleSandboxPrune(() => {});
+      await maybePruneSandboxes();
+      expect(backendMocks.removeRuntime).not.toHaveBeenCalled();
+      held[Symbol.dispose]();
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      await expect.poll(() => backendMocks.removeRuntime.mock.calls.length).toBe(1);
+      await gateway.drain();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      held[Symbol.dispose]();
+      await gateway.drain();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an expired browser while its workspace is in use", async () => {
+    const { acquireSandboxRuntimeUse } = await import("./registry-lifecycle.js");
+    const browser = { ...browserEntry(), workspaceDir: "/synthetic/managed-workspace" };
+    registryMocks.readRegistry.mockResolvedValue({ entries: [] });
+    registryMocks.readBrowserRegistry.mockResolvedValue({ entries: [browser] });
+    const cached = cacheBrowser();
+    const held = await acquireSandboxRuntimeUse({ workspaceDir: browser.workspaceDir });
+    try {
+      await maybePruneSandboxes(pruneConfig);
+      expectBrowserRetained(cached);
+    } finally {
+      held[Symbol.dispose]();
+    }
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6 * 60 * 1000);
+    await maybePruneSandboxes(pruneConfig);
+    expect(backendMocks.removeRuntime).toHaveBeenCalledOnce();
+  });
+
   it("rejects hosted custody released during registry inspection before runtime removal", async () => {
     const root = roots.make("sandbox-prune-custody-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {

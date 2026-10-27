@@ -47,7 +47,7 @@ import {
   GuardedTranscriptItem,
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
-  transcriptReplyDependencies,
+  transcriptContextDependencies,
 } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
@@ -536,15 +536,13 @@ export function projectChatTranscript(
       return [
         liveStatusSignature(item),
         item.key === liveItem?.key ? resolveLiveStream : undefined,
-        ...transcriptReplyDependencies(item, loadedReplySources),
+        ...transcriptContextDependencies(item, loadedReplySources, props),
         // Durable drafts can restore the same map under a new callback generation.
         hasQuestions ? asyncQuestions.drafts : undefined,
         hasQuestions ? asyncQuestionGeneration : undefined,
         // Tool plugins own foreground activity.
         hasTools ? presented : undefined,
         readsRoster ? subagents.rowsKey : undefined,
-        item.kind === "notice" ? props.onRetryRun : undefined,
-        item.kind === "notice" ? props.failureActionsRunId : undefined,
       ];
     },
     (item) => {
@@ -609,6 +607,7 @@ export function projectChatTranscript(
         return {
           kind: "notice",
           item,
+          modelCatalog: props.modelCatalog,
           onPermissionRetry: props.onPermissionRetry,
           recovery: props,
         };

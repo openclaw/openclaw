@@ -49,6 +49,10 @@ vi.mock("./code-regions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./code-regions.js")>();
   return {
     ...actual,
+    findCodeRegions(text: string) {
+      markdownOwnershipWork.scannedCharacters += text.length;
+      return actual.findCodeRegions(text);
+    },
     findCodeOwnership(
       text: Parameters<typeof actual.findCodeOwnership>[0],
       options?: Parameters<typeof actual.findCodeOwnership>[1],
@@ -149,6 +153,20 @@ it.each(["mixed", "leading", "repeated literal", "repeated hidden"])(
     expect(scannedCharacters).toBeLessThan(source.length * 16);
   },
 );
+
+it("bounds Markdown scan work after an early duplicate paragraph", () => {
+  const paragraphs = Array.from(
+    { length: 128 },
+    (_, index) => `Paragraph ${index}: an ordinary explanatory sentence without code.`,
+  );
+  const source = ["Ready.", "Ready.", ...paragraphs].join("\n\n");
+  const stream = createAssistantVisibleStreamText("final_answer");
+  markdownOwnershipWork.scannedCharacters = 0;
+  const result = streamChunks(source, 4, stream);
+  expect(result.text).toBe(["Ready.", ...paragraphs].join("\n\n"));
+  expect(result.delivered).toBe(result.text);
+  expect(markdownOwnershipWork.scannedCharacters).toBeLessThan(source.length * 16);
+});
 
 it("restores provisional reasoning text and resets its state on replacement", () => {
   const stream = createAssistantVisibleStreamText("final_answer");
