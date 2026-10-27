@@ -21,7 +21,7 @@ import * as workerStore from "../../../infra/sqlite-worker-store.js";
 import type { SqliteWorkerOperations } from "../../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
-import { withoutMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
+import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -80,7 +80,6 @@ import {
   createPersistedImageNoteFixture,
 } from "./attempt-execution-settle.test-support.js";
 import { runEmbeddedAttemptSettledPhase as settle } from "./attempt-settle.js";
-import { createSettledStreamResult } from "./attempt-stream.test-helpers.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -209,17 +208,45 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     expect(fixture.sessionManager.appendMessageAsync.mock.calls[0]?.[0]).not.toHaveProperty(
       "excludeFromContext",
     );
-    const [input, stream, result] = mocks.completeResult.mock.calls[0]!;
-    expect(input).toBe(fixture.input);
-    expect(stream).toEqual(expect.any(Object));
-    expect(result.messagesSnapshot).toContainEqual(expect.objectContaining(imageNote));
+    expect(mocks.completeResult).toHaveBeenCalledWith(
+      fixture.input,
+      expect.any(Object),
+      expect.objectContaining({
+        messagesSnapshot: expect.arrayContaining([
+          expect.objectContaining({ customType: "openclaw.system-note", display: true }),
+        ]),
+      }),
+    );
   });
 
   it("persists and publishes image failure notes through settlement without parent SQL", async () => {
     await withNotes("file-backed", async (f) => {
       const { fixture, target, before, previousLeaf, previousMessages } = f;
       await useActualResult(true);
-      const result = await withoutMainThreadSql(() => settle(fixture.input));
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: target.storePath });
+      // Prepare before instrumentation so the probes must observe cached statements too.
+      const calibration = database.db.prepare("SELECT 1 AS value");
+      const probes = observeMainThreadSql();
+      const result = await (async () => {
+        try {
+          database.db.exec("SELECT 1");
+          database.db.prepare("SELECT 1");
+          calibration.get();
+          calibration.all();
+          calibration.run();
+          expect([...calibration.iterate()]).toEqual([{ value: 1 }]);
+          for (const probe of probes.calls) {
+            expect(probe).toHaveBeenCalled();
+          }
+          probes.clear();
+
+          const measuredResult = await settle(fixture.input);
+          probes.expectIdle();
+          return measuredResult;
+        } finally {
+          probes.restore();
+        }
+      })();
 
       const after = await loadTranscriptEvents(target);
       expectAppended(before, after);
@@ -375,6 +402,23 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           expect(failure).toMatchObject({ committedMessageId: note.id });
           expect(activeSession.messages).toEqual(previousMessages);
 
+          const appendBeforeReconcile = (
+            event: Parameters<typeof appendTranscriptEventSnapshotSync>[1],
+          ) => {
+            const needsReconcile = vi.fn();
+            expect(
+              appendTranscriptEventSnapshotSync(
+                target,
+                event,
+                {},
+                {
+                  scheduleProjectionReconcile: false,
+                  onProjectionReconcileNeeded: needsReconcile,
+                },
+              ),
+            ).toMatchObject({ ok: true, value: { result: { appended: true } } });
+            expect(needsReconcile).toHaveBeenCalled();
+          };
           const side = intervening === "side" || intervening === "side-dirty";
           const visibleMessages =
             intervening === "side"
@@ -406,16 +450,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
               : [];
           for (const event of events) {
             if (intervening.endsWith("-dirty")) {
-              expect(
-                appendTranscriptEventSnapshotSync(
-                  target,
-                  event,
-                  {},
-                  {
-                    scheduleProjectionReconcile: false,
-                  },
-                ).ok,
-              ).toBe(true);
+              appendBeforeReconcile(event);
             } else {
               await appendPreparedTranscriptEvent(target, event, () => {});
               await waitForSessionTranscriptProjection(target);
@@ -675,13 +710,19 @@ describe("runEmbeddedAttemptSettledPhase", () => {
   it("defaults a source-less settlement failure without dropping it", async () => {
     const fixture = createFixture(mocks);
     const failure = new Error("settlement failed");
-    mocks.settleStream.mockResolvedValueOnce(
-      createSettledStreamResult({
-        promptError: failure,
-        timedOutDuringCompaction: true,
-        sessionIdUsed: "settled-session",
-      }),
-    );
+    mocks.settleStream.mockImplementationOnce(async () => ({
+      promptError: failure,
+      promptErrorSource: null,
+      timedOutDuringCompaction: true,
+      messagesSnapshot: [],
+      sessionIdUsed: "settled-session",
+      lastAssistant: undefined,
+      currentAttemptAssistant: undefined,
+      attemptUsage: undefined,
+      promptCache: undefined,
+      lastCallUsage: undefined,
+      compactionOccurredThisAttempt: false,
+    }));
 
     await settle(fixture.input);
 
