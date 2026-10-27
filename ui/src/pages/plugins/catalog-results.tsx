@@ -268,24 +268,26 @@ function CatalogCard(props: {
             <div class="plugin-card-title-row">
               <h3>{props.plugin.catalog.name}</h3>
               {props.plugin.catalog.official ? renderPluginOfficialBadge() : undefined}
+              <div class="plugin-catalog-card__action">
+                {installed() ? (
+                  renderPluginStateStatus(installedState()!, "plugin-catalog-card__status")
+                ) : (
+                  <PluginInstallAction
+                    registerInstallAction={props.state.registerInstallAction}
+                    buttonClass={
+                      "btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
+                    }
+                    pluginName={props.plugin.catalog.name}
+                    busy={busy()}
+                    disabled={!canInstall()}
+                    progress={progress()}
+                    onInstall={() => props.state.onInstall(props.plugin.id)}
+                  />
+                )}
+              </div>
             </div>
             {renderPluginAuthor(props.plugin.catalog.author)}
           </div>
-        </div>
-        <div class="plugin-catalog-card__action">
-          {installed() ? (
-            renderPluginStateStatus(installedState()!, "plugin-catalog-card__status")
-          ) : (
-            <PluginInstallAction
-              registerInstallAction={props.state.registerInstallAction}
-              buttonClass={"btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"}
-              pluginName={props.plugin.catalog.name}
-              busy={busy()}
-              disabled={!canInstall()}
-              progress={progress()}
-              onInstall={() => props.state.onInstall(props.plugin.id)}
-            />
-          )}
         </div>
       </div>
       <PluginCardSummary

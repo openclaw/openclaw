@@ -169,6 +169,16 @@ and its parent completion, even when recovery uses a new execution ID. A missing
 final reply still records a failure. This does not authorize automatic relaunch
 of unrelated interrupted child work.
 
+If the lifecycle listener misses that terminal event, the registry sweep uses
+the same recovery claim or receipt to find the registered wake's execution and
+its own terminal timestamps and reply. The current Gateway's terminal job snapshot
+takes precedence. After a restart, a matching last terminal run ID in the session
+and that execution's persisted final reply can settle the run. It does not credit a later parent
+follow-up to the wake. Without matching execution evidence, ordinary wait and
+recovery owners remain in charge; an ownerless run eventually reports failure
+at the existing stale-run cutoff (two hours, or its longer explicit timeout plus
+one minute). Duplicate events and sweeps keep the same parent completion.
+
 Recovery retires superseded requester-transfer generations before restoring the
 remaining claim. The current generation keeps its completion custody; obsolete
 transfers do not retry indefinitely. Registry hydration and startup transfer each
@@ -200,6 +210,9 @@ session must still identify the exact run from the retired Gateway, with no newe
 run or admitted work owning that session. Live executions and queued collectors
 keep their existing owners. Orphaned runs settle their native execution state
 before cleanup, so retained child sessions do not leave phantom running activity.
+If a later turn has already reused the child session, registry recovery settles
+the old Gateway's unfinished run as interrupted without changing the newer session
+or crediting its result to the old run. The original parent receives that interruption.
 If settlement fails, completion remains available for retry.
 
 Recovery remembers live session ownership without retaining saved prompt snapshots.

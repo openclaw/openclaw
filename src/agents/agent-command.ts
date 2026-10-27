@@ -313,8 +313,15 @@ async function agentCommandInternalOwned(
         const now = Date.now();
         const currentStoreEntry = sessionStore[sessionKey];
         const allowCreate = currentStoreEntry === undefined && sessionEntry === undefined;
+        // A local operator's own root records the direct chat type that
+        // operator-created Gateway roots receive, so memory audience resolves.
         const initialEntry = currentStoreEntry ??
-          sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
+          sessionEntry ?? {
+            sessionId,
+            updatedAt: now,
+            sessionStartedAt: now,
+            ...(opts.operatorDirectRoot ? { chatType: "direct" as const } : {}),
+          };
         const isSessionRollover =
           isNewSession && (initialEntry.sessionId !== sessionId || automaticReset !== undefined);
         const entry = isSessionRollover ? clearRotatedSessionMetadata(initialEntry) : initialEntry;

@@ -366,14 +366,14 @@ describe("persistent chat session snapshots", () => {
     },
   );
 
-  it("restores legacy sidebar presence defaults", async () => {
+  it("defaults omitted sidebar presence preferences in the current projection", async () => {
     const store = makeStore(undefined, true);
     const sidebarKey = `${key("").split("\u0000")[0]}\u0000sidebar:operator`;
     expect(await store.writeSidebar(sidebarKey, sidebarSnapshot, parseSidebarSnapshot)).toBe(true);
     await putRawRecord(
       {
         sessionKey: sidebarKey,
-        projectionVersion: 1,
+        projectionVersion: 3,
         savedAt: Date.now(),
         model: { ...sidebarSnapshot, peoplePresenceFilter: undefined, offlineUsers: undefined },
       },

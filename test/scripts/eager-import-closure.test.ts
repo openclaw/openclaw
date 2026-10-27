@@ -482,12 +482,31 @@ it.each([
     ],
   },
   {
+    name: "Git worktree inspections",
+    entrypoints: ["src/agents/worktrees/git-worktree-operations.runtime.ts"],
+    dynamic: false,
+    deferredOwners: ["src/agents/worktrees/snapshot-inventory.ts"],
+  },
+  {
     name: "persisted model catalog reader",
     entrypoints: ["src/agents/plugin-model-catalog-read.worker.ts"],
     dynamic: false,
     deferredOwners: [
       "src/state/openclaw-agent-db-readonly.ts",
       "src/state/openclaw-agent-db-borrower.ts",
+    ],
+  },
+  {
+    name: "canonical validation worker",
+    entrypoints: [
+      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
+      "src/config/sessions/session-accessor.sqlite-mutation-worker.runtime.ts",
+      "src/config/sessions/session-canonical-validation.ts",
+    ],
+    dynamic: false,
+    deferredOwners: [
+      "src/config/sessions/session-cold-storage-source-guard.worker.ts",
+      "src/config/sessions/session-source-predicate.worker.ts",
     ],
   },
   {

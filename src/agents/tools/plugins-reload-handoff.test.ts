@@ -121,7 +121,11 @@ it.each([
     const enqueue = vi
       .spyOn(events, "enqueueSessionEventForHost")
       .mockImplementation((text, opts) => {
-        expect(opts).toMatchObject({ sessionKey, expectedTarget: { sessionId } });
+        expect(opts).toMatchObject({
+          sessionKey,
+          source: "tool_handoff",
+          expectedTarget: { sessionId },
+        });
         order.push("resume");
         resumed.resolve(text);
         return {
@@ -369,7 +373,7 @@ it.for([
             expect(input.ctx).toMatchObject({
               CommandAuthorized: false,
               InternalTurnSource: "event",
-              InputProvenance: { kind: "internal_system", sourceTool: "plugin" },
+              InputProvenance: { kind: "internal_system", sourceTool: "tool_handoff" },
             });
             expect(input.ctx.SenderId).toBeUndefined();
             return dispatch(input);

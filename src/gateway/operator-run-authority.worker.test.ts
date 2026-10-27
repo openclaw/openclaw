@@ -287,6 +287,38 @@ it("checks a live access source once for each role-policy evaluation", () =>
     expect(() => resolveOperatorRolePolicy(client, config)).toThrow("access grant ended");
   }));
 
+it("checks retained role grants without renormalizing them and rejects the next revocation", () =>
+  withOperator(async ({ profile, client, context }) => {
+    setUserProfileRole(profile.id, "reader");
+    const config = readerConfig([
+      "operator.read",
+      "operator.talk",
+      "operator.pairing",
+      "operator.approvals",
+      "operator.questions",
+      "operator.sessions.read",
+    ]);
+    context.getRuntimeConfig = () => config;
+    client.connect.scopes = [" operator.read ", " \t"];
+    const captured = await capture({ client, context });
+    using _ = { [Symbol.dispose]: captured.release };
+    const role = config.gateway.roles.definitions.reader;
+    const grants = role.scopes;
+    let reads = 0;
+    role.scopes = new Proxy(grants, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key)) {
+          reads++;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    expect(captured.authority.assertCurrent).not.toThrow();
+    expect(reads).toBe(1);
+    grants[0] = "operator.sessions.read";
+    expect(captured.authority.assertCurrent).toThrow("Your operator role changed");
+  }));
+
 it.each(["capture", "operator tool"])(
   "prepares %s profile authority without parent data SQL",
   (entry) =>

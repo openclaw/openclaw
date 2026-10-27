@@ -69,6 +69,9 @@ const repositoryScriptEntries = [
   "scripts/perf/access-authority-callback-measure.mjs!",
   // Its header documents the sandbox/workspace ownership assertion benchmark.
   "scripts/perf/workspace-assertion-measure.mjs!",
+  // Its header documents the paired workspace reconciliation benchmark.
+  "scripts/perf/workspace-manifest-comparison.ts!",
+  "scripts/perf/state-owner-identity-measure.mjs!",
   // Its header documents the full transcript-pairing repair benchmark.
   "scripts/perf/tool-result-pairing-measure.ts!",
   "scripts/perf/assistant-thinking-measure.ts!",
@@ -139,6 +142,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-row-materialization-measure.ts!",
   "scripts/perf/session-row-lineage-measure.ts!",
   "scripts/perf/tool-result-hash-measure.ts!",
+  "scripts/perf/tool-result-size-measure.ts!",
   "scripts/perf/ws-counter-stress-preload.ts!",
   "scripts/perf/ws-counter-stress.ts!",
   // The source header documents this GitHub reader benchmark's Node command.
@@ -252,6 +256,7 @@ const repositoryScriptEntries = [
   // Cold-load diagnostics invoked directly as documented in their headers.
   "scripts/perf/gateway-main-heap-preload.mjs!",
   "scripts/perf/headless-tools-cold-import.mjs!",
+  "scripts/perf/session-actor-append-measure.ts!",
   // scripts/perf/README.md invokes these measurement commands by path.
   "scripts/perf/cron-delivery-gateway-entry.ts!",
   "scripts/perf/plugin-policy-read-measure.mjs!",
@@ -357,6 +362,7 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-source-demand.mts!",
   "scripts/perf/responses-continuation-measure.mjs!",
   "scripts/perf/responses-continuation.ts!",
+  "scripts/perf/responses-history-conversion.ts!",
   "scripts/perf/schema-validator-cache-measure.ts!",
   "scripts/perf/session-lifecycle-boot.ts!",
   "scripts/perf/shared-skills-measure.ts!",
@@ -390,6 +396,7 @@ const repositoryScriptEntries = [
   "scripts/perf/lease-main-thread-renewal.mjs!",
   "scripts/perf/media-selection-measure.ts!",
   "scripts/perf/model-catalog-runtime-measure.ts!",
+  "scripts/perf/models-list-read-measure.ts!",
   "scripts/perf/model-suppression-resolver.ts!",
   "scripts/perf/node-event-session-source-measure.mjs!",
   "scripts/perf/onboarding-readback-measure.ts!",
@@ -422,6 +429,7 @@ const repositoryScriptEntries = [
   "scripts/perf/tool-result-owned-freeze-measure.ts!",
   "scripts/perf/tool-search-allowlist-measure.ts!",
   "scripts/perf/tools-catalog-copy-measure.ts!",
+  "scripts/perf/session-catalog-entry-snapshot-measure.ts!",
   // Standalone owner benchmark; invocation is documented in its header.
   "scripts/perf/model-tool-projection-measure.ts!",
   "scripts/perf/trajectory-skills-metadata-measure.ts!",
@@ -507,6 +515,7 @@ const repositoryScriptEntries = [
   "scripts/perf/ui-streaming-render-measure.ts!",
   // Maintained source headers invoke these standalone commands by exact path.
   "scripts/perf/archive-worker-startup-measure.mjs!",
+  "scripts/perf/archive-canonical-worker-measure.ts!",
   "scripts/perf/attempt-stream-repair-measure.ts!",
   "scripts/perf/config-health-read-measure.ts!",
   "scripts/perf/context-engine-lifecycle-bench.ts!",
@@ -544,6 +553,7 @@ const repositoryScriptEntries = [
   "scripts/perf/gateway-object-copies-measure.mjs!",
   "scripts/perf/git-buffer-capture-measure.ts!",
   "scripts/perf/guarded-body-stream-measure.ts!",
+  "scripts/perf/first-stream-event-timeout-measure.ts!",
   "scripts/perf/msteams-json-clone-measure.ts!",
   "scripts/perf/plugin-object-copy-measure.ts!",
   "scripts/perf/plugin-recovery-transport-measure.ts!",
@@ -576,10 +586,13 @@ const repositoryScriptEntries = [
   "scripts/perf/compaction-serialization-measure.mjs!",
   "scripts/perf/exec-policy-sort-measure.mjs!",
   "scripts/perf/mcp-acquisition-measure.ts!",
+  "scripts/perf/profile-avatar-retention-measure.ts!",
   "scripts/perf/shell-extract-bench.ts!",
   "scripts/perf/subagent-active-read-measure.ts!",
   "scripts/perf/subagent-descendant-count-measure.ts!",
   "scripts/perf/trusted-snapshot-freeze-measure.mjs!",
+  "scripts/perf/session-skill-snapshot-intern.ts!",
+  "scripts/perf/session-skill-snapshot-intern.preload.mjs!",
   "scripts/perf/git-read-sharing-measure.ts!",
   // Live proof and test owners spawn or preload these children through computed paths.
   "scripts/perf/bench-ingress-bridge.mjs!",
@@ -599,6 +612,7 @@ const repositoryScriptEntries = [
   "scripts/perf/native-allocation-profile.mjs!",
   "scripts/perf/session-initial-context-fixture.ts!",
   "scripts/perf/session-initial-context-measure.ts!",
+  "scripts/perf/session-reload-measure.ts!",
   "scripts/perf/sql-probe-measure.ts!",
   "scripts/perf/workspace-manifest-retention.ts!",
   // Maintained guides and source headers invoke these focused workloads by exact path.

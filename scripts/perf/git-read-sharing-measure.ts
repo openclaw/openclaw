@@ -32,7 +32,7 @@ const hook = registerHooks({
           export const counts = {};
           export async function runGitWorkerOperation({ type, input }) {
             counts[type] = (counts[type] ?? 0) + 1;
-            if (type === "checkout.revision") return "unchanged";
+            if (type === "checkout.revision") return { key: "unchanged" };
             if (type === "pull-request.branch-comparison") {
               return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
             }

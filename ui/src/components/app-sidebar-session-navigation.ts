@@ -56,6 +56,7 @@ import {
   projectSidebarVisibleMainSession,
   resolveLatestSidebarAgentSession,
   resolveSidebarMainSessionKey,
+  restoreSnapshotNavigation,
   type SidebarSessionNavigationState,
 } from "./app-sidebar-session-navigation-logic.ts";
 import type { SessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
@@ -101,7 +102,7 @@ import {
   sidebarRowsInputs,
   type SidebarProjectionHost,
 } from "./sidebar-projection-memo.ts";
-import { restoreSnapshotSections, restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
+import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { mountedViewerSessionKeys } from "./solid/viewer-facepile.tsx";
 
 export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase {
@@ -336,6 +337,12 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   override disconnectedCallback() {
+    // The same host moves between desktop and drawer synchronously.
+    queueMicrotask(() => {
+      if (!this.isConnected) {
+        this.pinnedSessions.dispose();
+      }
+    });
     this.sessionProjection.invalidate();
     this.homeMemos.clear();
     super.disconnectedCallback();
@@ -457,11 +464,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   /** Collapsed zones keep full rows for true header counts and status dots. */
   protected zonedVisibleSections(rows: SidebarRecentSession[]): SidebarVisibleSections {
     if (this.sidebarSnapshot) {
-      const model = this.sidebarSnapshot;
-      return this.sectionsMemo.read(
-        () => [model, this.getRouteSessionKey()],
-        () => restoreSnapshotSections(model, this.getRouteSessionKey()),
-      );
+      return this.readSnapshotNavigation(this.sidebarSnapshot);
     }
     return memoizedSidebarSections(
       this.sectionsMemo,
@@ -472,14 +475,21 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     );
   }
 
-  private readonly cachedZone = new SidebarProjectionMemo<ReturnType<typeof personalSidebarZone>>();
+  private readonly snapshotNavigation = new SidebarProjectionMemo<
+    ReturnType<typeof restoreSnapshotNavigation>
+  >();
+
+  private readSnapshotNavigation(model: SidebarSnapshotModel) {
+    const selectedKey = this.getRouteSessionKey();
+    return this.snapshotNavigation.read(
+      () => [model, selectedKey],
+      () => restoreSnapshotNavigation(model, selectedKey),
+    );
+  }
 
   reconciledSidebarZone(rows?: SidebarRecentSession[]) {
     if (this.sidebarSnapshot) {
-      return this.cachedZone.read(
-        () => [this.sidebarSnapshot, this.getRouteSessionKey()],
-        () => personalSidebarZone(this, []),
-      );
+      return this.readSnapshotNavigation(this.sidebarSnapshot).zone;
     }
     const liveRows = rows ?? this.selectedAgentSessionRows(this.getSessionNavigationState());
     return personalSidebarZone(this, liveRows);
@@ -645,13 +655,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     navigationState: SidebarSessionNavigationState,
   ): SidebarRecentSession[] {
     if (this.sidebarSnapshot) {
-      const model = this.sidebarSnapshot;
-      return this.rowsMemo.read(
-        () => [model, this.getRouteSessionKey()],
-        () => model.sessions.map((row) => restoreSnapshotSession(row, this.getRouteSessionKey())),
-      );
+      return this.readSnapshotNavigation(this.sidebarSnapshot).visibleRows;
     }
-    const rows = this.rowsMemo.read(
+    return this.rowsMemo.read(
       () => [...sidebarRowsInputs(this, navigationState), this.sidebarEntries],
       () => {
         const roster = this.rosterSessionSource;
@@ -668,20 +674,20 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
           compareSessions: createSidebarSessionRowsComparator(this.readSidebarSessionSortOptions),
           resolveAttention: this.resolveSessionAttention,
         });
-        return this.applySessionOwnerFilter(
+        const rows = this.applySessionOwnerFilter(
           projectUnpinnedSessionRows(projected),
           this.selectedAgentSessionResult()?.owners,
         );
+        this.attention.scheduleSessionSnoozeWake(
+          sidebarSessionSnoozeWakeRows(
+            this.sessionData,
+            this.selectedAgentSessionResult(),
+            navigationState,
+          ),
+        );
+        return rows;
       },
     );
-    this.attention.scheduleSessionSnoozeWake(
-      sidebarSessionSnoozeWakeRows(
-        this.sessionData,
-        this.selectedAgentSessionResult(),
-        navigationState,
-      ),
-    );
-    return rows;
   }
 
   private selectedAgentSessionResult(agentId = this.expandedAgentId()): SessionsListResult | null {

@@ -14,11 +14,7 @@ import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionManager } from "../sessions/index.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
-import {
-  calculateMaxToolResultCharsWithCap,
-  resolveAutoLiveToolResultMaxChars,
-  resolveLiveToolResultMaxChars,
-} from "../tool-result-limits.js";
+import { resolveLiveToolResultMaxChars } from "../tool-result-limits.js";
 import { readCacheTtlCheckpoint } from "./cache-ttl-checkpoint.js";
 import * as truncationNotice from "./context-truncation-notice.js";
 import { log } from "./logger.js";
@@ -36,6 +32,8 @@ import {
 import { projectToolResultMessage } from "./tool-result-projection-message.js";
 import {
   estimateToolResultTextChars,
+  getToolResultHistoryTextBudget,
+  getToolResultTextBudget,
   isToolResultTextBlock,
   readPreparedToolResultTextChars,
   sliceToolResultTextTailToBudget,
@@ -459,20 +457,6 @@ export function resolveLiveToolResultAggregateMaxChars(params: {
   );
 }
 
-function getToolResultTextBudget(msg: AgentMessage): number {
-  if (!msg || msg.role !== "toolResult") {
-    return 0;
-  }
-  const content = (msg as { content?: unknown }).content;
-  return Array.isArray(content)
-    ? content.reduce(
-        (total, block) =>
-          total + (isToolResultTextBlock(block) ? estimateToolResultTextChars(block.text) : 0),
-        0,
-      )
-    : 0;
-}
-
 export function truncateToolResultMessage(
   msg: Extract<AgentMessage, { role: "toolResult" }>,
   maxChars: number,
@@ -488,9 +472,7 @@ export function truncateToolResultMessage(
   maxChars: number,
   options: ToolResultTruncationOptions = {},
 ): AgentMessage {
-  const suffixFactory = options.suffix ?? truncationNotice.forMessage(msg);
   const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
-  const minKeepChars = resolveEffectiveMinKeepChars(maxChars, options, suffixFactory);
   const content = (msg as { content?: unknown }).content;
   if (!Array.isArray(content)) {
     return msg;
@@ -506,6 +488,8 @@ export function truncateToolResultMessage(
   if (totalTextChars <= maxChars) {
     return msg;
   }
+  const suffixFactory = options.suffix ?? truncationNotice.forMessage(msg);
+  const minKeepChars = resolveEffectiveMinKeepChars(maxChars, options, suffixFactory);
 
   // A caller's raw-text safety floor changes cost, not which semantic blocks
   // are short. Reserve their actual weighted cost before shrinking larger text.
@@ -695,10 +679,7 @@ function resolveToolResultBudgets(params: {
   const maxChars = Math.max(
     1,
     params.maxCharsOverride ??
-      calculateMaxToolResultCharsWithCap(
-        params.contextWindowTokens,
-        resolveAutoLiveToolResultMaxChars(params.contextWindowTokens),
-      ),
+      resolveLiveToolResultMaxChars({ contextWindowTokens: params.contextWindowTokens }),
   );
   return {
     maxChars,
@@ -908,11 +889,23 @@ function buildToolResultReplacementPlan(params: {
   protectTrailingToolResults?: boolean;
 }) {
   // Plan on message positions; transcript entry IDs belong only to the rewrite boundary.
+  const { textLengths, totalChars, largestChars } = getToolResultHistoryTextBudget(params.messages);
+  if (largestChars <= params.maxChars && totalChars <= params.aggregateBudgetChars) {
+    return {
+      messages: params.messages,
+      changedIndices: new Set<number>(),
+      oversizedReplacementCount: 0,
+      aggregateReplacementCount: 0,
+      aggregatePressureExceeded: false,
+      oversizedReducibleChars: 0,
+      aggregateReducibleChars: 0,
+    };
+  }
   const trailingStart = params.protectTrailingToolResults
     ? params.messages.findLastIndex((message) => message.role === "assistant") + 1
     : params.messages.length;
   const candidates = params.messages.flatMap((message, index) => {
-    const textLength = getToolResultTextBudget(message);
+    const textLength = textLengths[index]!;
     return message.role === "toolResult" && textLength > 0
       ? [{ index, source: message, message, textLength, aggregateTextLength: textLength }]
       : [];

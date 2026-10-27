@@ -16,6 +16,7 @@ import {
   resolveSessionStoreCompatibilityAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "../config/legacy.default-agent-owner.js";
+import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
@@ -23,6 +24,7 @@ import {
 import { isPerAgentSessionStoreConfig } from "../config/sessions/session-store-config.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   DEFAULT_AGENT_ID,
   isIncognitoSessionKey,
@@ -32,6 +34,7 @@ import {
   type ParsedAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
@@ -202,13 +205,53 @@ export function resolveSessionStoreAgentId(
     : resolveLogicalSessionStoreAgentId(cfg, canonicalKey);
 }
 
-/** Preserve raw alias ownership and validate the canonical fixed-store boundary together. */
-export function resolveSessionStoreIdentity(params: {
+type SessionStoreIdentityParams = {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
   preserveQualifiedAddress?: boolean;
-}): { agentId: string; canonicalKey: string } {
+};
+type SessionStoreIdentity = Readonly<{ agentId: string; canonicalKey: string }>;
+const sessionStoreIdentities = new WeakMap<object, Map<string, SessionStoreIdentity>>();
+
+/** Share deterministic routing only; callers still revalidate live sharing authority. */
+export function resolveSessionStoreIdentity(
+  params: SessionStoreIdentityParams,
+): SessionStoreIdentity {
+  const current = runtimeConfigPublication.current;
+  const generation =
+    current?.config === params.cfg
+      ? current.revision
+      : isDeeplyFrozenPlainData(params.cfg)
+        ? params.cfg
+        : undefined;
+  if (!generation) {
+    return deriveSessionStoreIdentity(params);
+  }
+  let identities = sessionStoreIdentities.get(generation);
+  if (!identities) {
+    identities = new Map();
+    sessionStoreIdentities.set(generation, identities);
+  }
+  const key = JSON.stringify([
+    params.sessionKey,
+    params.agentId,
+    params.preserveQualifiedAddress === true,
+  ]);
+  let identity = identities.get(key);
+  if (!identity) {
+    identity = Object.freeze(deriveSessionStoreIdentity(params));
+    identities.set(key, identity);
+    // Bound long-lived publications; retired generations are weakly held.
+    if (identities.size > 16_384) {
+      pruneMapToMaxSize(identities, 16_384);
+    }
+  }
+  return identity;
+}
+
+/** Preserve raw alias ownership and validate the canonical fixed-store boundary together. */
+function deriveSessionStoreIdentity(params: SessionStoreIdentityParams): SessionStoreIdentity {
   const raw = normalizeOptionalString(params.sessionKey) ?? "";
   const requestedAgentId = normalizeOptionalString(params.agentId);
   const normalizedKey = normalizeSessionKeyPreservingOpaquePeerIds(raw);
