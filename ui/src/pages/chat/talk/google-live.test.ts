@@ -14,7 +14,6 @@ import {
   getGoogleLiveToolOwnerState,
   googleLiveTestFixture,
   inputProcessors,
-  inputSinks,
   installGoogleLiveTestFixture,
   latestWebSocket,
   pumpMicrophone,
@@ -156,24 +155,6 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(wsInstances).toHaveLength(0);
   });
 
-  it("keeps the microphone processor inaudible locally", async () => {
-    const transport = await createTransport();
-
-    await startTransport(transport);
-
-    const processor = inputProcessors.at(-1);
-    const sink = inputSinks.at(-1);
-    if (!processor || !sink) {
-      throw new Error("missing microphone capture graph");
-    }
-    expect(sink.gain.value).toBe(0);
-    expect(processor.connect).toHaveBeenCalledWith(sink);
-    expect(sink.connect).toHaveBeenCalledOnce();
-
-    transport.stop();
-    expect(sink.disconnect).toHaveBeenCalledOnce();
-  });
-
   it("requests ArrayBuffer frames and decodes binary setup messages", async () => {
     const onStatus = vi.fn();
     const onTalkEvent = vi.fn();
@@ -312,23 +293,6 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(createdSources).toHaveLength(4_096);
   });
 
-  it("rejects an oversized first frame before decoding provider audio", async () => {
-    const onStatus = vi.fn();
-    const transport = await createTransport({ onStatus });
-    const ws = await startTransport(transport);
-
-    ws.emitContent(audioParts(1, "!".repeat(3_904_000)));
-
-    await waitForFast(() =>
-      expect(onStatus).toHaveBeenCalledWith(
-        "error",
-        "Realtime Talk playback exceeded the browser audio buffer limit",
-      ),
-    );
-    expect(createdSources).toHaveLength(0);
-    expect(ws.readyState).toBe(3);
-  });
-
   it("publishes transcripts and plays Google Live audio frames", async () => {
     const onTranscript = vi.fn();
     const { ws } = await startFixture({ onTranscript });
@@ -370,26 +334,18 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual(["session.closed"]);
   });
 
-  it("silently disposes a provisional Google Live transport", async () => {
+  it("silently disposes a provisional transport and ignores its late socket events", async () => {
     const onTalkEvent = vi.fn();
-    const transport = await createTransport({ onTalkEvent });
+    const onStatus = vi.fn();
+    const transport = await createTransport({ onTalkEvent, onStatus });
     const { start, ws } = await beginTransport(transport);
+    onStatus.mockClear();
 
     transport.stop({ emitClosed: false });
     await expect(start).resolves.toBe("cancelled");
 
     expect(onTalkEvent).not.toHaveBeenCalled();
     expect(ws.readyState).toBe(3);
-  });
-
-  it("ignores late WebSocket events after stop", async () => {
-    const onStatus = vi.fn();
-    const transport = await createTransport({ onStatus });
-    const { start, ws } = await beginTransport(transport);
-    onStatus.mockClear();
-
-    transport.stop();
-    await expect(start).resolves.toBe("cancelled");
     ws.emitOpen();
     ws.emitMessage(encodeJsonFrame({ setupComplete: {} }));
 

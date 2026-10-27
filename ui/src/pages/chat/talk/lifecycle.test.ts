@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { useRealtimeTalkMicrophoneFixture } from "./input.test-support.ts";
 import { createGatewayRelaySession } from "./session.test-support.ts";
@@ -47,23 +47,16 @@ vi.mock("./webrtc.ts", () => ({
 
 import { RealtimeTalkSession } from "./session.ts";
 
-type TranscriptContext = RealtimeTalkTransportContext & {
-  callbacks: {
-    onTranscript?: (entry: { role: "user" | "assistant"; text: string; final: boolean }) => void;
-  };
-  flushTranscriptWrites?: () => Promise<void>;
-};
-
 function createVoiceSession(voiceSessionId: string, clientSecret = "secret") {
   return { provider: "openai", transport: "webrtc" as const, voiceSessionId, clientSecret };
 }
 
-function transcriptContext(contexts: RealtimeTalkTransportContext[], index = 0): TranscriptContext {
+function transcriptContext(contexts: RealtimeTalkTransportContext[], index = 0) {
   const context = contexts[index];
   if (!context) {
     throw new Error("expected realtime transport context");
   }
-  return context as TranscriptContext;
+  return context;
 }
 
 type RequestParams = { voiceSessionId?: string; entryId?: string };
@@ -94,7 +87,11 @@ function calls<T extends [string, ...unknown[]]>(
 ) {
   return request.mock.calls.filter(([name]) => name === method);
 }
-function publish(context: TranscriptContext, text: string, role: "user" | "assistant" = "user") {
+function publish(
+  context: RealtimeTalkTransportContext,
+  text: string,
+  role: "user" | "assistant" = "user",
+) {
   context.callbacks.onTranscript?.({ role, text, final: true });
 }
 function expectCloses(request: ReturnType<typeof voiceRequest>, ids: string[]) {
@@ -107,6 +104,7 @@ function expectCloses(request: ReturnType<typeof voiceRequest>, ids: string[]) {
 useRealtimeTalkMicrophoneFixture();
 
 describe("RealtimeTalkSession lifecycle", () => {
+  afterEach(() => vi.useRealTimers());
   beforeEach(() => {
     transportMock.relayContexts.length = 0;
     transportMock.relayStops.length = 0;
@@ -165,32 +163,28 @@ describe("RealtimeTalkSession lifecycle", () => {
 
   it("retries finalized transcript writes in order", async () => {
     vi.useFakeTimers();
-    try {
-      const transcriptEntryIds: string[] = [];
-      let firstAttempt = true;
-      const request = voiceRequest("voice-queue", transcriptEntryIds, async (method, params) => {
-        if (method === "talk.client.transcript") {
-          if (params?.entryId === "1" && firstAttempt) {
-            firstAttempt = false;
-            throw new Error("temporary failure");
-          }
-          return { ok: true };
+    const transcriptEntryIds: string[] = [];
+    let firstAttempt = true;
+    const request = voiceRequest("voice-queue", transcriptEntryIds, async (method, params) => {
+      if (method === "talk.client.transcript") {
+        if (params?.entryId === "1" && firstAttempt) {
+          firstAttempt = false;
+          throw new Error("temporary failure");
         }
         return { ok: true };
-      });
-      const session = sessionFor(request);
-      await session.start();
-      const context = transcriptContext(transportMock.webRtcContexts);
-      publish(context, "first");
-      publish(context, "second", "assistant");
+      }
+      return { ok: true };
+    });
+    const session = sessionFor(request);
+    await session.start();
+    const context = transcriptContext(transportMock.webRtcContexts);
+    publish(context, "first");
+    publish(context, "second", "assistant");
 
-      await vi.advanceTimersByTimeAsync(500);
-      await vi.waitFor(() => expect(transcriptEntryIds).toEqual(["1", "1", "2"]));
-      void session.stop();
-      await vi.runAllTimersAsync();
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.waitFor(() => expect(transcriptEntryIds).toEqual(["1", "1", "2"]));
+    void session.stop();
+    await vi.runAllTimersAsync();
   });
 
   it("starts fresh transcript ownership when restarting the same browser session", async () => {
@@ -246,42 +240,33 @@ describe("RealtimeTalkSession lifecycle", () => {
     void session.stop();
   });
 
-  it("retires both relays when restart activation throws", async () => {
-    const request = voiceRequest(() => createGatewayRelaySession("openai", "relay-activation"));
-    const session = sessionFor(request);
-    await session.start();
-    transportMock.relayActivate.mockImplementationOnce(() => {
-      throw new Error("activation failed");
-    });
+  it.each([false, true])(
+    "retires both relays after activation throws (stopped=%s)",
+    async (stopped) => {
+      const request = voiceRequest(() => createGatewayRelaySession("openai", "relay-activation"));
+      const session = sessionFor(request);
+      await session.start();
+      transportMock.relayActivate.mockImplementationOnce(() => {
+        if (stopped) {
+          void session.stop();
+        }
+        throw new Error("activation failed");
+      });
 
-    await expect(session.start()).rejects.toThrow("activation failed");
+      await expect(session.start()).rejects.toThrow("activation failed");
 
-    expect(transportMock.relayStops[0]).toHaveBeenCalledOnce();
-    expect(transportMock.relayStops[1]).toHaveBeenCalledOnce();
-    void session.stop();
-    expect(transportMock.relayStops[0]).toHaveBeenCalledOnce();
-  });
-
-  it("does not restore an active relay after activation stops the session", async () => {
-    const request = voiceRequest(() =>
-      createGatewayRelaySession("openai", "relay-activation-stop"),
-    );
-    const session = sessionFor(request);
-    await session.start();
-    transportMock.relayActivate.mockImplementationOnce(() => {
+      expect(transportMock.relayStops[0]).toHaveBeenCalledOnce();
+      if (stopped) {
+        expect(transportMock.relayStops[0]).toHaveBeenCalledWith({ disposition: "detach" });
+      }
+      expect(transportMock.relayStops[1]).toHaveBeenCalledOnce();
       void session.stop();
-      throw new Error("activation stopped");
-    });
-
-    await expect(session.start()).rejects.toThrow("activation stopped");
-
-    expect(transportMock.relayStops[0]).toHaveBeenCalledOnce();
-    expect(transportMock.relayStops[0]).toHaveBeenCalledWith({ disposition: "detach" });
-    expect(transportMock.relayStops[1]).toHaveBeenCalledOnce();
-    void session.stop();
-    expect(transportMock.relayStops[0]).toHaveBeenCalledOnce();
-    expect(transportMock.relayStops[1]).toHaveBeenCalledOnce();
-  });
+      expect(transportMock.relayStops[0]).toHaveBeenCalledOnce();
+      if (stopped) {
+        expect(transportMock.relayStops[1]).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("ignores transcripts from a superseded pending replacement", async () => {
     const firstReplacementStart = createDeferred<"ready">();
@@ -426,56 +411,48 @@ describe("RealtimeTalkSession lifecycle", () => {
   it("surfaces transcript failure after three attempts", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    try {
-      const request = voiceRequest("voice-failure", undefined, async (method) => {
-        if (method === "talk.client.transcript") {
-          throw new Error("still unavailable");
-        }
-        return { ok: true };
-      });
-      const onStatus = vi.fn();
-      const session = sessionFor(request, { onStatus });
-      await session.start();
-      const context = transcriptContext(transportMock.webRtcContexts);
-      publish(context, "save me");
+    onTestFinished(() => warn.mockRestore());
+    const request = voiceRequest("voice-failure", undefined, async (method) => {
+      if (method === "talk.client.transcript") {
+        throw new Error("still unavailable");
+      }
+      return { ok: true };
+    });
+    const onStatus = vi.fn();
+    const session = sessionFor(request, { onStatus });
+    await session.start();
+    const context = transcriptContext(transportMock.webRtcContexts);
+    publish(context, "save me");
 
-      await vi.advanceTimersByTimeAsync(2_500);
-      await vi.waitFor(() =>
-        expect(onStatus).toHaveBeenCalledWith(
-          "error",
-          expect.stringContaining("Voice transcript could not be saved"),
-        ),
-      );
-      expect(calls(request, "talk.client.transcript")).toHaveLength(3);
-      expect(warn).toHaveBeenCalled();
-      void session.stop();
-      await vi.runAllTimersAsync();
-    } finally {
-      warn.mockRestore();
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(2_500);
+    await vi.waitFor(() =>
+      expect(onStatus).toHaveBeenCalledWith(
+        "error",
+        expect.stringContaining("Voice transcript could not be saved"),
+      ),
+    );
+    expect(calls(request, "talk.client.transcript")).toHaveLength(3);
+    expect(warn).toHaveBeenCalled();
+    void session.stop();
+    await vi.runAllTimersAsync();
   });
 
   it("retries logical voice-session close after transient failures", async () => {
     vi.useFakeTimers();
-    try {
-      let closeAttempts = 0;
-      const request = voiceRequest("voice-close-retry", undefined, async (method) => {
-        if (method === "talk.client.close" && ++closeAttempts < 3) {
-          throw new Error("temporary close failure");
-        }
-        return { ok: true };
-      });
-      const session = sessionFor(request);
-      await session.start();
+    let closeAttempts = 0;
+    const request = voiceRequest("voice-close-retry", undefined, async (method) => {
+      if (method === "talk.client.close" && ++closeAttempts < 3) {
+        throw new Error("temporary close failure");
+      }
+      return { ok: true };
+    });
+    const session = sessionFor(request);
+    await session.start();
 
-      void session.stop();
-      await vi.runAllTimersAsync();
+    void session.stop();
+    await vi.runAllTimersAsync();
 
-      expect(closeAttempts).toBe(3);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(closeAttempts).toBe(3);
   });
 
   it("bounds active and draining client voice owners across session objects", async () => {
@@ -533,115 +510,102 @@ describe("RealtimeTalkSession lifecycle", () => {
 
   it("bounds stalled detached owners across browser session keys", async () => {
     vi.useFakeTimers();
-    try {
-      let createCount = 0;
-      const closeSignals: AbortSignal[] = [];
-      const request = vi.fn(
-        async (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
-          if (method === "talk.client.create") {
-            createCount += 1;
-            return createVoiceSession(`voice-${createCount}`);
+    let createCount = 0;
+    const closeSignals: AbortSignal[] = [];
+    const request = vi.fn(
+      async (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
+        if (method === "talk.client.create") {
+          createCount += 1;
+          return createVoiceSession(`voice-${createCount}`);
+        }
+        if (method === "talk.client.close") {
+          const signal = options?.signal;
+          if (!signal) {
+            throw new Error("expected close abort signal");
           }
-          if (method === "talk.client.close") {
-            const signal = options?.signal;
-            if (!signal) {
-              throw new Error("expected close abort signal");
-            }
-            closeSignals.push(signal);
-            await new Promise<void>((_resolve, reject) => {
-              signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-            });
-          }
-          return { ok: true };
-        },
-      );
-      const client = { request } as never;
-      const draining = Array.from(
-        { length: 16 },
-        (_, index) => new RealtimeTalkSession(client, `agent:main:session-${index}`),
-      );
+          closeSignals.push(signal);
+          await new Promise<void>((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          });
+        }
+        return { ok: true };
+      },
+    );
+    const client = { request } as never;
+    const draining = Array.from(
+      { length: 16 },
+      (_, index) => new RealtimeTalkSession(client, `agent:main:session-${index}`),
+    );
 
-      for (const session of draining) {
-        await session.start();
-        void session.stop();
-        await Promise.resolve();
-      }
-      expect(closeSignals).toHaveLength(16);
-
-      const recovered = new RealtimeTalkSession(client, "agent:main:session-recovered");
-      await expect(recovered.start()).rejects.toThrow(
-        "Too many active or closing realtime Talk voice sessions",
-      );
-      expect(createCount).toBe(16);
-
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(closeSignals.every((signal) => !signal.aborted)).toBe(true);
-      await expect(recovered.start()).rejects.toThrow(
-        "Too many active or closing realtime Talk voice sessions",
-      );
-
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(closeSignals.every((signal) => signal.aborted)).toBe(true);
-
-      await recovered.start();
-      expect(createCount).toBe(17);
-      void recovered.stop();
-      await vi.advanceTimersByTimeAsync(60_000);
-    } finally {
-      vi.useRealTimers();
+    for (const session of draining) {
+      await session.start();
+      void session.stop();
+      await Promise.resolve();
     }
+    expect(closeSignals).toHaveLength(16);
+
+    const recovered = new RealtimeTalkSession(client, "agent:main:session-recovered");
+    await expect(recovered.start()).rejects.toThrow(
+      "Too many active or closing realtime Talk voice sessions",
+    );
+    expect(createCount).toBe(16);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(closeSignals.every((signal) => !signal.aborted)).toBe(true);
+    await expect(recovered.start()).rejects.toThrow(
+      "Too many active or closing realtime Talk voice sessions",
+    );
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(closeSignals.every((signal) => signal.aborted)).toBe(true);
+
+    await recovered.start();
+    expect(createCount).toBe(17);
+    void recovered.stop();
+    await vi.advanceTimersByTimeAsync(60_000);
   });
 
   it("releases bounded startup owners after request deadlines", async () => {
     vi.useFakeTimers();
     let failCreate = true;
-    try {
-      const requestsStarted = createDeferred();
-      let pendingCreates = 0;
-      const request = vi.fn(
-        async (method: string, _params?: unknown, options?: { timeoutMs?: number }) => {
-          if (method !== "talk.client.create") {
-            return { ok: true };
-          }
-          if (!failCreate) {
-            return createVoiceSession("voice-recovered");
-          }
-          await new Promise<void>((_resolve, reject) => {
-            setTimeout(() => reject(new Error("request timeout")), options?.timeoutMs);
-            if (++pendingCreates === 2) {
-              requestsStarted.resolve();
-            }
-          });
+    const requestsStarted = createDeferred();
+    let pendingCreates = 0;
+    const request = vi.fn(
+      async (method: string, _params?: unknown, options?: { timeoutMs?: number }) => {
+        if (method !== "talk.client.create") {
           return { ok: true };
-        },
-      );
-      const client = { request } as never;
-      const first = new RealtimeTalkSession(client, "agent:main:main", {}, { transport: "webrtc" });
-      const second = new RealtimeTalkSession(
-        client,
-        "agent:main:main",
-        {},
-        { transport: "webrtc" },
-      );
-      const third = new RealtimeTalkSession(client, "agent:main:main", {}, { transport: "webrtc" });
+        }
+        if (!failCreate) {
+          return createVoiceSession("voice-recovered");
+        }
+        await new Promise<void>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("request timeout")), options?.timeoutMs);
+          if (++pendingCreates === 2) {
+            requestsStarted.resolve();
+          }
+        });
+        return { ok: true };
+      },
+    );
+    const client = { request } as never;
+    const first = new RealtimeTalkSession(client, "agent:main:main", {}, { transport: "webrtc" });
+    const second = new RealtimeTalkSession(client, "agent:main:main", {}, { transport: "webrtc" });
+    const third = new RealtimeTalkSession(client, "agent:main:main", {}, { transport: "webrtc" });
 
-      const startsSettled = Promise.allSettled([first.start(), second.start()]);
-      await requestsStarted.promise;
-      await expect(third.start()).rejects.toThrow(
-        "Too many active or closing realtime Talk voice sessions",
-      );
-      expect(calls(request, "talk.client.create")).toHaveLength(2);
+    const startsSettled = Promise.allSettled([first.start(), second.start()]);
+    await requestsStarted.promise;
+    await expect(third.start()).rejects.toThrow(
+      "Too many active or closing realtime Talk voice sessions",
+    );
+    expect(calls(request, "talk.client.create")).toHaveLength(2);
 
-      await vi.advanceTimersByTimeAsync(30_000);
-      const settled = await startsSettled;
-      expect(settled.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    const settled = await startsSettled;
+    expect(settled.map((result) => result.status)).toEqual(["rejected", "rejected"]);
 
-      failCreate = false;
-      await third.start();
-      void third.stop();
-    } finally {
-      vi.useRealTimers();
-    }
+    failCreate = false;
+    await third.start();
+    void third.stop();
   });
 
   it("drops a previous transport's delayed transcript and close event after stop and restart", async () => {
