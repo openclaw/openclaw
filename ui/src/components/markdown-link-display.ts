@@ -1,7 +1,64 @@
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
 import type { ChatLinkDisplay, ChatRowDisplay } from "../lib/chat/row-display-facts.ts";
 import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
-import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
+
+export type SessionTitleDisplay = {
+  title?: string;
+  onTitle: (title: string | undefined) => void;
+};
+
+/** An absent title prepares the link while leaving its producer-owned label intact. */
+export function stampSessionTitleLabel(
+  element: HTMLElement,
+  label: HTMLElement,
+  title?: string,
+): HTMLElement {
+  let anchor = element;
+  if (
+    !(element instanceof HTMLAnchorElement) &&
+    !element.hasAttribute("data-session-title-only") &&
+    (element.classList.contains("markdown-session-link") ||
+      (title && element.hasAttribute("data-session-href")))
+  ) {
+    anchor = document.createElement("a");
+    for (const name of ["data-session-href", "data-session-key"]) {
+      const value = element.getAttribute(name);
+      if (value) {
+        anchor.setAttribute(name, value);
+      }
+    }
+    anchor.setAttribute("href", element.getAttribute("href") ?? element.dataset.sessionHref ?? "");
+    anchor.className = "markdown-session-link";
+    element.classList.remove("markdown-session-link");
+    element.removeAttribute("href");
+    element.removeAttribute("data-session-href");
+    element.replaceWith(anchor);
+    anchor.append(element);
+  }
+  if (title) {
+    if (!anchor.classList.contains("markdown-session-link--titled")) {
+      anchor.classList.add("markdown-session-link--titled");
+    }
+    if (label.className !== "session-label") {
+      label.className = "session-label";
+    }
+    if (label.textContent !== title) {
+      label.textContent = title;
+    }
+    if (anchor.firstChild !== label || anchor.childNodes.length !== 1) {
+      anchor.replaceChildren(label);
+    }
+  }
+  return anchor;
+}
+
+// Producers can mount before the app's lazy hovercard bootstrap has loaded.
+const { promise: registrar, resolve: installSessionTitleRegistrar } =
+  Promise.withResolvers<
+    (target: HTMLElement, label: HTMLElement, display?: SessionTitleDisplay) => () => void
+  >();
+
+export { installSessionTitleRegistrar };
 
 export const MARKDOWN_LINK_DISPLAY_TARGET_SELECTOR = `${SESSION_TITLE_TARGET_SELECTOR}, a.markdown-github-item`;
 
@@ -27,12 +84,12 @@ function linkDisplayKey(target: HTMLElement): string | undefined {
     : undefined;
 }
 
-export function registerMarkdownLinkDisplay(
+export function registerSessionTitleTarget(
   target: HTMLElement,
   label: HTMLElement,
-  display: ChatRowDisplay | undefined,
+  display?: ChatRowDisplay,
 ): () => void {
-  const key = linkDisplayKey(target);
+  const key = display && linkDisplayKey(target);
   const read = () => (key ? display?.read()?.facts?.links?.[key] : undefined);
   const write = (value: ChatLinkDisplay) => {
     const previous = read();
@@ -56,17 +113,31 @@ export function registerMarkdownLinkDisplay(
       display?.write({ links });
     }
   };
-  if (!target.classList.contains("markdown-github-item")) {
-    return registerSessionTitleTarget(target, label, {
-      title: read()?.title,
-      onTitle: (title) => write({ ...read(), title }),
-    });
+  if (target.classList.contains("markdown-github-item")) {
+    if (display && key) {
+      linkReaderDisplays.set(target, { read, write });
+      updateLinkReaderDisplay(target);
+    }
+    return () => linkReaderDisplays.delete(target);
   }
-  if (display && key) {
-    linkReaderDisplays.set(target, { read, write });
-    updateLinkReaderDisplay(target);
-  }
-  return () => linkReaderDisplays.delete(target);
+  const title = read()?.title;
+  const registeredTarget = title ? stampSessionTitleLabel(target, label, title) : target;
+  let active = true;
+  let release: (() => void) | undefined;
+  void registrar.then((register) => {
+    if (active) {
+      release = display
+        ? register(registeredTarget, label, {
+            title,
+            onTitle: (title) => write({ ...read(), title }),
+          })
+        : register(registeredTarget, label);
+    }
+  });
+  return () => {
+    active = false;
+    release?.();
+  };
 }
 
 /** The existing reader owns fresh metadata; this binding records only its inline display. */

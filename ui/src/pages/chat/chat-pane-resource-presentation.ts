@@ -14,32 +14,9 @@ import {
   readChatSessionSnapshot,
 } from "./session-message-cache.ts";
 
-type ResourceProps = Pick<
-  ChatProps,
-  | "mediaPolicyEpoch"
-  | "mediaReadAllowed"
-  | "connectionEpoch"
-  | "embedSandboxMode"
-  | "allowExternalEmbedUrls"
-  | "fetchLinkFavicon"
-  | "assistantAttachmentAuthToken"
-  | "resolveArtifactDownload"
-  | "basePath"
-  | "sessionPublicOrigin"
-  | "resourceBasePath"
-  | "fullMessageAgentId"
-  | "widgetLayout"
-  | "displayFacts"
-  | "assistantName"
-  | "assistantAvatar"
-  | "assistantAvatarUrl"
-  | "assistantAvatarSource"
-  | "senderAgentAvatars"
->;
-
 export function createChatPaneResourceProps() {
   const widgetLayout = createChatWidgetLayout();
-  return (state: ChatPageHost, context: ApplicationContext): ResourceProps => {
+  return (state: ChatPageHost, context: ApplicationContext) => {
     const mediaReadAllowed = state.connected && !state.isRouteSessionPending?.();
     const target = {
       sessionKey: state.sessionKey,
@@ -72,6 +49,6 @@ export function createChatPaneResourceProps() {
       basePath: state.basePath,
       sessionPublicOrigin: markdownSessionPublicOrigin(context),
       resourceBasePath: state.resourceBasePath,
-    };
+    } satisfies Partial<ChatProps>;
   };
 }

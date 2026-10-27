@@ -10,6 +10,7 @@ import {
   requestResult,
   transactionComplete as transactionDone,
 } from "../../lib/chat/control-ui-database.runtime.ts";
+import { chatThumbnailWeight } from "../../lib/chat/row-display-facts.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
@@ -21,7 +22,6 @@ import {
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
-import { chatThumbnailWeight } from "./session-message-display-facts.ts";
 import {
   CHAT_SNAPSHOT_METADATA_STORE_NAME as METADATA,
   CHAT_SNAPSHOT_STORE_NAME as SNAPSHOTS,
@@ -102,7 +102,7 @@ async function persist(store: SessionSnapshotStore, cacheKey: string, value: Cha
   writeSnapshotFixture(store, cacheKey, value);
   await store.flush();
 }
-const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion = 6) => ({
+const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion = 7) => ({
   projectionVersion,
   sessionKey: cacheKey,
   savedAt: 1,

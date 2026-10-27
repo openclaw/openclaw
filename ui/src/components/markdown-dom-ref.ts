@@ -4,9 +4,8 @@ import type { MarkdownContent } from "../lib/markdown-content.ts";
 import { MarkdownDomReconciler, type MarkdownDomMedia } from "../lib/markdown-dom-reconciler.ts";
 import {
   MARKDOWN_LINK_DISPLAY_TARGET_SELECTOR,
-  registerMarkdownLinkDisplay,
+  registerSessionTitleTarget,
 } from "./markdown-link-display.ts";
-import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
 
 export type MarkdownContentValue =
   | MarkdownContent
@@ -113,7 +112,7 @@ export function createMarkdownRef(
     current = new MarkdownDomReconciler(
       element,
       display
-        ? (target, label) => registerMarkdownLinkDisplay(target, label, display())
+        ? (target, label) => registerSessionTitleTarget(target, label, display())
         : registerSessionTitleTarget,
       display ? MARKDOWN_LINK_DISPLAY_TARGET_SELECTOR : undefined,
     );

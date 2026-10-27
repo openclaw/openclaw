@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
+import { Blob as NodeBlob } from "node:buffer";
 import { Show, createSignal } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatRowDisplayFacts } from "../../../lib/chat/row-display-facts.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { MessageImageAction } from "./chat-message-images-view.tsx";
+import { MessageImageAction } from "./chat-message-images-solid.tsx";
 import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import {
   imageResponse,
@@ -14,6 +15,8 @@ import {
   ticketResponse,
 } from "./chat-message-media.test-helpers.ts";
 import { ChatRowDisplayContext } from "./chat-row-display-context.ts";
+
+beforeEach(() => vi.stubGlobal("Blob", NodeBlob));
 
 afterEach(() => {
   vi.unstubAllGlobals();

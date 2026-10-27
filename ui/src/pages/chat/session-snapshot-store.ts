@@ -1,6 +1,11 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
-import { MAX_CHAT_THUMBNAILS, MAX_CHAT_THUMBNAIL_BYTES } from "../../lib/chat/row-display-facts.ts";
+import {
+  MAX_CHAT_THUMBNAILS,
+  MAX_CHAT_THUMBNAIL_BYTES,
+  boundChatThumbnails,
+  chatThumbnailWeight,
+} from "../../lib/chat/row-display-facts.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import * as json from "../../lib/snapshot-json.ts";
 import {
@@ -15,7 +20,6 @@ import {
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
-import { boundChatThumbnails, chatThumbnailWeight } from "./session-message-display-facts.ts";
 import {
   accessSidebarSnapshot,
   sidebarRecordBytes,
@@ -41,56 +45,28 @@ import { deleteStoredChatSnapshot } from "./session-snapshot-invalidation.ts";
 import {
   consumePrewarmedChatSnapshot,
   discardPrewarmedChatSnapshot,
-  loadChatHistoryStateValidator,
   peekPrewarmedChatSnapshot,
-  prewarmedHistoryStateValidator,
   readSharedPrewarm,
 } from "./session-snapshot-prewarm.ts";
 import {
   CHAT_SNAPSHOT_PROJECTION_VERSION,
   createSnapshotRecord,
-} from "./session-snapshot-projection.ts";
-import {
-  metadataSchema,
+  metadataRecordsSchema,
+  parseSnapshotRecord,
   recordSchema,
   type PreparedSnapshotRecord,
   type SessionSnapshotMetadata,
-  type SessionSnapshotRecord,
 } from "./session-snapshot-record.ts";
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 const CHAT_SNAPSHOT_IDLE_TIMEOUT_MS = 1000;
 
-type PendingSessionState = {
-  savedAt: number;
-  snapshot: ChatSessionSnapshot;
-  weight: number;
-};
+type PendingSessionState = Parameters<typeof createSnapshotRecord>[1] & { weight: number };
 type SnapshotReadScope = {
   isCurrent: () => boolean;
   dispose: () => void;
 };
 
 const activeStores = new Set<SessionSnapshotStore>();
-
-async function parseSnapshotRecord(
-  value: unknown,
-  sessionKey?: string,
-): Promise<SessionSnapshotRecord | null> {
-  const parsed = json.parseSnapshot(recordSchema, value);
-  if (!parsed || (sessionKey && parsed.sessionKey !== sessionKey)) {
-    return null;
-  }
-  const historyState = parsed.snapshot.historyState;
-  if (historyState !== undefined) {
-    // A repeated dynamic import can yield past dispatch even after prewarm evaluated it.
-    const isChatHistoryState =
-      prewarmedHistoryStateValidator ?? (await loadChatHistoryStateValidator());
-    if (!isChatHistoryState(historyState)) {
-      return null;
-    }
-  }
-  return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
-}
 
 async function readSnapshotRecord(
   sessionKey: string,
@@ -141,15 +117,10 @@ async function readSnapshotMetadata(): Promise<SessionSnapshotMetadata[] | null>
       transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).getAll(),
     );
     await transactionComplete(transaction);
-    const records: SessionSnapshotMetadata[] = [];
-    for (const value of values) {
-      const record = json.parseSnapshot(metadataSchema, value);
-      if (!record) {
-        debugSnapshotStore("resetting cache after metadata shape mismatch");
-        await resetSessionSnapshotDatabase(database);
-        return null;
-      }
-      records.push(record);
+    const records = json.parseSnapshot(metadataRecordsSchema, values);
+    if (!records) {
+      debugSnapshotStore("resetting cache after metadata shape mismatch");
+      await resetSessionSnapshotDatabase(database);
     }
     return records;
   } catch (error) {
@@ -183,15 +154,12 @@ async function writeSnapshotRecords(
     const snapshotStore = transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME);
     const metadataStore = transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME);
     const currentValues = await requestResult(metadataStore.getAll());
-    const next = new Map<string, SessionSnapshotMetadata>();
-    for (const value of currentValues) {
-      const metadata = json.parseSnapshot(metadataSchema, value);
-      if (!metadata) {
-        transaction.abort();
-        throw new Error("IndexedDB metadata shape mismatch");
-      }
-      next.set(metadata.sessionKey, metadata);
+    const current = json.parseSnapshot(metadataRecordsSchema, currentValues);
+    if (!current) {
+      transaction.abort();
+      throw new Error("IndexedDB metadata shape mismatch");
     }
+    const next = new Map(current.map((metadata) => [metadata.sessionKey, metadata]));
     for (const { record, metadata } of records) {
       next.set(record.sessionKey, metadata);
       snapshotStore.put(record);
@@ -404,9 +372,8 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     }
   }
 
-  async loadSavedAtIndex(): Promise<void> {
-    this.savedAtSeed ??= this.seedSavedAtIndex();
-    await this.savedAtSeed;
+  loadSavedAtIndex(): Promise<void> {
+    return (this.savedAtSeed ??= this.seedSavedAtIndex());
   }
 
   readSavedAt(sessionKey: string): number | null {
@@ -495,7 +462,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
           );
           const evicted = await writeSnapshotRecords(currentRecords, generation);
           if (evicted === null) {
-            this.resetSavedAtIndex();
+            this.savedAtBySession.clear();
             return;
           }
           for (const { metadata } of currentRecords) {
@@ -585,7 +552,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   private async seedSavedAtIndex(): Promise<void> {
     const records = await readSnapshotMetadata();
     if (!records) {
-      this.resetSavedAtIndex();
+      this.savedAtBySession.clear();
       return;
     }
     // This index only avoids redundant prefetches; concurrent eviction may leave it stale.
@@ -593,10 +560,6 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       const current = this.savedAtBySession.get(record.sessionKey) ?? 0;
       this.savedAtBySession.set(record.sessionKey, Math.max(current, record.savedAt));
     }
-  }
-
-  private resetSavedAtIndex(): void {
-    this.savedAtBySession.clear();
   }
 }
 
