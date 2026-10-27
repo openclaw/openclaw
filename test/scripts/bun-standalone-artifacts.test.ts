@@ -47,11 +47,16 @@ function fingerprint(record) { fallbacks++; return JSON.stringify([${JSON.string
     );
     const contents = typed ? source : stripTypeScriptTypes(source);
     const ast = parse(contents, { ecmaVersion: "latest", sourceType: "module" });
-    const declaration = ast.body.find(
-      (node) =>
-        node.type === "ExportNamedDeclaration" &&
-        node.declaration?.id?.name === "captureBundledPluginStateOperationModules",
-    )!.declaration;
+    const [declaration] = ast.body.flatMap((node) =>
+      node.type === "ExportNamedDeclaration" &&
+      node.declaration?.type === "FunctionDeclaration" &&
+      node.declaration.id?.name === "captureBundledPluginStateOperationModules"
+        ? [node.declaration]
+        : [],
+    );
+    if (!declaration || declaration.start == null || declaration.end == null) {
+      throw new Error("Bundled operation capture declaration is missing");
+    }
     const adapted = transform(contents.slice(declaration.start, declaration.end));
     expect(adapted.count).toBe(1);
     const captured: unknown[][] = [];
