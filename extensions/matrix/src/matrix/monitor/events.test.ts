@@ -365,36 +365,25 @@ describe("registerMatrixMonitorEvents verification routing", () => {
         promotable: shouldPromoteRecentInviteRoom({ roomId, roomInfo: info }),
       };
     };
-    const publishName = (roomId: string, name: string) =>
-      roomEventListener(roomId, {
-        event_id: `$name-${roomId}-${name}`,
-        type: "m.room.name",
-        state_key: "",
-        content: { name },
+    const expectOriginalClassification = async () => {
+      await expect(promotionView("!named:example.org")).resolves.toEqual({
+        name: "Room Alpha",
+        promotable: false,
       });
-
-    await expect(promotionView("!named:example.org")).resolves.toEqual({
-      name: "Room Alpha",
-      promotable: false,
-    });
-    await expect(promotionView("!unnamed:example.org")).resolves.toEqual({
-      name: undefined,
-      promotable: true,
-    });
-
-    roomNameByRoom.set("!named:example.org", "");
-    publishName("!named:example.org", "");
-    roomNameByRoom.set("!unnamed:example.org", "Room Bravo");
-    publishName("!unnamed:example.org", "Room Bravo");
-
-    await expect(promotionView("!named:example.org")).resolves.toEqual({
-      name: "Room Alpha",
-      promotable: false,
-    });
-    await expect(promotionView("!unnamed:example.org")).resolves.toEqual({
-      name: undefined,
-      promotable: true,
-    });
+      await expect(promotionView("!unnamed:example.org")).resolves.toEqual({
+        name: undefined,
+        promotable: true,
+      });
+    };
+    await expectOriginalClassification();
+    for (const [room, name] of [
+      ["!named:example.org", ""],
+      ["!unnamed:example.org", "Room Bravo"],
+    ]) {
+      roomNameByRoom.set(room, name);
+      roomEventListener(room, nameEvent(name));
+    }
+    await expectOriginalClassification();
   });
 
   it.each([BOT, ALICE])("tracks invite provenance from %s", (sender) => {

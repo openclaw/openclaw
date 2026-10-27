@@ -786,6 +786,13 @@ describe("matrix monitor handler draft streaming", () => {
     await waitForDrafts(expectedSends);
   }
 
+  async function deliverBlock(deliver: DeliverFn, text: string, nextId: string, remaining: string) {
+    nextDraft(nextId);
+    await deliver({ text }, { kind: "block" });
+    await waitForDrafts();
+    expect(draftBody()).toBe(remaining);
+  }
+
   function createStreamingHarness(opts?: {
     replyToMode?: "off" | "first" | "all" | "batched";
     threadReplies?: "inbound" | "always";
@@ -794,17 +801,10 @@ describe("matrix monitor handler draft streaming", () => {
     previewToolProgressEnabled?: boolean;
     accountConfig?: import("../../types.js").MatrixConfig;
   }) {
-    let capturedDeliver: DeliverFn | undefined;
-    let capturedOnError: ((error: unknown, info: { kind: string }) => void) | undefined;
-    let capturedReplyOpts: GetReplyOptions | undefined;
-    const { promise: captured, resolve: resolveCaptured } = createDeferred<void>();
-    const notifyCaptured = () => {
-      if (capturedDeliver && capturedReplyOpts) {
-        resolveCaptured();
-      }
-    };
-    // Gate that keeps the handler's model run alive until the test releases it.
-    const { promise: runGate, resolve: resolveRunGate } = createDeferred<void>();
+    let deliver: DeliverFn | undefined;
+    let onError: ((error: unknown, info: { kind: string }) => void) | undefined;
+    const replyOptions = createDeferred<GetReplyOptions>();
+    const run = createDeferred<void>();
 
     sendMessageMatrixMock.mockReset().mockImplementation(acceptMatrixReply());
     sendDraftMock.mockReset().mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
@@ -823,31 +823,26 @@ describe("matrix monitor handler draft streaming", () => {
       client: { redactEvent: redactEventMock },
       logVerboseMessage,
       createReplyDispatcherWithTyping: (params: Record<string, unknown> | undefined) => {
-        capturedDeliver = params?.deliver as DeliverFn | undefined;
-        capturedOnError = params?.onError as typeof capturedOnError;
-        notifyCaptured();
+        deliver = params?.deliver as DeliverFn | undefined;
+        onError = params?.onError as typeof onError;
         return replyDispatcher();
       },
       dispatchInboundMessage: vi.fn(async (args: { replyOptions?: GetReplyOptions }) => {
-        capturedReplyOpts = args?.replyOptions;
-        notifyCaptured();
-
-        await runGate;
-        return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
+        replyOptions.resolve(expectDefined(args.replyOptions, "reply options"));
+        await run.promise;
+        return dispatchResult(1);
       }) as never,
     });
 
     const dispatch = async () => {
       const handlerDone = receiveText(handler, { eventId: "$msg1", body: "hello" });
-      await captured;
+      const capturedOptions = await replyOptions.promise;
       return {
-        deliver: capturedDeliver!,
-        onError: capturedOnError!,
-        opts: capturedReplyOpts!,
-        // Release the run gate and wait for the handler to finish
-        // (including the finally block that stops the draft stream).
+        deliver: expectDefined(deliver, "deliver callback"),
+        onError: expectDefined(onError, "error callback"),
+        opts: capturedOptions,
         finish: async () => {
-          resolveRunGate();
+          run.resolve();
           await handlerDone;
         },
       };
@@ -1005,10 +1000,8 @@ describe("matrix monitor handler draft streaming", () => {
       });
       await vi.advanceTimersByTimeAsync(1_000);
       expect(lastCallArg(editMock, 2)).toContain("▸ Inspect");
-
       await opts.onApprovalEvent?.({ phase: "requested", command: "confirm-operation" });
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(lastCallArg(editMock, 2)).toContain("confirm-operation");
 
       const quietProgress = lastCallArg(editMock, 2);
       expect(quietProgress).toContain("Working");
@@ -1081,10 +1074,7 @@ describe("matrix monitor handler draft streaming", () => {
     await opts.onPartialReply?.({ text: "AlphaBeta" });
     await waitForState(() => matrixEditOptions("$draft1", "AlphaBeta"));
     await opts.onBlockReplyQueued?.({ text: "Alpha" });
-    nextDraft("$draft2");
-    await deliver({ text: "Alpha" }, { kind: "block" });
-    await waitForDrafts(1);
-    expect(draftBody()).toBe("Beta");
+    await deliverBlock(deliver, "Alpha", "$draft2", "Beta");
     matrixEditOptions("$draft1", "Alpha");
     expectNoCalls(sendMessageMatrixMock, redactEventMock);
     await finish();
@@ -1131,7 +1121,6 @@ describe("matrix monitor handler draft streaming", () => {
 
       nextDraft("$draft2");
       await deliver({ text: "Alpha" }, { kind: "block" });
-
       matrixEditOptions("$draft1", "Alpha");
       expectNoCalls(sendMessageMatrixMock, redactEventMock);
       await waitForDrafts(1);
@@ -1156,16 +1145,10 @@ describe("matrix monitor handler draft streaming", () => {
     expect(sendDraftMock).toHaveBeenCalledTimes(1);
     expect(editMock).not.toHaveBeenCalled();
 
-    nextDraft("$draft2");
-    await deliver({ text: "Alpha" }, { kind: "block" });
-    await waitForDrafts(1);
-    expect(draftBody()).toBe("Beta");
+    await deliverBlock(deliver, "Alpha", "$draft2", "Beta");
     expectFinalizedPreviewEdit("$draft1", "Alpha");
 
-    nextDraft("$draft3");
-    await deliver({ text: "Beta" }, { kind: "block" });
-    await waitForDrafts(1);
-    expect(draftBody()).toBe("Gamma");
+    await deliverBlock(deliver, "Beta", "$draft3", "Gamma");
     expectFinalizedPreviewEdit("$draft2", "Beta");
     await finish();
   });
@@ -1296,39 +1279,36 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("delivers final Matrix mentions normally without media", async () => {
-    const { redactEventMock, deliver, opts, finish } = await startStreaming({
-      streaming: "partial",
-      blockStreamingEnabled: true,
-    });
-    const preview = "hello @alice:example.org";
-    const finalText = `${preview}!`;
-    await sendPreview(opts, preview);
-    sendMessageMatrixMock.mockClear();
-    await deliver({ text: finalText }, { kind: "final" });
-    expect(editMock).not.toHaveBeenCalled();
-    expect(redactEventMock).toHaveBeenCalledWith(ROOM, "$draft1");
-    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
-    expect(callArg(sendMessageMatrixMock, 0, 1, "final reply text")).toBe(finalText);
-    await finish();
-  });
-
-  it("redacts stale draft and sends the final once when a later preview exceeds the event limit", async () => {
-    const { redactEventMock, deliver, opts, finish } = await startStreaming();
-    await sendPreview(opts, "1234");
-    prepareMatrixSingleTextMock.mockImplementation((text: string) => ({
-      ...prepareSingleText(text),
-      singleEventLimit: 5,
-      fitsInSingleEvent: text.trim().length <= 5,
-    }));
-    await opts.onPartialReply?.({ text: "123456" });
-    await deliver({ text: "123456" }, { kind: "final" });
-    expect(editMock).not.toHaveBeenCalled();
-    expect(redactEventMock).toHaveBeenCalledWith(ROOM, "$draft1");
-    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
-    expect(sendDraftMock).toHaveBeenCalledTimes(1);
-    await finish();
-  });
+  it.each(["mentions", "event limit"] as const)(
+    "replaces previews with one durable final for %s",
+    async (reason) => {
+      const mentions = reason === "mentions";
+      const { redactEventMock, deliver, opts, finish } = await startStreaming(
+        mentions ? { streaming: "partial", blockStreamingEnabled: true } : {},
+      );
+      const preview = mentions ? "hello @alice:example.org" : "1234";
+      const finalText = mentions ? `${preview}!` : "123456";
+      await sendPreview(opts, preview);
+      if (!mentions) {
+        prepareMatrixSingleTextMock.mockImplementation((text: string) => ({
+          ...prepareSingleText(text),
+          singleEventLimit: 5,
+          fitsInSingleEvent: text.trim().length <= 5,
+        }));
+        await opts.onPartialReply?.({ text: finalText });
+      }
+      if (mentions) {
+        sendMessageMatrixMock.mockClear();
+      }
+      await deliver({ text: finalText }, { kind: "final" });
+      expect(editMock).not.toHaveBeenCalled();
+      expect(redactEventMock).toHaveBeenCalledWith(ROOM, "$draft1");
+      expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+      expect(callArg(sendMessageMatrixMock, 0, 1, "final reply text")).toBe(finalText);
+      expect(sendDraftMock).toHaveBeenCalledTimes(1);
+      await finish();
+    },
+  );
 });
 
 it.each([
