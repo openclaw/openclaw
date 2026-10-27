@@ -179,13 +179,26 @@ describe("parseSlashCommand", () => {
   });
 
   it.each([false, undefined])(
-    "keeps skills with visibility %j in slash commands but out of $ completions",
+    "keeps skills with visibility %j in slash commands, the $ picker, and inline completions",
     (skillModelVisible) => {
-      applyRemoteEntries(remoteCommand("hidden_skill", { source: "skill", skillModelVisible }));
-      expectParsedSlash("/hidden_skill", { name: "hidden_skill" }, "");
-      expect(getSkillCommandCompletions("hidden")).toEqual([]);
+      applyRemoteEntries(remoteCommand("manual_skill", { source: "skill", skillModelVisible }));
+      expectParsedSlash("/manual_skill", { name: "manual_skill" }, "");
+      expect(getSkillCommandCompletions("manual").map((command) => command.name)).toEqual([
+        "manual_skill",
+      ]);
+      expect(completionNames("manual", { inlineOnly: true })).toEqual(["manual_skill"]);
     },
   );
+
+  it("keeps the reported model visibility on the skill entry the picker reads", () => {
+    applyRemoteEntries(
+      remoteCommand("manual_skill", { source: "skill", skillModelVisible: false }),
+    );
+    expectObjectFields(
+      SLASH_COMMANDS.find((entry) => entry.name === "manual_skill"),
+      { skillModelVisible: false },
+    );
+  });
 
   it("does not let remote commands collide with reserved local commands", () => {
     applyRemoteEntries(remoteCommand("redirect"));

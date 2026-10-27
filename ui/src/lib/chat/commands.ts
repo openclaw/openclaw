@@ -360,7 +360,7 @@ export function getSlashCommandCompletions(
   let commands = options?.inlineOnly
     ? SLASH_COMMANDS.filter(
         (command) =>
-          (command.source === "skill" && command.skillModelVisible === true) ||
+          command.source === "skill" ||
           (executesInlineImmediately(command) && options.allowImmediateInlineCommands !== false),
       )
     : SLASH_COMMANDS;
@@ -428,9 +428,10 @@ export function getSkillDisplayName(command: SlashCommandDef): string {
 export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
   const lower = normalizeLowercaseStringOrEmpty(filter);
   const normalized = lower.replace(/[\s_]+/gu, "-");
-  return SLASH_COMMANDS.filter(
-    (command) => command.source === "skill" && command.skillModelVisible === true,
-  )
+  // commands.list already drops skills that are not user-invocable, so the
+  // picker lists every skill it receives; skillModelVisible only guards the
+  // model's own selection and must not hide entries from the person typing.
+  return SLASH_COMMANDS.filter((command) => command.source === "skill")
     .filter((command) => {
       const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command));
       const displayLookup = displayName.replace(/[\s_]+/gu, "-");

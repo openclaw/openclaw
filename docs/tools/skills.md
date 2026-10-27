@@ -306,10 +306,11 @@ as `$HOME`, `$PATH`, and `$EDITOR` remain ordinary text; use lowercase `$home`,
 `$path`, or `$editor` to reference skills with those names. Escape a reference
 as `\$name` when it should stay literal.
 
-Skills with `disable-model-invocation: true` stay out of the `$` picker and the
-model's normal prompt, so the model cannot select them on its own. An authorized
-explicit `$skill-name` reference still invokes them; the flag only hides the
-skill from model-initiated selection.
+Skills with `disable-model-invocation: true` stay out of the model's normal
+prompt, so the model cannot select them on its own. The `$` picker and the
+inline `/` suggestions are typed by a person, so they still list every
+user-invocable skill; an authorized explicit `$skill-name` reference still
+invokes them, and the flag only hides the skill from model-initiated selection.
 
 ## Skill Workshop
 
