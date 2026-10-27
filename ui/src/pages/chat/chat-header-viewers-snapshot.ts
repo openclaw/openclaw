@@ -15,7 +15,6 @@ export const chatHeaderViewersSnapshotSchema = json.object({
       id: json.text,
       profileId: json.optional(json.text),
       name: json.optional(json.text),
-      email: json.optional(json.text),
       avatarUrl: json.optional(json.text),
     }),
     CHAT_HEADER_VIEWER_LIMIT,

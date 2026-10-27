@@ -54,6 +54,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     }
     if (
       row &&
+      (control || (row.sharingRole !== undefined && !canManageChatSessionSharing(row))) &&
       state.connected &&
       state.client?.recoveryScopeReady &&
       !chatHistoryRequests(state).initialSnapshotHydration
@@ -72,6 +73,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       }
       return;
     }
+    // A connected row can precede control admission; retain its geometry until replacement.
     return saved.headerSharing ?? undefined;
   }
 

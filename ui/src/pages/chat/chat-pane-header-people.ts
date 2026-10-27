@@ -45,16 +45,18 @@ export class ChatPaneHeaderPeople {
     const viewers = input.catalog
       ? undefined
       : this.viewers.read(
-          [
-            presence,
-            presence === undefined ? cached : undefined,
-            input.selfUser,
-            input.instanceId,
-            sessionKey,
-            input.detailsControl,
-            ownerIdentity,
-            showOwnerChip ? session?.participants : undefined,
-          ],
+          presence === undefined && cached
+            ? [cached, sessionKey]
+            : [
+                presence,
+                presence === undefined ? cached : undefined,
+                input.selfUser,
+                input.instanceId,
+                sessionKey,
+                input.detailsControl,
+                ownerIdentity,
+                showOwnerChip ? session?.participants : undefined,
+              ],
           () =>
             presence === undefined && cached
               ? cached.users.map(({ profileId, ...user }) => ({
@@ -102,8 +104,7 @@ export class ChatPaneHeaderPeople {
           .map(({ id, identity, name, email, avatarUrl }) => ({
             id,
             profileId: identity?.id,
-            name,
-            email,
+            name: name ?? email,
             avatarUrl,
           })),
         totalCount: totalCount ?? 0,
