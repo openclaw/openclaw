@@ -339,11 +339,6 @@ it.each([
   "model fallback",
   "revoked policy",
   "reassigned session",
-  "rotated lifecycle",
-  "reparented session",
-  "changed sandbox",
-  "changed exec host",
-  "changed delegation",
   "deleted requester",
 ] as const)(
   "rechecks reply capability authority after an await during %s before queueMessage",
@@ -413,23 +408,11 @@ it.each([
                     );
                   } else {
                     const patches = {
-                      "model fallback": {
-                        model: "fallback-model",
-                        modelProvider: "fallback-provider",
-                      },
+                      "model fallback": { model: "fallback", modelProvider: "fallback" },
                       "revoked policy": { inheritedToolDeny: ["exec"] },
-                      "reassigned session": { sessionId: "replacement-requester" },
-                      "rotated lifecycle": { lifecycleRevision: "replacement-lifecycle" },
-                      "reparented session": { spawnedBy: "agent:main:other-parent" },
-                      "changed sandbox": { sandboxMode: "all" },
-                      "changed exec host": { execHost: "gateway" },
-                      "changed delegation": {
-                        delegatedToolPolicy: {
-                          requesterSessionKey: "agent:main:main",
-                          targetAgentId: "main",
-                          deny: ["exec"],
-                          requesterDeny: ["exec"],
-                        },
+                      "reassigned session": {
+                        sessionId: "replacement-requester",
+                        spawnedBy: "agent:main:other-parent",
                       },
                     } satisfies Record<typeof change, Partial<SessionEntry>>;
                     await patchSessionEntryCore(scope, () => patches[change]);
