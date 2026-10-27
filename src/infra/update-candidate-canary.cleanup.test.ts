@@ -9,6 +9,7 @@ import {
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { toErrorObject } from "./errors.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import {
   holdCanaryProgress,
@@ -139,7 +140,11 @@ describe("canary teardown evidence", () => {
           queueMicrotask(() => parent.abort(failure));
         }
         return new Promise((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener(
+            "abort",
+            () => reject(toErrorObject(signal.reason, "Port check aborted")),
+            { once: true },
+          );
         });
       });
 
