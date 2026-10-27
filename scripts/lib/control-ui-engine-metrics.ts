@@ -15,6 +15,7 @@ export type EngineMetrics = {
   cpuMs: number | null;
   sampledCpu?: {
     coveredMs: number;
+    usageAreaMs: number;
     meanUsagePercent: number;
     sampleCount: number;
     bracketedAction: boolean;
@@ -152,8 +153,8 @@ async function startWebKitMeasurement(page: Page, trace: boolean) {
     async stop(): Promise<EngineMeasurement> {
       let stopped = false;
       try {
-        // Bracket the whole action and keep at least one second of samples;
-        // dropping its variable last interval can masquerade as a CPU win.
+        // Keep a comparable observed span for the smoothed usage diagnostic.
+        // This cannot isolate short-action CPU because usage includes prior work.
         if (!trace) {
           do {
             await waitForCpuSample();
@@ -182,21 +183,22 @@ async function startWebKitMeasurement(page: Page, trace: boolean) {
           );
         const layout = category("Layout");
         const style = category("RecalculateStyles");
-        // ResourceUsageThread samples at a coarse interval. Discard the first
-        // sample's unknown preceding interval; keep only observed inner spans.
+        // Mach cpu_usage is an aged utilization estimate, not an interval delta.
+        // Integrate only as a diagnostic area; never report it as action CPU.
         let coveredMs = 0;
-        let sampledCpuMs = 0;
+        let usageAreaMs = 0;
         for (let index = 1; index < cpuSamples.length; index++) {
           const duration =
             (cpuSamples[index]!.timestamp - cpuSamples[index - 1]!.timestamp) * 1_000;
           coveredMs += duration;
-          sampledCpuMs += (duration * cpuSamples[index]!.usage) / 100;
+          usageAreaMs += (duration * cpuSamples[index]!.usage) / 100;
         }
         const sampledCpu =
           coveredMs >= 1_000
             ? {
                 coveredMs,
-                meanUsagePercent: (sampledCpuMs / coveredMs) * 100,
+                usageAreaMs,
+                meanUsagePercent: (usageAreaMs / coveredMs) * 100,
                 sampleCount: cpuSamples.length,
                 bracketedAction: !trace,
               }
@@ -212,7 +214,7 @@ async function startWebKitMeasurement(page: Page, trace: boolean) {
             layoutCount: trace ? layout.length : null,
             styleCount: trace ? style.length : null,
             jsHeapUsedBytes: null,
-            cpuMs: sampledCpu ? sampledCpuMs : null,
+            cpuMs: null,
             ...(sampledCpu ? { sampledCpu } : {}),
             notes: [
               ...(trace
@@ -223,7 +225,7 @@ async function startWebKitMeasurement(page: Page, trace: boolean) {
                 : [
                     "CPU-only collection omits Timeline and ScriptProfiler; their counters are null. Samples bracket the action with at least one second of coverage. Short actions include idle time until that minimum; longer actions include up to one trailing sampling interval.",
                   ]),
-              "CPUProfiler samples are process/thread usage percentages, not cumulative CPU time. cpuMs is an estimate over sampledCpu.coveredMs only when that span is at least 1 s; the first sample's unknown preceding interval is excluded. Short spans, task and heap counters are null. Do not compare WebKit wall durations with Chromium threadTicks as CPU ratios.",
+              "CPUProfiler reports Mach aged utilization percentages, not interval or cumulative CPU time. sampledCpu.usageAreaMs is a smoothed diagnostic that includes pre-action history; it cannot certify action CPU or be compared with Chromium threadTicks. cpuMs, task and heap counters are null.",
             ],
           },
           ...(trace ? { timeline: records, profile: { scriptEvents, samples, cpuSamples } } : {}),
