@@ -33,11 +33,12 @@ defineSolidBridge<AgentSelectProps>(
     const id = `agent-select-${generateUUID()}`;
     let menu: MenuHandle | undefined;
     const selected = createMemo(() => props.options.find((option) => option.value === props.value));
-    const triggerOption = () =>
-      selected() ??
-      (props.value
-        ? { value: props.value, label: props.value, agent: { id: props.value } }
-        : undefined);
+    const fallbackOption = createMemo(() =>
+      selected() || !props.value
+        ? undefined
+        : { value: props.value, label: props.value, agent: { id: props.value } },
+    );
+    const triggerOption = () => selected() ?? fallbackOption();
     const label = () => triggerOption()?.label ?? (props.placeholder || t("agents.noAgents"));
     const accessibleLabel = () => [label(), selected()?.badge].filter(Boolean).join(", ");
     const gateway = useAvatarGatewayContext();
@@ -46,8 +47,8 @@ defineSolidBridge<AgentSelectProps>(
     const avatarSource = projectOwner(loader, (owner) => owner);
     const avatars = createMemo(() => {
       gateway();
-      const current = triggerOption();
-      const candidates = [...props.options, ...(current ? [current] : [])];
+      const fallback = fallbackOption();
+      const candidates = fallback ? [...props.options, fallback] : props.options;
       const identities = props.identityById;
       return avatarSource.read().withActiveRoutes(
         () =>
