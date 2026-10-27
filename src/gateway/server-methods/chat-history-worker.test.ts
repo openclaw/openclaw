@@ -203,10 +203,15 @@ it("keeps transferred visibility proportional to the bounded delta, including cl
 it("serializes direct history calls but keeps object messages for method adapters", async () => {
   await withHistory("encoded-history", async (scope) => {
     await append(scope, "reply", 1, "assistant", "Object caller reply");
+    await append(scope, "tool", 2, "assistant", "", {
+      content: [
+        { type: "toolCall", id: "read", name: "read", arguments: { path: "synthetic.txt" } },
+      ],
+    });
     const rpc = historyRpc(await createHistoryReadContext(), scope.sessionKey);
-    expect(
-      historyPayload(await rpc("chat.history", {}, { acceptsSerializedJson: true })).messages,
-    ).toBeInstanceOf(SerializedJsonArray);
+    const wire = historyPayload(await rpc("chat.history", {}, { acceptsSerializedJson: true }));
+    expect(wire.messages).toBeInstanceOf(SerializedJsonArray);
+    expect(wire.activity).toBeInstanceOf(SerializedJsonArray);
     const result = historyPayload(
       await rpc(
         "chat.history",
@@ -218,6 +223,9 @@ it("serializes direct history calls but keeps object messages for method adapter
       ),
     );
     expect(Array.isArray(result.messages)).toBe(true);
-    expect(result.messages).toMatchObject([{ content: "Object caller reply" }]);
+    expect(result.messages).toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: "Object caller reply" })]),
+    );
+    expect(Array.isArray(result.activity)).toBe(true);
   });
 });

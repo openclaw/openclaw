@@ -87,6 +87,10 @@ export function resetSessionManagerMocks(
   sessionManager.resetLeafAsync.mockReset();
   sessionManager.setNextUserMessagePersistence.mockReset();
   sessionManager.buildSessionContext.mockReset().mockReturnValue({ messages });
+  // Orphan repair reads the model window; it follows per-test buildSessionContext overrides.
+  Object.assign(sessionManager, {
+    [sessionManagerReadInitialContext]: async () => sessionManager.buildSessionContext(),
+  });
   sessionManager.appendThinkingLevelChange.mockReset();
   sessionManager.appendModelChange.mockReset();
   sessionManager.appendCustomEntryAsync.mockReset();

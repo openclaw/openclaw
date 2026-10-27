@@ -5,6 +5,8 @@
  * its base arm matches the protocol before unchanged patch entry reuse.
  * --phase patch-changed measures an activity update against the exact preimage;
  * its base arm matches full changed-entry receipts, candidate uses field deltas.
+ * --phase append-changed measures the same activity change during a transcript
+ * append; its base arm matches the full changed-entry append receipt protocol.
  * --fixture <file> replays a V8-serialized synthetic {before, outcome} captured
  * at the actor worker boundary, including its metadata publication receipts.
  * node --import ./scripts/tsx.mjs scripts/perf/session-actor-receipt-measure.ts \
@@ -50,7 +52,12 @@ const { values } = parseArgs({
 });
 const arm: unknown = isMainThread ? values.arm : workerData.arm;
 const phase: unknown = isMainThread ? values.phase : workerData.phase;
-assert(phase === "append" || phase === "patch" || phase === "patch-changed");
+assert(
+  phase === "append" ||
+    phase === "append-changed" ||
+    phase === "patch" ||
+    phase === "patch-changed",
+);
 assert(arm === "base" || arm === "candidate", "Choose --arm base or candidate");
 assert(values.mode === "timing" || values.mode === "allocation");
 const iterations = Number(values.iterations);
@@ -105,8 +112,10 @@ const appended: SessionActorHotState = {
     watermark: { ...before.transcript.watermark, maxSeq: 1001 },
   },
 };
-const after = phase === "append" ? appended : { ...appended, transcript: before.transcript };
-if (phase === "patch-changed") {
+const isAppend = phase === "append" || phase === "append-changed";
+const changed = phase === "patch-changed" || phase === "append-changed";
+const after = isAppend ? appended : { ...appended, transcript: before.transcript };
+if (changed) {
   after.entry = { ...structuredClone(before.entry!), updatedAt: 2 };
 }
 const sharedBuffer = new ArrayBuffer(64);
@@ -122,13 +131,13 @@ event.firstView[16] = 42;
 const outcome =
   fixture?.outcome ??
   createSessionActorCommittedOutcome({
-    phase: phase === "append" ? "appendTranscriptEvent" : "patch",
+    phase: isAppend ? "appendTranscriptEvent" : "patch",
     command: { commandId: "synthetic-append", phaseId: "synthetic-turn" },
     before,
     after,
     payloads: new Map([[1001, { event, serializedBytes: serialize(event).byteLength }]]),
     applied: {
-      value: phase === "append" ? { projectionNeedsReconcile: false } : undefined,
+      value: isAppend ? { projectionNeedsReconcile: false } : undefined,
       reducers: [],
     },
   });
@@ -203,7 +212,7 @@ async function measure() {
     assert(last);
     assert.deepEqual(last, outcome);
     if (arm === "candidate") {
-      if (phase !== "patch-changed") {
+      if (!changed) {
         assert.equal(last.receipt.postimage.entry, before.entry);
       }
       assert.equal(last.receipt.postimage.entry?.skillsSnapshot, before.entry?.skillsSnapshot);
@@ -211,7 +220,7 @@ async function measure() {
       assert.notEqual(last.receipt.postimage.entry, before.entry);
     }
     // The fixture owns this event shape; the check includes aliasing, not just equal bytes.
-    if (phase === "append") {
+    if (isAppend && !fixture) {
       const delivered = last.receipt.transcript.appendedEvents?.[0]?.event as typeof event;
       assert.equal(delivered.firstView.buffer, delivered.secondView.buffer);
       assert.notEqual(delivered.firstView.buffer, sharedBuffer);

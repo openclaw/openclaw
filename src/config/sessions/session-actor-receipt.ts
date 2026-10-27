@@ -35,8 +35,7 @@ export function projectSessionActorCommittedOutcome<Value>(
     (!append && receipt.phase !== "patch") ||
     receipt.transcript.append?.initialEntry ||
     !reference ||
-    (receipt.postimage.entry !== reference.entry &&
-      (receipt.phase !== "patch" || !receipt.postimage.entry || !reference.entry))
+    (receipt.postimage.entry !== reference.entry && (!receipt.postimage.entry || !reference.entry))
   ) {
     return outcome;
   }

@@ -51,7 +51,10 @@ retaining an admission must not retain those completed workspace payloads.
 
 Idle session reclamation workers retain their admitted connection, not completed
 deletion plans or the caller's async context. Retirement callbacks capture only
-the worker's registry key. Transport startup and idle timers run outside request
+the worker's registry key. Request handlers release completed replies before
+waiting for the next message, including buffered admission replies. Lazy plugin
+capture imports reuse the shared detached maintenance context rather than
+retaining the importing request. Transport startup and idle timers run outside request
 context while preserving the selected database engine. Each reclamation request
 keeps its own current-source and commit-authority checks.
 
@@ -123,6 +126,12 @@ Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
 the writer's ordered operation when a read must follow its accepted writes.
 Do not open a second main-thread connection or add a synchronous fallback.
+
+Local workspace reconciliation releases the shared state reader after capturing
+its database snapshot. The existing workspace computation pool scans files and
+prepares manifest results from that compressed snapshot; the Gateway forwards it
+without expanding the tree. The reconciliation lease still checks authority before
+accepting results, and the state writer retains atomic manifest publication.
 
 Long-lived Gateway and local TUI processes reuse the shared-state reader pool for
 early awaited configuration and plugin metadata reads. Standalone CLI inspection
@@ -588,7 +597,7 @@ that command; live policy and revocation checks still run at every admission.
 Plain transcript append and bookkeeping patch receipts use the same command-local
 reference when the entry is unchanged and initialization does not also expose it. Main restores the
 entry by reference to its deeply frozen replica preimage, without cloning it.
-Bookkeeping patches that change the entry send changed fields and removed keys
+Bookkeeping patches and plain appends that change the entry send changed fields and removed keys
 against that same token; the host rebuilds the outer entry while reusing unchanged
 frozen fields. Matching metadata publication postimages reuse that reconstructed
 entry instead of transferring a second copy. Settlement, publication, and commit
@@ -641,6 +650,12 @@ before storing custody. This removes a read round trip, not the command's hydrat
 or per-session ordering.
 Entry receipts follow physical database generations and scoped revisions; they do
 not require the publishing SQLite connection to match the actor worker's connection.
+
+Fresh pending input refreshes profile policy before source preparation, then reads
+session sharing facts once immediately before its message-approval callback.
+Replays still authorize before returning recorded input. The writer checks fresh
+transaction facts again before commit, and acknowledgment still waits for durable
+custody; removing the preliminary sharing read does not reorder the writer FIFO.
 
 Session memory indexing is background work. It batches transcript changes after
 30 seconds without transcript changes or running turns. Pending work keeps its

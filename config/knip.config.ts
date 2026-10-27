@@ -67,6 +67,7 @@ const repositoryScriptEntries = [
   // Its header documents the paired operator-role currency-check benchmark.
   "scripts/perf/operator-role-source-policy-measure.mjs!",
   "scripts/perf/access-authority-callback-measure.mjs!",
+  "scripts/perf/plugin-registry-binding-measure.mjs!",
   // Its header documents the config-wide admission metadata benchmark.
   "scripts/perf/config-wide-metadata-measure.ts!",
   // Its header documents the sandbox/workspace ownership assertion benchmark.
@@ -301,6 +302,7 @@ const repositoryScriptEntries = [
   "scripts/perf/cron-delivery-gateway-entry.ts!",
   "scripts/perf/plugin-policy-read-measure.mjs!",
   "scripts/perf/prompt-cache-observation-measure.ts!",
+  "scripts/perf/live-history-observation-measure.ts!",
   "scripts/perf/reconnect-read-wave-measure.ts!",
   "scripts/perf/session-actor-receipt-measure.ts!",
   "scripts/perf/session-actor-retention-measure.ts!",
@@ -518,6 +520,7 @@ const repositoryScriptEntries = [
   "scripts/perf/reef-device-sign-measure.ts!",
   "scripts/perf/session-actor-admission-measure.ts!",
   "scripts/perf/session-input-custody-measure.ts!",
+  "scripts/perf/chat-send-persist-measure.ts!",
   "scripts/perf/session-pin-policy-measure.ts!",
   "scripts/perf/session-prompt-begin-measure.ts!",
   "scripts/perf/session-store-target-inventory-measure.ts!",
@@ -608,6 +611,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-lifecycle-prepare-measure.ts!",
   "scripts/perf/session-replacement-write-measure.ts!",
   "scripts/perf/session-patch-label-owner-measure.ts!",
+  "scripts/perf/session-patch-result-measure.mjs!",
   "scripts/perf/session-event-audience-measure.ts!",
   "scripts/perf/transcript-snapshot-copy-measure.ts!",
   "scripts/perf/turn-start-phases.ts!",
@@ -1946,6 +1950,11 @@ const config = {
     "packages/net-policy": workspacePackage("net-policy"),
     "packages/markdown-core": workspacePackage("markdown-core"),
     "packages/media-core": workspacePackage("media-core"),
+    "packages/mermaid-renderer": {
+      // Vite selects the native adapter and classic compiler by file path, not imports.
+      entry: ["src/renderer.ts!", "src/native.ts!", "src/pele.min.ts!"],
+      project: ["src/**/*.ts!"],
+    },
     "packages/acp-core": workspacePackage("acp-core"),
     "packages/terminal-core": workspacePackage("terminal-core"),
     "packages/retry": workspacePackage("retry"),

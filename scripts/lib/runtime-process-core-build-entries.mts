@@ -45,6 +45,10 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
   runtimeProcessEntrypoints.sqliteSourceRevision,
   runtimeProcessEntrypoints.stateRead,
   runtimeProcessEntrypoints.sessionTranscript,
+  runtimeProcessEntrypoints.sessionDiskBudget,
+  runtimeProcessEntrypoints.pluginModelCatalogRead,
+  runtimeProcessEntrypoints.attachmentProcessor,
+  runtimeProcessEntrypoints.codeModeNode,
   runtimeProcessEntrypoints.shellSnapshotEnvironment,
   runtimeProcessEntrypoints.nativeHookRelayClient,
   runtimeProcessEntrypoints.spawnBroker,
@@ -55,6 +59,17 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
 ]);
 
 export function getStandaloneRuntimeProcessOutputOptions(name: string) {
+  if (
+    [
+      runtimeProcessEntrypoints.sessionDiskBudget,
+      runtimeProcessEntrypoints.pluginModelCatalogRead,
+      runtimeProcessEntrypoints.attachmentProcessor,
+      runtimeProcessEntrypoints.codeModeNode,
+    ].some((entry) => entry.distWorkerPath.replace(/\.js$/u, "") === name)
+  ) {
+    // Small workers must not evaluate shared Gateway chunks; keep optional paths lazy.
+    return { codeSplitting: true, chunkFileNames: `${name}-[name]-[hash].mjs` };
+  }
   const pluginPreparationEntry =
     runtimeProcessEntrypoints.pluginGenerationPreparation.distWorkerPath.replace(/\.js$/u, "");
   const stateReadEntry = runtimeProcessEntrypoints.stateRead.distWorkerPath.replace(/\.js$/u, "");
