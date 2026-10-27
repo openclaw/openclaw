@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { text as readBody } from "node:stream/consumers";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { withFastReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import { getRuntimeConfigSnapshot } from "../../../../src/config/config.js";
@@ -49,14 +50,9 @@ type Body = {
 };
 type Step = { step: number; plugin: string; generation: number; atMs: number };
 type Plugin = { id: string; turnHandover: boolean; contextEngine?: boolean };
-// `bundled` runs a shipped plugin from extensions/ in the memory slot and steps through
-// one of its tools; it reports no generation, so only reload timing proves handover.
-type Scenario = {
-  name: string;
-  plugins: Plugin[];
-  handsOver: boolean;
-  bundled?: { id: string; tool: string };
-};
+// `bundled` steps through a shipped plugin's tool, which reports no generation.
+type Scenario = { name: string; plugins: Plugin[]; handsOver: boolean; bundled?: Bundled };
+type Bundled = { id: string; tool: string };
 type EngineEvent = { event: string; generation: number; atMs: number; toolResults?: number };
 
 function writeToolCall(response: ServerResponse, name: string, id: string) {
@@ -223,15 +219,11 @@ it.for(scenarios)(
                 steps.push({
                   step: steps.length + 1,
                   atMs: Date.now() - startedAt,
-                  ...(bundled
-                    ? { plugin: bundled.id, generation: 0 }
-                    : (JSON.parse(output.output ?? "{}") as Pick<Step, "plugin" | "generation">)),
+                  ...(JSON.parse(output.output ?? "{}") as Pick<Step, "plugin" | "generation">),
                 });
+                // The bundled tool is fast; slow its steps so the reload lands mid-turn.
                 if (bundled) {
-                  // The bundled tool is fast; keep steps slow enough for the reload to land mid-turn.
-                  await new Promise((resolve) => {
-                    setTimeout(resolve, STEP_MS);
-                  });
+                  await delay(STEP_MS);
                 }
               }
               if (steps.length === RELOAD_AFTER_STEP && !reload) {
@@ -276,41 +268,34 @@ it.for(scenarios)(
           },
         };
         cfg.agents!.entries = { main: {} };
-        cfg.plugins = bundled
-          ? {
-              enabled: true,
-              allow: [bundled.id],
-              slots: { memory: bundled.id },
-              entries: { [bundled.id]: { enabled: true } },
-            }
-          : {
-              enabled: true,
-              allow: written.map(({ id }) => id),
-              load: { paths: written.map(({ root }) => root) },
-              slots: { memory: "none", ...(engineId ? { contextEngine: engineId } : {}) },
-              // External plugins need explicit consent to observe agent_end.
-              entries: Object.fromEntries(
-                written.map(({ id }) => [
-                  id,
-                  { enabled: true, hooks: { allowConversationAccess: true } },
-                ]),
-              ),
-            };
+        cfg.plugins = {
+          enabled: true,
+          allow: written.map(({ id }) => id),
+          load: { paths: written.map(({ root }) => root) },
+          slots: { memory: "none", ...(engineId ? { contextEngine: engineId } : {}) },
+          // External plugins need explicit consent to observe agent_end.
+          entries: Object.fromEntries(
+            written.map(({ id }) => [
+              id,
+              { enabled: true, hooks: { allowConversationAccess: true } },
+            ]),
+          ),
+        };
+        if (bundled) {
+          cfg.plugins = { enabled: true, allow: [bundled.id], slots: { memory: bundled.id } };
+        }
         cfg.tools = { allow: written.map(({ tool }) => tool), codeMode: false, toolSearch: false };
         cfg.gateway = { auth: { mode: "token", token } };
         await fs.writeFile(configPath, JSON.stringify(cfg));
-        // External fixtures need an install record and capability consent; bundled ones ship trusted.
-        const external = bundled ? [] : written;
         await seedInstalledPluginIndex(
           Object.fromEntries(
-            external.map(({ id, root }) => [
-              id,
-              { source: "path", sourcePath: root, installPath: root },
-            ]),
+            written
+              .filter(({ root }) => root)
+              .map(({ id, root }) => [id, { source: "path", sourcePath: root, installPath: root }]),
           ),
           { env: process.env, config: cfg },
         );
-        for (const { id, root } of external) {
+        for (const { id, root } of written.filter((plugin) => plugin.root)) {
           await resolvePluginCapabilityConsent({
             config: cfg,
             pluginId: id,
@@ -363,12 +348,11 @@ it.for(scenarios)(
         assert(reload, "the turn never reached the reload step");
         await reload;
         // agent_end side effects settle after the reply; wait for every plugin, then for strays.
-        const expectedAgentEnds = bundled ? 0 : written.length;
         const agentEnds = async () =>
           (await fs.readFile(counts, "utf8").catch(() => "")).split("\n").filter(Boolean).length;
         for (
           let waited = 0;
-          (await agentEnds()) < expectedAgentEnds && waited < 15_000;
+          (await agentEnds()) < (bundled ? 0 : written.length) && waited < 15_000;
           waited += 100
         ) {
           await new Promise((resolve) => {
@@ -401,23 +385,24 @@ it.for(scenarios)(
 
         // One logical turn: every step ran exactly once, and agent_end fired once per plugin.
         expect(steps, proof).toHaveLength(STEPS);
-        expect(summary.agentEnds, proof).toBe(expectedAgentEnds);
+        expect(summary.agentEnds, proof).toBe(bundled ? 0 : written.length);
         const firstGeneration = new Map<string, number>();
         for (const { plugin, generation } of steps.slice(0, RELOAD_AFTER_STEP)) {
           firstGeneration.set(plugin, firstGeneration.get(plugin) ?? generation);
         }
         const later = steps.slice(RELOAD_AFTER_STEP + 1);
         if (handsOver) {
-          // The reload finished mid-turn and later steps ran on the new generation.
+          // The reload finished mid-turn. A slow reload can land a step late, but from
+          // the first step on the new generation the turn never returns to the old one.
           expect(summary.reloadSettledBeforeReply, proof).toBe(true);
-          if (!bundled) {
-            expect(
-              later.every(
-                ({ plugin, generation }) => generation > (firstGeneration.get(plugin) ?? 0),
-              ),
-              proof,
-            ).toBe(true);
-          }
+          const moved = later.map(
+            ({ plugin, generation }) => generation > firstGeneration.get(plugin)!,
+          );
+          const landed = moved.indexOf(true);
+          expect(
+            Boolean(bundled) || (landed >= 0 && moved.slice(landed).every(Boolean)),
+            proof,
+          ).toBe(true);
         } else {
           // The reload waited for the whole turn, which stayed on its first generation.
           expect(summary.reloadSettledBeforeReply, proof).toBe(false);
