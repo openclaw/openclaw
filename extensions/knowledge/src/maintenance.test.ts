@@ -159,8 +159,12 @@ it("stopping during a paused review enqueue settles maintenance before closing t
   const f = await fixture({ reviewJobId: "review-job" }),
     scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
   let entered!: () => void, release!: () => void;
-  const enqueued = new Promise<void>((resolve) => (entered = resolve)),
-    paused = new Promise<void>((resolve) => (release = resolve));
+  const enqueued = new Promise<void>((resolve) => {
+      entered = resolve;
+    }),
+    paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
   // A failed assertion must not leave the pass, and so its service stop, paused.
   afterTest(() => release());
   const cron = {
