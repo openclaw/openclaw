@@ -253,14 +253,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     resetDeliverySettlementFixture();
   });
 
-  async function dispatchFinals(replies: ReplyPayload | ReplyPayload[]) {
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    const dispatcher = createDispatcher();
-    const result = await dispatch({ dispatcher, replyResolver: async () => replies });
-    expect(result.queuedFinal).toBe(true);
-    return dispatcher;
-  }
-
   const activeOperation = () =>
     expectDefined(getSessionControllerOperation("agent:test:session"), "dispatch reply operation");
 
@@ -701,28 +693,24 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     }
   });
 
-  it("dedupes equivalent non-streaming final payload entries for one turn", async () => {
-    const replyPayload = {
-      text: "repeat once",
-      mediaUrls: ["file:///tmp/repeat.png"],
-      channelData: { telegram: { parseMode: "MarkdownV2" } },
-    } satisfies ReplyPayload;
-
-    const dispatcher = await dispatchFinals([
-      replyPayload,
-      { ...replyPayload },
-      { ...replyPayload, videoAsNote: false },
-    ]);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(replyPayload);
-  });
-
+  const repeatedReply = {
+    text: "repeat once",
+    mediaUrls: ["file:///tmp/repeat.png"],
+    channelData: { telegram: { parseMode: "MarkdownV2" } },
+  } satisfies ReplyPayload;
   it.each([
+    {
+      name: "equivalent copies with an explicit false video marker",
+      replies: [repeatedReply, { ...repeatedReply }, { ...repeatedReply, videoAsNote: false }],
+      count: 1,
+    },
     {
       name: "different native locations",
       replies: [
         { location: { latitude: 1, longitude: 2 } },
         { location: { latitude: 3, longitude: 4 } },
       ],
+      count: 2,
     },
     {
       name: "normal and round videos sharing the same media",
@@ -730,15 +718,16 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         { mediaUrl: "file:///tmp/reply.mp4" },
         { mediaUrl: "file:///tmp/reply.mp4", videoAsNote: true },
       ],
+      count: 2,
     },
-  ] satisfies Array<{ name: string; replies: ReplyPayload[] }>)(
-    "preserves final payloads with $name",
-    async ({ replies }) => {
-      const dispatcher = await dispatchFinals(replies);
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(replies.length);
-      for (const [index, reply] of replies.entries()) {
-        expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(index + 1, reply);
-      }
+  ] satisfies Array<{ name: string; replies: ReplyPayload[]; count: number }>)(
+    "deduplicates final payloads: $name",
+    async ({ replies, count }) => {
+      hookMocks.runner.hasHooks.mockReturnValue(false);
+      const dispatcher = createDispatcher();
+      const result = await dispatch({ dispatcher, replyResolver: async () => replies });
+      expect(result.queuedFinal).toBe(true);
+      expectCalls([dispatcher.sendFinalReply, replies.slice(0, count).map((reply) => [reply])]);
     },
   );
 });

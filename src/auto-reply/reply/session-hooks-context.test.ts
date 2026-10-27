@@ -124,13 +124,15 @@ function requireHookCall<T extends unknown[]>(mock: { mock: { calls: T[] } }, la
   return mock.mock.calls[0]!;
 }
 
-function holdRolloverHooks(onRelease?: (name: string) => Promise<void>) {
+function holdRolloverHooks(completed: string[]) {
   const releases: Array<() => void> = [];
   const held = (name: string) => async () => {
     await new Promise<void>((resolve) => {
       releases.push(resolve);
     });
-    await onRelease?.(name);
+    await trackAsyncWork(() => {
+      completed.push(name);
+    });
   };
   hookRunnerMocks.runSessionEnd.mockImplementationOnce(held("end"));
   hookRunnerMocks.runSessionStart.mockImplementationOnce(held("start"));
@@ -535,11 +537,7 @@ describe("session hook context wiring", () => {
     "keeps rollover hooks alive after their requester closes (restart drain: %s)",
     async (draining, { signal }) => {
       const completedHooks: string[] = [];
-      const releases = holdRolloverHooks((name) =>
-        trackAsyncWork(() => {
-          completedHooks.push(name);
-        }),
-      );
+      const releases = holdRolloverHooks(completedHooks);
       const sessionKey = "agent:main:telegram:direct:held-rollover";
       const sessionId = "old-held-session";
       const { storePath } = await createStoredSession({
