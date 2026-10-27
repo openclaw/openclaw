@@ -27,6 +27,7 @@ if (!provider?.wrapStreamFn || !provider.normalizeToolSchemas) {
   throw new Error("Missing LM Studio transport hooks");
 }
 const wrapStreamFn = provider.wrapStreamFn;
+const createStreamFn = provider.createStreamFn;
 const normalizeToolSchemas = provider.normalizeToolSchemas;
 const user: Context["messages"][number] = { role: "user", content: "Use the probe.", timestamp: 1 };
 const responseFormat = {
@@ -117,7 +118,7 @@ async function withTransport(
         extraParams,
         config,
         streamFn:
-          provider.createStreamFn?.({ provider: "lmstudio", modelId: model.id, model, config }) ??
+          createStreamFn?.({ provider: "lmstudio", modelId: model.id, model, config }) ??
           streamSimple,
       });
       if (!wrapped) {
@@ -135,7 +136,15 @@ async function withTransport(
 
 afterEach(() => vi.unstubAllEnvs());
 
-it.each([
+type ThinkingCase = {
+  api: "openai-completions" | "anthropic-messages";
+  reasoning: SimpleStreamOptions["reasoning"];
+  thinkingLevel: "off" | "medium" | "adaptive" | null;
+  map: Record<string, string> | undefined;
+  expected: "enabled" | "disabled" | "omitted";
+};
+
+it.each<ThinkingCase>([
   {
     api: "openai-completions",
     reasoning: "medium",
@@ -199,7 +208,7 @@ it.each([
     map: { adaptive: "none", off: "on" },
     expected: "disabled",
   },
-] as const)(
+])(
   "routes $api/$reasoning with wrapper $thinkingLevel and map $map to Messages $expected",
   async ({ api, reasoning, thinkingLevel, map, expected }) => {
     await withTransport(
