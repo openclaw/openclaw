@@ -487,6 +487,7 @@ const repositoryScriptEntries = [
   "scripts/perf/quadratic-report-measure.ts!",
   "scripts/perf/reef-device-sign-measure.ts!",
   "scripts/perf/session-actor-admission-measure.ts!",
+  "scripts/perf/session-input-custody-measure.ts!",
   "scripts/perf/session-pin-policy-measure.ts!",
   "scripts/perf/session-prompt-begin-measure.ts!",
   "scripts/perf/session-store-target-inventory-measure.ts!",

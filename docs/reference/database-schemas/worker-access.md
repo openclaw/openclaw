@@ -623,6 +623,16 @@ commit atomically under the existing writer FIFO, source checks, final host
 COMMIT authorization, and receipt settlement. Schemas, durability, and update
 behavior are unchanged.
 
+Pending-input staging selects its lifecycle expectation inside the same writer
+FIFO. A current published entry supplies those fields without a preliminary full
+actor read; missing facts or an actor awaiting reconciliation still use the canonical
+actor reader. The command hydrates its own state and checks the captured lifecycle
+and live commit authority
+before storing custody. This removes a read round trip, not the command's hydration
+or per-session ordering.
+Entry receipts follow physical database generations and scoped revisions; they do
+not require the publishing SQLite connection to match the actor worker's connection.
+
 Session memory indexing is background work. It batches transcript changes after
 30 seconds without transcript changes or running turns. Pending work keeps its
 original age across turns; after five minutes it can start in the next idle gap

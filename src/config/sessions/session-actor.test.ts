@@ -26,6 +26,7 @@ import type {
 } from "./session-actor-contract.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { readSessionActorEntryFacts } from "./session-actor-replica.js";
 import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { withActor } from "./session-actor-transport.test-support.js";
 import { seedSessionActorOutcomeTransferEntry } from "./session-actor-worker.test-support.js";
@@ -367,13 +368,16 @@ it("serves installed state without a request and reconciles a retired worker gen
   await withActor(async ({ actor, commands, retireGeneration }) => {
     const initial = await actor.read(authority);
     expect(actor.snapshot(authority)).toEqual(initial);
+    expect(actor.snapshotEntry(authority)?.entry).toEqual(initial.entry);
     expect(await actor.read(authority)).toEqual(initial);
     expect(commands).toEqual(["session.actor.read"]);
     retireGeneration();
+    expect(actor.snapshotEntry(authority)?.entry).toEqual(initial.entry);
     expect(actor.snapshot(authority)).toBeUndefined();
     const restored = await actor.read(authority);
     expect(restored.entry?.sessionId).toBe(initial.entry?.sessionId);
     expect(restored.version.epoch).not.toBe(initial.version.epoch);
+    expect(actor.snapshotEntry(authority)?.entry).toEqual(restored.entry);
     expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
   });
 });
@@ -802,7 +806,7 @@ it.each([
     Object.assign(new Error("database or disk is full during settlement"), { code: "SQLITE_FULL" }),
   ],
 ] as const)("retains uncertainty with %s (%s)", async (cause, reply, rollback, settlementError) => {
-  await withActor(async ({ actor, commands, fault }) => {
+  await withActor(async ({ actor, commands, fault, nativePatch, readEntry }) => {
     const initial = await actor.read(authority);
     if (actor.target.database.kind !== "file") {
       throw new Error("Fixture requires durable storage");
@@ -872,10 +876,16 @@ it.each([
       (error: unknown) => classifyGatewayStorageFailure(error) === "session_actor_reconciliation",
     );
     expect(commands).toHaveLength(before);
+    expect(readEntry()?.updatedAt).toBe(rollback ? initial.entry?.updatedAt : 456);
+    nativePatch(789);
+    expect(
+      readSessionActorEntryFacts({ ...actor.target, database: actor.target.database })?.entry
+        ?.updatedAt,
+    ).toBe(789);
+    expect(actor.snapshotEntry(authority)).toBeUndefined();
     fault.reply = "normal";
-    expect((await actor.read(authority)).entry?.updatedAt).toBe(
-      rollback ? initial.entry?.updatedAt : 456,
-    );
+    expect((await actor.read(authority)).entry?.updatedAt).toBe(789);
+    expect(actor.snapshotEntry(authority)?.entry?.updatedAt).toBe(789);
   });
 });
 
