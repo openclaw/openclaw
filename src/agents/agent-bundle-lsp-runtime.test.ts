@@ -128,16 +128,12 @@ class MockChildProcess extends EventEmitter implements OwnedStdioProcess {
     if (this.respondMethods && !this.respondMethods.has(method)) {
       return;
     }
-    const result =
-      method === "initialize"
-        ? {
-            capabilities: {
-              hoverProvider: true,
-              definitionProvider: true,
-              referencesProvider: true,
-            },
-          }
-        : null;
+    const capabilities = {
+      hoverProvider: true,
+      definitionProvider: true,
+      referencesProvider: true,
+    };
+    const result = method === "initialize" ? { capabilities } : null;
     queueMicrotask(() => {
       const response = { jsonrpc: "2.0", id: body.id, result };
       const frame = this.frameResponse(response, method);
@@ -170,25 +166,18 @@ const position = { uri: "file:///tmp/workspace/index.ts", line: 0, character: 0 
 function createRuntime(options: Omit<Parameters<typeof createLspRuntime>[0], "workspaceDir"> = {}) {
   return createLspRuntime({ workspaceDir: "/tmp/workspace", ...options });
 }
-function getTool(
-  runtime: Awaited<ReturnType<typeof createRuntime>>,
-  name = "lsp_hover_typescript",
-) {
-  const tool = runtime.tools.find((candidate) => candidate.name === name);
-  if (!tool) {
-    throw new Error(`expected ${name} tool`);
-  }
-  return tool;
-}
-
 function startRuntime(child: MockChildProcess) {
   spawnMock.mockReturnValue(child);
   return createRuntime();
 }
 
-async function startTool(child: MockChildProcess, name?: string) {
+async function startTool(child: MockChildProcess, name = "lsp_hover_typescript") {
   const runtime = await startRuntime(child);
-  return { runtime, tool: getTool(runtime, name) };
+  const tool = runtime.tools.find((candidate) => candidate.name === name);
+  if (!tool) {
+    throw new Error(`expected ${name} tool`);
+  }
+  return { runtime, tool };
 }
 
 function pendingChild(...respondMethods: string[]) {
@@ -200,7 +189,6 @@ async function duringInitialization(
   check: (context: {
     observed: ReturnType<typeof observeCreation>;
     abort: () => Promise<void>;
-    reason: Error;
     respond: (result: unknown) => void;
   }) => Promise<void>,
 ) {
@@ -215,7 +203,6 @@ async function duringInitialization(
     initializeId = await waitForLspInitialization(child, creation);
     await check({
       observed,
-      reason,
       respond: (result) => {
         responded = true;
         child.reply(initializeId, result);
@@ -225,6 +212,9 @@ async function duringInitialization(
         await vi.advanceTimersByTimeAsync(1_000);
       },
     });
+    expect(await observed.error()).toBe(reason);
+    expect(child.dispose).toHaveBeenCalledOnce();
+    expect(child.messages("initialized")).toEqual([]);
   } finally {
     if (initializeId !== undefined && !responded) {
       child.reply(initializeId);
@@ -326,48 +316,39 @@ describe("bundle LSP runtime", () => {
     const child = pendingChild("shutdown");
     child.holdExtinction = true;
     spawnMock.mockReturnValue(child);
-    await duringInitialization(child, async ({ observed, abort, reason }) => {
+    await duringInitialization(child, async ({ observed, abort }) => {
       await abort();
       expect(child.kill).toHaveBeenCalled();
       expect(observed.isSettled()).toBe(false);
       expect(child.dispose).not.toHaveBeenCalled();
       child.extinction.resolve();
-      expect(await observed.error()).toBe(reason);
-      expect(child.dispose).toHaveBeenCalledOnce();
-      expect(child.messages("initialized")).toEqual([]);
     });
   });
 
-  it("does not notify initialized when preparation aborts after the response resolves", async () => {
+  it("withholds initialized when preparation aborts after the response", async () => {
     const child = pendingChild("shutdown");
     spawnMock.mockReturnValue(child);
-    await duringInitialization(child, async ({ observed, abort, reason, respond }) => {
+    await duringInitialization(child, async ({ abort, respond }) => {
       respond({ capabilities: { hoverProvider: true } });
       await abort();
-      expect(child.messages("initialized")).toEqual([]);
-      expect(await observed.error()).toBe(reason);
-      expect(child.dispose).toHaveBeenCalledOnce();
     });
   });
 
-  it("cleans initialized and pending LSP servers on preparation abort without starting siblings", async () => {
-    configureServers({
-      first: { command: "first-language-server" },
-      second: { command: "second-language-server" },
-      third: { command: "third-language-server" },
-    });
+  it("aborts initialized and pending servers without starting siblings", async () => {
+    configureServers(
+      Object.fromEntries(
+        ["first", "second", "third"].map((id) => [id, { command: `${id}-language-server` }]),
+      ),
+    );
     const first = new MockChildProcess();
     const second = pendingChild("shutdown");
     const third = new MockChildProcess();
     spawnMock.mockReturnValueOnce(first).mockReturnValueOnce(second).mockReturnValue(third);
-    await duringInitialization(second, async ({ observed, abort, reason }) => {
+    await duringInitialization(second, async ({ observed, abort }) => {
       expect(first.messages("initialized")).toHaveLength(1);
       await abort();
       expect(observed.isSettled()).toBe(true);
-      expect(await observed.error()).toBe(reason);
       expect(first.dispose).toHaveBeenCalledOnce();
-      expect(second.dispose).toHaveBeenCalledOnce();
-      expect(second.messages("initialized")).toEqual([]);
       expect(spawnMock).toHaveBeenCalledTimes(2);
       expect(third.receivedMessages).toEqual([]);
     });
@@ -384,7 +365,7 @@ describe("bundle LSP runtime", () => {
     await expect(hoverTool.execute("call-2", position)).rejects.toThrow("stdout failed");
   });
 
-  it("blocks new LSP requests on exit while allowing a final stdout response to drain", async () => {
+  it("blocks requests on exit but drains the final response", async () => {
     const child = pendingChild("initialize");
     const { tool: hoverTool } = await startTool(child);
     const pendingRequest = hoverTool.execute("call-1", position);
@@ -443,17 +424,16 @@ describe("bundle LSP runtime", () => {
       params: { message: "ready té" },
     });
     const child = new MockChildProcess(prefix);
-    const runtime = await startRuntime(child);
+    await startRuntime(child);
     child.stderr.write("synthetic-private-lsp-file-content\n");
 
-    expect(runtime.tools.map((tool) => tool.name)).toContain("lsp_hover_typescript");
     expect(debug).toHaveBeenCalledWith("bundle-lsp:typescript: notification window/logMessage");
     const logs = debug.mock.calls.flat().join(" ");
     expect(logs).not.toContain("ready té");
     expect(logs).not.toContain("synthetic-private-lsp-file-content");
   });
 
-  it("preserves consecutive multibyte tool responses delivered in 4096-byte chunks", async () => {
+  it("preserves consecutive multibyte responses in 4096-byte chunks", async () => {
     const chunkSize = 4096;
     const child = pendingChild("initialize", "shutdown");
     const { tool } = await startTool(child);
@@ -476,7 +456,7 @@ describe("bundle LSP runtime", () => {
     );
   });
 
-  it("accepts a maximum-size header when its separator is split across chunks", async () => {
+  it("accepts a maximum-size header with a split separator", async () => {
     const child = new MockChildProcess("", undefined, (body) => {
       const json = JSON.stringify(body);
       const headerPrefix = `Content-Length: ${Buffer.byteLength(json, "utf-8")}\r\nX-Padding: `;
@@ -540,7 +520,7 @@ describe("bundle LSP runtime", () => {
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
   });
 
-  it("joins repeated disposal until the exited LSP server's descendants settle", async () => {
+  it("joins repeated disposal until descendants settle", async () => {
     const child = new MockChildProcess();
     child.holdExtinction = true;
     const runtime = await startRuntime(child);
@@ -567,11 +547,10 @@ describe("bundle LSP runtime", () => {
     expect(child.messages("shutdown")).toHaveLength(1);
   });
 
-  it("records uncertain cleanup when LSP descendant settlement is unsupported", async () => {
+  it("records uncertain cleanup without descendant settlement", async () => {
     const child = new MockChildProcess();
     Object.defineProperty(child, "waitForExtinction", { value: undefined });
     const runtime = await startRuntime(child);
-    expect(runtime.tools.map((tool) => tool.name)).toContain("lsp_hover_typescript");
     const cleanupScope = createAgentCleanupScope();
 
     // Global/manual cleanup can precede an automatic owner joining the same resources.
@@ -582,7 +561,7 @@ describe("bundle LSP runtime", () => {
     expect(child.dispose).toHaveBeenCalledOnce();
   });
 
-  it("records uncertain cleanup when process construction cannot confirm reclamation", async () => {
+  it("records uncertain cleanup after unconfirmed startup reclamation", async () => {
     spawnMock.mockRejectedValue(new OwnedStdioCleanupError("startup cleanup was not confirmed"));
     const cleanupScope = createAgentCleanupScope();
 
@@ -612,7 +591,7 @@ describe("bundle LSP runtime", () => {
     expect(child.dispose).toHaveBeenCalledOnce();
   });
 
-  it("rejects outstanding requests before shutdown and detaches their abort listeners", async () => {
+  it("rejects pending requests before shutdown and detaches abort listeners", async () => {
     const child = pendingChild("initialize");
     const { runtime, tool: hover } = await startTool(child);
     const controller = new AbortController();

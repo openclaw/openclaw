@@ -347,23 +347,19 @@ describe("resolveBootstrapFilesForRun", () => {
           const files = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey, chatType });
           const paths = files.map((file) => file.path);
           const rootAliasPath = path.join(workspaceDir, "root-alias/MEMORY.md");
-          if (mode === "direct") {
-            expect(paths).toContain(rootAliasPath);
-          } else {
-            expect(paths).not.toContain(rootAliasPath);
-          }
-          expect(
-            files.find((file) => file.path === path.join(workspaceDir, "nested-alias/MEMORY.md")),
-          ).toMatchObject({ content, missing: false });
+          const nestedPath = path.join(workspaceDir, "nested-alias/MEMORY.md");
+          expect(paths.includes(rootAliasPath)).toBe(mode === "direct");
+          expect(files.find((file) => file.path === nestedPath)).toMatchObject({
+            content,
+            missing: false,
+          });
           if (remote) {
             expect(files.map((file) => file.name)).not.toContain(DEFAULT_USER_FILENAME);
             expect(files.some((file) => file.content === "Gateway decoy")).toBe(false);
           } else {
-            expect(
-              files.findIndex(
-                (file) => file.path === path.join(workspaceDir, "nested-alias/MEMORY.md"),
-              ),
-            ).toBeGreaterThan(files.findIndex((file) => file.name === "SOUL.md"));
+            expect(paths.indexOf(nestedPath)).toBeGreaterThan(
+              files.findIndex((file) => file.name === "SOUL.md"),
+            );
           }
         } finally {
           release();
