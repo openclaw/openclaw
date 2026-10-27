@@ -263,7 +263,8 @@ async function releasePool(owner: NodePool): Promise<void> {
     job: runInDetachedAsyncContext(() =>
       lifetime.scheduler.schedule({
         id: `code-mode-worker-surplus:${++nextPoolId}`,
-        delayMs: 30_000,
+        // Each slot remembers recent demand; serial reuse does not renew surplus capacity.
+        delayMs: 3 * 60_000,
         run: () => {
           const idle = idlePools.get(owner);
           if (idle) {
