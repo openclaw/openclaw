@@ -61,6 +61,18 @@ function installBoundary(session: Session, options: () => BoundaryOptions) {
     convert(normalizeMessagesForLlmBoundary(messages, options()));
 }
 
+function installTranscriptBoundary(session: Session, options: BoundaryOptions) {
+  const registry = createUserTranscriptContextRegistry();
+  guardSessionManager(session.sessionManager, {
+    onUserMessagePersisted: (persisted, runtime) => {
+      if (runtime) {
+        registry.record(runtime, persisted);
+      }
+    },
+  });
+  installBoundary(session, () => ({ ...options, userTranscriptContexts: registry.list() }));
+}
+
 function installPermissionPrompt(session: Session, api: Model["api"] = "anthropic-messages") {
   installAttemptPermissionPrompt({
     activeSession: session,
@@ -386,14 +398,6 @@ it.each(["sessions_send", "subagent_settle"] as const)(
       sourceTool === "sessions_send" ? annotateInterSessionPromptText(text, provenance) : text;
     const held = holdInitialRequest("Completion received");
     const { session, sessionManager } = await createTestSession();
-    const registry = createUserTranscriptContextRegistry();
-    guardSessionManager(sessionManager, {
-      onUserMessagePersisted: (persisted, runtime) => {
-        if (runtime) {
-          registry.record(runtime, persisted);
-        }
-      },
-    });
     const boundaryOptions = {
       appendOnlyRuntimeContext: true,
       inHistorySystemUpdates: true,
@@ -401,10 +405,7 @@ it.each(["sessions_send", "subagent_settle"] as const)(
       timezone: "UTC",
     };
     setSteeringRuntimeContextRetention(session, true);
-    installBoundary(session, () => ({
-      ...boundaryOptions,
-      userTranscriptContexts: registry.list(),
-    }));
+    installTranscriptBoundary(session, boundaryOptions);
     await withHeldPrompt(session, held, async (queue) => {
       await queue(delivered, {
         waitForTranscriptCommit: true,
@@ -439,21 +440,20 @@ it.each(["sessions_send", "subagent_settle"] as const)(
     await reopened.prompt("Continue the discussion.");
     expect(replayRequests).toHaveLength(1);
 
-    const captureInput = async (context: Context) => {
-      let input: unknown[] | undefined;
+    const inputs: unknown[][] = [];
+    for (const context of [first, replayRequests[0]!]) {
       const stream = streamOpenAIResponses({ ...testModel, api: "openai-responses" }, context, {
         apiKey: "fixture-transport-value",
         onPayload(payload) {
-          input = (payload as { input: unknown[] }).input;
+          inputs.push((payload as { input: unknown[] }).input);
           throw new Error("stop after payload capture");
         },
       });
       expect((await stream.result()).stopReason).toBe("error");
-      expect(input).toBeDefined();
-      return input!;
-    };
-    const before = await captureInput(first);
-    const after = await captureInput(replayRequests[0]!);
+    }
+    expect(inputs).toHaveLength(2);
+    const before = inputs[0]!;
+    const after = inputs[1]!;
     expect(JSON.stringify(after.slice(0, before.length))).toBe(JSON.stringify(before));
     expect(JSON.stringify(before)).toContain(`sourceTool=${sourceTool}`);
   },
@@ -487,16 +487,7 @@ it.each(
     const held = holdInitialRequest("Quoted reply received");
     const { requests } = held;
     const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
-    const registry = createUserTranscriptContextRegistry();
-    guardSessionManager(sessionManager, {
-      onUserMessagePersisted: (persisted, runtime) => {
-        if (runtime) {
-          registry.record(runtime, persisted);
-        }
-      },
-    });
-    const boundaryOptions = () => ({ sessionVersion, userTranscriptContexts: registry.list() });
-    installBoundary(session, boundaryOptions);
+    installTranscriptBoundary(session, { sessionVersion });
     const images =
       mediaKind === "inline"
         ? [
