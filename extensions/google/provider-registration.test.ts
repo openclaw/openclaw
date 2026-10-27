@@ -2,15 +2,25 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleProvider } from "./provider-registration.js";
 
-const streamFns = vi.hoisted(() => ({
-  createGenerativeAi: vi.fn(() => vi.fn()),
-  createVertex: vi.fn(() => vi.fn()),
-}));
+const streamFns = vi.hoisted(() => {
+  const generativeAi = vi.fn();
+  const vertex = vi.fn();
+  return {
+    moduleLoads: 0,
+    generativeAi,
+    vertex,
+    createGenerativeAi: vi.fn(() => generativeAi),
+    createVertex: vi.fn(() => vertex),
+  };
+});
 
-vi.mock("./transport-stream.js", () => ({
-  createGoogleGenerativeAiTransportStreamFn: streamFns.createGenerativeAi,
-  createGoogleVertexTransportStreamFn: streamFns.createVertex,
-}));
+vi.mock("./transport-stream.js", () => {
+  streamFns.moduleLoads++;
+  return {
+    createGoogleGenerativeAiTransportStreamFn: streamFns.createGenerativeAi,
+    createGoogleVertexTransportStreamFn: streamFns.createVertex,
+  };
+});
 
 function model(overrides: Partial<Model> = {}): Model {
   return {
@@ -51,11 +61,32 @@ function normalizeVideo(overrides: Partial<Model>) {
 
 describe("buildGoogleProvider createStreamFn", () => {
   beforeEach(() => {
-    streamFns.createGenerativeAi.mockClear();
-    streamFns.createVertex.mockClear();
+    streamFns.generativeAi.mockClear();
+    streamFns.vertex.mockClear();
   });
 
-  it.each([false, true])("routes Vertex with OpenAI compatibility=%s", (compatible) => {
+  it("keeps transport unloaded through registration and selection until the first stream", async () => {
+    const vertex = createStream();
+    const generativeAi = createStream({
+      provider: "google",
+      baseUrl: "https://generativelanguage.googleapis.com",
+    });
+    expect.soft(streamFns.moduleLoads).toBe(0);
+    expect(createStream({ api: "openai-completions" })).toBeUndefined();
+    expect.soft(streamFns.moduleLoads).toBe(0);
+    if (!vertex || !generativeAi) {
+      throw new Error("Google registration did not select both transports");
+    }
+    const requestModel = model();
+    const context = { messages: [] };
+    await vertex(requestModel, context);
+    await generativeAi(requestModel, context);
+    expect(streamFns.moduleLoads).toBe(1);
+    expect(streamFns.vertex).toHaveBeenCalledWith(requestModel, context);
+    expect(streamFns.generativeAi).toHaveBeenCalledWith(requestModel, context);
+  });
+
+  it.each([false, true])("routes Vertex with OpenAI compatibility=%s", async (compatible) => {
     const result = createStream(
       compatible
         ? {
@@ -65,8 +96,9 @@ describe("buildGoogleProvider createStreamFn", () => {
           }
         : {},
     );
-    expect(streamFns.createVertex).toHaveBeenCalledTimes(compatible ? 0 : 1);
-    expect(streamFns.createGenerativeAi).not.toHaveBeenCalled();
+    await result?.(model(), { messages: [] });
+    expect(streamFns.vertex).toHaveBeenCalledTimes(compatible ? 0 : 1);
+    expect(streamFns.generativeAi).not.toHaveBeenCalled();
     if (compatible) {
       expect(result).toBeUndefined();
     }
