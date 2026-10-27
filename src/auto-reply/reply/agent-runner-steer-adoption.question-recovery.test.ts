@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/index.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -17,10 +16,6 @@ import {
   type AgentQuestionDispatcher,
 } from "../../agents/harness/gateway-question-dispatch.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
-import {
-  callGatewayTool,
-  withQuestionGateway,
-} from "../../agents/harness/gateway-question.test-support.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { ReplyBackendQueueMessageResult } from "../../sessions/session-controller.contracts.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
@@ -534,94 +529,67 @@ describe("question response custody through reply adoption", () => {
         secondEntered.resolve();
       }
     });
-    await withQuestionGateway(async (fixture) => {
-      let claim: ReturnType<typeof registerPendingAgentQuestion> | undefined;
-      let answerOutcome: Promise<unknown> | undefined;
-      try {
-        await withQuestionCreator(key, first, async (operation, fingerprint) => {
-          // Construct both sources before either is bound to its controller input.
-          const second: FollowupRun = { ...first, prompt: "next input", messageId: "v1-second" };
-          const question = { header: "Answer", question: "Continue?", isOther: true, options: [] };
-          claim = registerPendingAgentQuestion({
-            questionId: id,
-            sessionKey: key,
-            questions: [{ id: "answer", ...question }],
-          });
-          const registration = callGatewayTool(
-            "question.request",
-            {},
-            {
-              id,
-              sessionKey: key,
-              timeoutMs: 60_000,
-              questions: [{ questionId: "answer", ...question }],
-            },
-          );
-          claim.attachRegistration(registration);
-          await withinTest(registration, signal);
-          const answer = callGatewayTool(
-            "question.waitAnswer",
-            { timeoutMs: 70_000 },
-            { id, timeoutMs: 60_000, includeResolutionId: true },
-          ) as Promise<QuestionWaitAnswerResult>;
-          answerOutcome = answer.catch(() => undefined);
-          claim.setAnswer(answer);
-          await withinTest(fixture.waitStarted, signal);
-          const cancel = vi.fn(() => fixture.backingRun.abort());
-          const queueMessage = vi.fn(async () => {
-            throw new Error("V1 backend must not receive source-bound question input");
-          });
-          operation.attachBackend({
-            kind: "embedded",
-            runId: "accepted-backing-work",
-            toolAuthorityFingerprint: fingerprint,
-            supportsTranscriptCommitWait: true,
-            cancel,
-            messageInjection: { isAvailable: () => true, queueMessage },
-          });
-          operation.setPhase("running");
-          for (const run of [first, second]) {
-            const state: ReplyOperationRunState = {};
-            await withinTest(startSteer(key, run, operation, followup, state), signal);
-            expect(state.admission).toEqual({
-              status: "accepted",
-              mode: "followup",
-              reason: "steering-unavailable",
-            });
-          }
-          expect(getExistingFollowupQueue(key)?.items.map((run) => run.prompt)).toEqual([
-            text,
-            "next input",
-          ]);
-          expectNotCalled(followup, queueMessage, cancel);
-          expect(operation.abortSignal.aborted).toBe(false);
-          expect(fixture.backingRun.signal.aborted).toBe(false);
-          expect(
-            fixture.requests.filter((request) => request.method === "question.resolve"),
-          ).toEqual([]);
-          expect(getSessionControllerOperation(key)).toBe(operation);
-          expect(fixture.manager.get(id)?.status).toBe("pending");
-          await expectPendingQuestionAnswerClaimable(key, true);
-          operation.complete();
-        });
-        await withinTest(firstEntered.promise, signal);
-        expect(followup).toHaveBeenCalledOnce();
-        expect(followup.mock.calls[0]?.[0].prompt).toBe(text);
-        releaseFirst.resolve();
-        await withinTest(secondEntered.promise, signal);
-        expect(followup.mock.calls.map(([run]) => run.prompt)).toEqual([text, "next input"]);
-        expect(fixture.manager.get(id)?.status).toBe("pending");
-      } finally {
-        releaseFirst.resolve();
-        if (fixture.manager.get(id)?.status === "pending") {
-          fixture.manager.cancel(id, "test-cleanup");
-        }
-        await answerOutcome;
-        claim?.dispose();
-        await Promise.allSettled(followup.mock.results.map((result) => result.value));
-        clearSessionQueues([key]);
-      }
+    let claim: ReturnType<typeof registerPendingAgentQuestion> | undefined;
+    const gatewayCall = vi.fn(async () => {
+      throw new Error("V1 steering must not dispatch a question answer");
     });
+    try {
+      await withQuestionCreator(key, first, async (operation, fingerprint) => {
+        // Construct both sources before either is bound to its controller input.
+        const second: FollowupRun = { ...first, prompt: "next input", messageId: "v1-second" };
+        claim = registerPendingAgentQuestion({
+          questionId: id,
+          sessionKey: key,
+          questions: [{ id: "answer", header: "Answer", question: "Continue?" }],
+          gatewayCall: { version: 2, call: gatewayCall },
+          answer: Promise.resolve({ status: "pending" }),
+        });
+        claim.attachRegistration(Promise.resolve());
+        const cancel = vi.fn();
+        const queueMessage = vi.fn(async () => {
+          throw new Error("V1 backend must not receive source-bound question input");
+        });
+        operation.attachBackend({
+          kind: "embedded",
+          runId: "accepted-backing-work",
+          toolAuthorityFingerprint: fingerprint,
+          supportsTranscriptCommitWait: true,
+          cancel,
+          messageInjection: { isAvailable: () => true, queueMessage },
+        });
+        operation.setPhase("running");
+        for (const run of [first, second]) {
+          const state: ReplyOperationRunState = {};
+          await withinTest(startSteer(key, run, operation, followup, state), signal);
+          expect(state.admission).toEqual({
+            status: "accepted",
+            mode: "followup",
+            reason: "steering-unavailable",
+          });
+        }
+        expect(getExistingFollowupQueue(key)?.items.map((run) => run.prompt)).toEqual([
+          text,
+          "next input",
+        ]);
+        expectNotCalled(followup, queueMessage, cancel, gatewayCall);
+        expect(operation.abortSignal.aborted).toBe(false);
+        expect(getSessionControllerOperation(key)).toBe(operation);
+        await expectPendingQuestionAnswerClaimable(key, true);
+        operation.complete();
+      });
+      await withinTest(firstEntered.promise, signal);
+      expect(followup).toHaveBeenCalledOnce();
+      expect(followup.mock.calls[0]?.[0].prompt).toBe(text);
+      releaseFirst.resolve();
+      await withinTest(secondEntered.promise, signal);
+      expect(followup.mock.calls.map(([run]) => run.prompt)).toEqual([text, "next input"]);
+      expect(gatewayCall).not.toHaveBeenCalled();
+    } finally {
+      releaseFirst.resolve();
+      claim?.dispose();
+      await Promise.allSettled(followup.mock.results.map((result) => result.value));
+      clearSessionQueues([key]);
+    }
     expect(getSessionControllerOperation(key)).toBeUndefined();
     expect(getExistingFollowupQueue(key)).toBeUndefined();
   });

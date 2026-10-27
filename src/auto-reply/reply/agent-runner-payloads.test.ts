@@ -69,7 +69,14 @@ function withMirror(text: string, visibleText = text) {
   );
 }
 
-function expectMirroredText(payload: ReplyPayload | undefined, text: string) {
+async function expectMirroredText(
+  input: ReplyPayload,
+  text: string,
+  params: Omit<TestReplyPayloadParams, "payloads"> = {},
+) {
+  const { replyPayloads } = await buildTestReplyPayloads({ payloads: [input], ...params });
+  expect(replyPayloads).toHaveLength(1);
+  const [payload] = replyPayloads;
   expect(payload?.text).toBe(text);
   expect(
     getReplyPayloadMetadata(expectDefined(payload, "expected reply"))?.sourceReplyTranscriptMirror
@@ -251,15 +258,11 @@ describe("buildReplyPayloads media filter integration", () => {
     "filters internal formatting after media dedupe: %s",
     async (_name, media, delivered, visible) => {
       const mediaUrl = "file:///tmp/result.png";
-      const { replyPayloads } = await buildTestReplyPayloads({
+      await expectBuiltPayloads({
         payloads: [{ text: "───", ...(media ? { mediaUrl } : {}) }],
+        expected: visible ? [{ mediaUrl }] : [],
         directBlockDeliveries: delivered ? [{ payload: { mediaUrl }, outcome: "delivered" }] : [],
       });
-
-      expect(replyPayloads).toHaveLength(visible ? 1 : 0);
-      if (visible) {
-        expect(replyPayloads[0]?.mediaUrl).toBe(mediaUrl);
-      }
     },
   );
 
@@ -268,14 +271,10 @@ describe("buildReplyPayloads media filter integration", () => {
     async (visibleAlreadyClean) => {
       const text =
         'Visible\n<function_response>\nSearching for: "what skills matter most in the age of AI"\n...\n</function_response>\nDone';
-      const payload = withMirror(text, visibleAlreadyClean ? "Visible\n\nDone" : text);
-
-      const { replyPayloads } = await buildTestReplyPayloads({
-        payloads: [payload],
-      });
-
-      expect(replyPayloads).toHaveLength(1);
-      expectMirroredText(replyPayloads[0], "Visible\n\nDone");
+      await expectMirroredText(
+        withMirror(text, visibleAlreadyClean ? "Visible\n\nDone" : text),
+        "Visible\n\nDone",
+      );
     },
   );
 
@@ -288,15 +287,13 @@ describe("buildReplyPayloads media filter integration", () => {
       '<function_calls><invoke name="exec">private XML</invoke></function_calls>',
       "private inbound paragraph",
     ].join("\n");
-    const text = `${conversationContext}\n\nVisible answer.`;
-    const payload = withMirror(text);
-
-    const { replyPayloads } = await buildTestReplyPayloads({
-      payloads: [payload],
-      conversationContext,
-    });
-
-    expectMirroredText(replyPayloads[0], "Visible answer.");
+    await expectMirroredText(
+      withMirror(`${conversationContext}\n\nVisible answer.`),
+      "Visible answer.",
+      {
+        conversationContext,
+      },
+    );
   });
 
   it("dedupes final media only against message-tool media sent to the same route", async () => {

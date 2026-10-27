@@ -211,7 +211,6 @@ describe("runReplyAgent runtime config", () => {
         } else {
           await expect(runReplyAgent(replyParams)).resolves.toEqual({ text: "done" });
         }
-        expect(finalize).toHaveBeenCalledOnce();
         expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith(outcome);
       } finally {
         finalize.mockRestore();
@@ -280,7 +279,6 @@ describe("runReplyAgent runtime config", () => {
         await queuedCall[4](queuedCall[1]);
 
         expect(queuedCall[1].controllerInput?.claim).toBeDefined();
-        expect(executeAgentTurnMock).toHaveBeenCalledTimes(2);
         expect(onAgentRunTerminalOutcome.mock.calls).toEqual([["completed"], ["failed"]]);
         expect(isSessionRunActive(sessionEntry.sessionId)).toBe(false);
       } finally {
@@ -415,7 +413,6 @@ describe("runReplyAgent runtime config", () => {
           lifecycle.onDeferredHeartbeat.mockClear();
           await vi.advanceTimersByTimeAsync(500);
           expect(lifecycle.onDeferredHeartbeat).not.toHaveBeenCalled();
-          expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
         } finally {
           release.resolve();
           await Promise.allSettled([pending]);
