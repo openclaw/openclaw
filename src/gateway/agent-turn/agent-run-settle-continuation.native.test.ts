@@ -41,8 +41,13 @@ vi.mock("../../commands/agent.js", () => ({ agentCommandFromGatewayIngress: read
 
 type TurnParams = Parameters<typeof prepareAgentRunUserTurn>[0];
 type Recorder = NonNullable<Awaited<ReturnType<typeof prepareAgentRunUserTurn>>["recorder"]>;
+const interSession = (sourceTool: string, sourceSessionKey: string) => ({
+  kind: "inter_session" as const,
+  sourceTool,
+  sourceSessionKey,
+});
 function makeTurnParams(
-  target: { sessionKey: string; sessionId: string; storePath: string },
+  target: Awaited<ReturnType<typeof createTarget>>,
   message: string,
   runId: string,
   overrides: Partial<Omit<TurnParams, "request">> & {
@@ -116,9 +121,7 @@ describe("requester-settle processing survives later user turns", () => {
         sessionEntry: loadSessionEntry(scope()) ?? undefined,
         request,
         inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey,
-          sourceTool: "subagent_settle",
+          ...interSession("subagent_settle", sourceSessionKey),
           sourceChannel: "internal",
         },
         context: { ...preparationContext, logGateway },
@@ -129,23 +132,18 @@ describe("requester-settle processing survives later user turns", () => {
     ...makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp: 2, stopReason }),
     __openclaw: { runId },
   });
-  const register = (instanceId: string) => {
+  const dispatch = (instanceId: string) => {
     const entry = createTestRpcSource(
       { sessionKey, sessionId, operationalRunInstance: { runId, instanceId } },
       runId,
     );
     rpcSourceTesting.set(runId, entry);
-    return entry;
-  };
-  const completedPayload = { status: "ok", summary: "completed", inputProcessingCompleted: true };
-  type Prepared = Awaited<ReturnType<typeof prepare>>;
-  const dispatch = (turn: Prepared, entry: ReturnType<typeof createTestRpcSource>) => {
     const controller = testRpcSourceController(entry);
     const cleanupAbortController = vi.fn(() => {
       rpcSourceTesting.deleteExpected(runId, entry);
     });
     const emitFinal = vi.fn();
-    const execute = () =>
+    const execute = (turn: Prepared) =>
       dispatchAgentRunFromGateway({
         admittedRunEntry: entry,
         ingressOpts: {
@@ -164,6 +162,8 @@ describe("requester-settle processing survives later user turns", () => {
       });
     return { entry, controller, cleanupAbortController, emitFinal, execute };
   };
+  const completedPayload = { status: "ok", summary: "completed", inputProcessingCompleted: true };
+  type Prepared = Awaited<ReturnType<typeof prepare>>;
   const completion = (turn: Prepared) => turn.recorder!.getProcessingCompletion!();
   const complete = (
     turn: Prepared,
@@ -220,8 +220,7 @@ describe("requester-settle processing survives later user turns", () => {
   beforeEach(async () => {
     logGateway.warn.mockClear();
     reads.command.mockReset().mockResolvedValue({ payloads: [], meta: { yielded: true } });
-    const entry = { sessionId, updatedAt: 1 };
-    await upsertSessionEntryCore(scope(), entry);
+    await upsertSessionEntryCore(scope(), { sessionId, updatedAt: 1 });
   });
 
   it.each([false, true])(
@@ -265,9 +264,8 @@ describe("requester-settle processing survives later user turns", () => {
     const manager = await SessionManager.openAsync(scope(), fixture.sessionsDir());
     await manager.appendMessageAsync(assistant("toolUse"));
     await manager.appendCustomMessageEntryAsync("openclaw.sessions_yield", "", false, { runId });
-    const entry = register("settle-native-instance");
-    const { emitFinal, execute } = dispatch(original, entry);
-    await execute();
+    const { emitFinal, execute } = dispatch("settle-native-instance");
+    await execute(original);
     expect(emitFinal).toHaveBeenCalledWith(
       [true, expect.objectContaining({ status: "ok", inputProcessingCompleted: true }), undefined],
       { runId },
@@ -354,19 +352,15 @@ describe("requester-settle processing survives later user turns", () => {
   );
 
   it("cannot publish a cancellation after losing completion authority", async () => {
-    let current = true;
+    const authority = new AbortController();
     const controller = new AbortController();
     const original = await prepare({
       abortSignal: controller.signal,
-      assertCompletionCurrent: () => {
-        if (!current) {
-          throw new Error("completion authority revoked");
-        }
-      },
+      assertCompletionCurrent: () => authority.signal.throwIfAborted(),
     });
     await original.recorder!.persistApproved();
     const before = await loadTranscriptEvents(scope());
-    current = false;
+    authority.abort(new Error("completion authority revoked"));
     controller.abort();
     await expect(original.recorder!.waitForPendingInputSettlement!()).rejects.toThrow(
       "completion authority revoked",
@@ -382,13 +376,11 @@ describe("requester-settle processing survives later user turns", () => {
   it.each([false, true])(
     "retains timeout input until its producer settles (classified=%s)",
     async (classified) => {
-      const entry = register("settle-timeout-instance");
-      const controller = testRpcSourceController(entry);
+      const { entry, controller, cleanupAbortController, emitFinal, execute } = dispatch("timeout");
       const original = await prepare({
         abortSignal: controller.signal,
         getAbortStopReason: () => "timeout",
       });
-      const { cleanupAbortController, emitFinal, execute } = dispatch(original, entry);
       await original.recorder!.persistApproved();
       const producer = createGate();
       reads.command.mockImplementationOnce(async () => {
@@ -403,7 +395,7 @@ describe("requester-settle processing survives later user turns", () => {
       });
       const execution = withSessionTurn(
         { sessionKey, sessionId, target: entry.input.target, controllerInput: entry.input },
-        execute,
+        () => execute(original),
       );
       try {
         await awaitGateBeforeSettlement(
@@ -448,7 +440,7 @@ describe("requester-settle processing survives later user turns", () => {
       withSessionSendDelivery({ delivery }, () =>
         prepare({
           settleWakeReplay: undefined,
-          inputProvenance: { kind: "inter_session", sourceSessionKey, sourceTool: "sessions_send" },
+          inputProvenance: interSession("sessions_send", sourceSessionKey),
         }),
       );
     const original = await preparePeer();
@@ -497,11 +489,7 @@ it("keeps the committed child target and later owner metadata through input pers
 
 it("persists subagent completion handoff prompts as hidden inter-session turns", async () => {
   const target = await createTarget("agent:main:completion-handoff", "completion-handoff-session");
-  const provenance = {
-    kind: "inter_session" as const,
-    sourceSessionKey: "agent:main:subagent:child",
-    sourceTool: "subagent_announce",
-  };
+  const provenance = interSession("subagent_announce", "agent:main:subagent:child");
   const message = "Continue the OpenClaw runtime event.";
   const params = makeTurnParams(target, message, "announce:completion-handoff", {
     inputProvenance: provenance,
@@ -535,7 +523,6 @@ it.each(["Original requester", null])(
   "retains accepted sender presentation after a profile rename (%s)",
   async (originalName) => {
     const target = await createTarget("agent:main:private-sender", "private-sender-session");
-    const runId = "announce:private-sender";
     const profileOptions = {
       path: path.resolve(fixture.sessionsDir(), "../../../state/openclaw.sqlite"),
     };
@@ -556,17 +543,13 @@ it.each(["Original requester", null])(
           updatedAt: original.updatedAt,
         },
       });
-    const params = makeTurnParams(target, "Retained private result", runId, {
+    const params = makeTurnParams(target, "Retained private result", "announce:private-sender", {
       privateCompletion: true,
       request: {
         expectedExistingSessionId: target.sessionId,
         deliver: false,
       },
-      inputProvenance: {
-        kind: "inter_session",
-        sourceTool: "subagent_announce",
-        sourceSessionKey: "agent:main:subagent:sender-child",
-      },
+      inputProvenance: interSession("subagent_announce", "agent:main:subagent:sender-child"),
       client: clientFor(original.displayName),
     });
     const accepted = await withTurn(params, async (recorder) => {
@@ -599,22 +582,18 @@ it.each(["Original requester", null])(
       );
     }
     const readSubmitted = pendingInputs.readSessionSubmittedInput;
-    let current = true;
+    const authority = new AbortController();
     using _ = vi
       .spyOn(pendingInputs, "readSessionSubmittedInput")
       .mockImplementationOnce(async (...args) => {
         const submitted = await readSubmitted(...args);
-        current = false;
+        authority.abort(new Error("Private source revoked"));
         return submitted;
       });
     await expect(
       prepareAndRelease({
         ...replayParams,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Private source revoked");
-          }
-        },
+        assertCurrent: () => authority.signal.throwIfAborted(),
       }),
     ).rejects.toThrow("Private source revoked");
     expect(await pendingInputs.listSessionPendingInputs(target)).toEqual(retained);

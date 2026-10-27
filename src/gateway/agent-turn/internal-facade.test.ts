@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
@@ -338,15 +339,13 @@ it("keeps selected wait session facts private", async () => {
 it.each(["final", "error"])(
   "preserves acceptance ordering and the post-acceptance %s",
   async (completion) => {
-    let sourceCurrent = true;
-    const assertAdmissionCurrent = vi.fn(() => {
-      if (!sourceCurrent) {
-        throw new Error("source closed");
-      }
-    });
+    const authority = new AbortController();
+    const assertAdmissionCurrent = () => authority.signal.throwIfAborted();
     const accepted = createDeferred();
     const { promise: finalGate, resolve: emitFinal } = createDeferred();
-    const dispatchError = Object.assign(new Error("turn failed"), { code: "ETURN" });
+    const dispatchError = new Error("turn failed");
+    const payload = { runId: "run-1", status: "ok", summary: "done" };
+    const meta = { runId: "run-1", terminal: true };
     startTurn.mockImplementation(async ({ io, assertAdmissionCurrent: admissionGuard }) => {
       admissionGuard();
       accept(io, "run-1", { runId: "run-1" });
@@ -354,28 +353,20 @@ it.each(["final", "error"])(
       if (completion === "error") {
         throw dispatchError;
       }
-      io.emitFinal([true, { runId: "run-1", status: "ok", summary: "done" }, undefined], {
-        runId: "run-1",
-        terminal: true,
-      });
+      io.emitFinal([true, payload, undefined], meta);
     });
     const onAccepted = vi.fn(() => accepted.resolve());
 
     const result = requestTurn("run-1", { expectFinal: true, onAccepted, assertAdmissionCurrent });
     await accepted.promise;
     expect(onAccepted).toHaveBeenCalledWith({ runId: "run-1", status: "accepted" });
-    sourceCurrent = false;
+    authority.abort(new Error("source closed"));
     emitFinal();
 
     if (completion === "error") {
       await expect(result).rejects.toBe(dispatchError);
     } else {
-      await expect(result).resolves.toEqual({
-        ok: true,
-        payload: { runId: "run-1", status: "ok", summary: "done" },
-        error: undefined,
-        meta: { runId: "run-1", terminal: true },
-      });
+      await expect(result).resolves.toEqual({ ok: true, payload, error: undefined, meta });
     }
   },
 );
@@ -497,7 +488,6 @@ it.each([false, true])(
   "cancels only its accepted run across the dispatch deadline (late acceptance: %s)",
   async (lateAcceptance) => {
     vi.useFakeTimers();
-    const context = createContext();
     const acceptanceGate = createDeferred();
     const acceptanceReached = createDeferred();
     const unrelated = registerRun("unrelated-run", "unrelated-session", "agent:main:unrelated");
@@ -515,18 +505,13 @@ it.each([false, true])(
       accept(io, "deadline-run", { runId: "deadline-run" });
       acceptanceReached.resolve();
       if (!lateAcceptance) {
-        await new Promise<void>((_resolve, reject) => {
-          registration.controller.signal.addEventListener(
-            "abort",
-            () => reject(new Error("deadline run aborted")),
-            { once: true },
-          );
-        });
+        await once(registration.controller.signal, "abort");
+        throw new Error("deadline run aborted");
       }
     });
 
     try {
-      const result = createFacade(context).dispatchRaw(
+      const result = createFacade().dispatchRaw(
         {
           message: "settle requester",
           sessionKey: "agent:main:deadline",

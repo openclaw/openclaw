@@ -158,6 +158,15 @@ describe("Gateway dispatch run ownership", () => {
     });
   }
 
+  function holdCommand(result: () => CommandResult = commandResult) {
+    const finish = createDeferred();
+    mocks.agentCommand.mockImplementationOnce(async () => {
+      await finish.promise;
+      return result();
+    });
+    return finish;
+  }
+
   it.each(["command", "command-cleanup", "media"] as const)(
     "joins a captured terminal save with the %s producer failure",
     async (startup) => {
@@ -255,11 +264,7 @@ describe("Gateway dispatch run ownership", () => {
     "rejects captured transcript custody after %s replacement",
     async (replacement) => {
       const { runId, entry, params } = createDispatch(true);
-      const finish = createDeferred();
-      mocks.agentCommand.mockImplementationOnce(async () => {
-        await finish.promise;
-        return commandResult();
-      });
+      const finish = holdCommand();
       const completion = dispatchAgentRunFromGateway(params);
       releaseAfterTest(completion, finish);
       const producer = entry.adapter.resolveTerminalProducer?.();
@@ -376,26 +381,16 @@ describe("Gateway dispatch run ownership", () => {
         },
         replacement === "same-session",
       );
-      const finishCommand = createDeferred();
-      const save = createGate();
-      mocks.agentCommand.mockImplementationOnce(async () => {
-        await finishCommand.promise;
-        return commandResult({
+      const finishCommand = holdCommand(() =>
+        commandResult({
           ...(entry.input.abortSignal.aborted ? { aborted: true, stopReason: "rpc" } : {}),
           terminalReply: { disposition: "visible", text: "Original result" },
-        });
-      });
-      let observed = false;
-      const reply = owner.take().then(
-        (result) => {
-          observed = true;
-          return { result };
-        },
-        (error: unknown) => {
-          observed = true;
-          return { error };
-        },
+        }),
       );
+      const save = createGate();
+      const observed = vi.fn();
+      const reply = owner.take();
+      void reply.then(observed, observed);
       const completion = dispatch();
       releaseAfterTest(completion, finishCommand, save);
       const producer = entry.adapter.resolveTerminalProducer?.();
@@ -419,22 +414,17 @@ describe("Gateway dispatch run ownership", () => {
       }
       finishCommand.resolve();
       await save.entered;
-      expect(observed).toBe(false);
+      expect(observed).not.toHaveBeenCalled();
       save.resolve();
       await completion;
       if (replacement === "same-session" || replacement === "mutated-entry") {
-        await expect(reply).resolves.toMatchObject({
-          error: expect.objectContaining({
-            message: expect.stringContaining("lost its Gateway registration"),
-          }),
-        });
+        await expect(reply).rejects.toThrow("lost its Gateway registration");
       } else {
-        await expect(reply).resolves.toMatchObject({
-          result:
-            replacement === "removed-by-abort"
-              ? { status: "error", stopReason: "rpc" }
-              : { status: "ok", replyText: "Original result" },
-        });
+        await expect(reply).resolves.toMatchObject(
+          replacement === "removed-by-abort"
+            ? { status: "error", stopReason: "rpc" }
+            : { status: "ok", replyText: "Original result" },
+        );
       }
       if (replacement !== "removed-by-abort") {
         expect(mocks.clearAgentRunContext).not.toHaveBeenCalled();
