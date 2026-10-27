@@ -26,6 +26,7 @@ export type PreparedModelRuntimeAuthMutation = {
   agentDir?: string;
   affectsInheritedStores: boolean;
   profileSetChanged: boolean;
+  availabilityOnly?: boolean;
 };
 
 type PreparedModelRuntimeAuthTransaction = {
@@ -447,6 +448,11 @@ export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
   invalidatedOwners: PreparedModelRuntimeOwner[];
   invalidatedConfiguredAgentIds: Set<string>;
 } {
+  // Availability reads use the auth snapshot owner's current usage view. Rebuilding here
+  // would retire otherwise-current plugins and supersede concurrent credential publications.
+  if (event.availabilityOnly) {
+    return { invalidatedOwners: [], invalidatedConfiguredAgentIds: new Set() };
+  }
   const agentDir = normalizeOptionalDir(event.agentDir);
   const staleError = capturePreparedModelRuntimeRefreshError(
     new Error("prepared model runtime owner is stale after auth mutation"),

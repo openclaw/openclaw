@@ -101,6 +101,8 @@ const repositoryScriptEntries = [
   "apps/android/scripts/build-release-artifacts.ts!",
   // scripts/README.md invokes this warm-interaction benchmark CLI by path.
   "scripts/bench-control-ui-interactions.ts!",
+  // scripts/README.md invokes the Chromium/WebKit companion with shared scenarios.
+  "scripts/bench-control-ui-engines.ts!",
   // The opt-in projection benchmark builds its browser fixture through this CLI.
   "scripts/build-control-ui-projection-fixture.mts!",
   // scripts/README.md invokes these exact memory-search benchmarks by path.
@@ -140,6 +142,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-actor-residency-snapshot.mjs!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-row-materialization-measure.ts!",
+  "scripts/perf/session-row-refresh-measure.ts!",
   "scripts/perf/session-row-lineage-measure.ts!",
   "scripts/perf/tool-result-hash-measure.ts!",
   "scripts/perf/tool-result-size-measure.ts!",
@@ -494,6 +497,8 @@ const repositoryScriptEntries = [
   "scripts/perf/placement-recovery-reads-bench.ts!",
   "scripts/perf/plain-tool-brace-measure.ts!",
   "scripts/perf/plugin-cache-stat-facts.ts!",
+  // Its header documents the paired metadata-root allocation benchmark.
+  "scripts/perf/plugin-cache-root-measure.ts!",
   "scripts/perf/plugin-preparation-boot.mjs!",
   "scripts/perf/plugin-preparation-boot-preload.mjs!",
   "scripts/perf/plugin-relative-path-measure.ts!",
@@ -518,6 +523,14 @@ const repositoryScriptEntries = [
   "scripts/perf/trajectory-tool-parameters-measure.ts!",
   "scripts/perf/transcript-projection-receipt-measure.ts!",
   "scripts/perf/ui-streaming-render-measure.ts!",
+  // Their source headers document these standalone performance commands.
+  "scripts/perf/active-run-projector-measure.ts!",
+  "scripts/perf/cron-store-context-measure.ts!",
+  "scripts/perf/diagnostic-frozen-trace-measure.ts!",
+  "scripts/perf/image-worker-buffers-measure.mjs!",
+  "scripts/perf/installed-plugin-index-fingerprint-measure.ts!",
+  "scripts/perf/knowledge-worker-diagnostics-measure.mjs!",
+  "scripts/perf/knowledge-worker-heap-measure.mjs!",
   // Maintained source headers invoke these standalone commands by exact path.
   "scripts/perf/archive-worker-startup-measure.mjs!",
   "scripts/perf/archive-canonical-worker-measure.ts!",
@@ -684,6 +697,7 @@ const repositoryScriptEntries = [
   "scripts/bench-team-reports-snapshots.mts!",
   "scripts/perf/async-work-scope-measure.ts!",
   "scripts/perf/local-workspace-callers-measure.ts!",
+  "scripts/perf/local-workspace-retention.ts!",
   "scripts/perf/plugin-iterator-membrane-measure.ts!",
   "scripts/perf/plugin-generation-retention.ts!",
   "scripts/perf/placement-startup-wake-measure.ts!",

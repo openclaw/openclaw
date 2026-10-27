@@ -13,6 +13,7 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
+import { localPlacement } from "../../gateway/worker-environments/placement-suite.test-support.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import {
@@ -218,26 +219,12 @@ describe("Goal continuation eligibility", () => {
     });
     workerPlacement.supported = mode !== "unsupported";
     workerPlacement.current.mockReturnValue({
+      ...localPlacement(identity.sessionId),
       agentId: "main",
       sessionKey: mode === "wrong-session" ? "other" : f.params.sessionKey,
       sessionId: identity.sessionId,
       state: mode === "local" ? "local" : "requested",
       executionMode: mode === "worker-turn" ? "worker-turn" : "remote-exec",
-      generation: 1,
-      turnClaim: null,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      stateChangedAtMs: 1,
-      environmentId: null,
-      activeOwnerEpoch: null,
-      workspaceBaseManifestRef: null,
-      remoteWorkspaceDir: null,
-      workerBundleHash: null,
-      lastTranscriptAckCursor: null,
-      lastLiveEventAckCursor: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      recoveryError: null,
     });
     expect(await enqueueGoalContinuation(f.params)).toBe(mode === "remote-exec");
     if (mode === "remote-exec") {

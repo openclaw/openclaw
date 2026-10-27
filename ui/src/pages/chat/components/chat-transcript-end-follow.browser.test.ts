@@ -17,6 +17,8 @@ class EndFollowFixture extends TranscriptTestHost {
   viewportPadding = 60;
   earlierRowHeight = 400;
   lastRowHeight = 900;
+  olderRows: TranscriptRow[] = [];
+  terminalRows: TranscriptRow[] = [];
 
   private readonly viewport = document.createElement("div");
   private readonly thread = document.createElement("div");
@@ -52,8 +54,10 @@ class EndFollowFixture extends TranscriptTestHost {
       this.appliedLastRowHeight = this.lastRowHeight;
     }
     const rows: TranscriptRow[] = [
+      ...this.olderRows,
       { kind: "content", key: "earlier", content: this.earlier },
       { kind: "content", key: "growing-run", content: this.last },
+      ...this.terminalRows,
     ];
     const content = this.transcript.renderSession("agent:main:end-follow", (session) =>
       renderReadyRows(session, rows),
@@ -117,6 +121,55 @@ async function settleFrames() {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   });
 }
+
+it("keeps the cached tail mounted when full history replaces the boot window", async () => {
+  await page.viewport(1200, 900);
+  saveChatSessionScrollPosition("end-follow-browser", "agent:main:end-follow", {
+    scrollTop: 0,
+    anchorToEnd: true,
+  });
+  const host = new EndFollowFixture();
+  fixture = host;
+  host.earlierRowHeight = 120;
+  const historyRow = (index: number): TranscriptRow => {
+    const content = document.createElement("div");
+    content.style.height = "120px";
+    return { kind: "content", key: `history-${index}`, content };
+  };
+  host.olderRows = Array.from({ length: 80 }, (_, index) => historyRow(index + 100));
+  host.style.cssText = "display: block; width: 800px";
+  document.body.append(host);
+  await host.settleUpdates();
+  await settleFrames();
+  const thread = host.querySelector<HTMLElement>(".chat-thread")!;
+  const windows: string[][] = [];
+  const observer = new MutationObserver(() => {
+    windows.push(
+      Array.from(
+        thread.querySelectorAll<HTMLElement>(".chat-virtual-row"),
+        (row) => row.dataset.virtualRowKey!,
+      ),
+    );
+  });
+  observer.observe(thread, { childList: true, subtree: true });
+  try {
+    host.olderRows = [
+      ...Array.from({ length: 100 }, (_, index) => historyRow(index)),
+      ...host.olderRows,
+    ];
+    const notice = document.createElement("div");
+    notice.style.height = "32px";
+    host.terminalRows = [{ kind: "content", key: "terminal-notice", content: notice }];
+    host.requestRender();
+    await host.settleUpdates();
+    await settleFrames();
+    expect(windows.length).toBeGreaterThan(0);
+    expect(windows.every((keys) => keys.includes("growing-run"))).toBe(true);
+    expect(thread.scrollHeight - thread.clientHeight - thread.scrollTop).toBe(0);
+  } finally {
+    observer.disconnect();
+  }
+});
 
 it("keeps a newly measured tail visible in the first paint after growth", async () => {
   const { host, thread, row, distance } = await mountFollowingFixture();

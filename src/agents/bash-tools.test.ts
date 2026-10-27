@@ -285,7 +285,7 @@ it("reads the unbounded offset log window", async () => {
   const log = await processAction({ action: "log", sessionId, offset: 30 });
   expect(log.details).toMatchObject({ totalLines: 201 });
   expect(text(log).split("\n")[0]).toBe("line-31");
-  expect(text(log).split("\n").at(-1)).toBe("line-201");
+  expect(text(log)).toMatch(/line-201\n\nProcess exited with code 0\.$/);
   expect(text(log)).not.toContain("showing last 200");
 });
 

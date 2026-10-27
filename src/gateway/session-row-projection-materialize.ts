@@ -282,7 +282,9 @@ export function readResidentSessionRow(
     throw new Error("Session rows require prepared database facts");
   }
   const { inputs, presentation } = readSessionRowInputs({
-    ...row,
+    key: row.key,
+    agentId: row.agentId,
+    entry: row.entry,
     cfg,
     preparedAcpMeta: databaseFacts.acpMeta,
     preparedRuntimeOwnership: databaseFacts.runtimeOwnership,

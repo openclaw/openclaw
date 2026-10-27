@@ -354,7 +354,7 @@
   position: relative;
   z-index: 3;
   display: flex;
-  min-height: 30px;
+  height: 1lh;
   flex: 0 0 auto;
   align-items: center;
   margin-inline-start: auto;

@@ -11,6 +11,10 @@ import {
   makeAgentUserMessage,
 } from "../agents/test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import {
+  withGuardedFetchBeforeRequest,
+  withGuardedFetchRequestAuthority,
+} from "../infra/net/fetch-request-authority.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
@@ -182,4 +186,40 @@ it.each(
         },
   );
   expect(JSON.stringify(projected)).not.toContain("fixture-sensitive-authorization");
+});
+
+it("requires managed fetch only inside a request-owned egress guard", async () => {
+  const host = getAiTransportHost();
+  const model = makeProviderModelFixture<"openai-chatgpt-responses">({
+    id: "gpt-test",
+    api: "openai-chatgpt-responses",
+    provider: "openai",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+  });
+  const guard = vi.fn();
+  expect(host.requiresManagedTransport(model, "fetch")).toBe(false);
+  const guarded = withGuardedFetchBeforeRequest(guard, async () => {
+    expect(host.requiresManagedTransport(model, "fetch")).toBe(true);
+    await Promise.resolve();
+    expect(host.requiresManagedTransport(model, "fetch")).toBe(true);
+  });
+  // The concurrent unguarded caller keeps its ordinary transport selection.
+  expect(host.requiresManagedTransport(model, "fetch")).toBe(false);
+  await guarded;
+  expect(host.requiresManagedTransport(model, "fetch")).toBe(false);
+  // Native session forks already carry a send-time lifecycle assertion; that
+  // lifetime-only scope must not disable their independent WebSocket transport.
+  await withGuardedFetchRequestAuthority(guard, async () => {
+    expect(host.requiresManagedTransport(model, "fetch")).toBe(false);
+    await withGuardedFetchBeforeRequest(guard, async () => {
+      expect(host.requiresManagedTransport(model, "fetch")).toBe(true);
+      await withGuardedFetchRequestAuthority(undefined, async () => {
+        expect(host.requiresManagedTransport(model, "fetch")).toBe(true);
+      });
+    });
+    expect(host.requiresManagedTransport(model, "fetch")).toBe(false);
+  });
+  // Selecting a transport is not itself a physical submission.
+  // The two lifetime entries assert; no transport-selection call does.
+  expect(guard).toHaveBeenCalledTimes(2);
 });

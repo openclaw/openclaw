@@ -56,13 +56,9 @@ export function isHiddenAssistantStreamText(text: string): boolean {
   return stripHeartbeatTokenForDisplay(text).shouldSkip;
 }
 
-export function shouldHideAssistantChatMessage(message: unknown): boolean {
-  return isAssistantHeartbeatAckForDisplay(message);
-}
-
 export function isVisibleChatHistoryMessage(message: unknown): boolean {
   return !(
-    shouldHideAssistantChatMessage(message) ||
+    isAssistantHeartbeatAckForDisplay(message) ||
     isSyntheticTranscriptRepairToolResult(message) ||
     isEmptyUserTextOnlyMessage(message)
   );

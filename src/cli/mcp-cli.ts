@@ -34,7 +34,7 @@ import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
-import { loginMcpServer } from "./mcp-cli-oauth.js";
+import { loginMcpServer, registerMcpLoginCommand, type McpLoginOptions } from "./mcp-cli-oauth.js";
 import { probeMcpServers, resolveMcpProbeIssue } from "./mcp-cli-probe.js";
 import {
   offlineMcpAction,
@@ -1087,18 +1087,14 @@ export function registerMcpCli(program: Command) {
       ),
     );
 
-  mcp
-    .command("login")
-    .description("Authorize an OAuth MCP server")
-    .argument("<name>", "MCP server name")
-    .option("--code <code>", "Authorization code from the OAuth redirect")
-    .action(
-      offlineMcpAction("login", async (owner, name: string, opts: { code?: string }) => {
-        const loaded = await loadMcpConfig();
-        const server = requireMcpServer(loaded, name);
-        await loginMcpServer({ name, server, code: opts.code, owner, fail });
-      }),
-    );
+  registerMcpLoginCommand(
+    mcp,
+    offlineMcpAction("login", async (owner, name: string, opts: McpLoginOptions) => {
+      const loaded = await loadMcpConfig();
+      const server = requireMcpServer(loaded, name);
+      await loginMcpServer({ name, server, code: opts.code, issuer: opts.issuer, owner, fail });
+    }),
+  );
 
   mcp
     .command("logout")
