@@ -206,8 +206,11 @@ export function ChatDetailsBackground(
   const unlisted = createMemo(() => subagents().filter((row) => !row.listed));
   const desktopPresentation = createMemo(() => props.desktopSubagents);
   const collection = createMemo(() => roster().filter((row) => row.listed));
+  // A hydrated child read can still be waiting for its observed parent.
   const liveSummary = createMemo(() =>
-    desktopPresentation() && props.details.subagentSessionsHydrated
+    desktopPresentation() &&
+    props.details.subagentSessionsHydrated &&
+    props.details.subagentSessions?.length
       ? props.details.selectedSession && projectDetailsSubagents(collection())
       : undefined,
   );

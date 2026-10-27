@@ -175,7 +175,6 @@ it.each([false, true])(
       current.update({
         desktop: { expanded: true, onExpandedChange: vi.fn() },
         cached: {
-          total: 11,
           more: true,
           rows: [{ id: "job-0", name: "Check the task", running: false, state: "", result: {} }],
         },
@@ -225,7 +224,7 @@ it("keeps a bounded live preview when desktop rows close before cached props cat
   expect(current.find(".chat-summary__automation")).toBeNull();
   current.cron();
   await waitForSolid(() =>
-    expect(remember.mock.lastCall?.[0].automations).toMatchObject({ rows: [], total: 0 }),
+    expect(remember.mock.lastCall?.[0].automations).toMatchObject({ rows: [], more: false }),
   );
 });
 

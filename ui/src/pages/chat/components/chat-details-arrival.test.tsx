@@ -256,7 +256,7 @@ function automationGateway(request: ReturnType<typeof createGatewayRequestMock>)
   return { gateway, publish };
 }
 
-it("retains cached Subagents until the live parent is known, then adopts an empty roster", async () => {
+it("retains cached Subagents until the roster observes its parent, then adopts no children", async () => {
   const remember = vi.fn<NonNullable<ChatDetailsProps["onDetailsSnapshot"]>>();
   const view = mountDetails({
     selectedSession: undefined,
@@ -278,6 +278,16 @@ it("retains cached Subagents until the live parent is known, then adopts an empt
   expect(remember).not.toHaveBeenCalled();
   expect(view.group("subagents")?.textContent).toContain("Review");
   view.update({ selectedSession: { key: view.initial.sessionKey, kind: "direct" } });
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(view.group("subagents")?.textContent).toContain("Review");
+  expect(remember).not.toHaveBeenCalled();
+  view.update({ subagentSessions: [] });
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(view.group("subagents")?.textContent).toContain("Review");
+  expect(remember).not.toHaveBeenCalled();
+  view.update({ subagentSessions: [{ key: view.initial.sessionKey, kind: "direct" }] });
   await vi.advanceTimersByTimeAsync(0);
   flush();
   expect(view.group("subagents")).toBeNull();

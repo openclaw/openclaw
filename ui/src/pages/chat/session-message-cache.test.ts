@@ -271,7 +271,7 @@ describe("session message cache", () => {
     const details = {
       locale: "en",
       subagents: { total: 0, rows: [], counts: [] },
-      automations: { rows: [], total: 0, more: false },
+      automations: { rows: [], more: false },
       outputs: 1,
     };
     write(widgetSnapshot([], "session-1", { details }));

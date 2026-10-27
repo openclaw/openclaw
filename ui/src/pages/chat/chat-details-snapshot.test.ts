@@ -35,11 +35,11 @@ it("merges Details and row-footprint receipts in the current snapshot", () => {
   createChatWidgetLayout()(state.chatMessagesBySession, state, {
     sessionKey: state.sessionKey,
   }).writeRows(widgetHeights);
-  receipt.write({ automations: { rows: [], total: 0, more: false } });
+  receipt.write({ automations: { rows: [], more: false } });
   expect(captureChatDetailsSnapshot(state)?.details).toEqual({
     locale: i18n.getLocale(),
     subagents: { total: 0, rows: [], counts: [] },
-    automations: { rows: [], total: 0, more: false },
+    automations: { rows: [], more: false },
     outputs: 2,
   });
   expect(read()?.details?.outputs).toBe(2);

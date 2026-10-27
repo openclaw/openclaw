@@ -44,7 +44,6 @@ export const detailsSnapshotSchema = json.optional(
           10,
         ),
         more: json.boolean,
-        total: nonnegative,
       }),
     ),
     outputs: json.optional(nonnegative),

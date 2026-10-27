@@ -422,7 +422,6 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
           write: props.onDetailsSnapshot,
           automations: {
             rows: jobs().slice(0, 10),
-            total: inventory.total() ?? inventory.jobs().length,
             more: inventory.jobs().length > 10 || inventory.hasMore(),
           },
         }
@@ -646,7 +645,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
           }}
         </Show>
         <Show when={inventory.readable() || cached()}>
-          <Show when={inventory.jobs().length > 0 || (cached()?.total ?? 0) > 0}>
+          <Show when={inventory.jobs().length > 0 || (cached()?.rows.length ?? 0) > 0}>
             <Show
               when={props.desktop}
               fallback={
