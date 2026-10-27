@@ -598,6 +598,43 @@ describe("typed Git read ownership", () => {
     expect(gitRead).toHaveBeenCalledTimes(5);
   });
 
+  it("prepares only Git environment values once per poll while observing changes", async () => {
+    vi.useFakeTimers();
+    gitRead.mockResolvedValue(emptyDiff);
+    const environment = process.env;
+    let configPath = "/first";
+    const gitConfigRead = vi.fn(() => configPath);
+    const unrelatedRead = vi.fn(() => "unused");
+    process.env = {
+      ...environment,
+      get GIT_CONFIG_GLOBAL() {
+        return gitConfigRead();
+      },
+      get UNRELATED_DIFF_FIXTURE() {
+        return unrelatedRead();
+      },
+    };
+    try {
+      const poll = () =>
+        runGitReadOperation(
+          { type: "checkout.diff", input: { cwd: "/poll-environment" } },
+          { poll: true },
+        );
+      await poll();
+      await vi.advanceTimersByTimeAsync(1_001);
+      gitConfigRead.mockClear();
+      await poll();
+      expect(gitRead).toHaveBeenCalledOnce();
+      expect(gitConfigRead).toHaveBeenCalledOnce();
+      configPath = "/second";
+      await poll();
+      expect(gitRead).toHaveBeenCalledTimes(2);
+      expect(unrelatedRead).not.toHaveBeenCalled();
+    } finally {
+      process.env = environment;
+    }
+  });
+
   it("separates unavailable checkouts by environment and honors explicit refresh", async () => {
     vi.useFakeTimers();
     const operation = { type: "checkout.diff" as const, input: { cwd: "/negative-scope" } };

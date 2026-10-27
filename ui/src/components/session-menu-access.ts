@@ -36,6 +36,7 @@ export function sessionMenuReasons(params: {
   const involvementReason = reason({
     method: "sessions.setInvolvement",
     requiredScope: "operator.read",
+    sessionScope: true,
   });
   const patchReason = (patch: Record<string, unknown>, sessionScope = false) =>
     reason({

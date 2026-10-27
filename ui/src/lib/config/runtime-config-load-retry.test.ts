@@ -83,4 +83,27 @@ describe("runtime config load retries", () => {
       }
     },
   );
+
+  it("keeps reload available when editing opens after a failed display read", async () => {
+    vi.useFakeTimers();
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("gateway restarting"))
+      .mockResolvedValue(makeSnapshot());
+    const { runtimeConfig, state } = createConfigCapabilityHarness(request);
+    try {
+      await runtimeConfig.ensureDisplayLoaded();
+      await runtimeConfig.ensureLoaded();
+      expect(state.configLoading).toBe(false);
+      expect(request).toHaveBeenCalledOnce();
+
+      await runtimeConfig.refresh();
+      expect(state.configSnapshot?.hash).toBe("hash-1");
+      expect(state.configLoading).toBe(false);
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally {
+      runtimeConfig.dispose();
+      vi.useRealTimers();
+    }
+  });
 });

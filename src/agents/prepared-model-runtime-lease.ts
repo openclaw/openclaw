@@ -2,13 +2,18 @@
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
   getPreparedSharedAuthStoreOwnership,
   prepareSharedAuthStoreOwnership,
 } from "./auth-profiles/path-resolve.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
-import { getPreparedModelRuntimeBorrowedSnapshot } from "./prepared-model-runtime-generation-scope.js";
+import {
+  getPreparedModelRuntimeBorrowedSnapshot,
+  getPreparedModelRuntimePluginGeneration,
+  runOutsidePreparedModelRuntimePluginGenerationScope,
+} from "./prepared-model-runtime-generation-scope.js";
 import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
 import { isPreparedModelRuntimeMissingOwnerError } from "./prepared-model-runtime.errors.js";
 import {
@@ -101,6 +106,49 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       });
     }
   };
+  const acquire = () =>
+    acquirePreparedModelRuntimeLeaseAttempt(
+      rawInput,
+      provenance,
+      context,
+      options,
+      assertAdmission,
+    );
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await (attempt === 0
+        ? acquire()
+        : runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+            runOutsidePluginRuntimeGenerationScope(acquire),
+          ));
+    } catch (error) {
+      // Explicit and inherited pins belong to admitted work, including nested completions.
+      if (
+        !(error instanceof PreparedModelRuntimePublicationSupersededError) ||
+        provenance !== "run" ||
+        options.pluginGeneration ||
+        getPreparedModelRuntimePluginGeneration()
+      ) {
+        throw error;
+      }
+      assertAdmission();
+      if (attempt === 1) {
+        throw new PreparedModelRuntimePublicationSupersededError(
+          "Model runtime changed during both preparation attempts; retry the request",
+          { cause: error },
+        );
+      }
+    }
+  }
+}
+
+async function acquirePreparedModelRuntimeLeaseAttempt(
+  rawInput: PreparedModelRuntimeInput,
+  provenance: "run" | "ephemeral",
+  context: PreparedModelRuntimeLeaseContext,
+  options: PreparedModelRuntimeLeaseOptions,
+  assertAdmission: () => void,
+): Promise<PreparedModelRuntimeLease> {
   assertAdmission();
   const generation = options.pluginGeneration;
   const borrowed = generation && getPreparedModelRuntimeBorrowedSnapshot(generation);
@@ -325,7 +373,6 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       snapshot = owner.snapshot;
     }
     assertAdmission();
-    // Reload during acquisition is best-effort: fail this request instead of restarting preparation.
     if (owner.needsRefresh || owner.snapshot !== snapshot) {
       throw new PreparedModelRuntimePublicationSupersededError(
         `prepared model runtime publication was superseded for ${input.agentDir}`,

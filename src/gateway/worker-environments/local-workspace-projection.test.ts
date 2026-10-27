@@ -811,6 +811,37 @@ it.for([false, true])(
   },
 );
 
+it("reports successful native eviction and restores accepted workspace contents", async () => {
+  const { service } = await archiveFixture();
+  const projection = await prepare();
+  const authored = "accepted guest edit before native eviction\n";
+  await writeText(projection, "source.txt", authored);
+  await synchronize();
+  const { withWorktreeAllocationLease } = await import("../../agents/worktrees/allocation.js");
+  const { evictManagedWorktree } = await import("../../agents/worktrees/eviction.js");
+  await expect(
+    withWorktreeAllocationLease({ env: process.env }, (guard) =>
+      evictManagedWorktree({
+        env: process.env,
+        record: owner.worktree,
+        guard,
+        reason: "idle-age",
+        getConfig: () => ({}),
+      }),
+    ),
+  ).resolves.toBe("dirty-purged");
+  const removed = getRegistryWorktree(process.env, owner.worktree.id);
+  expect(removed?.removedAt).toBeTypeOf("number");
+  expect(removed?.snapshotRef).toBeTruthy();
+  await expectMissing(canonical);
+  await closeOpenClawStateDatabaseAsync();
+  await service.restore({ id: owner.worktree.id });
+  await prepare();
+  await expectText(canonical, "source.txt", authored);
+  await expectText(projection, "source.txt", authored);
+  expect((await readProjection())?.pending_ref).toBeNull();
+});
+
 it.each(["legacy decoder", "failed restore retry", "retention"] as const)(
   "preserves accepted ignored files, symlinks and empty directories through archive: %s",
   async (mode) => {

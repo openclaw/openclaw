@@ -198,7 +198,9 @@ unresolved checkpoint failure cannot be reported as a clean stop.
 Conflicts preserve both versions and block further
 settlement until resolved. A retry or restart recovers the same pending result.
 Archive, reset, and deletion settle changes before retiring their runtimes;
-projection cleanup follows the existing managed-worktree snapshot retention.
+successful retirement clears owned pause receipts without resuming those runtimes.
+Failed retirement preserves guarded recovery for surviving paused runtimes.
+Projection cleanup follows the existing managed-worktree snapshot retention.
 Accepted guest-created ignored files (including symlinks) and empty directories
 survive archive and restore through the same pending-result recovery owner. This
 does not force ignored paths into Git publication or import unrelated ignored host

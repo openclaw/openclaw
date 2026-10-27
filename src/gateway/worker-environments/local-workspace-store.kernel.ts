@@ -11,10 +11,7 @@ import {
   readLocalWorkspaceSourcePaths,
   readLocalWorkspaceSweepCandidates,
 } from "./local-workspace-cas.kernel.js";
-import type {
-  LocalWorkspaceMutation,
-  LocalWorkspaceProjection,
-} from "./local-workspace-store.types.js";
+import type { LocalWorkspaceMutation } from "./local-workspace-store.types.js";
 
 const table = "local_workspace_projections";
 const nodes = "local_workspace_manifest_nodes";
@@ -151,7 +148,7 @@ export function mutateLocalWorkspaceProjection(
 export function readLocalWorkspaceProjectionByPathInDatabase(
   db: EngineConnection,
   projectionPath: string,
-): LocalWorkspaceProjection | null {
+) {
   if (!getAdmittedSqlSchemaFacts(db)) {
     throw new Error("Local workspace lookup requires admitted schema facts.");
   }
@@ -161,7 +158,10 @@ export function readLocalWorkspaceProjectionByPathInDatabase(
   return (
     executeSqliteQueryTakeFirstSync(
       db,
-      query(db).selectFrom(table).selectAll().where("projection_path", "=", projectionPath),
+      query(db)
+        .selectFrom(table)
+        .select(["worktree_id", "agent_id", "session_key", "session_id", "lifecycle_revision"])
+        .where("projection_path", "=", projectionPath),
     ) ?? null
   );
 }

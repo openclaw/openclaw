@@ -9,14 +9,16 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import type { ModelFallbackAvailability } from "./agent-scope.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import type { ModelFallbackStepFields } from "./model-fallback-observation.js";
-import type { ModelFallbackAttemptProvenance } from "./model-fallback.types.js";
+import type {
+  ModelFallbackAvailability,
+  ModelFallbackAttemptProvenance,
+} from "./model-fallback.types.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,

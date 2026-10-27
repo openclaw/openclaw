@@ -716,3 +716,12 @@ the admitted-agent matrix supplies a synthetic typed completion event. Neither
 fixture delivers an external announcement. These assertions define the offline regression contract; mock
 token usage is not evidence of provider cache reuse, which requires a successful
 live run.
+
+## Opt-in Gateway restart stress
+
+The existing team-shaped stress controller also supports bounded real-process
+restart chaos, with a mock dry mode and an explicitly selected approved live model.
+It combines concurrent coding turns, subagents, background exec, steering, queued
+messages, metadata churn, and a local TPM-429 proxy. It never connects to an existing
+Gateway or runs in CI. See `scripts/perf/team-shape-stress.md` in the repository for
+commands, credential isolation, report artifacts, and the limits of each invariant.

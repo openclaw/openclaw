@@ -41,6 +41,7 @@ import { isCompletionHeldByYield } from "./subagent-registry-run-pause.js";
 import { completeTerminalEffects } from "./subagent-registry-terminal-effects.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { getSubagentTerminalReplySummary } from "./subagent-run-payload-facts.js";
 import {
   resolveSubagentRunEffectiveEndedAt,
   shouldPreservePublishedExplicitRunTimeout,
@@ -215,6 +216,7 @@ export async function completeSubagentRunAttempt(
         completeParams.recoverInterrupted ||
         context.newerGenerationOwnsSession(selected) ||
         terminal.terminalReply ||
+        getSubagentTerminalReplySummary(selected) ||
         (terminal.missingRequiredReply && terminal.completionOutcome.status === "ok") ||
         completeParams.completionSnapshot
           ? undefined

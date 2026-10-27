@@ -3,9 +3,14 @@ import { existsSync } from "node:fs";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
+import * as acpMetadata from "../../acp/runtime/session-meta-readonly.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
@@ -27,6 +32,7 @@ import {
   getRpcSourceIdentity,
 } from "../../sessions/session-controller.rpc-sources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
 import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -513,6 +519,157 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
       },
       { session: { reset: { mode: "daily" } } },
     ),
+);
+
+it.for([
+  "unchanged",
+  "lifecycle changed",
+  "lifecycle changed before admission",
+  "caller revoked",
+] as const)(
+  "prepares ACP before an unrelated writer settles but keeps final admission ordered (%s)",
+  async (change, { signal }) =>
+    withAdmissionTest("chat-admission-preparation-order", async (f) => {
+      const { scope, runId } = f;
+      const now = Date.now();
+      const entry = f.seed({
+        updatedAt: now,
+        sessionStartedAt: now,
+        lifecycleRevision: "original-lifecycle",
+      });
+      await appendHeader(scope, entry, now);
+      const replaceLifecycle = () => {
+        const lifecycleRevision = "replacement-lifecycle";
+        replaceSessionEntrySync(scope, { ...entry, lifecycleRevision, updatedAt: now + 1 });
+        seedCanonicalAcpSessionMeta({
+          ...scope,
+          lifecycleRevision,
+          meta: {
+            backend: "acpx",
+            agent: scope.agentId,
+            runtimeSessionName: scope.sessionKey,
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: now,
+          },
+        });
+      };
+      const admission = await f.prepare({ isDirectExternalUser: true });
+      expect(admission.session.restartSafeRequest).toBeDefined();
+      if (change === "lifecycle changed before admission") {
+        replaceLifecycle();
+      }
+      await sessionEntryReads.readSessionEntryReadOnlyInWorker(scope);
+      const held = createDeferred();
+      const release = createDeferred();
+      const holder = agentWriteAdmission.runOpenClawAgentWriteAdmission(
+        { agentId: scope.agentId },
+        async () => {
+          held.resolve();
+          await release.promise;
+          replaceSessionEntrySync(
+            { ...scope, sessionKey: `${scope.sessionKey}:unrelated` },
+            { sessionId: "unrelated-session", updatedAt: now },
+          );
+          if (change === "lifecycle changed") {
+            replaceLifecycle();
+          }
+        },
+      );
+      const firstPreparation = createDeferred<"ACP" | "writer admission">();
+      const orderedRequested = createDeferred();
+      const metadataBindings: Array<{
+        lifecycleRevision: string | undefined;
+        hasMetadata: boolean;
+      }> = [];
+      const readMetadata = acpMetadata.readAcpSessionMetaForEntries;
+      using metadata = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
+      metadata.mockImplementation(async (params, options) => {
+        firstPreparation.resolve("ACP");
+        const result = await readMetadata(params, options);
+        for (const [index, selected] of params.entries.entries()) {
+          if (selected.sessionKey === scope.sessionKey) {
+            metadataBindings.push({
+              lifecycleRevision: selected.entry?.lifecycleRevision,
+              hasMetadata: result[index] != null,
+            });
+          }
+        }
+        return result;
+      });
+      const readOrdered = agentWriteAdmission.runOpenClawAgentWriteAdmissions;
+      using ordered = vi.spyOn(agentWriteAdmission, "runOpenClawAgentWriteAdmissions");
+      ordered.mockImplementation((options, consume, abortSignal) => {
+        firstPreparation.resolve("writer admission");
+        orderedRequested.resolve();
+        return readOrdered(options, consume, abortSignal);
+      });
+      let callerCurrent = true;
+      const respond = vi.fn();
+      let admitted: Admission | undefined;
+      let pending: Promise<Admission> | undefined;
+      try {
+        await withinTest(held.promise, signal);
+        pending = admitChatSend({
+          ...admission,
+          respond,
+          assertCurrent() {
+            if (!callerCurrent) {
+              throw new Error("Original chat caller revoked before final admission");
+            }
+          },
+        }).then((result) => (admitted = result));
+        expect(
+          await withinTest(
+            awaitGateBeforeSettlement(
+              firstPreparation.promise,
+              pending,
+              "chat skipped preparation",
+            ),
+            signal,
+          ),
+        ).toBe("ACP");
+        await withinTest(
+          awaitGateBeforeSettlement(
+            orderedRequested.promise,
+            pending,
+            "chat skipped final ordering",
+          ),
+          signal,
+        );
+        expect(metadataBindings).toEqual([
+          { lifecycleRevision: "original-lifecycle", hasMetadata: false },
+        ]);
+        expect(admitted).toBeUndefined();
+        expect(respond).not.toHaveBeenCalled();
+        callerCurrent = change !== "caller revoked";
+        release.resolve();
+        await holder;
+        admitted = await pending;
+        if (change === "caller revoked") {
+          expect(admitted.ok).toBe(false);
+          expectAdmissionError(respond, {
+            message: expect.stringContaining("Original chat caller revoked"),
+          });
+          expect(getRpcSource(runId)).toBeUndefined();
+        } else {
+          expect(admitted.ok, JSON.stringify(respond.mock.calls)).toBe(true);
+          assert(admitted.ok, "Session admission failed");
+          expect(Boolean(admitted.value.restartSafeAdmission)).toBe(change === "unchanged");
+          expect(respond).not.toHaveBeenCalled();
+          if (change === "lifecycle changed" || change === "lifecycle changed before admission") {
+            expect(metadataBindings).toEqual([
+              { lifecycleRevision: "original-lifecycle", hasMetadata: false },
+              { lifecycleRevision: "replacement-lifecycle", hasMetadata: true },
+            ]);
+          }
+        }
+      } finally {
+        release.resolve();
+        await Promise.allSettled([holder, ...(pending ? [pending] : [])]);
+        cleanupAdmission(admitted, runId);
+      }
+    }),
 );
 
 it("releases rejected upload reservations so corrected input can reuse its key", () =>

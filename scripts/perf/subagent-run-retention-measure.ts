@@ -5,6 +5,7 @@
  * on base/candidate in alternating order. Accept a lower retained-heap slope with
  * identical selected run IDs and no consistent CPU/allocation regression. Setup
  * and forced GC are outside timing; this is owner evidence, not Gateway latency.
+ * Add `--batch-runs=4653` to retain 4,653 then 9,306 rows at the same boundaries.
  * `timing --assert-retention` checks settled 32 KiB replies stay below 8 KiB/run.
  * `preview-timing --assert-retention` checks retained terminal previews alone stay
  * below 10 KiB/run, without compaction masking full-reply backing-string retention.
@@ -28,6 +29,7 @@ import {
 import { buildSubagentRunReadTopology } from "../../src/agents/subagents/registry/subagent-registry-read-topology.js";
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
 import { SubagentSessionReadLookup } from "../../src/agents/subagents/registry/subagent-session-read-scope.js";
+import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 assert(global.gc, "Run with --expose-gc");
 const mode = process.argv[2] ?? "timing";
@@ -48,7 +50,12 @@ const previews: Array<ReturnType<typeof prepareAgentRunTerminalReply>["terminalR
 const lookupOnly = mode.startsWith("lookup-");
 const topologyOnly = mode.startsWith("topology-");
 const allocation = mode.endsWith("allocation");
-const count = lookupOnly || topologyOnly ? 10_000 : 1_000;
+const count = parseStrictIntegerOption({
+  raw: process.argv.find((arg) => arg.startsWith("--batch-runs="))?.slice("--batch-runs=".length),
+  label: "--batch-runs",
+  fallback: lookupOnly || topologyOnly ? 10_000 : 1_000,
+  min: 1,
+});
 let persisted = new SubagentSessionReadLookup();
 const topologyRuns = new Map<string, SubagentRunRecord>();
 let topology: ReturnType<typeof buildSubagentRunReadTopology<SubagentRunRecord>> | undefined;

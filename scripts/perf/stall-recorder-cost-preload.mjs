@@ -103,5 +103,6 @@ if (isMainThread) {
       }
     }
   });
+  process.channel?.unref();
   process.once("exit", () => sample("exit"));
 }

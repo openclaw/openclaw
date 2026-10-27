@@ -1,5 +1,4 @@
 import { createEffect, createMemo, onCleanup, onSettled } from "solid-js";
-import { sameRouteLocation } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { mergeChatPageChrome, mobileNavLayoutMediaQuery } from "../../app/mobile-nav-layout.ts";
 import { nativeEmbedHost } from "../../app/native-web-chrome.ts";
@@ -14,7 +13,7 @@ import {
   isUiGlobalSessionKey,
   resolveUiGlobalAliasAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { currentRouteLocation, stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
+import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { ChatPageCloseFocus } from "./chat-page-close-focus.ts";
 import { createChatPageDropIndicator } from "./chat-page-drop-indicator.ts";
@@ -205,7 +204,12 @@ export function createChatPageState(
         stillOwnsCanonicalLocation(data.canonicalLocationSource, state.consumedDraftData === data)
       ) {
         // Move a route matched under the wrong namespace to its resolved board face.
-        context().replace(data.face ?? "chat", data.canonicalLocation);
+        context().replace(
+          data.face ?? "chat",
+          state.consumedDraftData === data
+            ? locationWithoutDraft(data.canonicalLocation)
+            : data.canonicalLocation,
+        );
         return;
       }
       void data?.canonicalLocationReady?.then((location) => {
@@ -219,14 +223,7 @@ export function createChatPageState(
           // A lazy canonicalization must never replace a newer route.
           const canonical =
             state.consumedDraftData === data ? locationWithoutDraft(location) : location;
-          if (sameRouteLocation(currentRouteLocation(), canonical)) {
-            // Refresh the loader receipt when confirmation did not need a new URL.
-            void context()
-              .revalidate(data.face ?? "chat")
-              .catch(() => undefined);
-          } else {
-            context().replace(data.face ?? "chat", canonical);
-          }
+          context().replace(data.face ?? "chat", canonical);
         }
       });
       if (routeChanged || !singleBoundPane()) {

@@ -5,23 +5,8 @@
  * are restricted. Only the Knowledge maintenance schedule uses this.
  */
 type Field = { values: Set<number>; any: boolean };
-export type Cron = {
-  expr: string;
-  timeZone: string;
-  minute: Field;
-  hour: Field;
-  dom: Field;
-  month: Field;
-  dow: Field;
-};
-type Wall = {
-  minute: number;
-  hour: number;
-  day: number;
-  month: number;
-  weekday: number;
-  key: string;
-};
+export type Cron = ReturnType<typeof parseCron>;
+type Wall = ReturnType<typeof wall>;
 
 const MINUTE = 60_000;
 const BOUNDS: [number, number][] = [
@@ -54,7 +39,7 @@ function field(source: string, [min, max]: [number, number]): Field {
 }
 
 /** Parse and validate an expression and time zone; throws a readable error. */
-export function parseCron(expr: string, timeZone: string): Cron {
+export function parseCron(expr: string, timeZone: string) {
   const parts = expr.trim().split(/\s+/u);
   if (parts.length !== 5) {
     throw new Error(
@@ -81,7 +66,7 @@ export function parseCron(expr: string, timeZone: string): Cron {
 }
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
-function wall(ms: number, timeZone: string): Wall {
+function wall(ms: number, timeZone: string) {
   let format = formatters.get(timeZone);
   if (!format) {
     formatters.set(

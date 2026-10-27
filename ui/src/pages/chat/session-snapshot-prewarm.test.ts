@@ -85,9 +85,13 @@ describe("routed transcript prewarm", () => {
 
   it("starts before consumption and reuses the matching read only once", async () => {
     const { open, reader } = await prewarm();
-    await vi.dynamicImportSettled();
+    expect(reader.readReady(key)).toBeUndefined();
+    const ready = await snapshots.readPrewarmedChatSnapshot(key);
     expect(open).toHaveBeenCalledOnce();
-    expect(await reader.read(key)).toEqual(stored);
+    expect(reader.readReady(otherKey)).toBeUndefined();
+    expect(reader.readReady(key)).toBe(ready);
+    expect(ready).toEqual(stored);
+    expect(reader.readReady(key)).toBeUndefined();
     expect(open).toHaveBeenCalledOnce();
     expect(await reader.read(key)).toEqual(stored);
     expect(open).toHaveBeenCalledTimes(2);

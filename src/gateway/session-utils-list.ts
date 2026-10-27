@@ -371,6 +371,7 @@ export function prepareSessionRowSelection(
         prepared?.metadataPrepared === true,
       );
     },
+    modelSearchMayMatch: (search: string) => projection.modelSearchMayMatch(search),
   };
 }
 
@@ -462,20 +463,26 @@ export function prepareProjectedSessionList(params: {
     ownerFirstActorId: opts.ownerFirst ? identity : undefined,
     restrictProfileReferences: client !== undefined,
     projectActiveRun: context ? (key) => active(getTarget(key)!)! : undefined,
-    entryFilter: (key, entry, row) => {
-      const storeKey = row.storeKey ?? key;
-      let visible = params.visibility?.get(entry);
-      if (visible === undefined) {
-        visible =
-          client === undefined || (presentation.sharing.entryFilter?.(storeKey, entry) ?? true);
-        params.visibility?.set(entry, visible);
-      }
-      return (
-        visible &&
-        (opts.hasBoard === undefined || row.hasBoard === opts.hasBoard) &&
-        (!opts.activeOnly || Boolean(active(getTarget(key)!)?.active))
-      );
-    },
+    entryFilter:
+      (client === undefined || !presentation.sharing.entryFilter) &&
+      opts.hasBoard === undefined &&
+      !opts.activeOnly
+        ? undefined
+        : (key, entry, row) => {
+            const storeKey = row.storeKey ?? key;
+            let visible = params.visibility?.get(entry);
+            if (visible === undefined) {
+              visible =
+                client === undefined ||
+                (presentation.sharing.entryFilter?.(storeKey, entry) ?? true);
+              params.visibility?.set(entry, visible);
+            }
+            return (
+              visible &&
+              (opts.hasBoard === undefined || row.hasBoard === opts.hasBoard) &&
+              (!opts.activeOnly || Boolean(active(getTarget(key)!)?.active))
+            );
+          },
   };
   const ownerRunningCandidateKeys = () =>
     prepared.candidateKeys(

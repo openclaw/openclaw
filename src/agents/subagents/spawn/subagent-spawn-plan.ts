@@ -5,11 +5,11 @@ import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
 import type { ResolvedAgentConfig } from "../../agent-scope-config.js";
+import { splitTrailingAuthProfile } from "../../model-ref-profile.js";
 import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
-} from "../../agent-scope.js";
-import { splitTrailingAuthProfile } from "../../model-ref-profile.js";
+} from "../../model-selection-config.js";
 import {
   type ModelRef,
   resolveSubagentConfiguredModelSelection,

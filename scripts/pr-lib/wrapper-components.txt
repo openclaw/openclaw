@@ -1579,7 +1579,6 @@ src/plugins/official-external-plugin-catalog-hosted.ts
 src/plugins/official-external-plugin-catalog-snapshot-store.ts
 src/plugins/official-external-plugin-catalog-source.ts
 src/plugins/official-external-plugin-catalog.ts
-src/plugins/official-external-provider-endpoints.ts
 src/plugins/package-compat.ts
 src/plugins/package-entry-resolution.ts
 src/plugins/package-entrypoints.ts
@@ -1599,7 +1598,6 @@ src/plugins/plugin-generation-file-capture.ts
 src/plugins/plugin-generation-receipt.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts
-src/plugins/plugin-instance-argument-views.ts
 src/plugins/plugin-instance-background.ts
 src/plugins/legacy-sdk-resource-host.ts
 src/plugins/provider-claude-thinking.ts

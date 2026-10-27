@@ -443,16 +443,9 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
   });
 
   it.each(["assistant", "prompt"] as const)(
-    "exhausts bounded recovery on organization TPM exhaustion from %s before fallback",
+    "advances from %s TPM exhaustion when the provider floor exceeds the fallback window",
     async (source) => {
       await withDefaultAuth(async ({ agentDir, workspaceDir }) => {
-        let initialCooldownUntil: number | undefined;
-        // The writer owns its clock; observe its first window before later failure marks.
-        sleepWithAbortMock.mockImplementationOnce(async () => {
-          const initial = (await readFallbackUsageStats(agentDir))["openai:p1"];
-          expect((initial?.cooldownUntil ?? 0) - (initial?.lastRateLimitAt ?? 0)).toBe(90_000);
-          initialCooldownUntil = initial?.cooldownUntil;
-        });
         const message =
           "429 Rate limit reached for mock-1 in organization org-example on tokens per min (TPM): Limit 10000, Used 9900, Requested 200. Please try again in 90s.";
         const config = makeModelFallbackConfig();
@@ -481,16 +474,13 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           });
         const result = await run("first");
         expect(result.result.payloads?.[0]?.text).toContain("fallback ok");
-        const expectedModels = [...Array<string>(16).fill("mock-1"), "mock-2"];
+        const expectedModels = ["mock-1", "mock-2"];
         expect(recordedAttempts().map((attempt) => attempt.modelId)).toEqual(expectedModels);
-        expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual(
-          Array<number>(15).fill(90_000),
-        );
+        expect(sleepWithAbortMock).not.toHaveBeenCalled();
         const stats = (await readFallbackUsageStats(agentDir))["openai:p1"];
         expect(stats).toMatchObject({ cooldownReason: "rate_limit", cooldownModel: "mock-1" });
         // Each 429 restates the provider's 90s: the window follows the latest one and never grows.
         expect(stats?.cooldownUntil).toBe((stats?.lastRateLimitAt ?? 0) + 90_000);
-        expect(stats?.cooldownUntil).toBeGreaterThanOrEqual(initialCooldownUntil ?? Infinity);
         expect(stats?.failureCounts).toBeUndefined();
 
         runEmbeddedAttemptMock.mockClear();
@@ -498,9 +488,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         const next = await run("during-cooldown");
         expect(next.result.payloads?.[0]?.text).toContain("fallback ok");
         expect(recordedAttempts().map((attempt) => attempt.modelId)).toEqual(expectedModels);
-        expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual(
-          Array<number>(15).fill(90_000),
-        );
+        expect(sleepWithAbortMock).not.toHaveBeenCalled();
       });
     },
   );

@@ -130,27 +130,6 @@ export default function createApplicationPlacementStartupRuntime(
     }
   };
 
-  const prepareAcceptedMessage = (
-    entry: PlacementStartupEntry,
-    recovery: SessionPlacementRecovery,
-    messageId: string,
-  ) => {
-    const submission = buildInitialChatSubmission(
-      entry.owner.sessionKey,
-      {
-        text: recovery.message,
-        mentions: recovery.mentions,
-        attachments: entry.attachments,
-        createdAt: entry.createdAt,
-      },
-      params.gateway.snapshot.client ?? entry.scope.client,
-      messageId,
-    );
-    params.chatSubmissions.retain(
-      submission ? { ...submission, sessionId: recovery.sessionId } : null,
-    );
-  };
-
   const pauseEntry = (
     entry: PlacementStartupEntry,
     recovery: SessionPlacementRecovery,
@@ -234,7 +213,20 @@ export default function createApplicationPlacementStartupRuntime(
         }
         if (result.status === "started") {
           // An ACK owns delivery even if a new hello arrives before this continuation.
-          prepareAcceptedMessage(entry, currentRecovery, result.messageId);
+          const submission = buildInitialChatSubmission(
+            entry.owner.sessionKey,
+            {
+              text: currentRecovery.message,
+              mentions: currentRecovery.mentions,
+              attachments: entry.attachments,
+              createdAt: entry.createdAt,
+            },
+            params.gateway.snapshot.client ?? entry.scope.client,
+            result.messageId,
+          );
+          params.chatSubmissions.retain(
+            submission ? { ...submission, sessionId: currentRecovery.sessionId } : null,
+          );
         } else if (!lifecycleCurrent(entry) && result.status === "interrupted") {
           return;
         }

@@ -281,6 +281,7 @@ export async function setSessionInvolvement(
     !requireSessionMutationAccess(deps, scope, {
       method: "sessions.setInvolvement",
       requiredScope: "operator.read",
+      sessionScope: true,
     })
   ) {
     return;

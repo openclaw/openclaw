@@ -116,4 +116,5 @@ if (isMainThread) {
       active = false;
     }
   });
+  process.channel?.unref();
 }

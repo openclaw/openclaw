@@ -6052,7 +6052,11 @@ SQLite streams the ordered cursor through a native iterator; PostgreSQL uses
 16-row keyset batches because its bridge buffers results.
 Bounded SQLite context hydration also decodes one payload row at a time, so the
 encoded window does not remain resident alongside its decoded result. Its byte
-selection, event order, and snapshot authority are unchanged. Before a transcript
+selection, event order, and snapshot authority are unchanged. Recent active-event
+and usage-accounting tails decode selected compressed rows directly, without
+returning expanded JSON through SQLite. Payload failures still abort immediately;
+JSON syntax failures retain their existing oldest-row precedence.
+Before a transcript
 worker task starts on V8, usage at or above 80% of the actual heap limit sheds its
 decoded history and memory-export caches through the isolate-local memory-pressure
 channel. Subsequent reads repopulate those caches through their existing owners;
@@ -6322,6 +6326,12 @@ refusing unreadable stored rows. Hydration still precedes Gateway readiness;
 activation and recovery remain post-ready.
 Session-list facts are prepared with each immutable row and reused at publication.
 A replacement row owns new facts; the cache does not retain retired rows.
+Fully settled registry rows retain terminal-reply disposition, length, and route
+notices in memory. Selected readers and mutations hydrate reply text, delivery
+payloads, and operator recovery sources through the existing worker before use.
+Unfinished lifecycle, requester, recovery, and pending, in-progress, or suspended
+delivery work keeps its full resident record. Durable records and retention are
+unchanged; ordinary keep-mode rows still have no automatic archive deadline.
 Completion acknowledgments also carry decoded records and worker-computed physical
 versions; the host does not parse or hash the retained JSON again. The transfer
 owners hash the physical rows only when those versions are needed. Plain decoding,

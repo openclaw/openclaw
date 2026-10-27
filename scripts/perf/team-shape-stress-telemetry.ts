@@ -350,6 +350,12 @@ export function installTeamStressTelemetryIpc() {
   }
   let stop: Awaited<ReturnType<typeof startTeamStressTelemetry>> | undefined;
   let pending = Promise.resolve();
+  let pendingReplies = 0;
+  const replied = () => {
+    if (--pendingReplies === 0) {
+      process.channel?.unref();
+    }
+  };
   process.on("message", (message: unknown) => {
     if (
       !message ||
@@ -361,6 +367,8 @@ export function installTeamStressTelemetryIpc() {
       return;
     }
     const action = message.action;
+    pendingReplies++;
+    process.channel?.ref();
     pending = pending
       .then(async () => {
         if (
@@ -382,12 +390,16 @@ export function installTeamStressTelemetryIpc() {
         } else {
           throw new Error("Invalid Team stress telemetry command or lifecycle");
         }
-        process.send?.({ channel: "team-shape-stress", action, ok: true });
+        process.send?.({ channel: "team-shape-stress", action, ok: true }, replied);
       })
       .catch((error: unknown) => {
-        process.send?.({ channel: "team-shape-stress", action, ok: false, error: String(error) });
+        process.send?.(
+          { channel: "team-shape-stress", action, ok: false, error: String(error) },
+          replied,
+        );
       });
   });
+  process.channel?.unref();
   process.once("disconnect", () => {
     void pending.then(() => stop?.()).catch(() => {});
   });
