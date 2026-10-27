@@ -1724,8 +1724,6 @@ const config = {
     // production uses them through their owning module/controller.
     "ui/src/pages/chat/chat-state-refresh.{ts,tsx}": ["exports"],
     "ui/src/pages/chat/composer-persistence.{ts,tsx}": ["exports"],
-    // Focused head tests bind fake nodes; production binds through initializeControlUiDocumentHead.
-    "ui/src/app/control-ui-document-head.ts": ["exports"],
     // Focused link tests build the resolver directly; production reaches it through projectSubagentStatus.
     "ui/src/pages/chat/chat-subagent-wait.ts": ["exports"],
     // The presentation fixture and focused UI tests consume these seams;
