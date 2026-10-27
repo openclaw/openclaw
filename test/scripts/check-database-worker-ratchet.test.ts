@@ -14,11 +14,6 @@ it.each([
   ["session-cold-storage-chunks.ts", "readSessionColdChunks", "executeSqliteQuerySync"],
   [
     "session-cold-storage-chunks.ts",
-    "readVerifiedSessionColdChunks",
-    "executeSqliteQueryTakeFirstSync",
-  ],
-  [
-    "session-cold-storage-chunks.ts",
     "iterateSessionColdRecords",
     "executeSqliteQueryTakeFirstSync",
   ],
@@ -36,10 +31,16 @@ it.each([
   "proves the cold-storage kernel %s:%s only through reviewed entries",
   (file, operation, primitive) => {
     const relative = `src/config/sessions/${file}`;
+    const worker =
+      operation === "readSessionColdChunks"
+        ? "session-cold-storage-read.worker.ts"
+        : operation === "iterateSessionColdRecords"
+          ? "session-transcript-hydration.worker.ts"
+          : "session-accessor.sqlite-archive.worker.ts";
     const sources = new Map([
       [relative, `export function ${operation}() { return ${primitive}(query); }`],
       [
-        "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
+        `src/config/sessions/${worker}`,
         `export async function dispatchColdPreparation() {
           const { ${operation} } = await import('./${file.replace(/\.ts$/, ".js")}');
           return scope.run(options, () => ${operation}());
