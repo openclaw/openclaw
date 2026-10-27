@@ -12,8 +12,8 @@ import type {
 } from "../../plugin-sdk/media-understanding.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createImageTool } from "./image-tool.js";
 import {
+  createRequiredImageTool,
   createMinimaxImageConfig,
   ONE_PIXEL_PNG_B64,
   resolveConfiguredImageModelForTest,
@@ -25,14 +25,6 @@ const buildProviderRegistry = buildMediaUnderstandingRegistry;
 const readProvider = getMediaUnderstandingProvider;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function createRequiredImageTool(options: Parameters<typeof createImageTool>[0]) {
-  const tool = createImageTool(options);
-  if (!tool) {
-    throw new Error("expected image tool");
-  }
-  return tool;
-}
 
 type ProviderDeps = NonNullable<Parameters<typeof testing.setProviderDepsForTest>[0]>;
 type MockImageLoadWebMedia = Awaited<

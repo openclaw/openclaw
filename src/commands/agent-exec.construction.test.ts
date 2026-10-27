@@ -9,6 +9,7 @@ import {
 import { isProcessAlive, waitForDead } from "../../test/helpers/process-wait.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import * as cliBackends from "../plugins/cli-backends.runtime.js";
 import * as processSupervisor from "../process/supervisor/index.js";
@@ -66,16 +67,12 @@ setInterval(() => {}, 1000);`,
       }),
     },
   ]);
-  await fs.writeFile(
-    configPath,
-    JSON.stringify({
-      tools: { fs: { workspaceOnly: false } },
-      agents: {
-        defaults: { model: { primary: "construction-cli/model-a" }, thinkingDefault: "off" },
-      },
-    }),
-    "utf8",
-  );
+  await writeFixtureJson(configPath, {
+    tools: { fs: { workspaceOnly: false } },
+    agents: {
+      defaults: { model: { primary: "construction-cli/model-a" }, thinkingDefault: "off" },
+    },
+  });
 
   vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", "1");
   vi.stubEnv("OPENCLAW_SERVICE_MARKER", "openclaw");

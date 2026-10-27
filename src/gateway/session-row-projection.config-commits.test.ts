@@ -26,7 +26,7 @@ type ReloadOptions = Parameters<typeof startGatewayConfigReloader>[0];
 vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/plugin-lifecycle-lease.js")>()),
   hasPluginLifecycleLease: () => false,
-  withPluginLifecycleLease: async (
+  withPluginLifecycleLeaseAsync: async (
     _options: unknown,
     run: (lease: { assertCurrent: () => void; assertOwned: () => void }) => Promise<unknown>,
   ) => run({ assertCurrent() {}, assertOwned() {} }),

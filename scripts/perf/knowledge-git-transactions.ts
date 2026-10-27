@@ -3,6 +3,7 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/knowledge-git-transactions.ts
  *   [--iterations 2000] [--history 2000] [--jobs 10] [--sample]
  *   [--source /absolute/path/to/storage-base.ts]
+ *   [--git-source /absolute/path/to/git-history.ts]
  *
  * Run timing and --sample allocation passes separately for each revision, in
  * alternating order. --source may select an adjacent baseline storage-base.ts
@@ -34,6 +35,7 @@ import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 const { values } = parseArgs({
   options: {
     source: { type: "string" },
+    "git-source": { type: "string" },
     iterations: { type: "string", default: "2000" },
     history: { type: "string", default: "2000" },
     jobs: { type: "string", default: "10" },
@@ -65,6 +67,11 @@ const { StorageBase } = (await import(
   source.href
 )) as typeof import("../../extensions/knowledge/src/storage-base.js");
 const { SqliteIdentityStore } = await import("../../extensions/knowledge/src/identity-store.js");
+const { GitHistory } = (await import(
+  values["git-source"]
+    ? pathToFileURL(path.resolve(values["git-source"])).href
+    : new URL("../../extensions/knowledge/src/git-history.ts", import.meta.url).href
+)) as typeof import("../../extensions/knowledge/src/git-history.js");
 const access: VaultAccess = {
   agentId: "synthetic-benchmark",
   scope: { visibility: "private" },
@@ -168,6 +175,7 @@ async function measure(name: string, operations: number, run: () => void) {
       name,
       mode: values.sample ? "allocation" : "timing",
       source: source.href,
+      gitSource: values["git-source"] ?? "extensions/knowledge/src/git-history.ts",
       operations,
       history,
       jobs,
@@ -216,7 +224,7 @@ try {
   };
   const store = new MeasuredStore(config.statePath);
   await store.registerIfAbsent(`store:${manifest.vaultId}`, manifest);
-  const bench = new GitBench(config, store);
+  const bench = new GitBench(config, store, undefined, new GitHistory(root));
   store.withDatabase((db) => {
     db.exec("BEGIN IMMEDIATE");
     const job = db.prepare(

@@ -399,10 +399,10 @@ export async function runPublicSettleRecoveryCase(
           }),
         ),
       ).toHaveBeenCalledTimes(1);
-      assertSettled("interrupted");
-      expect(JSON.stringify(transcript())).toContain(
-        "could not resume after the Gateway restarted",
-      );
+      const retained = loadSessionEntryReadOnly(scope);
+      expect(retained).toMatchObject({ status: "failed", abortedLastRun: false });
+      expect(retained?.mainRestartRecovery?.tombstone).toBeDefined();
+      expect(JSON.stringify(transcript())).toContain("In WebChat, use Resume");
       expect(readWake()).toBeUndefined();
       await assertRecoveryIdle(transcript(), 1);
       return;

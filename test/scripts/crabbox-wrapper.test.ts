@@ -3028,7 +3028,7 @@ esac
       input: ["bun", "--version"],
       includes: [
         "openclaw_crabbox_bootstrap_macos_js",
-        "bun_version=1.4.3",
+        "bun_version=1.4.4",
         'bun_root="$tool_root/bun-v${bun_version}"',
         'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
         "bun --version >&2 || return 1",
@@ -3582,7 +3582,7 @@ esac
       name: "bootstraps Bun for AWS macOS script-stdin bun shebangs",
       input: ["#!/usr/bin/env bun", "console.log(Bun.version);"].join("\n"),
       includes: [
-        "bun_version=1.4.3",
+        "bun_version=1.4.4",
         'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
         "bun --version >&2 || return 1",
       ],

@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listSystemPresence } from "../infra/system-presence.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -102,6 +103,93 @@ describe("session viewer presence declarations", () => {
 });
 
 describe("presence projection without resident session facts", () => {
+  it("shares watch selection across equal audiences and retires it when authority changes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const key = "agent:main:presence-audience";
+      const entry = { sessionId: "presence-audience", updatedAt: 1, visibility: "shared" as const };
+      replaceSessionEntrySync({ agentId: "main", sessionKey: key }, entry);
+      let cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      using _ = { [Symbol.dispose]: retainSessionListForegroundWork() };
+      const projection = await createSessionRowProjection({
+        cfg,
+        modelCatalog: [],
+        getPolicyConfig: () => cfg,
+      });
+      onTestFinished(() => projection.dispose());
+      await projection.ensureMaterialized();
+      const readTarget = projection.sharingTargetState.bind(projection);
+      let selections = 0;
+      const targetSpy = vi.spyOn(projection, "sharingTargetState").mockImplementation((query) => {
+        const state = readTarget(query);
+        if (state.status !== "ready") {
+          return state;
+        }
+        return {
+          ...state,
+          target: {
+            ...state.target,
+            entry: {
+              ...state.target.entry,
+              get incognito() {
+                selections++;
+                return state.target.entry.incognito;
+              },
+            },
+          },
+        };
+      });
+      onTestFinished(() => targetSpy.mockRestore());
+      const person = { text: "watcher", ts: 1 };
+      const presence = [{ ...person, watchedSessions: [key] }];
+      const project = createPresenceRecipientProjection({ cfg, presence, projection });
+      const readers: GatewayClient[] = Array.from({ length: 65 }, () => ({
+        ...recipient(["operator.read"]),
+        authenticatedUserProfile: {
+          profileId: "reader",
+          displayName: "Reader",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      }));
+      const pending = recipient(["operator.read"]);
+      pending.authenticatedGitHubIdentitySync = async () => ({
+        profileId: "pending",
+        updatedAt: 1,
+      });
+      for (const reader of readers) {
+        expect(project(reader)).toEqual(presence);
+        expect(project(pending)).toEqual([person]);
+      }
+      expect(selections).toBe(1);
+
+      const reader = readers[0]!;
+      reader.connect.scopes!.splice(0);
+      expect(project(reader)).toEqual([]);
+      reader.connect.scopes!.push("operator.read");
+      expect(project(reader)).toEqual(presence);
+      reader.authenticatedGitHubIdentitySync = pending.authenticatedGitHubIdentitySync;
+      delete reader.authenticatedUserProfile;
+      expect(project(reader)).toEqual([person]);
+
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key },
+        { ...entry, visibility: "draft" },
+      );
+      await projection.prepareMembership();
+      expect(project(readers[1]!)).toEqual([person]);
+      replaceSessionEntrySync({ agentId: "main", sessionKey: key }, entry);
+      await projection.prepareMembership();
+      expect(project(readers[1]!)).toEqual(presence);
+      cfg = { ...cfg, gateway: { roles: { definitions: {} } } };
+      expect(project(readers[1]!)).toEqual([person]);
+      cfg = { agents: { entries: { main: {} } } };
+      expect(project(readers[1]!)).toEqual(presence);
+      projection.dispose();
+      expect(projection.sharingRevision).toBeUndefined();
+      expect(project(readers[1]!)).toEqual([person]);
+    });
+  });
+
   it("omits pending watch references until the session owner publishes ready facts", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const key = "agent:main:presence-pending";

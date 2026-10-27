@@ -79,6 +79,48 @@ directory and the same chunk count for the production sqlite-vec KNN control.
 Both benchmarks create synthetic state; stop and remove only their disposable
 database state after collecting results.
 
+## Control UI Talk
+
+`scripts/bench-control-ui-talk.ts` compares frozen production UI bundles with a
+synthetic microphone and provider. The default transport is `webrtc`; use
+`--transport gateway-relay` to exercise native PCM capture and playback:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-talk.ts \
+  --transport gateway-relay \
+  --bundle-dir <baseline> --compare-bundle-dir <candidate> \
+  --states listening,speaking,responding,idle,hidden \
+  --viewport both --cpu-throttle 1,4 --pairs 10 --aa --duration-ms 5000 \
+  --output .artifacts/control-ui-talk-pcm
+```
+
+PCM mode requires an explicit supported state list: the default includes the
+WebRTC-only `transcribing` state. PCM `responding` means native output playback
+while the UI remains listening, rather than the WebRTC thinking animation.
+PCM mode rejects `--startup-latency`, `--startup-warm-cache`,
+`--compare-suspend-native-audio`, and transcript states. `--aa` adds same-baseline
+control pairs; alternate pair order reduces first/second browser bias.
+
+Ordinary comparisons use main-thread CPU counters with native clocks and
+service-worker precache/network quiet before each measurement. `--trace`,
+`--counters`, `--frames`, and `--process-wakeups` collect separate diagnostics;
+`--frames` adds its own animation loop and cannot measure idle or hidden states.
+PCM observations retain native input-callback/append timing, output scheduling
+and completion, and UI status/level endpoints. After Stop, the probe requires
+closed contexts, ended tracks, and stable callback/append/playback counts.
+Before PCM responding starts, the probe waits for silent input to reach level
+zero. Cancellation retires matching synthetic output and records its reason;
+an applied cancellation during measurement fails the observation. Failure
+artifacts include document visibility, native window bounds, audio context
+states, and the captured PCM activity.
+
+Use identical harness sources and flags for both sides. The synthetic PCM
+provider and native observers add measurement overhead. Callback-to-append and
+event-to-schedule timings are browser-local; they do not measure hardware,
+acoustic, real-provider, or network latency. Cadence bounds prove sustained
+delivery, not a latency acceptance threshold. Reports retain source and bundle
+hashes, failed samples, and per-cell results.
+
 ## Control UI warm interactions
 
 Build with `pnpm ui:build`, then collect the production renderer's desktop and

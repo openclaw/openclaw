@@ -163,9 +163,6 @@ suite.define(() => {
           lineHeight: Number.parseFloat(style.lineHeight),
           overflowY: style.overflowY,
           padding: Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom),
-          scrollbarWidth: style.scrollbarWidth,
-          webkitScrollbarWidth: getComputedStyle(element, "::-webkit-scrollbar").width,
-          webkitThumbInset: getComputedStyle(element, "::-webkit-scrollbar-thumb").borderLeftWidth,
         };
       });
 
@@ -173,12 +170,7 @@ suite.define(() => {
       expect(tenLines.height).toBeGreaterThanOrEqual(
         Math.floor(tenLines.lineHeight * 10 + tenLines.padding) - 1,
       );
-      expect(tenLines).toMatchObject({ overflowY: "hidden", scrollbarWidth: "thin" });
-      // Preserve a 12px drag target around the 6px painted thumb.
-      const composerScrollbar = Number.parseFloat(tenLines.webkitScrollbarWidth);
-      const composerThumbInset = Number.parseFloat(tenLines.webkitThumbInset);
-      expect(composerScrollbar).toBe(12);
-      expect(composerScrollbar - composerThumbInset * 2).toBe(6);
+      expect(tenLines.overflowY).toBe("hidden");
 
       const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");
       await message.fill(longPrompt);

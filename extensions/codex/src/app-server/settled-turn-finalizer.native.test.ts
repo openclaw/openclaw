@@ -308,6 +308,35 @@ async function createRunFixture(
 }
 
 it.skipIf(process.platform === "win32")(
+  "rejects a native patch before accessing the finalizer filesystem",
+  { timeout: 60_000 },
+  nativeCase(async (fixture) => {
+    await fs.writeFile(fixture.marker, "completed-once\n");
+    fixture.setPhase("patch");
+    await expect(
+      runBoundedCodexAppServerTurn({
+        ...boundedParams(fixture, fixture.pluginConfig),
+        taskLabel: "settled-turn finalization",
+        developerInstructions: "Summarize completed work without using tools.",
+        input: textInput("Summarize the completed action."),
+        isolation: "private-stdio",
+      }),
+    ).resolves.toMatchObject({ text: "Ready." });
+    expect(fixture.requests).toHaveLength(2);
+    expect(fixture.requests[1]?.body.input).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "custom_tool_call_output",
+          call_id: "denied-patch",
+          output: expect.stringContaining("No usable execution environment is available"),
+        }),
+      ]),
+    );
+    await expectActionOnce(fixture);
+  }),
+);
+
+it.skipIf(process.platform === "win32")(
   "refuses supervised finalization even when different host credentials and model work",
   { timeout: 60_000 },
   nativeCase(async (fixture, cleanups) => {

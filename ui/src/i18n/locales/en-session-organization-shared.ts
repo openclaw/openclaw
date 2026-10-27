@@ -3,6 +3,9 @@ import { en } from "./en.ts";
 
 const enSessionOrganizationShared = {
   sessionsView: {
+    title: "Sessions",
+    subtitle: "Browse sessions and manage per-session overrides.",
+    archivedOnlyTooltip: "Show only archived sessions.",
     archiveReasonManual: "Archived manually",
     archiveReasonAgeRetention: "Automatically archived by age retention",
     archiveReasonActiveSessionCap:
@@ -30,11 +33,16 @@ const enSessionOrganizationShared = {
     newGroupFailed: "Could not create the group.",
     newGroupStale: "Gateway connection replaced before the group was saved. Try again.",
   },
+  worktrees: {
+    title: "Managed Worktrees",
+    subtitle: "Isolated repository checkouts owned by OpenClaw.",
+  },
 } satisfies TranslationMap;
 
 export const registerSessionOrganizationSharedEnglish = Object.assign(
   () => {
     Object.assign(en.sessionsView, enSessionOrganizationShared.sessionsView);
+    Object.assign(en.worktrees, enSessionOrganizationShared.worktrees);
   },
   { catalog: enSessionOrganizationShared },
 );

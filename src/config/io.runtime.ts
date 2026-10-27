@@ -241,7 +241,11 @@ export async function withCurrentConfigPolicyReader<T>(
   params: {
     configPath: string;
     env: NodeJS.ProcessEnv;
-    lease: { databasePath: string; assertOwned: () => void };
+    lease: {
+      databasePath: string;
+      assertOwned: () => void | Promise<void>;
+      assertCurrent: () => void;
+    };
   },
   run: (getCurrentConfig: () => OpenClawConfig) => Promise<T>,
 ): Promise<T> {

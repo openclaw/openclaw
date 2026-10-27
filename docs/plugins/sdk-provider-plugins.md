@@ -432,7 +432,7 @@ not retain or close the shared pool; the Gateway owns its shutdown.
     that govern deprecated surfaces named on this page and its child pages.
 
     To read runtime auth profiles, await `loadAuthProfileStoreForRuntimeAsync`
-    from `openclaw/plugin-sdk/agent-runtime`. It reads persisted profiles in a
+    from `openclaw/plugin-sdk/provider-auth`. It reads persisted profiles in a
     database worker and preserves the optional third `env` argument for
     service-owned state directories. The synchronous `loadAuthProfileStoreForRuntime`
     is deprecated through 2026-12-31 and will be removed in the first January 2027 stable release.
@@ -657,6 +657,9 @@ existing local-credential and shared-OAuth exclusion rules remain unchanged.
 Setup-owned verification of a replacement OAuth sign-in also omits the capability:
 it uses the exact active setup credential scope, not ambient account authorization.
 The replacement stays unavailable outside that scope until verified activation.
+Runtime-only external OAuth profiles also omit the capability: the external
+credential source retains ownership, without requiring a canonical stored row.
+Persisted external profiles retain canonical capture and retirement checks.
 Absence retains the existing static `apiKey` behavior, not a guarantee of renewal
 during an attempt. Static API keys are unchanged. Account-less legacy OAuth
 credentials may keep the same refresh
