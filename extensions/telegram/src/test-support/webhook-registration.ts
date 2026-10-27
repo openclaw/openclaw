@@ -10,6 +10,7 @@ type Start = ReturnType<typeof createTelegramWebhookTestGateway>["startWebhook"]
 type RegistrationFixture = {
   gateway: ReturnType<typeof createTelegramWebhookTestGateway>;
   setWebhookSpy: Mock<Api["setWebhook"]>;
+  initSpy: Mock<() => Promise<void>>;
   stopSpy: ReturnType<typeof vi.fn>;
   transportCloseSpies: Array<ReturnType<typeof vi.fn>>;
   startWebhookStartupFixture: (options?: Partial<Parameters<Start>[0]>) => ReturnType<Start>;
@@ -20,7 +21,7 @@ type RegistrationFixture = {
 };
 
 export function registerTelegramWebhookRegistrationTests(fixture: RegistrationFixture) {
-  const { gateway, setWebhookSpy, secret, path } = fixture;
+  const { gateway, setWebhookSpy, initSpy, secret, path } = fixture;
   const webhookOptions = { secret, path };
   const runtime = { log() {}, error() {}, exit: vi.fn() };
   const disconnected = { mode: "webhook", connected: false };
@@ -36,18 +37,67 @@ export function registerTelegramWebhookRegistrationTests(fixture: RegistrationFi
     expect(fixture.stopSpy).toHaveBeenCalledTimes(1);
     expect(fixture.transportCloseSpies[0]).toHaveBeenCalledTimes(1);
   };
-  const expectBlocked = () => {
+  const expectBlocked = (message = "unauthorized") => {
     expectStopped();
-    status({ lifecycle: "blocked", terminalDisconnect: true, lastError: "unauthorized" });
+    status({ lifecycle: "blocked", terminalDisconnect: true, lastError: message });
   };
 
+  it("retries transient getMe startup init failures before starting the account", async () => {
+    const setStatus = vi.fn();
+    using now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const retryStarted = createDeferred<void>();
+    const releaseRetry = createDeferred<void>();
+    initSpy
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockImplementationOnce(async () => {
+        retryStarted.resolve();
+        await releaseRetry.promise;
+      });
+
+    const running = gateway.withWebhook(
+      { ...webhookOptions, runtime, setStatus },
+      async ({ port }) => {
+        const response = await postWebhookJson({
+          url: webhookUrl(port, path),
+          payload: JSON.stringify(telegramMessageUpdate(806, "startup webhook")),
+          secret,
+        });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+        expect(await response.text()).toBe("");
+      },
+    );
+    try {
+      await retryStarted.promise;
+      expect(expectStatusCall(setStatus, { lifecycle: "recovering" })).toEqual({
+        mode: "webhook",
+        connected: false,
+        lifecycle: "recovering",
+        lastDisconnect: { at: 1_000_000 },
+      });
+      expect(setWebhookSpy).not.toHaveBeenCalled();
+      now.mockReturnValue(1_090_000);
+    } finally {
+      releaseRetry.resolve();
+      await running;
+    }
+    expect(initSpy).toHaveBeenCalledTimes(2);
+    expectStatusCall(setStatus, { lifecycle: "ready", connected: true, lastError: null });
+    expect(setWebhookSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("waits for setWebhook before reporting ready while continuing durable webhook admission", async () => {
+    using now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
     const advertised = createDeferred<void>();
     const retryStarted = createDeferred<void>();
     const retryRegistration = createDeferred<void>();
     setStatus.mockImplementation(({ connected }) => connected && advertised.resolve());
     setWebhookSpy
       .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockImplementationOnce(async () => {
+        now.mockReturnValue(1_090_000);
+        throw apiError("service unavailable", 503);
+      })
       .mockImplementationOnce(async () => {
         retryStarted.resolve();
         await retryRegistration.promise;
@@ -57,6 +107,14 @@ export function registerTelegramWebhookRegistrationTests(fixture: RegistrationFi
     await gateway.withWebhook({ ...webhookOptions, runtime, setStatus }, async ({ port }) => {
       try {
         await retryStarted.promise;
+        expect(status({ lastError: "fetch failed" }).lastDisconnect).toEqual({
+          at: 1_000_000,
+          error: "fetch failed",
+        });
+        expect(status({ lastError: "service unavailable" }).lastDisconnect).toEqual({
+          at: 1_000_000,
+          error: "service unavailable",
+        });
         const response = await postWebhookJson({
           url: webhookUrl(port, path),
           payload: JSON.stringify(telegramMessageUpdate(806, "startup webhook")),
@@ -76,6 +134,7 @@ export function registerTelegramWebhookRegistrationTests(fixture: RegistrationFi
         ...disconnected,
         lifecycle: "recovering",
         lastError: "fetch failed",
+        lastDisconnect: { at: 1_000_000, error: "fetch failed" },
       });
       status({ mode: "webhook", connected: true, lastError: null });
     });
@@ -83,12 +142,13 @@ export function registerTelegramWebhookRegistrationTests(fixture: RegistrationFi
 
   it.each([
     [401, "unauthorized"],
+    [404, "not found"],
     [400, "bad webhook URL"],
   ] as const)("rejects setWebhook %s: %s", async (code, message) => {
     setWebhookSpy.mockRejectedValueOnce(apiError(message, code));
     await expect(start()).rejects.toThrow(message);
-    if (code === 401) {
-      expectBlocked();
+    if (code === 401 || code === 404) {
+      expectBlocked(message);
     } else {
       expect(status({ lastError: message }).lifecycle).toBeUndefined();
     }
