@@ -303,6 +303,9 @@ const repositoryScriptEntries = [
   "scripts/perf/cron-delivery-gateway-entry.ts!",
   "scripts/perf/plugin-policy-read-measure.mjs!",
   "scripts/perf/prompt-cache-observation-measure.ts!",
+  // Invoked directly with Node as documented in their headers.
+  "scripts/perf/prompt-cache-drops-measure.ts!",
+  "scripts/perf/prompt-cache-request-cost.ts!",
   "scripts/perf/live-history-observation-measure.ts!",
   "scripts/perf/reconnect-read-wave-measure.ts!",
   "scripts/perf/session-actor-receipt-measure.ts!",
