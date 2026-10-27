@@ -521,6 +521,14 @@ const repositoryScriptEntries = [
   "scripts/perf/trajectory-tool-parameters-measure.ts!",
   "scripts/perf/transcript-projection-receipt-measure.ts!",
   "scripts/perf/ui-streaming-render-measure.ts!",
+  // Their source headers document these standalone performance commands.
+  "scripts/perf/active-run-projector-measure.ts!",
+  "scripts/perf/cron-store-context-measure.ts!",
+  "scripts/perf/diagnostic-frozen-trace-measure.ts!",
+  "scripts/perf/image-worker-buffers-measure.mjs!",
+  "scripts/perf/installed-plugin-index-fingerprint-measure.ts!",
+  "scripts/perf/knowledge-worker-diagnostics-measure.mjs!",
+  "scripts/perf/knowledge-worker-heap-measure.mjs!",
   // Maintained source headers invoke these standalone commands by exact path.
   "scripts/perf/archive-worker-startup-measure.mjs!",
   "scripts/perf/archive-canonical-worker-measure.ts!",
