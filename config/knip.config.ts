@@ -787,6 +787,8 @@ const repositoryScriptEntries = [
   "scripts/perf/async-work-scope-measure.ts!",
   "scripts/perf/local-workspace-callers-measure.ts!",
   "scripts/perf/local-workspace-checkpoint-measure.ts!",
+  "scripts/perf/local-workspace-lease-holders-measure.ts!",
+  "scripts/perf/local-workspace-stopped-stream-measure.ts!",
   "scripts/perf/local-workspace-retention.ts!",
   "scripts/perf/plugin-iterator-membrane-measure.ts!",
   "scripts/perf/plugin-generation-retention.ts!",
