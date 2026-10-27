@@ -305,6 +305,12 @@ announcing children before answering. It does not collect Swarm results:
 collectors require `agents_wait`, or an awaited `agents.run()` in OpenClaw
 Code Mode, and do not send completion notifications.
 
+In automation turns, including cron jobs and jobs running in an existing session,
+`sessions_yield` returns `status: "yielded"` and ends the current model turn.
+The scheduler delivers child output under the job's delivery policy; yielding
+does not register an interactive requester continuation or an incoming-message
+wait, even with `waitFor: "message"`.
+
 `sessions_yield` is the waiting primitive for announced completions. Do not replace it with polling
 loops over `subagents`, `sessions_list`, `sessions_history`, shell
 `sleep`, or process polling just to detect child completion.
