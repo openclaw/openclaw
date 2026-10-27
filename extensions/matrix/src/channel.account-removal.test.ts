@@ -60,7 +60,7 @@ it("forgets the cached login when the account is removed, so a re-added account 
     accountId: "default",
     runtime: {} as never,
   });
-  expect(await loadMatrixCredentials(process.env, "default")).toBeNull();
+  expect(loadMatrixCredentials(process.env, "default")).toBeNull();
 
   // Re-adding the same account id with a password must not resurrect the removed token.
   const auth = await resolveMatrixAuth({
