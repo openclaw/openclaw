@@ -4,6 +4,7 @@
  *   --output .local/audit-rate/base-1 --iterations 1000 [--allocation] \
  *   [--source-dir .local/audit-rate/base-source] [--stage-gap-ms 1] [--turn-gap-ms 10]
  * --source-dir substitutes ONLY audit-event-writer.ts, retaining its relative imports.
+ * Both arms load the captured owner through the same native TypeScript hook.
  * Compare fixed work in alternating base/candidate runs; sample main-thread allocation
  * separately. Each turn enqueues eight items across six async lifecycle stages, producing
  * five activity rows, two progress rows, one identity and one decision. Forty agents and
@@ -51,18 +52,16 @@ const ownerSource = readFileSync(
     : fileURLToPath(ownerUrl),
   "utf8",
 );
-let substitutedOwner = false;
-if (values["source-dir"]) {
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url.startsWith("file:") && fileURLToPath(url) === fileURLToPath(ownerUrl)) {
-        substitutedOwner = true;
-        return { format: "module-typescript", source: ownerSource, shortCircuit: true };
-      }
-      return nextLoad(url, context);
-    },
-  });
-}
+let loadedOwner = false;
+registerHooks({
+  load(url, context, nextLoad) {
+    if (url.startsWith("file:") && fileURLToPath(url) === fileURLToPath(ownerUrl)) {
+      loadedOwner = true;
+      return { format: "module-typescript", source: ownerSource, shortCircuit: true };
+    }
+    return nextLoad(url, context);
+  },
+});
 const [
   { createAuditEventWriter },
   { GatewayScheduler },
@@ -80,7 +79,7 @@ const [
   import("../../src/state/openclaw-state-db.js"),
   import("../../src/infra/diagnostic-events.js"),
 ]);
-assert(!values["source-dir"] || substitutedOwner, "saved audit owner was not loaded");
+assert(loadedOwner, "captured audit owner was not loaded");
 diagnostics.setDiagnosticsEnabledForProcess(true);
 const now = Math.floor(Date.now() / 86_400_000) * 86_400_000;
 const scheduler = new GatewayScheduler();
