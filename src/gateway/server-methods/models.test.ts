@@ -1058,10 +1058,7 @@ describe("models.list", () => {
 
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
-        const { request, respond } = requestModelsList({
-          view: "all",
-          loadGatewayModelCatalog,
-        });
+        const { request, respond } = requestModelsList({ view: "all", loadGatewayModelCatalog });
 
         await vi.advanceTimersByTimeAsync(800);
         expect(respond).not.toHaveBeenCalled();
@@ -1078,6 +1075,7 @@ describe("models.list", () => {
                 name: "GPT Test",
                 provider: "openai",
                 agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
+                cyberAccessProgramDefault: "standard",
                 available: false,
               },
             ],
@@ -1105,10 +1103,7 @@ describe("models.list", () => {
       const cfg = {
         agents: {
           defaults: {
-            models: {
-              "openai/*": {},
-              "vllm/*": {},
-            },
+            models: { "openai/*": {}, "vllm/*": {} },
           },
         },
         models: configForProviders({
@@ -1140,6 +1135,7 @@ describe("models.list", () => {
               provider: "openai",
               agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
               local: false,
+              cyberAccessProgramDefault: "standard",
               available: true,
             },
             {
@@ -1148,6 +1144,7 @@ describe("models.list", () => {
               provider: "openai",
               agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
               local: false,
+              cyberAccessProgramDefault: "standard",
               available: true,
             },
             { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
@@ -1184,6 +1181,7 @@ describe("models.list", () => {
               provider: "openai",
               agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
               local: false,
+              cyberAccessProgramDefault: "standard",
               available: true,
             },
             {
@@ -1192,6 +1190,7 @@ describe("models.list", () => {
               provider: "openai",
               agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
               local: false,
+              cyberAccessProgramDefault: "standard",
               available: true,
             },
             { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
@@ -1311,6 +1310,7 @@ describe("models.list", () => {
                 provider: "openai",
                 agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
                 local: false,
+                cyberAccessProgramDefault: "standard",
                 available: true,
               },
             ],

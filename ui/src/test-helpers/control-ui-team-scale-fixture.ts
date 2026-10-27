@@ -14,6 +14,7 @@ import {
   prepareTeamScaleSidebarListChurn,
   type TeamScaleLiveEvent,
 } from "./control-ui-sidebar-list-fixture.ts";
+import { createTeamScaleSidebarPresentation } from "./control-ui-sidebar-presentation.test-support.ts";
 import { withTeamScaleConfig } from "./control-ui-team-scale-config.ts";
 import { createTeamScaleHistoryFixture } from "./control-ui-team-scale-history-fixture.ts";
 import {
@@ -24,6 +25,7 @@ import {
 import {
   createTeamScalePeople,
   TEAM_SCALE_AVATAR_ASSET,
+  teamScalePersonAvatar,
   TEAM_SCALE_SELF_INSTANCE_ID,
 } from "./control-ui-team-scale-people.ts";
 import {
@@ -59,6 +61,7 @@ type FixtureOptions = {
   sidebarLiveChurn?: boolean;
   sidebarAvatars?: boolean;
   transcriptAvatars?: boolean;
+  sidebarPresentation?: boolean;
   sidebarPersistentChildren?: boolean;
   sessionEventChurn?: boolean;
   sessionEventDurationMs?: number;
@@ -100,7 +103,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     counts.people,
     now,
     {
-      avatars: options.sidebarLiveChurn || options.sidebarAvatars,
+      avatars: options.sidebarLiveChurn || options.sidebarAvatars || options.sidebarPresentation,
       sharing: options.closedMenuMembers,
     },
   );
@@ -125,6 +128,9 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     });
   const duplicateReads = options.duplicateBootReads
     ? createTeamScaleDuplicateReadFixture(selectedSessionKey, now)
+    : undefined;
+  const sidebarPresentation = options.sidebarPresentation
+    ? createTeamScaleSidebarPresentation({ agents, pinnedRows, assets, now })
     : undefined;
   pinnedRows[0]!.sharingRole = "admin";
   pinnedRows[0]!.visibility = "shared";
@@ -158,16 +164,11 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         pinnedRows[(index - 8) % pinnedRows.length]!.key,
       ];
     }
-    if (options.sidebarLiveChurn || options.sidebarAvatars) {
-      assets.set(`/api/users/${person.id}/avatar`, {
-        contentType: "image/svg+xml",
-        body:
-          index % 6 === 2
-            ? "synthetic invalid image"
-            : `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="hsl(${(index * 37) % 360} 55% 45%)"/><text x="20" y="26" fill="white" text-anchor="middle" font-size="17">${index + 1}</text></svg>`,
-        ...(index % 6 === 1 ? { status: 404 } : {}),
-        ...(index % 6 === 3 ? { delayMs: 600 } : {}),
-      });
+    if (
+      (options.sidebarLiveChurn || options.sidebarAvatars || options.sidebarPresentation) &&
+      (!options.transcriptAvatars || person !== transcriptSender)
+    ) {
+      assets.set(`/api/users/${person.id}/avatar`, teamScalePersonAvatar(index));
     }
   }
   const sidebarListInput = {
@@ -384,6 +385,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       ),
     },
     ...(options.liveRun ? { inFlightRun: inFlightRun() } : {}),
+    featureEvents: ["cron.inventory.changed"],
     featureMethods: [
       ...defaultControlUiFeatureMethods,
       "sessions.list",
@@ -401,6 +403,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       "progressCard.get",
       "cron.list",
       "cron.status",
+      ...(sidebarPresentation ? [sidebarPresentation.method] : []),
       ...(options.dashboardMcpApp ? ["board.widget.appView", "mcp.app.view"] : []),
       ...(options.dashboardWidgetFontUrl ? ["mcp.app.discover"] : []),
       ...(duplicateReads?.featureMethods ?? []),
@@ -422,7 +425,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
             agentId: agent.id,
             name: agent.name,
             emoji: agent.identity?.emoji,
-            avatar: "",
+            avatar: agent.identity?.avatarUrl ?? "",
           },
         })),
       },
@@ -683,6 +686,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     board,
     selectedSessionKey,
     sidebarPersistentChildren,
+    sidebarPresentation,
     pinnedKeys,
     sidebarEntries,
     events,

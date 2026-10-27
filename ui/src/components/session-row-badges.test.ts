@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
+import { createComponent, createSignal, flush } from "solid-js";
 import { beforeEach, expect, it } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
@@ -18,11 +18,8 @@ beforeEach(() => i18n.setLocale("en"));
 function renderBadge(params: SessionRowBadgesParams, kind: string, text: string) {
   const indicator = badge(renderBadges(params), kind);
   expect(indicator?.getAttribute("aria-label")).toBe(text);
-  expect(indicator?.hasAttribute("title")).toBe(false);
-  expect(indicator?.closest<HTMLElement & { content?: string }>("openclaw-tooltip")?.content).toBe(
-    text,
-  );
-  expect(indicator?.querySelector("svg")).not.toBeNull();
+  expect(indicator?.getAttribute("title")).toBe(text);
+  expect(indicator?.querySelector(".session-css-icon")).not.toBeNull();
   return indicator;
 }
 
@@ -50,6 +47,12 @@ it("renders outbox attention and stays quiet when empty", () => {
     "3 messages need attention",
   );
   expect(indicator?.textContent).toContain("3");
+  const approval = badge(renderBadges({ hasApproval: true }), "approval");
+  expect(
+    indicator
+      ?.querySelector(".session-css-icon")
+      ?.isEqualNode(approval?.querySelector(".session-css-icon") ?? null),
+  ).toBe(true);
 
   expect(
     badge(renderBadges({ outboxAttentionCount: 1 }), "attention")?.getAttribute("aria-label"),
@@ -93,3 +96,24 @@ it.each([
     ).toHaveLength(1);
   },
 );
+
+it("retains PR artwork when a receipt confirms the displayed count", () => {
+  const [count, setCount] = createSignal<number | undefined>(undefined);
+  const { container } = mountSolid(() =>
+    createComponent(SessionRowBadges, {
+      pullRequest: { numbers: [17], state: "open" },
+      get pullRequestCount() {
+        return count();
+      },
+    }),
+  );
+  flush();
+  const original = badge(container, "pull-request");
+  expect(original).not.toBeNull();
+  setCount(1);
+  flush();
+  expect(badge(container, "pull-request")).toBe(original);
+  setCount(2);
+  flush();
+  expect(badge(container, "pull-request")?.textContent).toBe("2");
+});

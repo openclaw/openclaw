@@ -35,44 +35,32 @@ export function warmEntry() {
 
 export function updateWarmImage(patch: Partial<WarmImageRecord>) {
   const entry = warmEntry();
-  openWarmImageStore().register(entry.key, {
-    ...entry.value,
-    image: { ...entry.value.image!, ...patch },
-  });
+  const image = { ...entry.value.image!, ...patch };
+  openWarmImageStore().register(entry.key, { ...entry.value, image });
   return entry;
 }
 const uncached = { preparationKey: null, cacheKey: null, purpose: null };
 
-export const warmImage = (
-  checkpointId: string,
-  overrides: Partial<WarmImageRecord> = {},
-): WarmImageRecord => ({
-  checkpointId,
-  kind: "native",
-  state: "available",
-  createdAtMs: 1,
-  ...uncached,
-  lastDemandAtMs: 1,
-  ...overrides,
-});
+export function warmImage(id: string, patch: Partial<WarmImageRecord> = {}): WarmImageRecord {
+  return {
+    checkpointId: id,
+    kind: "native",
+    state: "available",
+    createdAtMs: 1,
+    ...uncached,
+    lastDemandAtMs: 1,
+    ...patch,
+  };
+}
 
-export const warmRecord = (overrides: Partial<WarmProfileRecord> = {}): WarmProfileRecord => ({
-  version: 3,
-  allocations: {},
-  ...overrides,
-});
+export function warmRecord(patch: Partial<WarmProfileRecord> = {}): WarmProfileRecord {
+  return { version: 3, allocations: {}, ...patch };
+}
 
-type CaptureOperation = Extract<NonNullable<WarmProfileRecord["operation"]>, { type: "capture" }>;
-export const captureOperation = (
-  id: string,
-  overrides: Partial<CaptureOperation> = {},
-): CaptureOperation => ({
-  type: "capture",
-  id,
-  phase: "creating",
-  startedAtMs: Date.now(),
-  ...overrides,
-});
+type Capture = Extract<NonNullable<WarmProfileRecord["operation"]>, { type: "capture" }>;
+export function captureOperation(id: string, patch: Partial<Capture> = {}): Capture {
+  return { type: "capture", id, phase: "creating", startedAtMs: Date.now(), ...patch };
+}
 
 export { createAsyncGate as pause } from "../../test-support/async-gate.test-support.js";
 

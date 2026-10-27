@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
@@ -58,6 +57,7 @@ import {
   type HandoffProcessIdentity,
 } from "./update-managed-service-handoff-schema.js";
 import { createManagedHandoffScopeReader } from "./update-managed-service-handoff-scope.js";
+import { resolveManagedUpdateLeaseTempRoot } from "./update-managed-service-handoff-temp-root.js";
 
 // Identity is earned by this process's original acquisition, not by decoding a
 // row or copying a grant. Survives the executor pinning/reopening the same DB.
@@ -74,10 +74,11 @@ export type {
 
 export function resolveManagedUpdateLeaseDatabasePath(): string {
   const uid = process.getuid?.();
+  const base = resolveManagedUpdateLeaseTempRoot();
   // Other users may own /tmp/openclaw after a reboot; lease placement must not follow it.
-  const preferredDir = path.join(os.tmpdir(), uid === undefined ? "openclaw" : `openclaw-${uid}`);
+  const preferredDir = path.join(base, uid === undefined ? "openclaw" : `openclaw-${uid}`);
   return path.join(
-    resolvePreferredOpenClawTmpDir({ preferredDir }),
+    resolvePreferredOpenClawTmpDir({ preferredDir, tmpdir: () => base }),
     "managed-update-handoffs.sqlite",
   );
 }

@@ -4,6 +4,7 @@
  *   --mode timing --turns 20 --output .local/sse-base.json
  *   [--fixture .local/recorded.sse] [--owner /absolute/path/to/replay-owner.ts]
  * Use --large-frame to record a 1 MiB output-item snapshot instead of 3,000 deltas.
+ * Use --mixed for alternating text/tool-argument deltas and mixed CR/LF framing.
  * The first run records <output>.sse. Reuse those exact bytes for both revisions.
  * Run timing/allocation separately in alternating order; hashes are outside measurement.
  */
@@ -24,6 +25,7 @@ const { values } = parseArgs({
     turns: { type: "string", default: "20" },
     owner: { type: "string" },
     fixture: { type: "string" },
+    mixed: { type: "boolean", default: false },
     "large-frame": { type: "boolean", default: false },
     output: { type: "string" },
   },
@@ -52,7 +54,10 @@ const fixtureEvents = values["large-frame"]
       },
     ]
   : Array.from({ length: 3000 }, (_, index) => ({
-      type: "response.output_text.delta",
+      type:
+        values.mixed && index % 2
+          ? "response.function_call_arguments.delta"
+          : "response.output_text.delta",
       item_id: "msg_fixture",
       output_index: 0,
       content_index: 0,
@@ -62,7 +67,10 @@ const fixture = values.fixture
   ? await readFile(values.fixture)
   : Buffer.from(
       fixtureEvents
-        .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+        .map((event, index) => {
+          const newline = values.mixed ? ["\n", "\r\n", "\r"][index % 3] : "\n";
+          return `event: ${event.type}${newline}data: ${JSON.stringify(event)}${newline}${newline}`;
+        })
         .join("") + "data: [DONE]\n\n",
     );
 await writeFile(`${values.output}.sse`, fixture);

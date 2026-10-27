@@ -184,46 +184,6 @@ export async function resolveNextResponsesEncryptedContentAttempt<
   };
 }
 
-function* decodeResponsesSseFrame(
-  frame: string,
-  firstFrame: boolean,
-): Generator<{ event: string | null; data: string }> {
-  let event: string | null = null;
-  let data: string | undefined;
-  let start = 0;
-  let cr = frame.indexOf("\r");
-  let lf = frame.indexOf("\n");
-  while (start < frame.length) {
-    const end = cr < 0 ? (lf < 0 ? frame.length : lf) : lf < 0 ? cr : Math.min(cr, lf);
-    // The SDK strips one BOM per line; the streaming decoder already handled the first.
-    const bom = !(firstFrame && start === 0) && frame.charCodeAt(start) === 0xfeff;
-    const line = frame.slice(bom ? start + 1 : start, end);
-    start = end + (frame[end] === "\r" && frame[end + 1] === "\n" ? 2 : 1);
-    if (cr >= 0 && cr < start) {
-      cr = frame.indexOf("\r", start);
-    }
-    if (lf >= 0 && lf < start) {
-      lf = frame.indexOf("\n", start);
-    }
-    if (!line && (event || data !== undefined)) {
-      yield { event, data: data ?? "" };
-      event = null;
-      data = undefined;
-    }
-    const colon = line.indexOf(":");
-    const field = colon < 0 ? line : line.slice(0, colon);
-    const value = colon < 0 ? "" : line.slice(colon + (line[colon + 1] === " " ? 2 : 1));
-    if (field === "event") {
-      event = value;
-    } else if (field === "data") {
-      data = data === undefined ? value : `${data}\n${value}`;
-    }
-  }
-  if (event || data !== undefined) {
-    yield { event, data: data ?? "" };
-  }
-}
-
 export async function createResponsesStreamWithRecovery(params: {
   client: ResponsesClientLike;
   request: OpenAIResponsesRequestParams;
@@ -254,21 +214,58 @@ export async function createResponsesStreamWithRecovery(params: {
     try {
       // This owner keeps the reader for terminal draining; framing only borrows reads.
       frames: for await (const { frame } of iterateSseFrames(() => reader.read())) {
-        const messages = decodeResponsesSseFrame(frame, firstFrame);
-        firstFrame = false;
-        for (const message of messages) {
-          if (message.data === "[DONE]") {
+        let eventName: string | null = null;
+        let data: string | undefined;
+        let start = 0;
+        let cr = frame.indexOf("\r");
+        let lf = frame.indexOf("\n");
+        while (start < frame.length) {
+          const end = cr < 0 ? (lf < 0 ? frame.length : lf) : lf < 0 ? cr : Math.min(cr, lf);
+          // The SDK strips one BOM per line; the decoder already handled the stream's first.
+          const bom = !(firstFrame && start === 0) && frame.charCodeAt(start) === 0xfeff;
+          const lineStart = bom ? start + 1 : start;
+          start = end + (frame[end] === "\r" && frame[end + 1] === "\n" ? 2 : 1);
+          if (cr >= 0 && cr < start) {
+            cr = frame.indexOf("\r", start);
+          }
+          if (lf >= 0 && lf < start) {
+            lf = frame.indexOf("\n", start);
+          }
+          if (lineStart < end) {
+            const fieldLength = frame.startsWith("data", lineStart)
+              ? 4
+              : frame.startsWith("event", lineStart)
+                ? 5
+                : 0;
+            const colon = lineStart + fieldLength;
+            if (fieldLength && (colon === end || frame[colon] === ":")) {
+              const value =
+                colon === end ? "" : frame.slice(colon + (frame[colon + 1] === " " ? 2 : 1), end);
+              if (fieldLength === 5) {
+                eventName = value;
+              } else {
+                data = data === undefined ? value : `${data}\n${value}`;
+              }
+            }
+            if (start < frame.length) {
+              continue;
+            }
+          }
+          if (!eventName && data === undefined) {
+            continue;
+          }
+          if (data === "[DONE]") {
             break frames;
           }
           let event: unknown;
           try {
-            event = JSON.parse(message.data);
+            event = JSON.parse(data ?? "");
           } catch {
             throw new SyntaxError("Error reading response: malformed server-sent event JSON.");
           }
-          if (message.event?.startsWith("thread.")) {
-            event = { event: message.event, data: event };
-          } else if (message.event === "error" || (isRecord(event) && event.error)) {
+          if (eventName?.startsWith("thread.")) {
+            event = { event: eventName, data: event };
+          } else if (eventName === "error" || (isRecord(event) && event.error)) {
             throw new APIError(
               undefined,
               // @ts-expect-error SDK SSE also passes arbitrary JSON; preserve scalar/null error payloads.
@@ -281,7 +278,10 @@ export async function createResponsesStreamWithRecovery(params: {
             isRecord(event) &&
             (event.type === "response.completed" || event.type === "response.incomplete");
           yield event;
+          eventName = null;
+          data = undefined;
         }
+        firstFrame = false;
       }
     } catch (error) {
       // Match SDK transport cancellation without swallowing provider API errors.

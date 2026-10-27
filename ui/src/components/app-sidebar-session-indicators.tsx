@@ -11,7 +11,8 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { sidebarSessionMetaId, sidebarSessionStateId } from "./app-sidebar-session-types.ts";
 import { ElapsedTime } from "./elapsed-time.tsx";
 import { describeSessionState } from "./session-leading-indicator.ts";
-import { Icon } from "./solid/icon.tsx";
+import { sidebarSessionBadgeFacts } from "./session-row-badge-presentation.ts";
+import { Icon, sessionIcon } from "./solid/icon.tsx";
 import {
   renderSessionLeadingState,
   sessionRunVisibility,
@@ -28,26 +29,16 @@ export function renderSidebarSessionIndicators(
   readIcon?: () => JSX.Element,
 ) {
   const team = createMemo(() => host().sidebarAgentsMode === "roster");
-  const ownAttention = createMemo(() => readSession().ownAttention ?? readSession().attention);
-  const hasApproval = createMemo(() => {
-    const attention = ownAttention();
-    return attention.kind === "question"
-      ? attention.requests.some((request) => request.kind === "approval")
-      : !team() && attention.kind === "approval";
-  });
   const childrenExpanded = createMemo(() => host().isSessionChildrenExpanded(readSession()));
-  const initialPullRequest = createMemo(
-    () => readSession().pullRequest ?? readDisplay?.()?.pullRequest,
+  const badges = createMemo(() =>
+    sidebarSessionBadgeFacts(
+      host().sessionPullRequests,
+      readSession(),
+      team(),
+      readSession().pullRequest ?? readDisplay?.()?.pullRequest,
+    ),
   );
-  const pullRequest = createMemo(() => {
-    const readSessionValue = readSession();
-    const initialPullRequestValue = initialPullRequest();
-    return host().sessionPullRequests.summary(
-      readSessionValue.key,
-      readSessionValue.worktreeId ?? "",
-      initialPullRequestValue,
-    );
-  });
+  const pullRequest = () => badges().pullRequest;
   const ownerAttribution = createMemo(() => {
     const readSessionValue = readSession();
     return host().sessionsStatusFilter === "archived"
@@ -239,7 +230,7 @@ export function renderSidebarSessionIndicators(
               aria-label={t("chat.sidebar.coding")}
               title={readSession().subtitle ?? t("chat.sidebar.coding")}
             >
-              <Icon name="terminal" />
+              {sessionIcon("terminal", 12, 1.6)}
             </span>
           ) : undefined}
           {team() && readSession().hasAutomation ? (
@@ -249,15 +240,15 @@ export function renderSidebarSessionIndicators(
               aria-label={t("tabs.cron")}
               title={t("tabs.cron")}
             >
-              <Icon name="clock" />
+              {sessionIcon("clock", 12, 1.6)}
             </span>
           ) : undefined}
           <SessionRowBadges
             {...readSession()}
             hasComposerDraft={readSession().hasComposerDraft === true}
             pullRequest={pullRequest()}
-            pullRequestCount={host().sessionPullRequests.count(readSession().key)}
-            hasApproval={hasApproval()}
+            pullRequestCount={badges().pullRequestCount}
+            hasApproval={badges().hasApproval}
           />
           {team() ? trail() : undefined}{" "}
           <Show when={team()}>

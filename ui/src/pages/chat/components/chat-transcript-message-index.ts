@@ -350,16 +350,31 @@ export function expandReplyTargetWork(
   }
 }
 
+export type PlacedContentRow = Extract<TranscriptRow, { kind: "content" }> & {
+  /** Row key this content follows; null leads the transcript and undefined trails it. */
+  after?: string | null;
+};
+
 export function projectTranscriptRows(
   rows: readonly TranscriptRow<ChatRenderItem>[],
   workPreviews: ReturnType<typeof projectTranscriptWorkPreviews>,
-  contentRows: readonly Extract<TranscriptRow, { kind: "content" }>[],
+  contentRows: readonly PlacedContentRow[],
 ): readonly TranscriptRow<ChatRenderItem>[] {
-  return presentationRows(rows, [workPreviews, ...contentRows.map((row) => row.key)], () => {
+  const key = [workPreviews, ...contentRows.flatMap((row) => [row.key, row.after])];
+  return presentationRows(rows, key, () => {
     if (!workPreviews.size && !contentRows.length) {
       return rows;
     }
-    const result: TranscriptRow<ChatRenderItem>[] = [];
+    const placed = Map.groupBy(
+      contentRows.filter((row) => row.after !== undefined),
+      (row) => row.after,
+    );
+    const take = (after: string | null) => {
+      const found = placed.get(after) ?? [];
+      placed.delete(after);
+      return found;
+    };
+    const result: TranscriptRow<ChatRenderItem>[] = take(null);
     for (const row of rows) {
       result.push(row);
       const previews = workPreviews.get(row.key);
@@ -371,7 +386,12 @@ export function projectTranscriptRows(
           content: new GuardedTranscriptItem([content], content),
         });
       }
+      result.push(...take(row.key));
     }
-    return result.concat(contentRows);
+    // An anchor outside these rows keeps its content visible at the end.
+    return result.concat(
+      [...placed.values()].flat(),
+      contentRows.filter((row) => row.after === undefined),
+    );
   });
 }

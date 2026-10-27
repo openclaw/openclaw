@@ -304,6 +304,12 @@ Additional hybrid check offloads require [fresh hosted assignment evidence](/ci/
 Windows keeps its complete explicit test inventory in five [measured project-aligned shards](/ci/runners#runner-backend-modes) for main and release validation. Windows-owner PRs retain the complete family; unrelated PRs omit it.
 
 Real-Gateway browser checks use [job budgets matched to their selected runner](/ci/runners#blacksmith-runner-capacity).
+They restore the protected full-build cache and still run private-QA preparation.
+The Control UI step can reuse public build content because backend-only private
+plugins do not change its output. Native UI declarations, assets, source plugin
+discovery, and Vite-consumed inputs remain part of its validated cache identity.
+Existing UI test bodies do not invalidate an otherwise unchanged bundle; their
+complete path inventory still invalidates new or removed glob matches.
 
 Control UI, repo E2E, and native live browser CI restore the Chromium revision pinned by the selected target's installed Playwright package, with separate OS/architecture cache keys and no fallback prefixes. The protected-main Vitest cache warmer publishes the browser cache in its short dependency job for both Linux backends; PR and release jobs remain restore-only. A cache miss still installs the managed browser, and current targets use the installer's `--require-playwright-chromium` mode rather than substituting system Chrome. Historical targets retain their Playwright installer and Linux dependency setup. Browser startup diagnostics include provider, page, WebSocket, and Chromium process events to diagnose a session-readiness timeout even when it is reported only after unrelated unit work finishes.
 
@@ -317,7 +323,7 @@ Browser extension CI launches the installed, patched Chrome MCP dependency direc
 
 When an ordinary PR, push, or scheduled run already selects the public artifact build, current-target Control UI locale checks share that job's checkout and dependency setup. Source verification and locale parity run before generators, with their result settled after the existing build diagnostics. Source failures remain blocking; generated-locale drift retains its strict or advisory policy. Standalone selections, dispatches, frozen targets, and compatibility targets keep the separate locale job.
 
-When the public artifact build is already selected, current-target browser extension E2E and the selected production deployment fixtures run directly in `build-artifacts`, before mutable built-artifact verifiers. They reuse that exact checkout's public build without an extra checkout, runtime archive, or runner. Native-policy and published-driver consumers wait for this browser proof with the rest of the producer job. Standalone browser selections and frozen targets retain their local runtime build. Real-Gateway fixtures retain their separate private-QA preparation. The sequential Doctor and SQLite built-CLI verifiers opt into the existing validated worker cache to reuse their identical compiled worker graph within the producer job; TUI retains its separate heap configuration and worker preparation.
+When the public artifact build is already selected, current-target browser extension E2E and the selected production deployment fixtures run directly in `build-artifacts`, before mutable built-artifact verifiers. They reuse that exact checkout's public build without an extra checkout, runtime archive, or runner. Native-policy and published-driver consumers wait for this browser proof with the rest of the producer job. Standalone browser selections and frozen targets retain their local runtime build. Real-Gateway fixtures retain their separate private-QA preparation. The native-host, Doctor and SQLite built-CLI verifiers opt into the existing validated worker cache to reuse their identical runtime-only compiled worker graph sequentially within the producer job; TUI retains its separate heap configuration and worker preparation.
 
 Build, QA and test orchestration restore the same [protected Node compile cache](/ci/scope-and-routing/node-test-lanes). The trusted warmer populates build tools before collecting test imports, including the same seven Control UI seed files on Node and the pinned Bun fork in both Linux cache backends; ordinary CI remains restore-only.
 
@@ -349,7 +355,7 @@ prepares its required declarations. Only a successful preparation step
 enables prebuilt consumption, so the children reuse its JavaScript, assets, and
 freshness stamps instead of starting another full build.
 
-Vitest transform-cache fingerprints exclude the generated `.ci-harness` checkout so CI consumers and the protected warmer hash the same source inputs. Node bytecode caching remains enabled for ordinary Vitest runs; Vitest owns the worker-level coverage safeguard described in [local testing](/reference/test/local#core-commands).
+Vitest transform-cache fingerprints include direct Vitest configs at every depth and the shared `test/vitest/` inputs, except the two database-worker membership inventories that only select tests. They exclude the generated `.ci-harness` checkout so CI consumers and the protected warmer hash the same source inputs. Node bytecode caching remains enabled for ordinary Vitest runs; Vitest owns the worker-level coverage safeguard described in [local testing](/reference/test/local#core-commands).
 
 Transform keys also include each project's dependency optimizer directory. This
 prevents cached UI imports from mixing separate projects' Lit instances when a

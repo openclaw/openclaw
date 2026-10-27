@@ -5,6 +5,10 @@ import type { GatewayConnectionTransport } from "./connection-transport.js";
 import type { installGatewayDeflateCodec } from "./ws-compression.js";
 import { recordGatewayWsEvent } from "./ws-connection-diagnostics.js";
 
+// Payload identity owns framing; compression negotiation chooses the payload before lookup.
+const rawHeaders = new WeakMap<Buffer | SerializedGatewayFrame, Buffer>();
+const compressedHeaders = new WeakMap<Buffer | SerializedGatewayFrame, Buffer>();
+
 /** Own outbound compression and socket batching for every frame. */
 export function createGatewayWebSocketTransport(
   socket: WebSocket,
@@ -99,13 +103,18 @@ export function createGatewayWebSocketTransport(
         const segments = payload instanceof SerializedGatewayFrame ? payload.segments : [payload];
         // Complete server text frames are unmasked. Encode only their RFC 6455
         // header so the native writev queue can borrow the immutable payload segments.
-        const header = Buffer.allocUnsafe(bytes < 126 ? 2 : bytes < 65536 ? 4 : 10);
-        header[0] = compressed ? 0xc1 : 0x81;
-        header[1] = bytes < 126 ? bytes : bytes < 65536 ? 126 : 127;
-        if (header.length === 4) {
-          header.writeUInt16BE(bytes, 2);
-        } else if (header.length === 10) {
-          header.writeBigUInt64BE(BigInt(bytes), 2);
+        const headers = compressed ? compressedHeaders : rawHeaders;
+        let header = headers.get(payload);
+        if (!header) {
+          header = Buffer.allocUnsafe(bytes < 126 ? 2 : bytes < 65536 ? 4 : 10);
+          header[0] = compressed ? 0xc1 : 0x81;
+          header[1] = bytes < 126 ? bytes : bytes < 65536 ? 126 : 127;
+          if (header.length === 4) {
+            header.writeUInt16BE(bytes, 2);
+          } else if (header.length === 10) {
+            header.writeBigUInt64BE(BigInt(bytes), 2);
+          }
+          headers.set(payload, header);
         }
         if (!nativeWritev && !batch) {
           stream.write(

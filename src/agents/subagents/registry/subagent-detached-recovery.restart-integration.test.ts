@@ -1,3 +1,6 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 // Preserve module setup before modules that consume it.
@@ -38,6 +41,7 @@ import {
   clearAgentRunContext,
   registerAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
+import { isMissingPathError } from "../../../infra/errors.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -45,10 +49,19 @@ import {
   getSharedGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { setUserProfileRole } from "../../../state/user-profile-writes.worker.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../../admitted-run-context.js";
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
+import { createAgentHarnessHostCapabilities } from "../../harness/host-capability.js";
 import { createRestartRecoveryOperatorSource } from "../../operator-run-recovery-source.js";
 import { createRestartRecoveryRequesterSource } from "../../requester-run-recovery-source.js";
+import { readPersistedFileStat } from "../../sessions/tools/file-write-verification.js";
+import { createWriteTool } from "../../sessions/tools/write.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { preserveSubagentRunForRestart } from "./subagent-registry-run-pause.js";
@@ -84,6 +97,9 @@ describe("detached subagent restart recovery", () => {
     { verified: false, transcript: true, sourceKind: "operator" },
     { verified: true, transcript: true, sourceKind: "operator" },
     { verified: true, transcript: true, sourceKind: "operator-drain" },
+    { verified: true, transcript: true, sourceKind: "operator-independent-drain" },
+    { verified: true, transcript: true, sourceKind: "operator-independent-role-revoked-drain" },
+    { verified: true, transcript: true, sourceKind: "operator-independent-session-replaced-drain" },
     { verified: true, transcript: true, sourceKind: "operator-followup" },
     { verified: true, transcript: true, sourceKind: "operator-followup-mismatched" },
     { verified: true, transcript: false, sourceKind: "operator" },
@@ -108,6 +124,12 @@ describe("detached subagent restart recovery", () => {
       });
       const channelSource = sourceKind.includes("channel");
       const drain = sourceKind.endsWith("-drain");
+      const independent = sourceKind.startsWith("operator-independent-");
+      const finalEffectChange = sourceKind.includes("role-revoked")
+        ? "role"
+        : sourceKind.includes("session-replaced")
+          ? "session"
+          : undefined;
       const requesterAgentId = sourceKind === "channel-cross-agent-drain" ? "requester" : "main";
       const requesterSessionKey = channelSource
         ? `agent:${requesterAgentId}:discord:channel:original-requester`
@@ -133,7 +155,12 @@ describe("detached subagent restart recovery", () => {
       vi.mocked(onAgentEvent).mockImplementation(events.onAgentEvent);
       const client = channelSource
         ? createSyntheticPluginRuntimeClient({ operatorRoleActor: { kind: "system" }, scopes })
-        : createOperatorClient({ profileName: "restart-child-owner", scopes });
+        : createOperatorClient({
+            profileName: finalEffectChange
+              ? `restart-child-owner-${finalEffectChange}`
+              : "restart-child-owner",
+            scopes,
+          });
       const now = Date.now();
       let runId = "warm-restart-child";
       const humanFollowup = sourceKind.startsWith("operator-followup");
@@ -337,7 +364,7 @@ describe("detached subagent restart recovery", () => {
       await activateSubagentRegistry(() => previousContext).settled;
       bindGatewayContextResolver(predecessor, previousContext.resolveGatewayContext);
       client.internal = { ...client.internal, operatorRunAuthority: source?.authority };
-      if (collect && source) {
+      if ((collect || independent) && source) {
         await inPreviousGateway(() =>
           registerSubagentRun({
             runId,
@@ -346,14 +373,14 @@ describe("detached subagent restart recovery", () => {
             sessionEntry: predecessor.childSessionIdentity,
             requesterAgentId: "main",
             requesterSessionKey,
-            requesterTurnRunId: "warm-restart-parent-turn",
+            requesterTurnRunId: independent ? undefined : "warm-restart-parent-turn",
             requesterDisplayKey: requesterSessionKey,
             task: predecessor.task,
             cleanup: "keep",
-            collect: true,
-            groupId: "restart-group",
-            swarmRequesterSessionKey: requesterSessionKey,
-            expectsCompletionMessage: false,
+            collect: collect || undefined,
+            groupId: collect ? "restart-group" : undefined,
+            swarmRequesterSessionKey: collect ? requesterSessionKey : undefined,
+            expectsCompletionMessage: !collect,
             completionTarget: "parent",
             completionRequesterSessionId: requesterIdentity.sessionId,
             completionRequesterLifecycleRevision: requesterIdentity.lifecycleRevision,
@@ -361,8 +388,8 @@ describe("detached subagent restart recovery", () => {
           }),
         );
         expect(loadSubagentRegistryFromSqlite().get(runId)?.operatorRecoverySource).toMatchObject({
-          sessionKey: requesterSessionKey,
-          sourceRunId: "warm-restart-parent-turn",
+          sessionKey: independent ? childSessionKey : requesterSessionKey,
+          sourceRunId: independent ? runId : "warm-restart-parent-turn",
           snapshot: { scopes },
         });
       } else {
@@ -422,7 +449,7 @@ describe("detached subagent restart recovery", () => {
         expect(source.authority.assertCurrent).toThrow();
       }
       rotateAgentEventLifecycleGeneration();
-      if (humanFollowup) {
+      if (humanFollowup || independent) {
         if (mismatchedFollowup) {
           const interrupted = subagentRuns.get(runId)!;
           await addSubagentRunForTests({
@@ -592,6 +619,96 @@ describe("detached subagent restart recovery", () => {
       expect(() => restoredAuthority?.assertCurrent()).not.toThrow();
       const resolveWakeGateway = getSharedGatewayContextResolver([successor!]);
       expect(resolveWakeGateway?.()).toBe(replacementContext);
+      if (finalEffectChange) {
+        // Launch is stubbed above; the restored principal crosses real admission,
+        // harness tool binding, and the write tool's final filesystem effect here.
+        const authority = expectDefined(restoredAuthority, "restored child operator authority");
+        const recovered = expectDefined(successor, "recovered child");
+        const inRecoveredChild = <T>(run: () => T) =>
+          subagentRuns.runWithCompletionAuthority(recovered, run);
+        const admission = prepareAgentRunAdmission({
+          cfg: replacementContext.getRuntimeConfig(),
+          facts: {
+            runId: recovered.runId,
+            agentId: "main",
+            ingress: { kind: "system", boundary: "recovered-child-test", state: "present" },
+          },
+          operationalRunInstance: createOperationalRunInstanceRef(recovered.runId),
+          operatorAuthority: authority,
+        });
+        const admittedRunContext = await inRecoveredChild(() =>
+          admission.admit("plugin-harness", `harness-${recovered.runId}`),
+        );
+        bindGatewayContextResolver(admittedRunContext, recoveryResolver);
+        const host = inRecoveredChild(() =>
+          createAgentHarnessHostCapabilities({
+            attempt: {
+              runId: recovered.runId,
+              agentId: "main",
+              sessionKey: childSessionKey,
+              sessionId: childIdentity.sessionId,
+              admittedRunContext,
+            },
+            pluginId: "codex",
+          }),
+        );
+        const beforeWrite = createDeferredCore();
+        const releaseWrite = createDeferredCore();
+        let pauseWrite = false;
+        let writes = 0;
+        let pendingWrite: Promise<unknown> | undefined;
+        try {
+          const tool = expectDefined(
+            host.capabilities.bindToolSurface([
+              createWriteTool(fixture.stateDir, {
+                operations: {
+                  mkdir: async (dir) => {
+                    await mkdir(dir, { recursive: true });
+                    if (pauseWrite) {
+                      beforeWrite.resolve();
+                      await releaseWrite.promise;
+                    }
+                  },
+                  readFile,
+                  statFile: (file) => readPersistedFileStat(file, isMissingPathError),
+                  writeFile: async (file, content) => {
+                    writes += 1;
+                    await writeFile(file, content, "utf8");
+                  },
+                },
+              }),
+            ])[0],
+            "restored child write tool",
+          );
+          const file = `recovered-child-effect-${finalEffectChange}.txt`;
+          await inRecoveredChild(() =>
+            tool.execute("allowed", { path: file, content: "allowed\n" }),
+          );
+          expect(await readFile(path.join(fixture.stateDir, file), "utf8")).toBe("allowed\n");
+          pauseWrite = true;
+          pendingWrite = inRecoveredChild(() =>
+            tool.execute("revoked", { path: file, content: "forbidden\n" }),
+          );
+          void pendingWrite.catch(beforeWrite.reject);
+          await beforeWrite.promise;
+          if (finalEffectChange === "role") {
+            setUserProfileRole(authority.profileId, "revoked-child-role");
+          } else {
+            await updateChild({ sessionId: "replacement-child-session" });
+          }
+          releaseWrite.resolve();
+          await expect(pendingWrite).rejects.toThrow();
+          expect(writes).toBe(1);
+          expect(await readFile(path.join(fixture.stateDir, file), "utf8")).toBe("allowed\n");
+        } finally {
+          releaseWrite.resolve();
+          await pendingWrite?.catch(() => undefined);
+          host.close();
+          admission.close();
+          replacementOpen = false;
+        }
+        return;
+      }
       if (sourceKind === "channel-reset") {
         const caller = subagentRuns.runWithCompletionAuthority(
           successor!,
@@ -612,7 +729,7 @@ describe("detached subagent restart recovery", () => {
         replacementOpen = false;
         return;
       }
-      if (humanFollowup) {
+      if (humanFollowup || independent) {
         resumeRunId = successor!.runId;
         await updateChild({
           status: "interrupted",
@@ -640,7 +757,7 @@ describe("detached subagent restart recovery", () => {
         expect(successor).toMatchObject({
           runId: `subagent-restart-recovery:${resumeRunId}`,
           taskRunId: runId,
-          task: "Verify the retained result.",
+          task: humanFollowup ? "Verify the retained result." : predecessor.task,
           operatorRecoverySource: { sourceRunId: runId, sessionKey: childSessionKey },
           execution: { status: "running" },
         });

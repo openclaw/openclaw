@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { clearRuntimeConfigSnapshot, readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
@@ -301,14 +302,11 @@ describe("doctor config flow", () => {
       await withTempHome(async (home) => {
         const pluginDir = path.join(home, "config-reader");
         await fs.mkdir(pluginDir);
-        await fs.writeFile(
-          path.join(pluginDir, "openclaw.plugin.json"),
-          JSON.stringify({
-            id: "config-reader",
-            kind: "context-engine",
-            configSchema: { type: "object", additionalProperties: false },
-          }),
-        );
+        await writeFixtureJson(path.join(pluginDir, "openclaw.plugin.json"), {
+          id: "config-reader",
+          kind: "context-engine",
+          configSchema: { type: "object", additionalProperties: false },
+        });
         await fs.writeFile(
           path.join(pluginDir, "index.cjs"),
           `module.exports = {

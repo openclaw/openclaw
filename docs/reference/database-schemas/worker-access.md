@@ -565,6 +565,8 @@ and outgoing public reads remain detached from the resident state.
 Internal hot-state projections also retain the actor's replace-only target,
 version, participants, and members. Read replies and committed receipt capture
 own detachment before those facts leave the worker.
+Cold hydration decodes each participant aggregate once; the selected entry and
+hot participant records share their actor-owned identity objects.
 
 Actor commands retain their immutable replica preimage for admission transport.
 The worker sends a reference only after matching its authoritative write token,
@@ -5906,6 +5908,8 @@ sweeps. Each preparation closes its scoped read-only handles before replying;
 selection, configuration checks, and commit authority remain per request.
 Preparation loads its read-only selection and archive encoding helpers without
 initializing the writable database lifecycle or transcript restoration machinery.
+Canonical validation and reclamation load cold-restoration source guards only
+when executing a cold mutation; restoration retains its existing source checks.
 
 Single-message lookups and display-message counts use that same history worker.
 Session-message broadcasts await the stored content and sequence in their existing

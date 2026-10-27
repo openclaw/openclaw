@@ -69,6 +69,8 @@ export function parseStressOptions(args: string[]) {
       "fixture-only": { type: "boolean" },
       "operator-model-policy": { type: "boolean" },
       "gateway-preload": { type: "string" },
+      "worker-heap-snapshot": { type: "boolean" },
+      "worktree-tool-churn": { type: "boolean" },
       port: { type: "string" },
       help: { type: "boolean" },
     },
@@ -129,6 +131,8 @@ export function parseStressOptions(args: string[]) {
     fixtureOnly: values["fixture-only"] ?? false,
     operatorModelPolicy: values["operator-model-policy"] ?? false,
     gatewayPreload: values["gateway-preload"] ? path.resolve(values["gateway-preload"]) : undefined,
+    workerHeapSnapshot: values["worker-heap-snapshot"] ?? false,
+    worktreeToolChurn: values["worktree-tool-churn"] ?? false,
     port,
     help: values.help,
   };
@@ -292,6 +296,7 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "--mixed-rpc",
             "--stress-tools",
             "--stress-subagents",
+            ...(options.worktreeToolChurn ? ["--worktree-tool-churn"] : []),
             ...(options.operatorModelPolicy ? ["--operator-model-policy"] : []),
             "--clients",
             String(options.clients),
@@ -328,6 +333,9 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "--prompt-kib",
             "8",
             "--worker-memory",
+            ...(options.workerHeapSnapshot
+              ? ["--worker-retained-heap", "--worker-heap-snapshot"]
+              : []),
             "--diagnostics",
             ...(mode !== "timing" ? ["--team-stress-allocation-sampling"] : []),
             ...(mode === "retention" ? ["--team-stress-retention-sampling"] : []),

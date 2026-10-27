@@ -97,6 +97,7 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
 
 vi.mock("../infra/clawhub-plugin-catalog.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/clawhub-plugin-catalog.js")>()),
+  fetchClawHubPluginDetail: async () => ({}),
   fetchClawHubPluginVersionCategories: (...args: unknown[]) =>
     mocks.pluginVersionCategories(...args),
 }));

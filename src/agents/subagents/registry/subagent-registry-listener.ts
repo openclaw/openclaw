@@ -14,6 +14,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import { resolveRecoveredSubagentExecutions } from "./subagent-recovered-executions.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { prepareSubagentTerminalObservation } from "./subagent-registry-completion-runtime.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
@@ -61,12 +62,7 @@ export function createSubagentRegistryListener(config: {
         if (!session || session.sessionId !== evt.sessionId) {
           return undefined;
         }
-        const sourceRunId =
-          session.restartRecoveryDeliveryRunId === evt.runId
-            ? session.restartRecoveryDeliverySourceRunId
-            : session.restartRecoveryTerminalDeliveryEvidence?.findLast(
-                (receipt) => receipt.transcriptRunId === evt.runId,
-              )?.runId;
+        const sourceRunId = resolveRecoveredSubagentExecutions(session).get(evt.runId);
         const source = sourceRunId?.startsWith("announce:requester-settle:")
           ? runs.get(sourceRunId)
           : undefined;

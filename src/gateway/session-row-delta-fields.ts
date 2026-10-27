@@ -22,8 +22,27 @@ function canonicalJson(value: unknown): string | undefined {
 }
 
 function hashJson(encoded: string | undefined): bigint | undefined {
+  if (encoded === undefined) {
+    return undefined;
+  }
+  // Seven ASCII characters plus a leading sentinel fit exactly in a JS number.
+  // Negative integers retain no text and cannot collide with unsigned SHA fingerprints.
+  if (encoded.length <= 7) {
+    let packed = 1;
+    for (let i = 0; i < encoded.length; i++) {
+      const code = encoded.charCodeAt(i);
+      if (code > 127) {
+        packed = 0;
+        break;
+      }
+      packed = packed * 128 + code;
+    }
+    if (packed) {
+      return -BigInt(packed);
+    }
+  }
   // Accepted: a 64-bit collision can omit a changed field, ~2^-64 per comparison.
-  return encoded === undefined ? undefined : hash("sha256", encoded, "buffer").readBigUInt64BE();
+  return hash("sha256", encoded, "buffer").readBigUInt64BE();
 }
 
 // Frozen field identities survive row clock/revision changes; retain only their hashes.
