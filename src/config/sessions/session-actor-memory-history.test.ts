@@ -666,6 +666,8 @@ describe("memory actor history facts", () => {
       anchors: [],
       contextAuthority: { entry: { sessionId: "next-window" } },
     });
+    const historical = await readMemory(current.storage!, "session.history.hydrate", { sessionId });
+    expect(ids(historical.snapshot.events)).toEqual([sessionId, "user"]);
     expect(
       (await readMemory(current.storage!, "session.history.hydrate", {})).snapshot.events,
     ).toEqual([]);

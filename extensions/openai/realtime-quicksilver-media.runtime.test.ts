@@ -110,7 +110,12 @@ async function createInboundAudioHarness(params?: {
     });
   const packet = (sequenceNumber: number, ssrc = 1) =>
     new RtpPacket(
-      new RtpHeader({ payloadType: 111, sequenceNumber, ssrc }),
+      new RtpHeader({
+        payloadType: 111,
+        sequenceNumber,
+        ssrc,
+        timestamp: (sequenceNumber * 960) >>> 0,
+      }),
       Buffer.from([sequenceNumber & 0xff]),
     );
   const receive = (...sequences: number[]) => {

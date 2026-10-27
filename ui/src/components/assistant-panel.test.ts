@@ -662,6 +662,8 @@ describe("assistant panel", () => {
     vi.stubGlobal("webkit", { messageHandlers: { openclawWindowDrag: { postMessage } } });
     const cases = [
       [".assistant-panel-header", true],
+      [".assistant-panel-title", true],
+      [".assistant-panel-actions", true],
       [".assistant-panel-actions button:first-child", false],
       [".assistant-panel-actions button:first-child svg", false],
       ["openclaw-custodian-surface", false],

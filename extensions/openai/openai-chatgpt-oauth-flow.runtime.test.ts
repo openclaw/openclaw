@@ -723,6 +723,8 @@ describe("OpenAI Codex OAuth flow", () => {
 
 describe("OpenAI model-account credential ownership", () => {
   it.each([
+    ["workspace-1", "user-1", true],
+    ["workspace-1", "user-2", false],
     ["workspace-2", "user-1", false],
     ["workspace-1", undefined, false],
   ] as const)(

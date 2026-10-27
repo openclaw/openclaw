@@ -97,89 +97,6 @@ describe("spawn input ownership transfer", () => {
     sessionId,
     storePath: (await loadSessionEntryAsync(sessionKey, { agentId })).storePath,
   });
-  const seedSession = (
-    sessionKey: string,
-    entry: Partial<Parameters<typeof sessionAccessor.upsertSessionEntryCore>[1]> = {},
-    agentId = "main",
-  ) =>
-    sessionAccessor.upsertSessionEntryCore(
-      { agentId, sessionKey },
-      {
-        sessionId: sessionKey,
-        updatedAt: 1,
-        ...entry,
-      },
-    );
-  const operatorScenario = async (kind: "native" | "peer" | "watched") => {
-    await prepareGatewayReplyRuntimeForTest();
-    const context = getContext();
-    const cfg = context.getRuntimeConfig();
-    const runId = randomUUID();
-    const watched = kind === "watched";
-    const parentKey = `agent:main:dashboard:parent-${runId}`;
-    const childKey = `agent:main:${watched ? "subagent" : "dashboard"}:child-${runId}`;
-    const client = createOperatorClient({ profileName: runId, scopes: ["operator.admin"] });
-    const ownership = watched
-      ? {
-          updatedAt: Date.now(),
-          createdVia: "operator" as const,
-          createdActor: {
-            type: "human" as const,
-            source: "profile" as const,
-            id: client.authenticatedUserProfile!.profileId,
-          },
-        }
-      : {};
-    await seedSession(parentKey, ownership);
-    await seedSession(childKey, {
-      ...ownership,
-      ...(kind !== "peer" ? { spawnedBy: parentKey, spawnDepth: 1 } : {}),
-    });
-    if (!watched) {
-      await withPreparedSessionResolve(
-        {
-          projection: expectDefined(getSessionRowProjection(context), "Gateway session projection"),
-          client,
-          p: { key: childKey, agentId: "main" },
-        },
-        (resolved) => expect(resolved).toMatchObject({ ok: true, key: childKey }),
-      );
-    }
-    const operator = expectDefined(
-      await captureGatewayOperatorRunAuthority({ client, context }),
-      "Expected operator-owned Gateway admission",
-    );
-    const admission = prepareAdmission(cfg, `requester-${runId}`, "agent", operator.authority);
-    const admitted = await admission.admit("embedded");
-    return {
-      context,
-      runId,
-      parentKey,
-      childKey,
-      admitted,
-      operator,
-      admission,
-      endRequester() {
-        admission.close();
-        operator.release();
-      },
-      send(
-        call: Parameters<ReturnType<typeof createSessionsSendTool>["execute"]>,
-        options: Parameters<typeof createSessionsSendTool>[0] = {},
-        participants?: ReturnType<typeof createReplyTurnParticipants>,
-      ) {
-        return send(
-          () => ({
-            ...caller(admitted, parentKey),
-            ...(participants ? { personalToolParticipants: participants } : {}),
-          }),
-          { agentSessionKey: parentKey, config: cfg, idempotencyKey: runId, ...options },
-          call,
-          client,
-        );
-      },
-    };
-  };
   const holdInput = async (
     scope: { storePath: string; agentId: string },
     beforeStaging: boolean,
@@ -209,24 +126,19 @@ describe("spawn input ownership transfer", () => {
         staged.resolve();
         return await pending;
       });
-    const release = () => releaseWriter.resolve();
-    signal.addEventListener("abort", release, { once: true });
     return {
       ...execution,
+      staged,
       releaseWriter,
-      waitForStage(pending: Promise<unknown>) {
-        return withinTest(
-          awaitGateBeforeSettlement(staged.promise, pending, "Input ended before staging"),
-          signal,
-        );
+      release(this: void) {
+        releaseWriter.resolve();
       },
       async close(pending?: Promise<unknown>) {
-        release();
+        this.release();
         await Promise.allSettled([writer, pending, execution.resume()]);
         // A pending dispatch can enter execution after resume; drain it before restoring the spy.
         await execution.cleanup().catch(() => {});
         stageSpy.mockRestore();
-        signal.removeEventListener("abort", release);
       },
     };
   };
@@ -254,16 +166,51 @@ describe("spawn input ownership transfer", () => {
   ] as const)(
     "delivers a $kind reply after the requester ends before child $boundary",
     async ({ kind, boundary }, { signal }) => {
-      const scenario = await operatorScenario(kind);
-      const { runId, childKey, operator } = scenario;
+      await prepareGatewayReplyRuntimeForTest();
+      const context = getContext();
+      const cfg = context.getRuntimeConfig();
+      const runId = randomUUID();
+      const parentKey = `agent:main:dashboard:reply-parent-${runId}`;
+      const childKey = `agent:main:dashboard:reply-child-${runId}`;
+      const client = createOperatorClient({
+        profileName: `reply-custody-${runId}`,
+        scopes: ["operator.admin"],
+      });
+      for (const sessionKey of [parentKey, childKey]) {
+        await sessionAccessor.upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: sessionKey,
+            updatedAt: 1,
+            ...(kind === "native" && sessionKey === childKey
+              ? { spawnedBy: parentKey, spawnDepth: 1 }
+              : {}),
+          },
+        );
+      }
+      await withPreparedSessionResolve(
+        {
+          projection: expectDefined(getSessionRowProjection(context), "Gateway session projection"),
+          client,
+          p: { key: childKey, agentId: "main" },
+        },
+        (resolved) => expect(resolved).toMatchObject({ ok: true, key: childKey }),
+      );
+      const operator = await captureGatewayOperatorRunAuthority({ client, context });
+      if (!operator) {
+        throw new Error("Expected original operator authority");
+      }
+      const admission = prepareAdmission(cfg, `requester-${runId}`, "agent", operator.authority);
+      const admitted = await admission.admit("embedded");
       const participants = createReplyTurnParticipants({ operatorAuthority: operator.authority });
       const dispatchEntered = createDeferred();
       const childEntered = createDeferred();
       const releaseDispatch = createDeferred();
       const releaseChild = createDeferred();
-      const replyFinished = createDeferred<unknown>();
+      const replyFinished = createDeferred();
       const executions: Promise<void>[] = [];
       const parentMessages: string[] = [];
+      let replyError: unknown;
       const continueWork = gatewayWork.runWithGatewayDetachedWorkContinuation;
       const replyObserver = vi
         .spyOn(gatewayWork, "runWithGatewayDetachedWorkContinuation")
@@ -271,8 +218,11 @@ describe("spawn input ownership transfer", () => {
           const pending = continueWork(work, holder);
           if (holder === "session:a2a-send") {
             void pending.then(
-              () => replyFinished.resolve(undefined),
-              (error: unknown) => replyFinished.resolve(error),
+              () => replyFinished.resolve(),
+              (error: unknown) => {
+                replyError = error;
+                replyFinished.resolve();
+              },
             );
           }
           return pending;
@@ -306,6 +256,33 @@ describe("spawn input ownership transfer", () => {
         const text =
           opts.sessionKey === childKey ? "delayed child result" : "received child result";
         const { terminalReply } = prepareAgentRunTerminalReply({ rawText: text });
+        const loaded = await loadSessionEntryAsync(opts.sessionKey!, { agentId: "main" });
+        await sessionAccessor.persistSessionTranscriptTurn(
+          {
+            agentId: "main",
+            sessionKey: opts.sessionKey!,
+            sessionId: loaded.entry!.sessionId,
+            storePath: loaded.storePath,
+          },
+          {
+            cwd: "/tmp",
+            runId: opts.runId,
+            expectedSessionId: loaded.entry!.sessionId,
+            touchSessionEntry: false,
+            updateMode: "none",
+            messages: [
+              {
+                message: {
+                  role: "assistant",
+                  phase: "final_answer",
+                  stopReason: "stop",
+                  content: [{ type: "text", text }],
+                },
+                now: Date.now(),
+              },
+            ],
+          },
+        );
         emitAgentEvent({
           runId: opts.runId!,
           stream: "lifecycle",
@@ -319,13 +296,24 @@ describe("spawn input ownership transfer", () => {
       };
       signal.addEventListener("abort", unblock, { once: true });
       try {
-        const result = await scenario.send(
+        const result = await send(
+          () => ({
+            ...caller(admitted, parentKey),
+            agentId: "main",
+            sessionKey: parentKey,
+            personalToolParticipants: participants,
+          }),
+          {
+            agentSessionKey: parentKey,
+            agentChannel: "webchat",
+            config: cfg,
+            idempotencyKey: runId,
+          },
           [
             "detached-reply",
             { sessionKey: childKey, message: "finish the accepted task", timeoutSeconds: 0 },
           ],
-          { agentChannel: "webchat" },
-          participants,
+          client,
         );
         expect(result.details, JSON.stringify(result.details)).toMatchObject({
           status: "accepted",
@@ -336,17 +324,20 @@ describe("spawn input ownership transfer", () => {
           signal,
         );
         participants.close();
-        scenario.endRequester();
+        admission.close();
+        operator.release();
         expect(() => participants.resolve()).toThrow("This turn has ended");
         unblock();
-        await expect(withinTest(replyFinished.promise, signal)).resolves.toBeUndefined();
+        await withinTest(replyFinished.promise, signal);
+        expect(replyError).toBeUndefined();
         expect(parentMessages).toHaveLength(1);
         expect(parentMessages[0]).toContain("delayed child result");
       } finally {
         unblock();
         await Promise.allSettled(executions);
         participants.close();
-        scenario.endRequester();
+        admission.close();
+        operator.release();
         replyObserver.mockRestore();
         executionSpy.mockRestore();
         signal.removeEventListener("abort", unblock);
@@ -357,8 +348,38 @@ describe("spawn input ownership transfer", () => {
   it.each(["requester", "child"] as const)(
     "revokes prepared watched followup %s access before real Gateway child admission",
     async (revoked) => {
-      const scenario = await operatorScenario("watched");
-      const { context, runId, childKey, admitted, operator, admission } = scenario;
+      await prepareGatewayReplyRuntimeForTest();
+      const context = getContext();
+      const cfg = context.getRuntimeConfig();
+      const runId = randomUUID();
+      const parentKey = `agent:main:dashboard:denied-parent-${runId}`;
+      const childKey = `agent:main:subagent:denied-child-${runId}`;
+      const client = createOperatorClient({
+        profileName: `watched-denial-${runId}`,
+        scopes: ["operator.admin"],
+      });
+      for (const sessionKey of [parentKey, childKey]) {
+        await sessionAccessor.upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: sessionKey,
+            updatedAt: Date.now(),
+            createdVia: "operator",
+            createdActor: {
+              type: "human",
+              source: "profile",
+              id: client.authenticatedUserProfile!.profileId,
+            },
+            ...(sessionKey === childKey ? { spawnedBy: parentKey, spawnDepth: 1 } : {}),
+          },
+        );
+      }
+      const operator = await captureGatewayOperatorRunAuthority({ client, context });
+      if (!operator) {
+        throw new Error("Expected operator-owned Gateway admission");
+      }
+      const admission = prepareAdmission(cfg, `requester-${runId}`, "agent", operator.authority);
+      const admitted = await admission.admit("embedded");
       const prepared = createDeferred();
       const release = createDeferred();
       const prepare = followupCustody.prepareSessionsSendFollowup;
@@ -376,7 +397,14 @@ describe("spawn input ownership transfer", () => {
       const stage = vi.spyOn(pendingInputs, "stageSessionPendingInput");
       let sending: Promise<unknown> | undefined;
       try {
-        const pending = scenario.send(
+        const pending = send(
+          () => caller(admitted, parentKey),
+          {
+            agentSessionKey: parentKey,
+            requesterTurnRunId: admission.operationalRunInstance.runId,
+            config: cfg,
+            idempotencyKey: runId,
+          },
           [
             "denied-watched-followup",
             {
@@ -387,7 +415,7 @@ describe("spawn input ownership transfer", () => {
               message: "This child input must never be admitted",
             },
           ],
-          { requesterTurnRunId: admission.operationalRunInstance.runId },
+          client,
         );
         sending = pending;
         await awaitGateBeforeSettlement(
@@ -395,7 +423,7 @@ describe("spawn input ownership transfer", () => {
           pending,
           "Send ended before preparing real custody",
         );
-        const revokedKey = revoked === "requester" ? scenario.parentKey : childKey;
+        const revokedKey = revoked === "requester" ? parentKey : childKey;
         const entry = (await loadSessionEntryAsync(revokedKey, { agentId: "main" })).entry;
         if (!entry) {
           throw new Error("Expected prepared session");
@@ -424,7 +452,8 @@ describe("spawn input ownership transfer", () => {
         await sending?.catch(() => {});
         held.mockRestore();
         stage.mockRestore();
-        scenario.endRequester();
+        admission.close();
+        operator.release();
       }
     },
   );
@@ -472,13 +501,20 @@ describe("spawn input ownership transfer", () => {
       try {
         setRuntimeConfigSnapshot(config);
         await prepareGatewayReplyRuntimeForTest({ force: true, config });
-        await seedSession(requesterKey, { spawnDepth: 1 });
-        await seedSession(targetKey, { sessionId }, "worker");
+        await sessionAccessor.upsertSessionEntryCore(
+          { agentId: "main", sessionKey: requesterKey },
+          { sessionId: requesterKey, updatedAt: 1, spawnDepth: 1 },
+        );
+        await sessionAccessor.upsertSessionEntryCore(
+          { agentId: "worker", sessionKey: targetKey },
+          { sessionId, updatedAt: 1 },
+        );
         const scope = await inputScope(targetKey, sessionId, "worker");
         const transcript = sessionAccessor.loadTranscriptEventsSync(scope);
         admission = prepareAdmission(config, `send-policy-source-${runId}`, "send-policy-proof");
         const admitted = await admission.admit("embedded");
         held = await holdInput(scope, boundary === "before staging", signal);
+        signal.addEventListener("abort", held.release, { once: true });
         if (boundary === "before acknowledgement") {
           const dispatch = gatewayDispatch.dispatchGatewayMethodInProcess;
           const spy = vi
@@ -498,7 +534,14 @@ describe("spawn input ownership transfer", () => {
           ["send-policy", { sessionKey: targetKey, mode: "followup", message, timeoutSeconds: 0 }],
         );
         sending = pending;
-        await held.waitForStage(pending);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            held.staged.promise,
+            pending,
+            "Send ended before input staging",
+          ),
+          signal,
+        );
         if (boundary !== "before staging") {
           expect((await withinTest(pending, signal)).details).toMatchObject({ status: "accepted" });
           await withinTest(held.entered, signal);
@@ -535,6 +578,9 @@ describe("spawn input ownership transfer", () => {
         restoreDispatch?.();
         admission?.close();
         setRuntimeConfigSnapshot(previousConfig);
+        if (held) {
+          signal.removeEventListener("abort", held.release);
+        }
       }
     },
   );
@@ -552,7 +598,10 @@ describe("spawn input ownership transfer", () => {
     const parentKey = `agent:main:parent:${runId}`;
     const childKey = `agent:main:subagent:${runId}`;
     const sessionId = `child-${runId}`;
-    await seedSession(childKey, { sessionId, updatedAt: Date.now() });
+    await sessionAccessor.upsertSessionEntryCore(
+      { agentId: "main", sessionKey: childKey },
+      { sessionId, updatedAt: Date.now() },
+    );
     const scope = await inputScope(childKey, sessionId);
     const admission = prepareAdmission(
       context.getRuntimeConfig(),
@@ -563,17 +612,6 @@ describe("spawn input ownership transfer", () => {
     const guard = await withGatewayToolCallerIdentity(caller(admitted, parentKey), () =>
       captureAgentToolSourceExecutionGuard(),
     );
-    const dispatchInput = (message: string, syntheticScopes?: string[]) =>
-      dispatchGatewayMethodInProcess(
-        "agent",
-        { message, sessionKey: childKey, idempotencyKey: runId },
-        {
-          forceSyntheticClient: true,
-          ...(syntheticScopes ? { syntheticScopes } : {}),
-          resolveGatewayContext: () => context,
-          sessionMutationCommitGuard: guard,
-        },
-      );
     if (boundary === "before reset" || boundary === "live reset") {
       const before = (await loadSessionEntryAsync(childKey, { agentId: "main" })).entry;
       let hookCalls = 0;
@@ -588,7 +626,16 @@ describe("spawn input ownership transfer", () => {
       };
       registerInternalHook("command:new", onReset);
       try {
-        const reset = dispatchInput("/new", ["operator.admin"]);
+        const reset = dispatchGatewayMethodInProcess(
+          "agent",
+          { message: "/new", sessionKey: childKey, idempotencyKey: runId },
+          {
+            forceSyntheticClient: true,
+            syntheticScopes: ["operator.admin"],
+            resolveGatewayContext: () => context,
+            sessionMutationCommitGuard: guard,
+          },
+        );
         if (boundary === "before reset") {
           await expect(reset).rejects.toThrow("tool invocation authority is no longer active");
           expect((await loadSessionEntryAsync(childKey, { agentId: "main" })).entry).toEqual(
@@ -608,14 +655,27 @@ describe("spawn input ownership transfer", () => {
       return;
     }
     const held = await holdInput(scope, boundary === "before staging", signal);
+    signal.addEventListener("abort", held.release, { once: true });
     let dispatch: Promise<unknown> | undefined;
     try {
-      dispatch = dispatchInput("synthetic staged child input");
+      dispatch = dispatchGatewayMethodInProcess(
+        "agent",
+        { message: "synthetic staged child input", sessionKey: childKey, idempotencyKey: runId },
+        {
+          forceSyntheticClient: true,
+          resolveGatewayContext: () => context,
+          sessionMutationCommitGuard: guard,
+        },
+      );
       const outcome = dispatch.then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
-      await held.waitForStage(dispatch);
+      await awaitGateBeforeSettlement(
+        held.staged.promise,
+        dispatch,
+        "Dispatch ended before staging",
+      );
       if (boundary === "before staging") {
         admission.close();
         held.releaseWriter.resolve();
@@ -647,6 +707,7 @@ describe("spawn input ownership transfer", () => {
     } finally {
       await held.close(dispatch);
       admission.close();
+      signal.removeEventListener("abort", held.release);
     }
   });
 });

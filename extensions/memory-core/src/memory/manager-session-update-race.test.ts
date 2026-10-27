@@ -26,6 +26,7 @@ import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
 import { forgetMemoryEntries } from "../memory-forget.js";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
+import * as memoryCpuWorkerRuntime from "./manager-cpu-worker-runtime.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
   createManagerIndexFixture,
