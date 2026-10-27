@@ -577,7 +577,7 @@ describe("sessions.changed coalescing", () => {
   it.each([false, true])(
     "binds active runs to their physical owner (fixed store=%s)",
     async (fixed) => {
-      const config = fixed
+      const config: OpenClawConfig = fixed
         ? fixedStoreConfig()
         : retainLegacyDefaultAgentId(
             {

@@ -591,11 +591,7 @@ describe("hosted channel post-write hooks", () => {
     );
     const committed = { channels: { matrix: { enabled: true, committed: true } } };
     mocks.writeWizardConfigFile.mockResolvedValue(hostedConfigFiles.write(committed));
-    const engine = new SystemAgentChatEngine({
-      surface: "gateway",
-      runAgentTurn: async () => null,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
+    const engine = createEngine({ surface: "gateway" });
 
     const reply = await engine.handle("connect matrix");
 

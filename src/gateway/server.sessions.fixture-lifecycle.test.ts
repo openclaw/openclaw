@@ -108,7 +108,7 @@ let env: ReturnType<typeof captureEnv>;
 beforeEach(() => {
   caseHooks.setup.length = 0;
   caseHooks.cleanup.length = 0;
-  env = captureEnv(GATEWAY_TEST_ENV_KEYS);
+  env = captureEnv([...GATEWAY_TEST_ENV_KEYS]);
 });
 afterEach(async () => {
   // Preserve cleanup even on the unfixed side of these regressions.
