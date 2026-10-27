@@ -106,7 +106,7 @@ it("recomputes mutable children shared by distinct shallow-frozen row snapshots"
 });
 
 it("reuses materialized field digests across clock samples without hiding viewer or source changes", () => {
-  let source = Object.freeze({
+  const source = Object.freeze({
     label: "Original label",
     status: "running",
     unread: false,
@@ -143,9 +143,13 @@ it("reuses materialized field digests across clock samples without hiding viewer
       ),
     ).toEqual({ set: { [field]: value }, remove: [] });
   }
-  source = Object.freeze(overrides);
-  const current = { ...source };
+  const replacement = Object.freeze(overrides);
+  const current = { ...replacement };
   expect(
-    createSessionRowDeltaDiffer()(initial, prepareSessionRowDeltaFields(current, source), current),
+    createSessionRowDeltaDiffer()(
+      initial,
+      prepareSessionRowDeltaFields(current, replacement),
+      current,
+    ),
   ).toEqual({ set: overrides, remove: [] });
 });
