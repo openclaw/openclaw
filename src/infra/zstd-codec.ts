@@ -3,6 +3,7 @@ import zlib from "node:zlib";
 export type ZstdCodec = {
   compress: (data: Uint8Array, level?: number, checksum?: boolean) => Buffer;
   decompress: (data: Uint8Array, maxOutputLength?: number) => Buffer;
+  createDecompressStream: () => zlib.ZstdDecompress;
 };
 
 let resolvedCodec: ZstdCodec | undefined;
@@ -35,5 +36,8 @@ export function resolveZstdCodec(): ZstdCodec {
               ),
             },
       ),
+    // Streaming decode keeps peak memory at one chunk, which lets archive reads
+    // hand large plaintext straight to disk instead of materializing a string.
+    createDecompressStream: () => zlib.createZstdDecompress(),
   });
 }

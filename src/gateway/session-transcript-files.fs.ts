@@ -5,6 +5,7 @@ import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
+import { SessionArchivePlaintextLimitError } from "../config/sessions/archive-limits.js";
 import {
   formatSessionArchiveTimestamp,
   parseSessionArchiveTimestamp,
@@ -103,7 +104,7 @@ async function resetArchiveHeaderMatchesSessionId(
   // would silently drop every compressed archive from fallback history.
   try {
     await using opened = await openLocalFileSafely({
-      filePath: materializeSessionArchiveForRead(archivePath),
+      filePath: await materializeSessionArchiveForRead(archivePath),
     });
     const buffer = Buffer.alloc(64 * 1024);
     const bytesRead = await readFileWindowFully(opened.handle, buffer, 0);
@@ -117,7 +118,12 @@ async function resetArchiveHeaderMatchesSessionId(
       return isRecord(record) && record.type === "session" && record.id === sessionId;
     }
     return false;
-  } catch {
+  } catch (error) {
+    // A refused archive is a visible read failure, not a mismatched header:
+    // swallowing it here would silently drop retained history from fallback.
+    if (error instanceof SessionArchivePlaintextLimitError) {
+      throw error;
+    }
     return false;
   }
 }

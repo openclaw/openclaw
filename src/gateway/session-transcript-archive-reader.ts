@@ -6,6 +6,7 @@ import {
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
+import { SessionArchivePlaintextLimitError } from "../config/sessions/archive-limits.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
@@ -172,8 +173,12 @@ export class ArchivedTranscriptReader {
         continue;
       }
       try {
-        return materializeSessionArchiveForRead(archivePath);
-      } catch {
+        return await materializeSessionArchiveForRead(archivePath);
+      } catch (error) {
+        // Refusal must reach the caller; only unreadable generations are skipped.
+        if (error instanceof SessionArchivePlaintextLimitError) {
+          throw error;
+        }
         continue;
       }
     }
@@ -426,8 +431,12 @@ export class ArchivedTranscriptReader {
     for (const archivePath of candidates) {
       let filePath: string;
       try {
-        filePath = materializeSessionArchiveForRead(archivePath);
-      } catch {
+        filePath = await materializeSessionArchiveForRead(archivePath);
+      } catch (error) {
+        // Refusal must reach the caller; only unreadable generations are skipped.
+        if (error instanceof SessionArchivePlaintextLimitError) {
+          throw error;
+        }
         // Try the next valid retained generation.
         continue;
       }
