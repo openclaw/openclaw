@@ -403,12 +403,19 @@ describe("createAgent", () => {
     expect(mocks.persisted).not.toHaveProperty("agents");
   });
 
-  it("does not recreate an id with pending deletion cleanup", async () => {
-    deletion(false);
+  it.each([false, true])(
+    "does not create or reuse an id with pending deletion cleanup (reuse: %s)",
+    async (reuse) => {
+      mocks.config = roster({ main: {}, researcher: {} });
+      deletion(false);
 
-    await expectError("deletion-pending");
-    expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
-  });
+      await expectCreation(
+        { name: "researcher", ...(reuse ? { reuseExisting: () => true } : {}) },
+        { status: "error", reason: "deletion-pending" },
+      );
+      expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
+    },
+  );
 
   it("claims a recovered completed tombstone only once for an existing roster entry", async () => {
     mocks.config = roster({ main: {}, researcher: {} });

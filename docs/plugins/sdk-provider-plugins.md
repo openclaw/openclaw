@@ -64,6 +64,23 @@ Unavailable storage or an unusable matching OAuth profile continues to interacti
 sign-in. A matching account identity alone does not make expired credentials usable.
 A failed selected import stops the operation instead of silently starting a different login.
 
+## Native migration effects
+
+Bundled migration providers use `openclaw/plugin-sdk/migration-runtime` for
+native side effects. `createMigrationAgent(ctx, definition)` creates an
+additional agent through the agent lifecycle owner and returns the updated
+config. An exact existing definition satisfies a retry; a different definition
+with the same ID conflicts. `validateMigrationCronJob` checks a portable cron
+definition, and `applyMigrationCronJob` persists it through the scheduler owner
+without starting execution. Existing edited jobs conflict instead of being
+replaced.
+
+These operations require the current offline migration owner and the final
+state directory. Mark them and dependent agent content `after-promotion`, and
+declare `deferredApply: { retrySafe: true }`. Staged onboarding cannot create
+native agents or scheduled jobs before promotion. Preserve the updated config
+for later items and report failures through the normal migration result.
+
 ## Read a selected personal account
 
 `isUserModelAuthProfileId` and `withPersonalAuthProfileStore` from

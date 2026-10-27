@@ -546,6 +546,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/agent-tools.workspace-paths.test.ts",
   "src/agents/agent-create.integration.test.ts",
   "src/agents/agent-create.workspace-worker.test.ts",
+  "src/plugin-sdk/migration-agent-runtime.test.ts",
+  "src/plugin-sdk/migration-cron-runtime.test.ts",
   "src/agents/sandbox.resolveSandboxContext.test.ts",
   "src/agents/sandbox.context.github-identity.test.ts",
   "src/auto-reply/reply/stage-remote-inbound-media.owner.test.ts",
