@@ -31,7 +31,7 @@ class GeometryPane extends ChatPaneRuntime {
   fixtureHistory = false;
   fixtureMessages: unknown[] = [];
   private rowHeight = 120;
-  private widgetLayout?: ChatWidgetLayout;
+  private fixtureWidgetLayout?: ChatWidgetLayout;
 
   initialize(
     context: ApplicationContext,
@@ -45,7 +45,7 @@ class GeometryPane extends ChatPaneRuntime {
     this.paneId = "geometry-render";
     this.sessionKey = "agent:main:geometry-render";
     this.rowHeight = rowHeight;
-    this.widgetLayout = widgetLayout;
+    this.fixtureWidgetLayout = widgetLayout;
     this.fixtureMessages = Array.from({ length: 100 }, (_, index) => ({
       role: index % 2 === 0 ? "user" : "assistant",
       content: `Row ${index}`,
@@ -76,7 +76,7 @@ class GeometryPane extends ChatPaneRuntime {
             historyPagination: this.fixtureHistory
               ? { hasMore: true, loading: false, onShowEarlier: () => {} }
               : undefined,
-            widgetLayout: this.widgetLayout,
+            widgetLayout: this.fixtureWidgetLayout,
           }),
           rowHeight: this.rowHeight,
         },
