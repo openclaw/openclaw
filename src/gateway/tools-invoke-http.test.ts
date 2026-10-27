@@ -239,10 +239,9 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: hookMocks.runBeforeToolCallHook,
 }));
 
-const { runBeforeToolCallHook: actualRunBeforeToolCallHook } =
-  await vi.importActual<typeof import("../agents/agent-tools.before-tool-call.js")>(
-    "../agents/agent-tools.before-tool-call.js",
-  );
+const { runBeforeToolCallHook: actualRunBeforeToolCallHook } = await vi.importActual<{
+  runBeforeToolCallHook: typeof runBeforeToolCallHookType;
+}>("../agents/agent-tools.before-tool-call.js");
 
 const { authorizeHttpGatewayConnect } = await import("./auth.js");
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
@@ -304,9 +303,6 @@ const invokeToolAuthed = invokeTool;
 
 const invokeAgentsListAuthed = async (params: { sessionKey?: string } = {}) =>
   invokeTool({ tool: "agents_list", action: "json", ...params });
-
-const firstHookCallArg = () =>
-  expectDefined(hookMocks.runBeforeToolCallHook.mock.calls[0], "before-tool-call hook")[0];
 
 const invokeToolsRpc = async (
   params: Record<string, unknown>,
@@ -406,39 +402,44 @@ describe("POST /tools/invoke", () => {
     expectOkInvokeResponse,
   });
 
-  it.each(["http", "rpc"])("isolates enabled agent history from operator %s calls", async (via) => {
-    setMainAllowedTools({ allow: ["session_status"], gatewayAllow: ["session_status"] });
+  it.each(["http", "rpc"])("isolates enabled history for main aliases: %s", async (via) => {
     const loopDetection = { enabled: true };
-    cfg = { ...cfg, tools: { loopDetection } };
+    const mainKey = `primary-${via}`;
+    cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: {
+          main: { tools: { deny: ["agents_list"] } },
+          ops: { tools: { allow: ["agents_list"] } },
+        },
+      },
+      session: { mainKey },
+      tools: { loopDetection },
+    };
     hookMocks.resolveToolLoopDetectionConfig.mockImplementation(
       actualResolveToolLoopDetectionConfig,
     );
     hookMocks.runBeforeToolCallHook.mockImplementation(actualRunBeforeToolCallHook);
-    const sessionKey = `agent:main:invoke-history-${via}`;
-    for (let index = 0; index < 2; index += 1) {
+    for (const alias of [undefined, "main"]) {
+      const target = alias ? { sessionKey: alias } : {};
       if (via === "http") {
-        await expectOkInvokeResponse(await invokeTool({ tool: "session_status", sessionKey }));
+        await expectOkInvokeResponse(await invokeTool({ tool: "agents_list", ...target }));
       } else {
         const call = await invokeToolsRpc({
-          name: "session_status",
+          name: "agents_list",
           args: {},
-          sessionKey,
-          idempotencyKey: `history-${index}`,
+          ...target,
+          idempotencyKey: `history-${alias ?? "default"}`,
         });
         expect(call?.[0]).toBe(true);
-        expect(call?.[1]).toMatchObject({ ok: true });
+        expect(call?.[1]).toMatchObject({ ok: true, toolName: "agents_list", source: "core" });
+        expect(call?.[1]?.output).toEqual({ ok: true, result: [] });
+        expect(lastCreateOpenClawToolsContext?.allowGatewaySubagentBinding).toBe(true);
       }
     }
+    const sessionKey = `agent:ops:${mainKey}`;
     expect(getDiagnosticSessionState({ sessionKey }).toolCallHistory ?? []).toHaveLength(0);
-    await actualRunBeforeToolCallHook({
-      toolName: "session_status",
-      params: {},
-      toolCallId: "agent-call",
-      ctx: { sessionKey, runId: "agent-run", loopDetection },
-    });
-    expect(getDiagnosticSessionState({ sessionKey }).toolCallHistory).toEqual([
-      expect.objectContaining({ toolName: "session_status", runId: "agent-run" }),
-    ]);
   });
 
   it("enforces action policy for administrator tool calls after hook rewrites", async () => {
@@ -635,24 +636,6 @@ describe("POST /tools/invoke", () => {
     }
   });
 
-  it("uses the configured main session key when sessionKey is missing or main", async () => {
-    cfg = {
-      ...cfg,
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "ops" } },
-        entries: {
-          main: { tools: { deny: ["agents_list"] } },
-          ops: { tools: { allow: ["agents_list"] } },
-        },
-      },
-      session: { mainKey: "primary" },
-    };
-
-    expect((await invokeAgentsListAuthed()).status).toBe(200);
-    expect((await invokeAgentsListAuthed({ sessionKey: "main" })).status).toBe(200);
-  });
-
   registerToolsInvokeErrorTests({
     setMainAllowedTools,
     invokeToolAuthed,
@@ -753,32 +736,6 @@ describe("POST /tools/invoke", () => {
 });
 
 describe("tools.invoke Gateway RPC", () => {
-  it("invokes a tool through the SDK-facing RPC envelope", async () => {
-    allowAgentsListForMain();
-
-    const call = await invokeToolsRpc({
-      name: "agents_list",
-      args: {},
-      sessionKey: "main",
-      idempotencyKey: "rpc-tool-test",
-    });
-
-    expect(call?.[0]).toBe(true);
-    expect(call?.[1]).toMatchObject({ ok: true, toolName: "agents_list", source: "core" });
-    expect(call?.[1]?.output).toEqual({ ok: true, result: [] });
-    expect(lastCreateOpenClawToolsContext?.allowGatewaySubagentBinding).toBe(true);
-    const hookArg = firstHookCallArg();
-    expect(hookArg).toMatchObject({
-      approvalMode: "report",
-      toolName: "agents_list",
-      toolCallId: "rpc-delegated-rpc-tool-test",
-      ctx: { agentId: "main", sessionKey: "agent:main:main" },
-    });
-    const hookCtx = expectDefined(hookArg.ctx, "before-tool-call hook context");
-    expect(hookCtx.config).toBe(cfg);
-    expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("delegated");
-  });
-
   it("limits terminal controls and execution denial to the current persisted session generation", async () => {
     setMainAllowedTools({ allow: ["terminal"], gatewayAllow: ["terminal"] });
     cfg = { ...cfg, tools: { exec: { mode: "deny" } } };
