@@ -419,34 +419,40 @@ try {
         projectActiveRun: (key: string) => presentation.active(prepared.getTarget(key)!)!,
       };
     };
-    const prepareArm = (listOwner: typeof lists, modelOwner: typeof currentModelFacts) => {
-      const prepared = prepare(listOwner);
-      if (baseModelFacts) {
-        const { cfg: modelConfig, modelCatalog, rowContext } = projection!.state;
-        prepared.modelSearchMayMatch = (query) =>
-          modelOwner.mayMatchSessionRowModelSearch(
-            { cfg: modelConfig, modelCatalog, rowContext, rows: shapeRows },
-            query,
-          );
-      }
-      return prepared;
-    };
     const window = { offset: 0, limit: 50, ownerLimit: 0 };
+    // Keep owner dispatch call shapes identical between arms.
+    const createArm = (
+      armName: string,
+      listOwner: typeof lists,
+      filterOwner: typeof currentFilters,
+      modelOwner: typeof currentModelFacts,
+    ) => ({
+      name: armName,
+      prepare: () => {
+        const prepared = prepare(listOwner);
+        if (baseModelFacts) {
+          const { cfg: modelConfig, modelCatalog, rowContext } = projection!.state;
+          prepared.modelSearchMayMatch = (query) =>
+            modelOwner.mayMatchSessionRowModelSearch(
+              { cfg: modelConfig, modelCatalog, rowContext, rows: shapeRows },
+              query,
+            );
+        }
+        return prepared;
+      },
+      select: (params: ReturnType<typeof prepare>) =>
+        filterOwner.filterSessionEntries(params, window),
+    });
     const arms =
       baseFilters || baseLists || baseModelFacts
         ? [
-            {
-              name: "base",
-              prepare: () => prepareArm(baseLists ?? lists, baseModelFacts ?? currentModelFacts),
-              select: (params: ReturnType<typeof prepare>) =>
-                (baseFilters ?? currentFilters).filterSessionEntries(params, window),
-            },
-            {
-              name: "candidate",
-              prepare: () => prepareArm(candidateLists, currentModelFacts),
-              select: (params: ReturnType<typeof prepare>) =>
-                currentFilters.filterSessionEntries(params, window),
-            },
+            createArm(
+              "base",
+              baseLists ?? lists,
+              baseFilters ?? currentFilters,
+              baseModelFacts ?? currentModelFacts,
+            ),
+            createArm("candidate", candidateLists, currentFilters, currentModelFacts),
           ]
         : [{ name: "selection", prepare, select: lists.selectSessionEntries }];
     for (const arm of arms) {
