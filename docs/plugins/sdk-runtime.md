@@ -387,13 +387,16 @@ to close before registering its successor. Disabling or removing a plugin can
 report their cleanup as deferred; starting engine disposal closes normal engine
 callbacks while cleanup finishes.
 
-Replacement validates metadata and configuration first, then stops services and
-channels, drains admitted work, runs `gateway_stop`, and disposes the old instance
+Replacement validates metadata and configuration first, then closes admission to
+the old instance and waits for in-flight work while its services and channels
+keep running. If that work does not finish in time, the reload fails once and
+resumes admission. Otherwise, replacement stops services and channels, drains
+remaining admitted work, runs `gateway_stop`, and disposes the old instance
 before invoking the new registration. Session-extension and runtime-lifecycle
 `cleanup` callbacks receive `reason: "restart"` before the replacement registers,
 so they can unsubscribe observers and release in-memory buffers. Persistent
 session-state and scheduler reconciliation remain part of registry retirement.
-Pre-publication failure triggers automatic
+Once services and channels begin stopping, a pre-publication failure triggers automatic
 recovery by registering the captured previous code with its previous config;
 a stopped instance is not assumed to be restartable. A plugin cannot synchronously
 replace itself from its own active call: the operation rejects before shutdown

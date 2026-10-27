@@ -82,15 +82,15 @@ function writeRegistry(
   );
 }
 
-/** Reads all registered sandbox runtime containers from SQLite. */
+/** Reads registered sandbox runtime containers, optionally for one workspace. */
 export async function readRegistry(
-  options: { path?: string; env?: NodeJS.ProcessEnv } = {},
+  options: { path?: string; env?: NodeJS.ProcessEnv; workspaceDir?: string } = {},
 ): Promise<SandboxRegistry> {
   const context = captureOpenClawStateReadWorkerContext(options);
   const install = captureSandboxRegistryFacts(context);
   const reply = await executeExistingOpenClawStateRead(
     options,
-    { type: "sandboxRegistry.list" },
+    { type: "sandboxRegistry.list", workspaceDir: options.workspaceDir },
     { context },
   );
   if (!reply) {
@@ -309,15 +309,15 @@ export async function removeSandboxRegistryRuntime(
   });
 }
 
-/** Reads all registered browser sandbox containers from SQLite. */
+/** Reads registered browser sandbox containers, optionally for one workspace. */
 export async function readBrowserRegistry(
-  options: { path?: string; env?: NodeJS.ProcessEnv } = {},
+  options: { path?: string; env?: NodeJS.ProcessEnv; workspaceDir?: string } = {},
 ): Promise<SandboxBrowserRegistry> {
   const context = captureOpenClawStateReadWorkerContext(options);
   const install = captureSandboxRegistryFacts(context);
   const reply = await executeExistingOpenClawStateRead(
     options,
-    { type: "sandboxRegistry.browsers" },
+    { type: "sandboxRegistry.browsers", workspaceDir: options.workspaceDir },
     { context },
   );
   if (!reply) {

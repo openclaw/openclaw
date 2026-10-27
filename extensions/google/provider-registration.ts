@@ -1,3 +1,4 @@
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
@@ -17,10 +18,15 @@ import {
   normalizeGoogleProviderConfig,
   resolveGoogleGenerativeAiTransport,
 } from "./provider-policy.js";
-import {
-  createGoogleGenerativeAiTransportStreamFn,
-  createGoogleVertexTransportStreamFn,
-} from "./transport-stream.js";
+
+const loadGenerativeAiStream = createLazyRuntimeSurface(
+  () => import("./transport-stream.js"),
+  (runtime) => runtime.createGoogleGenerativeAiTransportStreamFn(),
+);
+const loadVertexStream = createLazyRuntimeSurface(
+  () => import("./transport-stream.js"),
+  (runtime) => runtime.createGoogleVertexTransportStreamFn(),
+);
 
 export function buildGoogleProvider(): ProviderPlugin {
   return {
@@ -102,10 +108,10 @@ export function buildGoogleProvider(): ProviderPlugin {
         (model.api === "google-generative-ai" &&
           (model.provider === "google-vertex" || isGoogleVertexBaseUrl(model.baseUrl)))
       ) {
-        return createGoogleVertexTransportStreamFn();
+        return async (...args) => (await loadVertexStream())(...args);
       }
       if (model.api === "google-generative-ai") {
-        return createGoogleGenerativeAiTransportStreamFn();
+        return async (...args) => (await loadGenerativeAiStream())(...args);
       }
       return undefined;
     },

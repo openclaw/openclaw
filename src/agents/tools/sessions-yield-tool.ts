@@ -76,7 +76,7 @@ const SessionsYieldToolSchema = Type.Object({
   acknowledgment: Type.Optional(
     Type.String({
       description:
-        "Optional waiting reply in this session; with waitFor, text for an eligible task pause notice. Not an inter-session message.",
+        "Optional brief waiting status shown to the user as your message; put answers in normal assistant text. With waitFor, also the task pause notice. Not an inter-session message.",
     }),
   ),
 });
