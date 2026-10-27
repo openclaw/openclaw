@@ -18,7 +18,10 @@ import {
 import { retainSessionListBaseMiss } from "./session-list-diagnostics.js";
 import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
 import type { SessionListView } from "./session-list-view-cache.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "./session-request-agent.js";
 import {
   sessionRowId,
   sessionRowsRevision,
@@ -26,6 +29,8 @@ import {
 } from "./session-row-identity.js";
 import {
   projectPreparedSessionRunState,
+  toProjectedSessionSharingTarget,
+  prepareLinkedSessionEntryFilter,
   type SessionRowReadView,
 } from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
@@ -76,17 +81,6 @@ function sameFacts(previous: readonly unknown[] | undefined, current: readonly u
     }
   }
   return true;
-}
-
-function toProjectedSessionSharingTarget(record: records.MaterializedRow): SessionSharingTarget {
-  return {
-    agentId: record.agentId,
-    canonicalKey: record.key,
-    entry: record.entry,
-    storeKey: record.key,
-    storeKeys: [record.key],
-    storePath: record.storeTarget.storePath,
-  };
 }
 
 /** Immutable row identities own field preparation; fact indexes stay response-local. */
@@ -333,6 +327,11 @@ export function prepareProjectedSessionPresentation(
   const profileId = profile
     ? projectSessionParticipant({ type: "profile", id: profile.id }, profiles).identity.id
     : undefined;
+  const canReadLinkedEntry = prepareLinkedSessionEntryFilter(
+    projection,
+    sharing.entryFilter,
+    profileId,
+  );
   const listView = (opts: SessionsListParams, selection = false): SessionListView => {
     const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
     if (selection) {
@@ -414,8 +413,17 @@ export function prepareProjectedSessionPresentation(
     let excludedChildKeys = options.excludedChildKeys;
     if (!excludedChildKeys && entryFilter) {
       let excluded: Set<string> | undefined;
-      for (const { key, entry } of record.materialized.source.childLinks ?? []) {
-        if (!entryFilter(key, entry)) {
+      for (const { key, entry, agentId, storePath } of record.materialized.source.childLinks ??
+        []) {
+        const owner = agentId ? undefined : resolveRequestedSessionAgentId(cfg, key);
+        if (
+          !canReadLinkedEntry(
+            key,
+            entry,
+            agentId ?? (owner?.ok ? owner.agentId : undefined),
+            storePath,
+          )
+        ) {
           (excluded ??= new Set()).add(key);
         }
       }
@@ -433,7 +441,15 @@ export function prepareProjectedSessionPresentation(
           (entryFilter &&
             projection
               .selectEntries({ key: sessionKey })
-              .some((child) => !entryFilter(child.key, child.entry)))
+              .some(
+                (child) =>
+                  !canReadLinkedEntry(
+                    child.key,
+                    child.entry,
+                    child.agentId,
+                    child.storeTarget.storePath,
+                  ),
+              ))
         ) {
           (excludedSwarmKeys ??= new Set()).add(sessionKey);
         }

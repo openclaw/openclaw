@@ -264,7 +264,12 @@ export function resolveSessionChildOwners(params: {
   return result;
 }
 
-export type SessionChildLink = { key: string; entry: SessionEntry };
+export type SessionChildLink = {
+  key: string;
+  entry: SessionEntry;
+  agentId?: string;
+  storePath?: string;
+};
 
 /** Select canonical children; retained run results cannot create session links. */
 export function readStoreChildSessionLinks(params: {

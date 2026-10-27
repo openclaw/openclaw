@@ -470,12 +470,24 @@ export function prepareProjectedSessionList(params: {
         ? undefined
         : (key, entry, row) => {
             const storeKey = row.storeKey ?? key;
-            let visible = params.visibility?.get(entry);
+            // Invitations can change without replacing the entry retained across yields.
+            const visibility =
+              presentation.sharing.sessionCap === "invited" ? undefined : params.visibility;
+            let visible = visibility?.get(entry);
             if (visible === undefined) {
+              const selected = getTarget(key)!;
               visible =
                 client === undefined ||
-                (presentation.sharing.entryFilter?.(storeKey, entry) ?? true);
-              params.visibility?.set(entry, visible);
+                (presentation.sharing.entryFilter?.(
+                  storeKey,
+                  entry,
+                  Boolean(
+                    identity &&
+                    projection.hasMembership(selected.storeTarget.storePath, storeKey, identity),
+                  ),
+                ) ??
+                  true);
+              visibility?.set(entry, visible);
             }
             return (
               visible &&
