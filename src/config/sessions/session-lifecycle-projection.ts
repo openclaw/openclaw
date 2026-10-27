@@ -122,12 +122,12 @@ export async function projectSessionEntryLifecycleMutationInWorker(
     };
   }
   // The former finish round trip detached caller-owned metadata at this boundary.
-  for (const upsert of upsertedEntries) {
-    if (upsert.routeContext) {
-      upsert.routeContext = structuredClone(upsert.routeContext);
+  for (const preparedUpsert of upsertedEntries) {
+    if (preparedUpsert.routeContext) {
+      preparedUpsert.routeContext = structuredClone(preparedUpsert.routeContext);
     }
-    if (upsert.resetBoundary) {
-      upsert.resetBoundary = structuredClone(upsert.resetBoundary);
+    if (preparedUpsert.resetBoundary) {
+      preparedUpsert.resetBoundary = structuredClone(preparedUpsert.resetBoundary);
     }
   }
   return {
