@@ -131,28 +131,23 @@ describe("buildGuardedModelFetch", () => {
     }
   });
 
-  it("keeps the completed body and releases its local lease when guard cleanup fails", async () => {
-    const releaseLease = vi.fn();
-    ensureModelProviderLocalServiceMock.mockResolvedValue({ release: releaseLease });
-    const releaseGuard = mockResponse(
-      new Response("ok"),
-      vi.fn(async () => {
-        throw new Error("synthetic guard cleanup failure");
-      }),
-    );
-
-    await expect((await request({}, localModel)).text()).resolves.toBe("ok");
-
-    expect(releaseGuard).toHaveBeenCalledOnce();
-    expect(releaseLease).toHaveBeenCalledOnce();
-  });
-
-  it("releases the local lease when guarded fetch fails", async () => {
+  it.each(["guard cleanup", "fetch"])("releases the local lease on %s failure", async (stage) => {
     const release = vi.fn();
     const error = new Error("network down");
     ensureModelProviderLocalServiceMock.mockResolvedValue({ release });
-    fetchWithSsrFGuardMock.mockRejectedValue(error);
-    await expect(request({}, localModel)).rejects.toBe(error);
+    if (stage === "fetch") {
+      fetchWithSsrFGuardMock.mockRejectedValue(error);
+      await expect(request({}, localModel)).rejects.toBe(error);
+    } else {
+      const releaseGuard = mockResponse(
+        new Response("ok"),
+        vi.fn(async () => {
+          throw error;
+        }),
+      );
+      await expect((await request({}, localModel)).text()).resolves.toBe("ok");
+      expect(releaseGuard).toHaveBeenCalledOnce();
+    }
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -164,34 +159,26 @@ describe("buildGuardedModelFetch", () => {
     const timeoutController = new AbortController();
     const callerController = new AbortController();
     const combinedController = new AbortController();
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
-    const anySpy = vi.spyOn(AbortSignal, "any").mockReturnValue(combinedController.signal);
+    using timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    using anySpy = vi.spyOn(AbortSignal, "any").mockReturnValue(combinedController.signal);
     const signal = caller ? callerController.signal : undefined;
-    try {
-      const response = await buildGuardedModelFetch(target, timeout)(
-        `${target.baseUrl}/responses`,
-        {
-          method: "POST",
-          signal,
-        },
-      );
-      await response.text();
-      expect(timeoutSpy).toHaveBeenCalledExactlyOnceWith(expected);
-      expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(
-        target,
-        undefined,
-        caller ? combinedController.signal : timeoutController.signal,
-      );
-      expect(latestGuardedFetchParams().timeoutMs).toBe(expected);
-      expect(latestGuardedFetchParams().signal).toBe(signal);
-      if (caller) {
-        expect(anySpy).toHaveBeenCalledExactlyOnceWith([signal, timeoutController.signal]);
-      } else {
-        expect(anySpy).not.toHaveBeenCalled();
-      }
-    } finally {
-      timeoutSpy.mockRestore();
-      anySpy.mockRestore();
+    const response = await buildGuardedModelFetch(target, timeout)(`${target.baseUrl}/responses`, {
+      method: "POST",
+      signal,
+    });
+    await response.text();
+    expect(timeoutSpy).toHaveBeenCalledExactlyOnceWith(expected);
+    expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(
+      target,
+      undefined,
+      caller ? combinedController.signal : timeoutController.signal,
+    );
+    expect(latestGuardedFetchParams().timeoutMs).toBe(expected);
+    expect(latestGuardedFetchParams().signal).toBe(signal);
+    if (caller) {
+      expect(anySpy).toHaveBeenCalledExactlyOnceWith([signal, timeoutController.signal]);
+    } else {
+      expect(anySpy).not.toHaveBeenCalled();
     }
   });
 

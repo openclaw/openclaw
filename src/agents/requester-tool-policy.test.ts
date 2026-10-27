@@ -505,9 +505,7 @@ describe("resolveRequesterToolPolicies", () => {
           sourceTool: "sessions_send",
         },
       };
-      const admitted = await withPreparedSessionCapabilityRead(() =>
-        resolveRequesterToolPolicies({ config: cfg, ...request }),
-      );
+      const admitted = await resolvePolicy({ config: cfg, ...request });
       const nextConfig = config({
         ...cfg,
         tools: {
@@ -515,9 +513,7 @@ describe("resolveRequesterToolPolicies", () => {
           toolsBySender: { ...cfg.tools?.toolsBySender, "id:alice": { deny: ["exec"] } },
         },
       });
-      const next = await withPreparedSessionCapabilityRead(() =>
-        resolveRequesterToolPolicies({ config: nextConfig, ...request }),
-      );
+      const next = await resolvePolicy({ config: nextConfig, ...request });
 
       expect(next.senderPolicy).toEqual({ deny: ["exec"] });
       expect(next.inheritedToolPolicy).toEqual({ deny: ["message"] });
@@ -561,7 +557,6 @@ describe("resolveRequesterToolPolicies", () => {
 
     expectInherited(result, "completion-handoff", { allow: ["read", "exec"] });
     expect(result.senderPolicy).toBeUndefined();
-
     const controllerResult = await resolvePolicy({ sessionKey: controllerSessionKey, ...handoff });
     expectCurrentSource(controllerResult);
   });
