@@ -301,6 +301,7 @@ const repositoryScriptEntries = [
   "scripts/perf/cron-delivery-gateway-entry.ts!",
   "scripts/perf/plugin-policy-read-measure.mjs!",
   "scripts/perf/prompt-cache-observation-measure.ts!",
+  "scripts/perf/live-history-observation-measure.ts!",
   "scripts/perf/reconnect-read-wave-measure.ts!",
   "scripts/perf/session-actor-receipt-measure.ts!",
   "scripts/perf/session-actor-retention-measure.ts!",
