@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isNativeError } from "node:util/types";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
@@ -282,6 +283,7 @@ export function withWorktreeRunEnd<T>(
 export function retainWorktreeRunEndFailure(error: unknown): void {
   const operation = current.getStore();
   if (operation && hasSqliteWorkerOutcomeUnknown(error) && isNativeError(error)) {
+    materializeErrorStack(error);
     operation.uncertain ??= error;
   }
 }
