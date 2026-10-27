@@ -84,11 +84,25 @@ database state after collecting results.
 ### Real-Gateway Usage model filters
 
 `bench-usage-gateway.ts` measures the production Usage page against isolated
-Gateways with durable synthetic session transcripts. It compares two installed
-source checkouts using one frozen production UI build, so the experiment isolates
-backend changes. Both checkouts must contain identical copies of the driver and
-`scripts/lib/usage-bench-{child,rtt}.ts`. It does not build, install, contact a
-provider, or use an operator's Gateway state.
+Gateways with durable synthetic session transcripts. Build both clean source
+checkouts with `pnpm build sourcePerformance` first, and supply one frozen
+production UI build. The driver verifies each source commit against build-info
+and both local build stamps, then hashes the complete runtime output before and
+after the experiment. It does not build, install, contact a provider, or use an
+operator's Gateway state.
+
+The source helper only seeds durable synthetic state and exits after draining
+its writers. Unlike the earlier source-run cohort, this built-path cohort does
+not prime the usage cache or summary before opening the browser: initial work is
+included in default-readiness and full-range observations. The measured Gateway runs that checkout's normal `dist/entry.js`,
+with production worker entrypoints. Seeding and startup are separate from browser
+default readiness, full-range loading, and warm filters. Numeric dispatch counters
+observe native worker messages without retaining or rewriting their payloads.
+All roles use the invoking driver's seed, RTT, and dispatch-observer helpers,
+whose hashes are recorded separately from the per-checkout runtime. The seed
+helper must remain compatible with both checkouts' database schemas. No
+aggregation runs in the shared seed process. Each Gateway uses its own runtime
+profiling and graceful-stop preloads.
 
 Start with the three-session smoke, which includes mixed-model usage and saved
 context, before increasing volume:

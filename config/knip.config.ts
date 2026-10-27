@@ -98,6 +98,7 @@ const repositoryScriptEntries = [
   // scripts/README.md invokes the real-Gateway Usage benchmark; it spawns this exact child path.
   "scripts/bench-usage-gateway.ts!",
   "scripts/lib/usage-bench-child.ts!",
+  "scripts/lib/usage-bench-observer.mjs!",
   // The opt-in projection benchmark builds its browser fixture through this CLI.
   "scripts/build-control-ui-projection-fixture.mts!",
   // scripts/README.md invokes these exact memory-search benchmarks by path.

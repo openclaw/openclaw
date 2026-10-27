@@ -1,33 +1,41 @@
-/** Proof child: actual Gateway, durable transcripts, and existing profiling IPC. */
+/** Seed durable synthetic Usage data, then hand it to a separate built Gateway. */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { captureRuntimeConfigAsyncReader } from "../../src/config/config.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "../../src/config/sessions/session-accessor.js";
 import { promptReport } from "../../src/config/sessions/system-prompt-report.test-support.js";
-import { startGatewayServer } from "../../src/gateway/server.js";
-import {
-  acquireGatewayE2ePortBlock,
-  startClaimedGateway,
-} from "../../src/gateway/test-helpers.listener.js";
-import { refreshCostUsageCacheForAgent } from "../../src/infra/session-cost-usage-aggregation.js";
-import { loadCostUsageSummary } from "../../src/infra/session-cost-usage.js";
-import { WorkerTaskPool } from "../../src/infra/worker-task-pool.js";
 import { createOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
-type Setup = { uiRoot: string; sessions: number };
+type Setup = { uiRoot: string; sessions: number; port: number };
+export type UsageBenchFixture = {
+  channel: "usage-volume-fixture";
+  action: "seeded";
+  root: string;
+  home: string;
+  stateDir: string;
+  configPath: string;
+  startDate: string;
+  endDate: string;
+  sessions: number;
+  allTokens: number;
+  models: Record<string, { sessions: number; tokens: number }>;
+};
 const setup = JSON.parse(await readFile(process.argv[2]!, "utf8")) as Setup;
-if (!process.send) throw new Error("Proof child requires managed IPC");
+if (!process.send) {
+  throw new Error("Proof child requires managed IPC");
+}
 const token = process.env.OPENCLAW_USAGE_BENCH_TOKEN;
 delete process.env.OPENCLAW_USAGE_BENCH_TOKEN;
-if (!token) throw new Error("Proof child requires a generated fixture credential");
+if (!token) {
+  throw new Error("Proof child requires a generated fixture credential");
+}
 const send = (value: object) =>
-  new Promise<void>((resolve, reject) =>
-    process.send!(value, (error) => (error ? reject(error) : resolve())),
-  );
+  new Promise<void>((resolve, reject) => {
+    process.send!(value, (error) => (error ? reject(error) : resolve()));
+  });
 const state = await createOpenClawTestState({
   label: "usage-model-cohort-volume",
   env: {
@@ -40,73 +48,13 @@ const state = await createOpenClawTestState({
     OPENCLAW_SKIP_PROVIDERS: "1",
   },
 });
-let claim: Awaited<ReturnType<typeof acquireGatewayE2ePortBlock>> | undefined;
-let claimed = false;
-let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+let handedOff = false;
 const dayMs = 86_400_000;
 const end = Date.parse(new Date().toISOString().slice(0, 10));
 const start = end - 179 * dayMs;
 const model = (index: number) => `fixture-model-${String(index).padStart(2, "0")}-end`;
 const totals = new Map<string, { sessions: number; tokens: number }>();
-const dispatches: Array<{ kind: string; rows: number; contextRows: number; packedBytes: number }> =
-  [];
-const originalRun = WorkerTaskPool.prototype.run;
-WorkerTaskPool.prototype.run = new Proxy(originalRun, {
-  apply(target, receiver, args) {
-    const task = args[0];
-    if (isRecord(task)) {
-      const input = task.kind === undefined ? task : task.input;
-      if (
-        isRecord(input) &&
-        Array.isArray(input.rows) &&
-        (Array.isArray(input.packed) || task.kind === "cohorts")
-      ) {
-        const packedBytes = Array.isArray(input.packed)
-          ? input.packed.reduce((sum, packed) => {
-              const batch = packed.batch;
-              return sum + batch.values.byteLength + batch.offsets.byteLength;
-            }, 0)
-          : 0;
-        dispatches.push({
-          kind: typeof task.kind === "string" ? task.kind : "report",
-          rows: input.rows.length,
-          contextRows: input.rows.filter((row) => isRecord(row) && row.hasContextWeight === true)
-            .length,
-          packedBytes,
-        });
-      }
-    }
-    return Reflect.apply(target, receiver, args);
-  },
-});
-const stopped = Promise.withResolvers<void>();
-let closing: Promise<void> | undefined;
-const stop = () =>
-  (closing ??= (async () => {
-    try {
-      await server?.close({ reason: "Usage volume proof complete" });
-      if (!claimed) await claim?.release();
-    } finally {
-      WorkerTaskPool.prototype.run = originalRun;
-      await state.cleanup();
-      stopped.resolve();
-    }
-  })());
-process.on("message", (message) => {
-  if (!isRecord(message) || message.channel !== "usage-volume-fixture") return;
-  if (message.action === "snapshot")
-    void send({ channel: "usage-volume-fixture", action: "snapshot", dispatches: [...dispatches] });
-  if (message.action === "stop")
-    void stop().catch((error) => {
-      console.error(error);
-      process.exitCode = 1;
-      stopped.resolve();
-    });
-});
-process.once("SIGTERM", () => void stop());
 try {
-  claim = await acquireGatewayE2ePortBlock();
-  const port = claim.port;
   await state.writeConfig({
     browser: { enabled: false },
     discovery: { mdns: { mode: "off" } },
@@ -114,7 +62,7 @@ try {
     agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
     gateway: {
       mode: "local",
-      port,
+      port: setup.port,
       bind: "loopback",
       auth: { mode: "token", token },
       controlUi: { enabled: true, root: setup.uiRoot },
@@ -125,7 +73,7 @@ try {
       store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
     },
   });
-  const config = await captureRuntimeConfigAsyncReader()();
+  await captureRuntimeConfigAsyncReader()();
   const storePath = path.join(state.sessionsDir(), "sessions.json");
   let allTokens = 0;
   for (let index = 0; index < setup.sessions; index++) {
@@ -170,30 +118,26 @@ try {
       })),
     });
   }
-  await refreshCostUsageCacheForAgent({ config, agentId: "main", waitForRefresh: true });
-  await loadCostUsageSummary({ config, agentId: "main", startMs: start, endMs: end + dayMs });
-  server = await startClaimedGateway(claim, () =>
-    startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: true,
-      sidecarStartup: "defer",
-    }),
-  );
-  claimed = true;
-  await send({
+  // Close source-owned writers before the compiled process opens this durable state.
+  await state.restoreEnv();
+  const fixture: UsageBenchFixture = {
     channel: "usage-volume-fixture",
-    action: "ready",
-    port,
-    token,
+    action: "seeded",
+    root: state.root,
+    home: state.home,
+    stateDir: state.stateDir,
+    configPath: state.configPath,
     startDate: new Date(start).toISOString().slice(0, 10),
     endDate: new Date(end).toISOString().slice(0, 10),
     sessions: setup.sessions,
     allTokens,
     models: Object.fromEntries(totals),
-  });
-  await stopped.promise;
+  };
+  await send(fixture);
+  handedOff = true;
 } finally {
-  await stop();
+  if (!handedOff) {
+    await state.cleanup();
+  }
   process.disconnect?.();
 }
