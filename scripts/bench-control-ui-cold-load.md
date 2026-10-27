@@ -655,6 +655,14 @@ The native typing probe appends to the existing draft and verifies that every
 dispatched character survives streaming; `streaming.typing` retains the count
 and final synthetic draft alongside the timing evidence.
 
+Use `--transcript-messages 2000` for the long-session stream. Add
+`--streaming-content tool-code` to grow an open TypeScript fence alongside an
+expanded tool card, or `--streaming-panes 2` to stream two independent sessions
+in the native split layout. Each pane must retain its typed draft, show the
+complete reply, and follow its own growing tail. `streaming.panes` and
+`streaming.typingByPane` retain these results; the original first-pane fields
+remain available. The default Markdown fixture is still 645 deltas.
+
 Add `--streaming-allocations` to sample JavaScript allocations during the stream
 with CDP HeapProfiler at a 4 KiB interval, retaining samples collected by both
 major and minor GC. `streaming.allocations` reports estimated bytes and bytes per

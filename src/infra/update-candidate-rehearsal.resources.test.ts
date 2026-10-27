@@ -179,6 +179,7 @@ it("reaps an expired snapshot worker before removing its database and WAL scratc
   const now = Date.now.bind(Date);
   let elapsed = 0;
   vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+  vi.spyOn(performance, "now").mockImplementation(() => now() + elapsed);
   const ready = createDeferred();
   const run = exec.runUtf8CommandWithTimeout;
   vi.spyOn(exec, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {

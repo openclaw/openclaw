@@ -73,6 +73,7 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
   try {
     const gateway = await gatewayOwner.start({
       repoRoot,
+      initializeCurrentRuntimeState: true,
       command: {
         executablePath: process.execPath,
         argsPrefix: [path.join(repoRoot, "dist", "index.js")],

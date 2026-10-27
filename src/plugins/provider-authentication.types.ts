@@ -108,7 +108,7 @@ export type ProviderAuthContext = {
       state: string;
       timeoutMs: number;
       buildAuthorizationUrl: (redirectUrl: string) => string;
-    }) => Promise<{ code: string; state: string }>;
+    }) => Promise<{ code: string; state: string; iss?: string }>;
   };
 };
 

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 271650,
-  "reason": "Same-host route grouping measures 271528 to 271650 B gzip (+122 B), with five startup JS requests and one CSS request unchanged. In 20 base/A-A/head triplets, 100 ms Cron readiness improves 912.5 to 816.2 ms (paired A/A -10.745%); total CPU is flat. Retain the measured head value under the approved small-byte measured-win policy.",
-  "updatedAt": "2026-10-26"
+  "startupJsGzipBytes": 271181,
+  "reason": "Same-host main285 and Creation bfcd2db6 measure startup 271088 to 271181 B gzip (+93 B), with five JS requests and one CSS request unchanged. New Session falls from 768182 to 767606 B and 17 to 16 JS requests. Retain the previously measured model-open CPU and Claws warm-task wins, with their disclosed cold-tail caveats; fresh source-pinned runtime qualification is recorded in PR #184994. Ratchet to the actual measured head.",
+  "updatedAt": "2026-10-27"
 }

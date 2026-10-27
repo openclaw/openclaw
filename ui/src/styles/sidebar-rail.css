@@ -3,6 +3,38 @@
   overflow: visible;
 }
 
+/* Account identity remains recognizable while a cold profile photo resolves. */
+.sidebar-identity-card .viewer-avatar.is-pending > img {
+  display: none;
+}
+
+.sidebar-identity-card .viewer-avatar.is-pending > .viewer-avatar__fallback {
+  display: grid;
+  visibility: visible;
+}
+
+.sidebar--rail .sidebar-shell__footer {
+  min-height: 37px;
+  padding-block: 4px;
+}
+
+.sidebar--rail .sidebar-shell__connection,
+.sidebar--rail .sidebar-shell__footer .gateway-status--row {
+  height: 28px;
+}
+
+.sidebar-shell__connection > .gateway-status-tooltip {
+  display: flex;
+}
+
+.sidebar--rail .sidebar-shell__footer .gateway-status--connected {
+  color: var(--muted);
+}
+
+.sidebar--rail .sidebar-shell__footer .gateway-status--connected .gateway-status__icon {
+  color: var(--ok);
+}
+
 .sidebar--rail .sidebar-shell {
   min-width: 0;
   overflow: hidden;

@@ -8,18 +8,23 @@ import {
   mcpOAuthCliLoginSteps,
   operatorMcpOAuthIdentity,
 } from "../../agents/mcp-oauth-identity.js";
-import type { McpOAuthLoginLifecycle } from "../../agents/mcp-oauth-provider.js";
+import {
+  McpOAuthCredentialsRetainedError,
+  type McpOAuthLoginLifecycle,
+} from "../../agents/mcp-oauth-provider.js";
 import {
   cancelMcpOAuthAuthorization,
   completeOAuthCallback,
   startMcpOAuthAuthorization,
 } from "../../agents/mcp-oauth.js";
+import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { resolveOperatorMcpOAuthConnection } from "../../plugins/mcp-auth-status.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { WizardSession } from "../../wizard/session.js";
 import {
   createProviderBrowserAuthSession,
+  ProviderBrowserSignInError,
   ProviderBrowserSignInUnavailableError,
 } from "../provider-browser-auth.js";
 import { rejectExistingSetupWizardSession } from "./system-agent-setup-wizard.js";
@@ -99,75 +104,121 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
       respond,
       assertCurrent,
       createSession: () =>
-        new WizardSession(
-          async (prompter, signal, runner) => {
-            let attemptState: string | undefined;
-            let saved = false;
-            const browser = createProviderBrowserAuthSession({
-              signal: AbortSignal.any([
-                signal,
-                ...(client.connectionSignal ? [client.connectionSignal] : []),
-              ]),
-              browserOrigin: client.browserOrigin,
-              openUrl: async (url) => {
-                login.assertCurrent();
-                await prompter.openUrl?.(url);
-                login.assertCurrent();
-              },
-            });
-            const login: McpOAuthLoginLifecycle = {
-              signal: browser.signal,
-              assertCurrent: () => {
-                signal.throwIfAborted();
-                assertCurrent();
-                browser.assertCurrent();
-              },
-              onAuthorizationPublished: (state) => {
-                attemptState = state;
-              },
-              beforeTokensSaved: () => runner.lockCancellation(),
-              onTokensSaved: () => {
-                saved = true;
-              },
-            };
-            const failure = () =>
-              new Error(
-                saved
-                  ? `Authentication saved, but sign-in cleanup did not finish. Close this dialog and check the ${settingsOwner} before trying again.`
-                  : terminalLogin
-                    ? `Sign-in did not finish. Check the MCP server settings and try again, or sign in from this Gateway's terminal: ${terminalLogin}.`
-                    : "Sign-in did not finish. Check the plugin settings, then select Connect to try again.",
-              );
+        new WizardSession(async (prompter, signal, runner) => {
+          let attemptState: string | undefined;
+          let saved = false;
+          const browser = createProviderBrowserAuthSession({
+            signal: AbortSignal.any([
+              signal,
+              ...(client.connectionSignal ? [client.connectionSignal] : []),
+            ]),
+            browserOrigin: client.browserOrigin,
+            openUrl: async (url) => {
+              login.assertCurrent();
+              await prompter.openUrl?.(url);
+              login.assertCurrent();
+            },
+          });
+          const login: McpOAuthLoginLifecycle = {
+            signal: browser.signal,
+            assertCurrent: () => {
+              signal.throwIfAborted();
+              assertCurrent();
+              browser.assertCurrent();
+            },
+            onAuthorizationPublished: (state) => {
+              attemptState = state;
+            },
+            beforeTokensSaved: () => runner.lockCancellation(),
+            onTokensSaved: () => {
+              saved = true;
+            },
+          };
+          const failure = () =>
+            new Error(
+              saved
+                ? `Authentication saved, but sign-in cleanup did not finish. Close this dialog and check the ${settingsOwner} before trying again.`
+                : terminalLogin
+                  ? `Sign-in did not finish. Check the MCP server settings and try again, or sign in from this Gateway's terminal: ${terminalLogin}.`
+                  : "Sign-in did not finish. Check the plugin settings, then select Connect to try again.",
+            );
+          try {
             try {
-              try {
-                const result = await browser.authorizePrepared<"authorized">({
-                  timeoutMs: 10 * 60_000,
-                  prepare: async (redirectUrl) => {
-                    const started = await startMcpOAuthAuthorization(identity, config, {
-                      redirectUrl,
-                      login,
-                    });
-                    return started.status === "authorized" ? { result: "authorized" } : started;
-                  },
-                });
-                if (
-                  result !== "authorized" &&
-                  (await completeOAuthCallback(identity, config, result, login)) !== "authorized"
-                ) {
-                  throw failure();
-                }
-              } finally {
-                browser.close();
-                if (attemptState) {
-                  await cancelMcpOAuthAuthorization(identity, attemptState);
-                }
+              const result = await browser.authorizePrepared<"authorized">({
+                timeoutMs: 10 * 60_000,
+                prepare: async (redirectUrl) => {
+                  const started = await startMcpOAuthAuthorization(identity, config, {
+                    redirectUrl,
+                    login,
+                  });
+                  return started.status === "authorized" ? { result: "authorized" } : started;
+                },
+              });
+              if (
+                result !== "authorized" &&
+                (await completeOAuthCallback(identity, config, result, login)) !== "authorized"
+              ) {
+                throw new ProviderBrowserSignInError("expired");
               }
-            } catch (error) {
-              throw error instanceof ProviderBrowserSignInUnavailableError ? error : failure();
+            } finally {
+              browser.close();
+              if (attemptState) {
+                await cancelMcpOAuthAuthorization(identity, attemptState);
+              }
             }
-          },
-          { timeoutMs: 10 * 60_000 },
-        ),
+          } catch (error) {
+            if (saved) {
+              throw failure();
+            }
+            if (error instanceof ProviderBrowserSignInUnavailableError) {
+              throw error;
+            }
+            const {
+              AuthorizationServerMismatchError,
+              IssuerMismatchError,
+              OAuthError,
+              RegistrationRejectedError,
+            } = await import("@modelcontextprotocol/client");
+            let reason = "unexpected";
+            let message: string | undefined;
+            // Provider errors can contain callback codes, tokens, and untrusted text.
+            // Select fixed copy instead of exposing their messages or response bodies.
+            if (
+              error instanceof IssuerMismatchError ||
+              error instanceof AuthorizationServerMismatchError
+            ) {
+              reason = "provider-mismatch";
+              message =
+                "OpenClaw could not verify the sign-in provider. Close this dialog, review the connection settings, and try again.";
+            } else if (error instanceof ProviderBrowserSignInError) {
+              reason = error.reason;
+              message =
+                error.reason === "expired"
+                  ? "This sign-in attempt expired. Close this dialog and start sign-in again."
+                  : "The provider did not approve sign-in. Close this dialog and try again.";
+            } else if (error instanceof McpOAuthCredentialsRetainedError) {
+              reason = "credentials-retained";
+              message =
+                "The sign-in service rejected this attempt. Existing credentials were not changed. Close this dialog, review the connection settings, and try again.";
+            } else if (error instanceof RegistrationRejectedError) {
+              reason = "registration-rejected";
+              message =
+                "The sign-in service rejected this connection's settings. Close this dialog and review the connection settings before trying again.";
+            } else if (error instanceof OAuthError) {
+              reason = "provider-rejected";
+              message =
+                "The sign-in service rejected this attempt. Close this dialog and try again.";
+            } else if (isTransientNetworkError(error)) {
+              reason = "network";
+              message =
+                "OpenClaw could not reach the sign-in service. Check this Gateway's network connection, then close this dialog and try again.";
+            }
+            context.logGateway.warn(
+              `MCP sign-in failed for server "${params.serverName}": ${reason}`,
+            );
+            throw message ? new Error(message) : failure();
+          }
+        }),
     });
   },
 };
