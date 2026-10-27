@@ -44,6 +44,7 @@ import {
   registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
   rejectPendingPreparedModelRuntimeReplacement,
+  retirePreparedModelRuntimeAgent,
   type PreparedModelRuntimeLease,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
@@ -398,6 +399,33 @@ describe("prepared reply dispatch runtime", () => {
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(
       loadsBeforeExecutionWorkspaces + registries.size,
     );
+    const retirementRuntime = [...registries.keys()][0]!;
+    const retirementLease = await acquire(retirementRuntime, published.pluginGeneration, "static");
+    let retirementLeaseActive = true;
+    try {
+      await withPreparedModelRuntimePluginGenerationScope(
+        retirementLease.pluginGeneration,
+        async () => {
+          await retirePreparedModelRuntimeAgent({
+            agentId: "default",
+            agentDirs: [published.agentDir],
+          });
+          await expect(
+            acquireAgentRunPreparedModelRuntime(
+              {
+                ...input(retirementRuntime),
+                workspaceDir: fixture.state.path("workspace-after-agent-retirement"),
+              },
+              { catalogMode: "static", pluginGeneration: retirementLease.pluginGeneration },
+            ),
+          ).rejects.toThrow("plugin generation was superseded");
+        },
+        () => (retirementLeaseActive ? retirementLease.snapshot : undefined),
+      );
+    } finally {
+      retirementLeaseActive = false;
+      await retirementLease[Symbol.asyncDispose]();
+    }
   });
 
   it.each(["disabled", "error", "not-imported"] as const)(

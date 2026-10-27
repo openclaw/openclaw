@@ -32,6 +32,8 @@ import {
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.owner.js";
 import {
+  bindPreparedPluginGenerationConfiguredBase,
+  getPreparedPluginGenerationConfiguredBase,
   preparedPluginGenerationReusesBase,
   preparedPluginGenerationSupportsSelections,
 } from "./prepared-model-runtime.plugin-generation.js";
@@ -310,6 +312,8 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
           })
         : undefined);
     const configuredGeneration = generationAuthorityOwner?.pluginGeneration;
+    const requiredConfiguredGeneration =
+      requestedGeneration && getPreparedPluginGenerationConfiguredBase(requestedGeneration);
     // A selected run view may change execution workspaces only while its exact lease remains open
     // and the configured generation it was derived from still owns publication authority.
     const requestedGenerationIsCurrent =
@@ -318,7 +322,7 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
         configuredGeneration !== undefined &&
         activeBorrowedSnapshot !== undefined &&
         input.runtimePluginSelections !== undefined &&
-        preparedPluginGenerationReusesBase(requestedGeneration, configuredGeneration) &&
+        requiredConfiguredGeneration === configuredGeneration &&
         preparedModelRuntimeBorrowMatchesInput(
           activeBorrowedSnapshot,
           requestedGeneration,
@@ -329,8 +333,9 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
       provenance === "run" &&
       context.getGatewayLifecycleActive() &&
       requestedGeneration &&
-      generationAuthorityOwner &&
-      (generationAuthorityOwner.needsRefresh || !requestedGenerationIsCurrent)
+      ((requiredConfiguredGeneration !== undefined && !generationAuthorityOwner) ||
+        (generationAuthorityOwner &&
+          (generationAuthorityOwner.needsRefresh || !requestedGenerationIsCurrent)))
     ) {
       throw new PreparedModelRuntimePublicationSupersededError(
         `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
@@ -439,6 +444,9 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
         : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);
     const pluginGeneration = owner.pluginGeneration!;
+    if (options.pluginGeneration) {
+      bindPreparedPluginGenerationConfiguredBase(pluginGeneration, options.pluginGeneration);
+    }
     if (owner.provenance !== provenance) {
       return {
         snapshot,
