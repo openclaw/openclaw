@@ -83,41 +83,6 @@ const expectAbsent = (name: string) => expect(readRegistryEntry(name)).resolves.
 const writeNative = (write: Parameters<typeof writeSandboxRegistryInDatabase>[1]) =>
   runOpenClawStateWriteTransaction(({ db }) => writeSandboxRegistryInDatabase(db, write));
 
-it.each(["container", "browser"] as const)(
-  "selects only the requested workspace's %s runtimes, including changed bindings",
-  async (kind) => {
-    const write = (containerName: string, workspaceDir?: string) =>
-      writeNative(
-        kind === "container"
-          ? { operation: "update", entry: containerEntry({ containerName, workspaceDir }) }
-          : { operation: "updateBrowser", entry: browserEntry({ containerName, workspaceDir }) },
-      );
-    write("selected", "/projection/selected");
-    write("other", "/projection/other");
-    write("unbound");
-    const read = kind === "container" ? readRegistry : readBrowserRegistry;
-    const selected = async () =>
-      (await read({ workspaceDir: "/projection/selected" })).entries.map(
-        (entry) => entry.containerName,
-      );
-    expect(await selected()).toEqual(["selected"]);
-    writeNative(
-      kind === "container"
-        ? { operation: "remove", containerName: "selected" }
-        : { operation: "removeBrowser", containerName: "selected" },
-    );
-    writeNative(
-      kind === "container"
-        ? { operation: "remove", containerName: "other" }
-        : { operation: "removeBrowser", containerName: "other" },
-    );
-    write("selected", "/projection/other");
-    write("other", "/projection/selected");
-    expect(await selected()).toEqual(["other"]);
-    expect((await read()).entries).toHaveLength(3);
-  },
-);
-
 type RegistryReceipt = Extract<
   Parameters<Parameters<typeof sandboxRegistryPublication.subscribeFacts>[0]>[0],
   { facts: unknown }
@@ -454,32 +419,34 @@ describe("registry race safety", () => {
     ).resolves.toEqual(["openshell-newer", "openshell-older"]);
   });
 
-  it("stores unsafe container names without writing path-derived files", async () => {
-    await updateRegistry(containerEntry({ containerName: "../escape" }));
-
-    const registry = await readRegistry();
-
-    expect(registry.entries.map((entry) => entry.containerName)).toEqual(["../escape"]);
-    await expect(fs.access(`${fixture.root}/escape.json`)).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
   it.each(["container", "browser"] as const)(
-    "keeps concurrent %s updates in deterministic name order",
+    "orders concurrent %s updates and selects only the requested workspace without path-derived files",
     async (kind) => {
       await Promise.all(
-        ["c", "a", "b"].map((name, index) => {
-          const containerName = `${kind}-${name}`;
+        [`${kind}-c`, "../escape", `${kind}-a`, `${kind}-other`].map((containerName, index) => {
+          const workspaceDir = ["/selected", undefined, "/selected", "/other"][index];
+          const entry = { containerName, workspaceDir };
           return kind === "container"
-            ? updateRegistry(containerEntry({ containerName }))
-            : updateBrowserRegistry(browserEntry({ containerName, cdpPort: 9222 + index }));
+            ? updateRegistry(containerEntry(entry))
+            : updateBrowserRegistry(browserEntry({ ...entry, cdpPort: 9222 + index }));
         }),
       );
-      const registry = await (kind === "container" ? readRegistry() : readBrowserRegistry());
-      expect(registry.entries.map((entry) => entry.containerName)).toEqual(
-        ["a", "b", "c"].map((name) => `${kind}-${name}`),
-      );
+      const read = kind === "container" ? readRegistry : readBrowserRegistry;
+      const registry = await read();
+      expect(registry.entries.map((entry) => entry.containerName)).toEqual([
+        "../escape",
+        `${kind}-a`,
+        `${kind}-c`,
+        `${kind}-other`,
+      ]);
+      const selected = await read({ workspaceDir: "/selected" });
+      expect(selected.entries.map((entry) => entry.containerName)).toEqual([
+        `${kind}-a`,
+        `${kind}-c`,
+      ]);
+      await expect(fs.access(`${fixture.root}/escape.json`)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     },
   );
 
