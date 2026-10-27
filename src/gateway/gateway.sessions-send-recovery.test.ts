@@ -29,7 +29,15 @@ import {
   type RecoveryDiagnosticMarker,
   writeRecoveryDiagnosticProbe,
 } from "./gateway.sessions-send-recovery.diagnostics.test-support.js";
+import { productModelConfig } from "./server.chat-product.test-support.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+
+const queuedChat = (sessionKey: string, message: string, idempotencyKey = randomUUID()) => ({
+  sessionKey,
+  message,
+  idempotencyKey,
+  queueMode: "followup" as const,
+});
 
 // Real public chat.send/sessions_send, provider socket, and cold Gateway process restarts.
 // The provider holds queued turns and proves steering persistence before restart.
@@ -356,12 +364,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
       const resetSource = "agent:main:dashboard:reset-source";
       const revokedSource = "agent:main:dashboard:revoked-source";
       const expectedUpdates = Array.from({ length: 5 }, (_, i) => `PEER_UPDATE_${i + 1}`);
-      const chatRequests: Array<{
-        sessionKey: string;
-        message: string;
-        idempotencyKey: string;
-        queueMode: "followup";
-      }> = [];
+      const chatRequests: ReturnType<typeof queuedChat>[] = [];
       const cancelledChatId = randomUUID();
       const expectedDelivery = expectedUpdates.flatMap((message, i) => [
         message,
@@ -458,6 +461,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         const diagnosticPlugin = gateway.state.path("recovery-proof");
         await writeRecoveryDiagnosticProbe(diagnosticPlugin);
         const provider = buildMockOpenAiResponsesProvider(baseUrl);
+        const model = productModelConfig(gateway.state.workspaceDir, provider);
         const config = {
           diagnostics: { enabled: true },
           logging: { level: "debug", file: gateway.state.path("gateway.log") },
@@ -469,30 +473,15 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           agents: {
             ownership: "explicit",
             defaults: {
+              ...model.defaults,
               maxConcurrent: 8,
-              workspace: gateway.state.workspaceDir,
-              skipBootstrap: true,
               utilityModel: "",
               skills: [],
               model: { primary: provider.modelRef, fallbacks: [] },
-              models: {
-                [provider.modelRef]: {
-                  agentRuntime: { id: "openclaw" },
-                  params: { transport: "sse", openaiWsWarmup: false },
-                },
-              },
             },
             entries: { main: {} },
           },
-          models: {
-            mode: "replace",
-            providers: {
-              [provider.providerId]: {
-                ...provider.config,
-                request: { allowPrivateNetwork: true },
-              },
-            },
-          },
+          models: model.models,
           tools: {
             profile: "full",
             codeMode: false,
@@ -554,22 +543,12 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           await start(key, `HOLD_PARALLEL_${index}`);
           await waitFor(() => expect(parallelHeld.has(index)).toBe(true));
           for (const ordinal of [1, 2]) {
-            await request("chat.send", {
-              sessionKey: key,
-              message: `PARALLEL_INPUT_${index}_${ordinal}`,
-              idempotencyKey: randomUUID(),
-              queueMode: "followup",
-            });
+            await request("chat.send", queuedChat(key, `PARALLEL_INPUT_${index}_${ordinal}`));
           }
         }
         for (const message of expectedUpdates) {
           await send(source, message);
-          const input = {
-            sessionKey: target,
-            message: `  CHAT_UPDATE_${chatRequests.length + 1}  `,
-            idempotencyKey: randomUUID(),
-            queueMode: "followup" as const,
-          };
+          const input = queuedChat(target, `  CHAT_UPDATE_${chatRequests.length + 1}  `);
           chatRequests.push(input);
           const admitted = await request<{ runId: string }>("chat.send", input);
           expect(admitted.runId).toBe(input.idempotencyKey);
@@ -578,12 +557,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         await send(resetSource, "RESET_SOURCE_UPDATE");
         await send(revokedSource, "REVOKED_UPDATE");
         await send(archivedSource, "ARCHIVED_SOURCE_UPDATE");
-        await request("chat.send", {
-          sessionKey: target,
-          message: "CANCELLED_CHAT",
-          idempotencyKey: cancelledChatId,
-          queueMode: "followup",
-        });
+        await request("chat.send", queuedChat(target, "CANCELLED_CHAT", cancelledChatId));
         const before = await history();
         expect(before.pendingInputs.items).toHaveLength(15);
         expect(JSON.stringify(before)).not.toContain("chatInputRecovery");

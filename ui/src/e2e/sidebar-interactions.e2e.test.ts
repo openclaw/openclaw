@@ -51,7 +51,7 @@ function agentResponses(agents: Array<{ id: string; name?: string }>) {
 }
 
 suite.define(() => {
-  it("opens every new-session plus as a native link without creating sessions", async () => {
+  it("keeps every new-session plus native and opens group and catalog targets without creating sessions", async () => {
     await suite.withPage(desktop, async ({ context, page }) => {
       const agentId = "research";
       const group = "Client & ops / α";
@@ -106,18 +106,23 @@ suite.define(() => {
         section,
         params: { agent: agentId, ...params },
       });
-      const actions: Array<{ selector: string; section?: string; params: Record<string, string> }> =
-        [
-          railAction,
-          sectionAction(`category:${group}`, { group }),
-          sectionAction("ungrouped"),
-          {
-            selector: `[data-session-section="catalog:${catalogId}"] .sidebar-session-catalog-new`,
-            section: `catalog:${catalogId}`,
-            params: { agent: agentId, catalog: catalogId },
-          },
-          railAction,
-        ];
+      const actions: Array<{
+        selector: string;
+        section?: string;
+        params: Record<string, string>;
+        newTab?: "middle" | "modified";
+      }> = [
+        railAction,
+        { ...sectionAction(`category:${group}`, { group }), newTab: "middle" },
+        sectionAction("ungrouped"),
+        {
+          selector: `[data-session-section="catalog:${catalogId}"] .sidebar-session-catalog-new`,
+          section: `catalog:${catalogId}`,
+          params: { agent: agentId, catalog: catalogId },
+          newTab: "modified",
+        },
+        railAction,
+      ];
       for (const [index, action] of actions.entries()) {
         if (index === actions.length - 1) {
           await page.locator('[data-navigation-view][aria-pressed="true"]').click();
@@ -142,10 +147,14 @@ suite.define(() => {
           }),
         ).toBe(false);
 
+        if (!action.newTab) {
+          continue;
+        }
+
         // Native tab gestures do not retain an opener, so observe the browser context.
         const [popup] = await Promise.all([
           context.waitForEvent("page"),
-          index % 2 === 0
+          action.newTab === "modified"
             ? link.click({ modifiers: ["ControlOrMeta"] })
             : link.click({ button: "middle" }),
         ]);

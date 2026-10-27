@@ -15,6 +15,7 @@ import {
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { getRawExecuteAgentTurnForTest } from "./agent-runner-execution-admission.test-support.js";
@@ -463,9 +464,7 @@ export function expectRecordFields(
   record: Record<string, unknown>,
   fields: Record<string, unknown>,
 ) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
+  expectObjectFields(record, fields);
 }
 
 export function requireMockCall(mock: unknown, index: number, label: string): unknown[] {

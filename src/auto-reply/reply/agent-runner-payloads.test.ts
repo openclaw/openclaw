@@ -6,6 +6,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { expectObjectFields as expectFields } from "../../test-utils/mock-call-assertions.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -59,16 +60,6 @@ async function expectBuiltPayloads({
   const { replyPayloads } = await buildTestReplyPayloads(params);
   expect(replyPayloads).toHaveLength(expected.length);
   expected.forEach((payload, index) => expectFields(replyPayloads[index], payload));
-}
-
-function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const payload = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(payload[key], key).toEqual(expectedValue);
-  }
 }
 
 function withMirror(text: string, visibleText = text) {
@@ -172,34 +163,27 @@ describe("buildReplyPayloads media filter integration", () => {
     mediaUrls: ["file:///tmp/unsent-a.ogg", "file:///tmp/unsent-b.ogg"],
     audioAsVoice: true,
   };
-  it.each<{
-    name: string;
-    payload: ReplyPayload;
-    sentMediaUrls?: string[];
-    expected?: ReplyPayload[];
-  }>([
-    {
-      name: "unsent media after the legacy media URL was already sent",
-      payload: { ...voiceRemainder, mediaUrl: "file:///tmp/sent.ogg" },
-      sentMediaUrls: ["file:///tmp/sent.ogg"],
-      expected: [
-        { ...voiceRemainder, mediaUrl: undefined, mediaUrls: [...voiceRemainder.mediaUrls] },
-      ],
+  const pinnedReply = { text: "already sent", delivery: { pin: { enabled: true } } };
+  it.each<[string, ReplyPayload, ReplyPayload, string[]?]>([
+    [
+      "unsent media after the legacy media URL was already sent",
+      { ...voiceRemainder, mediaUrl: "file:///tmp/sent.ogg" },
+      { ...voiceRemainder, mediaUrl: undefined, mediaUrls: [...voiceRemainder.mediaUrls] },
+      ["file:///tmp/sent.ogg"],
+    ],
+    ["an enabled configured delivery operation", pinnedReply, pinnedReply],
+  ])(
+    "preserves %s when only the reply text was sent",
+    async (_name, payload, expected, messagingToolSentMediaUrls) => {
+      const { replyPayloads } = await buildTestReplyPayloads({
+        payloads: [payload],
+        messagingToolSentTexts: ["already sent"],
+        messagingToolSentMediaUrls,
+      });
+      expect(replyPayloads).toHaveLength(1);
+      expect(replyPayloads[0]).toMatchObject(expected);
     },
-    {
-      name: "an enabled configured delivery operation",
-      payload: { text: "already sent", delivery: { pin: { enabled: true } } },
-    },
-  ])("preserves $name when only the reply text was sent", async (testCase) => {
-    const { replyPayloads } = await buildTestReplyPayloads({
-      payloads: [testCase.payload],
-      messagingToolSentTexts: ["already sent"],
-      messagingToolSentMediaUrls: testCase.sentMediaUrls,
-    });
-    const expected = testCase.expected ?? [testCase.payload];
-    expect(replyPayloads).toHaveLength(expected.length);
-    expected.forEach((payload, index) => expect(replyPayloads[index]).toMatchObject(payload));
-  });
+  );
 
   it("shares first-reply threading across staged payload builds", async () => {
     const applyReplyToMode = createReplyToModeFilterForChannel("first", "whatsapp");
@@ -260,12 +244,12 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it.each([
-    { name: "text alone", media: false, delivered: false, visible: false },
-    { name: "already-delivered media", media: true, delivered: true, visible: false },
-    { name: "unsent media", media: true, delivered: false, visible: true },
-  ])(
-    "filters internal formatting after media dedupe: $name",
-    async ({ media, delivered, visible }) => {
+    ["text alone", false, false, false],
+    ["already-delivered media", true, true, false],
+    ["unsent media", true, false, true],
+  ] as const)(
+    "filters internal formatting after media dedupe: %s",
+    async (_name, media, delivered, visible) => {
       const mediaUrl = "file:///tmp/result.png";
       const { replyPayloads } = await buildTestReplyPayloads({
         payloads: [{ text: "───", ...(media ? { mediaUrl } : {}) }],

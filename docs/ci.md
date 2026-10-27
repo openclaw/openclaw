@@ -42,6 +42,18 @@ Agent auth-store admission and configured model-owner changes explicitly select
 the Gateway agent-config readiness suite. Its lazy startup path is not fully
 visible to the bounded import graph; the owner watch preserves overlap coverage.
 
+PR Node plans also select the QA scenario catalog's reference check when a
+changed path is absent from the checkout, including the removed side of a rename.
+This catches stale YAML code references without selecting the full QA smoke lane.
+Removed UI test paths also select the UI runtime inventory check so its literal
+Node-driven browser list cannot silently retain deleted tests. Both checks use
+the existing bounded Node planner and leave native and real-Gateway tiers unchanged.
+
+Added tests outside the ordinary suite roots select the full-suite ownership
+inventory, including rename destinations. The policy watch uses the PR base
+to distinguish additions from existing-file edits, which add no inventory work.
+See [selection and routing](/ci/scope-and-routing/selection) for the scope.
+
 Gateway close and run-shutdown owner changes likewise select the Gateway
 detached-execution shutdown and late-admission suites. `server.close()` reaches
 those owners through the kernel's lazy shutdown runtime, beyond the bounded
@@ -368,7 +380,7 @@ prepares its required declarations. Only a successful preparation step
 enables prebuilt consumption, so the children reuse its JavaScript, assets, and
 freshness stamps instead of starting another full build.
 
-Vitest transform-cache fingerprints include direct Vitest configs at every depth and the shared `test/vitest/` inputs, except the two database-worker membership inventories that only select tests. They exclude the generated `.ci-harness` checkout so CI consumers and the protected warmer hash the same source inputs. Node bytecode caching remains enabled for ordinary Vitest runs; Vitest owns the worker-level coverage safeguard described in [local testing](/reference/test/local#core-commands).
+Vitest transform-cache generations include direct Vitest configs at every depth and the shared `test/vitest/` inputs, except the two database-worker membership inventories, unit-fast discovery inventory, and the E2E config factory. Each project fingerprints its declaring config and imported config dependencies; the E2E factory also supplies its canonical file when loaded through a wrapper. E2E-only config edits therefore invalidate E2E transforms while preserving unrelated unit transforms. Shared compiler, helper, dependency, and schema inputs retain their invalidation. Generations exclude the generated `.ci-harness` checkout so CI consumers and the protected warmer hash the same source inputs. Node bytecode caching remains enabled for ordinary Vitest runs; Vitest owns the worker-level coverage safeguard described in [local testing](/reference/test/local#core-commands).
 
 Transform keys also include each project's dependency optimizer directory. This
 prevents cached UI imports from mixing separate projects' Lit instances when a

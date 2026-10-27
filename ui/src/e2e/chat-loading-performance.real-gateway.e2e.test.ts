@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
@@ -15,6 +16,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
@@ -578,7 +580,45 @@ suite.define(() => {
         const storedSnapshot: unknown = warmState.storage.records.snapshots.find((record) =>
           record.sessionKey.endsWith(`\u0000${selectedKey}`),
         )?.snapshot;
+        const currentOwner = await evaluateControlUiContext(page, ({ gateway }) => ({
+          gatewayUrl: gateway.connection.gatewayUrl,
+          sessionKey: gateway.snapshot.sessionKey,
+          recoveryScope: gateway.snapshot.client?.recoveryScope ?? null,
+          recoveryScopeReady: gateway.snapshot.client?.recoveryScopeReady ?? false,
+          profileId: gateway.snapshot.selfUser?.id ?? null,
+        }));
+        const gatewayScope = gatewayCredentialScope(currentOwner.gatewayUrl);
+        const originScope = gatewayOriginScope(currentOwner.gatewayUrl);
+        const bootRecord: unknown = JSON.parse(
+          warmState.storage.local.find(
+            ([key]) => key === `openclaw.control.bootRecord.v1:${gatewayScope}`,
+          )?.[1] ?? "null",
+        );
+        const savedSettings: unknown = JSON.parse(
+          warmState.storage.local.find(
+            ([key]) => key === `openclaw.control.settings.v1:${originScope}`,
+          )?.[1] ?? "null",
+        );
+        const savedSelection =
+          isRecord(savedSettings) && isRecord(savedSettings.sessionsByGateway)
+            ? savedSettings.sessionsByGateway[originScope]
+            : null;
         const cacheBeforeReload = {
+          currentSessionMatches: currentOwner.sessionKey === selectedKey,
+          savedSessionMatches:
+            isRecord(savedSelection) && savedSelection.sessionKey === selectedKey,
+          recoveryScopeReady: currentOwner.recoveryScopeReady,
+          bootScopeMatches: isRecord(bootRecord) && bootRecord.scope === gatewayScope,
+          bootOwnerMatches:
+            isRecord(bootRecord) &&
+            currentOwner.recoveryScope !== null &&
+            bootRecord.recoveryScope === currentOwner.recoveryScope,
+          bootProfileMatches:
+            isRecord(bootRecord) && bootRecord.profileId === currentOwner.profileId,
+          bootFromCurrentDocument:
+            isRecord(bootRecord) &&
+            typeof bootRecord.savedAt === "number" &&
+            bootRecord.savedAt >= startedAt,
           messages: warmState.messages,
           cursorPresent: isRecord(storedSnapshot) && typeof storedSnapshot.deltaCursor === "string",
           bootRecordPresent: warmState.storage.local.some(([key]) =>
