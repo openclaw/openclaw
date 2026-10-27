@@ -23,7 +23,7 @@ function assertNonBlankStringField(field: string, value: unknown) {
   if (typeof value !== "string" || !value.trim()) {
     const objectField = field.slice(0, field.lastIndexOf("."));
     throw new Error(
-      `${field} must be a non-empty string; omit ${objectField} if unused, or supply a valid target`,
+      `${field} must be a non-empty string; omit ${objectField} if unused, or supply a valid target. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds. If you cannot retry, tell the user the reminder was not saved.`,
     );
   }
 }

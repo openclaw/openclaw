@@ -193,14 +193,14 @@ describe("WebChat automation creation through the tool and Gateway", () => {
         patch: { name: "", schedule: { kind: "at", at: "" }, trigger: null },
       };
       await expect(tool.execute("blank-destination", args)).rejects.toThrow(
-        "omit delivery.failureDestination if unused, or supply a valid target",
+        "omit delivery.failureDestination if unused, or supply a valid target. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds.",
       );
       expect(await cron.list({ includeDisabled: true })).toEqual([]);
 
       // This main-session reminder needs no separate delivery destination.
       const retry = { ...args, job: { ...args.job, delivery: undefined } };
       await expect(tool.execute("incompatible-trigger", retry)).rejects.toThrow(
-        'schedule.kind="at" cannot include trigger. Remove trigger for a one-time reminder, or use a recurring every/cron schedule.',
+        'schedule.kind="at" cannot include trigger. Remove trigger for a one-time reminder, or use a recurring every/cron schedule. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds.',
       );
       expect(await cron.list({ includeDisabled: true })).toEqual([]);
 
