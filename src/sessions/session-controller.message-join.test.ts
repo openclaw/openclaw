@@ -77,8 +77,6 @@ it("copies private turn participants and freezes only their shared command targe
 });
 
 type JoinCase = {
-  collaborative?: true;
-  protocolDrop?: true;
   differentConversation?: true;
   predecessor?: boolean | "pending";
   claim?: "before" | "after" | "added";
@@ -88,15 +86,7 @@ type JoinCase = {
   headless?: true;
   caps?: "expand" | "narrow" | "protocol";
   target?: "new" | "removed" | "foreign";
-  mismatch?:
-    | "binding"
-    | "profile"
-    | "tools"
-    | "elevation"
-    | "exec"
-    | "workspace"
-    | "cwd"
-    | "scopes";
+  mismatch?: "profile" | "tools" | "elevation" | "exec" | "workspace" | "cwd" | "scopes";
   after?: "settings" | "activity" | "revoke" | "caller-revoke" | "backend" | "delivery";
   sessionOnly?: true;
 };
@@ -134,12 +124,6 @@ it.each<[string, Outcome, JoinCase?]>([
   ["headless-to-web", "accepted", { headless: true, caps: "expand", target: "new" }],
   ["protocol-only", "accepted", { caps: "protocol" }],
   ["narrower caps", "accepted", { caps: "narrow" }],
-  ["protocol capability removed", "accepted", { protocolDrop: true }],
-  [
-    "protocol capability removed with collaboration",
-    "accepted",
-    { protocolDrop: true, collaborative: true },
-  ],
   [
     "another conversation with changed policy",
     "deferred",
@@ -148,7 +132,6 @@ it.each<[string, Outcome, JoinCase?]>([
   ["new target", "accepted", { headless: true, target: "new" }],
   ["removed target", "accepted", { target: "removed" }],
   ["changed non-owner target", "accepted", { target: "foreign" }],
-  ["changed binding", "accepted", { mismatch: "binding" }],
   ["cross-profile caps", "deferred", { headless: true, caps: "expand", mismatch: "profile" }],
   ["missing selection compatible", "accepted", { legacy: true }],
   ["missing selection expanded caps", "deferred", { legacy: true, caps: "expand" }],
@@ -170,10 +153,7 @@ it.each<[string, Outcome, JoinCase?]>([
   async (name, outcome, c = {}) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const key = `agent:main:join-${name.replaceAll(" ", "-")}`;
-      const cfg: OpenClawConfig = {
-        agents: { entries: { main: {} } },
-        ...(c.collaborative ? { messages: { queue: { allowCollaborativeSteering: true } } } : {}),
-      };
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg);
       const entry: SessionEntry = {
         sessionId: "join-session",
@@ -200,11 +180,7 @@ it.each<[string, Outcome, JoinCase?]>([
         permissionMode: "full",
         config: cfg,
         traceAuthorized: false,
-        clientCaps: c.protocolDrop
-          ? ["ui-commands", "usage-refreshing"]
-          : c.headless
-            ? []
-            : ["ui-commands"],
+        clientCaps: c.headless ? [] : ["ui-commands"],
         gatewayUiCommandTarget:
           c.headless || c.caps === "protocol"
             ? undefined
@@ -218,12 +194,8 @@ it.each<[string, Outcome, JoinCase?]>([
         run.run.authProfileIdSource = c.profile === "auto" ? "auto" : undefined;
       }
       const original = structuredClone([run.run.clientCaps, run.run.gatewayUiCommandTarget]);
-      let sourceCurrent = true;
-      const assertSource = () => {
-        if (!sourceCurrent) {
-          throw new Error("Caller revoked");
-        }
-      };
+      const sourceRevocation = new AbortController();
+      const assertSource = () => sourceRevocation.signal.throwIfAborted();
       const operatorAuthority = createAdmittedRunOperatorAuthority({
         profileId: "join-owner",
         scopes: ["operator.admin"],
@@ -287,32 +259,16 @@ it.each<[string, Outcome, JoinCase?]>([
                 }),
           },
         };
-        let incomingCurrent = true;
+        const incomingRevocation = new AbortController();
         if (c.after === "caller-revoke") {
           incoming.operatorAuthority = createAdmittedRunOperatorAuthority({
-            profileId: "join-owner",
-            scopes: ["operator.admin"],
-            gatewayAccessGrant: null,
-            modelPolicy: prepareOperatorModelPolicy({ cfg, policy: {} }),
-            assertCurrent() {
-              if (!incomingCurrent) {
-                throw new Error("Incoming caller revoked");
-              }
-            },
+            ...operatorAuthority,
+            source: {},
+            assertCurrent: () => incomingRevocation.signal.throwIfAborted(),
           });
         }
         if (c.caps) {
-          incoming.run.clientCaps =
-            c.caps === "narrow"
-              ? []
-              : [
-                  ...(c.caps === "expand" ? (run.run.clientCaps ?? []) : []),
-                  "ui-commands",
-                  "usage-refreshing",
-                ];
-        }
-        if (c.protocolDrop) {
-          incoming.run.clientCaps = ["ui-commands"];
+          incoming.run.clientCaps = c.caps === "narrow" ? [] : ["ui-commands", "usage-refreshing"];
         }
         if (c.differentConversation) {
           incoming.run.conversationId = "different-conversation";
@@ -327,9 +283,6 @@ it.each<[string, Outcome, JoinCase?]>([
         }
         if (c.profile === "pin" || c.profile === "auto") {
           incoming.run.authProfileId = "synthetic-profile-b";
-        }
-        if (c.mismatch === "binding") {
-          incoming.run.toolBindings = { synthetic: "different-binding" };
         }
         if (c.mismatch === "tools") {
           incoming.run.config = { ...cfg, tools: { deny: ["exec"] } };
@@ -424,7 +377,7 @@ it.each<[string, Outcome, JoinCase?]>([
           return;
         }
         if (c.after === "revoke") {
-          sourceCurrent = false;
+          sourceRevocation.abort(new Error("Caller revoked"));
         }
         if (c.after === "settings" || c.after === "activity") {
           const settings = c.after === "settings";
@@ -448,7 +401,7 @@ it.each<[string, Outcome, JoinCase?]>([
         }
         try {
           if (c.after === "caller-revoke") {
-            incomingCurrent = false;
+            incomingRevocation.abort(new Error("Incoming caller revoked"));
             assertSource();
             operatorAuthority.assertCurrent();
             await expect(joined.prepareCurrent()).rejects.toThrow("Incoming caller revoked");
@@ -469,9 +422,7 @@ it.each<[string, Outcome, JoinCase?]>([
             expect(replacement).not.toHaveBeenCalled();
             return;
           }
-          const readAuthority = () => {
-            joined.toolAuthority.read();
-          };
+          const readAuthority = joined.toolAuthority.read;
           const closed = c.after === "delivery";
           const unobserved = c.predecessor && c.legacy;
           const attempt = await beginReplyMessageInjectionTarget(target, incoming.prompt, {

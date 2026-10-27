@@ -26,7 +26,6 @@ import {
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import { buildCommandContext } from "../../auto-reply/reply/commands.js";
 import { prepareReplyRunContext } from "../../auto-reply/reply/get-reply-run-context.js";
 import { baseParams } from "../../auto-reply/reply/get-reply-run.test-support.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
@@ -195,20 +194,15 @@ describe("steering input custody", () => {
           agents: ["main", "other"],
           modelPolicy: { allow: ["openai/gpt-test"] },
         };
-        const cfg = fixture.context.getRuntimeConfig();
-        const roleConfig: typeof cfg = {
-          ...cfg,
-          gateway: {
-            ...cfg.gateway,
-            roles: {
-              definitions: {
-                writer: role,
-                participant: { ...role, sessions: { others: "view" } },
-              },
+        steeringConfig.gateway = {
+          ...steeringConfig.gateway,
+          roles: {
+            definitions: {
+              writer: role,
+              participant: { ...role, sessions: { others: "view" } },
             },
           },
         };
-        fixture.context.getRuntimeConfig = () => roleConfig;
         fixture.client.connect.scopes = role.scopes;
         setUserProfileRole(profile.id, "writer");
         setUserProfileRole(incomingProfile.id, "participant");
@@ -248,12 +242,6 @@ describe("steering input custody", () => {
         incomingGrant,
         scenario === "changed grant" ? "replacement-grant" : "original-grant",
       );
-      if (sharedSecretOwner) {
-        prepareGatewayConnectOperatorAccess(originalClient);
-        prepareGatewayConnectOperatorAccess(reconnectedClient);
-        expect(originalClient.internal.operatorAccessAuthority).toBeUndefined();
-        expect(reconnectedClient.internal.operatorAccessAuthority).toBeUndefined();
-      }
       if (acrossProfiles) {
         reconnectedClient.authenticatedUserId = "other-steering@example.test";
         reconnectedClient.authenticatedUserProfile = {
@@ -264,10 +252,14 @@ describe("steering input custody", () => {
         if (scenario === "different scopes across profiles") {
           reconnectedClient.connect.scopes = ["operator.read", "operator.write"];
         }
-        prepareGatewayConnectOperatorAccess(originalClient);
-        prepareGatewayConnectOperatorAccess(reconnectedClient);
-        expect(originalClient.internal.operatorAccessAuthority).toBeNull();
-        expect(reconnectedClient.internal.operatorAccessAuthority).toBeNull();
+      }
+      if (sharedSecretOwner || acrossProfiles) {
+        for (const connection of [originalClient, reconnectedClient]) {
+          prepareGatewayConnectOperatorAccess(connection);
+          expect(connection.internal.operatorAccessAuthority).toBe(
+            sharedSecretOwner ? undefined : null,
+          );
+        }
       }
       let captured: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
       let operation = fixture.activeRun;
@@ -297,37 +289,17 @@ describe("steering input custody", () => {
           >[0];
           const ownerCtx = ownerDispatchParams.ctx;
           expect(ownerCtx).not.toHaveProperty("SenderId");
-          const ownerConfig = fixture.context.getRuntimeConfig();
           const prepared = await prepareReplyRunContext(
             baseParams({
+              ...fixture.scope,
               ctx: ownerCtx,
               sessionCtx: ownerCtx,
-              cfg: ownerConfig,
-              agentId: fixture.scope.agentId,
-              sessionKey: fixture.scope.sessionKey,
-              sessionId: fixture.scope.sessionId,
-              storePath: fixture.scope.storePath,
+              cfg: fixture.context.getRuntimeConfig(),
               isNewSession: false,
-              systemSent: true,
               provider: "openai",
               model: "gpt-test",
               opts: ownerDispatchParams.replyOptions,
               commandAuthorized: ownerCtx.CommandAuthorized === true,
-              command: buildCommandContext(
-                {
-                  ctx: ownerCtx,
-                  cfg: ownerConfig,
-                  agentId: fixture.scope.agentId,
-                  sessionKey: fixture.scope.sessionKey,
-                  isGroup: false,
-                  triggerBodyNormalized: ownerCtx.commandText ?? ownerCtx.Body ?? "",
-                },
-                resolveCommandAuthorization({
-                  cfg: ownerConfig,
-                  ctx: ownerCtx,
-                  commandAuthorized: ownerCtx.CommandAuthorized === true,
-                }),
-              ),
             }),
           );
           if (prepared.kind !== "ready") {
