@@ -449,6 +449,7 @@ const repositoryScriptEntries = [
   "scripts/perf/stream-dispatch-scope-measure.ts!",
   "scripts/perf/subagent-mutation-clone-measure.ts!",
   "scripts/perf/telegram-entity-sort-measure.mjs!",
+  "scripts/perf/telegram-token-owner-measure.mjs!",
   "scripts/perf/tool-result-owned-freeze-measure.ts!",
   "scripts/perf/tool-search-allowlist-measure.ts!",
   "scripts/perf/tools-catalog-copy-measure.ts!",
