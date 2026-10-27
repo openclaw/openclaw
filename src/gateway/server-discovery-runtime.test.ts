@@ -71,12 +71,12 @@ async function startDiscovery(
 
 const makeDiscoveryService = (
   id: string,
-  params: { pluginId?: string; stop?: () => void | Promise<void>; advertise?: Advertise } = {},
+  params: { stop?: () => void | Promise<void>; advertise?: Advertise } = {},
 ) => {
   const advertise = params.advertise ?? vi.fn(async () => ({ stop: params.stop }));
   return {
-    pluginId: params.pluginId ?? id,
-    pluginName: params.pluginId ?? id,
+    pluginId: id,
+    pluginName: id,
     source: "test",
     id: id.trim(),
     service: { id, advertise },
@@ -98,19 +98,11 @@ function expectCalls(...calls: [unknown, number][]) {
   }
 }
 
-function useDevelopmentDiscoveryEnv() {
-  process.env.NODE_ENV = "development";
-  delete process.env.VITEST;
-}
-
 function deferredAdvertisement(id: string, phase: "pending" | "ready" = "pending") {
   const result = createDeferredCore<{ stop: () => void }>();
-  const started = createDeferredCore();
   const stop = vi.fn();
-  const acquire: Advertise = () => {
-    started.resolve();
-    return phase === "pending" ? result.promise : Promise.resolve({ stop });
-  };
+  const acquire: Advertise = () =>
+    phase === "pending" ? result.promise : Promise.resolve({ stop });
   const advertise = vi.fn<Advertise>(acquire);
   releases.push(() => result.resolve({ stop }));
   return {
@@ -118,7 +110,6 @@ function deferredAdvertisement(id: string, phase: "pending" | "ready" = "pending
     advertise,
     acquire,
     stop,
-    started: started.promise,
     resolve: () => result.resolve({ stop }),
   };
 }
@@ -137,7 +128,8 @@ async function startTimedDiscovery(
 describe("startGatewayDiscovery", () => {
   const envSnapshot = captureFullEnv();
   beforeEach(() => {
-    useDevelopmentDiscoveryEnv();
+    process.env.NODE_ENV = "development";
+    delete process.env.VITEST;
     process.env.OPENCLAW_CLI_PATH = "/usr/local/bin/openclaw";
     delete process.env.OPENCLAW_TAILNET_DNS;
     logs = makeLogs();

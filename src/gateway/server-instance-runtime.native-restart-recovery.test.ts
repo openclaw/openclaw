@@ -50,7 +50,7 @@ import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-ap
 import type { createAgentTurnService } from "./agent-turn/agent-turn-service.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
-import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
+import { pairedOperator, recoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
@@ -108,11 +108,8 @@ describe("cold restart recovery of native operator input", () => {
       setRuntimeConfigSnapshot({});
       const context = createDirectChatContext({ trackExecution: trackAsyncWork });
       const profile = ensureProfileForEmail("stale-recovery@example.test");
-      const fixture = await createOperatorRecoveryFixture({
-        stateDir: state.stateDir,
+      const fixture = await recoveryFixture(state.stateDir, profile.id, {
         context,
-        profileId: profile.id,
-        config: {},
       });
       const target = { ...fixture.target, sessionId: "rotated-session" };
       await replaceSessionEntry(target, {
@@ -190,11 +187,8 @@ describe("cold restart recovery of native operator input", () => {
         const scopes = [
           scenario === "write operator" ? "operator.write" : "operator.sessions.write",
         ];
-        const fixture = await createOperatorRecoveryFixture({
-          stateDir: state.stateDir,
+        const fixture = await recoveryFixture(state.stateDir, profile.id, {
           context,
-          profileId: profile.id,
-          config: {},
           scopes,
           tokenlessDevice: scenario === "trusted proxy",
           sourceRunId:
@@ -370,10 +364,8 @@ describe("cold restart recovery of native operator input", () => {
         scenario === "role reassigned after admission"
           ? ensureProfileForEmail("native-recovery-operator@example.test")
           : ensureGatewayOwnerProfile("Recovery owner");
-      const fixture = await createOperatorRecoveryFixture({
-        stateDir: state.stateDir,
+      const fixture = await recoveryFixture(state.stateDir, owner.id, {
         context: makeContext(),
-        profileId: owner.id,
         config,
         sessionKey: SESSION,
         sessionId: SESSION_ID,
@@ -392,20 +384,8 @@ describe("cold restart recovery of native operator input", () => {
             ? "announce:requester-settle:main:parent:completed-child:yield-1"
             : undefined,
         device: {
+          ...pairedOperator(),
           deviceId: "native-recovery-device",
-          publicKey: "synthetic-public-key",
-          roles: ["operator"],
-          approvedScopes: ["operator.admin"],
-          tokens: {
-            operator: {
-              token: "synthetic-device-token",
-              role: "operator",
-              scopes: ["operator.admin"],
-              createdAtMs: 1,
-            },
-          },
-          createdAtMs: 1,
-          approvedAtMs: 1,
         },
       });
       expect(fixture.sourceAuthority.assertCurrent).toThrow("no longer active");
