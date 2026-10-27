@@ -184,6 +184,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       () => this.virtualizer,
       (range) => this.prependAnchor.extractRange(range, this.rowIndexesByKey, this.focusedRowKey),
       invalidate,
+      this.layout.rowMinimum,
     );
     this.mcpAppUnmountGate = createMcpAppUnmountGate(invalidate);
     this.positionRail = createPositionRailGutter(
@@ -372,9 +373,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       }
     }
     this.queueLayout();
-    if (!this.initialRange.pending && this.layout.ready) {
-      this.layout.persistRows(this.virtualizer);
-    }
+    this.layout.persistRows(this.virtualizer, this.initialRange.pending);
     // Disclosure measurement owns this commit; its sizer lands on the next update.
     if (interactionResizePending) {
       this.endAnchor.cancelReconcile();

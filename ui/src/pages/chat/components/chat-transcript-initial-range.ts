@@ -5,6 +5,7 @@ export class TranscriptInitialRange {
   private tailRows: number;
   private viewportOnly = false;
   private preparingOverscan = false;
+  private cachedWindow = false;
 
   get measuring(): boolean {
     return this.pending || this.preparingOverscan;
@@ -19,11 +20,46 @@ export class TranscriptInitialRange {
     private readonly virtualizer: () => Virtualizer<HTMLDivElement, HTMLElement>,
     private readonly normalRange: (range: Range) => number[],
     private readonly invalidate: () => void,
+    private readonly cachedRowSize: (index: number) => number,
   ) {
     this.tailRows = initialOffset === null ? 1 : 0;
   }
 
   extract(range: Range): number[] {
+    if (this.pending) {
+      let startIndex = range.startIndex;
+      if (this.tailRows) {
+        const virtualizer = this.virtualizer();
+        const height = virtualizer.scrollRect?.height ?? virtualizer.options.initialRect.height;
+        startIndex = range.count - 1;
+        let covered = this.cachedRowSize(startIndex);
+        while (startIndex > 0 && covered > 0 && covered < height) {
+          const size = this.cachedRowSize(--startIndex);
+          if (!size) {
+            break;
+          }
+          covered += size + virtualizer.options.gap;
+        }
+      }
+      const cachedRange = {
+        ...range,
+        startIndex,
+        endIndex: this.tailRows ? range.count - 1 : range.endIndex,
+      };
+      let indexes = this.normalRange(cachedRange);
+      const cachedWindow = indexes.every((index) => this.cachedRowSize(index) > 0);
+      if (!cachedWindow && this.tailRows) {
+        indexes = this.normalRange({ ...cachedRange, overscan: 0 });
+      }
+      if (indexes.length && indexes.every((index) => this.cachedRowSize(index) > 0)) {
+        // Exact-width footprints cover the viewport and overscan; no measurement ladder is needed.
+        if (this.tailRows) {
+          this.tailRows = range.count - indexes[0]!;
+        }
+        this.cachedWindow = cachedWindow;
+        return indexes;
+      }
+    }
     if (!this.tailRows) {
       return this.normalRange(this.viewportOnly ? { ...range, overscan: 0 } : range);
     }
@@ -75,7 +111,7 @@ export class TranscriptInitialRange {
 
   complete(): void {
     if (this.pending) {
-      this.finish(true);
+      this.finish(!this.cachedWindow);
     } else {
       this.preparingOverscan = false;
     }
