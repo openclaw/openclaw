@@ -106,6 +106,7 @@ async function runDoctorConfigPreflightOperation(
   let modelBillingRouteMigrationSource: OpenClawConfig | undefined;
   let heartbeatMigrationSource: OpenClawConfig | undefined;
   let heartbeatMigrationDeferred = false;
+  let rehearsalCronMigrationDeferred = false;
   let cronStoreSelectionUnresolved = false;
   const preflightWarnings: string[] = [];
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
@@ -189,7 +190,9 @@ async function runDoctorConfigPreflightOperation(
   ) =>
     (options.repairPrefixedConfig === true ||
       (stateMigrationsRequested && options.migrateLegacyConfig !== false)) &&
-    !heartbeatMigrationDeferred &&
+    // A released updater may omit cron identity while injecting retired heartbeat
+    // config. Only its disposable, cron-disabled copy may project without migration.
+    (!heartbeatMigrationDeferred || rehearsalCronMigrationDeferred) &&
     canPlanAutomaticConfigRepair(configSnapshot) &&
     !skipLegacyParentConfigWrite &&
     (options.repairPrefixedConfig === true ||
@@ -290,8 +293,16 @@ async function runDoctorConfigPreflightOperation(
       if (projected && !isDeepStrictEqual(projected, source)) {
         heartbeatMigrationDeferred = true;
         automaticConfigRepair = null;
-        const warning =
-          "Run openclaw doctor --fix interactively to select the cron partition and migrate heartbeat settings. The original config was retained.";
+        const { canDeferRehearsalCronMigration } =
+          await import("../config/io.cron-owner-refusal.js");
+        rehearsalCronMigrationDeferred = await canDeferRehearsalCronMigration(
+          source,
+          snapshot.path,
+          process.env,
+        );
+        const warning = rehearsalCronMigrationDeferred
+          ? "Update rehearsal: cron and heartbeat data migration is deferred because the source cron partition is unknown. Only the disposable config is projected for validation; original state and config are unchanged."
+          : "Run openclaw doctor --fix interactively to select the cron partition and migrate heartbeat settings. The original config was retained.";
         preflightWarnings.push(warning);
         note(warning, "Doctor warning");
       }

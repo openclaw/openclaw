@@ -7,9 +7,11 @@ import { restoreOperatorModelPolicySnapshot } from "../agents/operator-model-pol
 import type { RequesterOrigin } from "../agents/requester-origin.js";
 import { readRestartRecoveryRequesterSource } from "../agents/requester-run-recovery-source.js";
 import { prepareCommandOwnerAuthority } from "../auto-reply/command-auth.js";
+import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
@@ -38,6 +40,7 @@ import {
 } from "./operator-access-policy.js";
 import {
   onOperatorRolePolicyChanged,
+  readOperatorRoleConfigRevision,
   resolveOperatorRolePolicyForAssignment,
 } from "./operator-role-policy.js";
 import {
@@ -189,15 +192,14 @@ async function restoreGatewayOperatorSnapshot(params: {
       subscriptions.push(releaseDeviceNotification);
     }
     let authPolicy: GatewayAuthPolicy = snapshot.authPolicy;
+    let sourceConfig: OpenClawConfig | undefined;
+    let sourceRevision: object | undefined;
+    let sourcePublication: object | undefined;
     const assertSourcePolicy = () => {
       assertLifetime();
       const cfg = getConfig();
-      const role = resolveOperatorRolePolicyForAssignment(
-        snapshot.profileId,
-        snapshot.assignedRole,
-        cfg,
-        snapshot.githubLogin,
-      );
+      const revision = readOperatorRoleConfigRevision(gatewayOwner);
+      const publication = runtimeConfigPublication.current?.revision;
       if (
         !device.isCurrent() ||
         (snapshot.sharedGeneration !== undefined &&
@@ -206,11 +208,21 @@ async function restoreGatewayOperatorSnapshot(params: {
         throw new Error("Restart recovery operator source policy changed.");
       }
       if (
-        !isOperatorRoleSourcePolicyCurrent(
-          snapshot.rolePolicy,
-          sourceRolePolicy(role),
-          snapshot.scopes,
-        ) ||
+        ((cfg !== sourceConfig ||
+          revision !== sourceRevision ||
+          publication !== sourcePublication) &&
+          !isOperatorRoleSourcePolicyCurrent(
+            snapshot.rolePolicy,
+            sourceRolePolicy(
+              resolveOperatorRolePolicyForAssignment(
+                snapshot.profileId,
+                snapshot.assignedRole,
+                cfg,
+                snapshot.githubLogin,
+              ),
+            ),
+            snapshot.scopes,
+          )) ||
         !isGatewayAuthGrantCurrent(authPolicy, cfg)
       ) {
         throw new GatewayOperatorRecoveryAuthorizationError(
@@ -219,6 +231,11 @@ async function restoreGatewayOperatorSnapshot(params: {
       }
       // Retain this config's issued policy only after validating the original grant.
       authPolicy = captureGatewayAuthPolicy(cfg, authPolicy);
+      // The decoded admission is frozen. Reconcile it once per live owner's publication;
+      // profile assignments, device lifetime, and plugin grants still check every use.
+      sourceConfig = cfg;
+      sourceRevision = revision;
+      sourcePublication = publication;
       return cfg;
     };
     let assertPolicy = assertSourcePolicy;
