@@ -117,7 +117,7 @@ retired `maintenance.reviewJobId` setting fails validation; run
 `openclaw doctor --fix` to remove it.
 
 The review edits private knowledge, so its automation must run in a session
-with the owner's private access. Turn on **Review unlinked claims** from the
+with the owner's private access. Turn on **Consolidate unlinked claims** from the
 [Scribes](/plugins/knowledge/scribes) tab of the Knowledge page. To start it
 without the Control UI, open a new conversation in the owner's direct chat and
 send the prompt the Scribes tab would send; the

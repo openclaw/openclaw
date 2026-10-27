@@ -1,7 +1,7 @@
 /** The scribes Knowledge can start, their options, and the readable prompts that start, run and repair them. */
 import type { IconName } from "./ui-icons.js";
 
-export type ScribeId = "unlinked-review" | "conversations" | "memory";
+export type ScribeId = "claim-consolidation" | "conversations" | "memory";
 export type ScribeMode = "once" | "ongoing";
 export type ConversationScope = "active" | "all";
 export type ConversationSince = "30d" | "90d" | "all" | "today";
@@ -10,7 +10,7 @@ export type ReviewSchedule = typeof REVIEW_WEEKLY_SCHEDULE | typeof REVIEW_NIGHT
 
 /** Dialog choices for each scribe; the prompts spell them out as settings. */
 export type ScribeOptions = {
-  "unlinked-review": { schedule: ReviewSchedule };
+  "claim-consolidation": { schedule: ReviewSchedule };
   conversations: { scope: ConversationScope; since: ConversationSince; schedule?: string };
   memory: { sources: MemorySource[] };
 };
@@ -49,17 +49,17 @@ export const REVIEW_NIGHTLY_SCHEDULE = "45 3 * * *";
 
 export const SCRIBES: readonly ScribeDefinition[] = [
   {
-    id: "unlinked-review",
-    title: "Review unlinked claims",
+    id: "claim-consolidation",
+    title: "Consolidate unlinked claims",
     blurb:
-      "Weekly or nightly, files claims that name no page, creates pages for subjects that deserve one, and folds outcomes into page State.",
+      "Weekly or nightly, files claims that name no page on their subject pages, creates pages for subjects that deserve one, supersedes status snapshots by their outcome, and folds outcomes into page State.",
     skill: "knowledge-maintenance",
     icon: "link",
     tone: "blue",
     modes: ["ongoing"],
     cadence: "Ongoing",
     startLabel: "Turn on…",
-    dialogTitle: "Review unlinked claims",
+    dialogTitle: "Consolidate unlinked claims",
     submitLabel: "Turn on",
   },
   {
@@ -109,7 +109,7 @@ export const setupIdempotencyKey = (id: ScribeId, sessionKey: string, attempt: s
 /** Default dialog choices: conservative (weekly review; active conversations, last 30 days). */
 export function defaultOptions<Id extends ScribeId>(id: Id): ScribeOptions[Id] {
   const defaults: ScribeOptions = {
-    "unlinked-review": { schedule: REVIEW_WEEKLY_SCHEDULE },
+    "claim-consolidation": { schedule: REVIEW_WEEKLY_SCHEDULE },
     conversations: { scope: "active", since: "30d", schedule: CONVERSATIONS_SCHEDULE },
     memory: { sources: ["memory-md", "daily-notes"] },
   };
@@ -174,8 +174,8 @@ function workSettings(setup: ScribeSetup) {
 
 // What the scribe does, and the skill that does the work.
 const PURPOSE: Record<ScribeId, string> = {
-  "unlinked-review":
-    "This scribe reviews Knowledge claims that name no page: it files each one on the right page, creates pages for subjects that deserve one, supersedes status snapshots by their outcome, and folds the outcomes into page State.",
+  "claim-consolidation":
+    "This scribe consolidates Knowledge claims that name no page: it files each one on the right page, creates pages for subjects that deserve one, supersedes status snapshots by their outcome, and folds the outcomes into page State.",
   conversations:
     "This scribe reads the owner's conversations and saves the decisions, preferences, commitments and lessons in them to Knowledge.",
   memory:
@@ -184,8 +184,8 @@ const PURPOSE: Record<ScribeId, string> = {
 
 // The work step: the skill section that does it, applied to the settings.
 const WORK: Record<ScribeId, string> = {
-  "unlinked-review":
-    'Follow the "Scribe runs" section of the knowledge-maintenance skill: review every claim that names no page until none is left to decide.',
+  "claim-consolidation":
+    'Follow the "Scribe runs" section of the knowledge-maintenance skill: consolidate every claim that names no page until none is left to decide.',
   conversations:
     'Follow "Learn from conversations" in the "Scribe runs" section of the knowledge-ingest skill, for the conversations in the settings.',
   memory:
@@ -194,7 +194,7 @@ const WORK: Record<ScribeId, string> = {
 
 // What the closing sentence counts after the work.
 const COUNTS: Record<ScribeId, string> = {
-  "unlinked-review": "claims examined, linked, superseded, withdrawn and left",
+  "claim-consolidation": "claims examined, linked, superseded, withdrawn and left",
   conversations: "conversations learned and skipped, claims and pages written",
   memory: "files read, items saved, already known and skipped",
 };

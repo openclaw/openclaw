@@ -244,7 +244,7 @@ See [Maintenance](/plugins/knowledge/maintenance).
 ## Scribes
 
 The **Scribes** tab starts conversations that keep a store up to date on their
-own: reviewing unlinked claims after maintenance, learning from conversations
+own: consolidating unlinked claims after maintenance, learning from conversations
 once or daily, and importing Memory once. Each follows a bundled skill; ongoing
 scribes schedule themselves as OpenClaw automations.
 
