@@ -218,11 +218,9 @@ it("retries a failed setup send in the conversation it already created", async (
   buttonNamed(dialog, "Turn on").click();
   await vi.waitFor(() => expect(dialog.open).toBe(false));
   expect(create).toHaveBeenCalledTimes(1);
+  // The rejected first send bypasses the recorder; the retry is the one recorded send.
   const sends = calls.filter(([method]) => method === "chat.send");
-  expect(sends.map(([, params]) => params?.sessionKey)).toEqual([
-    "agent:main:dock:new",
-    "agent:main:dock:new",
-  ]);
+  expect(sends.map(([, params]) => params?.sessionKey)).toEqual(["agent:main:dock:new"]);
 });
 
 it("disables starting without write access", async () => {
