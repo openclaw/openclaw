@@ -10,6 +10,7 @@ import type {
   UsersListModelAccountsResult,
   UsersSelfResult,
 } from "../../../packages/gateway-protocol/src/schema/users.js";
+import { createCliTtyMock } from "../../cli/test-runtime-capture.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildMinimalGatewayHelloOkPayload,
@@ -251,26 +252,16 @@ function waitForPromptAbort(): void {
   );
 }
 
-const ttyDescriptors = [process.stdin, process.stderr].map(
-  (stream) => [stream, Object.getOwnPropertyDescriptor(stream, "isTTY")] as const,
-);
+const tty = createCliTtyMock([process.stdin, process.stderr]);
 beforeEach(() => {
-  for (const [stream] of ttyDescriptors) {
-    Object.defineProperty(stream, "isTTY", { configurable: true, value: true });
-  }
+  tty.set(true);
   mocks.password.mockReset();
   mocks.autocomplete.mockReset();
   mocks.openUrl.mockClear();
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const [stream, descriptor] of ttyDescriptors) {
-    if (descriptor) {
-      Object.defineProperty(stream, "isTTY", descriptor);
-    } else {
-      Reflect.deleteProperty(stream, "isTTY");
-    }
-  }
+  tty.restore();
 });
 
 describe("personal model account CLI over an identified Gateway connection", () => {
