@@ -20,7 +20,6 @@ import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-lo
 import { reclaimAbandonedSqliteSnapshotsAsync } from "./sqlite-snapshot-reclamation.js";
 import { sqliteSnapshotStagingEntrypoints } from "./sqlite-snapshot-staging-runtime.test-support.js";
 import {
-  acquireSqliteSnapshotReadToken,
   createSqliteSnapshotStagingDirectory,
   createSqliteSnapshotStagingDirectorySync,
   createSqliteSnapshotStagingTokenSync,
@@ -132,10 +131,6 @@ async function reclaimWithLog(root: string, cache: string) {
   return fs.readFileSync(log, "utf8");
 }
 
-function drainReclamation(cache: string, report?: (message: string) => void) {
-  Array.from(reclaimAbandonedSqliteSnapshots(cache, report));
-}
-
 function assertReadable(location: string) {
   using database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
   expect(database.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
@@ -154,16 +149,21 @@ function ageSnapshotTree(directory: string, ageMs = 25 * 60 * 60 * 1000): void {
   fs.utimesSync(directory, stale, stale);
 }
 
-function legacySnapshot(
+function snapshotFixture(
   cache: string,
   name: string,
   bytes: string | Buffer,
   relative = "database.sqlite",
+  current = false,
 ) {
-  const root = path.join(cache, `openclaw-sqlite-readonly-12345-${name}`);
+  const root = path.join(cache, `openclaw-sqlite-readonly-${current ? "v2" : "12345"}-${name}`);
   const location = path.join(root, relative);
   fs.mkdirSync(path.dirname(location), { recursive: true });
   fs.writeFileSync(location, bytes);
+  if (current) {
+    fs.writeFileSync(path.join(root, "owner.sqlite"), "");
+    fs.writeFileSync(path.join(path.dirname(location), "owner.sqlite"), "");
+  }
   ageSnapshotTree(root);
   return { root, location };
 }
@@ -280,7 +280,7 @@ it("keeps timers responsive while async allocation reclaims a legacy backlog", a
   setLoggerOverride({ level: "silent", file: path.join(root, "cleanup.log") });
   const payload = Buffer.alloc(1024 * 1024);
   for (let index = 0; index < 429; index++) {
-    legacySnapshot(cache, index.toString(36).padStart(6, "0"), payload);
+    snapshotFixture(cache, index.toString(36).padStart(6, "0"), payload);
   }
 
   let previous = performance.now();
@@ -306,44 +306,42 @@ it("keeps timers responsive while async allocation reclaims a legacy backlog", a
   expect(fs.readdirSync(cache)).toEqual([]);
 });
 
-it.each(["worker", "legacy"] as const)(
+const temporaryPayload = ".fs-safe-03b4546f-c812-43a1-a63a-afdd917a6f8a.tmp";
+it.each([
+  ["worker", "openclaw/openclaw-sqlite-readonly-12345-Worker/database.sqlite", false],
+  ["legacy", "database.sqlite", false],
+  ["flat", temporaryPayload, true],
+  ["nested", `openclaw-sqlite-readonly-v2-37qLgI/${temporaryPayload}`, true],
+] as const)(
   "reclaims only stale %s snapshots without modifying recent descendants",
-  async (layout) => {
+  async (layout, relative, current) => {
     const { root, cache, source } = createFixture();
-    const nested = path.join(
-      "openclaw",
-      "openclaw-sqlite-readonly-12345-Worker",
-      "database.sqlite",
-    );
-    const bytes =
-      layout === "worker" ? fs.readFileSync(source) : Buffer.from("legacy interrupted snapshot");
-    const old = legacySnapshot(
-      cache,
-      "Older1",
-      bytes,
-      layout === "worker" ? nested : "database.sqlite",
-    );
-    const young = legacySnapshot(
-      cache,
-      "Young1",
-      layout === "worker" ? bytes : "recently active legacy copy",
-      layout === "worker" ? nested : "first",
-    );
-    const recent = new Date(Date.now() - (layout === "worker" ? 0 : 23 * 60 * 60 * 1000));
+    const bytes = current ? Buffer.alloc(4 * 1024 * 1024, 0x5a) : fs.readFileSync(source);
+    const capture = (name: string, filename: string = relative) =>
+      snapshotFixture(cache, name, bytes, filename, current);
+    const old = capture("Older1");
+    const young = capture("Young1", layout === "legacy" ? "first" : relative);
+    const unknown = capture("Unkn01");
+    const unknownFile = path.join(path.dirname(unknown.location), "unknown");
+    fs.writeFileSync(unknownFile, "preserve");
+    ageSnapshotTree(unknown.root);
+    const recent = new Date(Date.now() - (layout === "legacy" ? 23 * 60 * 60 * 1000 : 0));
     fs.utimesSync(young.location, recent, recent);
     const mtime = fs.statSync(young.root).mtimeMs;
     const log = await reclaimWithLog(root, cache);
-    expect([fs.existsSync(old.root), fs.existsSync(young.root)]).toEqual([false, true]);
+    expect([old.root, young.root, unknown.root].map(fs.existsSync)).toEqual([false, true, true]);
     expect(log).toContain(`Reclaimed ${bytes.length} bytes`);
-    if (layout === "worker") {
+    if (!current) {
       assertReadable(young.location);
-      expect(log).toContain("Skipped SQLite snapshot reclamation");
-      expect(fs.existsSync(path.join(path.dirname(young.location), "owner.sqlite"))).toBe(false);
-    } else {
-      expect(fs.readFileSync(young.location, "utf8")).toBe("recently active legacy copy");
       expect(fs.statSync(young.root).mtimeMs).toBe(mtime);
     }
-    expect(fs.existsSync(path.join(young.root, "owner.sqlite"))).toBe(false);
+    expect(log).toContain("Skipped SQLite snapshot reclamation");
+    expect(fs.readFileSync(young.location).equals(bytes)).toBe(true);
+    expect(fs.readFileSync(unknown.location).equals(bytes)).toBe(true);
+    expect(fs.readFileSync(unknownFile, "utf8")).toBe("preserve");
+    for (const directory of new Set([young.root, path.dirname(young.location)])) {
+      expect(fs.existsSync(path.join(directory, "owner.sqlite"))).toBe(current);
+    }
   },
 );
 
@@ -357,13 +355,10 @@ it.each(["sync", "async"] as const)(
 
     const allocated = createSqliteSnapshotStagingDirectorySync(cache);
     try {
-      const reclaim = async () => {
-        if (mode === "async") {
-          await reclaimAbandonedSqliteSnapshotsAsync(cache);
-        } else {
-          drainReclamation(cache);
-        }
-      };
+      const reclaim = () =>
+        mode === "async"
+          ? reclaimAbandonedSqliteSnapshotsAsync(cache)
+          : Array.from(reclaimAbandonedSqliteSnapshots(cache));
       await reclaim();
       expect(fs.existsSync(abandoned)).toBe(true);
       ageSnapshotTree(abandoned, 30 * 60 * 1000);
@@ -390,12 +385,12 @@ it("reclaims one oversized abandoned snapshot per pass without starving the next
   });
   const reports: string[] = [];
   try {
-    drainReclamation(cache, (message) => reports.push(message));
+    Array.from(reclaimAbandonedSqliteSnapshots(cache, (message) => reports.push(message)));
     expect(abandoned.filter((directory) => fs.existsSync(directory))).toHaveLength(1);
     expect(reports).toContain(
       `Reclaimed ${512 * 1024 * 1024 + 1} bytes of interrupted SQLite snapshot data.`,
     );
-    drainReclamation(cache, () => {});
+    Array.from(reclaimAbandonedSqliteSnapshots(cache, () => {}));
     expect(abandoned.some((directory) => fs.existsSync(directory))).toBe(false);
   } finally {
     for (const directory of abandoned) {
@@ -403,63 +398,6 @@ it("reclaims one oversized abandoned snapshot per pass without starving the next
     }
   }
 });
-
-it.each(["abandoned", "unknown", "malformed", "recent", "live", "symlink"] as const)(
-  "handles %s nested fs-safe snapshot payloads without relaxing reclamation guards",
-  (kind) => {
-    const { cache, source } = createFixture();
-    const parent = path.join(cache, "openclaw-sqlite-readonly-v2-i6lre8");
-    const child = path.join(parent, "openclaw-sqlite-readonly-v2-37qLgI");
-    fs.mkdirSync(child, { recursive: true });
-    for (const directory of [parent, child]) {
-      fs.writeFileSync(path.join(directory, "owner.sqlite"), "");
-    }
-    const payload = path.join(child, ".fs-safe-03b4546f-c812-43a1-a63a-afdd917a6f8a.tmp");
-    const bytes = Buffer.alloc(4 * 1024 * 1024, 0x5a);
-    if (kind === "symlink") {
-      fs.symlinkSync(path.dirname(source), payload, "junction");
-    } else {
-      fs.writeFileSync(payload, bytes);
-    }
-    if (kind === "unknown" || kind === "malformed") {
-      fs.writeFileSync(
-        path.join(
-          child,
-          kind === "unknown" ? "unknown" : ".fs-safe-03b4546f-c812-13a1-a63a-afdd917a6f8a.tmp",
-        ),
-        "preserve",
-      );
-    }
-    ageSnapshotTree(parent, 30 * 60 * 1000);
-    if (kind === "recent") {
-      const now = new Date();
-      fs.utimesSync(payload, now, now);
-    }
-    const release = kind === "live" ? acquireSqliteSnapshotReadToken(child) : undefined;
-    const reports: string[] = [];
-    try {
-      drainReclamation(cache, (message) => reports.push(message));
-      expect(fs.existsSync(parent)).toBe(kind !== "abandoned");
-      if (kind === "abandoned") {
-        expect(reports).toContain(
-          `Reclaimed ${bytes.length} bytes of interrupted SQLite snapshot data.`,
-        );
-      } else {
-        expect(
-          reports.some((message) => message.startsWith("Skipped SQLite snapshot reclamation:")),
-        ).toBe(true);
-        if (kind === "symlink") {
-          expect(fs.lstatSync(payload).isSymbolicLink()).toBe(true);
-        } else {
-          expect(fs.readFileSync(payload).equals(bytes)).toBe(true);
-        }
-      }
-      assertReadable(source);
-    } finally {
-      release?.();
-    }
-  },
-);
 
 it.skipIf(process.platform === "win32")(
   "reclaims abandoned mixed-generation snapshots while preserving live or recent children",
