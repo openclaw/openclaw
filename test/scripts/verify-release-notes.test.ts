@@ -352,7 +352,7 @@ describe("release-note verification", () => {
   it("credits human maintainers but excludes automation identities", () => {
     expect(isEligibleHandle("human-contributor")).toBe(true);
     expect(isEligibleHandle("steipete")).toBe(true);
-    expect(isEligibleHandle("steipete-oai")).toBe(true);
+    expect(isEligibleHandle("steipete-oai")).toBe(false);
     expect(isEligibleHandle("hugin-bot")).toBe(false);
     expect(isEligibleHandle("roboclaw-bot")).toBe(false);
   });
@@ -1101,7 +1101,7 @@ Release provenance for ${hash} -> #3`
       `${git(cwd, ["log", "-1", "--format=%B"])}\nCo-authored-by: RomneyDa <6581799+RomneyDa@users.noreply.github.com>`,
     ]);
     const target = git(cwd, ["rev-parse", "HEAD"]);
-    const stale = `${changelog}- Preserve playback errors. (#21) Thanks @RomneyDa.\n\n${contributionRecord(base, target, ["- **PR #21** Related #20. Thanks @RomneyDa."])}`;
+    const stale = `${changelog}- Preserve playback errors by @steipete and @original-helper. (#21) Thanks @RomneyDa.\n\n${contributionRecord(base, target, ["- **PR #21** Related #20. Thanks @RomneyDa."])}`;
     writeFileSync(join(cwd, "CHANGELOG.md"), stale);
     const seed = commitAll(cwd, "docs: old credit");
     const gh = join(cwd, "gh");

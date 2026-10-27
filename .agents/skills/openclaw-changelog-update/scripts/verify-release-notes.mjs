@@ -42,6 +42,7 @@ const excludedHandles = new Set([
   "codex",
   "hugin-bot",
   "roboclaw-bot",
+  "steipete-oai",
 ]);
 const nonEditorialTypes = new Set([
   "build",
@@ -679,14 +680,9 @@ function handlesIn(text) {
   if (thanksStart < 0) {
     return [];
   }
-  const content = text.slice(0, thanksStart);
   return [...text.slice(thanksStart).matchAll(/@([A-Za-z0-9-]+)/g)]
     .map((match) => match[1])
-    .filter(
-      (handle) =>
-        isEligibleHandle(handle) &&
-        !new RegExp(`(?<![A-Za-z0-9-])@${escapeRegExp(handle)}\\b`, "i").test(content),
-    );
+    .filter(isEligibleHandle);
 }
 
 function externalReferencesIn(text) {

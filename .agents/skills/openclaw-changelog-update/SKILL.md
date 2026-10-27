@@ -263,7 +263,8 @@ of this skill; initial generation must never overwrite them.
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
    - credit verified human authors, including maintainers such as `@steipete`.
-     Never thank bots, `@claude`, `@codex`, `@openclaw`, or `@clawsweeper`
+     Never thank bots, known automation accounts such as `@steipete-oai`,
+     `@claude`, `@codex`, `@openclaw`, or `@clawsweeper`
    - do not use GitHub's release contributor count as the source of truth; the
      changelog must carry the complete human credit set itself
 7. Sorting preference:

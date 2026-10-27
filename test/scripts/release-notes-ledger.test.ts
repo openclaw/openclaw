@@ -123,6 +123,45 @@ describe("renderContributionRecordEntry", () => {
     );
   });
 
+  it.each([
+    { thanks: " Thanks @alice and @bob.", expected: [] },
+    {
+      thanks: "",
+      expected: [
+        "missing editorial Thanks @alice for PR #456",
+        "missing editorial Thanks @bob for directly landed work",
+      ],
+    },
+    {
+      thanks: " Thanks @alice and @bob and @outsider.",
+      expected: ["unexpected editorial Thanks @outsider"],
+    },
+  ])(
+    "validates explicit PR and direct-work thanks despite earlier mentions: '$thanks'",
+    ({ thanks, expected }) => {
+      const entry = recordEntry({ editorialEligible: true, thanks: ["alice"] });
+      const source = recordSection("- **PR #456** Thanks @alice.").replace(
+        "### Fixes",
+        `### Fixes\n\n- Restore playback errors by @alice and @bob; reported alongside @outsider. (#456)${thanks}`,
+      );
+      const directCommits = [
+        {
+          subject: "fix: restore playback errors",
+          closingReferences: [],
+          contributors: ["bob"],
+        },
+      ];
+      expect(
+        ledgerChecks(
+          { source },
+          [entry],
+          new Map([[456, { __typename: "PullRequest" }]]),
+          directCommits,
+        ),
+      ).toEqual(expected);
+    },
+  );
+
   it("rebuilds seeded references without trusting old credits", () => {
     const related = "Related #45, OpenClaw/imsg#141, #67.";
     const priorRecord = contributionRecordFor({
