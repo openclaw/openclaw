@@ -54,9 +54,9 @@ type PlacementRow = {
 
 async function placeRow(
   placements: ReturnType<typeof createWorkerSessionPlacementStore>,
-  key: string,
   sessionId: string,
-  entry: Partial<SessionEntry>,
+  entry: Partial<SessionEntry> = {},
+  key = `agent:main:${sessionId}`,
 ): Promise<PlacementRow> {
   seedRow(key, { sessionId, updatedAt: 1, ...entry });
   return {
@@ -129,7 +129,7 @@ async function heldPlacementReads(
   for (let index = 0; index < sessionCount; index++) {
     const sessionId = options.sessionId?.(index) ?? `held-placement-${index}`;
     const key = `agent:main:held-placement-${index}`;
-    rows.push(await placeRow(placements, key, sessionId, { archivedAt: 1 }));
+    rows.push(await placeRow(placements, sessionId, { archivedAt: 1 }, key));
   }
   const entered = createDeferredCore();
   const atCapacity = createDeferredCore();
@@ -353,18 +353,20 @@ it.each(["stores", "config"] as const)(
 it("keeps exact category reads independent of bulk placement preparation", async ({ signal }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const placements = createWorkerSessionPlacementStore();
-    const rows: PlacementRow[] = [];
-    for (const name of ["exact", "bulk"]) {
-      const sessionId = `independent-placement-${name}`;
-      const key = `agent:main:${sessionId}`;
-      rows.push(
-        await placeRow(placements, key, sessionId, {
-          label: name === "exact" ? "Fresh exact description" : undefined,
-        }),
-      );
-    }
-    const exactRow = rows[0]!;
-    const bulkRow = rows[1]!;
+    const exactRow = await placeRow(placements, "independent-placement-exact", {
+      label: "Fresh exact description",
+    });
+    const bulkRow = await placeRow(placements, "independent-placement-bulk");
+    const rows = [exactRow, bulkRow];
+    const provision = async (row: PlacementRow) => {
+      row.placement = await placements.transition({
+        sessionId: row.sessionId,
+        from: "requested",
+        to: "provisioning",
+        expectedGeneration: row.placement.generation,
+      });
+      reportPlacementTransition(undefined, row.placement);
+    };
     const bulkEntered = createDeferredCore();
     const releaseBulk = createDeferredCore();
     let holdBulk = false;
@@ -392,23 +394,11 @@ it("keeps exact category reads independent of bulk placement preparation", async
     try {
       await projection.ensureMaterialized();
       holdBulk = true;
-      bulkRow.placement = await placements.transition({
-        sessionId: bulkRow.sessionId,
-        from: "requested",
-        to: "provisioning",
-        expectedGeneration: bulkRow.placement.generation,
-      });
-      reportPlacementTransition(undefined, bulkRow.placement);
+      await provision(bulkRow);
       const bulk = projection.ensureMaterialized();
       pending.push(Promise.allSettled([bulk]));
       await waitForRead(bulkEntered.promise, bulk, signal, "Bulk placement refresh did not enter");
-      exactRow.placement = await placements.transition({
-        sessionId: exactRow.sessionId,
-        from: "requested",
-        to: "provisioning",
-        expectedGeneration: exactRow.placement.generation,
-      });
-      reportPlacementTransition(undefined, exactRow.placement);
+      await provision(exactRow);
       const sql = observeHostDataSql();
       sessionChanges.emit({ sessionKey: exactRow.key, factsInvalidated: "category" });
       const { respond, completion: description } = describeSession(

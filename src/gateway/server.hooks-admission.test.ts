@@ -411,92 +411,72 @@ function withRevokedHook(
 }
 
 describe("gateway hook admission", () => {
-  test("joins the initial config reconcile before accepting the first hook", async ({ signal }) => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    let ready = false;
-    const startReloader = configReload.startGatewayConfigReloader;
-    vi.spyOn(configReload, "startGatewayConfigReloader").mockImplementation((options) => {
-      let initial = true;
-      const reloader = startReloader({
-        ...options,
-        readSnapshot: async (...args) => {
-          if (initial) {
-            initial = false;
-            entered.resolve();
-            await release.promise;
-          }
-          return options.readSnapshot(...args);
-        },
-      });
-      void reloader.ready.then(() => {
-        ready = true;
-      });
-      return reloader;
-    });
-    await writeReloadableHooksConfig(enabledHooks);
-    await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: "0" }, async () => {
-      installHookReplyRuntime();
-      const admitted = createDeferred<HookReceipt>();
-      observeHookReceipts((_text, receipt) => admitted.resolve(receipt));
-      const request = withGatewayServer(async ({ port, server }) => {
-        await server.startupSettled;
-        await waitForGatewayStartup(port);
-        await expectResponse(await postWake(port, "first-hook", "first"));
-        await expect((await admitted.promise).settled).resolves.toMatchObject({
-          status: "completed",
-        });
-      });
-      try {
-        await waitForGate(entered.promise, request, signal, "Gateway skipped initial reconcile");
-        expect(ready, "config reloader became ready during its initial reconcile").toBe(false);
-        // Change source identity without changing runtime values: startup must
-        // finish this no-op publication before the hook captures its authority.
-        await fs.appendFile(process.env.OPENCLAW_CONFIG_PATH!, "\n", "utf8");
-      } finally {
-        release.resolve();
-        await request;
-      }
-    });
-  });
-
-  test("keeps pending hook admission current through a same-value provider-auth refresh", async ({
-    signal,
-  }) => {
-    await writeReloadableHooksConfig(enabledHooks);
-    await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: "0" }, async () => {
-      installHookReplyRuntime();
+  test.each(["initial config reconcile", "same-value provider-auth refresh"] as const)(
+    "keeps hook admission current through %s",
+    async (boundary, { signal }) => {
       const entered = createDeferred();
       const release = createDeferred();
-      const admitted = createDeferred<HookReceipt>();
-      const prepare = sessionEventTarget.prepareSessionEventTargetForHost;
-      vi.spyOn(sessionEventTarget, "prepareSessionEventTargetForHost").mockImplementationOnce(
-        async (...args) => {
-          entered.resolve();
-          await release.promise;
-          return prepare(...args);
-        },
-      );
-      observeHookReceipts((_text, receipt) => admitted.resolve(receipt));
-      await withGatewayServer(async ({ port, server }) => {
-        await server.startupSettled;
-        await waitForGatewayStartup(port);
-        const request = postWake(port, "refresh-during-admission", "refresh");
-        let response: Response;
+      let ready = false;
+      if (boundary === "initial config reconcile") {
+        const startReloader = configReload.startGatewayConfigReloader;
+        vi.spyOn(configReload, "startGatewayConfigReloader").mockImplementation((options) => {
+          let initial = true;
+          const reloader = startReloader({
+            ...options,
+            readSnapshot: async (...args) => {
+              if (initial) {
+                initial = false;
+                entered.resolve();
+                await release.promise;
+              }
+              return options.readSnapshot(...args);
+            },
+          });
+          void reloader.ready.then(() => {
+            ready = true;
+          });
+          return reloader;
+        });
+      } else {
+        const prepare = sessionEventTarget.prepareSessionEventTargetForHost;
+        vi.spyOn(sessionEventTarget, "prepareSessionEventTargetForHost").mockImplementationOnce(
+          async (...args) => {
+            entered.resolve();
+            await release.promise;
+            return prepare(...args);
+          },
+        );
+      }
+      await writeReloadableHooksConfig(enabledHooks);
+      await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: "0" }, async () => {
+        installHookReplyRuntime();
+        const admitted = createDeferred<HookReceipt>();
+        observeHookReceipts((_text, receipt) => admitted.resolve(receipt));
+        const request = withGatewayServer(async ({ port, server }) => {
+          await server.startupSettled;
+          await waitForGatewayStartup(port);
+          await expectResponse(await postWake(port, boundary));
+          await expect((await admitted.promise).settled).resolves.toMatchObject({
+            status: "completed",
+          });
+        });
         try {
-          await waitForGate(entered.promise, request, signal, "hook skipped admission gate");
-          expect(await refreshActiveProviderAuthRuntimeSnapshot()).toBe(true);
+          await waitForGate(entered.promise, request, signal, `Gateway skipped ${boundary}`);
+          if (boundary === "initial config reconcile") {
+            expect(ready, "config reloader became ready during its initial reconcile").toBe(false);
+            // Change source identity without changing runtime values: startup must
+            // finish this no-op publication before the hook captures its authority.
+            await fs.appendFile(process.env.OPENCLAW_CONFIG_PATH!, "\n", "utf8");
+          } else {
+            expect(await refreshActiveProviderAuthRuntimeSnapshot()).toBe(true);
+          }
         } finally {
           release.resolve();
-          response = await request;
+          await request;
         }
-        await expectResponse(response);
-        await expect((await admitted.promise).settled).resolves.toMatchObject({
-          status: "completed",
-        });
       });
-    });
-  });
+    },
+  );
 
   test("flushes an oversized chunked hook response before closing the socket", async () => {
     await withHookGateway(async ({ port }) => {
