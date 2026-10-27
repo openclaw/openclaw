@@ -254,7 +254,12 @@ export function createMessageImagePresentation(props: MessageImageProps) {
     currentImage = image;
     currentOptions = options;
     // Recording already displayed pixels must not replace the mounted live image.
-    if (active && row && saved?.thumbnail && (thumbnail || !previewElement)) {
+    if (
+      active &&
+      row &&
+      saved?.thumbnail &&
+      (thumbnail || !previewElement || options?.mediaReadAllowed === false)
+    ) {
       if (thumbnail?.blob !== saved.thumbnail || thumbnail?.scope !== row.scope) {
         if (thumbnail) {
           URL.revokeObjectURL(thumbnail.url);

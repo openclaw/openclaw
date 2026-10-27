@@ -162,9 +162,13 @@ it("records displayed bytes without replacing the live image, then restores them
     expect(view.container.querySelector("img")).toBe(image);
     expect(image.getAttribute("src")).toBe(displayedSource);
     expect(createUrl).not.toHaveBeenCalled();
+    setLive(false);
+    flush();
+    expect(view.container.querySelector(".chat-image-skeleton")).toBeNull();
+    expect(view.container.querySelector("img")).toBe(image);
+    expect(image.getAttribute("src")).toBe("blob:recorded-thumbnail");
     setVisible(false);
     flush();
-    setLive(false);
     setVisible(true);
     flush();
     expect(view.container.querySelector("img")?.getAttribute("src")).toBe(
