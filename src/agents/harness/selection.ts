@@ -14,6 +14,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import {
+  assertOperatorAccessProgramAllowed,
   assertOperatorModelAllowed,
   bindOperatorModelExecution,
   readRunOperatorAuthority,
@@ -28,6 +29,7 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
+import { requiresOperatorModelExecutionPolicy } from "../operator-access-program.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -202,6 +204,7 @@ export async function runAgentHarnessAttempt(
   params: EmbeddedRunAttemptInternalParams,
   nativeSessionRuntime?: import("../embedded-agent-runner/run/model-setup.js").PreparedNativeSessionRuntime,
 ): Promise<EmbeddedRunAttemptResult> {
+  assertOperatorAccessProgramAllowed(readRunOperatorAuthority(params), params.cyberAccessProgram);
   let internalParams: EmbeddedRunAttemptInternalParams & {
     systemAgentTool?: SystemAgentToolOptions;
   } = params;
@@ -306,6 +309,10 @@ export async function runAgentHarnessAttempt(
             }
           }
           attempt.hostCapabilities?.assertActive();
+          assertOperatorAccessProgramAllowed(
+            readRunOperatorAuthority(params),
+            params.cyberAccessProgram,
+          );
           return harness.runAttempt(attempt);
         },
       );
@@ -513,11 +520,11 @@ function assertHarnessModelPolicySupport(harness: AgentHarness, params: Embedded
   authority?.assertCurrent();
   if (
     !isBuiltInOpenClawAgentHarness(harness) &&
-    authority?.modelPolicy &&
+    requiresOperatorModelExecutionPolicy(authority) &&
     harness.nativeModelPolicySupport !== "exact"
   ) {
     throw new AgentHarnessPreflightError(
-      `Agent harness ${harness.id} cannot enforce your operator role's model policy. Choose a compatible runtime or ask a gateway administrator to update the harness.`,
+      `Agent harness ${harness.id} cannot enforce your operator role's model policy or Access grants. Choose a compatible runtime or ask a gateway administrator to update the harness.`,
     );
   }
   return authority;
