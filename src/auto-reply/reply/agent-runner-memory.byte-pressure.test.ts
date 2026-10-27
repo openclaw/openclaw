@@ -28,9 +28,9 @@ vi.mock("../../agents/sessions/session-manager.js", () => ({
 vi.mock("../../agents/embedded-agent.js", () => ({ compactEmbeddedAgentSession: compact }));
 // mock-isolation: This preflight test must not load or execute the model-turn entry point.
 vi.mock("../../agents/embedded-agent-runner/run-entry.js", () => ({}));
-// mock-isolation: A declined compaction never publishes session accounting.
+// mock-isolation: Accept failed-attempt latch accounting without opening a database.
 vi.mock("./session-updates.js", () => ({
-  incrementCompactionCount: vi.fn(),
+  incrementCompactionCount: async () => 0,
 }));
 
 const model = "claude-sonnet-5-5";
