@@ -19,7 +19,8 @@ import {
   readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import type { CodexUserInput } from "./protocol.js";
 import {
   createParams,
@@ -27,9 +28,17 @@ import {
   bindProductionHarnessHostCapabilitiesForTest,
   fastWait,
   runCodexAppServerAttempt,
+  setCodexAppServerClientFactoryForTest,
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
+import { createIsolatedCodexAppServerClient } from "./shared-client.js";
+import {
+  listenForNativeResponses,
+  nativeAppServerOptions,
+  nativeProviderConfig,
+} from "./thread-native.test-support.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 type QueueOptions = NonNullable<Parameters<typeof queueAgentHarnessMessage>[2]>;
 type Recorder = NonNullable<QueueOptions["userTurnTranscriptRecorder"]>;
@@ -43,6 +52,7 @@ type SteerRequest = {
 };
 
 setupRunAttemptTestHooks();
+vi.unmock("node:child_process");
 const managedFixtures: string[] = [];
 afterEach(async () => {
   await Promise.all(
@@ -338,6 +348,115 @@ describe("Codex active-run steering media", () => {
         }
       });
     },
+  );
+
+  it.each([
+    { source: "session", accepted: true },
+    { source: "sibling", accepted: false },
+    { source: "shared", accepted: false },
+  ] as const)(
+    "with a native app-server accepts $source workspace images: $accepted",
+    async ({ source, accepted: expectedAccepted }) => {
+      const fixture = await createMediaFixture("offloaded");
+      fixture.params.config = {
+        ...fixture.params.config,
+        tools: { ...fixture.params.config?.tools, fs: { workspaceOnly: false } },
+      };
+      const imageBytes = await relocateSteeringImage(fixture, source);
+      const nativeRoot = path.join(tempDir, `native-${source}`);
+      await fs.mkdir(nativeRoot, { recursive: true });
+      const native = await createCodexNativeTestState(await fs.realpath(nativeRoot));
+      const providerStarted = createDeferred<void>();
+      const openResponses = new Set<import("node:http").ServerResponse>();
+      const port = await listenForNativeResponses({ onTestFinished }, (request, response) => {
+        request.resume();
+        request.on("end", () => {
+          if (request.method !== "POST" || request.url !== "/v1/responses") {
+            response.writeHead(404).end();
+            return;
+          }
+          openResponses.add(response);
+          response.on("close", () => openResponses.delete(response));
+          response.writeHead(200, { "Content-Type": "text/event-stream" });
+          response.write(
+            `event: response.created\ndata: ${JSON.stringify({
+              type: "response.created",
+              response: { id: `steering-${source}` },
+            })}\n\n`,
+          );
+          providerStarted.resolve();
+        });
+      });
+      await fs.writeFile(
+        path.join(native.codexHome, "config.toml"),
+        nativeProviderConfig(
+          "steering-proof",
+          port,
+          ['sandbox_mode="read-only"', "allow_login_shell=false"],
+          ["code_mode=false", "shell_snapshot=false"],
+        ),
+      );
+      const appServer = { ...nativeAppServerOptions(native), sandbox: "read-only" as const };
+      const client = await createIsolatedCodexAppServerClient({
+        startOptions: appServer.start,
+        agentDir: path.join(nativeRoot, "agent"),
+        authProfileId: null,
+        config: {},
+        timeoutMs: 20_000,
+      });
+      expect(client.getServerVersion()).toBe(CODEX_APP_SERVER_VERSION);
+      const nativeSteers: SteerRequest[] = [];
+      const request = client.request.bind(client);
+      vi.spyOn(client, "request").mockImplementation(async (method, params, options) => {
+        const result = await request(method, params, options);
+        if (method === "turn/steer") {
+          nativeSteers.push(params as SteerRequest);
+        }
+        return result;
+      });
+      setCodexAppServerClientFactoryForTest(async () => client);
+      fixture.params.timeoutMs = 60_000;
+      const controller = new AbortController();
+      fixture.params.abortSignal = controller.signal;
+      const run = runCodexAppServerAttempt(fixture.params, {
+        pluginConfig: { appServer: { homeScope: "user" } },
+      });
+      try {
+        await run.waitForTurnAccepted();
+        await providerStarted.promise;
+        const accepted = vi.fn();
+        expect(
+          queueAgentHarnessMessage(fixture.params.sessionId, "inspect this", {
+            ...fixture.options,
+            onQueueAccepted: accepted,
+            waitForTranscriptCommit: false,
+          }),
+        ).toBe(true);
+        await vi.waitFor(
+          () => expect(accepted).toHaveBeenCalledExactlyOnceWith(expectedAccepted),
+          fastWait,
+        );
+        if (expectedAccepted) {
+          expect(nativeSteers).toHaveLength(1);
+          expect(nativeSteers[0]!.input).toEqual([
+            { type: "text", text: "inspect this", text_elements: [] },
+            { type: "image", url: `data:image/png;base64,${imageBytes.toString("base64")}` },
+          ]);
+        } else {
+          expect(nativeSteers).toEqual([]);
+          expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
+          expect(await fixture.readSteeredMessages()).toEqual([]);
+        }
+      } finally {
+        controller.abort();
+        for (const response of openResponses) {
+          response.end();
+        }
+        await run;
+        await client.closeAndWait();
+      }
+    },
+    60_000,
   );
 
   it.each(["ro"] as const)(
