@@ -64,8 +64,7 @@
 
 .chat-details-desktop-body__content {
   /* Subtract the native gutters before the first layout measurement. */
-  padding-inline: max(0px, calc(16px - (100cqi - 100%) / 2));
-  padding-block: 4px;
+  padding: 4px calc(16px + 50% - 50cqi);
 }
 
 @supports selector(::-webkit-scrollbar) {
