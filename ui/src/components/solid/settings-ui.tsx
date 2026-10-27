@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { children, createMemo, For, onSettled, Show } from "solid-js";
+import { children, For, onSettled, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -280,11 +280,6 @@ function ToggleControl(
   },
 ) {
   const labelId = nextSettingsRadioName();
-  // Equal owner frames must not reset native activation before the change event.
-  const isChecked = createMemo(() => props.checked);
-  const disabled = createMemo(() => props.disabled);
-  const saving = createMemo(() => props.saving);
-  const labelledBy = createMemo(() => props.labelledBy ?? labelId);
   return (
     <span class="settings-toggle">
       <input
@@ -292,10 +287,10 @@ function ToggleControl(
         class="settings-toggle__input"
         type="checkbox"
         role="switch"
-        checked={isChecked()}
-        disabled={disabled()}
-        aria-disabled={saving() ? "true" : undefined}
-        aria-labelledby={labelledBy()}
+        checked={props.checked}
+        disabled={props.disabled}
+        aria-disabled={props.saving ? "true" : undefined}
+        aria-labelledby={props.labelledBy ?? labelId}
         onClick={(event) => {
           const input = event.currentTarget;
           if (props.disabled || props.saving) {

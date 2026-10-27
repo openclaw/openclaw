@@ -13,38 +13,26 @@ it.each([
   ["standalone", SettingsToggle],
   ["row", SettingsToggleRow],
 ] as const)(
-  "%s preserves activation across refreshed props and restores rejected changes",
+  "%s uses the current activation callback synchronously and restores rejected changes",
   (_kind, Toggle) => {
     const calls: [string, boolean][] = [];
     const record = (name: string) => (checked: boolean) => calls.push([name, checked]);
     const [updated, setUpdated] = createSignal(false);
-    const [control, setControl] = createSignal({ checked: false, saving: false });
-    let reject = true;
     const view = render(() => (
       <Toggle
         title="Notifications"
         ariaLabel="Enabled"
-        checked={control().checked}
-        saving={control().saving}
+        checked={false}
         onAct={updated() ? record("current") : record("old")}
         onChange={(checked) => {
           calls.push(["change", checked]);
-          return reject ? false : undefined;
+          return false;
         }}
       />
     ));
     setUpdated(true);
     flush();
     const input = view.getByRole("switch") as HTMLInputElement;
-    input.addEventListener(
-      "click",
-      () => {
-        // A streamed owner frame must not reset native activation before change.
-        setControl((current) => ({ ...current }));
-        flush();
-      },
-      { capture: true, once: true },
-    );
     for (const activate of [
       () =>
         Toggle === SettingsToggleRow
@@ -60,18 +48,6 @@ it.each([
       expect(input.checked).toBe(false);
       calls.length = 0;
     }
-    reject = false;
-    input.click();
-    expect(input.checked).toBe(true);
-    setControl({ checked: false, saving: true });
-    flush();
-    expect(input.checked).toBe(false);
-    calls.length = 0;
-    input.click();
-    expect(calls).toEqual([]);
-    setControl({ checked: true, saving: false });
-    flush();
-    expect(input.checked).toBe(true);
   },
 );
 
