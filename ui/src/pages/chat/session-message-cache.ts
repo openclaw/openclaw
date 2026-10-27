@@ -12,6 +12,7 @@ import type {
   ChatHeaderSharingSnapshot,
   ChatHeaderViewersSnapshot,
 } from "./chat-header-viewers-snapshot.ts";
+import type { ChatDetailsSnapshot } from "./chat-details-snapshot.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
@@ -75,6 +76,7 @@ export type ChatSessionSnapshot = {
   sessionState?: ChatSessionStateSnapshot;
   headerViewers?: ChatHeaderViewersSnapshot;
   headerSharing?: ChatHeaderSharingSnapshot | null;
+  details?: ChatDetailsSnapshot;
   composer?: ChatComposerSnapshot | null;
   // The board provider validates cached payloads before they can reach a view.
   board?: { snapshot: unknown; receivedAtMs: number } | null;
@@ -407,30 +409,21 @@ export function cacheChatSessionSnapshot(
     withWidgetHeights.board === undefined && existing?.snapshot.board !== undefined
       ? { ...withWidgetHeights, board: existing.snapshot.board }
       : withWidgetHeights;
-  const withComposer =
-    withBoard.composer === undefined &&
-    existing?.snapshot.composer !== undefined &&
-    existing.snapshot.sessionId === incoming.sessionId
-      ? { ...withBoard, composer: existing.snapshot.composer }
-      : withBoard;
-  const withSessionState =
-    withComposer.sessionState === undefined &&
-    existing?.snapshot.sessionState !== undefined &&
-    existing.snapshot.sessionId === incoming.sessionId
-      ? { ...withComposer, sessionState: existing.snapshot.sessionState }
-      : withComposer;
-  const withViewers =
-    withSessionState.headerViewers === undefined &&
-    existing?.snapshot.headerViewers !== undefined &&
-    existing.snapshot.sessionId === incoming.sessionId
-      ? { ...withSessionState, headerViewers: existing.snapshot.headerViewers }
-      : withSessionState;
   const snapshot =
-    withViewers.headerSharing === undefined &&
-    existing?.snapshot.headerSharing !== undefined &&
-    existing.snapshot.sessionId === incoming.sessionId
-      ? { ...withViewers, headerSharing: existing.snapshot.headerSharing }
-      : withViewers;
+    existing?.snapshot.sessionId === incoming.sessionId
+      ? {
+          ...withBoard,
+          composer:
+            withBoard.composer === undefined ? existing.snapshot.composer : withBoard.composer,
+          details: withBoard.details ?? existing.snapshot.details,
+          headerViewers: withBoard.headerViewers ?? existing.snapshot.headerViewers,
+          headerSharing:
+            withBoard.headerSharing === undefined
+              ? existing.snapshot.headerSharing
+              : withBoard.headerSharing,
+          sessionState: withBoard.sessionState ?? existing.snapshot.sessionState,
+        }
+      : withBoard;
   const previousState = existing?.snapshot.sessionState;
   const sessionState = snapshot.sessionState;
   if (
@@ -453,6 +446,7 @@ export function cacheChatSessionSnapshot(
         previousState?.parentSession === sessionState?.parentSession)) &&
     existing.snapshot.headerViewers === snapshot.headerViewers &&
     existing.snapshot.headerSharing === snapshot.headerSharing &&
+    existing.snapshot.details === snapshot.details &&
     samePagination(existing.snapshot.pagination, snapshot.pagination)
   ) {
     return;

@@ -256,6 +256,78 @@ function automationGateway(request: ReturnType<typeof createGatewayRequestMock>)
   return { gateway, publish };
 }
 
+it("paints cached section slots in final order and adopts live rows in place", async () => {
+  const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
+  const request = createGatewayRequestMock(() => pending.promise);
+  const child = { key: "agent:main:subagent:review", label: "Review", status: "done" as const };
+  const view = mountDetails({
+    pullRequestsGateway: automationGateway(request).gateway,
+    onOpenSubagent() {},
+    onOpenSubagents() {},
+    cachedDetails: {
+      locale: "en",
+      subagents: { total: 1, rows: [child], counts: [{ status: "done", count: 1 }] },
+      outputs: 1,
+      automations: {
+        rows: [
+          {
+            id: "Scheduled check",
+            name: "Scheduled check",
+            running: false,
+            state: "Every 10 minutes",
+            result: { summary: undefined, checkedAt: undefined, failed: false },
+          },
+        ],
+        total: 1,
+        more: false,
+      },
+    },
+  });
+  const sections = () =>
+    Array.from(view.container.querySelectorAll<HTMLElement>("[data-details-group]")).map(
+      (element) => element.dataset.detailsGroup,
+    );
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  const initial = [view.group("subagents"), view.group("outputs"), view.group("automations")];
+  expect(
+    sections(),
+    view.container.querySelector("openclaw-chat-summary-automations")?.outerHTML,
+  ).toEqual(["subagents", "outputs", "automations"]);
+  expect(view.group("subagents")?.textContent).toContain("Review");
+  expect(view.group("automations")?.textContent).toContain("Scheduled check");
+  view.update({
+    subagentSessionsHydrated: true,
+    subagentSessions: [
+      {
+        ...child,
+        sessionId: "review",
+        kind: "direct",
+        classification: "subagent",
+        parentSessionKey: view.initial.sessionKey,
+      },
+    ],
+    outputs: {
+      ...view.initial.outputs!,
+      artifacts: [],
+      dashboard: { title: "Build report", onOpen() {} },
+    },
+  });
+  pending.resolve(automationPage("Scheduled check"));
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect([view.group("subagents"), view.group("outputs"), view.group("automations")]).toEqual(
+    initial,
+  );
+  expect(sections()).toEqual(["subagents", "outputs", "automations"]);
+  view.update({
+    subagentSessions: [],
+    outputs: { ...view.initial.outputs!, artifacts: [], dashboard: null },
+  });
+  expect(view.group("subagents")).toBeNull();
+  expect(view.group("outputs")).toBeNull();
+});
+
 it("retires an automation page when the logical session changes", async () => {
   const retired = createDeferred<CronJobsListResult<CronCompactJob>>();
   const current = createDeferred<CronJobsListResult<CronCompactJob>>();

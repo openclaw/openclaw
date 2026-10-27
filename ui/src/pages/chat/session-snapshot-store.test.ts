@@ -158,6 +158,32 @@ async function readRawRecord(
 }
 
 describe("persistent chat session snapshots", () => {
+  it("round-trips bounded Details display data without adding undefined fields", async () => {
+    const details: NonNullable<ChatSessionSnapshot["details"]> = {
+      locale: "en",
+      subagents: {
+        total: 1,
+        rows: [{ key: "agent:main:subagent:review", label: "Review", status: "done" }],
+        counts: [{ status: "done", count: 1 }],
+      },
+      automations: {
+        rows: [
+          {
+            id: "check",
+            name: "Check",
+            running: false,
+            state: "Every hour",
+            result: { summary: undefined, checkedAt: undefined, failed: false },
+          },
+        ],
+        total: 1,
+        more: false,
+      },
+      outputs: 1,
+    };
+    await persist(new SessionSnapshotStore(), sessionKey, { ...snapshot(), details });
+    expect((await readSnapshot())?.details).toEqual(JSON.parse(JSON.stringify(details)));
+  });
   it("restores model display data with the conversation, isolated from another account", async () => {
     const writer = new SessionSnapshotStore();
     const remembered: NonNullable<ChatSessionSnapshot["composer"]> = {
@@ -457,7 +483,7 @@ describe("persistent chat session snapshots", () => {
 
   it.each(["direct", "prewarmed"])("discards the previous projection (%s)", async (mode) => {
     await persist(writer, sessionKey, snapshot("current"));
-    await putRawRecord(envelope(sessionKey, snapshot("old"), 4));
+    await putRawRecord(envelope(sessionKey, snapshot("old"), 5));
     if (mode === "prewarmed") {
       void prewarmChatSnapshot(sessionKey);
     }

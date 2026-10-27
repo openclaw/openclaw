@@ -265,6 +265,21 @@ describe("session message cache", () => {
     layout.write(row, 80);
     expect(context.layout().read(row)).toBe(80);
   });
+
+  it("retains Details display facts through history replacement but drops them on reset", () => {
+    const { read, write } = createCacheContext();
+    const details = {
+      locale: "en",
+      subagents: { total: 0, rows: [], counts: [] },
+      automations: { rows: [], total: 0, more: false },
+      outputs: 1,
+    };
+    write(widgetSnapshot([], "session-1", { details }));
+    write(widgetSnapshot(["live"], "session-1"));
+    expect(read()?.details).toEqual(details);
+    write(widgetSnapshot([], "session-2"));
+    expect(read()?.details).toBeUndefined();
+  });
   it("retains a scoped board through transcript replacement and clears it authoritatively", () => {
     const cache: ChatMessageCache = new Map();
     const host = {
