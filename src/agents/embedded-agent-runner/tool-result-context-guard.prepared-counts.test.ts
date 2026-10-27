@@ -3,6 +3,7 @@ import { estimateStringCharsWithMinimumRawWeight } from "@openclaw/normalization
 import type { Agent, AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
+import { cloneSessionModelContextEntries } from "../sessions/session-manager-codec.js";
 import { installToolResultContextGuard } from "./tool-result-context-guard.js";
 import {
   truncateOversizedToolResultsInMessages,
@@ -71,26 +72,52 @@ it("keeps a fractional floor independent of a prepared floor-2 count", async () 
   expect(actual === source).toBe(expected === fresh);
 });
 
-it("reuses frozen history sizes across requests and still measures changed content", () => {
-  const truncate = truncateOversizedToolResultsInMessages;
-  const text = "historical 漢字🙂\n".repeat(128);
-  const source = toolResult(freezeTrustedJsonSnapshot([{ type: "text", text }]));
-  const history = [source];
-  expect(truncate(history, 128_000).messages).toBe(history);
-  countChars.mockClear();
-  expect(truncate([...history], 128_000).messages[0]).toBe(source);
-  expect(fullTextScans(text)).toBe(0);
+it.each(["frozen", "initial-context"])(
+  "reuses %s history sizes across requests and still measures changed content",
+  async (kind) => {
+    const truncate = truncateOversizedToolResultsInMessages;
+    const text = "historical 漢字🙂\n".repeat(128);
+    let source = toolResult(freezeTrustedJsonSnapshot([{ type: "text", text }]));
+    if (kind === "initial-context") {
+      const [entry] = cloneSessionModelContextEntries([
+        {
+          type: "message",
+          id: "history",
+          parentId: null,
+          timestamp: "2026-01-01T00:00:00.000Z",
+          message: source,
+        },
+      ]);
+      if (entry?.type !== "message" || entry.message.role !== "toolResult") {
+        throw new Error("Missing model history");
+      }
+      source = entry.message;
+      expect(Object.isFrozen(source.content)).toBe(false);
+    }
+    const history = [source];
+    expect(truncate(history, 128_000).messages).toBe(history);
+    const run = guarded();
+    await run(source);
+    truncate([...history], 128_000);
+    countChars.mockClear();
+    await run(source);
+    expect(truncate([...history], 128_000).messages[0]).toBe(source);
+    expect(fullTextScans(text)).toBe(0);
 
-  const mutableBlock = { type: "text" as const, text: "short" };
-  const mutableContent = [mutableBlock];
-  Object.freeze(mutableContent);
-  const changed = toolResult(mutableContent);
-  expect(truncate([changed], 128_000, 1_000).messages[0]).toBe(changed);
-  mutableBlock.text = text;
-  expect(truncate([changed], 128_000, 1_000).truncatedCount).toBe(1);
-  expect(truncate(history, 128_000, 1_000).truncatedCount).toBe(1);
-  expect(source.content).toEqual([{ type: "text", text }]);
-});
+    const mutableBlock = { type: "text" as const, text: "short" };
+    const mutableContent = [mutableBlock];
+    Object.freeze(mutableContent);
+    const changed = toolResult(mutableContent);
+    expect(truncate([changed], 128_000, 1_000).messages[0]).toBe(changed);
+    mutableBlock.text = text;
+    expect(truncate([changed], 128_000, 1_000).truncatedCount).toBe(1);
+    expect(truncate(history, 128_000, 1_000).truncatedCount).toBe(1);
+    expect(JSON.stringify(truncate(history, 128_000, 1_000))).toBe(
+      JSON.stringify(truncate(structuredClone(history), 128_000, 1_000)),
+    );
+    expect(source.content).toEqual([{ type: "text", text }]);
+  },
+);
 
 it("does not rescan cold oversized text before truncating it", () => {
   const text = "cold output 漢字\n".repeat(2_048);
@@ -99,5 +126,5 @@ it("does not rescan cold oversized text before truncating it", () => {
   expect(fullTextScans(text)).toBe(1);
   countChars.mockClear();
   expect(truncateOversizedToolResultsInMessages([source], 128_000, 1_000).truncatedCount).toBe(1);
-  expect(fullTextScans(text)).toBe(2);
+  expect(fullTextScans(text)).toBe(0);
 });
