@@ -272,6 +272,7 @@ export function buildAnthropicCliBackend(
       systemPromptFileArg: "--append-system-prompt-file",
       systemPromptMode: "append",
       systemPromptWhen: "always",
+      env: { CLAUDE_CODE_ENTRYPOINT: "openclaw" },
       clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
       serialize: true,
     },
