@@ -16,6 +16,7 @@ import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { GatewayRequestEntryLifetime } from "../server-request-entry.js";
 import { createRpcSourceForTest, claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
+import { expectCalls } from "./agent-owner.test-support.js";
 import { createInternalAgentTurnFacade } from "./internal-facade.js";
 import type { AgentTurnStartOwner } from "./internal-facade.types.js";
 import { setTestRpcSourceIdentity } from "./rpc-source.test-support.js";
@@ -176,7 +177,7 @@ it.for([
   // Each case drains its execution before replacing the mocked import.
   vi.resetModules();
   startTurn.mockReset().mockImplementation(async ({ io }) => {
-    io.emitAcceptance([true, { runId: "cold-run" }, undefined]);
+    accept(io, "cold-run");
   });
   waitForTurn.mockReset().mockResolvedValue({ result: { status: "timeout" } });
   const held = createDeferred();
@@ -251,8 +252,7 @@ it.for([
       await expect(executions[0]).rejects.toThrow(
         method === "wait" && boundary === "abort" ? "agent.wait observation cancelled" : message,
       );
-      expect(startTurn).not.toHaveBeenCalled();
-      expect(waitForTurn).not.toHaveBeenCalled();
+      expectCalls(0, startTurn, waitForTurn);
     }
     expect(scope.hasPendingWork).toBe(false);
   } finally {
@@ -352,10 +352,8 @@ it.each([
   expect(startTurn).not.toHaveBeenCalled();
   expect(scope.hasPendingWork).toBe(false);
   if (authorizationAbort) {
-    expect(releaseMutation).toHaveBeenCalledOnce();
-    expect(releaseAccess).toHaveBeenCalledOnce();
-    expect(envelope).not.toHaveBeenCalled();
-    expect(waitForTurn).not.toHaveBeenCalled();
+    expectCalls(1, releaseMutation, releaseAccess);
+    expectCalls(0, envelope, waitForTurn);
   }
 });
 

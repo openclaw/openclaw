@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../../agents/restart-recovery-prompt.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -26,6 +26,7 @@ import {
 } from "../../state/user-profile-writes.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { withSessionSendDelivery, type SessionSendDelivery } from "../session-send-delivery.js";
+import { createGate, expectCalls } from "./agent-owner.test-support.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { createAgentTurnTestContext } from "./agent-run-dispatch.test-support.js";
 import {
@@ -177,8 +178,7 @@ describe("requester-settle processing survives later user turns", () => {
     expect(completion(turn)).toBeUndefined();
     const { io, cleanup, result } = reconciliation(turn);
     expect(result).toBeUndefined();
-    expect(cleanup).not.toHaveBeenCalled();
-    expect(io.emitAcceptance).not.toHaveBeenCalled();
+    expectCalls(0, cleanup, io.emitAcceptance);
   };
   const appendNewerTurn = async (manager: SessionManager, key: string, text: string) => {
     const user: PersistedUserTurnMessage = {
@@ -393,11 +393,9 @@ describe("requester-settle processing survives later user turns", () => {
       });
       const { cleanupAbortController, emitFinal, execute } = dispatch(original, entry);
       await original.recorder!.persistApproved();
-      const producerEntered = createDeferred();
-      const finishProducer = createDeferred();
+      const producer = createGate();
       reads.command.mockImplementationOnce(async () => {
-        producerEntered.resolve();
-        await finishProducer.promise;
+        await producer.wait();
         return {
           payloads: [],
           meta: {
@@ -412,16 +410,15 @@ describe("requester-settle processing survives later user turns", () => {
       );
       try {
         await awaitGateBeforeSettlement(
-          producerEntered.promise,
+          producer.entered,
           execution,
           "Timeout continuation did not enter its producer",
         );
         controller.abort(new DOMException("Synthetic producer deadline", "TimeoutError"));
         await original.recorder!.waitForPendingInputSettlement!();
         expect(completion(original)).toBeUndefined();
-        expect(cleanupAbortController).not.toHaveBeenCalled();
-        expect(emitFinal).not.toHaveBeenCalled();
-        finishProducer.resolve();
+        expectCalls(0, cleanupAbortController, emitFinal);
+        producer.resolve();
         await execution;
         await original.recorder!.waitForPendingInputSettlement!();
         expect(completion(original)).toMatchObject({
@@ -430,7 +427,7 @@ describe("requester-settle processing survives later user turns", () => {
         });
         expect(cleanupAbortController).toHaveBeenCalledOnce();
       } finally {
-        finishProducer.resolve();
+        producer.resolve();
         await execution;
         await release(original);
       }

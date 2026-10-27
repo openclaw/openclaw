@@ -15,6 +15,7 @@ import * as transcript from "../../sessions/user-turn-transcript-admission.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunById } from "../chat-abort.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
+import { createGate, expectCalls } from "./agent-owner.test-support.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
 import {
@@ -22,6 +23,11 @@ import {
   setTestRpcSourceIdentity,
   testRpcSourceController,
 } from "./rpc-source.test-support.js";
+
+const commandResult = (meta: Partial<AgentCommandDeliveryResult["meta"]> = {}) => ({
+  payloads: [],
+  meta,
+});
 
 const mocks = vi.hoisted(() => ({
   agentCommand: vi.fn(
@@ -44,29 +50,10 @@ vi.mock(import("../../infra/agent-run-registry.js"), async (importOriginal) => (
 }));
 vi.mock("./agent-dedupe.js", () => ({ setGatewayDedupeEntries: vi.fn() }));
 
-function createGate() {
-  const entered = createDeferred();
-  const finish = createDeferred();
-  return {
-    entered: entered.promise,
-    resolve: finish.resolve,
-    wait: () => {
-      entered.resolve();
-      return finish.promise;
-    },
-  };
-}
-
-function expectCalls(count: number, ...spies: unknown[]) {
-  for (const spy of spies) {
-    expect(spy).toHaveBeenCalledTimes(count);
-  }
-}
-
 describe("Gateway dispatch run ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.agentCommand.mockImplementation(async () => ({ payloads: [], meta: {} }));
+    mocks.agentCommand.mockImplementation(async () => commandResult());
   });
 
   function createDispatch(terminalProducer = false) {
@@ -145,6 +132,24 @@ describe("Gateway dispatch run ownership", () => {
       },
       runId,
       sameStore ? entry.input.target?.storeScope : undefined,
+    );
+  }
+
+  function expectReplaySession(
+    entry: ReturnType<typeof createTrackedDispatch>["entry"],
+    sessionKey: string,
+    extra: Record<string, unknown> = {},
+  ) {
+    expect(setGatewayDedupeEntries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: {
+          sessionKey,
+          sessionId: getRpcSourceIdentity(entry).sessionId,
+          agentId: getRpcSourceIdentity(entry).agentId,
+          lifecycleGeneration: getRpcSourceLifecycleGeneration(entry),
+        },
+        ...extra,
+      }),
     );
   }
 
@@ -254,7 +259,7 @@ describe("Gateway dispatch run ownership", () => {
       const finish = createDeferred();
       mocks.agentCommand.mockImplementationOnce(async () => {
         await finish.promise;
-        return { payloads: [], meta: {} };
+        return commandResult();
       });
       const completion = dispatchAgentRunFromGateway(params);
 
@@ -303,17 +308,7 @@ describe("Gateway dispatch run ownership", () => {
     });
     expectCalls(0, mocks.agentCommand, mocks.clearAgentRunContext);
     expect(rpcSourceTesting.get(runId)).toBe(successor);
-    expect(setGatewayDedupeEntries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        session: {
-          sessionKey,
-          sessionId: getRpcSourceIdentity(entry).sessionId,
-          agentId: getRpcSourceIdentity(entry).agentId,
-          lifecycleGeneration: getRpcSourceLifecycleGeneration(entry),
-        },
-        entry: expect.objectContaining({ ok: false }),
-      }),
-    );
+    expectReplaySession(entry, sessionKey, { entry: expect.objectContaining({ ok: false }) });
     expect(emitFinal).toHaveBeenCalledOnce();
   });
 
@@ -337,7 +332,7 @@ describe("Gateway dispatch run ownership", () => {
           testRpcSourceController(entry).abort();
           throw entry.input.abortSignal.reason;
         }
-        return { payloads: [], meta: {} };
+        return commandResult();
       });
       const { emitFinal } = params.io;
       const { cleanupAbortController } = params;
@@ -399,13 +394,10 @@ describe("Gateway dispatch run ownership", () => {
       const save = createGate();
       mocks.agentCommand.mockImplementationOnce(async () => {
         await finishCommand.promise;
-        return {
-          payloads: [],
-          meta: {
-            ...(entry.input.abortSignal.aborted ? { aborted: true, stopReason: "rpc" } : {}),
-            terminalReply: { disposition: "visible", text: "Original result" },
-          },
-        };
+        return commandResult({
+          ...(entry.input.abortSignal.aborted ? { aborted: true, stopReason: "rpc" } : {}),
+          terminalReply: { disposition: "visible", text: "Original result" },
+        });
       });
       let observed = false;
       const reply = owner.take().then(
@@ -464,18 +456,9 @@ describe("Gateway dispatch run ownership", () => {
             replacement === "mutated-entry" ? entry : successor,
           );
         }
-        expect(setGatewayDedupeEntries).toHaveBeenCalledWith(
-          expect.objectContaining({
-            session: {
-              sessionKey:
-                replacement === "mutated-entry"
-                  ? getRpcSourceIdentity(entry).sessionKey
-                  : sessionKey,
-              sessionId: getRpcSourceIdentity(entry).sessionId,
-              agentId: getRpcSourceIdentity(entry).agentId,
-              lifecycleGeneration: getRpcSourceLifecycleGeneration(entry),
-            },
-          }),
+        expectReplaySession(
+          entry,
+          replacement === "mutated-entry" ? getRpcSourceIdentity(entry).sessionKey : sessionKey,
         );
       } finally {
         finishCommand.resolve();
@@ -534,10 +517,9 @@ describe("Gateway dispatch run ownership", () => {
       },
     ];
     owner.promoteYield(f.runId, entries, 1);
-    mocks.agentCommand.mockResolvedValueOnce({
-      payloads: [],
-      meta: { yielded: true, terminalReply: { disposition: "empty" } },
-    });
+    mocks.agentCommand.mockResolvedValueOnce(
+      commandResult({ yielded: true, terminalReply: { disposition: "empty" } }),
+    );
     const predecessor = dispatch(f.runId, f.entry, undefined, async () => {
       await settlement.wait();
       return true;
