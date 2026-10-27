@@ -197,6 +197,43 @@ describe("SessionLinkTitler", () => {
     expect(first.textContent).toBe("Updated by the producer");
   });
 
+  it("reconciles a saved display title against live roster changes without replaying equal labels", () => {
+    const rows = [row("Saved research")];
+    const { titler, request } = createTitler(rows);
+    const anchor = sessionAnchor();
+    const label = document.createElement("span");
+    label.className = "session-label";
+    label.textContent = "Saved research";
+    anchor.classList.add("markdown-session-link--titled");
+    anchor.replaceChildren(label);
+    const onTitle = vi.fn();
+    titler.register(anchor, label, { title: "Saved research", onTitle });
+    titler.refresh();
+    const observer = observe(anchor);
+    try {
+      titler.refresh();
+      expect(observer.takeRecords()).toEqual([]);
+      rows[0] = row("Current research");
+      titler.refresh();
+      expectTitle(anchor, "Current research");
+      expect(onTitle).toHaveBeenLastCalledWith("Current research");
+      observer.takeRecords();
+      titler.refresh();
+      expect(observer.takeRecords()).toEqual([]);
+      rows[0] = row();
+      titler.refresh();
+      expect(anchor.classList.contains("markdown-session-link--titled")).toBe(false);
+      expect(anchor.textContent).toBe(SESSION_KEY);
+      expect(onTitle).toHaveBeenLastCalledWith(undefined);
+      observer.takeRecords();
+      titler.refresh();
+      expect(observer.takeRecords()).toEqual([]);
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      observer.disconnect();
+    }
+  });
+
   it.each(
     ["cached", "pending"].flatMap((state) =>
       ["replacement", "reconnect", "profile", "client ABA"].map((change) => ({ state, change })),

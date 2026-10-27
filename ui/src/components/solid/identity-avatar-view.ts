@@ -17,7 +17,10 @@ const avatarGatewayContext = projectSource(null, {
   equality: "revision",
 });
 
-export function useIdentityAvatarView(identity: Accessor<IdentityAvatarInput>) {
+export function useIdentityAvatarView(
+  identity: Accessor<IdentityAvatarInput>,
+  cachedOnly?: Accessor<boolean>,
+) {
   const gateway = useAvatarGatewayContext();
   const application = useOptionalApplication();
   const directory = application
@@ -30,6 +33,7 @@ export function useIdentityAvatarView(identity: Accessor<IdentityAvatarInput>) {
       input.identity?.type === "profile" && directory
         ? directory.read().avatarIdentity(input)
         : input,
+      cachedOnly?.() ?? false,
     );
   });
 }

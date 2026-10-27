@@ -6,6 +6,7 @@ import {
   resolveAssistantTextAvatar,
   resolveChatAvatarRenderUrl,
 } from "../../../lib/avatar.ts";
+import { readCachedAvatarImageUrl } from "../../../lib/identity-avatar-loader.ts";
 import {
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
@@ -52,18 +53,27 @@ export function resolveAssistantDisplayAvatar(props: {
   agents?: AgentsListResult["agents"];
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
+  assistantAvatarSource?: string | null;
 }) {
   const id = props.currentAgentId ?? "main";
   const agent = props.agents?.find((entry) => entry.id === id);
-  const avatar = resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
-    identity: {
-      avatar: props.assistantAvatar ?? undefined,
-      avatarUrl: props.assistantAvatarUrl ?? undefined,
-    },
-  });
+  const source = props.assistantAvatarSource;
+  const avatar =
+    source === undefined
+      ? resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
+          identity: {
+            avatar: props.assistantAvatar ?? undefined,
+            avatarUrl: props.assistantAvatarUrl ?? undefined,
+          },
+        })
+      : source === null
+        ? null
+        : (readCachedAvatarImageUrl(source) ??
+          resolveChatAvatarRenderUrl(source, { identity: { avatar: source } }));
   return {
     id,
-    avatar: avatar ?? (agent ? resolveAgentAvatarUrl(agent) : null),
+    avatar:
+      source === undefined ? (avatar ?? (agent ? resolveAgentAvatarUrl(agent) : null)) : avatar,
     textAvatar:
       resolveAssistantTextAvatar(props.assistantAvatar) ??
       (agent ? resolveAgentTextAvatar(agent) : null),

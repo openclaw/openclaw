@@ -22,6 +22,11 @@ import {
   markdownSessionPublicOrigin,
   parseLocalMarkdownSessionUrl,
 } from "./markdown-session-links.ts";
+import {
+  sessionTitleAnchor,
+  stampSessionTitleLabel,
+  type SessionTitleDisplay,
+} from "./session-title-label.ts";
 
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
@@ -35,7 +40,11 @@ type SessionTitleTarget = {
 
 type SessionTitle = SessionTitleTarget & { title?: string };
 
-type RegisteredTitle = { element: HTMLElement; label: HTMLElement };
+type RegisteredTitle = {
+  element: HTMLElement;
+  label: HTMLElement;
+  display?: SessionTitleDisplay;
+};
 
 /** A session URL the loaded roster cannot identify; the Gateway resolves it on demand. */
 type SessionReference = {
@@ -108,8 +117,8 @@ export class SessionLinkTitler {
     return this.scope;
   }
 
-  register(element: HTMLElement, label: HTMLElement): () => void {
-    const entry = { element, label };
+  register(element: HTMLElement, label: HTMLElement, display?: SessionTitleDisplay): () => void {
+    const entry = { element, label, display };
     this.registered.set(element, entry);
     if (!this.refreshQueued) {
       this.refreshQueued = true;
@@ -149,21 +158,17 @@ export class SessionLinkTitler {
     if (!entry) {
       return;
     }
+    if (
+      entry.display?.title &&
+      (this.context?.gateway.snapshot.phase !== "connected" ||
+        this.context.sessions.state.resultCached)
+    ) {
+      return;
+    }
     const scope = this.currentScope();
     let target = this.targetForAnchor(element, targets);
-    const anchor =
-      element instanceof HTMLAnchorElement || element.hasAttribute("data-session-title-only")
-        ? element
-        : document.createElement("a");
-    if (element !== anchor && element.classList.contains("markdown-session-link")) {
-      anchor.dataset.sessionHref = element.dataset.sessionHref;
-      anchor.setAttribute("href", element.getAttribute("href") ?? "");
-      anchor.className = "markdown-session-link";
-      element.classList.remove("markdown-session-link");
-      element.removeAttribute("href");
-      element.removeAttribute("data-session-href");
-      element.replaceWith(anchor);
-      anchor.append(element);
+    const anchor = sessionTitleAnchor(element);
+    if (element !== anchor) {
       this.registered.delete(element);
       entry.element = anchor;
       this.registered.set(anchor, entry);
@@ -177,6 +182,15 @@ export class SessionLinkTitler {
       this.titledAnchors.delete(anchor);
     }
     if (target && !("sessionKey" in target)) {
+      if (
+        !canCallGatewayMethod(
+          this.context && { ...this.context.gateway.snapshot, client: this.client },
+          "sessions.resolve",
+          "operator.read",
+        )
+      ) {
+        return;
+      }
       try {
         target = await this.resolveReference(target, scope);
       } catch {
@@ -315,7 +329,16 @@ export class SessionLinkTitler {
     const entry: ReferenceEntry = {
       expiresAt: now + SUCCESS_CACHE_MS,
       promise: Promise.resolve().then(async () => {
-        if (!client) {
+        if (
+          !client ||
+          client !== this.client ||
+          this.currentScope() !== scope ||
+          !canCallGatewayMethod(
+            this.context && { ...this.context.gateway.snapshot, client },
+            "sessions.resolve",
+            "operator.read",
+          )
+        ) {
           throw new Error("Session link resolution requires a connected Gateway");
         }
         const result = await client.request<SessionsResolveResult>(
@@ -371,15 +394,15 @@ export class SessionLinkTitler {
   private cachedOrSeededEntry(target: SessionTitleTarget): CacheEntry | undefined {
     const now = Date.now();
     const cached = this.cache.get(target.sessionKey);
-    if (cached && cached.expiresAt > now) {
-      this.setCacheEntry(target.sessionKey, cached);
-      return cached;
-    }
-    this.cache.delete(target.sessionKey);
     const row = this.context?.sessions.state.result?.sessions.find((candidate) =>
       areUiSessionKeysEquivalent(candidate.key, target.sessionKey),
     );
     if (!row) {
+      if (cached && cached.expiresAt > now) {
+        this.setCacheEntry(target.sessionKey, cached);
+        return cached;
+      }
+      this.cache.delete(target.sessionKey);
       return undefined;
     }
     const value: SessionTitle = {
@@ -388,12 +411,22 @@ export class SessionLinkTitler {
       agentId: row.agentId ?? parseAgentSessionKey(row.key)?.agentId ?? target.agentId,
       title: row.displayName ?? row.derivedTitle,
     };
+    if (
+      cached?.value &&
+      cached.expiresAt > now &&
+      cached.value.sessionKey === value.sessionKey &&
+      cached.value.agentId === value.agentId &&
+      cached.value.title === value.title
+    ) {
+      this.setCacheEntry(target.sessionKey, cached);
+      return cached;
+    }
     const entry = { expiresAt: now + SUCCESS_CACHE_MS, promise: Promise.resolve(value), value };
     this.setCacheEntry(target.sessionKey, entry);
     return entry;
   }
 
-  private loadTitle(target: SessionTitleTarget): Promise<SessionTitle> {
+  private loadTitle(target: SessionTitleTarget): Promise<SessionTitle | undefined> {
     const cached = this.cachedOrSeededEntry(target);
     if (cached) {
       return cached.promise;
@@ -407,9 +440,21 @@ export class SessionLinkTitler {
         "operator.read",
       )
     ) {
-      return Promise.resolve(target);
+      return Promise.resolve(undefined);
     }
+    const scope = this.currentScope();
     const load = async () => {
+      if (
+        client !== this.client ||
+        this.currentScope() !== scope ||
+        !canCallGatewayMethod(
+          this.context && { ...this.context.gateway.snapshot, client },
+          "controlUi.sessionPreview",
+          "operator.read",
+        )
+      ) {
+        throw new Error("Session title requires a connected Gateway");
+      }
       const value = await client.request<ControlUiSessionPreview>("controlUi.sessionPreview", {
         sessionKey: target.sessionKey,
       });
@@ -466,14 +511,30 @@ export class SessionLinkTitler {
         anchor.setAttribute("href", href);
       }
     }
-    if (!title || anchor.classList.contains("markdown-session-link--titled")) {
+    const previous = this.titledAnchors.get(anchor);
+    const ownedTitle = previous?.title ?? entry.display?.title;
+    if (
+      anchor.classList.contains("markdown-session-link--titled") &&
+      (ownedTitle === undefined || label.textContent !== ownedTitle)
+    ) {
       return;
     }
-    anchor.classList.add("markdown-session-link--titled");
+    if (!title) {
+      if (
+        titleRecord &&
+        ownedTitle !== undefined &&
+        anchor.classList.contains("markdown-session-link--titled")
+      ) {
+        anchor.classList.remove("markdown-session-link--titled");
+        label.textContent = target.sessionKey;
+        this.titledAnchors.delete(anchor);
+        entry.display?.onTitle(undefined);
+      }
+      return;
+    }
     this.titledAnchors.set(anchor, { scope: this.scope, key: target.sessionKey, title });
     // The producer retains this label across later rendering updates.
-    label.className = "session-label";
-    label.textContent = title;
-    anchor.replaceChildren(label);
+    stampSessionTitleLabel(anchor, label, title);
+    entry.display?.onTitle(title);
   }
 }

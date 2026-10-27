@@ -1,3 +1,6 @@
+/* @vitest-environment jsdom */
+
+import { Blob as NodeBlob } from "node:buffer";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -18,6 +21,7 @@ import {
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { chatThumbnailWeight } from "./session-message-display-facts.ts";
 import {
   CHAT_SNAPSHOT_METADATA_STORE_NAME as METADATA,
   CHAT_SNAPSHOT_STORE_NAME as SNAPSHOTS,
@@ -32,7 +36,6 @@ import {
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
-/* @vitest-environment jsdom */
 import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
 const DB = "openclaw-chat-snapshots";
@@ -157,6 +160,69 @@ async function readRawRecord(
 }
 
 describe("persistent chat session snapshots", () => {
+  it("restores row display bytes with their transcript and removes them on scoped sign-out", async () => {
+    // fake-indexeddb uses Node structured clone; jsdom's Blob is not cloneable there.
+    vi.stubGlobal("Blob", NodeBlob);
+    const thumbnail = new Blob([new Uint8Array([1, 2, 3])], { type: "image/webp" });
+    const saved = {
+      ...snapshot({ role: "assistant", content: "Synthetic image", __openclaw: { id: "reply" } }),
+      rowDisplay: {
+        reply: {
+          links: { "session:agent:main:linked": { title: "Synthetic linked task" } },
+          images: { source: { width: 480, height: 240, rendition: 480 as const, thumbnail } },
+        },
+        evicted: {
+          images: { gone: { width: 480, height: 240, rendition: 480 as const, thumbnail } },
+        },
+      },
+    };
+    const writer = new SessionSnapshotStore();
+    await persist(writer, sessionKey, saved);
+    const restored = await readSnapshot();
+    expect(restored?.rowDisplay?.reply?.links).toEqual(saved.rowDisplay.reply.links);
+    const image = restored?.rowDisplay?.reply?.images?.source;
+    expect(image).toMatchObject({ width: 480, height: 240, rendition: 480 });
+    expect(await image?.thumbnail?.arrayBuffer()).toEqual(await thumbnail.arrayBuffer());
+    expect(restored?.rowDisplay?.evicted).toBeUndefined();
+    const other = key("agent:main:other");
+    await persist(writer, other, { ...saved, sessionId: "other" });
+    await clearStoredChatSnapshots(sessionKey.slice(0, sessionKey.indexOf("\u0000") + 1));
+    expect(await readSnapshot()).toBeNull();
+    expect(await readSnapshot(other)).toBeNull();
+  });
+
+  it("evicts old thumbnail bytes at the global budget without evicting transcript rows", async () => {
+    vi.stubGlobal("Blob", NodeBlob);
+    const thumbnail = new Blob([new Uint8Array(256 * 1024)], { type: "image/webp" });
+    const make = (prefix: string, count: number): ChatSessionSnapshot => ({
+      ...snapshot(),
+      messages: Array.from({ length: count }, (_, index) => ({
+        role: "assistant",
+        content: "Synthetic image",
+        __openclaw: { id: `${prefix}-${index}` },
+      })),
+      rowDisplay: Object.fromEntries(
+        Array.from({ length: count }, (_, index) => [
+          `${prefix}-${index}`,
+          { images: { source: { width: 960, height: 480, rendition: 960 as const, thumbnail } } },
+        ]),
+      ),
+    });
+    const writer = new SessionSnapshotStore();
+    await persist(writer, sessionKey, make("old", 32));
+    const nextKey = key("agent:main:new");
+    await persist(writer, nextKey, make("new", 1));
+    const old = await readSnapshot();
+    const next = await readSnapshot(nextKey);
+    expect(old?.messages).toHaveLength(32);
+    expect(next?.messages).toHaveLength(1);
+    expect(chatThumbnailWeight(old ?? {}).count + chatThumbnailWeight(next ?? {}).count).toBe(32);
+    expect(chatThumbnailWeight(old ?? {}).bytes + chatThumbnailWeight(next ?? {}).bytes).toBe(
+      8 * 1024 * 1024,
+    );
+    expect(next?.rowDisplay?.["new-0"]?.images?.source?.thumbnail).toBeInstanceOf(Blob);
+  });
+
   it("restores model display data with the conversation, isolated from another account", async () => {
     const writer = new SessionSnapshotStore();
     const remembered: NonNullable<ChatSessionSnapshot["composer"]> = {

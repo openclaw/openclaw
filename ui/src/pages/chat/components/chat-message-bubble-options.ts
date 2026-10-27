@@ -30,6 +30,7 @@ export type MessageRenderOptions = {
   presented?: boolean;
   boardProvider?: BoardProvider;
   widgetLayout?: import("../session-message-cache.ts").ChatWidgetLayout;
+  displayFacts?: import("../../../lib/chat/row-display-facts.ts").ChatDisplayFacts;
   agentId?: string;
   runActive?: boolean;
   asyncQuestions?: AsyncQuestionPresentation;

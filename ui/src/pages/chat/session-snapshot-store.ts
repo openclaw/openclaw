@@ -1,13 +1,8 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
-import {
-  isChatTranscriptMetadata,
-  isProgressCard,
-  isMessageReactionSummary,
-} from "../../lib/protocol-validators.generated/transcript.js";
+import { MAX_CHAT_THUMBNAILS, MAX_CHAT_THUMBNAIL_BYTES } from "../../lib/chat/row-display-facts.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import * as json from "../../lib/snapshot-json.ts";
-import { chatSessionStateSnapshotSchema } from "./chat-session-state-snapshot.ts";
 import {
   getSessionCacheValue,
   MAX_CACHED_CHAT_SESSIONS,
@@ -20,6 +15,7 @@ import {
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { boundChatThumbnails, chatThumbnailWeight } from "./session-message-display-facts.ts";
 import {
   accessSidebarSnapshot,
   sidebarRecordBytes,
@@ -54,115 +50,16 @@ import {
   CHAT_SNAPSHOT_PROJECTION_VERSION,
   createSnapshotRecord,
 } from "./session-snapshot-projection.ts";
+import {
+  metadataSchema,
+  recordSchema,
+  type PreparedSnapshotRecord,
+  type SessionSnapshotMetadata,
+  type SessionSnapshotRecord,
+} from "./session-snapshot-record.ts";
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 const CHAT_SNAPSHOT_IDLE_TIMEOUT_MS = 1000;
 
-const nonnegative = json.refine(json.number, (value) => value >= 0);
-const sessionKeySchema = json.refine(json.text, (value) => value.length > 0);
-const completePaginationSchema = json.object(
-  {
-    completeSnapshot: json.optional(json.literal(true)),
-    hasMore: json.literal(false),
-    totalMessages: json.optional(nonnegative),
-  },
-  true,
-);
-const morePaginationSchema = json.object(
-  {
-    hasMore: json.literal(true),
-    nextOffset: nonnegative,
-    totalMessages: json.optional(nonnegative),
-  },
-  true,
-);
-const paginationSchema = {
-  parse(value: unknown) {
-    return asOptionalRecord(value)?.hasMore === true
-      ? morePaginationSchema.parse(value)
-      : completePaginationSchema.parse(value);
-  },
-};
-const permissionModeSchema = json.enumeration(["read-only", "guarded", "workspace", "full"]);
-const snapshotSchema = json.object(
-  {
-    sessionState: json.optional(chatSessionStateSnapshotSchema),
-    composer: json.optional(
-      json.nullable(
-        json.object({
-          id: json.text,
-          provider: json.text,
-          name: json.text,
-          reasoning: json.optional(json.boolean),
-          speed: json.optional(
-            json.object({
-              active: json.boolean,
-              currentOverride: json.enumeration(["", "on", "off", "auto", "ultrafast"]),
-              label: json.text,
-              supported: json.boolean,
-            }),
-          ),
-          thinkingLevel: json.optional(json.text),
-          thinkingDefault: json.optional(json.text),
-          thinkingLevels: json.optional(
-            json.array(json.object({ id: json.text, label: json.text }), 30),
-          ),
-          permissionMode: json.optional(permissionModeSchema),
-          defaultPermissionMode: json.optional(permissionModeSchema),
-        }),
-      ),
-    ),
-    board: json.optional(
-      json.nullable(json.object({ snapshot: json.unknown, receivedAtMs: nonnegative }, true)),
-    ),
-    widgetHeights: json.optional(
-      json.refine(
-        json.record(json.refine(json.number, (height) => height >= 1 && height <= 8000)),
-        (heights) => Object.keys(heights).length <= 100,
-      ),
-    ),
-    transcriptMetadata: json.optional(json.checked(isChatTranscriptMetadata)),
-    messageReactions: json.optional(
-      json.record(json.array(json.checked(isMessageReactionSummary))),
-    ),
-    progressCard: json.optional(json.nullable(json.checked(isProgressCard))),
-    deltaCursor: json.optional(json.text),
-    // Only persisted warm metadata needs its full validator; read admission loads it below.
-    historyState: json.optional(json.unknown),
-    displayedLeafEntryId: json.optional(json.nullable(json.text)),
-    // Message contents are opaque; only the array boundary needs validation.
-    messages: json.checked<unknown[]>(Array.isArray),
-    pagination: paginationSchema,
-    sessionId: json.nullable(json.text),
-  },
-  true,
-);
-const recordSchema = json.refine(
-  json.object(
-    {
-      projectionVersion: json.refine(
-        json.number,
-        (value) => Number.isSafeInteger(value) && value > 0,
-      ),
-      savedAt: nonnegative,
-      sessionId: json.nullable(json.text),
-      sessionKey: sessionKeySchema,
-      snapshot: snapshotSchema,
-    },
-    true,
-  ),
-  (record) => record.sessionId === record.snapshot.sessionId,
-);
-
-type SessionSnapshotRecord = Omit<json.SnapshotValue<typeof recordSchema>, "snapshot"> & {
-  snapshot: ChatSessionSnapshot;
-};
-const metadataFields = {
-  savedAt: nonnegative,
-  sessionKey: sessionKeySchema,
-};
-const metadataSchema = json.object({ ...metadataFields, weight: nonnegative }, true);
-type SessionSnapshotMetadata = json.SnapshotValue<typeof metadataSchema>;
-type PreparedSnapshotRecord = NonNullable<ReturnType<typeof createSnapshotRecord>>;
 type PendingSessionState = {
   savedAt: number;
   snapshot: ChatSessionSnapshot;
@@ -200,12 +97,11 @@ async function readSnapshotRecord(
   value: unknown,
   isCurrent: () => boolean,
 ): Promise<ChatSessionSnapshot | null> {
-  if (
-    value === undefined ||
-    !isCurrent() ||
-    !isPersistableChatSnapshotKey(sessionKey) ||
-    asOptionalRecord(value)?.projectionVersion !== CHAT_SNAPSHOT_PROJECTION_VERSION
-  ) {
+  if (value === undefined || !isCurrent() || !isPersistableChatSnapshotKey(sessionKey)) {
+    return null;
+  }
+  if (asOptionalRecord(value)?.projectionVersion !== CHAT_SNAPSHOT_PROJECTION_VERSION) {
+    await deleteStoredChatSnapshot(sessionKey);
     return null;
   }
   const record = await parseSnapshotRecord(value, sessionKey);
@@ -313,6 +209,37 @@ async function writeSnapshotRecords(
       snapshotStore.delete(oldest.sessionKey);
       metadataStore.delete(oldest.sessionKey);
       evicted.push(oldest.sessionKey);
+    }
+    let thumbnailCount = oldestFirst.reduce((sum, item) => sum + item.thumbnailCount, 0);
+    let thumbnailBytes = oldestFirst.reduce((sum, item) => sum + item.thumbnailBytes, 0);
+    for (const metadata of oldestFirst) {
+      if (thumbnailCount <= MAX_CHAT_THUMBNAILS && thumbnailBytes <= MAX_CHAT_THUMBNAIL_BYTES) {
+        break;
+      }
+      if (!metadata.thumbnailCount) {
+        continue;
+      }
+      const record = json.parseSnapshot(
+        recordSchema,
+        await requestResult(snapshotStore.get(metadata.sessionKey)),
+      );
+      if (!record) {
+        transaction.abort();
+        throw new Error("IndexedDB thumbnail record mismatch");
+      }
+      const snapshot = boundChatThumbnails(record.snapshot, {
+        count: Math.max(0, MAX_CHAT_THUMBNAILS - (thumbnailCount - metadata.thumbnailCount)),
+        bytes: Math.max(0, MAX_CHAT_THUMBNAIL_BYTES - (thumbnailBytes - metadata.thumbnailBytes)),
+      });
+      const retained = chatThumbnailWeight(snapshot);
+      thumbnailCount += retained.count - metadata.thumbnailCount;
+      thumbnailBytes += retained.bytes - metadata.thumbnailBytes;
+      snapshotStore.put({ ...record, snapshot });
+      metadataStore.put({
+        ...metadata,
+        thumbnailCount: retained.count,
+        thumbnailBytes: retained.bytes,
+      });
     }
     await transactionComplete(transaction);
     return evicted;

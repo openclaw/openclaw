@@ -1,6 +1,6 @@
 /** Browser-only diagnostic, serialized after the mock socket and wire-delay probe. */
 export function warmReloadProbe(
-  input: { rowFacts?: boolean; avatars?: boolean } = {},
+  input: { rowFacts?: boolean; avatars?: boolean; lateRowFacts?: boolean } = {},
   samplePaneChrome?: (at: number) => void,
 ) {
   const milestones: Record<string, number> = {};
@@ -56,12 +56,37 @@ export function warmReloadProbe(
   let removedRows = 0;
   let stopped = false;
   let cachedRows: Element[] = [];
-  const factSelectors = {
+  const factSelectors: Record<string, string> = {
     reactions: ".chat-message-reactions",
     notices: ".chat-run-failure",
     activity: ".chat-activity-group",
     meta: ".msg-meta",
+    ...(input.lateRowFacts
+      ? {
+          links: ".markdown-session-link, .markdown-github-item",
+          images: ".chat-image-frame",
+          canonicalNotices: ".chat-notice",
+          avatars: ".chat-avatar, .chat-author-avatar",
+        }
+      : {}),
   };
+  const lateFrames: Array<{
+    at: number;
+    cached: boolean;
+    height: number | undefined;
+    links: string[];
+    images: string[];
+    notices: string[];
+    avatars: string[];
+  }> = [];
+  const imageFact = (image: HTMLImageElement) => [
+    image.getAttribute("src")?.startsWith("blob:")
+      ? image.getAttribute("src")
+      : image.getAttribute("src")?.split("?", 1)[0],
+    image.complete && image.naturalWidth > 0,
+    image.naturalWidth,
+    image.naturalHeight,
+  ];
   const factFrames: Array<{
     at: number;
     changes: Array<{ rowKey: string | null; parts: string[]; heightDelta: number }>;
@@ -84,10 +109,15 @@ export function warmReloadProbe(
       cached: boolean;
     }
   >();
+  let observedThread: Element | undefined;
   const resize = input.rowFacts
     ? new ResizeObserver((entries) => {
         for (const entry of entries) {
-          sizes.set(entry.target, entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height);
+          const height = entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height;
+          sizes.set(entry.target, height);
+          if (entry.target === observedThread && lateFrames.length) {
+            lateFrames.at(-1)!.height = height;
+          }
         }
       })
     : undefined;
@@ -294,6 +324,7 @@ export function warmReloadProbe(
   const observer = new MutationObserver((records) => {
     const regions = new Map<string, number>();
     const textRoots = new Set<Element>();
+    const textSelector = input.lateRowFacts ? ".chat-text, .chat-notice" : ".chat-text";
     for (const record of records) {
       const element =
         record.target instanceof Element ? record.target : record.target.parentElement;
@@ -314,7 +345,7 @@ export function warmReloadProbe(
       ) {
         avatarTransitions.push({ at: performance.now(), region, attribute: record.attributeName });
       }
-      const textRoot = element?.closest(".chat-text");
+      const textRoot = element?.closest(textSelector);
       if (textRoot) {
         textRoots.add(textRoot);
       }
@@ -322,10 +353,10 @@ export function warmReloadProbe(
         if (!(node instanceof Element)) {
           continue;
         }
-        if (node.matches(".chat-text")) {
+        if (node.matches(textSelector)) {
           textRoots.add(node);
         }
-        for (const root of node.querySelectorAll(".chat-text")) {
+        for (const root of node.querySelectorAll(textSelector)) {
           textRoots.add(root);
         }
       }
@@ -429,6 +460,45 @@ export function warmReloadProbe(
     );
     if (visible) {
       mark("firstTranscript");
+      if (input.lateRowFacts && thread && inner) {
+        observedThread = inner;
+        observeSize(inner);
+        lateFrames.push({
+          at: performance.now(),
+          cached: Boolean(milestones.cacheRead && !milestones.catchupResponse),
+          height: sizes.get(inner),
+          links: [...thread.querySelectorAll<HTMLElement>(factSelectors.links!)].map((link) =>
+            JSON.stringify([
+              link.textContent,
+              link.className,
+              link.dataset.linkReaderTone,
+              link.getAttribute("aria-description"),
+            ]),
+          ),
+          images: [...thread.querySelectorAll<HTMLElement>(factSelectors.images!)].map((frame) =>
+            JSON.stringify([
+              frame.className,
+              frame.getAttribute("style"),
+              [...frame.querySelectorAll("img")].map(imageFact),
+            ]),
+          ),
+          notices: [...thread.querySelectorAll<HTMLElement>(factSelectors.canonicalNotices!)].map(
+            (notice) =>
+              JSON.stringify([
+                notice.getAttribute("data-chat-row-key"),
+                notice.className,
+                notice.textContent,
+              ]),
+          ),
+          avatars: [...thread.querySelectorAll<HTMLElement>(factSelectors.avatars!)].map((avatar) =>
+            JSON.stringify([
+              avatar.className,
+              [...avatar.querySelectorAll("img")].map(imageFact),
+              avatar.textContent,
+            ]),
+          ),
+        });
+      }
       if (resize && inner) {
         const at = performance.now();
         const rowKeys = currentRows.map((row) => row.getAttribute("data-virtual-row-key"));
@@ -453,6 +523,14 @@ export function warmReloadProbe(
               elements.map((element) => [
                 element.textContent,
                 element.querySelectorAll("*").length,
+                ...(input.lateRowFacts
+                  ? [
+                      element.className,
+                      element.getAttribute("style"),
+                      element.getAttribute("aria-description"),
+                      [...element.querySelectorAll("img")].map(imageFact),
+                    ]
+                  : []),
               ]),
             );
             heights[part] = elements.map((element) => sizes.get(element));
@@ -602,6 +680,36 @@ export function warmReloadProbe(
           Math.min(rect.bottom, bounds.bottom, innerHeight) > Math.max(rect.top, bounds.top, 0)
         );
       });
+      const firstPaint = milestones.firstTranscriptPaint ?? milestones.firstTranscript;
+      // The rAF sample immediately before presentation owns that painted frame.
+      const firstPaintedFrame =
+        firstPaint === undefined ? -1 : lateFrames.findLastIndex((frame) => frame.at <= firstPaint);
+      const paintedLateFrames =
+        firstPaint === undefined ? [] : lateFrames.slice(Math.max(0, firstPaintedFrame));
+      const firstLateFrame = paintedLateFrames[0];
+      const lateChanges = paintedLateFrames.slice(1).flatMap((frame, index) => {
+        const previous = paintedLateFrames[index]!;
+        const parts = (["links", "images", "notices", "avatars"] as const).filter(
+          (part) => JSON.stringify(frame[part]) !== JSON.stringify(previous[part]),
+        );
+        const heightDelta =
+          frame.height !== undefined && previous.height !== undefined
+            ? frame.height - previous.height
+            : 0;
+        return parts.length || Math.abs(heightDelta) > 0.5
+          ? [{ at: frame.at, parts, heightDelta }]
+          : [];
+      });
+      if (
+        input.lateRowFacts &&
+        (firstPaintedFrame < 0 ||
+          !firstLateFrame?.cached ||
+          milestones.firstTranscriptPaint === undefined)
+      ) {
+        throw new Error(
+          "Unqualified late-row-facts sample: no measured cached first transcript paint",
+        );
+      }
       return {
         milestones,
         transcriptPresentation: {
@@ -639,6 +747,30 @@ export function warmReloadProbe(
               threadFrames,
               rowWindows,
               coverage,
+            }
+          : undefined,
+        lateRowFacts: input.lateRowFacts
+          ? {
+              boundary: firstPaint,
+              measuredPaint: milestones.firstTranscriptPaint !== undefined,
+              firstFrame: firstLateFrame,
+              frames: paintedLateFrames,
+              changes: lateChanges,
+              visualChanges: lateChanges.filter((change) => change.parts.length).length,
+              heightDelta:
+                firstLateFrame?.height !== undefined &&
+                paintedLateFrames.at(-1)?.height !== undefined
+                  ? paintedLateFrames.at(-1)!.height! - firstLateFrame.height
+                  : null,
+              maximumHeightChange:
+                firstLateFrame?.height === undefined
+                  ? null
+                  : Math.max(
+                      0,
+                      ...paintedLateFrames.map((frame) =>
+                        Math.abs((frame.height ?? firstLateFrame.height!) - firstLateFrame.height!),
+                      ),
+                    ),
             }
           : undefined,
         states,

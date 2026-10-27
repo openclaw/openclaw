@@ -3,6 +3,7 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { CronJobSchema } from "../../../packages/gateway-protocol/src/schema/cron.ts";
 import { ChatHistoryDeltaResultSchema } from "../../../packages/gateway-protocol/src/schema/logs-chat.ts";
+import { SessionRowSchema } from "../../../packages/gateway-protocol/src/schema/sessions-row.ts";
 import { GatewaySessionRowEvents } from "../api/gateway-session-row-events.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { canApplySessionListSnapshot } from "../lib/sessions/session-list-query.ts";
@@ -30,6 +31,66 @@ function expectAbsent(value: unknown, fields: string) {
 }
 
 describe("Team-scale Gateway fixture", () => {
+  sessionGatewayTest(
+    "exercises authorized ticketed and cacheable native images in the late-row window",
+    async ({ connect }) => {
+      const fixture = createControlUiTeamScaleFixture({ now, lateRowFacts: true });
+      const { request } = await connect(fixture.scenario);
+      const response = await request("sessions.messages.subscribe", {
+        key: fixture.selectedSessionKey,
+        initialHistory: { limit: 80, maxBytes: 256 * 1024, knownState: {} },
+      });
+      const history = asOptionalRecord(asOptionalRecord(response.payload.initialHistory)?.payload);
+      expect([...Value.Errors(SessionRowSchema, history?.sessionInfo)]).toEqual([]);
+      const messages = Array.isArray(history?.messages) ? history.messages : [];
+      const lastAnswer = messages
+        .map(asOptionalRecord)
+        .find((message) => asOptionalRecord(message?.__openclaw)?.id === "team-message-240");
+      const images = (Array.isArray(lastAnswer?.content) ? lastAnswer.content : [])
+        .map(asOptionalRecord)
+        .filter((block) => block?.type === "image");
+      expect(images).toHaveLength(2);
+      expect(images[0]).toMatchObject({ artifactId: "synthetic-late-row-thumbnail" });
+      expect(images[0]).not.toHaveProperty("url");
+      expect(images[1]).toMatchObject({ url: "media://inbound/synthetic-l245-cacheable.png" });
+      for (const image of images) {
+        expectAbsent(image, "width height");
+      }
+      expect(history).toHaveProperty("sessionInfo.archived", true);
+      const download = await request("artifacts.download", {
+        sessionKey: fixture.selectedSessionKey,
+        artifactId: "synthetic-late-row-thumbnail",
+        transport: "http",
+        previewWidth: 480,
+      });
+      expect(download.payload).toHaveProperty("artifact.mimeType", "image/png");
+      const downloadUrl = download.payload.url;
+      if (typeof downloadUrl !== "string") {
+        throw new Error("The ticketed thumbnail fixture must return an HTTP download URL");
+      }
+      expect(fixture.assets.get(downloadUrl)?.headers?.["Cache-Control"]).toBe("private, no-store");
+      expect(fixture.assets.get("/__openclaw__/assistant-media")?.headers?.["Cache-Control"]).toBe(
+        "private, no-cache",
+      );
+      for (const path of [downloadUrl, "/__openclaw__/assistant-media"]) {
+        const body = fixture.assets.get(path)?.body;
+        if (!Buffer.isBuffer(body)) {
+          throw new Error("The late-row fixture must serve native PNG bytes");
+        }
+        expect(body.readUInt32BE(16)).toBe(480);
+        expect(body.readUInt32BE(20)).toBe(240);
+        expect(body.length).toBeGreaterThanOrEqual(32 * 1024);
+        expect(body.length).toBeLessThanOrEqual(96 * 1024);
+      }
+      const preview = await request("controlUi.sessionPreview", {
+        sessionKey: "agent:main:synthetic-late-row-reference",
+      });
+      expect(preview.payload).toHaveProperty("title", "Synthetic linked research");
+      const pr = await request("forge.preview", { url: fixture.lateRowFacts!.prUrl });
+      expect(pr.payload).toHaveProperty("badge", { label: "Open", tone: "positive" });
+    },
+  );
+
   sessionGatewayTest.for(["normal", "large"] as const)(
     "revalidates the selected %s transcript without retransmitting cached messages",
     async (mode, { connect }) => {

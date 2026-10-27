@@ -134,7 +134,20 @@ cached transcript opens at its latest messages without an initial scroll animati
 It retains participant and completed-work timing information and the last task
 progress card for display while connecting; live Gateway results replace those
 cached facts in place. Cached progress does not authorize offline actions. The
-first chat request uses the saved cursor if the cached transcript is ready when
+cached window also retains resolved link labels, image dimensions, archive
+attribution, and avatar source identities. Previously displayed inline thumbnails
+can paint with their rows while reconnecting, without a new network read. These
+display copies do not authorize opening originals or other Gateway actions.
+
+Thumbnail storage shares the transcript's Gateway and account scope. It holds at
+most 32 thumbnails and 8 MiB total, with a 256 KiB limit per image; animated and
+full-size originals are excluded. Display facts cover up to eight links and eight
+images per retained row, across 80 rows. Thumbnails leave the cache with their
+rows, and scope retirement, session reset, or forgetting the browser clears the
+affected copies. Missing, evicted, or incompatible data keeps the usual loader.
+Media tickets and credentials are never added to these display facts.
+
+The first chat request uses the saved cursor if the cached transcript is ready when
 the live message subscription finishes connecting. Otherwise, the live read and
 cache restoration run in parallel. Agent switches and stale asynchronous reads
 retain their own identity checks. When the cached conversation also has the exact
@@ -197,7 +210,8 @@ The account-scoped transcript cache replaces older unscoped derived snapshots;
 those old transcripts are discarded rather than attributed to the next account.
 A connected visit fills the new cache. Existing unowned drafts and queued input
 are preserved for explicit recovery and review, not automatically assigned or
-sent. Existing attachment stores and storage limits remain unchanged. An older
+sent. Draft and queued-input attachment stores keep their existing storage limits;
+warm transcript thumbnails use the separate bounds above. An older
 UI cannot read the new account-qualified outbox keys; rolling back does not
 convert that retained input back into an unowned queue.
 

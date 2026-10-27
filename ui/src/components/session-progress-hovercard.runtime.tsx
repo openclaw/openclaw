@@ -33,6 +33,7 @@ import {
   sessionProgressHoverPlacementForTarget,
   sessionProgressHoverTargetFromEvent,
 } from "./session-progress-hovercard-target.ts";
+import type { SessionTitleDisplay } from "./session-title-label.ts";
 
 const OPEN_DELAY_MS = 450;
 const SWEEP_OPEN_DELAY_MS = 80;
@@ -58,7 +59,11 @@ type SessionProgressHovercardProps = {
 };
 
 type SessionProgressHovercardMethods = {
-  registerSessionTitleTarget: (target: HTMLElement, label: HTMLElement) => () => void;
+  registerSessionTitleTarget: (
+    target: HTMLElement,
+    label: HTMLElement,
+    display?: SessionTitleDisplay,
+  ) => () => void;
 };
 
 type HovercardFrame = {
@@ -619,8 +624,8 @@ export const SessionProgressHovercard = defineSolidBridge<
       lookupSidebarRow: { default: null, attribute: false },
     },
     methods: {
-      registerSessionTitleTarget: (host, target, label) =>
-        sessionLinkTitlers.get(host)?.register(target, label) ?? (() => {}),
+      registerSessionTitleTarget: (host, target, label, display) =>
+        sessionLinkTitlers.get(host)?.register(target, label, display) ?? (() => {}),
     },
   },
 );
