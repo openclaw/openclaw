@@ -67,14 +67,7 @@ export function hasOperatorApprovalsAccess(auth: OperatorAuth): boolean {
   return hasOperatorScope(auth, "operator.approvals", false);
 }
 
-/**
- * Guests: session-only operators who can view, not write, other people's sessions.
- * Matches the restricted role shape Visitor Access requires. Presentation defaults
- * only; the Gateway still owns every authorization decision.
- */
-export function isRestrictedSessionGuest(auth: OperatorAuth): boolean {
-  return auth?.sessionCap === "view" && !hasOperatorReadAccess(auth);
-}
+export { isRestrictedSessionGuest } from "../../../src/shared/operator-scope-compat.js";
 
 export function hasOperatorSelfReadAccess(auth: OperatorAuth): boolean {
   return hasOperatorReadAccess(auth) || hasOperatorScope(auth, "operator.sessions.read", true);

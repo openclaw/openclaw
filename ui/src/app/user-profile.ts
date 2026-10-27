@@ -12,7 +12,8 @@ export function sameSelfUser(
     left?.identity?.id === right?.identity?.id &&
     left?.email === right?.email &&
     left?.name === right?.name &&
-    left?.avatarUrl === right?.avatarUrl
+    left?.avatarUrl === right?.avatarUrl &&
+    left?.isGuest === right?.isGuest
   );
 }
 

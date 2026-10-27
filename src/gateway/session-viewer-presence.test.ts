@@ -103,6 +103,38 @@ describe("session viewer presence declarations", () => {
 });
 
 describe("presence projection without resident session facts", () => {
+  it("preserves admitted presence without requiring its profile in the resident catalog", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "visitor",
+            definitions: {
+              visitor: {
+                sessions: { others: "view" },
+                agents: [],
+                scopes: ["operator.sessions.write"],
+              },
+            },
+          },
+        },
+      };
+      const presence = [
+        {
+          ts: 1,
+          text: "",
+          user: {
+            id: "retained-person",
+            identity: { type: "profile" as const, id: "retained-person" },
+          },
+        },
+      ];
+      const project = createPresenceRecipientProjection({ cfg, presence });
+      expect(project(recipient())).toEqual(presence);
+      expect(project(recipient(["operator.sessions.read"]))).toEqual([]);
+    });
+  });
+
   it("shares watch selection across equal audiences and retires it when authority changes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const key = "agent:main:presence-audience";

@@ -52,10 +52,10 @@ it.each([false, true])(
       avatarUrl: "https://avatars.githubusercontent.com/u/42?v=4",
     };
     const profiles = [
-      { ...profile, id: "assigned", role: "guest", githubIdentity },
+      { ...profile, id: "assigned", role: "visitor", githubIdentity },
       { ...profile, id: "mapped", githubIdentity },
       { ...profile, id: "default" },
-      { ...profile, id: "merged", role: "guest", mergedInto: "mapped" },
+      { ...profile, id: "merged", role: "visitor", mergedInto: "mapped" },
     ];
     listProfiles.mockResolvedValue(profiles);
     readUserProfileSnapshot.mockResolvedValue({
@@ -66,9 +66,9 @@ it.each([false, true])(
       getRuntimeConfig: () => ({
         gateway: {
           roles: {
-            default: "guest",
+            default: "visitor",
             definitions: {
-              guest: { sessions: { others: "view" }, agents: [], scopes: [] },
+              visitor: { sessions: { others: "view" }, agents: [], scopes: [] },
               release_admin: {
                 sessions: { others: "write" },
                 agents: "*",
@@ -82,10 +82,22 @@ it.each([false, true])(
     });
     const result = respond.mock.calls[0]?.[1];
     expect(result.profiles).toMatchObject([
-      { id: "assigned", role: "guest", effectiveRole: "guest", roleSource: "assigned" },
-      { id: "mapped", effectiveRole: "release_admin", roleSource: "githubLogin" },
-      { id: "default", effectiveRole: "guest", roleSource: "default" },
-      { id: "merged", role: "guest", effectiveRole: "release_admin", roleSource: "githubLogin" },
+      {
+        id: "assigned",
+        role: "visitor",
+        effectiveRole: "visitor",
+        roleSource: "assigned",
+        isGuest: true,
+      },
+      { id: "mapped", effectiveRole: "release_admin", roleSource: "githubLogin", isGuest: false },
+      { id: "default", effectiveRole: "visitor", roleSource: "default", isGuest: true },
+      {
+        id: "merged",
+        role: "visitor",
+        effectiveRole: "release_admin",
+        roleSource: "githubLogin",
+        isGuest: false,
+      },
     ]);
     expect(result.profiles[1]).not.toHaveProperty("role");
     expect(Value.Check(UsersListResultSchema, result)).toBe(true);

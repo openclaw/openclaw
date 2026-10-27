@@ -250,7 +250,12 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
           aria-hidden="true"
         />
         <div>
-          <h2>{label().name}</h2>
+          <div class="person-activity-card__identity">
+            <h2>{label().name}</h2>
+            <Show when={user().isGuest}>
+              <span class="person-activity-card__guest">{t("presence.guest")}</span>
+            </Show>
+          </div>
           <Show when={user().entries !== undefined}>
             <span
               class={[

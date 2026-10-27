@@ -51,6 +51,8 @@ export const PresenceEntrySchema = closedObject({
       email: Type.Optional(NonEmptyString),
       name: Type.Optional(NonEmptyString),
       avatarUrl: Type.Optional(NonEmptyString),
+      /** Current policy presentation, independent of connection scopes and display identity. */
+      isGuest: Type.Optional(Type.Boolean()),
     }),
   ),
   /** Sessions this connection declares it is viewing, independent of transport subscriptions. Sorted lexicographically. */

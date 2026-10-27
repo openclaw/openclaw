@@ -1221,6 +1221,7 @@ const startupEnglish = {
     },
     rosterTitle: "Online",
     usersTitle: "Users",
+    guest: "Guest",
     allUsers: "All users",
     directoryFailed: "Could not load all users. Retry",
     filters: {

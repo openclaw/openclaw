@@ -189,7 +189,7 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
                   data-person-card
                   data-online-user-id={user().id}
                   data-presence-activity={activityState()}
-                  aria-description={`${activityState() === "offline" ? t("presence.offline") : presenceActivityLabel(presenceViewerActivity(user()))} · ${workloadLabel()}`}
+                  aria-description={`${user().isGuest ? `${t("presence.guest")} · ` : ""}${activityState() === "offline" ? t("presence.offline") : presenceActivityLabel(presenceViewerActivity(user()))} · ${workloadLabel()}`}
                   title={workload() ? undefined : t("presence.sessions.unavailable")}
                   data-person-card-key={presenceUserKey(user())}
                   data-person-card-trigger
@@ -202,7 +202,14 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
                   <span class="sidebar-online__avatar" aria-hidden="true">
                     <ViewerAvatar user={user()} markAsViewer={false} variant="footer" />
                   </span>
-                  <span class="sidebar-online__person-name">{presenceViewerLabel(user())}</span>
+                  <span class="sidebar-online__person-name">
+                    <span class="sidebar-online__person-label">{presenceViewerLabel(user())}</span>
+                    <Show when={user().isGuest}>
+                      <span class="sidebar-online__guest" aria-label={t("presence.guest")}>
+                        {t("presence.guest")}
+                      </span>
+                    </Show>
+                  </span>
                   {workload() && (workload()!.open > 0 || workload()!.running > 0) ? (
                     <span class="sidebar-online__counts" aria-hidden="true">
                       <For each={["running", "open"] as const}>

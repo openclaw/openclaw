@@ -122,6 +122,7 @@ export function createPersonReferenceCard(options: {
             profile.githubIdentity?.login ||
             t("presence.card.person"),
           avatarUrl: profileAvatarUrl(profile),
+          isGuest: profile.isGuest,
           watchedSessions: [],
         };
       } else if (!directory.result) {
@@ -221,6 +222,7 @@ export function createPersonReferenceCard(options: {
                       ...person,
                       name: presence?.name ?? person.name,
                       avatarUrl: presence?.avatarUrl ?? person.avatarUrl,
+                      isGuest: presence ? presence.isGuest : person.isGuest,
                       watchedSessions: presence?.watchedSessions ?? [],
                       entries: presence?.entries ?? (data?.presencePayload ? [] : undefined),
                     },

@@ -4,6 +4,7 @@ import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 export function buildAuthenticatedPresenceUser(params: {
   authenticatedUserId?: string;
   authenticatedUserIsTailscaleProvider?: boolean;
+  authenticatedUserIsGuest?: boolean;
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;
@@ -22,6 +23,9 @@ export function buildAuthenticatedPresenceUser(params: {
   return {
     id: params.authenticatedUserProfile.profileId,
     identity: { type: "profile", id: params.authenticatedUserProfile.profileId },
+    ...(params.authenticatedUserIsGuest !== undefined
+      ? { isGuest: params.authenticatedUserIsGuest }
+      : {}),
     ...(params.authenticatedUserId && !params.authenticatedUserIsTailscaleProvider
       ? { email: params.authenticatedUserId }
       : {}),

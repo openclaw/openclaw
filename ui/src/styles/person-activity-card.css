@@ -49,6 +49,22 @@
   line-height: 1;
 }
 
+.person-activity-card__identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.person-activity-card__guest {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: calc(10px * var(--control-ui-text-scale));
+  line-height: 1.4;
+}
+
 .person-activity-card__status {
   display: inline-flex;
   align-items: center;

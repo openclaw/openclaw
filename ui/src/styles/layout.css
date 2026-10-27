@@ -2149,6 +2149,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .sidebar-online__menu-trigger svg {
+  display: block;
   width: 14px;
   height: 14px;
 }
@@ -2252,7 +2253,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .sidebar-online__person-name {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
   overflow: hidden;
   color: var(--text-strong);
@@ -2260,11 +2263,23 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   font-weight: 600;
   line-height: calc(24px * var(--control-ui-text-scale));
   white-space: nowrap;
-  mask-image: linear-gradient(to right, black calc(100% - 12px), transparent);
 }
 
-.sidebar-online__person-name:dir(rtl) {
-  mask-image: linear-gradient(to left, black calc(100% - 12px), transparent);
+.sidebar-online__person-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-online__guest {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: calc(10px * var(--control-ui-text-scale));
+  font-weight: 400;
+  line-height: 1.4;
 }
 
 /* Keep the group intrinsic and right-anchored; hover changes paint, not spacing. */

@@ -115,3 +115,18 @@ export function resolveScopeOutsideRequestedRoles(params: {
   }
   return null;
 }
+
+/** Presentation only: session guests can view others' sessions without general Gateway reads. */
+export function isRestrictedSessionGuest(
+  auth: { role?: string; scopes?: readonly string[]; sessionCap?: string } | null | undefined,
+): boolean {
+  return (
+    auth?.sessionCap === "view" &&
+    auth.scopes !== undefined &&
+    !roleScopesAllow({
+      role: auth.role ?? "operator",
+      requestedScopes: ["operator.read"],
+      allowedScopes: auth.scopes,
+    })
+  );
+}

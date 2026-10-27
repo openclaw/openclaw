@@ -18,7 +18,7 @@ export function createPresenceReset(
   presence: SystemPresence[],
   version: number,
 ): PresenceReset {
-  // Projection preserves source ordering; only watched-session fields change.
+  // Projection preserves source ordering and the source-owned connection keys.
   return { reset: true, version, presence, keys: source.map(getSystemPresenceKey) };
 }
 

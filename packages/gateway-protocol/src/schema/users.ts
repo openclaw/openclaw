@@ -73,6 +73,8 @@ export const UserProfileSchema = closedObject({
   hasAvatar: Type.Boolean(),
   role: Type.Optional(UserProfileRoleSchema),
   effectiveRole: Type.Optional(UserProfileRoleSchema),
+  /** Presentation from the effective policy; absent when no named policy is available. */
+  isGuest: Type.Optional(Type.Boolean()),
   roleSource: Type.Optional(
     Type.Union([Type.Literal("assigned"), Type.Literal("githubLogin"), Type.Literal("default")]),
   ),

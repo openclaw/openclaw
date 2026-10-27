@@ -81,6 +81,11 @@ describe("gateway presence audience", () => {
         default: "reader",
         definitions: {
           reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+          visitor: {
+            sessions: { others: "view" },
+            agents: "*",
+            scopes: ["operator.sessions.write"],
+          },
           writer: { sessions: { others: "write" }, agents: "*", scopes: ["operator.write"] },
           restricted: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
           maintainer: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
@@ -89,6 +94,8 @@ describe("gateway presence audience", () => {
       },
     );
     const creator = ensureProfileForEmail("creator@example.com");
+    const visitor = ensureProfileForEmail("visitor@example.com");
+    setUserProfileRole(visitor.id, "visitor");
     const restricted = ensureProfileForEmail("restricted@example.com");
     setUserProfileRole(restricted.id, "restricted");
     setUserProfileRole(ensureProfileForEmail("admin@example.com").id, "maintainer");
@@ -199,6 +206,8 @@ describe("gateway presence audience", () => {
       };
       try {
         const watcher = await openRecipient("watcher", ["operator.admin"]);
+        const guest = await openRecipient("visitor", ["operator.sessions.write"]);
+        expect(guest.hello.snapshot.presence).toEqual([]);
         // Join publication itself: an RPC response can precede the coalescing window.
         const firstConnect = onceMessage<{
           type: string;
@@ -221,6 +230,9 @@ describe("gateway presence audience", () => {
               expect.objectContaining({ instanceId: "presence-idle", reason: "connect" }),
             ]),
           );
+        expect(
+          watcher.events.at(-1)?.find((entry) => entry.user?.id === visitor.id)?.user?.isGuest,
+        ).toBe(true);
         for (const sessionKeys of [[sharedKey], []]) {
           expect(await rpcReq(idle.ws, "sessions.viewers.set", { sessionKeys })).toMatchObject({
             ok: true,
@@ -260,6 +272,7 @@ describe("gateway presence audience", () => {
         expect(rawWatcher?.watchedSessions).toEqual(watchedKeys);
         const { watchedSessions: _watchedSessions, ...person } = rawWatcher!;
         expect(person.user?.id).toBe(ensureProfileForEmail("watcher@example.com").id);
+        expect(person.user?.isGuest).toBe(false);
         expect(person.ts).toBeGreaterThan(0);
         expect(person).toMatchObject({
           onlineSince: expect.any(Number),

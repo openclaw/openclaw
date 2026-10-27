@@ -32,7 +32,7 @@ it("isolates namespaces while merging renamed tabs and excluding disconnected fa
     { instanceId: "raw-tab", user: raw, watchedSessions: ["raw-session"] },
     {
       instanceId: "profile-tab-2",
-      user: { ...profile, name: "Renamed profile" },
+      user: { ...profile, name: "Renamed profile", isGuest: true },
       watchedSessions: ["profile-extra"],
     },
     {
@@ -47,6 +47,7 @@ it("isolates namespaces while merging renamed tabs and excluding disconnected fa
   expect(forward.users).toEqual([
     expect.objectContaining({
       ...profile,
+      isGuest: true,
       watchedSessions: ["profile-extra", "profile-session"],
       entries,
     }),

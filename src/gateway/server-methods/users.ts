@@ -37,6 +37,7 @@ import { resolveSystemGitHubIdentityStatus } from "../../agents/github-tool-iden
 import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
+import { isRestrictedSessionGuest } from "../../shared/operator-scope-compat.js";
 import { UserChannelIdentityConflictError } from "../../state/user-channel-identities.js";
 import {
   changeCanonicalUserChannelIdentity,
@@ -390,15 +391,20 @@ export const usersHandlers: GatewayRequestHandlers = {
       ...result,
       profiles: result.profiles.map((profile) => {
         const canonical = profilesById.get(profile.mergedInto ?? profile.id) ?? profile;
-        return Object.assign(
-          profile,
-          resolveOperatorRoleSelection(
-            canonical.id,
-            canonical.role ?? null,
-            cfg,
-            canonical.githubIdentity?.host ? null : (canonical.githubIdentity?.login ?? null),
-          ),
+        const selection = resolveOperatorRoleSelection(
+          canonical.id,
+          canonical.role ?? null,
+          cfg,
+          canonical.githubIdentity?.host ? null : (canonical.githubIdentity?.login ?? null),
         );
+        const role = selection.effectiveRole
+          ? cfg.gateway?.roles?.definitions[selection.effectiveRole]
+          : undefined;
+        return Object.assign(profile, selection, {
+          isGuest: role
+            ? isRestrictedSessionGuest({ scopes: role.scopes, sessionCap: role.sessions.others })
+            : undefined,
+        });
       }),
     });
   },

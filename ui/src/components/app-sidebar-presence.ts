@@ -55,7 +55,15 @@ export function sidebarPresenceScope(host: SidebarPresenceHost): SidebarPresence
 }
 
 function person(user: AuthenticatedUser) {
-  return [user.id, user.identity?.type, user.identity?.id, user.name, user.email, user.avatarUrl];
+  return [
+    user.id,
+    user.identity?.type,
+    user.identity?.id,
+    user.name,
+    user.email,
+    user.avatarUrl,
+    user.isGuest,
+  ];
 }
 
 export function sidebarPresencePresentation(

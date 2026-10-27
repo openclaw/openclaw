@@ -55,6 +55,7 @@ export function groupPresenceUsers(entries: readonly PresenceEntry[]): {
       .map(([, userEntries]) => ({
         id: userEntries[0]!.user!.id,
         identity: userEntries[0]!.user!.identity,
+        isGuest: userEntries.find((entry) => entry.user?.isGuest !== undefined)?.user?.isGuest,
         name: firstSorted(userEntries.map((entry) => entry.user?.name)),
         email: firstSorted(userEntries.map((entry) => entry.user?.email)),
         avatarUrl: firstSorted(userEntries.map((entry) => entry.user?.avatarUrl)),

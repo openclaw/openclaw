@@ -22,6 +22,7 @@ export function profilePresenceViewer(profile: UserProfile): PresenceViewer {
     id: profile.id,
     identity: { type: "profile", id: profile.id },
     name: profile.displayName ?? undefined,
+    isGuest: profile.isGuest,
     avatarUrl: profileAvatarUrl(profile),
     watchedSessions: [],
     entries: [],
