@@ -393,6 +393,11 @@ suite.define(() => {
         await page.evaluate(readStoredWarmState, { ...warmInput, includeDrafts: true }),
       ).toEqual({ ...baseline, drafts: 0 });
       liveJobName = "Updated scheduled check 1";
+      // The reset document reloads an exact-key link independently of short-link discovery.
+      await page.evaluate(
+        (url) => history.replaceState(null, "", url),
+        controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey),
+      );
       await page.reload();
       await gateway.waitForRequest("connect");
       await details.getByText("Synthetic scheduled check 1", { exact: true }).waitFor();
