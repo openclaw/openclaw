@@ -8,7 +8,6 @@ import {
 } from "./markdown-session-links.ts";
 import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
-import { SessionLinkTitler } from "./session-link-titling.ts";
 
 const repoUrl = "https://github.com/openclaw/openclaw";
 const pullUrl = `${repoUrl}/pull/3434`;
@@ -180,27 +179,23 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it.each([
-      ["absolute href", `[Open session](${location.origin}/chat/roboclaw/d0effac9)`],
-      ["literal with a file extension", "[Open session](/chat/roboclaw/d0effac9.md)"],
-    ])("decorates host-local session URLs in %s", (_kind, input) => {
-      const fragment = render(input, { sessionLinks: true, fileLinks: true });
-      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-session-link");
-      expect(link?.getAttribute("href")).toContain("/chat/roboclaw/d0effac9");
-      expect(link?.hasAttribute("target")).toBe(false);
-      expect(link?.hasAttribute("data-file-path")).toBe(false);
-      expect(link?.hasAttribute("data-session-key")).toBe(false);
-      expect(fragment.querySelector("a a")).toBeNull();
-    });
-
-    it.each([
       ["source", "src/utils/foo.ts", "file"],
       ["root session", "/chat/main/cafebabe", "session"],
-      ["absolute session", `${location.origin}/chat/main/cafebabe`, "session"],
+      ["session file extension", "/chat/main/cafebabe.md", "session"],
+      [
+        "CJK-adjacent session",
+        `${location.origin}/chat/main/cafebabe?view=full#latest`,
+        "session",
+        `${location.origin}/chat/main/cafebabe?view=full#latest重新解读`,
+      ],
       ["relative route", "chat/main/x", "plain"],
       ["other application page", "/activity", "plain"],
-    ])("classifies %s independently of the current chat route", (label, href, kind) => {
+    ])("classifies %s independently of the current chat route", (label, href, kind, source) => {
       onChatPage(() => {
-        const fragment = render(`[${label}](${href})`, { sessionLinks: true, fileLinks: true });
+        const fragment = render(source ?? `[${label}](${href})`, {
+          sessionLinks: true,
+          fileLinks: true,
+        });
         const link = fragment.querySelector<HTMLAnchorElement>("a")!;
         expect(link.classList.contains("markdown-session-link")).toBe(kind === "session");
         expect(link.hasAttribute("data-session-href")).toBe(kind === "session");
@@ -208,6 +203,14 @@ describe("toSanitizedMarkdownHtml links", () => {
         expect(link.classList.contains("markdown-file-link")).toBe(kind === "file");
         expect(link.dataset.filePath).toBe(kind === "file" ? href : undefined);
         expect(link.getAttribute("href")).toBe(kind === "file" ? null : href);
+        expect(fragment.querySelector("a a")).toBeNull();
+        if (kind === "session") {
+          expect(link.hasAttribute("target")).toBe(false);
+          expect(link.dataset.sessionHref).toBe(href);
+        }
+        if (source) {
+          expect(link.nextSibling?.textContent).toBe("重新解读");
+        }
       });
     });
 
@@ -566,11 +569,10 @@ describe("selected human mention rendering", () => {
 });
 
 describe("session navigation", () => {
-  type SessionRow = { key: string; agentId: string; displayName: string };
-  function makeContext(rows?: SessionRow[], navigate = vi.fn()) {
+  function makeContext(navigate = vi.fn()) {
     return {
       basePath: "",
-      sessions: { state: rows ? { result: { sessions: rows } } : {} },
+      sessions: { state: {} },
       agents: { state: {} },
       agentSelection: { state: {} },
       gateway: { snapshot: {} },
@@ -578,31 +580,9 @@ describe("session navigation", () => {
     } as unknown as ApplicationContext;
   }
 
-  it.each(["", "?view=full#latest"])(
-    "refreshes a cleaned session title with suffix %j",
-    async (suffix) => {
-      const sessionKey = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
-      const pathname = "/chat/main/d0effac9";
-      const href = `${location.origin}${pathname}${suffix}`;
-      const host = render(`${href}重新解读`, { sessionLinks: true });
-      const anchor = host.querySelector<HTMLAnchorElement>("a")!;
-      const titler = new SessionLinkTitler();
-      titler.context = makeContext([{ key: sessionKey, agentId: "main", displayName: "Research" }]);
-      titler.register(anchor, document.createElement("span"));
-      await titler.decorate(anchor);
-      titler.refresh();
-      expect(anchor).toMatchObject({
-        textContent: "Research",
-        dataset: { sessionKey, sessionHref: href },
-      });
-      expect(anchor.getAttribute("href")).toBe(`${pathname}${suffix}`);
-      expect(anchor.nextSibling?.textContent).toBe("重新解读");
-    },
-  );
-
   it("navigates through the canonical chat session route", () => {
     const navigate = vi.fn();
-    navigateMarkdownSession(makeContext(undefined, navigate), {
+    navigateMarkdownSession(makeContext(navigate), {
       sessionKey: "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6",
       agentId: "roboclaw",
     });

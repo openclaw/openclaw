@@ -354,45 +354,6 @@ describe("sidebar people workload", () => {
     }
   });
 
-  it("keeps a single deduplicated self visible when returning to Online", async () => {
-    const { sidebar, publishPresence } = await mountWorkload();
-    const self = presence()[0]!;
-    await publishPresence([self, { ...self, instanceId: "second-self-tab" }]);
-    expect(names(sidebar)).toEqual(["ada"]);
-    expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
-    await selectSidebarView(sidebar, "sessions");
-    expect(sidebar.querySelector(".sidebar-online")).toBeNull();
-    await selectSidebarView(sidebar, "online");
-    expect(names(sidebar)).toEqual(["ada"]);
-    await publishPresence([{ ...self, reason: "disconnect" }]);
-    expect(names(sidebar)).toEqual([]);
-    expect(sidebar.querySelector(".sidebar-online__list")).not.toBeNull();
-  });
-
-  it.each(["chip", "roster"] as const)(
-    "hides people filters in Sessions and preserves them when Online is selected again (%s)",
-    async (mode) => {
-      const { sidebar } = await mountWorkload();
-      sidebar.sidebarAgentsMode = mode;
-      const view = sidebar.people;
-      view.set("statusFilter", "running");
-      view.set("sortMode", "running");
-      await settle(sidebar);
-      expect(names(sidebar)).toEqual(["bea", "ada"]);
-      expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
-
-      await selectSidebarView(sidebar, "sessions");
-      expect(sidebar.querySelector(".sidebar-online__filter-toggle")).toBeNull();
-      expect(sidebar.querySelector(".sidebar-online__list")).toBeNull();
-
-      await selectSidebarView(sidebar, "online");
-      expect(names(sidebar)).toEqual(["bea", "ada"]);
-      expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
-      await click(sidebar, ".sidebar-online__filter-toggle");
-      expect(sidebar.sidebarMenus.peopleFilterMenuPosition).not.toBeNull();
-    },
-  );
-
   it("uses one complete cross-agent summary, including self, not the paginated or owner-filtered sidebar", async () => {
     const pending = createDeferred<SessionsListResult>();
     const { sidebar, sessions, context, summaryRequest } = await mountWorkload(
@@ -483,6 +444,11 @@ describe("sidebar people workload", () => {
     provider.setContext({ ...context, basePath: "/control" });
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["bea", "ada"]);
+    await selectSidebarView(sidebar, "sessions");
+    expect(sidebar.querySelector(".sidebar-online__filter-toggle")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-online__list")).toBeNull();
+    await selectSidebarView(sidebar, "online");
+    expect(names(sidebar)).toEqual(["bea", "ada"]);
     await open();
     expect(dom.text("#sidebar-people-status")).toContain("Running");
     await click(sidebar, "#sidebar-people-reset");
@@ -517,7 +483,15 @@ describe("sidebar people workload", () => {
   it("keeps all mixed Active, Idle, and Online-only people, including zero counts, in presence order", async () => {
     const { sidebar, publishPresence } = await mountWorkload(undefined, true);
     const entries = presence(true);
-    await publishPresence([profile("zoe"), entries[1]!, entries[3]!, entries[2]!, entries[0]!]);
+    const self = entries[0]!;
+    await publishPresence([
+      profile("zoe"),
+      entries[1]!,
+      entries[3]!,
+      entries[2]!,
+      self,
+      { ...self, instanceId: "second-self-tab" },
+    ]);
     expectCounts(sidebar, { ada: ["1", "7"], "Raw Ada": [], cy: [], zoe: [] });
     expect(person(sidebar, "Raw Ada").title).toBe("Session counts unavailable");
     const ada = domProbe(person(sidebar, "ada"));
@@ -541,6 +515,9 @@ describe("sidebar people workload", () => {
       ).not.toBeNull();
     }
     expect(personDescription(sidebar, "cy")).toContain("0 open sessions, 0 running");
+    await publishPresence([{ ...self, reason: "disconnect" }]);
+    expect(names(sidebar)).toEqual([]);
+    expect(sidebar.querySelector(".sidebar-online__list")).not.toBeNull();
   });
 
   it("lists running people first within each presence group, by name and never by count", async () => {

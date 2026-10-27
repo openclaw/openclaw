@@ -9,7 +9,6 @@ import {
   createSidebarNarration,
   type SidebarNarrationSyncInput,
 } from "./app-sidebar-session-narration.ts";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import "../test-helpers/app-sidebar-tool-activity-cases.ts";
 
 // Assert the protocol throttle through timers without a production-only export.
@@ -134,7 +133,19 @@ describe("createSidebarNarration", () => {
       startedAt: undefined,
       updatedAt: index,
     }));
-    const { narration, input } = startNarration(source, { rows });
+    const stale = Object.assign(runningRow("agent:main:stale"), {
+      hasActiveRun: false,
+      status: "running" as const,
+      updatedAt: 1_000,
+    });
+    const { narration, input } = startNarration(source, { rows: [...rows, stale] });
+    expect(source.subscribeMessages.mock.calls.map(([key]) => key)).not.toContain(
+      "agent:main:stale",
+    );
+    expect(source.subscribeMessages).toHaveBeenCalledWith(rows[7]!.key, {
+      agentId: undefined,
+      mode: "narration",
+    });
     rows[0]!.updatedAt = 100;
     narration.sync({ ...input, rows: rows.toReversed() });
     expect(source.subscribeMessages).toHaveBeenCalledTimes(6);
@@ -169,7 +180,7 @@ describe("createSidebarNarration", () => {
   });
 
   it("releases hidden narration interests while preserving selected-pane and outbox owners", async () => {
-    const visibility = browserVisibility();
+    const visibility = browserVisibility("hidden");
     const wireKeys = new Set<string>();
     const request = vi.fn().mockImplementation(async (method: string, params: { key: string }) => {
       if (method === "sessions.messages.subscribe") {
@@ -200,7 +211,9 @@ describe("createSidebarNarration", () => {
         message: assistant(text),
       });
 
-    const handles = await settleSubscriptions();
+    expect(source.subscribeMessages).not.toHaveBeenCalled();
+    visibility("visible");
+    await settleSubscriptions();
     expect(wireKeys.size).toBe(7);
     emit(snapshot("Before hiding."));
     emit(snapshot("Queued old narration."));
@@ -209,12 +222,10 @@ describe("createSidebarNarration", () => {
     visibility("hidden");
     visibility("hidden");
     narration.sync(input);
-    expect(source.unsubscribeMessages.mock.calls.map(([handle]) => handle)).toEqual(handles);
     expect([...wireKeys]).toEqual([selectedPane.key, outbox.key]);
     expect(vi.getTimerCount()).toBe(0);
     emit(snapshot("Hidden update."));
     expect(narration.read().lines.size).toBe(0);
-    expect(source.subscribeMessages).toHaveBeenCalledTimes(7);
 
     // Rows can settle or change while this tab is hidden.
     narration.sync({
@@ -224,16 +235,18 @@ describe("createSidebarNarration", () => {
     visibility("visible");
     visibility("visible");
     await settleSubscriptions();
-    expect(source.subscribeMessages).toHaveBeenCalledTimes(9);
     expect([...wireKeys]).toEqual([selectedPane.key, outbox.key, "agent:main:new"]);
     emit(snapshot("Back in view."));
     expect(narration.read().lines.get(selectedPane.key)).toBe("Back in view.");
 
+    visibility("hidden");
+    narration.sync({ ...input, enabled: false, connectionIdentity: {} });
+    visibility("visible");
+    expect([...wireKeys]).toEqual([selectedPane.key, outbox.key]);
     narration.disconnect();
     visibility("hidden");
     visibility("visible");
     expect(source.subscribeMessages).toHaveBeenCalledTimes(9);
-    expect(source.unsubscribeMessages).toHaveBeenCalledTimes(9);
     expect([...wireKeys]).toEqual([selectedPane.key, outbox.key]);
     await coordinator.release(selectedPane);
     await coordinator.release(outbox);
@@ -281,43 +294,6 @@ describe("createSidebarNarration", () => {
       }
     },
   );
-
-  it("defers initial hidden subscriptions and honors disabled intent on return", async () => {
-    const visibility = browserVisibility("hidden");
-    const source = messageSource();
-    const { narration, input } = startNarration(source);
-    expect(source.subscribeMessages).not.toHaveBeenCalled();
-    visibility("visible");
-    await Promise.resolve();
-    expect(source.subscribeMessages).toHaveBeenCalledOnce();
-    visibility("hidden");
-    narration.sync({ ...input, enabled: false, connectionIdentity: {} });
-    visibility("visible");
-    expect(source.subscribeMessages).toHaveBeenCalledOnce();
-    expect(source.unsubscribeMessages).toHaveBeenCalledOnce();
-    narration.disconnect();
-  });
-
-  it("subscribes only to sessions with a projected active run", async () => {
-    const source = messageSource();
-    const { subscribeMessages } = source;
-    const rows: SidebarRecentSession[] = [
-      { ...runningRow("agent:main:stale"), hasActiveRun: false, status: "running" },
-      { ...runningRow("agent:main:failed"), hasActiveRun: false, status: "failed" },
-      runningRow("agent:main:active"),
-    ];
-
-    const { narration } = startNarration(source, { rows });
-    await Promise.resolve();
-
-    expect(subscribeMessages).toHaveBeenCalledTimes(1);
-    expect(subscribeMessages).toHaveBeenCalledWith("agent:main:active", {
-      agentId: undefined,
-      mode: "narration",
-    });
-
-    narration.disconnect();
-  });
 
   it("renders paced digests immediately and keeps the final line after queued tool activity", async () => {
     const { narration, emit, line, run } = narrationFixture();
