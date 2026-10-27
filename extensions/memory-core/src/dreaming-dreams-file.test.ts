@@ -220,6 +220,16 @@ it("preserves restrictive DREAMS.md permissions across atomic replace", async ()
 it("keeps a shared workspace's directory mode when writing DREAMS.md", async () => {
   if (process.platform !== "win32") {
     await fs.chmod(workspaceDir, 0o770);
+    const open = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (args[0] === workspaceDir) {
+        vi.spyOn(handle, "chmod").mockRejectedValue(
+          Object.assign(new Error("shared workspace chmod denied"), { code: "EPERM" }),
+        );
+      }
+      return handle;
+    });
   }
 
   await writeBackfill();
