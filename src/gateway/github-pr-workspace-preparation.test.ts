@@ -143,12 +143,15 @@ describe("existing PR preparation through the registered agent action", () => {
         }
         f.pr.base.ref = "another-base";
         const beforeRetarget = await workspaceState();
-        await expect(f.invoke()).rejects.toThrow("base branch");
+        await expect(f.invoke()).rejects.toThrow('restore its base branch to "main" on GitHub');
         expect(await workspaceState()).toEqual(beforeRetarget);
         expect(f.readSession().worktree?.githubPullRequest).toEqual(association);
         f.pr.base.ref = "main";
+        expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: f.pr.head.sha });
+        if (!advance) {
+          expect(await workspaceState()).toEqual(beforeRetarget);
+        }
       }
-      expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: f.pr.head.sha });
       const refreshedAssociation = f.readSession().worktree?.githubPullRequest;
       expect(refreshedAssociation?.preparedHeadCommit).toBe(f.pr.head.sha);
       await f.git("merge-base", "--is-ancestor", f.headCommit, "HEAD");
