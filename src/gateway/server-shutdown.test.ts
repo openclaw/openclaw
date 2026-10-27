@@ -48,7 +48,9 @@ it.for([false, true])(
       expect(hasGatewayCleanupRetainedError(failure)).toBe(true);
       expect(isGatewayCleanupRetainedError(failure)).toBe(!fatal);
       expect(onError).toHaveBeenCalledWith(
-        "gateway lifetime sidecars cleanup exceeded 5000ms; resources remain",
+        expect.stringMatching(
+          /^gateway lifetime sidecars cleanup exceeded 5000ms; resources remain; pending: shutdown\.gateway-lifetime-sidecars=\d+ms$/,
+        ),
       );
     } finally {
       sidecar.resolve();

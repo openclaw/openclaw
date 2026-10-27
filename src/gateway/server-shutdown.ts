@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { formatErrorMessage } from "../infra/errors.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import { settlesWithin } from "../shared/settle-within.js";
-import { measureGatewayCloseStep } from "./restart-trace.js";
+import { formatGatewayPendingCloseSteps, measureGatewayCloseStep } from "./restart-trace.js";
 import type { GatewayCloseOptions } from "./server-public.js";
 
 export function recordGatewayShutdownWarning(warnings: string[], name: string): void {
@@ -108,7 +108,7 @@ export async function runGatewayCloseSteps(params: {
       const pending = measureGatewayCloseStep(phase, () => step.run());
       const graceMs = step.name === "gateway close" ? 10_000 : CLEANUP_GRACE_MS;
       if (!(await settlesWithin(pending, graceMs))) {
-        const message = `${step.name} cleanup exceeded ${graceMs}ms; resources remain`;
+        const message = `${step.name} cleanup exceeded ${graceMs}ms; resources remain; pending: ${formatGatewayPendingCloseSteps()}`;
         params.onError(message);
         leftovers.push(new Error(message));
         // Dependencies of a retained connection writer cannot be disposed safely.

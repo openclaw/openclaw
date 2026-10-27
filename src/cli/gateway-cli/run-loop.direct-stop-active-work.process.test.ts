@@ -9,6 +9,10 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js";
 import { formatCliProcessFailure } from "../cli-process-child.test-helpers.js";
 import { createProcessFixtures } from "./run-loop-process.test-support.js";
@@ -83,21 +87,26 @@ posixIt.for(["SIGTERM", "SIGUSR2"] as const)(
     const homeDir = path.join(fixtureDir, "home");
     fs.mkdirSync(stateDir, { recursive: true });
     fs.mkdirSync(homeDir, { recursive: true });
+    const env = {
+      ...process.env,
+      HOME: homeDir,
+      NODE_ENV: undefined,
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      NODE_OPTIONS: undefined,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_NO_RESPAWN: "1",
+      VITEST: undefined,
+    };
+    if (stopSignal === "SIGUSR2") {
+      const database = openOpenClawStateDatabase({ env });
+      await closeOpenClawStateDatabaseByPathAsync(database.path);
+    }
     const child = spawn(
       process.execPath,
       ["--import", "tsx", "--input-type=module", "--eval", childScript, stopSignal],
       {
-        env: {
-          ...process.env,
-          HOME: homeDir,
-          NODE_ENV: undefined,
-          NODE_DISABLE_COMPILE_CACHE: "1",
-          NODE_OPTIONS: undefined,
-          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_NO_RESPAWN: "1",
-          VITEST: undefined,
-        },
+        env,
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -118,6 +127,9 @@ posixIt.for(["SIGTERM", "SIGUSR2"] as const)(
     });
     const diagnostics = `${tracked.output.stdout}\n${tracked.output.stderr}`;
     expect(exit[0] !== null || exit[1] !== null, diagnostics).toBe(true);
+    if (stopSignal === "SIGTERM") {
+      expect(exit, diagnostics).toEqual([0, null]);
+    }
     expect(Date.now() - stoppedAt, diagnostics).toBeLessThan(10_000);
     expect(tracked.output.stdout).toContain("process proof: service-child-cleanup-deadline");
     expect(tracked.output.stdout).toContain("process proof: custody:retained");

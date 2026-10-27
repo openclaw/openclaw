@@ -511,16 +511,11 @@ export async function prepareAgentRunUserTurn(params: {
       // Retained input must keep its media even if later preparation or cleanup fails.
       params.onUserTurnMediaPersisted();
     }
-    const stopReason = params.getAbortStopReason?.() ?? "rpc";
-    const outcome = buildAgentRunTerminalOutcome({ status: "error", stopReason });
-    // Pending input must settle before admission can publish an abort. Timeouts
-    // retain retry custody; an explicit stop cancels it even before execution.
+    // Failed preparation settles as an ordinary failed send. The pending-input
+    // owner independently preserves queued inputs selected for graceful restart.
     const failure = await releasePreparedAgentRunUserTurnAfterFailure(
       { recorder, claimedExecApprovalFollowupHandoffId, execApprovalFollowupHandoffClaimId },
       error,
-      params.abortSignal?.aborted && stopReason !== "restart" && outcome.reason === "cancelled"
-        ? "cancelled"
-        : "interrupted",
     );
     if (!mediaRetained) {
       await Promise.allSettled(createdMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
