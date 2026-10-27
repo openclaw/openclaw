@@ -14,6 +14,7 @@ import {
   captureSqliteWorkerAdmissionPaths,
   findUnclaimedSharedStateActors,
   findReusableSqliteWorkerClient,
+  selectIdleSqliteWorkerClients,
   closeUnclaimedSharedStateActors,
   prepareSqliteWorkerDatabaseAdmission,
   reclaimSqliteWorkerClient,
@@ -65,7 +66,46 @@ import { sqliteWorkerRequestBytes } from "./sqlite-worker-state-context.js";
 import { resolveSqliteBrokerWorkerCount } from "./worker-pool-sizing.js";
 import { trackWorkerRequest, type WorkerRequestObservation } from "./worker-request-diagnostics.js";
 
-const MAX_STORES = 64;
+const DEFAULT_MAX_STORES = 64;
+const DEFAULT_STORE_RETAIN_LIMIT = 64;
+const DEFAULT_STORE_IDLE_TTL_MS = 5 * 60_000;
+const DEFAULT_STORE_IDLE_SWEEP_MS = 60_000;
+
+/** The store cap is a deployment knob: burst concurrency can raise it without a rebuild. */
+export function resolveSqliteWorkerStoreCap(): number {
+  const raw = process.env.OPENCLAW_SQLITE_WORKER_MAX_STORES?.trim();
+  if (!raw) return DEFAULT_MAX_STORES;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_MAX_STORES;
+  return Math.min(parsed, 4096);
+}
+
+/** Live clients kept before idle clients are retired; bounds the retained floor. */
+export function resolveSqliteWorkerStoreRetainLimit(): number {
+  const raw = process.env.OPENCLAW_SQLITE_WORKER_STORE_RETAIN_LIMIT?.trim();
+  if (!raw) return DEFAULT_STORE_RETAIN_LIMIT;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_STORE_RETAIN_LIMIT;
+  return Math.min(parsed, 4096);
+}
+
+/** Idle age before a store client may release its retained state. */
+export function resolveSqliteWorkerStoreIdleTtlMs(): number {
+  const raw = process.env.OPENCLAW_SQLITE_WORKER_STORE_IDLE_TTL_MS?.trim();
+  if (!raw) return DEFAULT_STORE_IDLE_TTL_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_STORE_IDLE_TTL_MS;
+  return Math.min(parsed, 86_400_000);
+}
+
+/** How often the broker sweeps for idle store clients. */
+export function resolveSqliteWorkerStoreIdleSweepMs(): number {
+  const raw = process.env.OPENCLAW_SQLITE_WORKER_STORE_IDLE_SWEEP_MS?.trim();
+  if (!raw) return DEFAULT_STORE_IDLE_SWEEP_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1_000) return DEFAULT_STORE_IDLE_SWEEP_MS;
+  return Math.min(parsed, 3_600_000);
+}
 const MAX_QUEUED_COMMAND_BYTES = 64 * 1024 * 1024;
 export const SQLITE_WORKER_MAX_REQUESTS_PER_WORKER = 128;
 const SQLITE_WORKER_MAX_QUEUED_BYTES = 256 * 1024 * 1024;
@@ -86,6 +126,18 @@ export class SqliteWorkerBroker {
   private readonly clients = new Set<object>();
   private readonly stores = new Map<object, StoreClient>();
   private readonly operations = new Set<Promise<void>>();
+  private readonly maxStores = resolveSqliteWorkerStoreCap();
+  private readonly sqliteWorkerIdleSweepTimer: ReturnType<typeof setInterval> = (() => {
+    const timer = setInterval(() => {
+      try {
+        this.sweepIdleStoreClients();
+      } catch {
+        // An idle sweep failure must never take the broker down.
+      }
+    }, resolveSqliteWorkerStoreIdleSweepMs());
+    (timer as { unref?: () => void }).unref?.();
+    return timer;
+  })();
   private readonly lifecycle = createSqliteWorkerLifecycle({
     explicitSqliteCloseReleasesNativeResources: this.explicitSqliteCloseReleasesNativeResources,
     actors: this.actors,
@@ -106,7 +158,7 @@ export class SqliteWorkerBroker {
     maxQueuedBytes: SQLITE_WORKER_MAX_QUEUED_BYTES,
     maxQueuedInputBytes: MAX_QUEUED_COMMAND_BYTES,
     maxMessageBytes: SQLITE_WORKER_MAX_MESSAGE_BYTES,
-    maxPendingOpens: MAX_STORES,
+    maxPendingOpens: this.maxStores,
   });
   private draining?: Promise<void>;
 
@@ -115,6 +167,29 @@ export class SqliteWorkerBroker {
     retention: SqliteWorkerInputRetention = "stream",
   ): SqliteWorkerInputPreparation {
     return this.inputAdmission.reserveInputPreparation(inputBytes, retention);
+  }
+
+  /**
+   * Retire store clients that went idle so retained state tracks concurrency, not uptime.
+   * The release path is client.retireIdle()/client.retire() -> owner.release(true) ->
+   * stores.delete/clients.delete + lifecycle.closeActor, which frees the native connection
+   * and its page cache.
+   */
+  sweepIdleStoreClients(force = false): number {
+    const selected = selectIdleSqliteWorkerClients(this.stores.values(), {
+      retainLimit: resolveSqliteWorkerStoreRetainLimit(),
+      idleTtlMs: resolveSqliteWorkerStoreIdleTtlMs(),
+      now: Date.now(),
+      force,
+    });
+    let retired = 0;
+    for (const client of selected) {
+      const pending = client.retireIdle?.() ?? client.retire?.();
+      if (!pending) continue;
+      retired += 1;
+      void pending.catch(() => undefined);
+    }
+    return retired;
   }
 
   open<Operations extends SqliteWorkerOperations>(
@@ -135,7 +210,7 @@ export class SqliteWorkerBroker {
     let reserved: boolean;
     let snapshot: PreparedSqliteWorkerOpen;
     try {
-      reserved = reserveSqliteWorkerClient(this.clients, this.stores.values(), MAX_STORES, client);
+      reserved = reserveSqliteWorkerClient(this.clients, this.stores.values(), this.maxStores, client);
       snapshot = captureSqliteWorkerOpen(options, stateContext, assertCurrent, custody);
       const generation = options.runtimeGeneration;
       generation?.retain(this, async () => {
@@ -158,7 +233,7 @@ export class SqliteWorkerBroker {
               snapshot,
               this.stores.values(),
               () =>
-                reserveSqliteWorkerClient(this.clients, this.stores.values(), MAX_STORES, client),
+                reserveSqliteWorkerClient(this.clients, this.stores.values(), this.maxStores, client),
               () => this.draining !== undefined,
             );
           }
@@ -254,7 +329,7 @@ export class SqliteWorkerBroker {
     } else {
       const slot = await this.lifecycle.acquireSlot(
         options,
-        { maxWorkers: this.maxWorkers, maxStores: MAX_STORES },
+        { maxWorkers: this.maxWorkers, maxStores: this.maxStores },
         (replySlot) => this.createReplyOwner(replySlot),
       );
       try {
@@ -367,11 +442,14 @@ export class SqliteWorkerBroker {
     }
     const releasePaths = retainSqliteWorkerAdmissionPathReferences(owned, admittedPaths);
     let referenceReleased = false;
+    let brokerClient: StoreClient | undefined;
     const { store, client: storeClient } = createSqliteWorkerClient<Operations>({
       actor: owned,
       isDraining: () => this.draining !== undefined,
       isAvailable: () => !owned.slot.failed && !owned.cleanupState && !owned.retirementRequested,
-      retireIdle: options.retireIdle,
+      // The broker owns retirement when the opener does not provide one: an idle client
+      // must release its retained state instead of pinning it for the process lifetime.
+      retireIdle: options.retireIdle ?? (() => brokerClient?.retire()),
       dispatch: (payload, signal, scope, assertCurrent, createAdmission, requestClass) =>
         this.enqueue(
           owned.slot,
@@ -418,6 +496,7 @@ export class SqliteWorkerBroker {
         }
       },
     });
+    brokerClient = storeClient;
     this.stores.set(store, storeClient);
     return store;
   }

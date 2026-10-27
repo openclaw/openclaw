@@ -134,9 +134,15 @@ export type StoreClient = {
   actor: Actor;
   close(): Promise<void>;
   retireIdle?: () => Promise<void> | undefined;
+  /** Broker-owned retirement for a client that no owner claimed. */
+  retire?: () => Promise<void> | undefined;
   sealed: boolean;
   isAvailable(): boolean;
   scopes: Set<Promise<void>>;
+  /** Last time this client served an operation. */
+  lastUsedAt: number;
+  markUsed(): void;
+  isIdle(): boolean;
   execute(
     command: { type: PropertyKey; input: unknown },
     options: { signal?: AbortSignal },
