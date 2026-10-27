@@ -465,6 +465,30 @@ it("withholds unsafe MCP endpoints and only projects bounded public metadata", a
   expect(Value.Check(PluginDiscoveryDetailSchema, joinDetail(detail))).toBe(true);
 });
 
+it("keeps astral MCP display text whole at the metadata caps", async () => {
+  const detail = await readDetail({
+    version: {
+      version: "1.2.3",
+      createdAt: 100,
+      pluginManifestSummary: {
+        configFields: [],
+        bundledSkills: [],
+        mcpServers: [
+          {
+            name: "astral",
+            transport: "stdio",
+            scope: `${"s".repeat(999)}\u{1F600}scope tail`,
+            setup: `${"d".repeat(1999)}\u{1F9DE}setup tail`,
+          },
+        ],
+      },
+    },
+  });
+  expect(detail.mcpServerDetails).toEqual([
+    { name: "astral", transport: "stdio", scope: "s".repeat(999), setup: "d".repeat(1999) },
+  ]);
+});
+
 it.each([undefined, {}])("keeps unreleased detail with optional security: %s", async (security) => {
   const detail = await readDetail({
     package: {

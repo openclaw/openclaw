@@ -1,8 +1,6 @@
 import { once } from "node:events";
 import { createServer, type RequestListener, type Server } from "node:http";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { retainGatewayResponsePayload } from "../../../packages/gateway-client/src/protocol-request.js";
-import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import * as gatewayService from "../../daemon/service.js";
@@ -406,18 +404,7 @@ it.each([true, false])(
     mockProcessPlatform("linux");
     useService();
     // The retained updater speaks an older protocol than the restarted Gateway.
-    const mismatch = new GatewayClientRequestError({
-      code: "INVALID_REQUEST",
-      message: "protocol mismatch",
-      details: {
-        code: "PROTOCOL_MISMATCH",
-        clientMinProtocol: 5,
-        clientMaxProtocol: 5,
-        expectedProtocol: 4,
-        minimumProbeProtocol: 3,
-      },
-    });
-    retainGatewayResponsePayload(mismatch, undefined);
+    const mismatch = restart.gatewayProtocolMismatchError();
     restart.callGateway.mockRejectedValue(mismatch);
     const inspecting = createDeferred();
     let completedInspections = observed ? 1 : 0;

@@ -117,17 +117,18 @@ function agentConfig(
 
 describe("promptAuthConfig", () => {
   it("resolves fallback aliases before scoped allowlist pruning", async () => {
+    const models = {
+      "openai/gpt-5.5": { alias: "GPT" },
+      "openai/gpt-5.4-mini": { alias: "mini" },
+      "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+    };
     mocks.authChoice.mockResolvedValue("token");
     mocks.applyAuth.mockResolvedValue({
       config: {
         agents: {
           defaults: {
             model: { primary: "openai/gpt-5.5", fallbacks: ["mini"] },
-            models: {
-              "openai/gpt-5.5": { alias: "GPT" },
-              "openai/gpt-5.4-mini": { alias: "mini" },
-              "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-            },
+            models: structuredClone(models),
           },
         },
       },
@@ -155,11 +156,7 @@ describe("promptAuthConfig", () => {
       "openai/gpt-5.5",
     ]);
     expect(result.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.5" });
-    expect(result.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.5": { alias: "GPT" },
-      "openai/gpt-5.4-mini": { alias: "mini" },
-      "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-    });
+    expect(result.agents?.defaults?.models).toEqual(models);
   });
 
   it.each([false, true])("writes selected-agent policy (legacy primary: %s)", async (legacy) => {
@@ -193,16 +190,20 @@ describe("promptAuthConfig", () => {
     });
   });
 
-  it("loads the manifest catalog after provider setup", async () => {
+  it("retries provider selection before loading the installed provider's manifest catalog", async () => {
     const provider = "github-copilot";
     const existingConfig: OpenClawConfig = {
       models: { providers: { existing: providerModels("old") } },
     };
-    mocks.authChoice.mockResolvedValue(provider);
-    mocks.preferredProvider.mockResolvedValue(provider);
-    mocks.applyAuth.mockResolvedValue({
-      config: { ...existingConfig, plugins: { entries: { [provider]: { enabled: true } } } },
-    });
+    mocks.authChoice
+      .mockResolvedValueOnce("provider-plugin:wecom:default")
+      .mockResolvedValueOnce(provider);
+    mocks.preferredProvider.mockResolvedValueOnce("wecom").mockResolvedValueOnce(provider);
+    mocks.applyAuth
+      .mockResolvedValueOnce({ config: existingConfig, retrySelection: true })
+      .mockResolvedValueOnce({
+        config: { ...existingConfig, plugins: { entries: { [provider]: { enabled: true } } } },
+      });
     mocks.catalog.mockReturnValueOnce([
       {
         ref: `${provider}/new`,
@@ -224,32 +225,6 @@ describe("promptAuthConfig", () => {
       loadCatalog: true,
       providerScopedCatalog: false,
     });
-  });
-
-  it("returns to auth selection when plugin install onboarding asks for a retry", async () => {
-    mocks.authChoice
-      .mockResolvedValueOnce("provider-plugin:wecom:default")
-      .mockResolvedValueOnce("kilocode-api-key");
-    mocks.applyAuth
-      .mockResolvedValueOnce({ config: {}, retrySelection: true })
-      .mockResolvedValueOnce({
-        config: {
-          models: {
-            providers: {
-              kilocode: providerModels("kilo-auto/balanced"),
-              minimax: providerModels("MiniMax-M2.7"),
-            },
-          },
-        },
-      });
-    mocks.allowlist.mockResolvedValue({ models: undefined });
-    mocks.preferredProvider.mockResolvedValueOnce("wecom").mockResolvedValueOnce(undefined);
-
-    await promptAuthConfig({}, makeRuntime(), noopPrompter);
-
-    expect(mocks.authChoice).toHaveBeenCalledTimes(2);
-    expect(mocks.applyAuth).toHaveBeenCalledTimes(2);
-    expect(mocks.allowlist).toHaveBeenCalledTimes(1);
   });
 
   it.each(["none", "agent", "shared"] as const)("provider auth: initialize %s", async (owner) => {
@@ -301,12 +276,11 @@ describe("promptAuthConfig", () => {
     );
     const result = await promptAuthConfig(config, makeRuntime(), noopPrompter, target);
 
-    const initializesAgent = owner === "agent";
     expect(resolveAgentEffectiveModelPrimary(result, "ops")).toBe(
       override ? recommended : undefined,
     );
     expect(result.agents?.entries?.OPS?.model).toEqual(
-      initializesAgent ? { ...agentModel, primary: recommended } : agentModel,
+      owner === "agent" ? { ...agentModel, primary: recommended } : agentModel,
     );
     expect(result.agents?.defaults?.model).toEqual(
       owner === "shared" ? { ...defaultModel, primary: recommended } : defaultModel,

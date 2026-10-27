@@ -33,6 +33,13 @@ const FORMAT_OPTIONS = JSON5.parse(
 /** @type {({entry: string, output: string, constant: string, platform: import("esbuild").Platform, encoding?: "data-url"} & ({program: true} | {program?: false, exportName: string}))[]} */
 const ASSETS = [
   {
+    entry: "src/shared/keyboard-shortcuts.ts",
+    exportName: "createKeyboardShortcutMatcher",
+    output: "src/shared/keyboard-shortcuts.generated.ts",
+    constant: "KEYBOARD_SHORTCUT_MATCHER_SOURCE",
+    platform: "browser",
+  },
+  {
     entry: "src/gateway/mcp-app-standalone-host.ts",
     exportName: "runStandaloneMcpAppHost",
     output: "src/gateway/mcp-app-standalone-host.generated.ts",
@@ -71,7 +78,7 @@ for (const entry of Object.values(runtimeProcessScriptEntrypoints)) {
 }
 
 /** Build complete, self-contained programs without reflecting on runtime functions. */
-export async function generateRuntimeScriptAssets(rootDir = ROOT) {
+async function generateRuntimeScriptAssets(rootDir = ROOT) {
   const programs = new Map();
   const assets = ASSETS.map((asset) => {
     const result = buildSync({
@@ -87,6 +94,8 @@ export async function generateRuntimeScriptAssets(rootDir = ROOT) {
       format: asset.program ? "esm" : "iife",
       globalName: asset.program ? undefined : "__openclawRuntimeScript",
       legalComments: "none",
+      // Drop esbuild's source-path comments so dependency store locations cannot enter assets.
+      minifyWhitespace: true,
       logLevel: "silent",
       metafile: true,
       platform: asset.platform,
@@ -147,6 +156,7 @@ export function createRuntimeProcessScriptFile(name, options) {
     bundle: true,
     format: "esm",
     legalComments: "none",
+    minifyWhitespace: true,
     logLevel: "silent",
     metafile: true,
     platform: "node",

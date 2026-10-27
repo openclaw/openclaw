@@ -1,5 +1,6 @@
 import { chromium, type Browser } from "playwright";
 import { expect, it } from "vitest";
+import { createDarkDesktopControlUiContextOptions } from "../../e2e/control-ui-browser-options.test-support.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -11,16 +12,11 @@ const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executab
 it.skipIf(!canRunPlaywrightChromium(executablePath))(
   "publishes the reviewed selection after closing a pending publish and retrying its failure",
   async () => {
-    const server = await startControlUiE2eServer(undefined, { source: true });
+    const server = await startControlUiE2eServer();
     let browser: Browser | undefined;
     try {
       browser = await chromium.launch({ executablePath });
-      const page = await browser.newPage({
-        locale: "en-US",
-        colorScheme: "dark",
-        serviceWorkers: "block",
-        viewport: { width: 1440, height: 900 },
-      });
+      const page = await browser.newPage(createDarkDesktopControlUiContextOptions());
       const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
       const optionalFile = "workspace/checklist.md";
       const scope = { input: "Repository", job: "Summarize", output: "Brief", authority: "Read" };

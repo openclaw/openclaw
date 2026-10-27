@@ -342,6 +342,7 @@ it("records terminal metrics without reading logs or private diagnostic content"
   const exporter = createDiagnosticsPrometheusExporter();
   const readPrivateContent = vi.fn(() => ({ toolInput: { text: "private tool input" } }));
   const readLogAttribute = vi.fn(() => "synthetic log attribute");
+  const readWsBuckets = vi.fn(() => frameBuckets());
   const emitLog = () =>
     emitDiagnosticEvent({
       type: "log.record",
@@ -361,6 +362,15 @@ it("records terminal metrics without reading logs or private diagnostic content"
   });
   try {
     emitLog();
+    emitTrustedDiagnosticEventWithPrivateData({
+      type: "gateway.ws.event",
+      event: "chat",
+      count: 1,
+      bytes: 256,
+      get frameBytes() {
+        return readWsBuckets();
+      },
+    });
     emitTrustedDiagnosticEventWithPrivateData(
       {
         type: "tool.execution.completed",
@@ -380,6 +390,7 @@ it("records terminal metrics without reading logs or private diagnostic content"
     );
     expect(readPrivateContent).not.toHaveBeenCalled();
     expect(readLogAttribute).not.toHaveBeenCalled();
+    expect(readWsBuckets).not.toHaveBeenCalled();
   } finally {
     exporter.service.stop?.();
     await waitForDiagnosticEventsDrained();

@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, 
 import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import * as rootLogger from "../../logger.js";
 import type { SpawnResult } from "../../process/exec.js";
@@ -416,14 +417,7 @@ describe("worker turn launcher failure recovery", () => {
         timestamp: 1,
       }),
     );
-    await manager.appendMessageAsync({
-      role: "toolResult",
-      toolCallId: "call-replay",
-      toolName: "read",
-      content: [{ type: "text", text: "result" }],
-      isError: false,
-      timestamp: 2,
-    });
+    await manager.appendMessageAsync(makeTextToolResult("call-replay", "read", "result", false, 2));
     const launchTurn = vi.fn(async (): Promise<SpawnResult> => {
       throw new Error("unexpected worker handoff");
     });

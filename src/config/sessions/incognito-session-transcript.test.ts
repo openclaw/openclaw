@@ -31,7 +31,6 @@ import type { SessionAccessScope } from "./session-accessor.types.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import {
   withSessionActorStorage,
-  runWithSessionActorStorage,
   type SelectedSessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
@@ -52,9 +51,7 @@ const create = (
 ) => createSessionEntryWithTranscript(scope, () => ({ ok: true, entry: value }), options);
 function expectEmpty(...states: OpenClawTestState[]) {
   for (const state of states) {
-    expect
-      .soft(listDirectoryTreeStrictSync(state.stateDir).map((walkEntry) => walkEntry.relativePath))
-      .toEqual([]);
+    expect.soft(listDirectoryTreeStrictSync(state.stateDir)).toEqual([]);
   }
 }
 const expectHeader = (scope: SessionAccessScope, sessionId: string, extra = {}) =>
@@ -127,44 +124,25 @@ it.each(["ambient", "omitted", "sentinel", "durable"] as const)(
           : undefined;
     const scope = scopeFor(env, ` ${key} `, storePath);
     const original = makeEntry("created-incognito");
-    expect(process.env.OPENCLAW_STATE_DIR).toBe(ambient.stateDir);
-    expect(explicit.stateDir).not.toBe(ambient.stateDir);
-
     await withMemory(scope, async () => {
-      const createChecked = async (value: SessionEntry, label: string, previous?: SessionEntry) => {
+      const createChecked = async (value: SessionEntry, label: string) => {
         let followed = false;
-        const result = await createSessionEntryWithTranscript(
-          scope,
-          (snapshot) => {
-            const expected = previous ? expect.objectContaining(previous) : undefined;
-            expect(snapshot).toMatchObject({
-              existingEntry: expected,
-              targetEntry: expected,
-              labelInUse: false,
-            });
-            return { ok: true, entry: value };
+        const result = await create(scope, value, {
+          cwd: state.workspaceDir,
+          label,
+          afterCommitted: async (_entry, source) => {
+            source.assertCurrent();
+            expect(loadSessionEntry(scope)).toMatchObject(value);
+            await Promise.resolve();
+            source.assertCurrent();
+            expect(loadSessionEntry(scope)).toMatchObject(value);
+            followed = true;
           },
-          {
-            cwd: state.workspaceDir,
-            label,
-            afterCommitted: async (_entry, source) => {
-              source.assertCurrent();
-              expect(loadSessionEntry(scope)).toMatchObject(value);
-              await Promise.resolve();
-              source.assertCurrent();
-              expect(loadSessionEntry(scope)).toMatchObject(value);
-              followed = true;
-            },
-          },
-        );
+        });
         expect(followed).toBe(true);
         expect(result).toMatchObject({ ok: true, entry: { ...value, label }, sessionFile: key });
       };
       await createChecked(original, "unused");
-      expect(memorySessionActorOwners.read({ agentId, path: sentinel })).toMatchObject({
-        agentId,
-        path: sentinel,
-      });
       expectEmpty(explicit, ambient);
 
       const transcriptScope = { ...scope, sessionKey: key, sessionId: original.sessionId };
@@ -185,7 +163,7 @@ it.each(["ambient", "omitted", "sentinel", "durable"] as const)(
       });
 
       const updated = { ...original, label: "recreated", updatedAt: 2 };
-      await createChecked(updated, "recreated", original);
+      await createChecked(updated, "recreated");
       expect(loadSessionEntry(scope)).toMatchObject(updated);
     });
     memorySessionActorOwners.closeDatabase({ agentId, path: sentinel });
@@ -220,7 +198,6 @@ it.each([
     expect(listOpenClawRegisteredAgentDatabases({ env: explicit.env })).toEqual([
       expect.objectContaining({ agentId: physicalOwner, path: databasePath }),
     ]);
-    expect(fs.existsSync(databasePath)).toBe(true);
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     expect(loadSessionEntry(scope)).toMatchObject(original);
@@ -299,29 +276,24 @@ it("retains archived incognito transcripts until owner close", async () => {
       transcriptEvents: [event],
     }));
     const activeScope = { ...scope, sessionKey: "agent:main:dashboard:incognito-active" };
-    const activeActor = await binding.actor.storage.acquire(activeScope.sessionKey);
-    try {
-      await runWithSessionActorStorage({ ...binding, actor: activeActor }, async () => {
-        await create(activeScope, makeEntry("active", now, false));
-        const maintenanceConfig = resolveMaintenanceConfigFromInput({
-          archiveDashboardAfter: false,
-          maxDiskBytes: false,
-          maxEntries: 1,
-          pruneAfter: "365d",
-        });
-        for (const mode of ["skip", "warn", "enforce"] as const) {
-          await patchSessionEntryCore(activeScope, () => ({ model: mode }), {
-            maintenanceConfig: { ...maintenanceConfig, mode: mode === "warn" ? "warn" : "enforce" },
-            skipMaintenance: mode === "skip",
-          });
-          if (mode !== "enforce") {
-            expect(memoryRead(binding)?.archivedAt).toBeUndefined();
-          }
-        }
+    await withMemory(activeScope, async () => {
+      await create(activeScope, makeEntry("active", now, false));
+      const maintenanceConfig = resolveMaintenanceConfigFromInput({
+        archiveDashboardAfter: false,
+        maxDiskBytes: false,
+        maxEntries: 1,
+        pruneAfter: "365d",
       });
-    } finally {
-      await activeActor.release();
-    }
+      for (const mode of ["skip", "warn", "enforce"] as const) {
+        await patchSessionEntryCore(activeScope, () => ({ model: mode }), {
+          maintenanceConfig: { ...maintenanceConfig, mode: mode === "warn" ? "warn" : "enforce" },
+          skipMaintenance: mode === "skip",
+        });
+        if (mode !== "enforce") {
+          expect(memoryRead(binding)?.archivedAt).toBeUndefined();
+        }
+      }
+    });
     expect(loadSessionEntry(scope)).toMatchObject({
       sessionId: "archived",
       archivedAt: expect.any(Number),

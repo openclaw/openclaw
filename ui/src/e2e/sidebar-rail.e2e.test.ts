@@ -13,8 +13,19 @@ import {
 
 const suite = createControlUiE2eSuite({ name: "Personal rail pins" });
 const unloaded = [
-  { key: "agent:research:plan", kind: "direct" as const, label: "Research plan", icon: "🔬" },
-  { key: "agent:main:notes", kind: "direct" as const, label: "Release notes" },
+  {
+    key: "agent:research:plan",
+    sessionId: "session:agent:research:plan",
+    kind: "direct" as const,
+    label: "Research plan",
+    icon: "🔬",
+  },
+  {
+    key: "agent:main:notes",
+    sessionId: "session:agent:main:notes",
+    kind: "direct" as const,
+    label: "Release notes",
+  },
 ];
 const entries = [
   "session-rail:agent:main:current",
@@ -246,7 +257,7 @@ suite.define(() => {
         const installProfilePreferences = () =>
           installPreferenceServer(
             page,
-            { "ui.themeMode": "dark" },
+            { "ui.themeMode": "dark", "new-session.migration.v1": true },
             "openclaw-test:clean-rail:profile-prefs",
           );
         await installProfilePreferences();

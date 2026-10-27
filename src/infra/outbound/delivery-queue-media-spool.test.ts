@@ -333,30 +333,27 @@ it("uses the live send's local-read capability", async () => {
   await expect(rawStage({ mediaAccess })).rejects.toThrow();
 });
 
-it.each([undefined, "session-generation-v1", "command-owner-v1"] as const)(
+it.each([
+  [undefined, ""],
+  ["session-generation-v1", "g1-"],
+  ["command-owner-v1", "c1-"],
+] as const)(
   "publishes complete media with older-reader-compatible custody (%s)",
-  async (artifactFormat) => {
-    const atMove: { finalExisted: boolean; partSize: number }[] = [];
+  async (artifactFormat, prefix) => {
+    const atMove: [boolean, number][] = [];
     storeSpy.onMove = (from, to, rootDir) => {
       const knownToPublishedReader = artifactFormat === undefined;
       expect(PUBLISHED_ARTIFACT_NAME_RE.test(from)).toBe(knownToPublishedReader);
       expect(PUBLISHED_ARTIFACT_NAME_RE.test(to)).toBe(knownToPublishedReader);
       expect(from).toBe(`${to}.part`);
       if (artifactFormat) {
-        expect(to).toMatch(
-          artifactFormat === "command-owner-v1"
-            ? /^c1-[0-9a-f-]{36}\.ogg$/
-            : /^g1-[0-9a-f-]{36}\.ogg$/,
-        );
+        expect(to).toMatch(new RegExp(`^${prefix}[0-9a-f-]{36}\\.ogg$`));
       }
-      atMove.push({
-        finalExisted: existsSync(path.join(rootDir, to)),
-        partSize: statSync(path.join(rootDir, from)).size,
-      });
+      atMove.push([existsSync(path.join(rootDir, to)), statSync(path.join(rootDir, from)).size]);
     };
 
     await stage({ artifactFormat });
-    expect(atMove).toEqual([{ finalExisted: false, partSize: "opus-bytes".length }]);
+    expect(atMove).toEqual([[false, "opus-bytes".length]]);
     expect(await fs.readdir(spoolRoot)).toHaveLength(1);
   },
 );

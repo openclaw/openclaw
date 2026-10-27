@@ -18,7 +18,9 @@ const socketUrl = "unix:///tmp/signal%20private/a%23b.sock";
 const baseUrl = "http://127.0.0.1:8080";
 const native = (options: Native = {}): Transport => ({ kind: "managed-native", ...options });
 const account = (options: Native = {}) => ({ account: phone, transport: native(options) });
-const endpoint = (kind: "container" | "external-native", url: string): Transport => ({ kind, url });
+const endpoint = <Kind extends "container" | "external-native">(kind: Kind, url: string) => ({
+  transport: { kind, url },
+});
 const config = (signal: Signal): OpenClawConfig => ({ channels: { signal } });
 const accounts = (entries: NonNullable<Signal["accounts"]>): Signal => ({ accounts: entries });
 const http = (url: string, host: string, port: number, id?: string): Check => [
@@ -34,10 +36,16 @@ const defaults: ResolvedSignalTransport = {
   startupTimeoutMs: 30_000,
 };
 const port = (httpPort: number, id = "work"): Check => [{ kind: "managed-native", httpPort }, id];
-const root = (options: Native): Signal => ({ transport: native(options) });
+const root = (options: Native, extra: Signal = {}) => ({ transport: native(options), ...extra });
 const socket = { transport: native({ socketPath }) };
 const dormant = { enabled: false };
 const explicit = account({ httpPort: 8181 });
+const containerUrl = "http://default-container:8080";
+const externalUrl = "http://canonical-native:8181";
+const container = endpoint("container", containerUrl);
+const external = endpoint("external-native", externalUrl);
+const uuid = "123e4567-e89b-12d3-a456-426614174000";
+const namedAccount = accounts({ work: { account: phone } });
 
 it.each<Case>([
   [
@@ -54,41 +62,24 @@ it.each<Case>([
   [root({ httpHost: "[::1]", httpPort: 8181 }), http("http://[::1]:8181", "::1", 8181)],
   [root({ url: baseUrl, httpHost: "127.0.0.2" }), http(baseUrl, "127.0.0.2", 8081)],
   [
-    {
-      transport: endpoint("container", "http://default-container:8080"),
-      accounts: { work: { account: phone } },
-    },
-    [{ kind: "container", baseUrl: "http://default-container:8080" }, undefined, true],
+    { ...container, ...namedAccount },
+    [{ kind: "container", baseUrl: containerUrl }, undefined, true],
     [{ kind: "managed-native", baseUrl }, "work"],
   ],
   [
-    {
-      transport: endpoint("external-native", "http://canonical-native:8181"),
-      accounts: {
-        default: {
-          account: phone,
-          transport: endpoint("container", "http://stale-container:8080"),
-        },
-      },
-    },
-    [{ kind: "external-native", baseUrl: "http://canonical-native:8181" }, "default", true],
+    { ...external, ...accounts({ default: { account: phone, ...container } }) },
+    [{ kind: "external-native", baseUrl: externalUrl }, "default", true],
   ],
   [accounts({ personal: account(), work: account() }), port(8080, "personal"), port(8081)],
   [accounts({ alpha: account({ httpPort: 8080 }), Ops: account() }), port(8081, "Ops")],
   [accounts({ dormant: { ...explicit, ...dormant }, work: explicit }), port(8181)],
   [accounts({ placeholder: dormant, work: account() }), port(8080)],
   [
-    accounts({
-      proxy: account({ url: "http://localhost:8080", httpPort: 8181 }),
-      work: account(),
-    }),
+    accounts({ proxy: account({ url: "http://localhost:8080", httpPort: 8181 }), work: account() }),
     port(8081),
   ],
   [
-    {
-      transport: native({ httpPort: 8080 }),
-      accounts: { work: account({ url: baseUrl, httpHost: "0.0.0.0" }) },
-    },
+    root({ httpPort: 8080 }, accounts({ work: account({ url: baseUrl, httpHost: "0.0.0.0" }) })),
     http("http://127.0.0.1:8081", "0.0.0.0", 8081, "work"),
   ],
 ])("resolves transport %j", (signal, ...checks) => {
@@ -105,66 +96,35 @@ it.each<Case>([
   }
 });
 
-it.each<[string, Signal, string, string?]>([
-  ["duplicate enabled sockets", { ...socket, accounts: { work: socket } }, "distinct socket path"],
-  ["socket with HTTP options", root({ socketPath, httpPort: 8080 }), "cannot be combined"],
+it.each<[Signal, string, string?]>([
+  [{ ...socket, accounts: { work: socket } }, "distinct socket path"],
+  [root({ socketPath, httpPort: 8080 }), "cannot be combined"],
   [
-    "duplicate explicit ports",
     accounts({ personal: explicit, work: explicit }),
     'Signal managed native accounts "work" and "personal" both bind port 8181.',
     "work",
   ],
   [
-    "local external endpoint collision",
     accounts({
-      proxy: { account: phone, transport: endpoint("container", "http://localhost:8181") },
+      proxy: { account: phone, ...endpoint("container", "http://localhost:8181") },
       work: explicit,
     }),
     'Signal managed native account "work" binds port 8181, which conflicts with account "proxy" local transport endpoint.',
     "work",
   ],
   [
-    "own independent local endpoint collision",
-    {
-      account: phone,
-      transport: native({ url: "https://127.0.0.1:8181", httpPort: 8181 }),
-    },
+    { account: phone, ...root({ url: "https://127.0.0.1:8181", httpPort: 8181 }) },
     'Signal managed native account "default" binds port 8181, which conflicts with its local transport endpoint.',
   ],
-])("rejects %s", (_name, signal, message, accountId) => {
+])("rejects %j: %s", (signal, message, accountId) => {
   expect(() => resolveSignalAccount({ cfg: config(signal), accountId })).toThrow(message);
 });
 
-it.each<[string, Signal, string[], string, string?, boolean?]>([
-  [
-    "top-level account",
-    { account: phone, accounts: { work: { enabled: false } } },
-    ["default", "work"],
-    "default",
-    phone,
-  ],
-  [
-    "case-preserving default",
-    {
-      transport: endpoint("container", "http://signal-container:8080"),
-      accounts: { Default: { account: phone } },
-    },
-    ["default"],
-    "default",
-    phone,
-  ],
-  [
-    "UUID with a named account",
-    {
-      accountUuid: "123e4567-e89b-12d3-a456-426614174000",
-      accounts: { work: { account: phone } },
-    },
-    ["work"],
-    "work",
-    undefined,
-    false,
-  ],
-])("selects the %s", (_name, signal, ids, accountId, expectedAccount, defaultConfigured) => {
+it.each<[Signal, string[], string, string?, boolean?]>([
+  [{ account: phone, ...accounts({ work: dormant }) }, ["default", "work"], "default", phone],
+  [{ ...container, ...accounts({ Default: { account: phone } }) }, ["default"], "default", phone],
+  [{ accountUuid: uuid, ...namedAccount }, ["work"], "work", undefined, false],
+])("selects an account from %j", (signal, ids, accountId, expectedAccount, defaultConfigured) => {
   const cfg = config(signal);
   const resolved = resolveSignalAccount({ cfg });
   expect(listSignalAccountIds(cfg)).toEqual(ids);
@@ -179,23 +139,16 @@ it.each<[string, Signal, string[], string, string?, boolean?]>([
 });
 
 it("uses configured defaultAccount when accountId is omitted", () => {
-  const work = {
-    name: "Work",
-    account: phone,
-    transport: endpoint("external-native", "http://127.0.0.1:9999"),
-  };
-  const resolved = resolveSignalAccount({
-    cfg: config({ defaultAccount: "work", accounts: { work } }),
-  });
+  const workUrl = "http://127.0.0.1:9999";
+  const work = { name: "Work", account: phone, ...endpoint("external-native", workUrl) };
+  const cfg = config({ defaultAccount: "work", accounts: { work } });
+  const resolved = resolveSignalAccount({ cfg });
   expect(resolved).toMatchObject({
     accountId: "work",
     name: "Work",
-    baseUrl: "http://127.0.0.1:9999",
+    baseUrl: workUrl,
     configured: true,
     config: { account: phone },
   });
-  expect(resolved.transport).toEqual({
-    kind: "external-native",
-    baseUrl: "http://127.0.0.1:9999",
-  });
+  expect(resolved.transport).toEqual({ kind: "external-native", baseUrl: workUrl });
 });

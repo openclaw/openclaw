@@ -11,14 +11,16 @@ import {
   encodeMemoryEmbedding,
   isPostgresSqlConnection,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import {
+  openNodeSqliteDatabase,
+  runSqliteImmediateTransactionSync,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it } from "vitest";
 import { memoryTextSearchSchema, memoryVectorSearchSchema } from "./manager-search-schema.js";
 import {
   MemorySourceIndexKernel,
-  memoryChunkRowId,
   readMemorySourceChunks,
   type MemorySourceIndexReplacement,
   type MemorySourceIndexRow,
@@ -48,112 +50,119 @@ CREATE TABLE memory_index_chunk_provenance (
 CREATE TABLE memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `;
 
+function withSourceDatabase(run: (db: ReturnType<typeof openEngineStore>) => void) {
+  withEngineStoreAdmission(() => {
+    const artifacts = path.join(process.cwd(), ".artifacts");
+    fs.mkdirSync(artifacts, { recursive: true });
+    using anchor = openNodeSqliteDatabase(
+      path.join(tempDirs.make("memory-source-postgres-", artifacts), "anchor.sqlite"),
+    );
+    const db = openEngineStore({
+      anchor,
+      input: { connection: connection!, schemaPrefix: "memory_source_test" },
+      schema: { id: "memory_source", version: 1, sqlite: "", postgres: sourceSchema },
+      openSqlite: () => {
+        throw new Error("Unexpected SQLite bootstrap");
+      },
+      prepareAnchor: () => {},
+      inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: false }),
+    });
+    if (!isPostgresSqlConnection(db)) {
+      throw new Error("Expected PostgreSQL");
+    }
+    const namespace = String(db.prepare("SELECT current_schema() AS namespace").get()!.namespace);
+    try {
+      run(db);
+    } finally {
+      db.exec(`DROP SCHEMA "${namespace.replaceAll('"', '""')}" CASCADE`);
+      db.close();
+    }
+  });
+}
+
 it.skipIf(!connection)(
   "PostgreSQL: replaces 129 rows and rolls back canonical and derived rows",
   () => {
-    withEngineStoreAdmission(() => {
+    withSourceDatabase((db) => {
       expect(threadId, "Admission stays in the suite's application process").toBe(0);
-      const artifacts = path.join(process.cwd(), ".artifacts");
-      fs.mkdirSync(artifacts, { recursive: true });
-      const root = tempDirs.make("memory-source-postgres-", artifacts);
-      using anchor = openNodeSqliteDatabase(path.join(root, "anchor.sqlite"));
-      const db = openEngineStore({
-        anchor,
-        input: { connection: connection!, schemaPrefix: "memory_source_test" },
-        schema: { id: "memory_source", version: 1, sqlite: "", postgres: sourceSchema },
-        openSqlite: () => {
-          throw new Error("Unexpected SQLite bootstrap");
-        },
-        prepareAnchor: () => {},
-        inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: false }),
+      admitStoreSearch(db, memoryTextSearchSchema("unicode61"), { extension: "memory.text" });
+      admitStoreSearch(db, memoryVectorSearchSchema(3), { extension: "memory.vector" });
+      const state = {
+        vector: { enabled: true, available: true },
+        fts: { enabled: true, available: true },
+        hasVectorTable: true,
+      };
+      const value: MemorySourceIndexReplacement = {
+        source: "memory",
+        entry: { path: "memory/batch.md", hash: "first", mtimeMs: 100.25, size: 129 },
+        model: "test-model",
+        now: 100,
+        vectorReady: true,
+        embeddings: Array.from({ length: 129 }, () => [1, 0, 0]),
+        chunks: Array.from({ length: 129 }, (_, index) => ({
+          startLine: index + 1,
+          endLine: index + 1,
+          hash: `chunk-${index}`,
+          text: `indexedword ${index}`,
+          importance: 7,
+          triggers: null,
+          projectKey: null,
+        })),
+      };
+      const write = () =>
+        new MemorySourceIndexKernel(db, state).replaceRows(
+          value,
+          value.chunks.map((chunk, index) => ({ chunk, embedding: value.embeddings[index]! })),
+        );
+      runSqliteImmediateTransactionSync(db, () => {
+        write();
+        markMemoryVectorIndexClean(db);
       });
-      if (!isPostgresSqlConnection(db)) {
-        throw new Error("Expected PostgreSQL");
-      }
-      const namespace = String(db.prepare("SELECT current_schema() AS namespace").get()!.namespace);
-      try {
-        admitStoreSearch(db, memoryTextSearchSchema("unicode61"), { extension: "memory.text" });
-        admitStoreSearch(db, memoryVectorSearchSchema(3), { extension: "memory.vector" });
-        const state = {
-          vector: { enabled: true, available: true },
-          fts: { enabled: true, available: true },
-          hasVectorTable: true,
-        };
-        const value: MemorySourceIndexReplacement = {
-          source: "memory",
-          entry: { path: "memory/batch.md", hash: "first", mtimeMs: 100.25, size: 129 },
-          model: "test-model",
-          now: 100,
-          vectorReady: true,
-          embeddings: Array.from({ length: 129 }, () => [1, 0, 0]),
-          chunks: Array.from({ length: 129 }, (_, index) => ({
-            startLine: index + 1,
-            endLine: index + 1,
-            hash: `chunk-${index}`,
-            text: `indexedword ${index}`,
-            importance: 7,
-            triggers: null,
-            projectKey: null,
-          })),
-        };
-        const write = () =>
-          new MemorySourceIndexKernel(db, state).replaceRows(
-            value,
-            value.chunks.map((chunk, index) => ({ chunk, embedding: value.embeddings[index]! })),
-          );
-        db.runTransaction(() => {
-          write();
-          markMemoryVectorIndexClean(db);
-        });
-        const vectors = () =>
-          db.prepare("SELECT id, embedding::text FROM memory_index_chunks_vec ORDER BY id").all();
-        const changes = () => db.prepare("SELECT id FROM projection_changes").all();
-        const before = vectors();
-        expect(before).toHaveLength(129);
-        const expectUnchanged = () => {
-          expect(vectors()).toEqual(before);
-          expect(changes()).toEqual([]);
-          expect(readMemorySourceChunks(db, "memory", value.entry.path)).toHaveLength(129);
-        };
-        db.exec(`CREATE TEMP TABLE projection_changes (id TEXT);
+      const vectors = () =>
+        db.prepare("SELECT id, embedding::text FROM memory_index_chunks_vec ORDER BY id").all();
+      const changes = () => db.prepare("SELECT id FROM projection_changes").all();
+      const before = vectors();
+      expect(before).toHaveLength(129);
+      const expectUnchanged = () => {
+        expect(vectors()).toEqual(before);
+        expect(changes()).toEqual([]);
+        expect(readMemorySourceChunks(db, "memory", value.entry.path)).toHaveLength(129);
+      };
+      db.exec(`CREATE TEMP TABLE projection_changes (id TEXT);
         CREATE FUNCTION pg_temp.record_projection_change() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN INSERT INTO projection_changes VALUES (coalesce(NEW.id, OLD.id)); RETURN NULL; END $$;
         CREATE TRIGGER record_projection_change AFTER INSERT OR UPDATE OR DELETE
         ON memory_index_chunks_vec FOR EACH ROW EXECUTE FUNCTION pg_temp.record_projection_change()`);
-        const parameterCounts: number[] = [];
-        const events = channel("openclaw.database.statement");
-        const observe = (event: unknown) => {
-          if (isRecord(event) && event.engine === "postgres" && typeof event.sql === "string") {
-            parameterCounts.push(event.sql.match(/\$\d+/g)?.length ?? 0);
-          }
-        };
-        events.subscribe(observe);
-        try {
-          value.entry.hash = "second";
-          value.now = 200;
-          db.runTransaction(write);
-        } finally {
-          events.unsubscribe(observe);
+      const parameterCounts: number[] = [];
+      const events = channel("openclaw.database.statement");
+      const observe = (event: unknown) => {
+        if (isRecord(event) && event.engine === "postgres" && typeof event.sql === "string") {
+          parameterCounts.push(event.sql.match(/\$\d+/g)?.length ?? 0);
         }
-        expect(parameterCounts.every((count) => count < 65_535)).toBe(true);
-        expectUnchanged();
-        expect(() =>
-          db.runTransaction(() => {
-            value.chunks = value.chunks.slice(0, 1);
-            value.embeddings = [[0, 1, 0]];
-            write();
-            expect(changes().length).toBeGreaterThan(0);
-            throw new Error("rollback source fixture");
-          }),
-        ).toThrow("rollback source fixture");
-        expectUnchanged();
-        expect(
-          db.prepare("SELECT hash FROM memory_index_sources WHERE path = ?").get(value.entry.path),
-        ).toEqual({ hash: "second" });
+      };
+      events.subscribe(observe);
+      try {
+        value.entry.hash = "second";
+        value.now = 200;
+        runSqliteImmediateTransactionSync(db, write);
       } finally {
-        db.exec(`DROP SCHEMA "${namespace.replaceAll('"', '""')}" CASCADE`);
-        db.close();
+        events.unsubscribe(observe);
       }
+      expect(parameterCounts.every((count) => count < 65_535)).toBe(true);
+      expectUnchanged();
+      expect(() =>
+        runSqliteImmediateTransactionSync(db, () => {
+          value.chunks = value.chunks.slice(0, 1);
+          value.embeddings = [[0, 1, 0]];
+          write();
+          expect(changes().length).toBeGreaterThan(0);
+          throw new Error("rollback source fixture");
+        }),
+      ).toThrow("rollback source fixture");
+      expectUnchanged();
+      expect(
+        db.prepare("SELECT hash FROM memory_index_sources WHERE path = ?").get(value.entry.path),
+      ).toEqual({ hash: "second" });
     });
   },
 );
@@ -165,137 +174,83 @@ it.skipIf(!connection).each([
 ])(
   "PostgreSQL: keeps the last values for repeated chunk IDs ($count rows, retained=$retainedLast)",
   ({ count, retainedLast }) => {
-    withEngineStoreAdmission(() => {
-      const artifacts = path.join(process.cwd(), ".artifacts");
-      fs.mkdirSync(artifacts, { recursive: true });
-      const root = tempDirs.make("memory-duplicate-postgres-", artifacts);
-      using anchor = openNodeSqliteDatabase(path.join(root, "anchor.sqlite"));
-      const db = openEngineStore({
-        anchor,
-        input: { connection: connection!, schemaPrefix: "memory_duplicate_test" },
-        schema: { id: "memory_source", version: 1, sqlite: "", postgres: sourceSchema },
-        openSqlite: () => {
-          throw new Error("Unexpected SQLite bootstrap");
-        },
-        prepareAnchor: () => {},
-        inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: false }),
-      });
-      if (!isPostgresSqlConnection(db)) {
-        throw new Error("Expected PostgreSQL");
-      }
-      const namespace = String(db.prepare("SELECT current_schema() AS namespace").get()!.namespace);
-      try {
-        admitStoreSearch(db, memoryVectorSearchSchema(3), { extension: "memory.vector" });
-        const state = {
-          vector: { enabled: true, available: true },
-          fts: { enabled: false, available: false },
-          hasVectorTable: true,
-        };
-        const rows: MemorySourceIndexRow[] = Array.from({ length: count }, (_, index) => {
-          const last = index === count - 1;
-          return {
-            chunk: {
-              startLine: 1,
-              endLine: 1,
-              hash: "repeated-content",
-              text: last ? "latest text" : "earlier text",
-              importance: last ? 9 : 1,
-              triggers: last ? "latest" : "earlier",
-              projectKey: last ? "latest-project" : "earlier-project",
-              provenance: {
-                originClass: last ? "owner" : "untrusted",
-                sessionKind: last ? "interactive" : "unknown",
-                observedAt: last ? 200 : 100,
-                supersedesKey: last ? "latest-source" : "earlier-source",
-              },
+    withSourceDatabase((db) => {
+      admitStoreSearch(db, memoryVectorSearchSchema(3), { extension: "memory.vector" });
+      const state = {
+        vector: { enabled: true, available: true },
+        fts: { enabled: false, available: false },
+        hasVectorTable: true,
+      };
+      const rows: MemorySourceIndexRow[] = Array.from({ length: count }, (_, index) => {
+        const last = index === count - 1;
+        return {
+          chunk: {
+            startLine: 1,
+            endLine: 1,
+            hash: "repeated-content",
+            text: last ? "latest text" : "earlier text",
+            importance: last ? 9 : 1,
+            triggers: last ? "latest" : "earlier",
+            projectKey: last ? "latest-project" : "earlier-project",
+            provenance: {
+              originClass: last ? "owner" : "untrusted",
+              sessionKind: last ? "interactive" : "unknown",
+              observedAt: last ? 200 : 100,
+              supersedesKey: last ? "latest-source" : "earlier-source",
             },
-            embedding: last && !retainedLast ? [1, 0, 0] : [0, 1, 0],
-            ...(last && retainedLast ? { retained: true } : {}),
-          };
-        });
-        const header = {
-          source: "memory" as const,
-          entry: { path: "memory/repeat.md", hash: "repeated", mtimeMs: 200, size: 3200 },
-          model: "test-model",
-          now: 200,
-          vectorReady: true,
+          },
+          embedding: last && !retainedLast ? [1, 0, 0] : [0, 1, 0],
+          ...(last && retainedLast ? { retained: true } : {}),
         };
-        const failedStatements: string[] = [];
-        const events = channel("openclaw.database.statement");
-        const observe = (event: unknown) => {
-          if (isRecord(event) && event.outcome === "error" && typeof event.sql === "string") {
-            failedStatements.push(event.sql);
-          }
-        };
-        events.subscribe(observe);
-        try {
-          db.runTransaction(() => new MemorySourceIndexKernel(db, state).replaceRows(header, rows));
-        } catch (error) {
-          // Preserve the native failing statement and synthetic conflict-key inputs in CI.
-          throw new Error(
-            `${String(error)}\n${JSON.stringify({
-              header,
-              count,
-              rows: [rows[0], rows.at(-1)],
-              failedStatements,
-              id: memoryChunkRowId(
-                header.source,
-                header.entry.path,
-                {
-                  startLine: 1,
-                  endLine: 1,
-                  hash: "repeated-content",
-                },
-                header.model,
-              ),
-            })}`,
-            { cause: error },
-          );
-        } finally {
-          events.unsubscribe(observe);
-        }
-        expect(
-          db
-            .prepare(`SELECT c.text, c.updated_at, encode(c.embedding, 'hex') AS canonical_embedding,
+      });
+      const header = {
+        source: "memory" as const,
+        entry: { path: "memory/repeat.md", hash: "repeated", mtimeMs: 200, size: 3200 },
+        model: "test-model",
+        now: 200,
+        vectorReady: true,
+      };
+      runSqliteImmediateTransactionSync(db, () =>
+        new MemorySourceIndexKernel(db, state).replaceRows(header, rows),
+      );
+      expect(
+        db
+          .prepare(`SELECT c.text, c.updated_at, encode(c.embedding, 'hex') AS canonical_embedding,
           v.embedding::text AS vector, m.importance, m.triggers, m.project_key,
           p.origin_class, p.session_kind, p.observed_at, p.supersedes_key
         FROM memory_index_chunks c
         JOIN memory_index_chunks_vec v USING (id)
         JOIN memory_index_chunk_recall_metadata m ON m.chunk_id = c.id
         JOIN memory_index_chunk_provenance p ON p.chunk_id = c.id`)
-            .all(),
-        ).toEqual([
-          {
-            text: retainedLast ? "earlier text" : "latest text",
-            updated_at: 200,
-            canonical_embedding: Buffer.from(
-              encodeMemoryEmbedding(retainedLast ? [0, 1, 0] : [1, 0, 0]),
-            ).toString("hex"),
-            vector: retainedLast ? "[0,1,0]" : "[1,0,0]",
-            importance: 9,
-            triggers: "latest",
-            project_key: "latest-project",
-            origin_class: "owner",
-            session_kind: "interactive",
-            observed_at: 200,
-            supersedes_key: "latest-source",
-          },
-        ]);
-        db.runTransaction(() =>
-          new MemorySourceIndexKernel(db, state).replaceGroup(
-            ["earlier-header", "latest-header"].map((hash) => ({
-              header: { ...header, entry: { ...header.entry, hash }, delta: true },
-              rows: [],
-            })),
-          ),
-        );
-        expect(
-          db.prepare("SELECT hash FROM memory_index_sources WHERE path = ?").get(header.entry.path),
-        ).toEqual({ hash: "latest-header" });
-      } finally {
-        db.exec(`DROP SCHEMA "${namespace.replaceAll('"', '""')}" CASCADE`);
-        db.close();
-      }
+          .all(),
+      ).toEqual([
+        {
+          text: retainedLast ? "earlier text" : "latest text",
+          updated_at: 200,
+          canonical_embedding: Buffer.from(
+            encodeMemoryEmbedding(retainedLast ? [0, 1, 0] : [1, 0, 0]),
+          ).toString("hex"),
+          vector: retainedLast ? "[0,1,0]" : "[1,0,0]",
+          importance: 9,
+          triggers: "latest",
+          project_key: "latest-project",
+          origin_class: "owner",
+          session_kind: "interactive",
+          observed_at: 200,
+          supersedes_key: "latest-source",
+        },
+      ]);
+      runSqliteImmediateTransactionSync(db, () =>
+        new MemorySourceIndexKernel(db, state).replaceGroup(
+          ["earlier-header", "latest-header"].map((hash) => ({
+            header: { ...header, entry: { ...header.entry, hash }, delta: true },
+            rows: [],
+          })),
+        ),
+      );
+      expect(
+        db.prepare("SELECT hash FROM memory_index_sources WHERE path = ?").get(header.entry.path),
+      ).toEqual({ hash: "latest-header" });
     });
   },
 );

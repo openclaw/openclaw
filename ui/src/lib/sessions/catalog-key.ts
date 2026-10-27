@@ -1,6 +1,5 @@
 import type {
   SessionCatalogHost,
-  SessionCatalogSession,
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -32,11 +31,6 @@ export function announceCatalogSessionContinued(detail: CatalogSessionContinuedD
 const CATALOG_SESSION_LOOKUP_PAGE_LIMIT = 100;
 const CATALOG_SESSION_LOOKUP_MAX_PAGES = 100;
 
-type CatalogSessionLookup = {
-  host: SessionCatalogHost | null;
-  session: SessionCatalogSession | null;
-};
-
 /** Resolves a catalog row's metadata (host + per-session capability flags).
     A sidebar row can come from any loaded page, so this follows the host's
     cursor until the thread is found; `null` means the caller went stale. */
@@ -45,7 +39,7 @@ export async function lookupCatalogSession(params: {
   key: CatalogSessionKey;
   agentId: string;
   isCurrent: () => boolean;
-}): Promise<CatalogSessionLookup | null> {
+}) {
   const { agentId, client, key } = params;
   let cursor: string | undefined;
   const seenCursors = new Set<string>();

@@ -7,6 +7,7 @@ import {
   readMarkdownCodeBlockCopyText,
 } from "../../../components/markdown-code-blocks.ts";
 import { markdownBlocksRef } from "../../../components/markdown-element-refs-solid.ts";
+import { loadStreamingMarkdown } from "../../../components/markdown-live-loader.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
@@ -107,6 +108,15 @@ function drawContent(content: RawContent["content"], media?: MarkdownMedia) {
   }
 }
 
+async function withFakeTimers(run: () => Promise<void>) {
+  vi.useFakeTimers();
+  try {
+    await run();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe("streaming Markdown DOM", () => {
   it.each([
     ["A reply", "A reply with **bold**", "strong", "bold"],
@@ -121,20 +131,16 @@ describe("streaming Markdown DOM", () => {
   });
 
   it("formats the first delta after an idle formatting window immediately", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       draw("A growing reply");
       await vi.advanceTimersByTimeAsync(50);
       draw("A growing reply with **bold** text");
       expect(container.querySelector("strong")?.textContent).toBe("bold");
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("coalesces burst formatting into one bounded window and flushes an idle preview", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       draw("Visit www");
       draw("Visit www.example");
       await vi.advanceTimersByTimeAsync(25);
@@ -154,36 +160,35 @@ describe("streaming Markdown DOM", () => {
       expect(container.querySelectorAll("a")[1]?.getAttribute("href")).toBe(
         "http://www.openclaw.org",
       );
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("keeps visible plain text in place when deferred formatting catches up", async () => {
-    vi.useFakeTimers();
+    await loadStreamingMarkdown.preload();
     const mutations: MutationRecord[] = [];
     const observer = new MutationObserver((records) => mutations.push(...records));
     try {
-      draw("A growing reply");
-      draw("A growing reply with more text");
-      const text = container.querySelector("p")?.textContent;
-      observer.observe(container, { characterData: true, subtree: true });
-      await vi.advanceTimersByTimeAsync(50);
-      expect(container.querySelector("p")?.textContent).toBe(text);
-      expect([...mutations, ...observer.takeRecords()]).toHaveLength(0);
-      observer.disconnect();
-      draw("A growing reply with more text and a pending suffix");
-      draw("A growing reply with more text");
-      expect(container.querySelector("p")?.textContent).toBe(text);
+      await withFakeTimers(async () => {
+        draw("A growing reply");
+        draw("A growing reply with more text");
+        const text = container.querySelector("p")?.textContent;
+        observer.observe(container, { characterData: true, subtree: true });
+        draw("A growing reply with more text");
+        await vi.advanceTimersByTimeAsync(50);
+        expect(container.querySelector("p")?.textContent).toBe(text);
+        expect([...mutations, ...observer.takeRecords()]).toHaveLength(0);
+        observer.disconnect();
+        draw("A growing reply with more text and a pending suffix");
+        draw("A growing reply with more text");
+        expect(container.querySelector("p")?.textContent).toBe(text);
+      });
     } finally {
       observer.disconnect();
-      vi.useRealTimers();
     }
   });
 
   it("shows appended text before bounded formatting and flushes completion without a stale timer", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       draw("A growing reply");
       const paragraph = container.querySelector("p");
       draw("A growing reply with a plain tail");
@@ -197,71 +202,52 @@ describe("streaming Markdown DOM", () => {
       draw("Replacement", { key: "replacement", streaming: false });
       await vi.advanceTimersByTimeAsync(50);
       expect(container.textContent).toBe("Replacement\n");
+    });
+  });
+
+  it.each([
+    ["paragraph", "A growing reply", "p"],
+    ["list", "- First item\n- Growing item", "ul"],
+    ["long list", Array.from({ length: 200 }, (_, index) => `- Item ${index}`).join("\n"), "ul"],
+    ["code fence", "```text\nA growing block", "pre"],
+  ])("updates %s text without removing the rendered subtree", (_label, initial, selector) => {
+    const suffix = " with more text";
+    draw(initial);
+    const existing = container.querySelector(selector);
+    expect(existing).not.toBeNull();
+    const records: MutationRecord[] = [];
+    const observer = new MutationObserver((mutations) => records.push(...mutations));
+    observer.observe(container, { childList: true, subtree: true, characterData: true });
+    try {
+      for (let index = 1; index <= 12; index++) {
+        draw(initial + suffix.repeat(index));
+      }
+      records.push(...observer.takeRecords());
+      expect(container.querySelector(selector)).toBe(existing);
+      expect(records.flatMap((record) => [...record.removedNodes])).toHaveLength(0);
+      expect(records.some((record) => record.type === "characterData")).toBe(true);
+      expect(existing?.textContent).toContain(suffix.repeat(12));
     } finally {
-      vi.useRealTimers();
+      observer.disconnect();
     }
   });
 
   it.each([
-    { label: "paragraph", initial: "A growing reply", suffix: " with more text", selector: "p" },
-    {
-      label: "list",
-      initial: "- First item\n- Growing item",
-      suffix: " with more text",
-      selector: "ul",
-    },
-    {
-      label: "long list",
-      initial: Array.from({ length: 200 }, (_, index) => `- Item ${index}`).join("\n"),
-      suffix: " with more text",
-      selector: "ul",
-    },
-    {
-      label: "code fence",
-      initial: "```text\nA growing block",
-      suffix: " with more text",
-      selector: "pre",
-    },
+    [
+      "list item append",
+      "- <details><summary>Evidence</summary>Retained details</details>\n- Second item",
+      "\n- Third item",
+      "li",
+    ],
+    [
+      "disclosure closure",
+      "<details><summary>Evidence</summary>\n\nRetained evidence",
+      "\n\n</details>\n\nFollowing paragraph",
+      "details",
+    ],
   ])(
-    "updates $label text without removing the rendered subtree",
-    ({ initial, suffix, selector }) => {
-      draw(initial);
-      const existing = container.querySelector(selector);
-      expect(existing).not.toBeNull();
-      const records: MutationRecord[] = [];
-      const observer = new MutationObserver((mutations) => records.push(...mutations));
-      observer.observe(container, { childList: true, subtree: true, characterData: true });
-      try {
-        for (let index = 1; index <= 12; index++) {
-          draw(initial + suffix.repeat(index));
-        }
-        records.push(...observer.takeRecords());
-        expect(container.querySelector(selector)).toBe(existing);
-        expect(records.flatMap((record) => [...record.removedNodes])).toHaveLength(0);
-        expect(records.some((record) => record.type === "characterData")).toBe(true);
-        expect(existing?.textContent).toContain(suffix.repeat(12));
-      } finally {
-        observer.disconnect();
-      }
-    },
-  );
-
-  it.each([
-    {
-      label: "list item append",
-      initial: "- <details><summary>Evidence</summary>Retained details</details>\n- Second item",
-      suffix: "\n- Third item",
-      selector: "li",
-    },
-    {
-      label: "disclosure closure",
-      initial: "<details><summary>Evidence</summary>\n\nRetained evidence",
-      suffix: "\n\n</details>\n\nFollowing paragraph",
-      selector: "details",
-    },
-  ])(
-    "preserves reader disclosure state through $label and finalization",
-    ({ initial, suffix, selector }) => {
+    "preserves reader disclosure state through %s and finalization",
+    (_label, initial, suffix, selector) => {
       draw(initial);
       const retained = container.querySelector(selector);
       const details = container.querySelector("details")!;
@@ -547,16 +533,11 @@ describe("streaming Markdown DOM", () => {
   });
 
   it.each([
-    { label: "nested list", before: "- First", after: "- Growing", suffix: " item" },
-    {
-      label: "promoted paragraph",
-      before: "Retained paragraph.",
-      after: "",
-      suffix: "\n\nFollowing paragraph",
-    },
+    ["nested list", "- First", "- Growing", " item"],
+    ["promoted paragraph", "Retained paragraph.", "", "\n\nFollowing paragraph"],
   ])(
-    "refreshes $label media policy and releases removed media",
-    async ({ before, after, suffix }) => {
+    "refreshes %s media policy and releases removed media",
+    async (_label, before, after, suffix) => {
       let policy = "allowed";
       const connections: boolean[] = [];
       function MediaCard(props: Parameters<MarkdownMedia["render"]>[0]) {

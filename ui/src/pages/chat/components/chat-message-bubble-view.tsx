@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import {
   createEffect,
@@ -73,15 +74,13 @@ const PluginInlineView = lazy(() => import("../../../plugins/control-ui-inline-v
   export: "PluginInlineView",
 });
 
-export type GroupedMessageProps = {
+/** Message identity owns text/media DOM; option refreshes only publish new facts. */
+export function GroupedMessage(props: {
   preparation: ChatMessageRenderPreparation;
   messageKey: string;
   options: GroupedMessageOptions;
   onOpenSidebar?: (content: SidebarContent) => void;
-};
-
-/** Message identity owns text/media DOM; option refreshes only publish new facts. */
-export function GroupedMessage(props: GroupedMessageProps) {
+}) {
   const refreshMedia = () => void refresh(state);
   const state = createMemo(() =>
     prepareGroupedMessage(props.preparation, props.messageKey, props.options, props.onOpenSidebar),
@@ -408,6 +407,15 @@ function BubbleContents(props: ContentProps) {
       </For>
       <Show when={props.state().hasToolCards || props.state().failedToolCard}>
         <BubbleToolCards {...props} />
+      </Show>
+      <Show
+        when={
+          !props.state().hasToolCards &&
+          asNullableRecord(asNullableRecord(props.state().message)?.["__openclaw"])
+            ?.catalogTruncated === true
+        }
+      >
+        <p role="status">{t("chat.catalogOutputTruncated")}</p>
       </Show>
     </>
   );

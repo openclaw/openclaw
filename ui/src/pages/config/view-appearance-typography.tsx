@@ -1,6 +1,5 @@
 import { createMemo, For } from "solid-js";
 import { normalizeTerminalFontFamily } from "../../app/terminal-font.ts";
-import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import {
   loadTypefaceSpecimens,
@@ -11,7 +10,7 @@ import {
 import { SettingsRow } from "../../components/solid/settings-ui.tsx";
 import "../../components/select-picker.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
 import { serverUiPrefProvenanceHint } from "./view-appearance-preferences.tsx";
@@ -25,11 +24,7 @@ export function Typography(
     };
   },
 ) {
-  const branding = projectSource(undefined, {
-    read: currentThemeBranding,
-    subscribe: (_source, notify) => subscribeThemeBranding(notify),
-    equality: Object.is,
-  });
+  const branding = themeBrandingProjection;
   const options = createMemo(() =>
     Object.entries(TYPEFACES).map(([face, metadata]) => ({
       value: face,

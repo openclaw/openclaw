@@ -1,30 +1,26 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { GatewayOperatorRoleDefinition } from "../../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { CronStoredJob } from "../../../cron/types.js";
+import type { PluginDoctorCronJob } from "../../../plugins/doctor-contract-module.js";
 
 const mocks = vi.hoisted(() => ({
-  jobs: [] as Array<{
-    id: string;
-    definition: Record<string, unknown> | null;
-    invalidReason?: string;
-  }>,
+  jobs: [] as Pick<PluginDoctorCronJob, "id" | "definition" | "invalidReason">[],
   sessions: new Map<string, unknown>(),
-  profiles: new Set<string>(),
-  roles: new Map<string, string>(),
+  profiles: new Map<string, string | null>(),
   readSession: vi.fn(),
+  note: vi.fn<(message: string, title?: string) => void>(),
+}));
+
+vi.mock("../../../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../packages/terminal-core/src/note.js")>()),
+  note: mocks.note,
 }));
 
 vi.mock("./store-repair.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./store-repair.js")>()),
-  inspectCronJobsForDoctor: async () => ({
-    jobs: mocks.jobs.map((job, sortOrder) => ({
-      storeKey: "store",
-      sortOrder,
-      definitionJson: JSON.stringify(job.definition),
-      ...job,
-    })),
-  }),
+  inspectCronJobsForDoctor: async () => ({ jobs: mocks.jobs }),
 }));
 
 vi.mock("../../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
@@ -39,12 +35,12 @@ vi.mock("../../../state/openclaw-state-db-readonly.js", async (importOriginal) =
   executeExistingOpenClawStateRead: async (_options: unknown, command: { profileId: string }) => ({
     type: "userProfiles.reconcile",
     profile: mocks.profiles.has(command.profileId)
-      ? { id: command.profileId, role: mocks.roles.get(command.profileId) ?? null }
+      ? { id: command.profileId, role: mocks.profiles.get(command.profileId) }
       : undefined,
   }),
 }));
 
-const { collectScheduledContextReport } = await import("./execution-context-check.js");
+const { noteScheduledContextReport } = await import("./execution-context-check.js");
 
 const PARENT = "agent:main:dashboard:parent";
 const GONE = { sessionKey: "agent:main:dashboard:gone", sessionId: "gone-session" };
@@ -57,13 +53,9 @@ function jobRow(id: string, overrides: Partial<CronStoredJob> = {}) {
       agentId: "main",
       name: id,
       enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
       schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "run", toolsAllow: ["read"] },
-      delivery: { mode: "none" },
       sourceConversation: { sessionKey: PARENT, sessionId: "parent-session" },
       ...overrides,
     },
@@ -73,148 +65,108 @@ function jobRow(id: string, overrides: Partial<CronStoredJob> = {}) {
 const parent: Partial<SessionEntry> = { sessionId: "parent-session", chatType: "direct" };
 
 beforeEach(() => {
-  mocks.jobs = [];
   mocks.sessions = new Map([[PARENT, parent]]);
-  mocks.profiles = new Set(["profile-1"]);
-  mocks.roles = new Map();
+  mocks.profiles = new Map([["profile-1", null]]);
   mocks.readSession.mockReset();
+  mocks.note.mockReset();
   mocks.readSession.mockImplementation(async ({ sessionKey }: { sessionKey: string }) =>
     mocks.sessions.get(sessionKey),
   );
 });
 
-function roleConfig(): OpenClawConfig {
-  return {
-    gateway: {
-      roles: {
-        default: "member",
-        definitions: {
-          member: { sessions: { others: "none" }, agents: "*", scopes: ["operator.write"] },
-          contractor: {
-            sessions: { others: "none" },
-            agents: "*",
-            scopes: ["operator.write"],
-            sandbox: "required",
-          },
-        },
+const member: GatewayOperatorRoleDefinition = {
+  sessions: { others: "none" },
+  agents: "*",
+  scopes: ["operator.write"],
+};
+const roleConfig: OpenClawConfig = {
+  gateway: {
+    roles: {
+      default: "member",
+      definitions: {
+        member,
+        contractor: { ...member, sandbox: "required" },
       },
     },
-  } as OpenClawConfig;
-}
+  },
+};
 
 const profileActor = { type: "human", source: "profile", id: "profile-1" } as const;
 
-describe("collectScheduledContextReport", () => {
-  it("checks a profile requester against the stored profile and the role rule", async () => {
-    mocks.jobs = [jobRow("current", { createdActor: profileActor })];
-    expect((await collectScheduledContextReport({ cfg: {} })).losses).toEqual([]);
+async function noteText(cfg: OpenClawConfig): Promise<string | null> {
+  await noteScheduledContextReport({ cfg });
+  return mocks.note.mock.calls[0]?.[0] ?? null;
+}
 
-    const tiered = await collectScheduledContextReport({ cfg: roleConfig() });
-    expect(tiered.losses).toEqual([expect.objectContaining({ ownerCheck: "checked" })]);
+const ownerTools = "owner-only tools such as sessions, portal, nodes, gateway and plugins";
 
-    mocks.profiles.clear();
-    const removed = await collectScheduledContextReport({ cfg: {} });
-    expect(removed.losses).toEqual([expect.objectContaining({ ownerCheck: "checked" })]);
-  });
+it.each([
+  ["owner", null, {}, false],
+  ["member", null, roleConfig, true],
+  ["removed", undefined, {}, true],
+  ["sandboxed", "contractor", roleConfig, true],
+] as const)("checks a %s profile requester", async (_kind, role, cfg, losesAccess) => {
+  mocks.jobs = [jobRow("current", { createdActor: profileActor })];
+  mocks.profiles = new Map(role === undefined ? [] : [["profile-1", role]]);
+  const text = await noteText(cfg);
+  expect(text).toEqual(losesAccess ? expect.stringContaining(ownerTools) : null);
+  expect(text ?? "").not.toMatch(
+    /Doctor could not verify it|could not be evaluated|unsandboxed execution/,
+  );
+});
 
-  it("applies the creator role's sandbox from the stored profile role", async () => {
-    mocks.jobs = [jobRow("sandboxed", { createdActor: profileActor })];
-    mocks.roles.set("profile-1", "contractor");
-    const report = await collectScheduledContextReport({ cfg: roleConfig() });
-    // Today's runs already sandbox this creator, so the sandbox is not a loss.
-    expect(report.losses).toEqual([
-      expect.objectContaining({ fields: [expect.objectContaining({ field: "ownerEmbedded" })] }),
-    ]);
-    expect(report.failed).toEqual([]);
-  });
-
-  it("accepts a configured channel owner", async () => {
-    mocks.jobs = [
-      jobRow("channel", {
-        toolsAllowProvenance: {
+it("accepts a configured channel owner", async () => {
+  mocks.jobs = [
+    jobRow("channel", {
+      toolsAllowProvenance: {
+        version: 1,
+        source: "authenticated-requester",
+        channelRequester: {
           version: 1,
-          source: "authenticated-requester",
-          channelRequester: {
-            version: 1,
-            channel: "telegram",
-            accountId: "default",
-            senderId: "42",
-          },
+          channel: "telegram",
+          accountId: "default",
+          senderId: "42",
         },
-      }),
-    ];
-    const cfg = { commands: { ownerAllowFrom: ["telegram:42"] } } as OpenClawConfig;
-    expect((await collectScheduledContextReport({ cfg })).losses).toEqual([]);
-  });
+      },
+    }),
+  ];
+  expect(await noteText({ commands: { ownerAllowFrom: ["telegram:42"] } })).toBeNull();
+});
 
-  it("reads the parent row read-only and reports an archived parent as a pause", async () => {
-    mocks.jobs = [jobRow("archived", { createdActor: profileActor })];
-    mocks.sessions.set(PARENT, { ...parent, archivedAt: 1 });
-    const report = await collectScheduledContextReport({ cfg: {} });
-    expect(report.pauses).toEqual([
-      expect.objectContaining({ parentSessionKey: PARENT, cause: "archived" }),
-    ]);
-    expect(mocks.readSession).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "main", sessionKey: PARENT, readConsistency: "latest" }),
-    );
-  });
-
-  it("reports a parent without a chat type and skips malformed rows", async () => {
-    mocks.jobs = [
-      jobRow("no-chat-type", { createdActor: profileActor }),
-      { id: "broken", definition: null, invalidReason: "invalid-definition-json" },
-    ];
-    mocks.sessions.set(PARENT, { sessionId: "parent-session" });
-    const report = await collectScheduledContextReport({ cfg: {} });
-    expect(report.missingChatType).toEqual([
-      expect.objectContaining({ job: expect.objectContaining({ id: "no-chat-type" }) }),
-    ]);
-    expect(report.failed).toEqual([]);
-    expect(mocks.readSession).toHaveBeenCalledTimes(1);
-  });
-
-  it("lists a job whose parent read fails instead of aborting the review", async () => {
-    mocks.jobs = [jobRow("unreadable", { createdActor: profileActor }), jobRow("other")];
-    mocks.readSession.mockRejectedValueOnce(new Error("store locked"));
-    const report = await collectScheduledContextReport({ cfg: {} });
-    expect(report.failed).toEqual([
-      expect.objectContaining({ job: expect.objectContaining({ id: "unreadable" }) }),
-    ]);
-    expect(mocks.readSession).toHaveBeenCalledTimes(2);
-  });
-
-  it("reports only the pause for a main-target job, which runs in the agent's own session", async () => {
-    mocks.jobs = [
-      jobRow("main-removed", {
-        sessionTarget: "main",
-        payload: { kind: "systemEvent", text: "x" },
-        sourceConversation: GONE,
-      }),
-      jobRow("main-live", { sessionTarget: "main", payload: { kind: "systemEvent", text: "x" } }),
-    ];
-    mocks.sessions.set(PARENT, { sessionId: "parent-session" });
-    const report = await collectScheduledContextReport({ cfg: {} });
-    expect(report.pauses).toEqual([
-      expect.objectContaining({
-        job: expect.objectContaining({ id: "main-removed" }),
-        cause: "removed",
-      }),
-    ]);
-    expect(report.losses).toEqual([]);
-    expect(report.missingChatType).toEqual([]);
-  });
-
-  it("never pauses or predicts access changes for a command job", async () => {
-    mocks.jobs = [
-      jobRow("command-removed", {
-        payload: { kind: "command", argv: ["true"] },
-        sourceConversation: GONE,
-      }),
-      jobRow("command-live", { payload: { kind: "command", argv: ["true"] } }),
-    ];
-    mocks.sessions.set(PARENT, { sessionId: "parent-session" });
-    const report = await collectScheduledContextReport({ cfg: {} });
-    expect(report).toMatchObject({ pauses: [], losses: [], missingChatType: [], failed: [] });
-    expect(mocks.readSession).toHaveBeenCalledTimes(2);
-  });
+it("continues a read-only parent review after errors and reports only applicable job warnings", async () => {
+  const archivedKey = "agent:main:dashboard:archived";
+  const main = { sessionTarget: "main", payload: { kind: "systemEvent", text: "x" } } as const;
+  const command = {
+    payload: { kind: "command", argv: ["true"] },
+  } satisfies Partial<CronStoredJob>;
+  mocks.sessions.set(archivedKey, { ...parent, archivedAt: 1 });
+  mocks.sessions.set(PARENT, { sessionId: "parent-session" });
+  mocks.jobs = [
+    jobRow("unreadable", { createdActor: profileActor }),
+    jobRow("archived", {
+      sourceConversation: { sessionKey: archivedKey, sessionId: "parent-session" },
+    }),
+    jobRow("no-chat-type", { createdActor: profileActor }),
+    jobRow("other"),
+    { id: "broken", definition: null, invalidReason: "invalid-definition-json" },
+    jobRow("main-removed", { ...main, sourceConversation: GONE }),
+    jobRow("main-live", main),
+    jobRow("command-removed", { ...command, sourceConversation: GONE }),
+    jobRow("command-live", command),
+  ];
+  mocks.readSession.mockRejectedValueOnce(new Error("store locked"));
+  const text = await noteText({});
+  expect(text).toContain("- unreadable (unreadable): store locked");
+  expect(text).toContain(`- archived (archived): \`${archivedKey}\` is archived`);
+  expect(text).toContain("a creating conversation with no stored chat type");
+  expect(text).toContain(`- no-chat-type (no-chat-type): \`${PARENT}\``);
+  expect(text).toContain(`- other (other): ${ownerTools}`);
+  expect(text?.split("\n").filter((line) => line.includes("main-"))).toEqual([
+    "- main-removed (main-removed): `agent:main:dashboard:gone` was removed",
+  ]);
+  expect(text).not.toMatch(/broken|command-/);
+  expect(mocks.note).toHaveBeenCalledWith(expect.any(String), "Cron");
+  expect(mocks.readSession).toHaveBeenCalledWith(
+    expect.objectContaining({ agentId: "main", sessionKey: PARENT, readConsistency: "latest" }),
+  );
 });

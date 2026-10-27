@@ -102,41 +102,34 @@ describe("Ollama onboarding model selection", () => {
     expect(result.defaultModel).toBe("ollama/deepseek-r1:1b");
   });
 
-  it.each([
-    {
-      description: "model inspection fails",
-      showResponse: () => Response.json({ error: "inspection unavailable" }, { status: 503 }),
-    },
-  ])(
-    "selects and configures list-advertised models when $description",
-    async ({ showResponse }) => {
-      const { result, prompter } = await configureInteractive(
-        {
-          tagModels: [
-            {
-              name: "gemma4:e2b",
-              size: 2_000_000_000,
-              details: { context_length: 32_768 },
-              capabilities: ["completion", "tools"],
-            },
-          ],
-          showResponse,
-          fallbackResponse: showResponse,
-        },
-        { confirm: vi.fn().mockResolvedValue(false) },
-      );
+  it("selects and configures list-advertised models when inspection fails", async () => {
+    const showResponse = () => Response.json({ error: "inspection unavailable" }, { status: 503 });
+    const { result, prompter } = await configureInteractive(
+      {
+        tagModels: [
+          {
+            name: "gemma4:e2b",
+            size: 2_000_000_000,
+            details: { context_length: 32_768 },
+            capabilities: ["completion", "tools"],
+          },
+        ],
+        showResponse,
+        fallbackResponse: showResponse,
+      },
+      { confirm: vi.fn().mockResolvedValue(false) },
+    );
 
-      expect(result.defaultModel).toBe("ollama/gemma4:e2b");
-      expect(result.config.models?.providers?.ollama?.models).toContainEqual(
-        expect.objectContaining({
-          id: "gemma4:e2b",
-          contextWindow: 32_768,
-          compat: expect.objectContaining({ supportsTools: true }),
-        }),
-      );
-      expect(prompter.confirm).not.toHaveBeenCalled();
-    },
-  );
+    expect(result.defaultModel).toBe("ollama/gemma4:e2b");
+    expect(result.config.models?.providers?.ollama?.models).toContainEqual(
+      expect.objectContaining({
+        id: "gemma4:e2b",
+        contextWindow: 32_768,
+        compat: expect.objectContaining({ supportsTools: true }),
+      }),
+    );
+    expect(prompter.confirm).not.toHaveBeenCalled();
+  });
 
   it("preserves incomplete remote-model-only capabilities during interactive setup", async () => {
     const { result } = await configureInteractive(
@@ -212,57 +205,39 @@ describe("Ollama onboarding model selection", () => {
         expect(configured?.filter((name) => name.startsWith("remote-"))).toEqual([]);
       } else {
         expect(inspected).toContain(remoteModels[0]?.name);
-        if (remoteCapability === "embedding") {
-          expect(inspected).toContain("local-chat:latest");
-          expect(result.defaultModel).toBe("ollama/local-chat:latest");
-          expect(configured?.filter((name) => name.startsWith("remote-"))).toEqual([]);
-        } else {
-          expect(configured).toEqual(
-            expect.arrayContaining(remoteModels.map((model) => model.name)),
-          );
-        }
+        expect(inspected).toContain("local-chat:latest");
+        expect(result.defaultModel).toBe("ollama/local-chat:latest");
+        expect(configured?.filter((name) => name.startsWith("remote-"))).toEqual([]);
       }
     },
   );
 
-  describe("non-interactive defaults", () => {
-    it.each([
-      ["completion and embedding", ["completion", "embedding"], undefined, true, true],
-    ] as const)(
-      "respects %s capabilities when selecting and configuring a default",
-      async (_description, capabilities, inspectedCapabilities, useRemote, supportsTools) => {
-        const remoteName = "remote-model:latest";
-        const localName = "local-chat:latest";
-        const { configure } = startNonInteractive({
-          tagModels: [
-            {
-              name: remoteName,
-              remote_model: "upstream-model",
-              size: 1,
-              capabilities: [...capabilities],
-            },
-            { name: localName, size: 500 },
-          ],
-          showResponse: (model) =>
-            Response.json({
-              model_info: { "test.context_length": 32_768 },
-              capabilities: model === remoteName ? inspectedCapabilities : ["completion", "tools"],
-            }),
-          fallbackResponse: () => Response.json({}),
-        });
-        const expectedDefault = `ollama/${useRemote ? remoteName : localName}`;
-        const config = await configure();
-        expect(config.agents?.defaults?.model).toEqual({ primary: expectedDefault });
-        const configured = config.models?.providers?.ollama?.models;
-        expect(configured).toContainEqual(expect.objectContaining({ id: localName }));
-        const remote = configured?.find((model) => model.id === remoteName);
-        if (supportsTools === undefined) {
-          expect(remote).toBeUndefined();
-        } else {
-          expect(remote).toMatchObject({ id: remoteName, compat: { supportsTools } });
-        }
-      },
-    );
+  it("uses remote completion-and-embedding models as non-interactive defaults", async () => {
+    const remoteName = "remote-model:latest";
+    const localName = "local-chat:latest";
+    const { configure } = startNonInteractive({
+      tagModels: [
+        {
+          name: remoteName,
+          remote_model: "upstream-model",
+          size: 1,
+          capabilities: ["completion", "embedding"],
+        },
+        { name: localName, size: 500 },
+      ],
+      showResponse: (model) =>
+        Response.json({
+          model_info: { "test.context_length": 32_768 },
+          capabilities: model === remoteName ? undefined : ["completion", "tools"],
+        }),
+      fallbackResponse: () => Response.json({}),
+    });
+    const config = await configure();
+    expect(config.agents?.defaults?.model).toEqual({ primary: `ollama/${remoteName}` });
+    const configured = config.models?.providers?.ollama?.models;
+    expect(configured).toContainEqual(expect.objectContaining({ id: localName }));
+    const remote = configured?.find((model) => model.id === remoteName);
+    expect(remote).toMatchObject({ id: remoteName, compat: { supportsTools: true } });
   });
 
   it("aborts pending context enrichment with the setup signal", async () => {

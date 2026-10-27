@@ -1,3 +1,15 @@
+// Team-shaped stress: prepare team-shape-fixture.ts --sessions 10000 --runs 8000
+// --settled-runs, then run this script against the built Gateway with:
+// --state-dir <fixture> --scenario memory-soak --clients 65 --runs 4 --plugins 40
+// --stress-tools --row-mode sidebar --limit 200 --list-filter-churn
+// --list-interval-ms 10000 --poll-seed team-stress --duration-ms 600000
+// --soak-rounds 40 --warmup-ms 60000 --round-interval-ms 15000 --chunks 200
+// --chunk-interval-ms 50 --retained-profile-ms 0 --diagnostics.
+// Trace allocations in a separate pass with matching fixture treatment on both sides:
+// either fresh fixtures or consistently warmed post-timing state.
+// wholeSoakCpu includes idle gaps; listFilterCounts proves measured search coverage.
+// Team fanout checks use continuous foreground receipts and committed injection IDs;
+// timed event counts can split unrelated background broadcasts at window boundaries.
 // --stress-worktree-fanout instead uses prepared fixture worktrees and retains reconnect/filter churn.
 // Worker-churn load (isolated built Gateway; run baseline/candidate on fresh identical fixtures):
 // node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts --state-dir .local/worker-base \
@@ -16,14 +28,32 @@
 // Fixed-work comparison: omit --poll-seed and use --soak-rounds 16,
 // --round-interval-ms 37500 and --list-interval-ms 600000 (256 requests per RPC method).
 // Setup can restore cold histories; report setup-inclusive worker/CPU totals too.
+// --cold-idle-ms 310000 adds a quiet tail after the measured soak, then reads the
+// last cold-summary key reserved from load. Use 257 cold keys for 256 load reads.
+// The tail records worker lifetimes/heaps and the real history response separately
+// from timing gates. Background usage refresh can warm the reserved key; this is
+// a functional history-read check, not guaranteed cold-restoration proof.
 
+// Stream custom syntax with --answer-chunk $'```json\n{"ok":true}\n```\nprose\n'.
+// Add --final-answer-phase to exercise the visible projection during each delta.
 // Add --list-filter-churn to --scenario memory-soak --mixed-rpc to rotate sidebar/search filters.
+// --operator-access-policy --operator-access-policies 40 enables one identified operator
+// and 40 policy plugins (one applicable retained grant). Combine memory-soak with
+// --stress-tools --stress-subagents for native child authority. A separate counting
+// pass can use --gateway-preload scripts/perf/plugin-access-authority-census.mjs.
+// --auth-availability-storm requires the matching fixture flag; alternate primary HTTP 429/success
+// through a real shared auth profile. Tool continuations stay successful. Writes mock counts even on failure.
 // --gateway-preload <file> imports benchmark instrumentation after tsx for source or dist entries;
 // result.json records its resolved path and SHA-256. Use the same instrumentation on both arms.
+// --chat-active-after-tool with --chat-active-hold-ms waits for the first text delta
+// after a committed tool result before sending queued/steering inputs. Requires --runs 1;
+// the stream continues during admission and holds completion for the requested interval.
 // Add --worktree-tool-churn to memory-soak --stress-tools --mixed-rpc to give each
 // foreground session its own managed worktree, read/grep its README, and cycle list searches.
 // This mode keeps a fixed viewer set instead of adding reconnect churn.
 // --stress-tool-search adds a verified catalog search before each --stress-tools execution.
+// --stress-network-tool adds a verified loopback HTTP tool inside each Code Mode cell.
+// Fixed N/2N retention usage: transcript-broadcast-run-retention.md.
 // --poll-between-rounds keeps list/mixed-RPC polling active between memory-soak cohorts.
 // On a fresh team-shape fixture, exercise sidebar/search and usage refresh with:
 // node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
@@ -38,8 +68,12 @@
 // Usage polling adds usage.cost and sessions.usage overview reads to the
 // mixed rotation; each round reports response cache statuses, including partials.
 // Use separate matching --allocations passes; their traced GC timing is diagnostic.
-import { spawn, type ChildProcess } from "node:child_process";
-import { createCipheriv, createHash, randomUUID } from "node:crypto";
+// --worker-heap-done-file/--worker-heap-peer-done-file also gate paired timing soaks
+// before post-window collection or teardown; give each arm fresh, distinct paths.
+// --node-policy-churn adds a paired synthetic node and node list/describe/invoke traffic;
+// use memory-soak --mixed-rpc --plugins 40 --list-interval-ms 500 for policy load.
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createCipheriv, createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import {
   appendFileSync,
@@ -54,6 +88,7 @@ import {
 import { createServer } from "node:http";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import path from "node:path";
+import { createHistogram } from "node:perf_hooks";
 import { finished } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
@@ -61,6 +96,7 @@ import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { McpServer } from "@modelcontextprotocol/server";
 import { Value } from "typebox/value";
 import { z } from "zod";
+import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.ts";
 import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.ts";
 import { HelloOkSchema } from "../../packages/gateway-protocol/src/schema/frames.ts";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions-patch.ts";
@@ -68,6 +104,10 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
 import { prepareSessionEventMetrics } from "../../src/gateway/session-event-metrics.js";
+import {
+  publicKeyRawBase64UrlFromEd25519Pem,
+  signEd25519Payload,
+} from "../../src/infra/ed25519-signature.js";
 import { encodePngRgba } from "../../src/media/png-encode.js";
 import { GatewaySessionRowEvents } from "../../ui/src/api/gateway-session-row-events.ts";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
@@ -98,11 +138,14 @@ import {
 } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
+import { TEAM_STRESS_PLUGIN_IDS } from "./team-shape-stress-fixture.ts";
+import { createTeamStressFanoutReceipts } from "./team-shape-stress-receipts.ts";
 
 const { values } = parseArgs({
   options: {
     // Cold-history worker-churn instrumentation and fixture workload.
     "cold-history": { type: "boolean", default: false },
+    "cold-idle-ms": { type: "string" },
     "worker-creation-counts": { type: "boolean", default: false },
     "stress-worktree-fanout": { type: "boolean", default: false },
     "state-dir": { type: "string" },
@@ -135,11 +178,18 @@ const { values } = parseArgs({
     "stress-tools": { type: "boolean", default: false },
     "worktree-tool-churn": { type: "boolean", default: false },
     "stress-tool-search": { type: "boolean", default: false },
+    "stress-network-tool": { type: "boolean", default: false },
     "attempt-setup-image": { type: "string" },
+    "sandbox-image": { type: "string" },
     "cold-session-rounds": { type: "string", default: "0" },
+    "turn-start-phases": { type: "boolean", default: false },
+    "turn-start-advance-origin": { type: "boolean", default: false },
+    "git-trace": { type: "boolean", default: false },
+    "provider-delay-ms": { type: "string", default: "0" },
     "stress-session-store": { type: "boolean", default: false },
     "transcript-hydration-counts": { type: "boolean", default: false },
     "operator-access-policy": { type: "boolean", default: false },
+    "operator-access-policies": { type: "string", default: "1" },
     "session-event-wake": { type: "boolean", default: false },
     "cron-operator-turn": { type: "boolean", default: false },
     "authority-counts": { type: "boolean", default: false },
@@ -150,6 +200,14 @@ const { values } = parseArgs({
     "mixed-rpc": { type: "boolean", default: false },
     "poll-between-rounds": { type: "boolean", default: false },
     "usage-rpc": { type: "boolean", default: false },
+    "node-policy-churn": { type: "boolean", default: false },
+    "team-stress": { type: "boolean", default: false },
+    "auth-availability-storm": { type: "boolean", default: false },
+    "operator-model-policy": { type: "boolean", default: false },
+    "team-stress-churn-ms": { type: "string", default: "1000" },
+    "team-stress-list-weight": { type: "string", default: "2" },
+    "team-stress-allocation-sampling": { type: "boolean", default: false },
+    "team-stress-retention-sampling": { type: "boolean", default: false },
     "dashboard-rpc": { type: "boolean", default: false },
     "github-options-connected": { type: "boolean", default: false },
     "github-options-observe": { type: "boolean", default: false },
@@ -201,10 +259,13 @@ const { values } = parseArgs({
     "retained-profile-ms": { type: "string", default: "600000" },
     "reset-every-rounds": { type: "string", default: "20" },
     chunks: { type: "string", default: "100" },
+    "answer-chunk": { type: "string", default: "Synthetic streamed answer. " },
+    "final-answer-phase": { type: "boolean", default: false },
     "chunk-interval-ms": { type: "string", default: "10" },
     "prompt-kib": { type: "string", default: "128" },
     "chat-attachment-kib": { type: "string", default: "0" },
     "chat-active-hold-ms": { type: "string", default: "0" },
+    "chat-active-after-tool": { type: "boolean", default: false },
     "heap-snapshot": { type: "boolean", default: false },
     "session-census": { type: "boolean", default: false },
     "fingerprint-retention": { type: "boolean", default: false },
@@ -222,7 +283,8 @@ const { values } = parseArgs({
   },
 });
 // Fixture fanout keeps the same continuous polling as the explicit pacing option.
-const pollBetweenRounds = values["poll-between-rounds"] || values["stress-worktree-fanout"];
+const pollBetweenRounds =
+  values["poll-between-rounds"] || values["stress-worktree-fanout"] || values["team-stress"];
 if (!values["state-dir"]) {
   throw new Error("--state-dir is required (existing team-shape fixture)");
 }
@@ -261,6 +323,21 @@ if (values["dashboard-rpc"] && mockPort === port + 1) {
 }
 const scenario = values.scenario;
 const pluginCount = integer(values.plugins, "--plugins", 0);
+const operatorAccessPolicyCount = integer(
+  values["operator-access-policies"],
+  "--operator-access-policies",
+);
+if (operatorAccessPolicyCount !== 1 && !values["operator-access-policy"]) {
+  throw new Error("--operator-access-policies requires --operator-access-policy");
+}
+if (values["team-stress"] && (pluginCount < 4 || pluginCount > TEAM_STRESS_PLUGIN_IDS.length)) {
+  throw new Error(
+    `--team-stress requires --plugins between 4 and ${TEAM_STRESS_PLUGIN_IDS.length}`,
+  );
+}
+const teamPluginCatalog = values["team-stress"] || values["turn-start-phases"];
+const syntheticPluginCount = teamPluginCatalog ? 0 : pluginCount;
+const teamStressPlugins = TEAM_STRESS_PLUGIN_IDS.slice(0, pluginCount);
 if (values["plugin-update"] && scenario !== "plugins.reload") {
   throw new Error("--plugin-update requires --scenario plugins.reload");
 }
@@ -322,14 +399,16 @@ const retentionScenario = scenario === "attempt-retention";
 if (
   values["list-filter-churn"] &&
   scenario !== "sessions.list" &&
-  !(scenario === "memory-soak" && values["mixed-rpc"])
+  scenario !== "memory-soak" &&
+  !values["turn-start-phases"]
 ) {
-  throw new Error(
-    "--list-filter-churn requires --scenario sessions.list or memory-soak --mixed-rpc",
-  );
+  throw new Error("--list-filter-churn requires --scenario sessions.list or memory-soak");
 }
 const idleScenario = scenario === "session-idle-retention";
 const soakScenario = scenario === "memory-soak";
+if (values["node-policy-churn"] && (!soakScenario || !values["mixed-rpc"] || !pluginCount)) {
+  throw new Error("--node-policy-churn requires memory-soak --mixed-rpc --plugins > 0");
+}
 const historyTurns = integer(values["history-turns"], "--history-turns", 0);
 const historyLastTurns = integer(values["history-last-turns"], "--history-last-turns", 0);
 const historyPayloadBytes =
@@ -378,6 +457,9 @@ if (
 const toolScenario = scenario === "chat.send" || reasoningScenario;
 if (values["stress-tool-search"] && !values["stress-tools"]) {
   throw new Error("--stress-tool-search requires --stress-tools");
+}
+if (values["stress-network-tool"] && !values["stress-tools"]) {
+  throw new Error("--stress-network-tool requires --stress-tools");
 }
 const chatActiveHoldMs = integer(values["chat-active-hold-ms"], "--chat-active-hold-ms", 0);
 if (
@@ -442,7 +524,9 @@ if (!["compact", "sidebar", "dashboard"].includes(rowMode)) {
   throw new Error("--row-mode must be compact, sidebar, or dashboard");
 }
 const clientCount =
-  scenario === "chat.send" || idleScenario ? 1 : integer(values.clients, "--clients");
+  (scenario === "chat.send" && !values["turn-start-phases"]) || idleScenario
+    ? 1
+    : integer(values.clients, "--clients");
 const rpcConcurrency = integer(values["rpc-concurrency"], "--rpc-concurrency");
 if (values["plugin-update"] && rpcConcurrency !== 1) {
   throw new Error("--plugin-update requires --rpc-concurrency 1");
@@ -519,6 +603,9 @@ if (
   );
 }
 const runCount = integer(values.runs ?? (scenario === "chat.send" ? "1" : "20"), "--runs");
+if (values["chat-active-after-tool"] && (!chatActiveHoldMs || runCount !== 1)) {
+  throw new Error("--chat-active-after-tool requires --chat-active-hold-ms and --runs 1");
+}
 const sessionCount = idleScenario ? integer(values.sessions, "--sessions") : runCount;
 const historyBytesPerTurn = 16 * 1024;
 const historyReasoningBytes = 4 * 1024;
@@ -551,7 +638,7 @@ const coldSessionRounds = integer(values["cold-session-rounds"], "--cold-session
 if (
   (coldSessionRounds || values["attempt-setup-image"]) &&
   (scenario !== "chat.send" ||
-    values["stress-tools"] ||
+    (values["stress-tools"] && !values["turn-start-phases"]) ||
     values["session-event-wake"] ||
     historyTurns)
 ) {
@@ -592,6 +679,12 @@ if (
 }
 const chunkCount = integer(values.chunks, "--chunks");
 const chunkIntervalMs = integer(values["chunk-interval-ms"], "--chunk-interval-ms", 0);
+const providerDelayMs = integer(values["provider-delay-ms"], "--provider-delay-ms", 0);
+if (values["turn-start-phases"] && scenario !== "chat.send") {
+  throw new Error("--turn-start-phases requires --scenario chat.send");
+}
+let measuredPhaseRound: number | undefined;
+const turnStartPhases: Array<Record<string, unknown>> = [];
 const listIntervalMs = integer(values["list-interval-ms"], "--list-interval-ms", 0);
 if (soakScenario && values["list-filter-churn"] && !listIntervalMs) {
   throw new Error("memory-soak --list-filter-churn requires --list-interval-ms");
@@ -634,10 +727,12 @@ if (
 }
 if (
   values["operator-access-policy"] &&
-  (scenario !== "chat.send" || !values["stress-tools"] || runCount !== 1 || listIntervalMs !== 0)
+  ((scenario !== "chat.send" && !soakScenario) ||
+    !values["stress-tools"] ||
+    (!soakScenario && (runCount !== 1 || listIntervalMs !== 0)))
 ) {
   throw new Error(
-    "--operator-access-policy requires --scenario chat.send --stress-tools --runs 1 and no polling",
+    "--operator-access-policy requires --stress-tools and either memory-soak or chat.send with --runs 1 and no polling",
   );
 }
 if (values["session-event-wake"] && !values["operator-access-policy"]) {
@@ -729,8 +824,37 @@ if (values["mixed-rpc"] && (!listIntervalMs || !turnScenario || clientCount < 4)
     "--mixed-rpc requires a turn scenario, --list-interval-ms, and at least four clients",
   );
 }
-if (values["poll-between-rounds"] && (!soakScenario || !listIntervalMs)) {
+if (
+  values["poll-between-rounds"] &&
+  ((!soakScenario && !values["turn-start-phases"]) || !listIntervalMs)
+) {
   throw new Error("--poll-between-rounds requires memory-soak and --list-interval-ms");
+}
+const teamStressChurnMs = integer(values["team-stress-churn-ms"], "--team-stress-churn-ms");
+const teamStressListWeight = integer(
+  values["team-stress-list-weight"],
+  "--team-stress-list-weight",
+  1,
+);
+if (teamStressListWeight > 64) {
+  throw new Error("--team-stress-list-weight must not exceed 64");
+}
+if (values["team-stress"] && (!soakScenario || !values["mixed-rpc"])) {
+  throw new Error("--team-stress requires memory-soak and --mixed-rpc");
+}
+if (values["team-stress-retention-sampling"] && !values["team-stress-allocation-sampling"]) {
+  throw new Error("--team-stress-retention-sampling requires --team-stress-allocation-sampling");
+}
+if (
+  values["team-stress-allocation-sampling"] &&
+  (!values["team-stress"] ||
+    values.allocations ||
+    values["stream-start-allocations"] ||
+    retainedProfileMs > 0)
+) {
+  throw new Error(
+    "--team-stress-allocation-sampling requires --team-stress and no other heap sampling (--retained-profile-ms 0)",
+  );
 }
 if (values["dashboard-rpc"] && (!soakScenario || !values["mixed-rpc"])) {
   throw new Error("--dashboard-rpc requires memory-soak and --mixed-rpc");
@@ -919,14 +1043,12 @@ const workerHeapPeerDoneFile = values["worker-heap-peer-done-file"];
 if (
   Boolean(workerHeapDoneFile) !== Boolean(workerHeapPeerDoneFile) ||
   (workerHeapDoneFile &&
-    (!values["worker-retained-heap"] ||
-      scenario !== "memory-soak" ||
-      values["mixed-rpc"] ||
+    (scenario !== "memory-soak" ||
       values["fingerprint-retention"] ||
       !workerHeapEvidence.acceptanceTiming))
 ) {
   throw new Error(
-    "Worker heap pair markers require both paths and an unprofiled memory soak without mixed RPCs or fingerprint retention",
+    "Measurement pair markers require both paths and a timing-compatible memory soak without fingerprint retention",
   );
 }
 if (
@@ -960,7 +1082,7 @@ async function workerHeapCommand(worker: WorkerHeapEvidence, operation: string) 
   }
 }
 const targetWorkerScript = (script: string) =>
-  /^(sqlite-store|prepared-model-catalog)\.worker\.[cm]?[jt]s$/.test(script);
+  /^(sqlite-store|prepared-model-catalog|git-operation)\.worker\.[cm]?[jt]s$/.test(script);
 const project = Array.isArray(fixture.projectWorktrees) ? fixture.projectWorktrees[0] : undefined;
 const coldBaseRefs =
   isRecord(project) && Array.isArray(project.coldBaseRefs)
@@ -972,6 +1094,28 @@ if (values["attempt-setup-image"] && coldBaseRefs.length < coldSessionRounds * r
   );
 }
 const fixtureSessionCount = typeof fixture.sessionCount === "number" ? fixture.sessionCount : 0;
+const teamStressTargets =
+  teamPluginCatalog && Array.isArray(fixture.stressTargets)
+    ? fixture.stressTargets.map((target: unknown) => {
+        if (
+          !isRecord(target) ||
+          typeof target.sessionKey !== "string" ||
+          typeof target.agentId !== "string"
+        ) {
+          throw new Error("Team stress targets require sessionKey and agentId");
+        }
+        return { sessionKey: target.sessionKey, agentId: target.agentId };
+      })
+    : [];
+if (values["team-stress"] && teamStressTargets.length === 0) {
+  throw new Error("--team-stress requires unarchived fixture targets");
+}
+const teamStressFanout = values["team-stress"]
+  ? createTeamStressFanoutReceipts(
+      clientCount,
+      teamStressTargets.map((target) => target.sessionKey),
+    )
+  : undefined;
 type StartupTarget = {
   sessionKey: string;
   shortId?: string;
@@ -1058,12 +1202,28 @@ const coldHistoryKeys: string[] = values["cold-history"]
 if (values["cold-history"] && (!values["mixed-rpc"] || !coldHistoryKeys.length)) {
   throw new Error("--cold-history requires --mixed-rpc and a prepared worker-cold fixture");
 }
+const coldIdleMs =
+  values["cold-idle-ms"] === undefined
+    ? undefined
+    : integer(values["cold-idle-ms"], "--cold-idle-ms", 300_000);
+if (
+  coldIdleMs !== undefined &&
+  (!soakScenario || !values["cold-history"] || coldHistoryKeys.length < 2)
+) {
+  throw new Error("--cold-idle-ms requires memory-soak --cold-history with at least two cold keys");
+}
+const coldIdleKey = coldIdleMs === undefined ? undefined : coldHistoryKeys.pop();
 let coldHistorySequence = 0;
 let stressWorktree: string | undefined;
 const worktreeToolRoots = new Map<number, string>();
 const worktreeToolSearches = new Map<string, number>();
 let diffControlOriginal: string | undefined;
-if (values["stress-tools"] || values["mixed-rpc"] || values["attempt-setup-image"]) {
+if (
+  values["stress-tools"] ||
+  values["mixed-rpc"] ||
+  values["attempt-setup-image"] ||
+  values["turn-start-phases"]
+) {
   if (!isRecord(project) || typeof project.path !== "string") {
     throw new Error("stress tools and mixed RPCs require a fixture generated with --projects >= 1");
   }
@@ -1121,6 +1281,9 @@ applyMockOpenAiModelConfig(cfg, {
   modelRef: "openai/gpt-4.1",
   ...(scenario === "sessions.patch" ? { utilityModelRef: "openai/gpt-4.1-mini" } : {}),
 });
+if (values["auth-availability-storm"]) {
+  cfg.models.providers.openai.apiKey = "openai:auth-availability-storm";
+}
 if (verifyHistoryReplay) {
   for (const model of cfg.models.providers.openai.models) {
     // The synthetic provider must fit the seed plus turns accumulated across restarts.
@@ -1165,6 +1328,27 @@ cfg.tools = {
   codeMode: values["stress-tools"],
   ...(values["stress-tools"] ? { exec: { host: "gateway", mode: "full" } } : {}),
 };
+if (values["sandbox-image"]) {
+  if (!values["turn-start-phases"] || values["attempt-setup-image"]) {
+    throw new Error("--sandbox-image requires --turn-start-phases without --attempt-setup-image");
+  }
+  cfg.tools.exec = { host: "sandbox", mode: "full" };
+  cfg.tools.sandbox = { tools: { allow: ["*"] } };
+  cfg.agents.defaults.sandbox = {
+    mode: "all",
+    backend: "docker",
+    scope: "session",
+    workspaceAccess: "rw",
+    workspaceRoot: path.join(root, "sandboxes"),
+    docker: {
+      image: values["sandbox-image"],
+      containerPrefix: `bench-turn-${port}-`,
+      network: "none",
+      cpus: 1,
+      memory: "512m",
+    },
+  };
+}
 if (values["cron-operator-turn"]) {
   cfg.cron = { ...cfg.cron, enabled: true };
 }
@@ -1200,6 +1384,14 @@ if (soakScenario) {
     cfg.cron = { ...cfg.cron, enabled: true };
   }
 }
+if (teamPluginCatalog) {
+  const bundled = teamStressPlugins;
+  cfg.plugins.enabled = true;
+  cfg.plugins.allow = [...new Set([...(cfg.plugins.allow ?? []), ...bundled])];
+  for (const id of bundled) {
+    cfg.plugins.entries[id] = { ...cfg.plugins.entries[id], enabled: true };
+  }
+}
 const dashboardBoardId = "synthetic-soak-board";
 const dashboardPreviewUrl = "https://github.com/openclaw-fixture/soak/issues/1";
 const dashboardPreviewTitle = "Synthetic dashboard issue";
@@ -1233,6 +1425,29 @@ const githubOptionsObservations: Array<{
 }> = [];
 const dashboardPreload = path.join(output, "dashboard-preload.mjs");
 const startupObserverPreload = path.join(output, "startup-observer-preload.mjs");
+const teamStressPreload = path.join(output, "team-stress-preload.mjs");
+const turnStartPreload = path.join(output, "turn-start-preload.mjs");
+if (values["turn-start-phases"]) {
+  writeFileSync(
+    turnStartPreload,
+    `import { isMainThread } from "node:worker_threads";
+import { onTrustedInternalDiagnosticEvent } from ${JSON.stringify(new URL("../../src/infra/diagnostic-events.ts", import.meta.url).href)};
+if (isMainThread) onTrustedInternalDiagnosticEvent(event => {
+  if (event.type === "diagnostic.phase.completed" &&
+      (event.name.startsWith("chat.send.") || event.name === "worktree.preparation")) {
+    process.send?.({ turnStartPhase: { name: event.name, durationMs: event.durationMs,
+      startedAt: event.startedAt, endedAt: event.endedAt, details: event.details } });
+  }
+}, { include: ["diagnostic.phase.completed"] });
+`,
+  );
+}
+if (values["team-stress"]) {
+  writeFileSync(
+    teamStressPreload,
+    `import { isMainThread } from "node:worker_threads";\nimport { installTeamStressTelemetryIpc } from ${JSON.stringify(new URL("./team-shape-stress-telemetry.ts", import.meta.url).href)};\nif (isMainThread) installTeamStressTelemetryIpc();\n`,
+  );
+}
 if (scenario === "chat.startup") {
   writeFileSync(
     startupObserverPreload,
@@ -1323,10 +1538,16 @@ let reloadPluginId: string | undefined;
 let scopePluginId: string | undefined;
 let updateReloadPlugin: (() => number) | undefined;
 const pluginUpdateLatenciesMs: number[] = [];
-if (scenario === "plugins.reload" || scenario === "plugin.scope" || pluginCount > 0) {
+if (
+  scenario === "plugins.reload" ||
+  scenario === "plugin.scope" ||
+  syntheticPluginCount > 0 ||
+  values["stress-network-tool"]
+) {
   const plugin = writePluginFixtures(output, {
-    count: Math.max(1, pluginCount),
+    count: Math.max(1, syntheticPluginCount),
     activationOnStartup: true,
+    nodePolicy: values["node-policy-churn"],
   });
   if (scenario === "plugins.reload") {
     reloadPluginId = plugin.pluginIds[0];
@@ -1371,6 +1592,28 @@ module.exports = { id, register(api) {
   }, { scope: "operator.read" });
 } };\n`,
     );
+  } else if (values["stress-network-tool"]) {
+    const id = plugin.pluginIds[0]!;
+    const pluginDir = path.join(plugin.pluginsDir, id);
+    writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `module.exports = { id: ${JSON.stringify(id)}, register(api) {
+  api.registerTool(() => ({ name: "benchmark_network", label: "Synthetic HTTP probe",
+    description: "Fetch a synthetic note from the isolated benchmark server.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    execute: async (_id, _params, signal) => {
+      const response = await fetch(${JSON.stringify(`http://127.0.0.1:${mockPort}/network-tool`)}, { signal });
+      if (!response.ok) throw new Error("Synthetic HTTP probe failed");
+      const text = await response.text();
+      return { content: [{ type: "text", text }], details: { text } };
+    }
+  }), { name: "benchmark_network" });
+} };\n`,
+    );
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.contracts = { tools: ["benchmark_network"] };
+    writeFileSync(manifestPath, JSON.stringify(manifest));
   }
   cfg.plugins = {
     ...cfg.plugins,
@@ -1519,11 +1762,17 @@ const authorityEmail = "operator@authority.example.test";
 const authorityOrigin = "https://authority.example.test";
 const fixtureDirectPassword = "synthetic-connected-github-local-caller";
 const trustedProxyScenario =
+  values["operator-model-policy"] ||
   values["operator-access-policy"] ||
   values["github-options-connected"] ||
   values["presence-deltas"];
 const clientConnection = {
   url: `ws://127.0.0.1:${port}`,
+  // Long streamed replies plus allocation sampling can queue admission beyond the
+  // helper's interactive default. Keep the full delay in measured connect latency.
+  handshakeTimeoutMs: 60_000,
+  openTimeoutMs: 60_000,
+  openTimeoutMessage: "benchmark WebSocket admission exceeded 60s",
   ...(trustedProxyScenario
     ? {
         origin: authorityOrigin,
@@ -1553,7 +1802,9 @@ if (values["operator-access-policy"]) {
 module.exports = { id: ${JSON.stringify(id)}, register(api) {
   const channel = ${JSON.stringify(authorityChannel)};
   let active = false, profileId, unsubscribe;
-  const counts = { authorize: 0, resume: 0, assert: 0, tools: 0, transcriptUpdates: 0, messageAppends: 0 };
+  const census = globalThis[Symbol.for("openclaw.benchmark.accessPolicyFixture")] = { active: false, policies: new Set(),
+    counts: { authorize: 0, resume: 0, assert: 0, tools: 0, transcriptUpdates: 0, messageAppends: 0 } };
+  const counts = census.counts;
   const messages = new Set();
   const controller = new AbortController();
   const grant = { grantId: "00000000-0000-4000-8000-000000000001", signal: controller.signal,
@@ -1565,7 +1816,8 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     profileId = context.profile.profileId;
   }
   api.registerGatewayAccessPolicy({
-    authorize(context) { checkProfile(context); if (active) counts.authorize++; return grant; },
+    authorize(context) { checkProfile(context); census.policies.add(${JSON.stringify(id)});
+      if (active) counts.authorize++; return grant; },
     resume(context) { checkProfile(context); if (active) counts.resume++;
       if (context.grantId !== grant.grantId) throw new Error("Synthetic grant mismatch"); return grant; }
   });
@@ -1573,12 +1825,15 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   function control(message) {
     if (message?.channel !== channel || typeof message.id !== "string" ||
         !["start", "stop"].includes(message.action)) return;
-    active = message.action === "start";
+    if (census.policies.size !== ${operatorAccessPolicyCount})
+      throw new Error("Synthetic access policy inventory was not fully authorized");
+    active = census.active = message.action === "start";
     if (active) { for (const key of Object.keys(counts)) counts[key] = 0; messages.clear(); }
     const host = globalThis[Symbol.for("openclaw.benchmark.authorityCounts")];
     if (host) { host.active = active; if (active) { host.counts = {}; host.callers = {}; host.firstAuthPolicyStacks = []; } }
     process.send?.({ channel, id: message.id, counts: { ...counts }, profileId,
       sourceOverlay: globalThis[Symbol.for("openclaw.benchmark.sourceOverlay")],
+      scopeCounts: globalThis[Symbol.for("openclaw.benchmark.accessAuthorityCensus")]?.snapshot(),
       ...(host ? { hostCounts: host.counts, hostCallers: host.callers, installed: host.installed, firstAuthPolicyStacks: host.firstAuthPolicyStacks } : {}) });
   }
   api.registerService({ id: "synthetic-authority-counters",
@@ -1606,6 +1861,39 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     cfg.plugins.allow.push(id);
   }
   cfg.plugins.entries[id] = { enabled: true };
+  // Only one grant is applicable: persisted child recovery records one original grant.
+  for (let index = 1; index < operatorAccessPolicyCount; index++) {
+    const otherId = `${id}-${index}`;
+    const otherDir = path.join(output, otherId);
+    mkdirSync(otherDir);
+    writeFileSync(
+      path.join(otherDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: otherId,
+        activation: { onStartup: true },
+        configSchema: { type: "object", additionalProperties: false },
+      }),
+    );
+    writeFileSync(
+      path.join(otherDir, "index.cjs"),
+      `
+module.exports = { id: ${JSON.stringify(otherId)}, register(api) {
+  api.registerGatewayAccessPolicy({ authorize(context) {
+    const census = globalThis[Symbol.for("openclaw.benchmark.accessPolicyFixture")];
+    if (!census) throw new Error("Synthetic access policy census is unavailable");
+    census.policies.add(${JSON.stringify(otherId)});
+    if (census.active) census.counts.authorize++;
+    if (context.requiredByRole) throw new Error("Unselected synthetic policy was required");
+    return undefined;
+  } });
+} };\n`,
+    );
+    cfg.plugins.load.paths.push(otherDir);
+    if (cfg.plugins.allow?.length) {
+      cfg.plugins.allow.push(otherId);
+    }
+    cfg.plugins.entries[otherId] = { enabled: true };
+  }
 }
 if (trustedProxyScenario) {
   cfg.gateway = {
@@ -1629,6 +1917,15 @@ if (trustedProxyScenario) {
           scopes: ["operator.admin"],
           agents: "*",
           sessions: { others: "write" },
+          ...(values["operator-model-policy"]
+            ? {
+                modelPolicy: {
+                  sourceAgent: "main",
+                  allow: ["openai/*"],
+                  deny: ["openai/blocked-*"],
+                },
+              }
+            : {}),
           ...(values["operator-access-policy"]
             ? { accessPolicyPlugin: "synthetic-operator-access" }
             : {}),
@@ -1638,7 +1935,7 @@ if (trustedProxyScenario) {
   };
 }
 const toolPaths = Array.from({ length: retentionScenario ? 3 : 1 }, (_, index) => {
-  if (values["attempt-setup-image"]) {
+  if (values["attempt-setup-image"] || values["sandbox-image"]) {
     return "README.md";
   }
   const file = path.join(root, "workspace", `synthetic-tool-input-${index}.txt`);
@@ -1653,7 +1950,7 @@ const configPath = values["default-state-dir"]
   ? path.join(root, `${path.basename(output)}.json`)
   : path.join(output, "openclaw.json");
 writeFileSync(configPath, JSON.stringify(cfg));
-const chunk = "Synthetic streamed answer. ";
+const chunk = values["answer-chunk"];
 function responseEvents(chunks: string[]) {
   const text = chunks.join("");
   const item = {
@@ -1661,6 +1958,7 @@ function responseEvents(chunks: string[]) {
     id: "msg_broadcast",
     role: "assistant",
     status: "completed",
+    ...(values["final-answer-phase"] ? { phase: "final_answer" } : {}),
     content: [{ type: "output_text", text, annotations: [] }],
   };
   return [
@@ -1830,6 +2128,7 @@ async function stressSubagentEvents(body: unknown, input: unknown, purpose: stri
       throw new Error("stress subagent spawn did not return an accepted native child");
     }
     state.accepted = { runId: accepted.runId, childSessionKey: accepted.childSessionKey };
+    teamStressFanout?.trackForeground([accepted.childSessionKey], false);
     state.phase = "yield-issued";
     return functionCallEvents(
       "sessions_yield",
@@ -1860,6 +2159,7 @@ let activePrimaryStreams = 0;
 let peakPrimaryStreams = 0;
 let toolCalls = 0;
 let toolResults = 0;
+let networkToolRequests = 0;
 let outputLimitResponses = 0;
 let recoveredResponses = 0;
 let imageRequests = 0;
@@ -1946,6 +2246,8 @@ let cohort:
       incompleteReasoningSignatures: Map<string, string>;
       phases: StreamStartPhases;
       beforeRelease?: () => Promise<void>;
+      afterToolStreamStart?: () => Promise<void>;
+      activeInputAdmission?: Promise<void>;
       ready: Promise<void>;
       release: () => void;
       reject: (error: Error) => void;
@@ -1972,7 +2274,15 @@ const expectedHistoricalReasoning =
       )
     : [];
 const attemptSetupCatalog = new Set<string>();
+const authAvailabilityMock = { requests: 0, rateLimits: 0, successes: 0 };
+const authAvailabilityStartedAt = Date.now();
+const authAvailabilityMinutes = new Map<number, typeof authAvailabilityMock>();
 const mock = createServer((req, res) => {
+  if (values["stress-network-tool"] && req.url === "/network-tool") {
+    networkToolRequests++;
+    res.end("synthetic-network-tool-verified");
+    return;
+  }
   if (req.url === "/health") {
     res.end("ok");
     return;
@@ -2104,6 +2414,31 @@ const mock = createServer((req, res) => {
               .split("\n")
               .some((line) => stripInboundMetadata(line).trim() === primaryMessage)
           : stripInboundMetadata(lastUser).trim().split("\n")[0] === primaryMessage);
+    if (primary && values["auth-availability-storm"]) {
+      const minute = Math.floor((Date.now() - authAvailabilityStartedAt) / 60_000);
+      let counts = authAvailabilityMinutes.get(minute);
+      if (!counts) {
+        counts = { requests: 0, rateLimits: 0, successes: 0 };
+        authAvailabilityMinutes.set(minute, counts);
+      }
+      counts.requests++;
+      if (++authAvailabilityMock.requests % 2 === 1) {
+        counts.rateLimits++;
+        authAvailabilityMock.rateLimits++;
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
+        res.end(
+          JSON.stringify({
+            error: {
+              type: "rate_limit_error",
+              message: "Synthetic capacity rate limit; retry shortly.",
+            },
+          }),
+        );
+        return;
+      }
+      counts.successes++;
+      authAvailabilityMock.successes++;
+    }
     if (primary && values["attempt-setup-image"]) {
       const tools = isRecord(body) && Array.isArray(body.tools) ? body.tools : [];
       const names = new Set(
@@ -2160,6 +2495,7 @@ const mock = createServer((req, res) => {
             typeof toolResult.output !== "string" ||
             !toolResult.output.includes(
               values["attempt-setup-image"] ||
+                values["sandbox-image"] ||
                 values["worktree-tool-churn"] ||
                 values["stress-worktree-fanout"]
                 ? "# Synthetic project "
@@ -2267,8 +2603,9 @@ const mock = createServer((req, res) => {
       let reasoningReplayKey = toolOutput?.call_id;
       if (primary && toolScenario && cohort) {
         const currentCohort = cohort;
-        const toolWorktree =
-          values["worktree-tool-churn"] || values["stress-worktree-fanout"]
+        const toolWorktree = values["sandbox-image"]
+          ? "/workspace"
+          : values["worktree-tool-churn"] || values["stress-worktree-fanout"]
             ? worktreeToolRoots.get(index)
             : stressWorktree;
         if ((values["worktree-tool-churn"] || values["stress-worktree-fanout"]) && !toolWorktree) {
@@ -2300,6 +2637,9 @@ const mock = createServer((req, res) => {
                       storeCode +
                       (values["stress-tool-search"]
                         ? 'if (!(await catalog.search("read file content", { limit: 5 })).some(tool => tool.name === "read")) throw new Error("Synthetic tool search omitted read");\n'
+                        : "") +
+                      (values["stress-network-tool"]
+                        ? 'const network = await benchmark_network({}); if (network.text !== "synthetic-network-tool-verified") throw new Error("Synthetic network tool result mismatch");\n'
                         : "") +
                       `json(await read({ path: ${JSON.stringify((values["worktree-tool-churn"] || values["stress-worktree-fanout"]) && toolWorktree ? path.join(toolWorktree, "README.md") : toolPath)} }));\n` +
                       `const shell = await exec({ command: ${JSON.stringify(stressShellCommand)}, workdir: ${JSON.stringify(toolWorktree)} });\n` +
@@ -2367,9 +2707,15 @@ const mock = createServer((req, res) => {
           recoveredResponses++;
         }
       }
+      if (providerDelayMs > 0) {
+        await delay(providerDelayMs);
+      }
       for (const event of answer) {
         if (res.destroyed) {
           break;
+        }
+        if (continuation && event.type === "response.completed") {
+          await cohort?.activeInputAdmission;
         }
         if (primary && cohort) {
           cohort.phases.firstPrimarySseWrittenAtEpochMs ??= epochNow();
@@ -2417,6 +2763,16 @@ const mock = createServer((req, res) => {
         } else {
           res.write(`data: ${JSON.stringify(event)}\n\n`);
         }
+        if (
+          continuation &&
+          event.type === "response.output_text.delta" &&
+          cohort?.afterToolStreamStart
+        ) {
+          const beginActiveInputs = cohort.afterToolStreamStart;
+          cohort.afterToolStreamStart = undefined;
+          cohort.activeInputAdmission = beginActiveInputs();
+          void cohort.activeInputAdmission.catch(cohort.reject);
+        }
         if ((primary || continuation) && event.type === "response.output_text.delta") {
           await delay(chunkIntervalMs);
         }
@@ -2435,6 +2791,12 @@ const mock = createServer((req, res) => {
 });
 const children: ChildProcess[] = [];
 const clients: ReturnType<typeof createGatewayWsClient>[] = [];
+let policyNode: ReturnType<typeof createGatewayWsClient> | undefined;
+let policyNodeId: string | undefined;
+const policyNodeCommands = Array.from(
+  { length: values["node-policy-churn"] ? pluginCount : 0 },
+  (_, index) => `bench-plugin-${String(index + 1).padStart(2, "0")}.echo`,
+);
 const githubOptionsClients: ReturnType<typeof createGatewayWsClient>[] = [];
 const chatDeltaDeliveryMs: number[] = [];
 const expectedClosures = new WeakSet<ReturnType<typeof createGatewayWsClient>>();
@@ -2470,6 +2832,68 @@ const representativeFrames = new Map<string, FrameSizes>();
 let initialFullFrame: FrameSizes | undefined;
 const perClientCounters: Map<string, number>[] = [];
 let measuring = false;
+let teamStressStartedAt: number | undefined;
+let teamStressTelemetryActive = false;
+let teamStressPrometheusScrapes = 0;
+let teamStressRpcBucket:
+  | {
+      minute: number;
+      methods: Map<string, { histogram: ReturnType<typeof createHistogram>; errors: number }>;
+    }
+  | undefined;
+const teamStressRpcMinutes: Array<{
+  minute: number;
+  startedAtEpochMs: number;
+  methods: Record<
+    string,
+    { count: number; errors: number; p50Ms: number; p95Ms: number; p99Ms: number; maxMs: number }
+  >;
+}> = [];
+function flushTeamStressRpcMinute() {
+  if (!teamStressRpcBucket || teamStressStartedAt === undefined) {
+    return;
+  }
+  const minute = {
+    minute: teamStressRpcBucket.minute,
+    startedAtEpochMs: teamStressStartedAt + teamStressRpcBucket.minute * 60_000,
+    methods: Object.fromEntries(
+      [...teamStressRpcBucket.methods].map(([method, { histogram, errors }]) => [
+        method,
+        {
+          count: histogram.count,
+          errors,
+          p50Ms: (histogram.percentile(50) - 1) / 1000,
+          p95Ms: (histogram.percentile(95) - 1) / 1000,
+          p99Ms: (histogram.percentile(99) - 1) / 1000,
+          maxMs: (histogram.max - 1) / 1000,
+        },
+      ]),
+    ),
+  };
+  teamStressRpcMinutes.push(minute);
+  appendFileSync(path.join(output, "stress-rpc-minutes.jsonl"), `${JSON.stringify(minute)}\n`);
+  teamStressRpcBucket = undefined;
+}
+function recordTeamStressRpc(method: string, elapsedMs: number, ok: boolean) {
+  if (!teamStressTelemetryActive || teamStressStartedAt === undefined) {
+    return;
+  }
+  const minute = Math.floor((Date.now() - teamStressStartedAt) / 60_000);
+  if (teamStressRpcBucket && teamStressRpcBucket.minute !== minute) {
+    flushTeamStressRpcMinute();
+  }
+  const { methods } = (teamStressRpcBucket ??= { minute, methods: new Map() });
+  let metric = methods.get(method);
+  if (!metric) {
+    metric = {
+      histogram: createHistogram({ lowest: 1, highest: 3_600_000_001, figures: 3 }),
+      errors: 0,
+    };
+    methods.set(method, metric);
+  }
+  metric.histogram.record(Math.min(3_600_000_000, Math.round(elapsedMs * 1000)) + 1);
+  metric.errors += Number(!ok);
+}
 let measuringWholeSoakAllocation = false;
 let wholeSoakDeliveredSessionEvents = 0;
 let capturingColdSetup = values["dashboard-rpc"];
@@ -2564,6 +2988,9 @@ const env = {
     : {}),
   TMPDIR: path.join(root, "tmp"),
   OPENAI_API_KEY: "synthetic-fixture",
+  ...(values["operator-model-policy"] && values["team-stress-allocation-sampling"]
+    ? { OPENCLAW_BENCH_OPERATOR_MODEL_POLICY_COUNTS: "1" }
+    : {}),
   ...(values["github-options-connected"]
     ? {
         GH_TOKEN: "synthetic-github-options",
@@ -2750,7 +3177,8 @@ async function assertPortAvailable(targetPort: number) {
   });
 }
 async function ready(targetPort: number, endpoint: string, owned?: ChildProcess) {
-  for (let attempt = 0; attempt < 300; attempt++) {
+  // Loaded hosts can need several minutes for plugin startup; measurement starts after readiness.
+  for (let attempt = 0; attempt < 1200; attempt++) {
     if (owned) {
       assertGatewayAlive();
       // Preflight is best effort; the owned bind-success log handles another process taking the port.
@@ -2842,8 +3270,11 @@ const dashboardRpcShapes = values["dashboard-rpc"]
 const mixedRpcMethods = [
   "sessions.list",
   "chat.history",
+  ...(values["team-stress"] ? ["chat.startup"] : []),
   "sessions.diff",
   ...(values["worktree-tool-churn"] ? [] : ["connect"]),
+  ...(values["node-policy-churn"] ? ["node.list", "node.describe", "node.invoke"] : []),
+  ...(values["team-stress"] ? Array<string>(teamStressListWeight - 1).fill("sessions.list") : []),
   ...dashboardRpcShapes.map(({ method }) => method),
   ...(values["usage-rpc"] ? ["usage.cost", "sessions.usage"] : []),
 ];
@@ -2851,7 +3282,9 @@ const stressParentKey = "agent:main:transcript-broadcast-measure-native-parent";
 const keys = Array.from({ length: sessionCount }, (_, index) =>
   verifyHistoryReplay
     ? `agent:main:memory-soak-history-child-${index}`
-    : `agent:main:transcript-broadcast-measure-child-${index}`,
+    : values["turn-start-phases"]
+      ? `agent:main:transcript-broadcast-measure-${port}-child-${index}`
+      : `agent:main:transcript-broadcast-measure-child-${index}`,
 );
 const historyNamespace = verifyHistoryReplay ? "memory-soak-history" : "reopen-history";
 const historySeedPath = path.join(root, `${historyNamespace}.json`);
@@ -3171,6 +3604,7 @@ async function controlAuthorityCounters(child: ChildProcess, action: "start" | "
           }
         : {}),
       sourceOverlay: isRecord(message.sourceOverlay) ? message.sourceOverlay : undefined,
+      scopeCounts: isRecord(message.scopeCounts) ? message.scopeCounts : undefined,
       profileId: message.profileId,
       authorize: count("authorize"),
       resume: count("resume"),
@@ -3183,6 +3617,57 @@ async function controlAuthorityCounters(child: ChildProcess, action: "start" | "
     clearTimeout(timeout);
     child.off("message", onMessage);
   }
+}
+async function controlTeamStressTelemetry(child: ChildProcess, action: "start" | "stop") {
+  await new Promise<void>((resolve, reject) => {
+    const finish = (error?: Error) => {
+      clearTimeout(timeout);
+      child.off("message", onMessage);
+      child.off("exit", onExit);
+      child.off("error", finish);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const onMessage = (message: unknown) => {
+      if (
+        !isRecord(message) ||
+        message.channel !== "team-shape-stress" ||
+        message.action !== action
+      ) {
+        return;
+      }
+      finish(
+        message.ok === true
+          ? undefined
+          : new Error(`Team stress telemetry ${action}: ${String(message.error)}`),
+      );
+    };
+    const onExit = () => finish(new Error(`Gateway exited during Team stress telemetry ${action}`));
+    const timeout = setTimeout(
+      () => finish(new Error(`Team stress telemetry ${action} timed out`)),
+      action === "stop" && values["team-stress-retention-sampling"] ? 600_000 : 60_000,
+    );
+    child.on("message", onMessage);
+    child.once("exit", onExit);
+    child.once("error", finish);
+    child.send(
+      {
+        channel: "team-shape-stress",
+        action,
+        output,
+        allocations: values["team-stress-allocation-sampling"],
+        retention: values["team-stress-retention-sampling"],
+      },
+      (error) => {
+        if (error) {
+          finish(error);
+        }
+      },
+    );
+  });
 }
 function summarizeLatencies(latencies: number[]) {
   const sorted = latencies.toSorted((a, b) => a - b);
@@ -3255,8 +3740,15 @@ async function rpc(
 ) {
   assertGatewayAlive();
   const started = performance.now();
-  const response = await client.request(method, params, 180_000);
+  let response: Awaited<ReturnType<typeof client.request>>;
+  try {
+    response = await client.request(method, params, 180_000);
+  } catch (error) {
+    recordTeamStressRpc(method, performance.now() - started, false);
+    throw error;
+  }
   const rpcDurationMs = performance.now() - started;
+  recordTeamStressRpc(method, rpcDurationMs, response.ok);
   assertGatewayAlive();
   if (!response.ok) {
     throw new Error(`${method}: ${JSON.stringify(response.error)}`);
@@ -3510,6 +4002,7 @@ async function startStressSubagent(
   client: ReturnType<typeof createGatewayWsClient>,
   current: NonNullable<typeof cohort>,
 ) {
+  teamStressFanout?.trackForeground([stressParentKey], false);
   await rpc(client, "sessions.reset", { key: stressParentKey });
   let releaseChild!: () => void;
   const childReady = new Promise<void>((resolve) => {
@@ -3615,11 +4108,13 @@ async function finishStressSubagent(
 }
 let completedSoakRounds = 0;
 let sessionResets = 0;
+let teamStressWrites = 0;
 async function runRound(
   client: ReturnType<typeof createGatewayWsClient>,
   measuredRound?: number,
   roundKeys = keys,
 ) {
+  teamStressFanout?.trackForeground(roundKeys);
   const cronOperatorJob = values["cron-operator-turn"] ? cronOperatorJobs[0] : undefined;
   if (values["cron-operator-turn"] && !cronOperatorJob?.id) {
     throw new Error("Cron operator fixture is not ready");
@@ -3730,11 +4225,11 @@ async function runRound(
   };
   const activeAckLatenciesMs: number[] = [];
   let activeAcksBeforeRelease = 0;
+  let activeHoldEnded = false;
   let activeInputWork: Promise<void>[] = [];
   if (chatActiveHoldMs) {
     const beforeRelease = current.beforeRelease;
-    current.beforeRelease = async () => {
-      await beforeRelease?.();
+    const admitActiveInputs = async () => {
       // An older queued input must own custody before later steering attempts arrive.
       await Promise.all(
         roundKeys.map(async (sessionKey) => {
@@ -3752,7 +4247,19 @@ async function runRound(
               queueMode: "followup",
               deliver: false,
             });
-            await Promise.race([queued.promise, current.ready]);
+            if (values["chat-active-after-tool"]) {
+              const queuedTimeout = setTimeout(
+                () => queued.reject(new Error("active predecessor was not queued within 170s")),
+                170_000,
+              );
+              try {
+                await queued.promise;
+              } finally {
+                clearTimeout(queuedTimeout);
+              }
+            } else {
+              await Promise.race([queued.promise, current.ready]);
+            }
           } finally {
             queuedChatInputs.delete(input.runId);
           }
@@ -3773,7 +4280,7 @@ async function runRound(
             deliver: false,
           });
           activeAckLatenciesMs.push(performance.now() - started);
-          if (current.phases.streamsReleasedAtEpochMs === undefined) {
+          if (!activeHoldEnded) {
             activeAcksBeforeRelease++;
           }
         }),
@@ -3783,7 +4290,16 @@ async function runRound(
       }
       // Release independently of ACKs: a blocked baseline reports the held-turn delay.
       await delay(chatActiveHoldMs);
+      activeHoldEnded = true;
     };
+    if (values["chat-active-after-tool"]) {
+      current.afterToolStreamStart = admitActiveInputs;
+    } else {
+      current.beforeRelease = async () => {
+        await beforeRelease?.();
+        await admitActiveInputs();
+      };
+    }
   }
   // Include the first response processing after the mock releases the whole cohort.
   const captureWork =
@@ -3811,7 +4327,9 @@ async function runRound(
         })()
       : undefined;
   const providerTimeoutMs =
-    values["attempt-setup-image"] || values["stress-worktree-fanout"] ? 170_000 : 45_000;
+    values["attempt-setup-image"] || values["sandbox-image"] || values["stress-worktree-fanout"]
+      ? 170_000
+      : 45_000;
   const timeout = setTimeout(
     () =>
       current.reject(
@@ -3895,6 +4413,26 @@ async function runRound(
             clearTimeout(timer);
             sessionEventRuns.delete(sessionKey);
           }
+        } else if (
+          values["turn-start-phases"] &&
+          measuredRound !== undefined &&
+          measuredRound < coldSessionRounds
+        ) {
+          const created = await rpc(client, "sessions.create", {
+            key: sessionKey,
+            cwd: stressWorktree,
+            worktree: true,
+            message,
+            fork: false,
+            visibility: "shared",
+            displayName: "Synthetic cold turn",
+            ...(sessionEventAncestors === 0 ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
+          });
+          if (!isRecord(created) || typeof created.runId !== "string" || created.runError) {
+            throw new Error(`Fresh turn admission failed: ${JSON.stringify(created)}`);
+          }
+          runId = created.runId;
+          current.turns.get(index + 1)!.runId = runId;
         } else {
           await rpc(client, scenario === "chat.send" ? "chat.send" : "agent", {
             sessionKey,
@@ -3947,6 +4485,11 @@ async function runRound(
       : undefined;
     await Promise.all([cohortReady, captureWork, turns, subagentCompletion]);
     if (chatActiveHoldMs) {
+      if (values["chat-active-after-tool"] && activeInputs.length !== roundKeys.length * 3) {
+        throw new Error(
+          "after-tool streaming did not admit the expected queued and steering inputs",
+        );
+      }
       await Promise.all(activeInputWork);
       // agent.wait reports queued custody immediately; wait for each public terminal event first.
       const terminalDeadline = Promise.withResolvers<never>();
@@ -4058,18 +4601,23 @@ async function runRound(
     await captureWork;
   }
 }
-async function drainEvents() {
+async function drainEvents(requireSubscriberQuiet = true) {
   const started = performance.now();
   const timeoutMs = values["stress-worktree-fanout"] ? 60_000 : 15_000;
   while (performance.now() - started < timeoutMs) {
     assertGatewayAlive();
-    if (activeStreams === 0 && performance.now() - lastSubscriberEventAt >= 1000) {
+    if (
+      activeStreams === 0 &&
+      (teamStressFanout
+        ? teamStressFanout.isDrained(requireSubscriberQuiet)
+        : !requireSubscriberQuiet || performance.now() - lastSubscriberEventAt >= 1000)
+    ) {
       return;
     }
     await delay(50);
   }
   throw new Error(
-    `model streams and subscriber events did not drain within ${timeoutMs}ms: activeStreams=${activeStreams}, subscriberQuietMs=${Math.round(performance.now() - lastSubscriberEventAt)}, lastEvent=${lastSubscriberEventName}`,
+    `model streams and subscriber events did not drain within ${timeoutMs}ms: activeStreams=${activeStreams}, subscriberQuietMs=${Math.round(performance.now() - lastSubscriberEventAt)}, lastEvent=${lastSubscriberEventName}, pendingInjectionReceipts=${JSON.stringify(teamStressFanout?.pendingInjections() ?? [])}`,
   );
 }
 async function ensureRecaps(client: ReturnType<typeof createGatewayWsClient>) {
@@ -4294,6 +4842,7 @@ async function connectClient(index: number) {
         previousSeq = event.seq;
       }
       const payload = isRecord(event.payload) ? event.payload : undefined;
+      teamStressFanout?.observe(index, event.event, payload);
       if (
         index === 0 &&
         event.event === "chat" &&
@@ -4455,6 +5004,7 @@ let cleanupPromise: Promise<void> | undefined;
 function cleanup() {
   return (cleanupPromise ??= (async () => {
     closing = true;
+    flushTeamStressRpcMinute();
     cohort?.release();
     for (const id of [
       ...(stressCronJobId ? [stressCronJobId] : []),
@@ -4472,6 +5022,7 @@ function cleanup() {
     for (const client of [...clients, ...githubOptionsClients]) {
       client.close();
     }
+    policyNode?.close();
     await Promise.all(
       children.map((child) => stopChild(child, { teardownGraceMs: 10_000, killGraceMs: 2000 })),
     );
@@ -4511,7 +5062,9 @@ try {
         ? ["--trace-gc-nvp"]
         : []),
       "--import",
-      "./scripts/tsx.mjs",
+      teamPluginCatalog || !/\.[cm]?ts$/.test(values.entry)
+        ? new URL("./team-shape-stress-loader.mjs", import.meta.url).href
+        : "./scripts/tsx.mjs",
       ...(gatewayPreload ? ["--import", gatewayPreload.path] : []),
       ...(configCaptureSource ? ["--import", configCaptureSourcePreload] : []),
       ...(authoritySourcePreload ? ["--import", authoritySourcePreload.path] : []),
@@ -4527,6 +5080,8 @@ try {
         : []),
       "--import",
       "./scripts/lib/gateway-bench-profile-preload.ts",
+      ...(values["team-stress"] ? ["--import", teamStressPreload] : []),
+      ...(values["turn-start-phases"] ? ["--import", turnStartPreload] : []),
       ...(values["transport-counts"]
         ? ["--import", "./scripts/lib/gateway-bench-transport-preload.ts"]
         : []),
@@ -4546,11 +5101,17 @@ try {
     ],
     proxyViewers || trustedProxyScenario ? "trusted-proxy" : "none",
   );
+  const gitTraceDirectory = path.join(output, "git-trace");
+  if (values["git-trace"]) {
+    mkdirSync(gitTraceDirectory);
+  }
   const gatewayStartedAt = performance.now();
   gateway = launch(
     gatewayArgs,
     "gateway",
     {
+      ...(values["git-trace"] ? { GIT_TRACE2_EVENT: gitTraceDirectory } : {}),
+      ...(process.env.DEVELOPER_DIR ? { DEVELOPER_DIR: process.env.DEVELOPER_DIR } : {}),
       ...(values["transport-counts"]
         ? { OPENCLAW_BENCH_TRANSPORT_COUNTS_PATH: path.join(output, "transport-counts.json") }
         : {}),
@@ -4560,6 +5121,17 @@ try {
     },
     true,
   );
+  if (values["turn-start-phases"]) {
+    gateway.on("message", (message: unknown) => {
+      if (
+        isRecord(message) &&
+        isRecord(message.turnStartPhase) &&
+        measuredPhaseRound !== undefined
+      ) {
+        turnStartPhases.push({ round: measuredPhaseRound, ...message.turnStartPhase });
+      }
+    });
+  }
   await ready(port, "/readyz", gateway);
   const gatewayReadyMs = performance.now() - gatewayStartedAt;
   await readGatewayCpuUsage(gateway);
@@ -4581,7 +5153,10 @@ try {
           ...(sessionEventAncestors === 2 ? { parentSessionKey: "agent:main:main" } : {}),
           ...(stressWorktree ? { cwd: stressWorktree } : {}),
           ...(values["github-options-connected"]
-            ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
+            ? {
+                worktree: true,
+                ...(values["turn-start-phases"] ? {} : { worktreeBaseRef: "refs/heads/main" }),
+              }
             : {}),
           visibility: "shared",
           displayName: "Synthetic broadcast parent",
@@ -4620,8 +5195,13 @@ try {
             ? {}
             : { parentSessionKey: parentKey, spawnDepth: 1 }),
           fork: false,
-          ...(values["attempt-setup-image"] || values["worktree-tool-churn"]
-            ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
+          ...(values["attempt-setup-image"] ||
+          values["worktree-tool-churn"] ||
+          values["turn-start-phases"]
+            ? {
+                worktree: true,
+                ...(values["turn-start-phases"] ? {} : { worktreeBaseRef: "refs/heads/main" }),
+              }
             : {}),
           visibility: "shared",
           displayName: "Synthetic broadcast child",
@@ -4644,6 +5224,106 @@ try {
   const sender = clients[0];
   if (!sender) {
     throw new Error("no sender client");
+  }
+  if (values["node-policy-churn"]) {
+    const nodeKeys = generateKeyPairSync("ed25519");
+    const publicKey = publicKeyRawBase64UrlFromEd25519Pem(
+      nodeKeys.publicKey.export({ type: "spki", format: "pem" }),
+    );
+    policyNodeId = createHash("sha256").update(Buffer.from(publicKey, "base64url")).digest("hex");
+    const challenge = Promise.withResolvers<{ nonce: string; ts: number }>();
+    policyNode = createGatewayWsClient({
+      ...clientConnection,
+      onEvent: (event) => {
+        if (event.event === "connect.challenge" && isRecord(event.payload)) {
+          const { nonce, ts } = event.payload;
+          if (typeof nonce === "string" && typeof ts === "number") {
+            challenge.resolve({ nonce, ts });
+          }
+        }
+        if (event.event === "node.invoke.request" && isRecord(event.payload)) {
+          const { id, nodeId, command } = event.payload;
+          void rpc(policyNode!, "node.invoke.result", {
+            id,
+            nodeId,
+            ok: true,
+            payloadJSON: JSON.stringify({ synthetic: true, command }),
+          }).catch((error: unknown) => {
+            subscriberFailure ??= error instanceof Error ? error : new Error(String(error));
+          });
+        }
+      },
+    });
+    trackClientFrames(policyNode);
+    policyNode.ws.on("error", (error) => {
+      subscriberFailure ??= error;
+    });
+    policyNode.ws.on("close", (code) => {
+      if (!closing) {
+        subscriberFailure ??= new Error(`synthetic node unexpectedly closed (${code})`);
+      }
+    });
+    await policyNode.waitOpen();
+    const { nonce, ts } = await Promise.race([
+      challenge.promise,
+      delay(12_000, undefined, { ref: false }).then(() => {
+        throw new Error("Synthetic node challenge timed out");
+      }),
+    ]);
+    const nodeClient = {
+      id: "node-host",
+      version: "1.0.0",
+      platform: "linux",
+      deviceFamily: "linux",
+      mode: "node",
+      displayName: "Synthetic policy node",
+    };
+    const hello = await rpc(policyNode, "connect", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: nodeClient,
+      role: "node",
+      scopes: [],
+      caps: [],
+      commands: policyNodeCommands,
+      device: {
+        id: policyNodeId,
+        publicKey,
+        signedAt: ts,
+        nonce,
+        signature: signEd25519Payload(
+          nodeKeys.privateKey.export({ type: "pkcs8", format: "pem" }),
+          buildDeviceAuthPayloadV3({
+            deviceId: policyNodeId,
+            clientId: nodeClient.id,
+            clientMode: nodeClient.mode,
+            platform: nodeClient.platform,
+            deviceFamily: nodeClient.deviceFamily,
+            role: "node",
+            scopes: [],
+            signedAtMs: ts,
+            nonce,
+          }),
+        ),
+      },
+    });
+    if (!Value.Check(HelloOkSchema, hello) || hello.auth.role !== "node") {
+      throw new Error("Synthetic node did not complete its real Gateway handshake");
+    }
+    let node = await rpc(sender, "node.describe", { nodeId: policyNodeId });
+    if (isRecord(node) && typeof node.pendingRequestId === "string") {
+      await rpc(sender, "node.pair.approve", { requestId: node.pendingRequestId });
+      node = await rpc(sender, "node.describe", { nodeId: policyNodeId });
+    }
+    const admittedCommands = isRecord(node) && Array.isArray(node.commands) ? node.commands : [];
+    if (
+      !isRecord(node) ||
+      !node.connected ||
+      !node.paired ||
+      policyNodeCommands.some((command) => !admittedCommands.includes(command))
+    ) {
+      throw new Error("Synthetic node policy commands were not paired and admitted");
+    }
   }
   const sessionEventLineage: Array<{ key: string; parentSessionKey?: string }> = [];
   const verifySessionEventLineage = async (key: string) => {
@@ -4678,7 +5358,10 @@ try {
         key: target.sessionKey,
         cwd: target.worktree,
         ...(values["github-options-connected"]
-          ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
+          ? {
+              worktree: true,
+              ...(values["turn-start-phases"] ? {} : { worktreeBaseRef: "refs/heads/main" }),
+            }
           : {}),
         visibility: "shared",
         displayName: "Synthetic dashboard diff",
@@ -4774,11 +5457,45 @@ try {
       validateDashboardRpc(method, await rpc(sender, method, params));
     }
   }
-  if (reloadPluginId || scopePluginId) {
-    writeFileSync(
-      path.join(output, "plugin-inventory.json"),
-      JSON.stringify(await rpc(sender, "plugins.list", {}), null, 2),
-    );
+  if (values["operator-model-policy"]) {
+    const catalog = await rpc(sender, "models.list", { agentId: "main" });
+    if (
+      !isRecord(catalog) ||
+      !isRecord(catalog.modelSelectionPolicy) ||
+      catalog.modelSelectionPolicy.restricted !== true ||
+      catalog.modelSelectionPolicy.defaultModel !== "openai/gpt-4.1"
+    ) {
+      throw new Error("Synthetic operator did not acquire its model policy");
+    }
+    writeFileSync(path.join(output, "operator-model-policy.json"), JSON.stringify(catalog));
+  }
+  if (reloadPluginId || scopePluginId || teamPluginCatalog) {
+    const inventory = await rpc(sender, "plugins.list", {});
+    writeFileSync(path.join(output, "plugin-inventory.json"), JSON.stringify(inventory, null, 2));
+    if (teamPluginCatalog) {
+      const plugins =
+        isRecord(inventory) && Array.isArray(inventory.plugins) ? inventory.plugins : [];
+      // Provider catalog entries deliberately stay lazy; workload capabilities must be live.
+      const requiredActive = new Set(["acpx", "codex", "diagnostics-prometheus", "openai"]);
+      const invalid = [...new Set([...teamStressPlugins, ...requiredActive])].filter(
+        (id) =>
+          !plugins.some(
+            (plugin: unknown) =>
+              isRecord(plugin) &&
+              plugin.id === id &&
+              plugin.enabled === true &&
+              isRecord(plugin.runtime) &&
+              !plugin.runtime.error &&
+              (plugin.runtime.state === "active" ||
+                (!requiredActive.has(id) && plugin.runtime.state === "unloaded")),
+          ),
+      );
+      if (invalid.length) {
+        throw new Error(
+          `Team stress plugins missing, failed, or required runtime inactive: ${invalid.join(", ")}; inspect plugin-inventory.json`,
+        );
+      }
+    }
   }
   const expectedSidebar =
     scenario === "reconnect"
@@ -4850,12 +5567,13 @@ try {
     {},
     { archived: false },
     { archived: true },
-    { search: "team-shape" },
+    { search: teamPluginCatalog ? "Synthetic" : "team-shape" },
     { agentId: "main" },
     { excludeSubagents: true },
     { excludeSystem: true, excludeCron: true },
   ];
   let listChurnSequence = 0;
+  const listFilterCounts = listFilterShapes.map(() => 0);
   const readStartup = async (
     client: ReturnType<typeof createGatewayWsClient>,
     target: StartupTarget,
@@ -5193,7 +5911,8 @@ try {
     }
     const started = performance.now();
     await runScenario(undefined, warmupOperations);
-    await drainEvents();
+    // Stress background publications need not stop after the warmup turns settle.
+    await drainEvents(!values["team-stress"]);
     if (!soakScenario) {
       break;
     }
@@ -5251,6 +5970,24 @@ try {
     }
   }
   const warmReadyAtEpochMs = Date.now();
+  if (values["team-stress"]) {
+    const shape: Record<string, number> = {};
+    for (const archived of ["all", false, true] as const) {
+      const page = await rpc(sender, "sessions.list", { agentId: "main", archived, limit: 1 });
+      if (!isRecord(page) || typeof page.totalCount !== "number") {
+        throw new Error("Team stress live session census did not return totalCount");
+      }
+      shape[String(archived)] = page.totalCount;
+    }
+    writeFileSync(path.join(output, "stress-shape.json"), JSON.stringify(shape, null, 2));
+    if (
+      shape.all! < fixtureSessionCount ||
+      shape.false! < fixtureSessionCount - Number(fixture.archivedCount) ||
+      shape.true! < Number(fixture.archivedCount)
+    ) {
+      throw new Error("Team stress session shape changed during Gateway startup maintenance");
+    }
+  }
   console.log("PHASE warmed");
   if (values["start-file"]) {
     while (!existsSync(values["start-file"])) {
@@ -5266,6 +6003,11 @@ try {
     await delay(startAt - Date.now());
   }
   const warmStartReleasedAtEpochMs = Date.now();
+  if (values["team-stress"]) {
+    await controlTeamStressTelemetry(gateway, "start");
+    teamStressStartedAt = Date.now();
+    teamStressTelemetryActive = true;
+  }
   const soakAllocationPath =
     soakScenario && values.allocations
       ? path.join(output, "allocation-soak.heapprofile")
@@ -5287,10 +6029,12 @@ try {
       startedHeapWorkers.push(worker);
     }
   }
-  const wholeSoakResourcesBefore = soakScenario
-    ? await readGatewayResources(gateway, { includeWorkers: true })
-    : undefined;
+  const wholeSoakResourcesBefore =
+    soakScenario || values["turn-start-phases"]
+      ? await readGatewayResources(gateway, { includeWorkers: true })
+      : undefined;
   const measurementStartedAt = Date.now();
+  const wholeSoakCpuBefore = soakScenario ? await readGatewayCpuUsage(gateway) : undefined;
   const measuredGateway = gateway;
   const wholeChatDiagnosticsEnabled =
     scenario === "chat.send" &&
@@ -5416,22 +6160,73 @@ try {
       : round < (idleScenario ? 2 : rounds);
     round++
   ) {
+    if (values["turn-start-phases"] && round < coldSessionRounds) {
+      await delay(roundIntervalMs);
+    }
+    if (values["turn-start-advance-origin"] && round < coldSessionRounds) {
+      if (
+        !values["turn-start-phases"] ||
+        !isRecord(project) ||
+        typeof project.repoRoot !== "string"
+      ) {
+        throw new Error("Advancing an origin requires the turn-start fixture");
+      }
+      const git = (args: string[], input?: string) => {
+        const result = spawnSync("git", args, {
+          input,
+          encoding: "utf8",
+          env: {
+            ...env,
+            DEVELOPER_DIR: process.env.DEVELOPER_DIR,
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_AUTHOR_NAME: "Synthetic fixture",
+            GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+            GIT_COMMITTER_NAME: "Synthetic fixture",
+            GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+          },
+        });
+        if (result.status !== 0) {
+          throw new Error(`Synthetic origin update failed: ${result.stderr}`);
+        }
+        return result.stdout.trim();
+      };
+      const origin = realpathSync(git(["-C", project.repoRoot, "remote", "get-url", "origin"]));
+      if (!origin.startsWith(`${realpathSync(root)}${path.sep}`)) {
+        throw new Error("Origin must remain inside the synthetic fixture");
+      }
+      const atOrigin = (...args: string[]) => ["--git-dir", origin, ...args];
+      git(atOrigin("read-tree", "HEAD"));
+      const blob = git(
+        atOrigin("hash-object", "-w", "--stdin"),
+        `# Synthetic project base revision ${port}-${round}\n`,
+      );
+      git(atOrigin("update-index", "--add", "--cacheinfo", `100644,${blob},README.md`));
+      const tree = git(atOrigin("write-tree"));
+      const commit = git(
+        atOrigin("commit-tree", tree, "-p", "HEAD", "-m", `Synthetic base revision ${round}`),
+      );
+      git(atOrigin("update-ref", "refs/heads/main", commit));
+    }
+    measuredPhaseRound = round;
     if (scenario === "chat.send" && round < coldSessionRounds) {
       for (const [index, previous] of keys.entries()) {
         const key = `agent:main:transcript-broadcast-cold-${port}-${round}-${index}`;
-        await rpc(sender, "sessions.create", {
-          key,
-          ...(stressWorktree ? { cwd: stressWorktree } : {}),
-          ...(values["attempt-setup-image"]
-            ? { worktree: true, worktreeBaseRef: coldBaseRefs[round * runCount + index] }
-            : {}),
-          ...(sessionEventAncestors === 0 ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
-          fork: false,
-          visibility: "shared",
-          displayName: "Synthetic cold setup",
-        });
-        if (sessionEventAncestors !== undefined) {
-          await verifySessionEventLineage(key);
+        if (!values["turn-start-phases"]) {
+          await rpc(sender, "sessions.create", {
+            key,
+            ...(stressWorktree ? { cwd: stressWorktree } : {}),
+            ...(values["attempt-setup-image"]
+              ? { worktree: true, worktreeBaseRef: coldBaseRefs[round * runCount + index] }
+              : {}),
+            ...(sessionEventAncestors === 0 ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
+            fork: false,
+            visibility: "shared",
+            displayName: "Synthetic cold setup",
+          });
+          if (sessionEventAncestors !== undefined) {
+            await verifySessionEventLineage(key);
+          }
         }
         for (const client of clients.slice(0, exactClients)) {
           await rpc(client, "sessions.messages.unsubscribe", {
@@ -5472,6 +6267,7 @@ try {
     primaryStreamRequests = 0;
     toolCalls = 0;
     toolResults = 0;
+    networkToolRequests = 0;
     outputLimitResponses = 0;
     recoveredResponses = 0;
     imageRequests = 0;
@@ -5521,6 +6317,72 @@ try {
       const stopped = new Promise<void>((resolve) => {
         stopPolling = resolve;
       });
+      // Exercise the real transcript commit/publication path independently of model turns.
+      const churnWork = values["team-stress"]
+        ? (async () => {
+            while (true) {
+              if (!polling) {
+                break;
+              }
+              const started = performance.now();
+              const target = teamStressTargets[teamStressWrites % teamStressTargets.length]!;
+              const injected = await rpc(sender, "chat.inject", {
+                ...target,
+                message: `Synthetic Team stress timestamp churn ${teamStressWrites}.`,
+              });
+              if (
+                !isRecord(injected) ||
+                injected.ok !== true ||
+                typeof injected.messageId !== "string"
+              ) {
+                throw new Error("Team stress timestamp write did not commit");
+              }
+              teamStressWrites++;
+              teamStressFanout?.expectInjection(target.sessionKey, injected.messageId);
+              await Promise.race([
+                delay(Math.max(0, teamStressChurnMs - (performance.now() - started)), undefined, {
+                  ref: false,
+                }),
+                stopped,
+              ]);
+            }
+          })().catch((error: unknown) => {
+            subscriberFailure ??= error instanceof Error ? error : new Error(String(error));
+            polling = false;
+            stopPolling();
+          })
+        : undefined;
+      const scrapeWork = values["team-stress"]
+        ? (async () => {
+            while (true) {
+              if (!polling) {
+                break;
+              }
+              const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
+                signal: AbortSignal.timeout(10_000),
+                ...(trustedProxyScenario
+                  ? { headers: { ...clientConnection.headers, origin: authorityOrigin } }
+                  : {}),
+              });
+              if (!response.ok) {
+                throw new Error(`Team stress Prometheus scrape failed: HTTP ${response.status}`);
+              }
+              const text = await response.text();
+              if (!text.includes("openclaw_")) {
+                throw new Error("Team stress Prometheus scrape contained no OpenClaw metrics");
+              }
+              writeFileSync(
+                path.join(output, `stress-prometheus-${teamStressPrometheusScrapes++}.prom`),
+                text,
+              );
+              await Promise.race([delay(15_000, undefined, { ref: false }), stopped]);
+            }
+          })().catch((error: unknown) => {
+            subscriberFailure ??= error instanceof Error ? error : new Error(String(error));
+            polling = false;
+            stopPolling();
+          })
+        : undefined;
       const listWork = listIntervalMs
         ? Promise.all(
             clients
@@ -5618,16 +6480,66 @@ try {
                     } finally {
                       peer.close();
                     }
-                  } else if (method === "chat.history") {
+                  } else if (method === "node.list" || method === "node.describe") {
+                    const payload = await rpc(
+                      client,
+                      method,
+                      method === "node.list" ? {} : { nodeId: policyNodeId },
+                      onResponse,
+                    );
+                    const node =
+                      method === "node.list" && isRecord(payload) && Array.isArray(payload.nodes)
+                        ? payload.nodes.find(
+                            (entry: unknown) => isRecord(entry) && entry.nodeId === policyNodeId,
+                          )
+                        : payload;
+                    const admittedCommands =
+                      isRecord(node) && Array.isArray(node.commands) ? node.commands : [];
+                    if (
+                      !isRecord(node) ||
+                      !node.connected ||
+                      !node.paired ||
+                      policyNodeCommands.some((command) => !admittedCommands.includes(command))
+                    ) {
+                      throw new Error(`${method} lost the synthetic node's admitted commands`);
+                    }
+                  } else if (method === "node.invoke") {
+                    const command =
+                      policyNodeCommands[(round + clientIndex) % policyNodeCommands.length]!;
+                    const result = await rpc(
+                      client,
+                      method,
+                      {
+                        nodeId: policyNodeId,
+                        command,
+                        params: {},
+                        idempotencyKey: randomUUID(),
+                      },
+                      onResponse,
+                    );
+                    if (
+                      !isRecord(result) ||
+                      !isRecord(result.payload) ||
+                      result.payload.synthetic !== true ||
+                      result.payload.command !== command
+                    ) {
+                      throw new Error("node.invoke did not return the synthetic node's echo");
+                    }
+                  } else if (method === "chat.history" || method === "chat.startup") {
+                    const stressTarget = teamPluginCatalog
+                      ? teamStressTargets[(clientIndex + round) % teamStressTargets.length]
+                      : undefined;
                     const history = await rpc(
                       client,
                       method,
                       {
-                        sessionKey: historyTurns
-                          ? keys[clientIndex % keys.length]
-                          : coldHistoryKeys.length
-                            ? coldHistoryKeys[coldHistorySequence++ % coldHistoryKeys.length]
-                            : `agent:main:team-shape-session-${clientIndex % fixtureSessionCount}`,
+                        ...(stressTarget ?? {
+                          sessionKey: historyTurns
+                            ? keys[clientIndex % keys.length]
+                            : coldHistoryKeys.length
+                              ? coldHistoryKeys[coldHistorySequence++ % coldHistoryKeys.length]
+                              : `agent:main:team-shape-session-${clientIndex % fixtureSessionCount}`,
+                        }),
                         limit: 50,
                       },
                       onResponse,
@@ -5637,9 +6549,7 @@ try {
                       !Array.isArray(history.messages) ||
                       !history.messages.length
                     ) {
-                      throw new Error(
-                        "chat.history did not return the retained fixture transcript",
-                      );
+                      throw new Error(`${method} did not return the retained fixture transcript`);
                     }
                   } else if (method === "sessions.diff") {
                     const target =
@@ -5682,7 +6592,12 @@ try {
                       ? { archived: "all", search }
                       : values["list-filter-churn"]
                         ? listFilterShapes[listSequence % listFilterShapes.length]
-                        : undefined;
+                        : values["team-stress"]
+                          ? listFilterShapes[
+                              (round + clientIndex + Math.floor(poll / mixedRpcMethods.length)) %
+                                listFilterShapes.length
+                            ]
+                          : undefined;
                     requestStarted = performance.now();
                     const page = await rpc(
                       client,
@@ -5690,6 +6605,7 @@ try {
                       {
                         rowMode,
                         limit,
+                        ...(values["team-stress"] ? { archived: "all" } : {}),
                         ...(listFilter ?? { archived: "all" }),
                         ...(values["list-profile-reference"]
                           ? { involvingProfileId: values["list-profile-reference"] }
@@ -5710,6 +6626,10 @@ try {
                           Object.keys(listFilter).length === 0))
                     ) {
                       throw new Error("concurrent sessions.list did not return the requested page");
+                    }
+                    if (values["list-filter-churn"] && search === undefined) {
+                      const filterIndex = listSequence % listFilterShapes.length;
+                      listFilterCounts[filterIndex] = listFilterCounts[filterIndex]! + 1;
                     }
                     if (search) {
                       worktreeToolSearches.set(search, (worktreeToolSearches.get(search) ?? 0) + 1);
@@ -5751,10 +6671,7 @@ try {
         : undefined;
       try {
         streamStart = await runScenario(round);
-        if (!values["dashboard-rpc"]) {
-          await drainEvents();
-        }
-        if (values["dashboard-rpc"] || pollBetweenRounds) {
+        if ((values["dashboard-rpc"] || pollBetweenRounds) && !values["turn-start-phases"]) {
           // Keep polling between bursts of agent work.
           const pacedUntil = Math.min(
             roundStartedAt + roundIntervalMs,
@@ -5773,6 +6690,8 @@ try {
         polling = false;
         stopPolling();
         await listWork;
+        await churnWork;
+        await scrapeWork;
       }
     };
     const measuredWorkload = async () => {
@@ -5781,13 +6700,13 @@ try {
       }
       try {
         if (turnScenario) {
-          await drainEvents();
+          await drainEvents(!values["team-stress"]);
         }
         measuring = true;
         await workload();
-        // Polling RPCs can publish after workload's first drain. Freeze counters
-        // at a quiet boundary, rather than midway through their recipient fanout.
-        if (turnScenario) {
+        // Polling has stopped and in-flight RPCs have completed. Team receipts
+        // drain their workload while unrelated background metadata stays active.
+        if (turnScenario || !values["dashboard-rpc"]) {
           const beforeDrain = perClientCounters.map((counts) => Object.fromEntries(counts));
           const drainStarted = performance.now();
           await drainEvents();
@@ -5920,12 +6839,20 @@ try {
         `incomplete synthetic reasoning replay: ${JSON.stringify({ reasoningResponses, reasoningReplayRequests })}`,
       );
     }
+    if (values["stress-network-tool"] && networkToolRequests !== toolCalls) {
+      throw new Error(
+        `expected one HTTP request per Code Mode cell: ${networkToolRequests}/${toolCalls}`,
+      );
+    }
     if (verifyHistoryReplay && historicalReplayRequests !== sessionCount) {
       throw new Error(
         `Deep history reached only ${historicalReplayRequests}/${sessionCount} foreground turns`,
       );
     }
-    for (const event of turnScenario ? ["session.message", "sessions.changed"] : []) {
+    teamStressFanout?.assertComplete();
+    for (const event of turnScenario && !teamStressFanout
+      ? ["session.message", "sessions.changed"]
+      : []) {
       const expected = perClientCounters[0]?.get(event) ?? 0;
       if (!expected || perClientCounters.some((counts) => counts.get(event) !== expected)) {
         throw new Error(
@@ -5973,6 +6900,7 @@ try {
     const sample = {
       round,
       scenario,
+      ...(values["stress-network-tool"] ? { networkToolRequests } : {}),
       allocation,
       ...(values["config-capture-counts"]
         ? {
@@ -5988,7 +6916,13 @@ try {
               ...authorityCounts,
               scope:
                 "plugin callbacks in the measured turn window; not all host authority invocations",
+              primaryTurns: sessionCount,
+              sourceEvents,
+              policyCount: operatorAccessPolicyCount,
               assertionsPerTurn: authorityCounts.assert / sessionCount,
+              assertionsPerSourceEvent: sourceEvents
+                ? authorityCounts.assert / sourceEvents
+                : undefined,
               assertionsPerToolCompletion: authorityCounts.assert / authorityCounts.tools,
               assertionsPerMessageAppend: authorityCounts.assert / authorityCounts.messageAppends,
               workloadAllocatedBytesPerAssertion: allocation
@@ -6280,17 +7214,26 @@ try {
     // Keep equal work counts without shortening the continuous GC/allocation window.
     await delay(Math.max(0, durationMs - (Date.now() - measurementStartedAt)));
   }
-  const wholeSoakResourcesAfter = soakScenario
-    ? await readGatewayResources(gateway, { includeWorkers: true })
-    : undefined;
+  const wholeSoakResourcesAfter =
+    soakScenario || values["turn-start-phases"]
+      ? await readGatewayResources(gateway, { includeWorkers: true })
+      : undefined;
   const wholeWorkloadDiagnostics = await finishWholeWorkloadDiagnostics?.();
+  const wholeSoakCpu = wholeSoakCpuBefore
+    ? measureGatewayCpuUsage(wholeSoakCpuBefore, await readGatewayCpuUsage(gateway))
+    : undefined;
+  if (values["team-stress"]) {
+    teamStressTelemetryActive = false;
+    flushTeamStressRpcMinute();
+    await controlTeamStressTelemetry(gateway, "stop");
+  }
   if (workerHeapDoneFile && workerHeapPeerDoneFile) {
     writeFileSync(workerHeapDoneFile, String(Date.now()));
     // Long captures need room for a slower peer before either side forces GC.
     const deadline = Date.now() + Math.max(120_000, Date.now() - measurementStartedAt);
     while (!existsSync(workerHeapPeerDoneFile)) {
       if (Date.now() >= deadline) {
-        throw new Error("Worker heap peer did not finish its timing window");
+        throw new Error("Measurement peer did not finish its timing window");
       }
       await delay(100);
     }
@@ -6463,7 +7406,11 @@ try {
       isRecord(worker.after?.memory) && typeof worker.after.memory.heapUsed === "number"
         ? worker.after.memory.heapUsed
         : -1;
-    for (const script of ["sqlite-store.worker.js", "prepared-model-catalog.worker.js"]) {
+    for (const script of [
+      "sqlite-store.worker.js",
+      "prepared-model-catalog.worker.js",
+      "git-operation.worker.js",
+    ]) {
       const largest = startedHeapWorkers
         .filter((worker) => worker.script === script && worker.after?.ok === true)
         .toSorted((a, b) => heapBytes(b) - heapBytes(a))[0];
@@ -6471,6 +7418,61 @@ try {
         largest.snapshot = await workerHeapCommand(largest, "snapshot");
       }
     }
+  }
+  let coldIdle;
+  if (coldIdleMs !== undefined && coldIdleKey !== undefined) {
+    // All polling has stopped and the synthetic stress cron is disabled above.
+    // Keep ordinary Gateway maintenance enabled; issue no workload requests during quiet.
+    await drainEvents();
+    const before = await readGatewayResources(gateway, { includeWorkers: true });
+    const startedAtEpochMs = Date.now();
+    console.log(
+      `PHASE cold-idle ${JSON.stringify({ startedAtEpochMs, durationMs: coldIdleMs, sessionKey: coldIdleKey })}`,
+    );
+    while (Date.now() - startedAtEpochMs < coldIdleMs) {
+      await delay(Math.min(30_000, coldIdleMs - (Date.now() - startedAtEpochMs)));
+      assertGatewayAlive();
+    }
+    const elapsedMs = Date.now() - startedAtEpochMs;
+    const after = await readGatewayResources(gateway, { includeWorkers: true });
+    const historyReadStartedAt = performance.now();
+    const history = await rpc(sender, "chat.history", { sessionKey: coldIdleKey, limit: 50 });
+    const historyReadMs = performance.now() - historyReadStartedAt;
+    if (
+      !isRecord(history) ||
+      !Array.isArray(history.messages) ||
+      !history.messages.length ||
+      !history.messages.some(
+        (message: unknown) => isRecord(message) && contentText(message.content).length > 0,
+      )
+    ) {
+      throw new Error("Post-idle chat.history did not return the reserved fixture transcript");
+    }
+    const responsePath = path.join(output, "cold-idle-history.json");
+    const response = JSON.stringify(history);
+    writeFileSync(responsePath, `${response}\n`);
+    const afterHistoryRead = await readGatewayResources(gateway, { includeWorkers: true });
+    const archiveStarts = (resources: typeof before) =>
+      resources.workers?.workerLifecycle
+        .filter((worker) =>
+          /^session-accessor\.sqlite-archive\.worker\.[cm]?[jt]s$/.test(worker.script),
+        )
+        .reduce((sum, worker) => sum + worker.started, 0) ?? 0;
+    coldIdle = {
+      requestedMs: coldIdleMs,
+      startedAtEpochMs,
+      elapsedMs,
+      sessionKey: coldIdleKey,
+      before,
+      after,
+      afterHistoryRead,
+      quietArchiveWorkerStarts: archiveStarts(after) - archiveStarts(before),
+      archiveWorkerStartsDuringHistoryRead: archiveStarts(afterHistoryRead) - archiveStarts(after),
+      historyReadMs,
+      messageCount: history.messages.length,
+      responsePath,
+      responseSha256: createHash("sha256").update(response).digest("hex"),
+    };
   }
   // Process exit plus drained log streams makes promotion accounting independent of pipe buffering.
   await cleanup();
@@ -6500,9 +7502,10 @@ try {
   }
   const result = {
     output,
+    ...(coldIdle ? { coldIdle } : {}),
     gatewayPreload,
     gatewayReadyMs,
-    syntheticPlugins: Math.max(pluginCount, reloadPluginId || scopePluginId ? 1 : 0),
+    syntheticPlugins: Math.max(syntheticPluginCount, reloadPluginId || scopePluginId ? 1 : 0),
     ...(values["plugin-update"]
       ? {
           pluginUpdate: {
@@ -6557,6 +7560,18 @@ try {
     pollBetweenRounds,
     mixedRpc: values["mixed-rpc"],
     usageRpc: values["usage-rpc"],
+    ...(values["team-stress"]
+      ? {
+          teamStress: {
+            churnIntervalMs: teamStressChurnMs,
+            committedWrites: teamStressWrites,
+            targets: teamStressTargets.length,
+            prometheusScrapes: teamStressPrometheusScrapes,
+            rpcMinutes: teamStressRpcMinutes,
+            telemetry: JSON.parse(readFileSync(path.join(output, "stress-telemetry.json"), "utf8")),
+          },
+        }
+      : {}),
     ...(values["dashboard-rpc"]
       ? {
           dashboardRpc: {
@@ -6635,10 +7650,16 @@ try {
     workerCreationCounts: values["worker-creation-counts"],
     coldHistorySessions: coldHistoryKeys.length,
     coldHistoryRequests: coldHistorySequence,
+    nodePolicyChurn: values["node-policy-churn"],
+    ...(values["node-policy-churn"]
+      ? { policyNodeId, policyNodeCommandCount: policyNodeCommands.length }
+      : {}),
     stressSessionStore: values["stress-session-store"],
     stressToolSearch: values["stress-tool-search"],
+    stressNetworkTool: values["stress-network-tool"],
     transcriptHydrationCounts: values["transcript-hydration-counts"],
     operatorAccessPolicy: values["operator-access-policy"],
+    operatorAccessPolicyCount,
     cronOperatorTurn: values["cron-operator-turn"],
     sessionEventWake: values["session-event-wake"],
     authorityCounts: values["authority-counts"],
@@ -6690,6 +7711,9 @@ try {
     ...(wholeChatDiagnosticsEnabled
       ? { wholeChatDiagnostics: wholeWorkloadDiagnostics, wholeChatGc }
       : {}),
+    ...(values["turn-start-phases"]
+      ? { turnStartResources: { before: wholeSoakResourcesBefore, after: wholeSoakResourcesAfter } }
+      : {}),
     initialFullFrame,
     clientCount,
     exactClients,
@@ -6707,6 +7731,7 @@ try {
           ...(chatActiveHoldMs
             ? {
                 chatActiveHoldMs,
+                chatActiveAfterTool: values["chat-active-after-tool"],
                 activeChatSendAck: {
                   ...latencySummary(
                     samples.flatMap(
@@ -6748,6 +7773,8 @@ try {
       : {}),
     ...(scenario === "sessions.cleanup" ? { sessionMaintenanceMode: "warn" } : {}),
     chunks: chunkCount,
+    answerChunk: chunk,
+    finalAnswerPhase: values["final-answer-phase"],
     chunkIntervalMs,
     peakStreams,
     streamRequests,
@@ -6814,6 +7841,10 @@ try {
           retainedProfile,
           wholeSoakAllocation,
           wholeSoakDiagnostics: wholeWorkloadDiagnostics,
+          wholeSoakCpu,
+          ...(values["list-filter-churn"]
+            ? { listFilterCounts, listFilterShapes, listChurnPatches: listChurnSequence }
+            : {}),
           wholeSoakGc,
         }
       : {}),
@@ -6889,6 +7920,12 @@ try {
       }),
     ),
   };
+  if (values["turn-start-phases"]) {
+    writeFileSync(
+      path.join(output, "turn-start-phases.json"),
+      JSON.stringify({ providerDelayMs, coldSessionRounds, phases: turnStartPhases }, null, 2),
+    );
+  }
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));
   console.log(`RESULT ${path.join(output, "result.json")}`);
 } catch (error) {
@@ -6904,5 +7941,24 @@ try {
   }
   throw error;
 } finally {
+  if (values["auth-availability-storm"]) {
+    writeFileSync(
+      path.join(output, "auth-availability-mock.json"),
+      JSON.stringify(
+        {
+          ...authAvailabilityMock,
+          startedAt: authAvailabilityStartedAt,
+          minutes: [...authAvailabilityMinutes].map(([minute, counts]) => ({
+            minute,
+            requests: counts.requests,
+            rateLimits: counts.rateLimits,
+            successes: counts.successes,
+          })),
+        },
+        null,
+        2,
+      ),
+    );
+  }
   await cleanup();
 }

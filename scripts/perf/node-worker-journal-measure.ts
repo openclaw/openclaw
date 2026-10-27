@@ -1,4 +1,4 @@
-// Synthetic predecessor recovery through the real journal worker, with Gateway custody.
+// Synthetic journal claims and predecessor recovery, with Gateway custody.
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -11,12 +11,15 @@ const { values } = parseArgs({
     root: { type: "string" },
     prepare: { type: "boolean", default: false },
     port: { type: "string", default: "41516" },
+    flow: { type: "string", default: "turn" },
   },
 });
 assert(values.root, "--root must name an exclusively owned synthetic fixture directory");
 const root = path.resolve(values.root);
 const port = Number(values.port);
 assert(Number.isInteger(port) && port >= 40000 && port <= 65535);
+assert(values.flow === "turn" || values.flow === "launch");
+const launchFlow = values.flow === "launch";
 const stateDir = path.join(root, "state");
 Object.assign(process.env, {
   HOME: root,
@@ -33,6 +36,16 @@ const phase = (name: string) => {
 const states = ["completed", "failed", "interrupted", "cancelled"] as const;
 const count = 20;
 const fixturePath = path.join(root, "fixture.json");
+const claimFor = (index: number, prefix: string) => ({
+  launchId: `synthetic-${prefix}-${index}`,
+  planHash: "a".repeat(64),
+  gatewayNamespace: "synthetic-gateway",
+  environmentId: `synthetic-environment-${index}`,
+  sessionId: `synthetic-session-${index}`,
+  ownerEpoch: 1,
+  placementGeneration: 1,
+  runId: `synthetic-run-${index}`,
+});
 
 if (values.prepare) {
   mkdirSync(root);
@@ -63,45 +76,40 @@ if (values.prepare) {
   const journal = new NodeWorkerJournalWorker({ env: process.env });
   const launches = new NodeWorkerLaunchStore(journal);
   const turns = new NodeWorkerTurnStore(journal);
-  const supervisor = { pid: 17, startTime: 23 };
+  const supervisor = { pid: launchFlow ? 2_147_483_647 : 17, startTime: 23 };
   try {
     for (let index = 0; index < count; index++) {
-      const claim = {
-        launchId: `synthetic-turn-${index}`,
-        planHash: "a".repeat(64),
-        gatewayNamespace: "synthetic-gateway",
-        environmentId: `synthetic-environment-${index}`,
-        sessionId: `synthetic-session-${index}`,
-        ownerEpoch: 1,
-        placementGeneration: 1,
-        runId: `synthetic-run-${index}`,
-      };
+      const claim = claimFor(index, launchFlow ? "reclaim" : "turn");
       await launches.claim(claim, supervisor, count, now);
-      await turns.claim({ claim, ownerLaunchId: claim.launchId, supervisor, nowMs: now + index });
+      if (!launchFlow) {
+        await turns.claim({ claim, ownerLaunchId: claim.launchId, supervisor, nowMs: now + index });
+      }
     }
   } finally {
     await journal.drain();
     await closeOpenClawStateDatabaseAsync();
   }
   // Exclusive offline predecessor: it knows the physical journal, not the turn table.
-  const predecessor = new DatabaseSync(resolveOpenClawStateSqlitePath());
-  try {
-    const update = predecessor.prepare(
-      "UPDATE node_worker_launches SET state = ?, error_text = ?, result_json = ?, completed_at_ms = ?, updated_at_ms = ? WHERE launch_id = ?",
-    );
-    for (let index = 0; index < count; index++) {
-      const state = states[index % states.length]!;
-      update.run(
-        state,
-        state === "completed" ? null : "synthetic predecessor",
-        state === "completed" ? "{}" : null,
-        now + 5,
-        now + 5,
-        `synthetic-turn-${index}`,
+  if (!launchFlow) {
+    const predecessor = new DatabaseSync(resolveOpenClawStateSqlitePath());
+    try {
+      const update = predecessor.prepare(
+        "UPDATE node_worker_launches SET state = ?, error_text = ?, result_json = ?, completed_at_ms = ?, updated_at_ms = ? WHERE launch_id = ?",
       );
+      for (let index = 0; index < count; index++) {
+        const state = states[index % states.length]!;
+        update.run(
+          state,
+          state === "completed" ? null : "synthetic predecessor",
+          state === "completed" ? "{}" : null,
+          now + 5,
+          now + 5,
+          `synthetic-turn-${index}`,
+        );
+      }
+    } finally {
+      predecessor.close();
     }
-  } finally {
-    predecessor.close();
   }
   console.log(JSON.stringify({ prepared: count }));
 } else {
@@ -116,24 +124,47 @@ if (values.prepare) {
   const turns = new NodeWorkerTurnStore(journal);
   try {
     await gateway.startupSettled;
-    for (const name of ["recovery", "warm"]) {
-      phase(name);
-      for (let index = 0; index < count; index++) {
-        const receipt = await turns.get(`synthetic-turn-${index}`);
-        const state = states[index % states.length]!;
-        assert.equal(receipt?.state, state === "completed" ? "interrupted" : state);
-        assert.equal(
-          receipt?.errorText,
-          state === "completed"
-            ? "node worker stopped before its turn completed"
-            : "synthetic predecessor",
-        );
-        assert.equal(receipt?.resultJson, null);
-        assert.equal(receipt?.completedAtMs, now + Math.max(5, index));
-        assert.equal(receipt?.updatedAtMs, receipt?.completedAtMs);
+    if (launchFlow) {
+      const { NodeWorkerLaunchStore } =
+        await import("../../src/node-host/node-worker-launch-store.ts");
+      const { requireNodeWorkerProcessIdentity } =
+        await import("../../src/node-host/node-worker-process-identity.ts");
+      const launches = new NodeWorkerLaunchStore(journal);
+      const supervisor = requireNodeWorkerProcessIdentity(process.pid);
+      for (const name of ["create", "reclaim", "warm"]) {
+        phase(name);
+        for (const prefix of name === "warm" ? ["create", "reclaim"] : [name]) {
+          for (let index = 0; index < count; index++) {
+            const claim = claimFor(index, prefix);
+            const result = await launches.claim(claim, supervisor, count * 2, now + 100);
+            assert.equal(result.action, name === "warm" ? "replay" : "start");
+            assert.equal(result.receipt.state, "pending");
+            assert.deepEqual(result.receipt.supervisor, supervisor);
+            assert.equal(result.receipt.updatedAtMs, now + 100);
+          }
+        }
       }
+      console.log(JSON.stringify({ created: count, reclaimed: count, warm: count * 2 }));
+    } else {
+      for (const name of ["recovery", "warm"]) {
+        phase(name);
+        for (let index = 0; index < count; index++) {
+          const receipt = await turns.get(`synthetic-turn-${index}`);
+          const state = states[index % states.length]!;
+          assert.equal(receipt?.state, state === "completed" ? "interrupted" : state);
+          assert.equal(
+            receipt?.errorText,
+            state === "completed"
+              ? "node worker stopped before its turn completed"
+              : "synthetic predecessor",
+          );
+          assert.equal(receipt?.resultJson, null);
+          assert.equal(receipt?.completedAtMs, now + Math.max(5, index));
+          assert.equal(receipt?.updatedAtMs, receipt?.completedAtMs);
+        }
+      }
+      console.log(JSON.stringify({ recovered: count, warm: count, outcomes: states }));
     }
-    console.log(JSON.stringify({ recovered: count, warm: count, outcomes: states }));
   } finally {
     phase("shutdown");
     await journal.drain();

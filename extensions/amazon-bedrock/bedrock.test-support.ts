@@ -89,22 +89,9 @@ export async function capturePayload(
   model: BedrockModel,
   context: Context,
   options: BedrockOptions = {},
-  validate?: (input: ConverseStreamCommand["input"]) => void,
 ) {
   const send = mockStream();
-  if (validate) {
-    send.mockImplementation((command) => {
-      validate(commandInput(command));
-      return {
-        $metadata: { httpStatusCode: 200 },
-        stream: streamEvents([startEvent, stopEvent]),
-      } as never;
-    });
-  }
-  const result = await streamBedrockForTest(model, context, options).result();
-  if (validate) {
-    expect(result.stopReason, result.errorMessage).toBe("stop");
-  }
+  await streamBedrockForTest(model, context, options).result();
   return commandInput(send.mock.calls.at(-1)?.[0]);
 }
 export async function collectStream(stream: ReturnType<typeof streamSimpleBedrock>) {

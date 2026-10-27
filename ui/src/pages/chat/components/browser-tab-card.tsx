@@ -14,10 +14,10 @@ import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { loadLinkPreview } from "../../../lib/link-preview.ts";
 import { openExternalUrlSafe, resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
+import { projectApplicationConfig, projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../../lib/reactive/projection.ts";
-import "../../../styles/session-menu.css";
+import { sharedThemeProjection } from "../../../lib/reactive/shared-application-projections.ts";
 
 /** Adapts existing anonymous page metadata; never fetches or embeds remote markup. */
 function browserTabTweet(url: string, title?: string, page?: ControlUiLinkPreview) {
@@ -89,9 +89,9 @@ export function BrowserTabCardHost(props: BrowserTabCardProps) {
     const context = props.context ?? application;
     return (
       context && [
-        projectOwner(context.gateway, (owner) => owner),
-        projectOwner(context.config, (owner) => owner),
-        projectOwner(context.theme, (owner) => owner),
+        projectGateway(context.gateway),
+        projectApplicationConfig(context.config),
+        sharedThemeProjection(context.theme),
       ]
     );
   });

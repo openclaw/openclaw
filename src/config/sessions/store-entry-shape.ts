@@ -27,7 +27,20 @@ export function normalizeOptionalTimestamp(value: unknown): number | undefined {
 }
 
 /** Removes retired and projected fields before a session entry is persisted or returned. */
-export function projectCanonicalSessionEntryShape(value: Record<string, unknown>): SessionEntry {
+export function projectCanonicalSessionEntryShape(
+  value: Partial<
+    Record<
+      | keyof SessionEntry
+      | "sessionFile"
+      | "transcriptPath"
+      | "conversationLink"
+      | "owner"
+      | "participants"
+      | "participantCount",
+      unknown
+    >
+  >,
+): SessionEntry {
   assertSupportedSessionStoreEntry(value);
   if (hasLegacySessionEntryState(value)) {
     throw new SessionStoreMigrationRequiredError(
@@ -43,7 +56,7 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     participantCount: _projectedParticipantCount,
     ...canonicalValue
   } = value;
-  const setOptionalField = (key: keyof SessionEntry, normalized: unknown) => {
+  const setOptionalField = (key: keyof typeof canonicalValue, normalized: unknown) => {
     if (normalized) {
       canonicalValue[key] = normalized;
     } else {

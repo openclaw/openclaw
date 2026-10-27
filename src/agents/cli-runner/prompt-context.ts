@@ -32,10 +32,20 @@ import type { CliReusableSession, RunCliAgentParams } from "./types.js";
 
 export function finalizeCliSystemPrompt(
   systemPrompt: string,
-  model: string,
-  replacements: Parameters<typeof applyPluginTextReplacements>[1],
+  run: {
+    modelDisplay: string;
+    backendResolved: {
+      textTransforms?: { input?: Parameters<typeof applyPluginTextReplacements>[1] };
+    };
+    params: Pick<RunCliAgentParams, "sessionEntry">;
+  },
 ): string {
-  const replaced = applyPluginTextReplacements(systemPrompt, replacements);
+  const replaced = applyPluginTextReplacements(
+    systemPrompt,
+    run.backendResolved.textTransforms?.input,
+  );
+  // A blind child's prompt never names its own model.
+  const model = run.params.sessionEntry?.blindPrompt ? undefined : run.modelDisplay;
   // Identity belongs after the cache boundary even for marker-free hook overrides.
   // Otherwise idle and active turns would place it on different sides of the prefix.
   return appendModelIdentitySystemPrompt({
@@ -81,6 +91,7 @@ export async function prepareCliTurnPromptContext(
     runtimeContextFragments?: RunCliAgentParams["runtimeContextFragments"];
     sessionTarget?: RunCliAgentParams["sessionTarget"];
     thinkLevel?: ThinkLevel;
+    nativeDelegationTools?: readonly string[];
     requesterProfileId?: string;
     configuredTimezone?: string;
     prompt: string;
@@ -139,6 +150,7 @@ export async function prepareCliTurnPromptContext(
       buildProactiveSubagentOrchestrationSection({
         enabled: params.thinkLevel === "ultra",
         hasSessionsSpawn: params.capabilityToolNames.has("sessions_spawn"),
+        nativeDelegationTools: params.nativeDelegationTools,
       }).join("\n"),
       interruptedInputContext
         ? labelRuntimeContextText(projectRuntimeContextFragments([interruptedInputContext]))

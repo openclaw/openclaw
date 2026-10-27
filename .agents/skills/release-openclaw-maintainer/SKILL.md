@@ -1,6 +1,6 @@
 ---
 name: release-openclaw-maintainer
-description: "Prepare, publish, recover, or verify OpenClaw beta, stable, and extended-stable releases, including approved backports."
+description: "Manage one OpenClaw release or orchestrate release owners across beta, stable, and extended-stable: preparation, hotfix routing, publication, handoff, and closeout."
 ---
 
 # OpenClaw Release Maintainer
@@ -9,6 +9,20 @@ Use for a release operation, not ordinary development or advisory mutation.
 Read `docs/reference/RELEASING.md` for current policy. Load `$release-private`
 when available before resolving private credential locators or host topology;
 credential operations use `$one-password`.
+
+## Choose the role
+
+- **Release owner (default):** “Manage this release” owns one release from
+  preparation through verification, retrospective, and closeout. Start with
+  [the owner lifecycle](references/release-owner.md), even for a short prompt.
+- **Release manager / orchestrator:** coordinate several release owners, draft
+  their kickoff or handoff briefs, and route hotfix opportunities. Start with
+  [manager mode](references/release-manager.md). This role does not become a
+  second writer of an owner's release branch or publication state.
+
+The skill owns the general process; the initial prompt carries release-specific
+intent, authority, and state, not a copied runbook. A handoff resumes that intent
+with current evidence rather than starting another release.
 
 ## Choose the operation
 
@@ -26,6 +40,14 @@ Read only the references needed for the selected phase:
   snapshot): [retrospective](references/retrospective.md).
 - Release notes: `$openclaw-changelog-update`, including its separate approved post-release docs-mirror route. Initial release generation keeps its existing format; docs publication does not run automatically during release. Requested announcements: `$release-openclaw-announcement` for Discord, `$release-tweets` for X. Announcements never gate publication and require explicit posting authorization.
 - Published artifact verification: `$verify-release`. GHSA operations: `$openclaw-ghsa-maintainer` only with explicit security-workflow authorization.
+
+## Hotfix ledger management
+
+Prefer the [shared hotfix ledger](references/hotfix-ledger-management.md) for
+backport discovery, selection, and outcomes, including Tideclaw-owned releases.
+Reuse candidates, add discoveries from main/sibling releases, and update each
+release's assessments. If access is unavailable, keep local evidence and sync
+later. This is recommended bookkeeping, not another release gate.
 
 ## Shared release boundaries
 
@@ -90,11 +112,15 @@ publisher accepts only successful FRV and cannot grant a waiver. Explicit
 publisher inputs select publication scope; the candidate helper still validates its explicit
 SDK acknowledgement when needed.
 
-Explicit approval is required for version changes and irreversible publication.
-A request to cut, publish, or complete a named release carries through its
-validated publication and verification; do not ask again unless identity,
-channel, scope, or material risk changes. Ship authority for ordinary code is
-not release authority.
+Use the [owner lifecycle's authority defaults](references/release-owner.md#resolve-authority)
+for release-management requests: beta includes validated publication unless
+held; stable and extended-stable require publication approval. An explicit
+prepare-only request never authorizes publication. An explicit instruction to
+publish or complete a named release carries through its validated publication
+and verification; do not ask again unless identity, channel, scope, or material
+risk changes. Resolve and record the version before changing it; unspecified
+versions follow the lifecycle's approval rule. Ship authority for ordinary code
+is not release authority.
 
 An operator's explicit approval to do whatever is needed to prepare a named
 release is standing authority for the necessary preparation decisions and
@@ -140,6 +166,10 @@ failing deterministically on the frozen candidate, or an update/install/
 publish-bytes defect. Name each cherry-pick in the handoff record. Not allowed:
 opportunistic backports, feature reverts, or a new base taken to "pick up" a
 fix that cherry-picks cleanly enough with a small conflict resolution.
+Explicit operator-approved additions follow the
+[owner intake procedure](references/release-owner.md#prepare-and-admit-hotfixes):
+record the changed scope and requalify the new candidate, never silently reuse
+invalidated proof. A manager's opportunity notification is not that approval.
 
 Release process improvements made during a release land on both branches.
 Workflow, release-script, release-test, `RELEASING.md`, and release-skill changes
@@ -150,10 +180,11 @@ already qualified candidate. Where `main`-only CI infrastructure is missing on t
 keep the branch's expression form and port only the logic. Product code on the
 release branch stays blocker-only per the rule above.
 
-A release is not done while anything opened for it is still open. Before the
-final report, list every PR created during the release (`gh pr list --author
+Resolve every repair PR opened for the release before the final report. The
+retrospective PR described below is the required open closeout deliverable, not
+an unresolved repair. List every PR created during the release (`gh pr list --author
 @me --state open` plus any PR bound to the session) and land or explicitly close
-each one with a reason; confirm its fix is on `main` and, when it is release
+each repair PR with a reason; confirm its fix is on `main` and, when it is release
 tooling, on the release branch. Also remove the release's temporary worktrees,
 abandoned local cut branches, and stale `scripts/pr` worktrees. Then write the
 [retrospective](references/retrospective.md) and open its `openclaw/maintainers`

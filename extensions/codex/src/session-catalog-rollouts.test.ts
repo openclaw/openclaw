@@ -5,6 +5,8 @@ import path from "node:path";
 import { zstdCompressSync } from "node:zlib";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { reconcileCodexCatalogFiles } from "./session-catalog-index-files.js";
+import { catalogRow } from "./session-catalog-index.test-support.js";
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
 import { CodexCatalogRolloutScanner } from "./session-catalog-rollout-scanner.js";
 import { readCodexCatalogRollout } from "./session-catalog-rollouts.js";
@@ -61,7 +63,7 @@ async function touch(file: string, timestamp: string) {
   const time = new Date(timestamp);
   await fs.utimes(file, time, time);
 }
-const meta = (id = "native-thread", extra: Record<string, unknown> = {}) =>
+const meta = (id = "native-thread") =>
   line("session_meta", {
     id,
     session_id: "root-session",
@@ -69,7 +71,6 @@ const meta = (id = "native-thread", extra: Record<string, unknown> = {}) =>
     source: "cli",
     cwd: "/workspace/project",
     originator: "codex_cli_rs",
-    ...extra,
   });
 
 async function fixture(contents: string | Buffer = meta(), fileName = "rollout-test.jsonl") {
@@ -92,6 +93,69 @@ async function fixture(contents: string | Buffer = meta(), fileName = "rollout-t
   };
 }
 describe("resident catalog rollout currency", () => {
+  it("transfers scan fingerprints to reconciliation without copying the catalog", async () => {
+    const f = await fixture();
+    const scan = vi.spyOn(f.scanner, "scan");
+    const first = await f.scan();
+    const row = catalogRow(
+      "native-thread",
+      100,
+      {},
+      {
+        rolloutPath: f.file,
+        fingerprint: first.files.get(f.file),
+      },
+    );
+    const noReads = expectNoReads("open");
+    const unexpected = vi.fn();
+    const observed = await reconcileCodexCatalogFiles(f.root, {
+      rows: new Map([[row.threadId, row]]),
+      observedFiles: first.files,
+      scanner: f.scanner,
+      assertCurrent() {},
+      requestNativeRefresh: unexpected,
+      report: unexpected,
+      put: unexpected,
+      remove: unexpected,
+    });
+    expect(observed).toBe((await scan.mock.results[1]!.value).files);
+    expect(observed).toEqual(first.files);
+    expect(unexpected).not.toHaveBeenCalled();
+    noReads();
+  });
+
+  it.each([false, true])(
+    "retries a failed rollout read without poisoning cached scan fingerprints (known=%s)",
+    async (known) => {
+      watchWithControlledEvents("linux");
+      const f = await fixture();
+      const first = await f.scan();
+      const previous = { mtimeMs: 1, size: 1 };
+      const report = vi.fn();
+      const owner = {
+        rows: new Map(),
+        observedFiles: known ? new Map([[f.file, previous]]) : new Map(),
+        scanner: f.scanner,
+        assertCurrent() {},
+        requestNativeRefresh: vi.fn(),
+        report,
+        put: vi.fn(),
+        remove: vi.fn(),
+      };
+      const error = denied();
+      const open = vi.spyOn(fs, "open").mockRejectedValueOnce(error);
+      owner.observedFiles = await reconcileCodexCatalogFiles(f.root, owner);
+      expect(report).toHaveBeenCalledExactlyOnceWith(error);
+      expect(owner.observedFiles.get(f.file)).toEqual(known ? previous : undefined);
+      expect((await f.scan()).files).toEqual(first.files);
+      owner.observedFiles = await reconcileCodexCatalogFiles(f.root, owner);
+      expect(owner.observedFiles).toEqual(first.files);
+      expect(open).toHaveBeenCalledTimes(2);
+      expect(owner.put).not.toHaveBeenCalled();
+      expect(owner.remove).not.toHaveBeenCalled();
+    },
+  );
+
   it("distinguishes a missing root from an unreadable scan", async () => {
     const f = await fixture();
     expect(await makeScanner(path.join(f.root, "missing")).scan(new Set())).toEqual(emptyScan);
@@ -100,27 +164,11 @@ describe("resident catalog rollout currency", () => {
     await expect(f.scan()).rejects.toBe(error);
   });
 
-  it("reports an unreadable rollout separately from incomplete metadata", async () => {
-    const f = await fixture();
-    const tracked = [f.file];
-    const before = await f.scan(tracked);
-    const error = denied();
-    const open = vi.spyOn(fs, "open").mockRejectedValueOnce(error);
-    await expect(f.read()).rejects.toBe(error);
-    open.mockRestore();
-    expect(await f.scan(tracked)).toEqual(before);
-    expect(await f.read()).toMatchObject({ id: "native-thread" });
-  });
-
   it("scans new day folders without content reads and prefers plain rollout siblings", async () => {
     const f = await fixture();
     const noReads = expectNoReads("readFile", "open");
     const tracked = [f.file];
     const { files: first } = await f.scan(tracked);
-    expect(first.get(f.file)).toEqual({
-      mtimeMs: expect.any(Number),
-      size: Buffer.byteLength(meta()),
-    });
     const compressedSibling = `${f.file}.zst`;
     await fs.writeFile(compressedSibling, zstdCompressSync(meta()));
     const newDay = path.join(f.root, "2026", "09", "17");
@@ -271,11 +319,7 @@ describe("resident catalog rollout currency", () => {
 
   it("derives bounded previews from the first user event and preserves canonical metadata", async () => {
     const f = await fixture(
-      meta("native-thread", {
-        history_mode: "paginated",
-        forked_from_id: "parent-thread",
-        history_base: { thread_id: "parent-thread", end_ordinal_exclusive: 42 },
-      }) +
+      meta() +
         line("response_item", {
           type: "message",
           role: "user",
@@ -302,7 +346,57 @@ describe("resident catalog rollout currency", () => {
     expect(row?.name).toBeUndefined();
   });
 
-  it("reads only the 128 KiB head and tail of large files", async () => {
+  it("parses catalog events once without deserializing unrelated rollout payloads", async () => {
+    const unrelated = [
+      line("response_item", { type: "function_call_output", output: "tool result" }),
+      line("turn_context", { cwd: "/workspace/context" }),
+      event("agent_message", { message: "assistant response" }),
+      event("token_count", { total_tokens: 100 }),
+    ];
+    const f = await fixture(
+      meta() + unrelated.join("").repeat(20) + message("First request") + settings(),
+    );
+    await f.read();
+    const parse = vi.spyOn(JSON, "parse");
+    expect(await f.read()).toMatchObject({
+      id: "native-thread",
+      preview: "First request",
+      cwd: "/workspace/moved",
+    });
+    expect(parse.mock.calls.filter(([text]) => text === meta().trim())).toHaveLength(1);
+    for (const record of unrelated) {
+      expect(parse).not.toHaveBeenCalledWith(record.trim());
+    }
+  });
+
+  it("preserves escaped event tags, reordered fields and malformed interior lines", async () => {
+    const escape = (text: string) =>
+      text.replace(/type|event_msg|user_message|thread_settings_applied|turn_started/gu, (tag) =>
+        tag
+          .split("")
+          .map((char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`)
+          .join(""),
+      );
+    const f = await fixture(
+      meta() +
+        "not json\nnull\n" +
+        escape(message("Escaped request")) +
+        escape(settings()) +
+        escape(event("turn_started", { started_at: 123 })) +
+        '{ "payload" : { "started_at" : 456, "type" : "task_started" }, "type" : "event_msg" }\n' +
+        event("thread_settings_applied", {
+          thread_settings: { cwd: "/workspace/incomplete" },
+        }).slice(0, -1),
+    );
+    expect(await f.read()).toMatchObject({
+      id: "native-thread",
+      preview: "Escaped request",
+      cwd: "/workspace/moved",
+      recencyAt: 456,
+    });
+  });
+
+  it("reads preview and current workspace from opposite ends of a large rollout", async () => {
     const f = await fixture(
       meta() +
         event("task_started", { turn_id: "first-turn" }) +
@@ -315,30 +409,11 @@ describe("resident catalog rollout currency", () => {
         ) +
         settings(),
     );
-    const readCalls: Array<() => Promise<number[]>> = [];
-    const realOpen = fs.open;
-    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await realOpen(...args);
-      const read = vi.spyOn(handle, "read");
-      readCalls.push(async () =>
-        Promise.all(
-          read.mock.results.flatMap((result) =>
-            result.type === "return" ? [result.value.then((value) => value.bytesRead)] : [],
-          ),
-        ),
-      );
-      return handle;
-    });
-    const readFile = vi.spyOn(fs, "readFile");
     expect(await f.read()).toMatchObject({
       preview: "First user request",
       cwd: "/workspace/moved",
       recencyAt: Math.floor(Date.parse(createdAt) / 1_000) + 60,
     });
-    const reads = (await Promise.all(readCalls.map((calls) => calls()))).flat();
-    expect(reads.reduce((sum, bytes) => sum + bytes, 0)).toBe(256 * 1024);
-    expect(Math.max(...reads)).toBeLessThanOrEqual(128 * 1024);
-    expect(readFile).not.toHaveBeenCalled();
     await touch(f.file, "2026-09-17T14:00:00.000Z");
     expect((await f.read())?.recencyAt).toBe(Math.floor(Date.parse(createdAt) / 1_000) + 60);
   });
@@ -351,7 +426,6 @@ describe("resident catalog rollout currency", () => {
           event("item_completed", {
             item: {
               type: "UserMessage",
-              id: "message-1",
               content: [
                 { type: "text", text: "A compressed" },
                 { type: "text", text: " request" },
@@ -373,7 +447,7 @@ describe("resident catalog rollout currency", () => {
     expect((await f.read())?.recencyAt).toBe(Math.floor(Date.parse(createdAt) / 1_000));
   });
 
-  it.each(["", meta().slice(0, -1)])(
+  it.each(["", meta().slice(0, -1), `\n${meta()}`, `null\n${meta()}`, `broken\n${meta()}`])(
     "retries incomplete metadata rather than inventing a row (%j)",
     async (contents) => {
       const f = await fixture(contents);

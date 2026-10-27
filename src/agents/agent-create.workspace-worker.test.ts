@@ -107,16 +107,13 @@ it("records operator and agent creation provenance after roster commits", async 
   const preparation = vi
     .spyOn(workspaceModule, "ensureAgentWorkspace")
     .mockImplementation(async (params) => {
-      const snapshot = vi.spyOn(snapshots, "runSqliteReadOnlyWorkerSync").mockImplementation(() => {
+      using snapshot = vi.spyOn(snapshots, "runSqliteReadOnlyWorkerSync").mockImplementation(() => {
         throw new Error("Workspace creation must not spawn synchronous SQLite snapshots");
       });
-      try {
-        const result = await ensureWorkspace(params);
-        expect(snapshot).not.toHaveBeenCalled();
-        return result;
-      } finally {
-        snapshot.mockRestore();
-      }
+
+      const result = await ensureWorkspace(params);
+      expect(snapshot).not.toHaveBeenCalled();
+      return result;
     });
   let grants = 0;
   probe.admission(workerAdmission, (request, grant, admit) => {

@@ -34,7 +34,9 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION } from "../../auth-rate-limit.js";
+import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
 import type { GatewayConnectionWork } from "../../server-connection-work.js";
+import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import { runWorkerTurnAdmissionContinuation } from "../../worker-environments/placement-turn-claim-events.js";
 import { isReplayableWorkerTranscriptCommitError } from "../../worker-environments/transcript-commit-failure.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
@@ -47,7 +49,6 @@ import {
   GatewayRpcDiagnostics,
   type GatewayRpcQueueTiming,
 } from "./request-diagnostics.js";
-import { runWorkerAdmissionBoundary } from "./worker-admission-boundary.js";
 import {
   dispatchWorkerRequest,
   type WorkerConnectionService,
@@ -57,6 +58,10 @@ import {
   workerMaxPayload,
   workerProtocolError,
 } from "./worker-connection-frames.js";
+
+type WorkerAdmissionBoundaryResult =
+  | { ok: true; identity: WorkerConnectionIdentity }
+  | { ok: false; reason: WorkerProtocolCloseReason | "rate-limited" | "claim-rejected" };
 
 export type { WorkerConnectionService } from "./worker-connection-dispatch.js";
 
@@ -180,11 +185,12 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       rejectAdmission({ id, reason: "protocol-mismatch" });
       return;
     }
-    const admission = await runWorkerAdmissionBoundary({
+    /** Serialize public credential checks and charge only failed admission attempts. */
+    const workerAdmissionInput = {
       service: params.service,
       admission: connect.admission,
       publicAdmission: params.publicAdmission,
-      claim: (identity) => {
+      claim: (identity: WorkerConnectionIdentity) => {
         const client: GatewayWsClient = {
           socket: params.transport,
           connect: {
@@ -207,7 +213,47 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
         }
         return true;
       },
-    });
+    };
+    const { clientIp, rateLimiter } = workerAdmissionInput.publicAdmission;
+    // Admission checks the credential before environment state, so an unavailable environment
+    // (Gateway starting, worker service absent, teardown) is a server-side outage, not a bad credential.
+    const chargeFailure = (reason: WorkerProtocolCloseReason) => {
+      if (reason !== "environment-unavailable") {
+        rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION);
+      }
+    };
+    const run = async (): Promise<WorkerAdmissionBoundaryResult> => {
+      const rateCheck = rateLimiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION);
+      if (rateCheck && !rateCheck.allowed) {
+        return { ok: false, reason: "rate-limited" };
+      }
+      const credentialAdmission =
+        (await workerAdmissionInput.service?.admitWorker(workerAdmissionInput.admission)) ??
+        ({ ok: false, reason: "environment-unavailable" } as const);
+      if (!credentialAdmission.ok) {
+        chargeFailure(credentialAdmission.reason);
+        return credentialAdmission;
+      }
+      const ownershipFailure = workerAdmissionInput.service?.validateWorkerConnection(
+        credentialAdmission.identity,
+      );
+      if (ownershipFailure) {
+        chargeFailure(ownershipFailure);
+        return { ok: false, reason: ownershipFailure };
+      }
+      if (!workerAdmissionInput.claim(credentialAdmission.identity)) {
+        return { ok: false, reason: "claim-rejected" };
+      }
+      rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION);
+      return credentialAdmission;
+    };
+    const admission = !rateLimiter
+      ? await run()
+      : await withSerializedRateLimitAttempt({
+          ip: clientIp,
+          scope: AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
+          run,
+        });
     if (!admission.ok) {
       if (admission.reason === "claim-rejected") {
         return;
@@ -290,8 +336,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
         }
       },
       Math.max(0, admission.identity.credentialExpiresAtMs - Date.now()),
-    );
-    expiryTimer.unref?.();
+    ).unref();
   };
 
   const handleMessage = async (

@@ -7,7 +7,8 @@ import {
   PluginsInstallProgressEventSchema,
   type PluginsSetEnabledParams,
 } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";

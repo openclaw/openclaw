@@ -6,7 +6,7 @@ const BUILTIN_MARKER = "__OPENCLAW_STANDALONE_BUILTIN_REQUIRES__";
 /**
  * Capture native filename selection without resolving image-owned JavaScript at runtime.
  * @param {{runtimeRoot: string, embeddedPaths: Record<string, string>,
- *   pluginLoader?: {specifier: string, modulePath: string}}} options
+ *   pluginLoader?: {specifier: string}}} options
  */
 export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths, pluginLoader }) {
   const nativeRequire = createRequire(path.join(runtimeRoot, "package.json"));
@@ -112,7 +112,13 @@ export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths, plu
           }
         }
         const entry = embedded(specifier) ?? embedded(resolved ?? imageFilename(specifier) ?? target.resolve(specifier));
-        const loaded = Reflect.apply(target, receiver, [entry ?? resolved ?? specifier, ...rest]);
+        const loaded = ${
+          pluginLoader
+            ? `!entry && globalThis.__openclawStandaloneBuildInfo.mode === "aot"
+          ? loadStandalonePluginRuntime().loadModule(parent, resolved ?? specifier)
+          : `
+            : ""
+        }Reflect.apply(target, receiver, [entry ?? resolved ?? specifier, ...rest]);
         return entry && commonJsEntries.has(entry) ? loaded.default ?? loaded : loaded;
       }
     });
@@ -120,25 +126,70 @@ export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths, plu
 })();
 ${
   pluginLoader
-    ? `if (globalThis.__openclawStandaloneBuildInfo.mode !== "aot") {
-// Keep the external edge literal: a computed require loses the complete builtin surface.
-globalThis.openclawStandaloneLoadJitiFactory = (() => {
-  let installed = false;
+    ? `const loadStandalonePluginRuntime = (() => {
+  let runtime;
   return () => {
-    if (!installed) {
-      const previous = Module._resolveFilename;
-      Module._resolveFilename = function (specifier, ...args) {
-        return specifier === ${JSON.stringify(pluginLoader.specifier)}
-          ? path.join(root, ${JSON.stringify(pluginLoader.modulePath)})
-          : previous.call(this, specifier, ...args);
-      };
-      installed = true;
-    }
-    return createRequire(import.meta.url)(${JSON.stringify(pluginLoader.specifier)}).createJiti;
+    // The literal external edge admits disk code; the relocated parent owns package lookup.
+    return runtime ??= createRequire(path.join(root, "package.json"))(${JSON.stringify(pluginLoader.specifier)});
   };
 })();
-}\n`
+globalThis.openclawStandaloneLoadJitiFactory = () => loadStandalonePluginRuntime().createJiti;\n`
     : ""
 }`,
   };
+}
+
+/** Transfer compiled exports to interpreted plugins without reading virtual source files. */
+export function createStandaloneExternalModuleBootstrap({ source = false } = {}) {
+  return `const imageNamespace = ${source ? JSON.stringify("openclaw-image") : "undefined"};
+globalThis.__openclawStandaloneExternalModulePath = (filename) => {
+  // The compiled require adapter already passes image paths to the native loader.
+  if (filename.startsWith("/$bunfs/")) return undefined;
+  const entry = embedded(filename);
+  return entry ? (imageNamespace && !commonJsEntries.has(entry) ? imageNamespace + ":" + entry : entry) : undefined;
+};
+globalThis.__openclawStandaloneExternalModuleResolution = (filename) => {
+  const entry = embedded(filename);
+  return { path: entry ?? filename, namespace: imageNamespace && entry && !commonJsEntries.has(entry) ? imageNamespace : "file" };
+};
+${
+  source
+    ? `let requireImageModule;
+Bun.plugin({ name: "openclaw-image-exports", setup(build) {
+  build.onLoad({ filter: /.*/, namespace: imageNamespace }, ({ path: filename }) => {
+    requireImageModule ??= globalThis.__openclawStandaloneCreateRequire(createRequire, path.join(root, "package.json"));
+    // Passing require's interop marker back to the loader unwraps only the default.
+    const { __esModule: _interop, ...exports } = requireImageModule(filename);
+    return { exports, loader: "object" };
+  });
+}});`
+    : ""
+}`;
+}
+
+/** Route disk imports to their embedded module without changing the compiled loader. */
+export function createStandaloneModuleResolverBootstrap() {
+  return `let resolving = false;
+if (isMainThread) Bun.plugin({ name: "openclaw-embedded-modules", setup(build) {
+  // Bun checks the filter against the compiled entry before invoking callbacks.
+  const filter = new RegExp("^(?!" + RegExp.escape(Bun.main) + "(?![\\\\s\\\\S]))");
+  build.onResolve({ filter }, ({path: specifier, importer, kind}) => {
+    // Re-entering the disk bridge while requiring an image exposes partial exports.
+    if (specifier.startsWith("/$bunfs/")) return;
+    if (kind === "require-resolve" || resolving || specifier.startsWith("node:") || specifier.startsWith("bun:")) return;
+    let target;
+    try {
+      resolving = true;
+      target = globalThis.__openclawStandaloneNativeResolve(importer || path.join(root, "openclaw.mjs"), specifier)
+        ?? (specifier.startsWith("file:") ? fileURLToPath(specifier)
+        : path.isAbsolute(specifier) ? specifier
+        : (() => {
+          try { return Bun.resolveSync(specifier, importer ? path.dirname(importer) : root); }
+          catch { return Bun.resolveSync(specifier, root); }
+        })());
+    } catch { return; } finally { resolving = false; }
+    const entry = embedded(target);
+    if (entry) return globalThis.__openclawStandaloneExternalModuleResolution(entry);
+  });
+}});`;
 }

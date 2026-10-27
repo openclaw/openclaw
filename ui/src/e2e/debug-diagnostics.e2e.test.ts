@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { catalogModel } from "./model-catalog-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Debug diagnostics mocked Gateway E2E",
@@ -121,14 +122,7 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
       "system.info": systemInfo(0.25, 0.2, [4, 8], [432, 210, 256], [0.18, 0.04, 0.03, 0.23]),
       health: { ok: true, gateway: "healthy" },
       "models.list": {
-        models: [
-          {
-            available: true,
-            id: "gpt-5.6-luna",
-            name: "GPT-5.6 Luna",
-            provider: "openai",
-          },
-        ],
+        models: [catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 Luna")],
       },
       "last-heartbeat": { ageMs: 1250, source: "gateway-heartbeat" },
       "diagnostics.lanes": {

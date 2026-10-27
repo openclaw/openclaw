@@ -57,7 +57,6 @@
     "install:driver": "bash scripts/install-driver.sh",
     "uninstall:driver": "bash scripts/install-driver.sh --uninstall",
     "inject:helper": "bash scripts/inject-helper.sh",
-    "inject:helper:phone": "bash scripts/inject-helper.sh --app Phone",
     "inject:helper:terminal": "bash scripts/inject-helper-terminal.sh"
   },
   "dependencies": {

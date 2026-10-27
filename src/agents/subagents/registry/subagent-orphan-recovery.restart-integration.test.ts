@@ -50,7 +50,7 @@ import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.j
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
 import { prepareInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
-import { registerRecoveredTerminalTailTest } from "./subagent-orphan-recovery.live-tail.test-support.js";
+import { registerRecoveredTerminalTests } from "./subagent-orphan-recovery.live-tail.test-support.js";
 import {
   createRecoverySessions,
   rawChildFixture,
@@ -336,7 +336,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       expect(dispatchAgent).not.toHaveBeenCalled();
     },
   );
-  registerRecoveredTerminalTailTest(fixture);
+  registerRecoveredTerminalTests(fixture);
 
   it("reconciles retained predecessor sessions during startup without waiting for a sweep", async () => {
     const startedAt = Math.floor(performance.timeOrigin) - 60_000;

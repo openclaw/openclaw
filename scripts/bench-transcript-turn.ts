@@ -14,6 +14,7 @@ import {
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../src/config/sessions/session-transcript-reconcile.js";
 import { installGatewayDatabaseEngine } from "../src/gateway/server-database-engine.js";
 import { installDatabaseProcessRole } from "../src/infra/database-engine/admission-scope.js";
+import { onInternalDiagnosticEvent } from "../src/infra/diagnostic-events.js";
 import { cleanupSessionStateForTest } from "../src/test-utils/session-state-cleanup.js";
 
 const { values } = parseArgs({
@@ -58,6 +59,14 @@ function mark(value: object) {
     JSON.stringify({ ...value, at: performance.timeOrigin + performance.now() }) + "\n",
   );
 }
+const unsubscribe = onInternalDiagnosticEvent(
+  (event) => {
+    if (event.type === "worker.request" && event.phase === "completed") {
+      mark({ request: event.requestClass });
+    }
+  },
+  { include: ["worker.request"] },
+);
 const scope = (sessionId: string) => ({
   agentId: "main",
   sessionKey: `agent:main:${sessionId}`,
@@ -121,10 +130,17 @@ try {
   );
 } finally {
   await cleanupSessionStateForTest({ stateDir: root });
+  unsubscribe();
 }
 
 // Analyze only timed intervals; setup and shutdown are deliberately outside the budget.
-type Sample = { count: number; statements: number; trips: number; elapsedMs: number };
+type Sample = {
+  count: number;
+  requests: number;
+  statements: number;
+  trips: number;
+  elapsedMs: number;
+};
 const samples: Sample[] = [];
 let active: Sample | undefined;
 for await (const line of createInterface({ input: fs.createReadStream(trace) })) {
@@ -135,23 +151,26 @@ for await (const line of createInterface({ input: fs.createReadStream(trace) }))
     elapsedMs?: number;
     sql?: string;
     engine?: string;
+    request?: string;
   };
   if (record.marker === "start") {
     active =
       record.iteration !== undefined && record.iteration >= 0 && record.count !== undefined
-        ? { count: record.count, statements: 0, trips: 0, elapsedMs: 0 }
+        ? { count: record.count, requests: 0, statements: 0, trips: 0, elapsedMs: 0 }
         : undefined;
   } else if (record.marker === "end" && active) {
     active.elapsedMs = record.elapsedMs!;
     samples.push(active);
     active = undefined;
+  } else if (active && record.request) {
+    active.requests += 1;
   } else if (active && record.sql) {
     active.statements += record.sql.split(";").filter((statement) => statement.trim()).length;
     active.trips += Number(record.engine === "postgres");
   }
 }
 const baseline: Record<number, number> =
-  values.engine === "postgres" ? { 1: 18, 2: 25, 4: 39 } : { 1: 15, 2: 28, 4: 50 };
+  values.engine === "postgres" ? { 1: 16, 2: 15, 4: 15 } : { 1: 17, 2: 17, 4: 17 };
 for (const count of [1, 2, 4]) {
   const selected = samples.filter((sample) => sample.count === count);
   assert.equal(selected.length, 10);
@@ -165,14 +184,17 @@ for (const count of [1, 2, 4]) {
       p95: elapsed[9],
     }),
   );
-  if (values["check-budget"]) {
+}
+if (values["check-budget"]) {
+  for (const count of [1, 2, 4]) {
+    const selected = samples.filter((sample) => sample.count === count);
+    assert.equal(new Set(selected.map((sample) => sample.requests)).size, 1);
+    assert.equal(selected[0]!.requests, 1);
     assert.equal(new Set(selected.map((sample) => sample.statements)).size, 1);
-    assert(
-      selected.every((sample) => sample.statements > 0 && sample.statements < baseline[count]!),
-    );
+    assert.equal(selected[0]!.statements, baseline[count]! - 3);
     if (values.engine === "postgres") {
       assert.equal(new Set(selected.map((sample) => sample.trips)).size, 1);
-      assert(selected.every((sample) => sample.trips > 0 && sample.trips < baseline[count]! - 1));
+      assert.equal(selected[0]!.trips, baseline[count]! - 4);
     }
   }
 }

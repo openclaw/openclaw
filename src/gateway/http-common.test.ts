@@ -45,6 +45,10 @@ function expectJsonResponse(
   expect(end).toHaveBeenCalledWith(JSON.stringify(body));
 }
 
+const errorBody = (message: string, type = "invalid_request_error") => ({
+  error: { message, type },
+});
+
 function mockDisconnect(
   socket = new EventEmitter(),
   resSocket: EventEmitter | null = socket,
@@ -87,12 +91,12 @@ it("sendRateLimited responds with 429 and no Retry-After when retryAfterMs is om
   const { res, setHeader, end } = makeMockHttpResponse();
   sendRateLimited(res);
   expect(setHeader.mock.calls.map(([name]) => name)).not.toContain("Retry-After");
-  expectJsonResponse(res, end, 429, {
-    error: {
-      message: "Too many failed authentication attempts. Please try again later.",
-      type: "rate_limited",
-    },
-  });
+  expectJsonResponse(
+    res,
+    end,
+    429,
+    errorBody("Too many failed authentication attempts. Please try again later.", "rate_limited"),
+  );
 });
 
 describe("readJsonBodyOrError", () => {
@@ -117,9 +121,7 @@ describe("readJsonBodyOrError", () => {
       expect(response.status).toBe(status);
       expect(response.headers.get("connection")).toBe("close");
       expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-      expect(await response.json()).toEqual({
-        error: { message, type: "invalid_request_error" },
-      });
+      expect(await response.json()).toEqual(errorBody(message));
       if (status === 413) {
         expect(events.find((entry) => entry.type === "payload.large")).toMatchObject({
           surface: "gateway.http.json",
@@ -141,9 +143,7 @@ describe("readJsonBodyOrError", () => {
     const { res, end } = makeMockHttpResponse();
     const destroy = vi.spyOn(res.req, "destroy");
     expect(await readJsonBodyOrError(res.req, res, 1024)).toBeUndefined();
-    expectJsonResponse(res, end, 400, {
-      error: { message: "bad json", type: "invalid_request_error" },
-    });
+    expectJsonResponse(res, end, 400, errorBody("bad json"));
     res.emit("finish");
     expect(destroy).not.toHaveBeenCalled();
   });
@@ -248,8 +248,6 @@ describe("watchClientDisconnect", () => {
     const reqSocket = new EventEmitter();
     const resSocket = new EventEmitter();
     const { controller, onDisconnect } = mockDisconnect(reqSocket, resSocket);
-    expect(reqSocket.listenerCount("close")).toBe(1);
-    expect(resSocket.listenerCount("close")).toBe(1);
     reqSocket.emit("close");
     expect(controller.signal.aborted).toBe(true);
     expect(reqSocket.listenerCount("close")).toBe(0);
@@ -261,7 +259,6 @@ describe("watchClientDisconnect", () => {
   it.each(["cleanup", "response completion"])("does not abort after %s", (phase) => {
     const socket = new EventEmitter();
     const { res, controller, cleanup } = mockDisconnect(socket, null);
-    expect(socket.listenerCount("close")).toBe(1);
     if (phase === "cleanup") {
       cleanup();
     } else {

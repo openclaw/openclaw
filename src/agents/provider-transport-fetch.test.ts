@@ -4,6 +4,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { prepareModelRequestBody } from "../../packages/ai/src/transports/model-request-body.js";
 import { withinTest } from "../../test/helpers/promise.js";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -48,7 +49,7 @@ function mockResponse(
 }
 
 function mockStream(
-  chunks: string[],
+  chunks: (string | Uint8Array)[],
   contentType?: string,
   options: Parameters<typeof responseStream>[1] = {},
 ) {
@@ -69,7 +70,7 @@ function privateNetworkPolicy(allowPrivateNetwork = false, trustConfiguredBaseUr
 }
 
 function responseStream(
-  chunks: string[],
+  chunks: (string | Uint8Array)[],
   options: { open?: boolean; cancel?: (reason: unknown) => Promise<void> } = {},
 ) {
   let close!: () => void;
@@ -77,7 +78,7 @@ function responseStream(
     start(controller) {
       close = () => controller.close();
       for (const chunk of chunks) {
-        controller.enqueue(new TextEncoder().encode(chunk));
+        controller.enqueue(typeof chunk === "string" ? new TextEncoder().encode(chunk) : chunk);
       }
       if (!options.open) {
         controller.close();
@@ -354,14 +355,9 @@ describe("buildGuardedModelFetch", () => {
   ])(
     "reports oversized $contentType and releases resources while a clone stays unread",
     async ({ contentType, error }, { signal }) => {
-      const upstream = new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new Uint8Array(17 * 1024 * 1024));
-          },
-        }),
-        { headers: { "content-type": contentType } },
-      );
+      const upstream = new Response(makeStallingStream([new Uint8Array(17 * 1024 * 1024)]), {
+        headers: { "content-type": contentType },
+      });
       const unreadClone = upstream.clone();
       const release = mockResponse(upstream);
       const reading = (await request(streaming)).text();
@@ -570,7 +566,13 @@ describe("buildGuardedModelFetch SSE readability", () => {
         "\n: second\n: third\r",
         '🦞: not a comment\nevent: ping\n\ndata: {"ok": true}\n\n',
       ];
-      mockStream(chunks, "text/event-stream");
+      const bytes = new TextEncoder().encode(chunks.join(""));
+      // Split the BOM and multibyte text as well as CRLF across network chunks.
+      mockStream(
+        Array.from(bytes, (_, index) => bytes.subarray(index, index + 1)),
+        "text/event-stream",
+      );
+      using decode = vi.spyOn(TextDecoder.prototype, "decode");
       const target =
         mode === "official"
           ? { ...completionModel, provider: "openai", baseUrl: "https://api.openai.com/v1" }
@@ -589,6 +591,10 @@ describe("buildGuardedModelFetch SSE readability", () => {
         );
       }
       expect(onSseComment).toHaveBeenCalledTimes(3);
+      if (mode !== "sanitized") {
+        // The observer forwards bytes; UTF-8 decoding belongs to the SDK consumer.
+        expect(decode).not.toHaveBeenCalled();
+      }
     },
   );
 

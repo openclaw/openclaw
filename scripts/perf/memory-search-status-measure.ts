@@ -4,6 +4,10 @@
  * Required: PGCENSUS_OUT (new directory), PGCENSUS_ENGINE (sqlite/postgres).
  * PostgreSQL also needs PGCENSUS_CONNECTION (a throwaway database).
  * Optional: PGCENSUS_EXPECT_COUNT_STATEMENTS enforces the per-search count budget.
+ * PGCENSUS_SOURCE_COUNT, PGCENSUS_ROUNDS, and PGCENSUS_WARMUPS scale the fixture.
+ * PGCENSUS_RUNTIME_ROOT and PGCENSUS_BUILD_ROOT keep state/builds on a chosen volume.
+ * PGCENSUS_MODE=migration seeds with PGCENSUS_SEED_BUILD_ROOT, then runs Doctor
+ * with PGCENSUS_BUILD_ROOT when the builds differ. The default mode is bulk.
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
@@ -36,8 +40,28 @@ assert(
   "Set PGCENSUS_OUT and PGCENSUS_ENGINE",
 );
 assert(engine !== "postgres" || process.env.PGCENSUS_CONNECTION, "Set PGCENSUS_CONNECTION");
+const sourceCount = Number(process.env.PGCENSUS_SOURCE_COUNT ?? 4);
+const rounds = Number(process.env.PGCENSUS_ROUNDS ?? 10);
+const warmups = Number(process.env.PGCENSUS_WARMUPS ?? 0);
+assert(Number.isSafeInteger(sourceCount) && sourceCount >= 4, "Source count must be at least 4");
+assert(Number.isSafeInteger(rounds) && rounds > 0, "Rounds must be positive");
+assert(Number.isSafeInteger(warmups) && warmups >= 0, "Warmups must be nonnegative");
+const buildRoot = path.resolve(process.env.PGCENSUS_BUILD_ROOT ?? process.cwd());
+const mode = process.env.PGCENSUS_MODE ?? "bulk";
+assert(mode === "bulk" || mode === "migration", "Mode must be bulk or migration");
+assert(
+  mode !== "migration" || process.env.PGCENSUS_SEED_BUILD_ROOT,
+  "Migration comparison requires an explicit predecessor seed build",
+);
+const seedBuildRoot =
+  mode === "migration"
+    ? path.resolve(process.env.PGCENSUS_SEED_BUILD_ROOT ?? buildRoot)
+    : buildRoot;
+assert(mode !== "migration" || engine === "postgres", "Migration proof requires PostgreSQL");
 fs.mkdirSync(output, { recursive: false });
-const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-search-status-"));
+const runtimeRoot = process.env.PGCENSUS_RUNTIME_ROOT ?? os.tmpdir();
+fs.mkdirSync(runtimeRoot, { recursive: true });
+const root = fs.mkdtempSync(path.join(runtimeRoot, "memory-search-status-"));
 const samples: {
   startNs: string;
   endNs: string;
@@ -47,6 +71,10 @@ const samples: {
 let gateway: ChildProcess | undefined;
 let client: ReturnType<typeof createGatewayWsClient> | undefined;
 let challengeTimer: ReturnType<typeof setTimeout> | undefined;
+let cli: ChildProcess | undefined;
+const preparation: Record<string, number> = {};
+let readinessMs: number | null = null;
+let migrationApplied = false;
 try {
   const workspace = path.join(root, "workspace");
   fs.mkdirSync(path.join(workspace, "memory"), { recursive: true });
@@ -61,6 +89,11 @@ try {
   for (const [name, text] of corpus) {
     const file = path.join(workspace, "memory", `${name}.md`);
     fs.writeFileSync(file, text + "\n");
+    fs.utimesSync(file, fixtureTime, fixtureTime);
+  }
+  for (let index = corpus.length; index < sourceCount; index++) {
+    const file = path.join(workspace, "memory", `filler-${String(index).padStart(6, "0")}.md`);
+    fs.writeFileSync(file, `Synthetic neutral reference entry ${index}.\n`);
     fs.utimesSync(file, fixtureTime, fixtureTime);
   }
   const port = await getFreePort();
@@ -115,9 +148,10 @@ try {
     OPENCLAW_MEMORY_SEARCH_MEASURE_OUT: output,
     NODE_OPTIONS: `--require=${preload}`,
   };
-  const launch = (args: string[], label: string) => {
+  const launch = (args: string[], label: string, cwd = buildRoot) => {
     const fd = fs.openSync(path.join(output, `${label}.log`), "w");
     const child = spawn(process.execPath, ["dist/entry.js", ...args], {
+      cwd,
       env,
       detached: true,
       stdio: ["ignore", fd, fd],
@@ -125,17 +159,90 @@ try {
     fs.closeSync(fd);
     return child;
   };
+  const runCli = async (args: string[], label: string, cwd: string) => {
+    const start = performance.now();
+    cli = launch(args, label, cwd);
+    const [code] = await once(cli, "close");
+    cli = undefined;
+    preparation[`${label}Ms`] = performance.now() - start;
+    assert.equal(code, 0, `${label} failed; see ${label}.log`);
+  };
   for (const [label, args] of [
     ["validate", ["config", "validate", "--json"]],
     ["index", ["memory", "index", "--force"]],
   ] as const) {
-    const child = launch([...args], label);
-    const [code] = await once(child, "close");
-    assert.equal(code, 0, `${label} failed; see ${label}.log`);
+    await runCli([...args], label, seedBuildRoot);
   }
   const validation = JSON.parse(fs.readFileSync(path.join(output, "validate.log"), "utf8"));
   assert.equal(validation.valid, true);
   assert.deepEqual(validation.warnings, []);
+  const readFixtureState = async (label: string) => {
+    const { Client } = await import("pg");
+    const database = new Client({ connectionString: process.env.PGCENSUS_CONNECTION });
+    await database.connect();
+    try {
+      const { rows } = await database.query<{
+        schemaname: string;
+        last_analyze: Date | null;
+        last_autoanalyze: Date | null;
+      }>(`SELECT schemaname, last_analyze, last_autoanalyze
+          FROM pg_stat_user_tables WHERE relname = 'memory_index_sources'`);
+      assert.equal(rows.length, 1, "Use one isolated agent store per benchmark database");
+      fs.writeFileSync(path.join(output, "statistics.json"), JSON.stringify(rows, null, 2));
+      const schema = `"${rows[0]!.schemaname.replaceAll('"', '""')}"`;
+      const {
+        rows: [state],
+      } = await database.query<{
+        schemaVersion: number;
+        sources: number;
+        sourceDigest: string;
+        chunkDigest: string;
+      }>(`SELECT
+          (SELECT schema_version::integer FROM ${schema}.schema_meta WHERE role = 'agent') AS "schemaVersion",
+          (SELECT count(*)::integer FROM ${schema}.memory_index_sources) AS sources,
+          (SELECT md5(coalesce(string_agg(row_to_json(s)::text, chr(10) ORDER BY id), ''))
+            FROM ${schema}.memory_index_sources s) AS "sourceDigest",
+          (SELECT md5(coalesce(string_agg(row_to_json(c)::text, chr(10) ORDER BY id), ''))
+            FROM ${schema}.memory_index_chunks c) AS "chunkDigest"`);
+      assert(state);
+      assert.equal(state.sources, sourceCount);
+      const { rows: indexes } = await database.query<{
+        name: string;
+        definition: string;
+        bytes: number;
+      }>(
+        `SELECT indexname AS name, indexdef AS definition,
+          pg_relation_size(pg_catalog.format('%I.%I', schemaname, indexname)::regclass)::integer AS bytes
+          FROM pg_indexes
+          WHERE schemaname = $1 AND tablename = 'memory_index_sources'
+          ORDER BY indexname`,
+        [rows[0]!.schemaname],
+      );
+      fs.writeFileSync(
+        path.join(output, `${label}.json`),
+        JSON.stringify({ ...state, indexes, statistics: rows }, null, 2),
+      );
+      return state;
+    } finally {
+      await database.end();
+    }
+  };
+  if (engine === "postgres") {
+    const seeded = await readFixtureState("seeded");
+    if (mode === "migration") {
+      assert.equal(seeded.schemaVersion, 35, "Migration comparison must start at schema 35");
+      // The same build is the explicit predecessor control for the paired comparison.
+      if (seedBuildRoot !== buildRoot) {
+        await runCli(["doctor", "--fix", "--yes", "--non-interactive"], "doctor", buildRoot);
+        const migrated = await readFixtureState("migrated");
+        assert.equal(migrated.sourceDigest, seeded.sourceDigest, "Doctor changed source rows");
+        assert.equal(migrated.chunkDigest, seeded.chunkDigest, "Doctor changed chunk rows");
+        assert.equal(migrated.schemaVersion, 36, "Doctor must advance to schema 36");
+        migrationApplied = true;
+        fs.copyFileSync(configPath, path.join(output, "migrated-config.json"));
+      }
+    }
+  }
   gateway = launch(
     ["gateway", "run", "--port", String(port), "--bind", "loopback", "--auth", "trusted-proxy"],
     "gateway",
@@ -148,6 +255,7 @@ try {
     isDone: () => gateway?.exitCode !== null,
   });
   assert.equal(ready.status, 200, "Gateway not ready");
+  readinessMs = ready.ms;
   const challenge = Promise.withResolvers<string>();
   challengeTimer = setTimeout(
     () => challenge.reject(new Error("Gateway challenge timed out")),
@@ -202,8 +310,8 @@ try {
     },
   });
   assert(connected.ok, "Synthetic read-only connection was rejected");
-  for (let index = 0; index < 10; index++) {
-    const [name] = corpus[index % corpus.length]!;
+  for (let index = -warmups; index < rounds; index++) {
+    const [name] = corpus[(index + warmups) % corpus.length]!;
     const startNs = process.hrtime.bigint().toString();
     const clock = performance.now();
     const result: GatewayReply = await client.request(
@@ -214,16 +322,21 @@ try {
     assert(result.ok, `Search ${index} failed`);
     const response = result.payload as MemorySearchResponse;
     assert.equal(response.results[0]?.path, `memory/${name}.md`);
-    samples.push({
-      startNs,
-      endNs: process.hrtime.bigint().toString(),
-      wallMs: performance.now() - clock,
-      response,
-    });
+    if (index >= 0) {
+      samples.push({
+        startNs,
+        endNs: process.hrtime.bigint().toString(),
+        wallMs: performance.now() - clock,
+        response,
+      });
+    }
   }
 } finally {
   clearTimeout(challengeTimer);
   client?.close();
+  if (cli) {
+    await stopChild(cli, { teardownGraceMs: 30_000 });
+  }
   if (gateway) {
     const stopped = await stopChild(gateway, { teardownGraceMs: 30_000 });
     assert.equal(stopped.exitCode, 0, "Gateway did not shut down cleanly");
@@ -273,8 +386,18 @@ fs.writeFileSync(
   path.join(output, "result.json"),
   JSON.stringify(
     {
-      head: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+      head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: buildRoot, encoding: "utf8" }).trim(),
       engine,
+      mode,
+      migrationApplied,
+      seedHead: execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: seedBuildRoot,
+        encoding: "utf8",
+      }).trim(),
+      sourceCount,
+      warmups,
+      preparation,
+      readinessMs,
       node: process.version,
       samples: measured,
     },

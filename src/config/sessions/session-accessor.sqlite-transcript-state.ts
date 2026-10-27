@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { engineGreatest } from "../../infra/database-engine/scalar.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -6,7 +7,7 @@ import {
   prepareSqliteQueryTakeFirstSync,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withoutSqliteDatabaseWriteScope,
@@ -21,7 +22,10 @@ import {
   preserveSessionEntryCacheAcrossWrite,
   publishSessionEntryPlaceholderInsertion,
 } from "./session-accessor.sqlite-entry-cache.js";
-import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  getSessionKysely,
+  type ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope-helpers.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
   selectTranscriptAppendState,
@@ -486,7 +490,7 @@ export function advanceTranscriptMutationAtInTransaction(
       .set((eb) => {
         const nextUpdatedAt =
           options.strictly && !actor?.window
-            ? eb.fn<number>(isPostgresSqlConnection(database.db) ? "greatest" : "max", [
+            ? engineGreatest(database.db, [
                 eb.val(transcriptUpdatedAt),
                 eb(eb.fn.coalesce("transcript_updated_at", eb.val(-1)), "+", steps),
                 eb(eb.fn.coalesce("transcript_observed_at", eb.val(-1)), "+", steps),

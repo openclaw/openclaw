@@ -70,6 +70,7 @@ import {
 import { refreshSessionPatchQueuedSelection } from "./server-methods/sessions-patch-model-selection.js";
 import { completeGatewaySessionCreation } from "./session-create-completion.js";
 import {
+  buildSessionCreateSettingsPatch,
   existingSessionSelectionWouldChange,
   sessionCreatePolicyAdoptionError,
 } from "./session-create-existing-selection.js";
@@ -78,6 +79,7 @@ import {
   inheritSessionCreateParentFields,
   prepareSessionCreateParent,
   resolveSessionCreateInheritance,
+  resolveSessionCreateRoot,
   resolveSessionCreateSpawnPolicy,
 } from "./session-create-inheritance.js";
 import {
@@ -370,19 +372,13 @@ async function createGatewaySessionInScope(
       return initializingSessionFailure();
     }
   }
-  const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
-  // Durable dashboard sessions parent to main for flow-up notices and sidebar threads.
-  // Incognito roots omit durable lineage so notices cannot cross the storage boundary.
-  const dashboardParentSessionKey =
-    !parentSessionKey &&
-    !params.authorizedPluginId &&
-    !incognito &&
-    params.fork !== true &&
-    (params.cfg.session?.dmScope ?? "main") === "main" &&
-    params.cfg.session?.scope !== "global" &&
-    targetSessionKey !== agentMainSessionKey
-      ? agentMainSessionKey
-      : undefined;
+  const { standalone: standaloneRoot, mainParentSessionKey: dashboardParentSessionKey } =
+    resolveSessionCreateRoot(params, {
+      parentSessionKey,
+      incognito,
+      targetSessionKey,
+      mainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId }),
+    });
 
   const authorityTargets = params.operatorAuthority
     ? [
@@ -717,6 +713,7 @@ async function createGatewaySessionInScope(
             requestedModel,
             requestedAgentRuntime: params.agentRuntime,
             requestedContextWindow,
+            requestedCyberAccessProgram: params.cyberAccessProgram,
             requestedFastMode,
             requestedThinkingLevel,
             subagentModelHint: isSubagentSessionKey(target.canonicalKey)
@@ -744,24 +741,14 @@ async function createGatewaySessionInScope(
           agentId: target.agentId,
           preparedSessionRoot: sessionRoot,
           preparedAgentRuntime: catalogAgentRuntime,
-          // Patch appliers read key presence as caller intent (present = change,
-          // null = clear), so omitted create fields must stay absent: a present
-          // undefined model trips the selection lock and drops modelFallback,
-          // and present undefined contextWindow/thinkingLevel take the
-          // reject-invalid branch instead of the model-change clearing branch.
-          patch: {
+          patch: buildSessionCreateSettingsPatch(params, {
             key: target.canonicalKey,
             label,
-            category: normalizeOptionalString(params.category),
-            ...((catalogModel ?? requestedModel) ? { model: catalogModel ?? requestedModel } : {}),
-            ...(params.agentRuntime !== undefined ? { agentRuntime: params.agentRuntime } : {}),
-            ...(requestedContextWindow ? { contextWindow: requestedContextWindow } : {}),
-            ...(requestedThinkingLevel ? { thinkingLevel: requestedThinkingLevel } : {}),
-            ...(requestedFastMode !== undefined ? { fastMode: requestedFastMode } : {}),
-            ...(requestedToolOverrides ? { toolOverrides: params.toolOverrides } : {}),
-            ...(params.communication !== undefined ? { communication: params.communication } : {}),
-            ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
-          },
+            model: catalogModel ?? requestedModel,
+            contextWindow: requestedContextWindow,
+            thinkingLevel: requestedThinkingLevel,
+            fastMode: requestedFastMode,
+          }),
           loadGatewayModelCatalogSnapshot: loadModelCatalog
             ? async () => {
                 preparedModelCatalog = await loadModelCatalog();
@@ -808,7 +795,20 @@ async function createGatewaySessionInScope(
         const initializedEntry: InternalSessionEntry = {
           ...patched.entry,
           ...inheritedWorkspace,
-          ...(createdNewEntry && displayName ? { displayName } : {}),
+          ...(createdNewEntry && displayName
+            ? {
+                displayName,
+                ...(params.displayNameGenerated
+                  ? {
+                      titleRefinement: {
+                        sessionId: patched.entry.sessionId,
+                        generatedName: displayName,
+                        remainingMessages: 7,
+                      },
+                    }
+                  : {}),
+              }
+            : {}),
           ...projectSessionCreateSpawnModelSelection({
             entry: patched.entry,
             creation: params.creation,
@@ -895,14 +895,15 @@ async function createGatewaySessionInScope(
         };
         const explicitParentSessionKey =
           canonicalParentSessionKey ?? normalizeOptionalString(initializedEntry.parentSessionKey);
+        const newStandaloneRoot = createdNewEntry && standaloneRoot && !explicitParentSessionKey;
         const entry: InternalSessionEntry = {
           ...initializedEntry,
           ...inheritSessionCreateParentFields({
             parent: currentParentSessionEntry,
             overrides: params,
             newExplicitChild: createdNewEntry && Boolean(canonicalParentSessionKey),
-            newDashboardRoot:
-              createdNewEntry && Boolean(dashboardParentSessionKey) && !explicitParentSessionKey,
+            newDashboardRoot: newStandaloneRoot && Boolean(dashboardParentSessionKey),
+            newOperatorRoot: newStandaloneRoot && creation?.via === "operator",
             selectedModel: initializedEntry.modelOverride,
           }),
           ...buildSessionParentLink({

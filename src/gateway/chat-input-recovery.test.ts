@@ -365,10 +365,26 @@ describe("interrupted chat input recovery", () => {
         expect(createRestartRecoveryOperatorSource(params)).toEqual(
           createOperatorInputRecoverySource(params),
         );
-        expect(createOperatorInputRecoverySource(params)).toMatchObject({
+        const source = expectDefined(createOperatorInputRecoverySource(params), "recovery source");
+        expect(source).toMatchObject({
           sessionId: fixture.target.sessionId,
           sourceRunId: fixture.target.sourceRunId,
         });
+        expect(source.snapshot.authPolicy).toBe(captured.authority.recoverySnapshot?.authPolicy);
+        expect(Reflect.set(source.snapshot.authPolicy, "role", "changed")).toBe(false);
+        expect(captured.authority.recoverySnapshot?.authPolicy.role).toBe("operator");
+        for (const sourceTool of ["cron_execution", "progress_card_refresh"]) {
+          expect(
+            createRestartRecoveryOperatorSource({
+              ...params,
+              inputProvenance: { kind: "internal_system", sourceTool },
+              requesterOrigin: {
+                sessionKey: params.sessionKey,
+                operatorProfileId: captured.authority.profileId,
+              },
+            }),
+          ).toBeUndefined();
+        }
       } finally {
         captured.release();
       }

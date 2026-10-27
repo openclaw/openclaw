@@ -334,6 +334,7 @@ type CliOptions = GatewayBenchRuntimeOptions & {
   visibleObserver: boolean;
   warmup: number;
   workspaceFanout: boolean;
+  postgres: boolean;
 };
 
 const DEFAULT_CADENCE_MS = 100;
@@ -342,6 +343,7 @@ const DEFAULT_ENTRY = "dist/entry.js";
 const DEFAULT_RUNS = 1;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_WARMUP = 0;
+const POSTGRES_CONNECTION_ENV = "OPENCLAW_BENCH_POSTGRES_CONNECTION";
 const MOCK_RESPONSE_CHUNK_DELAY_MS = 1_000;
 const STREAM_SUCCESS_MARKER = "OpenClaw gateway concurrency benchmark streaming response.";
 const TOOL_SUCCESS_MARKER = "OPENCLAW_E2E_DRAFTPROOF";
@@ -377,6 +379,7 @@ const BOOLEAN_FLAGS = new Set([
   "--help",
   "-h",
   "--json",
+  "--postgres",
   "--control-plane",
   "--no-diagnostics-timeline",
   "--activity-summary-diagnostics",
@@ -442,6 +445,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
   const options: CliOptions = {
     ...parseGatewayBenchRuntimeOptions(flags),
     provider,
+    postgres: flags.has("--postgres"),
     agentCount: boundedInt("--agent-count", 1, MAX_AGENT_COUNT),
     browserHistoryMessages: boundedInt("--browser-history-messages", 80, 500),
     browserSessionClicks: boundedInt("--browser-session-clicks", 0, 20, true),
@@ -626,6 +630,7 @@ Options:
   --resource-cgroup <path> Writable delegated cgroup-v2 parent; benchmark owns a unique child
   --transpiler-cache <path> Explicit Gateway Bun transpiler-cache directory (prime separately)
   --provider <name> mock (default) or openai (live ${LIVE_GATEWAY_MODEL_ID}; requires OPENAI_API_KEY)
+  --postgres        Use PostgreSQL from ${POSTGRES_CONNECTION_ENV} (default: SQLite; disposable fixture only)
   --agent-count <n> Configured agents sharing the fixed session inventory (default: 1, max: ${MAX_AGENT_COUNT})
   --browser-history-messages <n> Messages per browser click target, independent of inventory history (default: 80, max: 500)
   --browser-session-clicks <n> Click n existing sessions and revisit one during load (default: 0, max: 20; requires built UI and Chromium)
@@ -1266,6 +1271,18 @@ function buildConfig(
         })
       : undefined;
   return writeGatewayBenchConfig(root, config, { agentList, pluginFixtures });
+}
+
+function configurePostgresBenchConfig(configPath: string): void {
+  const config: OpenClawConfig = JSON.parse(readFileSync(configPath, "utf8"));
+  config.database = {
+    engine: "postgres",
+    postgres: {
+      connection: { source: "env", provider: "default", id: POSTGRES_CONNECTION_ENV },
+      schemaPrefix: `gwbench_${randomUUID().replaceAll("-", "").slice(0, 16)}`,
+    },
+  } satisfies NonNullable<OpenClawConfig["database"]>;
+  writeFileSync(configPath, JSON.stringify(config));
 }
 
 async function readGatewayProtocolVersion(entry: string): Promise<number> {
@@ -2017,6 +2034,7 @@ async function runGatewaySample(
   let agentWarmupStarted = false;
   let providerBeforeLoad: number | undefined;
   let providerAfterLoad: number | undefined;
+  const postgresConnection = options.postgres ? process.env[POSTGRES_CONNECTION_ENV] : undefined;
 
   try {
     if (
@@ -2027,6 +2045,9 @@ async function runGatewaySample(
     }
     if (options.provider === "openai" && !process.env.OPENAI_API_KEY?.trim()) {
       throw new Error("OpenAI benchmark requires OPENAI_API_KEY");
+    }
+    if (options.postgres && !postgresConnection?.trim()) {
+      throw new Error(`--postgres requires ${POSTGRES_CONNECTION_ENV}`);
     }
     const fixtureRoot = mkdtempSync(
       path.join(realpathSync(tmpdir()), "openclaw-gateway-concurrency-"),
@@ -2072,6 +2093,9 @@ async function runGatewaySample(
         Boolean(options.durationMs && options.toolEvents && options.workspaceFanout),
       );
       const workersPath = path.join(fixtureRoot, "workers.jsonl");
+      if (options.postgres) {
+        configurePostgresBenchConfig(configPath);
+      }
       if (options.controlUiLoad) {
         const config = JSON.parse(readFileSync(configPath, "utf8"));
         config.gateway.auth = { mode: "token", token: controlUiToken };
@@ -2201,6 +2225,7 @@ async function runGatewaySample(
                   }
                 : {}),
               OPENCLAW_SKIP_CHANNELS: "1",
+              ...(postgresConnection ? { [POSTGRES_CONNECTION_ENV]: postgresConnection } : {}),
             },
           }),
           OPENAI_API_KEY: live ? process.env.OPENAI_API_KEY : "gateway-concurrency-benchmark",
@@ -3695,6 +3720,7 @@ async function main(): Promise<void> {
   });
   const payload = {
     agentCount: options.agentCount,
+    databaseEngine: options.postgres ? "postgres" : "sqlite",
     browserHistoryMessages: options.browserHistoryMessages,
     browserSessionClicks: options.browserSessionClicks,
     cadenceMs: options.cadenceMs,
@@ -3784,6 +3810,7 @@ export const testing = {
   createTurnEvidence,
   captureChildOutput,
   buildConfig,
+  configurePostgresBenchConfig,
   formatProbeFailure,
   formatRunFailure,
   requestHttp,

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
+import { isEmbeddedStandaloneModule, resolveRuntimeScriptEnv } from "../../cli-invocation.mjs";
 import { resolveRuntimeProcessDistRoot } from "../../runtime-process-bootstrap.generated.mjs";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 
@@ -65,6 +66,16 @@ export function resolveRuntimeWorkerArgv(url: URL, execPath = process.execPath):
   return runtimeNeedsTypeScriptLoader(entry, execPath)
     ? ["--import", import.meta.resolve("tsx"), entry]
     : [...resolveRuntimeArgs(execPath), entry];
+}
+
+/** Self-hosted embedded entries use the image dispatcher; transferred scripts use Bun's runner. */
+export function resolveRuntimeWorkerEnv(url: URL, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (isEmbeddedStandaloneModule(url.href)) {
+    const embeddedEnv = { ...env };
+    delete embeddedEnv.BUN_BE_BUN;
+    return embeddedEnv;
+  }
+  return resolveRuntimeScriptEnv(env);
 }
 
 /** Select the source Worker preload without feeding Node's TypeScript loader to Bun. */

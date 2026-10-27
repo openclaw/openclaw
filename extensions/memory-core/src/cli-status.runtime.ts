@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
+  formatCliJsonFailure,
   formatErrorMessage,
   setVerbose,
   shortenHomePath,
@@ -159,9 +160,11 @@ async function runSelectedMemoryProviderStatus(
   owner: string,
 ) {
   if (opts.deep || opts.index || opts.fix) {
-    defaultRuntime.error(
-      `memory status --deep, --index, and --fix inspect Memory Core's own index, but plugins.slots.memory selects "${owner}". Run "openclaw memory index" to maintain the Memory Core sidecar index.`,
-    );
+    const message = `memory status --deep, --index, and --fix inspect Memory Core's own index, but plugins.slots.memory selects "${owner}". Run "openclaw memory index" to maintain the Memory Core sidecar index.`;
+    defaultRuntime.error(message);
+    if (opts.json) {
+      defaultRuntime.writeJson(formatCliJsonFailure(message));
+    }
     process.exitCode = 1;
     return;
   }

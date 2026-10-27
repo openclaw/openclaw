@@ -3,8 +3,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import "./chat-audio-player.tsx";
 import { CHAT_AUDIO_WAVEFORM_MAX_BYTES } from "./chat-audio-waveform.ts";
+import "./chat-audio-player.tsx";
+import { stubManualIntersectionObserver } from "./chat-media-observer.test-support.ts";
 
 type ChatAudioPlayer = HTMLElementTagNameMap["openclaw-chat-audio-player"];
 
@@ -117,31 +118,7 @@ async function createPlayer(
 
 function observeIntersections() {
   const callbacks: Array<() => void> = [];
-  vi.stubGlobal(
-    "IntersectionObserver",
-    class {
-      private readonly targets = new Set<Element>();
-      constructor(private readonly callback: IntersectionObserverCallback) {}
-      observe(target: Element) {
-        this.targets.add(target);
-        callbacks.push(() => {
-          if (this.targets.has(target)) {
-            // SAFETY: The viewport owner reads only target and isIntersecting.
-            this.callback(
-              [{ target, isIntersecting: true } as IntersectionObserverEntry],
-              this as unknown as IntersectionObserver,
-            );
-          }
-        });
-      }
-      unobserve(target: Element) {
-        this.targets.delete(target);
-      }
-      disconnect() {
-        this.targets.clear();
-      }
-    },
-  );
+  stubManualIntersectionObserver((_target, notify) => callbacks.push(() => notify(true)));
   return () => callbacks.shift()?.();
 }
 
@@ -476,13 +453,19 @@ describe("ChatAudioPlayer", () => {
     async (change) => {
       const intersect = observeIntersections();
       mockAudioContext();
-      const observe = vi.fn();
-      const disconnect = vi.fn();
+      const targets = new Set<Element>();
       vi.stubGlobal(
         "ResizeObserver",
         class {
-          observe = observe;
-          disconnect = disconnect;
+          observe(target: Element) {
+            targets.add(target);
+          }
+          unobserve(target: Element) {
+            targets.delete(target);
+          }
+          disconnect() {
+            targets.clear();
+          }
         },
       );
       vi.stubGlobal(
@@ -503,8 +486,7 @@ describe("ChatAudioPlayer", () => {
       await waitForSolid(() => expect(waveformElement(player)).not.toBeNull());
       const waveform = waveformElement(player)!;
       const media = player.querySelector("audio")!;
-      expect(observe).toHaveBeenCalledExactlyOnceWith(waveform);
-      expect(disconnect).not.toHaveBeenCalled();
+      expect(targets.has(waveform)).toBe(true);
       expect(media.getAttribute("src")).toBe("blob:waveform-disposal");
       const { pause } = mockActivePlayback(media);
       if (change === "unmount") {
@@ -520,7 +502,7 @@ describe("ChatAudioPlayer", () => {
         );
       }
       expect(waveform.isConnected).toBe(false);
-      expect(disconnect).toHaveBeenCalledOnce();
+      expect(targets.has(waveform)).toBe(false);
       expect(pause).toHaveBeenCalledOnce();
     },
   );

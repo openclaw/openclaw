@@ -1,9 +1,13 @@
 import path from "node:path";
+import type { PermissionExec as ExecFn } from "@openclaw/fs-safe/advanced";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
-import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  listAgentIds,
+  resolveAgentConfig,
+} from "../agents/agent-scope-config.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -18,11 +22,7 @@ import {
 } from "../gateway/auth-config-utils.js";
 import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
-import {
-  type ExecApprovalsFile,
-  loadExecApprovals,
-  resolveExecModePolicy,
-} from "../infra/exec-approvals.js";
+import { type ExecApprovalsFile, loadExecApprovals } from "../infra/exec-approvals.js";
 import {
   normalizeConfiguredSafeBins,
   normalizeConfiguredTrustedSafeBinDirs,
@@ -52,7 +52,6 @@ import type {
 } from "./audit.types.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import { collectExecFilesystemPolicyDriftHits } from "./exec-filesystem-policy.js";
-import type { ExecFn } from "./windows-acl.js";
 
 type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
 type ProbeGatewayFn = typeof import("../gateway/probe.js").probeGateway;
@@ -487,7 +486,6 @@ function collectExecRuntimeFindings(
   }
 
   const agents = listAgentEntries(cfg).filter((entry) => typeof entry.id === "string");
-  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const riskyAgents = agents
     .filter(
       (entry) =>
@@ -510,41 +508,38 @@ function collectExecRuntimeFindings(
     });
   }
 
-  const inherited = resolveExecModePolicy({
-    mode: cfg.tools?.exec?.mode,
-    security: cfg.tools?.exec?.security ?? "deny",
-    ask: cfg.tools?.exec?.ask ?? "off",
+  // Judge host exec the way the runtime runs it: an unsandboxed scope with no
+  // exec settings runs security=full, ask=off (prepareExecDefaults), not deny.
+  const defaultsExec = cfg.tools?.exec;
+  const effectiveExecScopes = listAgentIds(cfg).map((agentId) => {
+    const exec = resolveAgentConfig(cfg, agentId)?.tools?.exec;
+    const resolved = resolveExecDefaults({
+      cfg,
+      agentId,
+      // Non-main mode leaves each agent's main session on the host.
+      sandboxAvailable: resolveSandboxConfigForAgent(cfg, agentId).mode === "all",
+      execApprovals: approvals,
+    });
+    // Explicit full trust or switched-off approvals is an operator choice worth a
+    // finding on its own; a bare default only counts once open channels reach it.
+    const configured =
+      (exec?.security ?? defaultsExec?.security) === "full" ||
+      (exec?.mode ?? defaultsExec?.mode) === "full" ||
+      (exec?.ask ?? defaultsExec?.ask) === "off";
+    return { id: agentId, security: resolved.security, host: resolved.host, configured };
   });
-  const effectiveExecScopes = Array.from(
-    new Map(
-      [
-        {
-          id: defaultAgentId ?? "global",
-          security: inherited.security,
-          host: cfg.tools?.exec?.host ?? "auto",
-        },
-        ...agents.map((entry) => ({
-          id: entry.id,
-          security: resolveExecModePolicy({
-            mode: entry.tools?.exec?.mode,
-            security: entry.tools?.exec?.security ?? inherited.security,
-            ask: entry.tools?.exec?.ask ?? inherited.ask,
-          }).security,
-          host: entry.tools?.exec?.host ?? cfg.tools?.exec?.host ?? "auto",
-        })),
-      ].map((entry) => [entry.id, entry] as const),
-    ).values(),
-  );
   const fullExecScopes = effectiveExecScopes.filter((entry) => entry.security === "full");
   const execEnabledScopes = effectiveExecScopes.filter((entry) => entry.security !== "deny");
 
-  if (fullExecScopes.length > 0) {
+  const configuredFullScopes = fullExecScopes.filter((entry) => entry.configured);
+
+  if (configuredFullScopes.length > 0) {
     findings.push({
       checkId: "tools.exec.security_full_configured",
       severity: openExecSurfacePaths.length > 0 ? "critical" : "warn",
       title: "Exec security=full is configured",
       detail:
-        `Full exec trust is enabled for: ${fullExecScopes.map((entry) => entry.id).join(", ")}.` +
+        `Full exec trust is enabled for: ${configuredFullScopes.map((entry) => entry.id).join(", ")}.` +
         (openExecSurfacePaths.length > 0
           ? ` Open channel access was also detected at:\n${openExecSurfacePaths.map((entry) => `- ${entry}`).join("\n")}`
           : ""),

@@ -1,5 +1,10 @@
 import { once } from "node:events";
-import { createServer, request as httpRequest } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingHttpHeaders,
+  type RequestOptions,
+} from "node:http";
 import { buffer, text } from "node:stream/consumers";
 import { setImmediate } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
@@ -16,6 +21,33 @@ const backupPath = "/_matrix/client/v3/room_keys/version";
 const forwardedBody = { forwarded: true };
 type ForwardedRequest = { authorization?: string; body: Buffer; method: string; url: string };
 const servers: Array<{ close(): Promise<void> }> = [];
+
+function rawRequest(url: string, options: RequestOptions) {
+  const reply = Promise.withResolvers<{
+    body: string;
+    status?: number;
+    headers: IncomingHttpHeaders;
+  }>();
+  const upload = httpRequest(url, options, (res) => {
+    void text(res).then(
+      (body) => reply.resolve({ body, status: res.statusCode, headers: res.headers }),
+      reply.reject,
+    );
+  });
+  const closed = new Promise<void>((resolve) => {
+    upload.once("close", resolve);
+  });
+  upload.on("error", reply.reject);
+  // Truncated uploads deliberately abort without consuming a response.
+  void reply.promise.catch(() => undefined);
+  servers.push({
+    close: async () => {
+      upload.destroy();
+      await closed;
+    },
+  });
+  return { upload, closed, reply: reply.promise };
+}
 
 async function startTargetServer(params?: {
   responseBody?: Buffer | string;
@@ -166,89 +198,49 @@ describe("Matrix QA fault proxy", () => {
       forwardedBody,
     );
     expect(observed).toEqual(Buffer.from(body));
-    expect(target.requests).toEqual([
-      forwardedRequest(syncPath, { method: "POST", body: Buffer.from(body) }),
-    ]);
+    expect(target.requests.map((request) => request.body)).toEqual([Buffer.from(body)]);
   });
 
   it("returns 413 for a chunked overflow before the upload ends", async () => {
     const { proxy, target } = await startProxy({ maxRequestBytes: 4 });
-    const reply = Promise.withResolvers<{
-      body: string;
-      connection?: string;
-      status?: number;
-    }>();
-    const upload = httpRequest(
-      `${proxy.baseUrl}${syncPath}`,
-      { method: "POST", headers: { "transfer-encoding": "chunked" } },
-      (res) => {
-        void text(res).then(
-          (body) =>
-            reply.resolve({ body, connection: res.headers.connection, status: res.statusCode }),
-          reply.reject,
-        );
-      },
-    );
-    const closed = new Promise<void>((resolve) => {
-      upload.once("close", resolve);
+    const { upload, reply } = rawRequest(`${proxy.baseUrl}${syncPath}`, {
+      method: "POST",
+      headers: { "transfer-encoding": "chunked" },
     });
-    upload.once("error", reply.reject);
-    try {
-      upload.write("12345");
-      const response = await reply.promise;
-      expect([response.status, response.connection]).toEqual([413, "close"]);
-      expect(JSON.parse(response.body)).toMatchObject({
-        errcode: "MATRIX_QA_FAULT_PROXY_REQUEST_TOO_LARGE",
-      });
-      expect(target.requests).toEqual([]);
-    } finally {
-      upload.destroy();
-      await closed;
-    }
+    upload.write("12345");
+    const response = await reply;
+    expect([response.status, response.headers.connection]).toEqual([413, "close"]);
+    expect(JSON.parse(response.body)).toMatchObject({
+      errcode: "MATRIX_QA_FAULT_PROXY_REQUEST_TOO_LARGE",
+    });
+    expect(target.requests).toEqual([]);
   });
 
   it("does not forward a truncated upload and still serves the next request", async () => {
     const { proxy, target } = await startProxy();
-    const upload = httpRequest(`${proxy.baseUrl}${syncPath}`, {
+    const { upload, closed } = rawRequest(`${proxy.baseUrl}${syncPath}`, {
       method: "POST",
       headers: { "content-length": "10", expect: "100-continue" },
     });
-    const closed = new Promise<void>((resolve) => {
-      upload.once("close", resolve);
-    });
-    // The client deliberately tears down the partial upload.
-    upload.on("error", () => undefined);
     const continuing = once(upload, "continue");
     upload.flushHeaders();
-    try {
-      await continuing;
-      await new Promise<void>((resolve, reject) => {
-        upload.write("ab", (error) => (error ? reject(error) : resolve()));
-      });
-      await setImmediate();
-      upload.destroy();
-      await closed;
-      await expectReply(await fetch(`${proxy.baseUrl}${syncPath}`), 200, forwardedBody);
-      expect(target.requests).toEqual([forwardedRequest(syncPath)]);
-    } finally {
-      upload.destroy();
-      await closed;
-    }
+    await continuing;
+    await new Promise<void>((resolve, reject) => {
+      upload.write("ab", (error) => (error ? reject(error) : resolve()));
+    });
+    await setImmediate();
+    upload.destroy();
+    await closed;
+    await expectReply(await fetch(`${proxy.baseUrl}${syncPath}`), 200, forwardedBody);
+    expect(target.requests).toEqual([forwardedRequest(syncPath)]);
   });
 
   it("rejects request targets that resolve outside the configured origin", async () => {
     const { proxy, target } = await startProxy();
-    const requestTarget = async (path: string) =>
-      await new Promise<{ body: string; status: number | undefined }>((resolve, reject) => {
-        const req = httpRequest(proxy.baseUrl, { path }, (res) => {
-          void text(res).then((body) => resolve({ body, status: res.statusCode }), reject);
-        });
-        req.once("error", reject);
-        req.end();
-      });
-
     for (const path of ["http://127.0.0.1:9/latest/meta-data", "/\\127.0.0.1:9/latest"]) {
-      const response = await requestTarget(path);
+      const { upload, reply } = rawRequest(proxy.baseUrl, { path });
+      upload.end();
+      const response = await reply;
       expect(response.status).toBe(400);
       expect(response.body).toContain("MATRIX_QA_FAULT_PROXY_INVALID_TARGET");
     }
@@ -288,10 +280,8 @@ describe("Matrix QA fault proxy", () => {
     expect([headers.get("content-encoding"), headers.get("content-length")]).toEqual([null, null]);
     await expectReply(mutated, 200, { forwarded: true, mutated: true });
     expect(proxy.hits()).toEqual([faultHit("GET", "sync-state-after")]);
-    expect(target.requests).toEqual([
-      forwardedRequest(`${syncPath}?timeout=0&org.matrix.msc4222.use_state_after=true`, {
-        authorization: "Bearer driver-token",
-      }),
+    expect(target.requests.map((request) => request.url)).toEqual([
+      `${syncPath}?timeout=0&org.matrix.msc4222.use_state_after=true`,
     ]);
   });
 

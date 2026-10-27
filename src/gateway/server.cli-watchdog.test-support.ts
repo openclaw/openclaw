@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -182,13 +181,12 @@ export async function createWatchdogFixture() {
         },
       },
     });
-    const modelRef = "anthropic/claude-sonnet-4-6";
     const token = "freeze-fixture";
     const cfg = createClaudeCliGatewayConfig(
       state.workspaceDir,
-      modelRef,
+      "anthropic/claude-sonnet-4-6",
       token,
-    ) satisfies OpenClawConfig;
+    );
     gateway = await gatewayFixture.startGatewayWithClient({
       cfg,
       configPath: state.configPath,

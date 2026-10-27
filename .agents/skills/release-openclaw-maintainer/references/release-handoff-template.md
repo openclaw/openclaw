@@ -10,6 +10,18 @@ Ship `<version>` on `<channel>` and stop when `<terminal success criteria>`.
 After compaction or resume, replace this section with the latest explicit
 operator steering. Do not preserve superseded scope.
 
+## Ownership and authority
+
+- owner session: `<current owner and predecessor, if taking over>`
+- manager session: `<coordinator or none>`
+- release kind and base: `<patch | feature; exact baseline tag/branch/SHA>`
+- version decision: `<explicit version | approved resolved version>`
+- preparation/backport authority: `<instruction and approved set or selection scope>`
+- publication authority: `<held | beta management default | explicit approval; source and scope>`
+- intake: `<open | frozen; pending approved changes or next-release queue>`
+- handoff: `<predecessor stopped writing; successor acknowledgement or pending>`
+- next checkpoint: `<candidate approval | publication | recovery | closeout>`
+
 ## Immutable state
 
 - track: `<regular beta/stable | extended-stable>`
@@ -57,6 +69,13 @@ operator steering. Do not preserve superseded scope.
 - macOS preflight/publish run ids: `<preflight run/attempt, publish run/attempt, appcast PR or none>`
 - immutable successful children: `<run ids / artifacts or none>`
 - registry/provenance readback: `<artifact or command result>`
+
+## Hotfix tracking
+
+When backports are in scope, include the ledger release ID, assessed head SHA,
+and a link to scan/selection evidence. Note unresolved or deferred fixes and any
+updates still to sync. If using local evidence because access is unavailable,
+link it and state why; an unavailable ledger is not a publication blocker.
 
 ## Publication surfaces
 

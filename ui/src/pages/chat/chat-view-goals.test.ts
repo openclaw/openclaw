@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatGoalAction, ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -45,19 +46,14 @@ function renderGoal(goal: Goal = {}, props: Parameters<typeof renderChat>[0] = {
     sessionId: "goal-session",
     kind: "direct",
     updatedAt: 2,
-    goal: {
-      schemaVersion: 1,
-      id: "goal-1",
-      objective,
-      status: "active",
+    goal: createSessionGoalFixture("goal-1", objective, {
       createdAt: Date.now() - 15_000,
       updatedAt: 2,
       tokenStart: 100,
       tokensUsed: 12_400,
       tokenBudget: 50_000,
-      continuationTurns: 0,
       ...goal,
-    },
+    }),
   };
   renderChat({ ...props, selectedSession });
 }

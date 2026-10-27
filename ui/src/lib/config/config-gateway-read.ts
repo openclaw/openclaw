@@ -1,5 +1,5 @@
 import { err as failure, ok, type Result } from "@openclaw/normalization-core/result";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { configMutationFailure } from "./config-mutation-error.ts";

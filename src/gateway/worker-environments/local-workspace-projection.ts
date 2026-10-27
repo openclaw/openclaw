@@ -21,6 +21,7 @@ import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-
 import { projectionOperations } from "./local-workspace-state.js";
 import { withLocalWorkspaceStore, type LocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+import { OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX } from "./workspace-manifest-comparison.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 
 type LocalWorkspaceCustody = {
@@ -214,10 +215,6 @@ async function runLocalWorkspaceProjection<T>(
   const workerAuthority: WorktreeWorkerAuthority = {
     ...store.workerAuthority,
     predicates: owner.workerAuthority?.predicates ?? store.workerAuthority.predicates,
-    assertCurrent: () => {
-      store.workerAuthority.assertCurrent?.();
-      owner.workerAuthority?.assertCurrent?.();
-    },
   };
   let previous = store.get();
   // A reset may recover its prior result; another session incarnation cannot adopt it.
@@ -256,6 +253,12 @@ async function runLocalWorkspaceProjection<T>(
       : undefined;
   try {
     return await run(operations, quiescence);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX)) {
+      const { describeLocalWorkspaceRecovery } = await import("./local-workspace-recovery.js");
+      throw await describeLocalWorkspaceRecovery(error, owner, operations);
+    }
+    throw error;
   } finally {
     // Only acknowledged journal changes allow the frozen guest to resume.
     const retained = store.get();

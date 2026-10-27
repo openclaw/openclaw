@@ -495,6 +495,44 @@ describe("trajectory runtime", () => {
     expect(parsed.data.truncated).toBeUndefined();
   });
 
+  it("preserves non-JSON leaves and custom JSON results in captured events", async () => {
+    const writes: string[] = [];
+    const recorder = expectTrajectoryRuntimeRecorder(await createCapturedRuntimeRecorder(writes));
+    const error = new Error("synthetic failure");
+    error.stack = "synthetic stack";
+    recorder.recordEvent("tool.result", {
+      count: 123n,
+      callback: () => {},
+      values: [undefined, Number.NaN, 1n, () => {}],
+      custom: {
+        toJSON: () => ({
+          count: 456n,
+          error,
+          bytes: new Uint8Array([1, 2]),
+          callback: () => {},
+        }),
+      },
+    });
+
+    expect(JSON.parse(expectDefined(writes[0], "captured event")).data).toEqual({
+      count: "123",
+      callback: "[Function]",
+      values: [null, null, "1", "[Function]"],
+      custom: {
+        count: "456",
+        error: { name: "Error", message: "synthetic failure", stack: "synthetic stack" },
+        bytes: { type: "Uint8Array", data: "AQI=" },
+        callback: "[Function]",
+      },
+    });
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    recorder.recordEvent("tool.result", { toJSON: () => circular });
+    recorder.recordEvent("session.ended", { status: "success" });
+    expect(writes).toHaveLength(2);
+    expect(JSON.parse(expectDefined(writes[1], "terminal event")).seq).toBe(2);
+  });
+
   it("keeps structured tool output and usage below the event byte limit", async () => {
     const writes: string[] = [];
     const recorder = expectTrajectoryRuntimeRecorder(await createCapturedRuntimeRecorder(writes));

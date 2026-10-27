@@ -73,6 +73,35 @@ async function seedYieldedParent() {
   expect(loadSessionEntry(target)?.status).toBeUndefined();
 }
 
+function parentRun(route: string, overrides: Parameters<typeof createActiveRun>[1] = {}) {
+  const parent = createActiveRun(sessionKey, {
+    runId,
+    sessionId,
+    agentId: "main",
+    queued: route.startsWith("reserved"),
+    ...overrides,
+  });
+  if (!route.startsWith("reserved")) {
+    rpcSourceTesting.set(runId, parent);
+  }
+  return parent;
+}
+
+function chatAbort(
+  context: ReturnType<typeof abortContext>,
+  overrides: Partial<
+    Omit<Parameters<typeof invokeChatAbortHandler>[0], "handler" | "context">
+  > = {},
+) {
+  return invokeChatAbortHandler({
+    handler: handleChatAbortRequest,
+    context,
+    request: { sessionKey, runId },
+    client: { connect: { scopes: ["operator.admin"] } },
+    ...overrides,
+  });
+}
+
 it.each([
   "reserved chat",
   "indexed chat",
@@ -93,16 +122,9 @@ it.each([
     });
   }
   const context = abortContext();
-  const parent = createActiveRun(sessionKey, {
-    runId,
-    sessionId,
-    agentId: "main",
-    queued: route.startsWith("reserved"),
+  const parent = parentRun(route, {
     controlUiVisible: route.startsWith("hidden") ? false : undefined,
   });
-  if (!route.startsWith("reserved")) {
-    rpcSourceTesting.set(runId, parent);
-  }
   const cancel = vi.fn(async () => ({ killed: 1, cancelledRequesters: [requester] }));
   installHarness(async (params, run) => {
     expect(params).toMatchObject(requester);
@@ -113,13 +135,7 @@ it.each([
   if (route === "indexed sessions") {
     await stopSession(sessionKey, respond, context, { runId }, client);
   } else {
-    await invokeChatAbortHandler({
-      handler: handleChatAbortRequest,
-      context,
-      request: { sessionKey: requestedKey, runId },
-      respond,
-      client,
-    });
+    await chatAbort(context, { request: { sessionKey: requestedKey, runId }, respond, client });
   }
   expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
   expect(parent.input.abortSignal.aborted).toBe(true);
@@ -131,16 +147,7 @@ it.each(["reserved", "indexed"] as const)(
   async (route) => {
     await seedYieldedParent();
     const context = abortContext();
-    const parent = createActiveRun(sessionKey, {
-      runId,
-      sessionId,
-      agentId: "main",
-      queued: route === "reserved",
-      owner: { connId: "owner" },
-    });
-    if (route === "indexed") {
-      rpcSourceTesting.set(runId, parent);
-    }
+    const parent = parentRun(route, { owner: { connId: "owner" } });
     const client = { connId: "owner", connect: { scopes: ["operator.write"] }, invalidated: false };
     const cancel = vi.fn(async () => ({ killed: 1, cancelledRequesters: [requester] }));
     const prepare = vi.fn();
@@ -149,23 +156,15 @@ it.each(["reserved", "indexed"] as const)(
       client.invalidated = true;
       return run(cancel);
     });
-    const foreignResponse = await invokeChatAbortHandler({
-      handler: handleChatAbortRequest,
-      context,
-      request: { sessionKey, runId },
+    const foreignResponse = await chatAbort(context, {
       client: { connId: "foreign", connect: { scopes: ["operator.write"] } },
     });
     expectAbortFailure(foreignResponse, "unauthorized", "INVALID_REQUEST");
     expect(prepare).not.toHaveBeenCalled();
     expect(parent.input.abortSignal.aborted).toBe(false);
-    await expect(
-      invokeChatAbortHandler({
-        handler: handleChatAbortRequest,
-        context,
-        request: { sessionKey, runId },
-        client,
-      }),
-    ).rejects.toThrow("Gateway requester authority changed");
+    await expect(chatAbort(context, { client })).rejects.toThrow(
+      "Gateway requester authority changed",
+    );
     expect(prepare).toHaveBeenCalledOnce();
     expect(cancel).not.toHaveBeenCalled();
     // Reserved sources stop before native preparation; accepted parent effects remain.
@@ -178,16 +177,7 @@ it.each(["reserved", "indexed"] as const)(
   async (route) => {
     await seedYieldedParent();
     const context = abortContext();
-    const parent = createActiveRun(sessionKey, {
-      runId,
-      sessionId,
-      agentId: "main",
-      queued: route === "reserved",
-      controlUiVisible: false,
-    });
-    if (route === "indexed") {
-      rpcSourceTesting.set(runId, parent);
-    }
+    const parent = parentRun(route, { controlUiVisible: false });
     const cancel = vi.fn(async () => ({ killed: 1, cancelledRequesters: [requester] }));
     installHarness((_params, run) => run(cancel));
     const read = sessionUtils.loadGatewaySessionEntryReadOnlyInWorker;
@@ -202,11 +192,8 @@ it.each(["reserved", "indexed"] as const)(
       });
     try {
       await expect(
-        invokeChatAbortHandler({
-          handler: handleChatAbortRequest,
-          context,
+        chatAbort(context, {
           request: { sessionKey: "agent:main:other-conversation", runId },
-          client: { connect: { scopes: ["operator.admin"] } },
         }),
       ).rejects.toThrow("Run changed before cancellation; retry Stop.");
       expect(parent.input.abortSignal.aborted).toBe(false);
@@ -313,8 +300,7 @@ it.each(["completed", "replaced", "retargeted", "queued successor"] as const)(
       lifecycleRevision,
     });
     const context = abortContext();
-    const parent = createActiveRun(sessionKey, { runId, sessionId, agentId: "main" });
-    rpcSourceTesting.set(runId, parent);
+    const parent = parentRun("indexed");
     let successor: ReturnType<typeof createActiveRun> | undefined;
     const entered = createDeferred();
     const resume = createDeferred();
@@ -385,19 +371,9 @@ it.each(["embedded", "reserved", "indexed"] as const)(
     const abort = vi.fn(() => clearActiveEmbeddedRun(sessionId, handle, sessionKey));
     const handle = createEmbeddedRunHandle({ runId, abort });
     const context = abortContext();
-    const parent =
-      route === "embedded"
-        ? undefined
-        : createActiveRun(sessionKey, {
-            runId,
-            sessionId,
-            agentId: "main",
-            queued: route === "reserved",
-          });
+    const parent = route === "embedded" ? undefined : parentRun(route);
     if (route === "embedded") {
       setActiveEmbeddedRun(sessionId, handle, sessionKey);
-    } else if (route === "indexed" && parent) {
-      rpcSourceTesting.set(runId, parent);
     }
     await replaceSessionEntry(target, {
       ...original,
@@ -417,13 +393,7 @@ it.each(["embedded", "reserved", "indexed"] as const)(
       if (route === "embedded") {
         await stopSession(sessionKey, respond, context, { runId });
       } else {
-        await invokeChatAbortHandler({
-          handler: handleChatAbortRequest,
-          context,
-          request: { sessionKey, runId },
-          respond,
-          client: { connect: { scopes: ["operator.admin"] } },
-        });
+        await chatAbort(context, { respond });
       }
       expect(prepare).toHaveBeenCalledOnce();
       expect(

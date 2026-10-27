@@ -4,7 +4,10 @@ import type {
   AuditEventInput,
   OutboundMessageProgressInput,
 } from "../../audit/audit-event-types.js";
-import { captureExecutionIdentityAdmissionEnvelope } from "../../audit/execution-identity.test-support.js";
+import {
+  captureExecutionIdentityAdmissionEnvelope,
+  executionIdentityFacts,
+} from "../../audit/execution-identity.test-support.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import { loadCronJobsStore, saveCronJobsStore } from "../../cron/store.js";
 import { makeStore } from "../../cron/store.test-support.js";
@@ -23,14 +26,12 @@ import { NodeWorkerJournalWorker } from "../../node-host/node-worker-journal-wor
 import { NodeWorkerLaunchStore } from "../../node-host/node-worker-launch-store.js";
 import { requireNodeWorkerProcessIdentity } from "../../node-host/node-worker-process-identity.js";
 import { NodeWorkerTurnStore } from "../../node-host/node-worker-turn-store.js";
-import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
@@ -54,6 +55,19 @@ function rows(sql: string) {
   return admit(() => openOpenClawStateDatabase().db.prepare(sql).all());
 }
 
+function launchClaim(prefix: string) {
+  return {
+    launchId: `${prefix}-launch`,
+    planHash: "a".repeat(64),
+    gatewayNamespace: `${prefix}-gateway`,
+    environmentId: `${prefix}-environment`,
+    sessionId: `${prefix}-session`,
+    ownerEpoch: 1,
+    placementGeneration: 1,
+    runId: `${prefix}-run`,
+  };
+}
+
 describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
   "%s first-use owner schema admission",
   (engine) => {
@@ -64,16 +78,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       const launches = new NodeWorkerLaunchStore(journal);
       const turns = new NodeWorkerTurnStore(journal);
       const supervisor = requireNodeWorkerProcessIdentity(process.pid);
-      const claim = {
-        launchId: "pgfacts-launch",
-        planHash: "a".repeat(64),
-        gatewayNamespace: "pgfacts-gateway",
-        environmentId: "pgfacts-environment",
-        sessionId: "pgfacts-session",
-        ownerEpoch: 1,
-        placementGeneration: 1,
-        runId: "pgfacts-run",
-      };
+      const claim = launchClaim("pgfacts");
       try {
         expect(await launches.claim(claim, supervisor, 1)).toMatchObject({
           action: "start",
@@ -114,18 +119,11 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         // A predecessor only knows the physical journal; the next read settles its turn.
         admit(() =>
           runOpenClawStateWriteTransaction(({ db }) =>
-            executeSqliteQuerySync(
-              db,
-              getNodeSqliteKysely<StateDatabase>(db)
-                .updateTable("node_worker_launches")
-                .set({
-                  state: "failed",
-                  error_text: "synthetic predecessor",
-                  completed_at_ms: now + 1,
-                  updated_at_ms: now + 1,
-                })
-                .where("launch_id", "=", claim.launchId),
-            ),
+            db
+              .prepare(`UPDATE node_worker_launches SET state = 'failed',
+              error_text = 'synthetic predecessor', completed_at_ms = ?, updated_at_ms = ?
+              WHERE launch_id = ?`)
+              .run(now + 1, now + 1, claim.launchId),
           ),
         );
         const recovered = await turns.get(next.launchId);
@@ -153,6 +151,81 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           state: "cancelled",
           errorText: "node worker launch cancelled",
         });
+      } finally {
+        await journal.drain();
+      }
+    });
+
+    it("returns launch claim postimages for successful and zero-row reclaims", async () => {
+      const journal = new NodeWorkerJournalWorker({});
+      const launches = new NodeWorkerLaunchStore(journal);
+      const supervisor = requireNodeWorkerProcessIdentity(process.pid);
+      const predecessor = { pid: 2_147_483_647, startTime: 1 };
+      const claim = launchClaim("postimage");
+      const now = Date.now();
+      const expectPostimage = async (
+        result: Awaited<ReturnType<typeof launches.claim>>,
+        action: "start" | "replay",
+        receipt: object,
+      ) => {
+        expect(result).toMatchObject({ action, receipt });
+        expect(result).toEqual({
+          action,
+          nonterminalCount: 1,
+          receipt: await launches.get(claim.launchId),
+        });
+      };
+      try {
+        const created = await launches.claim(claim, predecessor, 1, now + 7);
+        await expectPostimage(created, "start", {
+          supervisor: predecessor,
+          state: "pending",
+          updatedAtMs: now + 7,
+        });
+        const reclaimed = await launches.claim(claim, supervisor, 1, now);
+        await expectPostimage(reclaimed, "start", {
+          supervisor,
+          state: "pending",
+          updatedAtMs: now + 7,
+        });
+        const bootId = (await launches.get(claim.launchId))?.bootId;
+        admit(() =>
+          runOpenClawStateWriteTransaction(({ db }) => {
+            db.prepare(`UPDATE node_worker_launches SET supervisor_pid = ?,
+              supervisor_start_time = ? WHERE launch_id = ?`).run(
+              predecessor.pid,
+              predecessor.startTime,
+              claim.launchId,
+            );
+            db.prepare("UPDATE node_worker_launch_boots SET boot_id = ? WHERE launch_id = ?").run(
+              "synthetic-old-boot",
+              claim.launchId,
+            );
+            // Exercise an actual zero-row write while preserving every launch constraint.
+            db.exec(
+              engine === "sqlite"
+                ? `CREATE TRIGGER skip_reclaim BEFORE UPDATE OF supervisor_pid ON node_worker_launches
+                   WHEN OLD.launch_id = 'postimage-launch' BEGIN SELECT RAISE(IGNORE); END`
+                : `CREATE FUNCTION skip_reclaim() RETURNS trigger LANGUAGE plpgsql AS
+                     $$ BEGIN RETURN NULL; END $$;
+                   CREATE TRIGGER skip_reclaim BEFORE UPDATE OF supervisor_pid ON node_worker_launches
+                     FOR EACH ROW WHEN (OLD.launch_id = 'postimage-launch')
+                     EXECUTE FUNCTION skip_reclaim()`,
+            );
+          }),
+        );
+        const noClaim = await launches.claim(claim, supervisor, 1, now + 20);
+        await expectPostimage(noClaim, "replay", {
+          supervisor: predecessor,
+          worker: null,
+          state: "pending",
+          updatedAtMs: now + 7,
+        });
+        if (bootId) {
+          expect(noClaim).toHaveProperty("receipt.bootId", bootId);
+        } else {
+          expect(noClaim).not.toHaveProperty("receipt.bootId");
+        }
       } finally {
         await journal.drain();
       }
@@ -257,12 +330,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       const now = Date.now();
       const context = captureOpenClawStateWorkerContext();
       const envelope = captureExecutionIdentityAdmissionEnvelope(
-        {
-          runId: "pgfacts-outbound-run",
-          agentId: "main",
-          ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-          runtime: { kind: "embedded" },
-        },
+        executionIdentityFacts("pgfacts-outbound-run"),
         { now, contextId: "pgfacts-context", executionId: "pgfacts-execution" },
       );
       const base = {

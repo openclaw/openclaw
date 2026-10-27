@@ -4,8 +4,9 @@ import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { Value } from "typebox/value";
 import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { SessionsGoalUpdateParamsSchema } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
+import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { SessionsListResult, SessionGoal } from "../../api/types.ts";
 import { retireStoredGoalOperations } from "../../lib/chat/goal-operation-storage.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -27,17 +28,11 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { createTestPageState } from "./chat-page-state.test-support.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
-const goal: SessionGoal = {
-  schemaVersion: 1,
-  id: "goal-a",
-  objective: "Review the UI",
+const goal: SessionGoal = createSessionGoalFixture("goal-a", "Review the UI", {
   status: "paused",
-  createdAt: 1,
   updatedAt: 2,
-  tokenStart: 0,
   tokensUsed: 10,
-  continuationTurns: 0,
-};
+});
 
 beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
 afterEach(() => {

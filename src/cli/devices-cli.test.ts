@@ -1,8 +1,9 @@
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import "../test-utils/prepare-compiled-subprocesses.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { expectText } from "../test-utils/text-assertions.js";
 import { registerDevicesCli } from "./devices-cli.js";
 import { ExpectedCliError } from "./failure-output.js";
 
@@ -82,14 +83,7 @@ async function refusal(...argv: string[]): Promise<string> {
 }
 const output = () => runtime.log.mock.calls.map(([text]) => text).join("\n");
 const errors = () => stripAnsi(runtime.error.mock.calls.map(([text]) => text).join("\n"));
-function expectText(text: string, included: string[], excluded: string[] = []) {
-  for (const value of included) {
-    expect(text).toContain(value);
-  }
-  for (const value of excluded) {
-    expect(text).not.toContain(value);
-  }
-}
+
 function expectCall(index: number, fields: Record<string, unknown>) {
   expect(callGateway.mock.calls[index]?.[0]).toEqual(expect.objectContaining(fields));
 }

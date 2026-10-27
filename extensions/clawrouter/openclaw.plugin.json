@@ -76,6 +76,7 @@
     ]
   },
   "modelCatalog": {
+    "configuredEndpointDiscovery": ["clawrouter"],
     "discovery": { "clawrouter": "runtime" },
     "runtimeAugment": true,
     "providers": {

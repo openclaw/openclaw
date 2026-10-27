@@ -52,7 +52,11 @@ export type GitReadOperations = {
       /** Previously displayed paths whose Git attributes can affect the cached diff. */
       paths?: string[];
     };
-    output: string | null;
+    output: {
+      key: string;
+      /** A successful status inventory, tied to its physical checkout and HEAD. */
+      cleanWorktree?: { root: string; head: string };
+    } | null;
   };
   "checkout.context": {
     input: { root: string; githubHost?: string };

@@ -48,8 +48,8 @@ export async function loadStatePortDescriptor(
     // v29 removes credential tables; v30 fences policies; v31 adds per-path workspace baselines.
     if (
       backup ||
-      OPENCLAW_STATE_SCHEMA_VERSION !== 32 ||
-      ![24, 25, 26, 27, 28, 29, 30, 31].includes(sourceVersion)
+      OPENCLAW_STATE_SCHEMA_VERSION !== 34 ||
+      ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing shared-state PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -86,10 +86,16 @@ export async function loadStatePortDescriptor(
   const keys = catalog.filter(
     (fact): fact is typeof fact & { value: string[] } => fact.kind === "primaryKey",
   );
-  const sourceSql = (sql: string) => {
+  const sourceSql = (sql: string, schemaSql = sql) => {
     const workspace = legacyWorkspace ? withLegacyLocalWorkspaceManifests(sql) : sql;
     const publication = historical ? withLegacyPublicationDraft(workspace) : workspace;
-    return sourceVersion < 32 ? withLegacyPostgresIndexOrdering(publication) : publication;
+    return sourceVersion < 33
+      ? withLegacyPostgresIndexOrdering(
+          publication,
+          sourceVersion < 32 ? "sqlite" : "schema-nullability",
+          schemaSql,
+        )
+      : publication;
   };
   const schema = (
     entry: Omit<typeof metadata, "fragments" | "sqliteRanges">,
@@ -111,7 +117,7 @@ export async function loadStatePortDescriptor(
         pk: keys.find((fact) => fact.table === name)?.value ?? [],
       })),
       preData: sourceSql(postgres.slice(entry.preData[0], entry.preData[1])),
-      postData: sourceSql(postgres.slice(entry.postData[0], entry.postData[1])),
+      postData: sourceSql(postgres.slice(entry.postData[0], entry.postData[1]), postgres),
       expectedCatalog: catalog.filter((fact) => names.has(fact.table)),
     };
   };

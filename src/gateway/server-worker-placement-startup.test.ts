@@ -47,6 +47,14 @@ function mockDispatch(overrides: Partial<WorkerPlacementDispatchService> = {}) {
 
 type ReconcileGuard = (environmentId: string, reconcileCore: () => Promise<void>) => Promise<void>;
 
+function guardedEnvironments(install: (guard: ReconcileGuard) => () => void | Promise<void>) {
+  return {
+    ...createEnvironments(),
+    get: vi.fn((environmentId: string) => ({ environmentId, state: "provisioning" })),
+    installReconcileEnvironmentGuard: vi.fn(install),
+  };
+}
+
 async function withStoredSession(
   mode: "recovery" | "authority",
   run: (root: string, storePath: string) => Promise<void>,
@@ -413,14 +421,10 @@ describe("worker placement startup health lifetime", () => {
         expect(installedGuard).toBeDefined();
       });
       mockDispatch({ reconcile, resumeProvisioning });
-      const environments = {
-        ...createEnvironments(),
-        get: vi.fn((environmentId: string) => ({ environmentId, state: "provisioning" })),
-        installReconcileEnvironmentGuard: vi.fn((guard: ReconcileGuard) => {
-          installedGuard = guard;
-          return vi.fn();
-        }),
-      };
+      const environments = guardedEnvironments((guard) => {
+        installedGuard = guard;
+        return vi.fn();
+      });
       const runtime = createRuntime({
         placements: placementStoreDefaults(() => placementRows) as never,
         environments: environments as never,
@@ -448,8 +452,8 @@ describe("worker placement startup health lifetime", () => {
           expect(signal?.aborted).toBe(false);
         });
         await guard(provisioning.environmentId, exactCore);
-        expect(resumeProvisioning).toHaveBeenCalledOnce();
         expect(resumeProvisioning.mock.calls[0]?.[0]).toBe(provisioning);
+        expect(resumeProvisioning).toHaveBeenCalledOnce();
         expect(exactCore).toHaveBeenCalledOnce();
 
         placementRows = [];
@@ -499,9 +503,7 @@ describe("worker placement startup health lifetime", () => {
       }),
     });
     const environments = {
-      ...createEnvironments(),
-      get: vi.fn((environmentId: string) => ({ environmentId, state: "provisioning" })),
-      installReconcileEnvironmentGuard: vi.fn((guard: ReconcileGuard) => {
+      ...guardedEnvironments((guard) => {
         installedGuard = guard;
         return async () => {
           events.push("guard:uninstall");
@@ -566,8 +568,6 @@ describe("worker placement startup health lifetime", () => {
     const postCloseCore = vi.fn(async () => {});
     await guard("worker-after-close", postCloseCore);
     expect(postCloseCore).not.toHaveBeenCalled();
-    expect(environments.stop).toHaveBeenCalledOnce();
-
     releaseRecovery.resolve();
     await Promise.all([guardedRecovery, stopping]);
     expect(events).toEqual([
@@ -584,11 +584,7 @@ describe("worker placement startup health lifetime", () => {
 describe("worker placement startup recovery authority", () => {
   it("holds exact session authority through async recovery work after cancellation", async () => {
     await withStoredSession("authority", async (root, storePath) => {
-      mockDispatch({
-        move: vi.fn(),
-        reconcile: vi.fn(),
-        reconcileActive: vi.fn(),
-      });
+      mockDispatch();
       const placement = {
         state: "provisioning",
         generation: 7,

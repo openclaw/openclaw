@@ -85,14 +85,10 @@ interface ExtensionUIDialogOptions {
   timeout?: number;
 }
 
-type WidgetPlacement = "aboveEditor" | "belowEditor";
-
 interface ExtensionWidgetOptions {
   /** Where the widget is rendered. Defaults to "aboveEditor". */
-  placement?: WidgetPlacement;
+  placement?: "aboveEditor" | "belowEditor";
 }
-
-type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
 
 /** Working indicator configuration for the interactive streaming loader. */
 interface WorkingIndicatorOptions {
@@ -102,7 +98,6 @@ interface WorkingIndicatorOptions {
   intervalMs?: number;
 }
 
-type AutocompleteProviderFactory = (current: AutocompleteProvider) => AutocompleteProvider;
 type EditorFactory = (
   tui: TUI,
   theme: EditorTheme,
@@ -131,7 +126,9 @@ export interface ExtensionUIContext {
   notify(message: string, type?: "info" | "warning" | "error"): void;
 
   /** Listen to raw terminal input (interactive mode only). Returns an unsubscribe function. */
-  onTerminalInput(handler: TerminalInputHandler): () => void;
+  onTerminalInput(
+    handler: (data: string) => { consume?: boolean; data?: string } | undefined,
+  ): () => void;
 
   /** Set status text in the footer/status bar. Pass undefined to clear. */
   setStatus(key: string, text: string | undefined): void;
@@ -215,7 +212,7 @@ export interface ExtensionUIContext {
   editor(title: string, prefill?: string): Promise<string | undefined>;
 
   /** Stack additional autocomplete behavior on top of the built-in provider. */
-  addAutocompleteProvider(factory: AutocompleteProviderFactory): void;
+  addAutocompleteProvider(factory: (current: AutocompleteProvider) => AutocompleteProvider): void;
 
   /**
    * Set a custom editor component via factory function.
@@ -540,16 +537,6 @@ interface SessionTreeEvent {
   fromExtension?: boolean;
 }
 
-type SessionEvent =
-  | SessionStartEvent
-  | SessionBeforeSwitchEvent
-  | SessionBeforeForkEvent
-  | SessionBeforeCompactEvent
-  | SessionCompactEvent
-  | SessionShutdownEvent
-  | SessionBeforeTreeEvent
-  | SessionTreeEvent;
-
 /** Fired before each LLM call. Can modify messages. */
 export interface ContextEvent {
   type: "context";
@@ -624,13 +611,11 @@ export interface ToolExecutionEndEvent extends Omit<
   "assistantTurnId" | "executionStarted" | "errorKind" | "hideFromChannelProgress"
 > {}
 
-type ModelSelectSource = "set" | "cycle" | "restore";
-
 interface ModelSelectEvent {
   type: "model_select";
   model: Model;
   previousModel: Model | undefined;
-  source: ModelSelectSource;
+  source: "set" | "cycle" | "restore";
 }
 
 export interface ThinkingLevelSelectEvent {
@@ -670,15 +655,6 @@ interface ToolCallEventBase<TName extends string, TInput> {
   input: TInput;
 }
 
-type BashToolCallEvent = ToolCallEventBase<"bash", BashToolInput>;
-type ReadToolCallEvent = ToolCallEventBase<"read", ReadToolInput>;
-type EditToolCallEvent = ToolCallEventBase<"edit", EditToolInput>;
-type WriteToolCallEvent = ToolCallEventBase<"write", WriteToolInput>;
-type GrepToolCallEvent = ToolCallEventBase<"grep", GrepToolInput>;
-type FindToolCallEvent = ToolCallEventBase<"find", FindToolInput>;
-type LsToolCallEvent = ToolCallEventBase<"ls", LsToolInput>;
-type CustomToolCallEvent = ToolCallEventBase<string, Record<string, unknown>>;
-
 /**
  * Fired before a tool executes. Can block.
  *
@@ -686,14 +662,14 @@ type CustomToolCallEvent = ToolCallEventBase<string, Record<string, unknown>>;
  * Later `tool_call` handlers see earlier mutations. No re-validation is performed after mutation.
  */
 export type ToolCallEvent =
-  | BashToolCallEvent
-  | ReadToolCallEvent
-  | EditToolCallEvent
-  | WriteToolCallEvent
-  | GrepToolCallEvent
-  | FindToolCallEvent
-  | LsToolCallEvent
-  | CustomToolCallEvent;
+  | ToolCallEventBase<"bash", BashToolInput>
+  | ToolCallEventBase<"read", ReadToolInput>
+  | ToolCallEventBase<"edit", EditToolInput>
+  | ToolCallEventBase<"write", WriteToolInput>
+  | ToolCallEventBase<"grep", GrepToolInput>
+  | ToolCallEventBase<"find", FindToolInput>
+  | ToolCallEventBase<"ls", LsToolInput>
+  | ToolCallEventBase<string, Record<string, unknown>>;
 
 interface ToolResultEventBase<TName extends string, TDetails> {
   type: "tool_result";
@@ -706,29 +682,29 @@ interface ToolResultEventBase<TName extends string, TDetails> {
   terminate?: boolean;
 }
 
-type BashToolResultEvent = ToolResultEventBase<"bash", BashToolDetails | undefined>;
-type ReadToolResultEvent = ToolResultEventBase<"read", ReadToolDetails | undefined>;
-type EditToolResultEvent = ToolResultEventBase<"edit", EditToolDetails | undefined>;
-type WriteToolResultEvent = ToolResultEventBase<"write", undefined>;
-type GrepToolResultEvent = ToolResultEventBase<"grep", GrepToolDetails | undefined>;
-type FindToolResultEvent = ToolResultEventBase<"find", FindToolDetails | undefined>;
-type LsToolResultEvent = ToolResultEventBase<"ls", LsToolDetails | undefined>;
-type CustomToolResultEvent = ToolResultEventBase<string, unknown>;
-
 /** Fired after a tool executes. Can modify result. */
 export type ToolResultEvent =
-  | BashToolResultEvent
-  | ReadToolResultEvent
-  | EditToolResultEvent
-  | WriteToolResultEvent
-  | GrepToolResultEvent
-  | FindToolResultEvent
-  | LsToolResultEvent
-  | CustomToolResultEvent;
+  | ToolResultEventBase<"bash", BashToolDetails | undefined>
+  | ToolResultEventBase<"read", ReadToolDetails | undefined>
+  | ToolResultEventBase<"edit", EditToolDetails | undefined>
+  | ToolResultEventBase<"write", undefined>
+  | ToolResultEventBase<"grep", GrepToolDetails | undefined>
+  | ToolResultEventBase<"find", FindToolDetails | undefined>
+  | ToolResultEventBase<"ls", LsToolDetails | undefined>
+  | ToolResultEventBase<string, unknown>;
 
 export type ExtensionEvent =
   | ResourcesDiscoverEvent
-  | SessionEvent
+  | (
+      | SessionStartEvent
+      | SessionBeforeSwitchEvent
+      | SessionBeforeForkEvent
+      | SessionBeforeCompactEvent
+      | SessionCompactEvent
+      | SessionShutdownEvent
+      | SessionBeforeTreeEvent
+      | SessionTreeEvent
+    )
   | ContextEvent
   | BeforeProviderRequestEvent
   | AfterProviderResponseEvent
@@ -1058,8 +1034,6 @@ export interface ExtensionShortcut {
   extensionPath: string;
 }
 
-type HandlerFn = (...args: unknown[]) => Promise<unknown>;
-
 export type SetSessionNameHandler = ExtensionAPI["setSessionName"];
 export type GetSessionNameHandler = ExtensionAPI["getSessionName"];
 export type RefreshToolsHandler = () => void;
@@ -1165,7 +1139,7 @@ export interface Extension {
   path: string;
   resolvedPath: string;
   sourceInfo: SourceInfo;
-  handlers: Map<string, HandlerFn[]>;
+  handlers: Map<string, ((...args: unknown[]) => Promise<unknown>)[]>;
   tools: Map<string, RegisteredTool>;
   messageRenderers: Map<string, MessageRenderer>;
   commands: Map<string, RegisteredCommand>;

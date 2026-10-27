@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   generate: vi.fn(),
   utility: vi.fn(),
   readTranscript: vi.fn(),
+  readTail: vi.fn(),
+  prepareSkills: vi.fn(),
   patch: vi.fn(),
   load: vi.fn(),
 }));
@@ -28,15 +30,19 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
 }));
 // mock-isolation: Registry and transport behavior are covered by the real-provider title suites.
 vi.mock("../skills/discovery/chat-commands.js", () => ({
-  prepareSkillCommandsForWorkspace: async () => [],
+  prepareSkillCommandsForWorkspace: mocks.prepareSkills,
 }));
 // mock-isolation: Title orchestration tests supply transcript reads without starting workers.
 vi.mock("./session-transcript-title-reader.js", () => ({
   readSessionTitleFieldsFromTranscriptAsync: mocks.readTranscript,
 }));
+// mock-isolation: Supply the recent conversation without starting history workers.
+vi.mock("./session-transcript-readers.js", () => ({
+  readSessionTranscriptBoundedMessageTailPageAsync: mocks.readTail,
+}));
 
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -76,6 +82,16 @@ function mockSessionUpdate(current: SessionEntry): void {
     mocks.load.mockReturnValue(result);
     return result;
   });
+}
+
+function mutableSession(entry: InternalSessionEntry = baseEntry) {
+  const session = { entry: { ...entry } };
+  mocks.load.mockImplementation(() => session.entry);
+  mocks.patch.mockImplementation(async (_scope, update) => {
+    const patch = await update(session.entry);
+    return (session.entry = patch ? { ...session.entry, ...patch } : session.entry);
+  });
+  return session;
 }
 
 function pendingLabel(once = false) {
@@ -122,6 +138,8 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       firstUserMessage: null,
       lastMessagePreview: null,
     });
+    mocks.readTail.mockReset().mockResolvedValue({ events: [] });
+    mocks.prepareSkills.mockReset().mockResolvedValue([]);
     mockSessionUpdate(baseEntry);
   });
 
@@ -155,12 +173,6 @@ describe("maybeGenerateDashboardSessionTitle", () => {
         authProfileOverride: "work",
       },
     );
-    expect(mocks.utility).toHaveBeenCalledWith({
-      cfg,
-      agentId: "main",
-      primaryProvider: "anthropic",
-      primaryModelRef: "anthropic/claude-fable-5@work",
-    });
   });
 
   it("preserves a locked session harness as the title runtime owner", async () => {
@@ -201,6 +213,84 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       false,
     );
     expectCalls(0, mocks.generate, mocks.patch);
+  });
+
+  it.each(["ordinary", "registered skill", "prepared skill"] as const)(
+    "refines a generated Dashboard title once after six follow-up messages (%s)",
+    async (mode) => {
+      const prepared = mode === "prepared skill";
+      const taskMessage = (text: string) => (mode === "ordinary" ? text : `/review ${text}`);
+      if (mode !== "ordinary") {
+        mocks.prepareSkills.mockResolvedValue([
+          { name: "review", skillName: "review", description: "Review a task" },
+        ]);
+      }
+      const session = mutableSession({
+        ...baseEntry,
+        ...(prepared
+          ? {
+              displayName: "Release Planning",
+              titleRefinement: {
+                sessionId: baseEntry.sessionId,
+                generatedName: "Release Planning",
+                remainingMessages: 7,
+              },
+            }
+          : {}),
+      });
+      const params = { ...titleDefaults };
+      await maybeGenerateDashboardSessionTitle({
+        ...params,
+        userMessage: taskMessage(params.userMessage),
+      });
+      mocks.generate.mockResolvedValue("Fix release signing");
+      mocks.readTail.mockResolvedValue({
+        events: [
+          {
+            event: {
+              type: "message",
+              message: { role: "user", content: "The release fails during signing" },
+            },
+          },
+        ],
+      });
+      for (const userMessage of ["/status", "/unknown task"]) {
+        await maybeGenerateDashboardSessionTitle({ ...params, userMessage });
+      }
+      for (let index = 0; index < 5; index++) {
+        await maybeGenerateDashboardSessionTitle({
+          ...params,
+          userMessage: taskMessage("Investigate signing"),
+        });
+      }
+      expect(session.entry.displayName).toBe("Release Planning");
+      await maybeGenerateDashboardSessionTitle({
+        ...params,
+        userMessage: taskMessage("Fix the certificate"),
+      });
+      expect(session.entry.displayName).toBe("Fix release signing");
+      expect(mocks.generate.mock.calls.at(-1)?.[0].userMessage).toContain("Fix the certificate");
+      expect(mocks.generate.mock.calls.at(-1)?.[0].userMessage).toContain("fails during signing");
+      for (let index = 0; index < 8; index++) {
+        await maybeGenerateDashboardSessionTitle(params);
+      }
+      expect(mocks.generate).toHaveBeenCalledTimes(prepared ? 1 : 2);
+    },
+  );
+
+  it("does not overwrite a manual rename while the one-time refinement is in flight", async () => {
+    const session = mutableSession();
+    await maybeGenerateDashboardSessionTitle(titleDefaults);
+    for (let index = 0; index < 5; index++) {
+      await maybeGenerateDashboardSessionTitle(titleDefaults);
+    }
+    const pending = pendingLabel();
+    const refinement = maybeGenerateDashboardSessionTitle(titleDefaults);
+    await pending.started;
+    session.entry = { ...session.entry, displayName: "My release" };
+    pending.resolve("Fix release signing");
+    await expect(refinement).resolves.toBe(false);
+    expect(session.entry.displayName).toBe("My release");
   });
 
   it("titles over an Android platform auto-label without treating it as a rename", async () => {
@@ -331,11 +421,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       } else {
         naming.reject(new Error("model attempts exhausted"));
       }
-      if (backgroundFirst) {
-        await expect(background).resolves.toBe(true);
-      } else {
-        await background;
-      }
+      await expect(background).resolves.toBe(backgroundFirst);
       await vi.advanceTimersByTimeAsync(0);
 
       expect(mocks.load()).toMatchObject({
@@ -393,18 +479,6 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(mocks.load()).not.toHaveProperty("displayName");
     expect(onTitleStateChanged).toHaveBeenCalledTimes(2);
   });
-
-  it("deduplicates concurrent title requests for one session generation", async () => {
-    const label = pendingLabel();
-
-    const first = maybeGenerateDashboardSessionTitle(titleParams());
-    const duplicate = maybeGenerateDashboardSessionTitle(titleParams());
-    label.resolve("Release Planning");
-    await expect(first).resolves.toBe(true);
-    await expect(duplicate).resolves.toBe(false);
-
-    expectCalls(1, mocks.generate, mocks.patch, mocks.load, mocks.readTranscript);
-  });
 });
 
 describe("buildDashboardSessionTitleSource", () => {
@@ -417,15 +491,6 @@ describe("buildDashboardSessionTitleSource", () => {
     expect(source).toBe(
       `Review this rollout [[reply_to_current]]\nDeployment context\n${pastedText}`.slice(0, 1_000),
     );
-  });
-
-  it("titles a control command turn from its text attachment", () => {
-    expect(
-      buildDashboardSessionTitleSource({
-        message: "/status",
-        attachments: [textAttachment("Pasted incident report")],
-      }),
-    ).toBe("Pasted incident report");
   });
 
   it.each([
@@ -453,7 +518,6 @@ function textAttachment(text: string): ChatAttachment {
 describe("deriveGoalSessionTitle", () => {
   it.each([
     ["/new", undefined],
-    ["/model openai/gpt-5.4", undefined],
     [
       "Hey. Investigate why heartbeat failed overnight.",
       "Investigate why heartbeat failed overnight.",

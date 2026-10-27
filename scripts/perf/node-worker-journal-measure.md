@@ -32,3 +32,25 @@ caches on the internal disk. Node `--cpu-prof` and the existing
 This workload reaches the journal through its worker transport while the Gateway
 owns the database. It does not claim an end-to-end remote node WebSocket command
 or model-turn latency result; those transports do not own the SQL being changed.
+
+## Launch claim postimages
+
+Use `--flow launch` on both preparation and measurement invocations. Preparation
+creates twenty synthetic pending launches with an absent predecessor PID. Under
+an isolated Gateway, measurement creates twenty more launches, reclaims the
+predecessor's twenty pending launches through the production process observation
+and journal worker transport, then replays all forty claims warm. No process is
+spawned or killed. The same frozen observer and per-thread profiles apply.
+
+Acceptance rule, registered before running this flow: each successful create and
+pending reclaim removes exactly one exact-entry launch SELECT; worker requests,
+all other target statements, and runtime MAIN SQL must not increase. Warm replay
+must retain its current counts. Returned action, supervisor, pending state,
+monotonic timestamp and durable receipt must match. Preserve capacity, pruning,
+plan mismatch, stale observations, conditional zero-row outcomes, and optional
+companion metadata. These remain transactional decisions, not retained state.
+
+Keep startup, create, reclaim, warm and shutdown separate. Use the sample/host and
+timing rules above, and report raw cells plus per-operation attribution. Any 20%
+adverse cell is a stop for explicit disposition. This workload establishes the
+journal owner cost, not remote node WebSocket or model-turn latency.

@@ -1,6 +1,7 @@
 import { Show } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-fixtures.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
@@ -170,6 +171,43 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     }
   });
 
+  it.each([false, true])(
+    "adopts decoded paste dimensions before and after an upload receipt (%s)",
+    async (receipt) => {
+      const container = mount(500);
+      const url = URL.createObjectURL(await svgResponse(1200, 563).blob());
+      try {
+        const draw = (sized = false) =>
+          drawImages(container, {
+            images: [
+              { url, alt: "Pasted screenshot", ...(sized ? { width: 1200, height: 563 } : {}) },
+            ],
+            role: "user",
+            nextMessage: true,
+          });
+        draw();
+        const originalFrame = frame(container);
+        const image = await admittedImage(container);
+        await image.decode();
+        if (receipt) {
+          draw(true);
+        }
+        await vi.waitFor(() => {
+          const box = geometry(container);
+          expect(box.width / box.height).toBeCloseTo(1200 / 563, 2);
+        });
+        expect(frame(container)).toBe(originalFrame);
+        const decoded = geometry(container);
+        unmountImages(container);
+        draw(receipt);
+        await (await admittedImage(container)).decode();
+        await vi.waitFor(() => expect(geometry(container)).toEqual(decoded));
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    },
+  );
+
   it("replaces a legacy immutable thumbnail rendition before loading its preview", async () => {
     const container = mount(500);
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/thumbnail?v=2`;
@@ -235,9 +273,9 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     ["portrait", 800, 1600, 500, 180, 360, "user", true],
     ["tiny image", 1, 1, 500, 160, 160, "assistant", true],
     ["narrow pane", 1200, 800, 180, 180, 120, "user", true],
-    ["panorama", 1200, 80, 500, 400, 32, "assistant", true],
-    ["tiny tall image", 80, 1600, 500, 160, 360, "user", true],
-    ["unknown dimensions", 800, 1600, 500, 400, 400 / 1.5, "assistant", false],
+    ["panorama", 1200, 80, 500, 400, 400 / 15, "assistant", true],
+    ["tiny tall image", 80, 1600, 500, 18, 360, "user", true],
+    ["unknown dimensions", 800, 1600, 500, 180, 360, "assistant", false],
   ] as const)(
     "keeps %s geometry through fetch, decode, and cache reuse",
     async (name, width, height, pane, expectedWidth, expectedHeight, role, sized) => {
@@ -274,10 +312,18 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       response.resolve(svgResponse(width, height));
       await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());
       const image = container.querySelector("img")!;
-      expect(geometry(container)).toEqual(before);
+      if (sized) {
+        expect(geometry(container)).toEqual(before);
+      }
       await image.decode();
+      await vi.waitFor(() => {
+        expect(geometry(container).width).toBeCloseTo(expectedWidth, 1);
+        expect(geometry(container).height).toBeCloseTo(expectedHeight, 1);
+      });
       const decoded = geometry(container);
-      expect(decoded).toEqual(before);
+      if (sized) {
+        expect(decoded).toEqual(before);
+      }
       expect(frame(container)).toBe(originalFrame);
       draw();
       expect(container.querySelector("img")).toBe(image);
@@ -287,7 +333,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       const remounted = await admittedImage(container);
       expect(remounted.getAttribute("src")).toBe(image.getAttribute("src"));
       await remounted.decode();
-      expect(geometry(container)).toEqual(decoded);
+      await vi.waitFor(() => expect(geometry(container)).toEqual(decoded));
       expect(fetchMock).toHaveBeenCalledOnce();
     },
   );
@@ -330,13 +376,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       expect(frame(container).textContent?.trim()).toBe("");
       expect(container.querySelector(".chat-image-skeleton")).not.toBeNull();
       expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
-      response.resolve(
-        Response.json({
-          available: true,
-          mediaTicket: "test-ticket",
-          mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-        }),
-      );
+      response.resolve(Response.json(mediaTicketPayload("test-ticket", 300_000)));
       await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());
       const loadable = geometry(container);
       expect(loadable.height).toBeCloseTo(400 / 1.5, 1);
@@ -404,6 +444,37 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     },
   );
 
+  it("reserves the menu footprint before the next short panorama preview", async () => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(800, 600);
+    const container = mount(500);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => svgResponse(1200, 30)),
+    );
+    drawImages(container, {
+      images: ["First panorama", "Second panorama"].map((alt) => ({
+        url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`,
+        alt,
+        width: 1200,
+        height: 30,
+      })),
+      role: "assistant",
+    });
+    await waitForFast(() => expect(container.querySelectorAll("img")).toHaveLength(2));
+    await Promise.all([...container.querySelectorAll("img")].map((image) => image.decode()));
+    const frames = [...container.querySelectorAll<HTMLElement>(".chat-image-frame")];
+    const first = frames[0]!;
+    const menu = first.querySelector<HTMLElement>(".chat-image-actions")!;
+    const surface = first.querySelector<HTMLElement>(".chat-image-surface")!;
+    const box = surface.getBoundingClientRect();
+    expect(box.width / box.height).toBeCloseTo(40, 0);
+    expect(menu.getBoundingClientRect().height).toBe(44);
+    expect(frames[1]!.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      menu.getBoundingClientRect().bottom,
+    );
+  });
+
   it.each(
     [1440, 390].flatMap((viewport) => ["ltr", "rtl"].map((direction) => ({ viewport, direction }))),
   )(
@@ -461,9 +532,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       expect(frames[1]!.getBoundingClientRect().top).toBeGreaterThan(
         frames[0]!.getBoundingClientRect().bottom,
       );
-      const messageColumn = container.querySelector<HTMLElement>(".chat-group-messages")!;
-      const fallbackWidth = Math.min(400, messageColumn.clientWidth);
-      for (const [index, expectedWidth] of [160, 84, 160, fallbackWidth, fallbackWidth].entries()) {
+      for (const [index, expectedWidth] of [160, 84, 18, 18, 160].entries()) {
         const element = frames[index]!;
         await page.getByAltText(images[index]!.alt, { exact: true }).hover();
         for (const animation of element.getAnimations({ subtree: true })) {
@@ -474,15 +543,26 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         const surface = element.querySelector(".chat-image-surface")!;
         const surfaceRect = surface.getBoundingClientRect();
         expect(getComputedStyle(element, "::after").content).toBe("none");
-        expect(actionsRect.left).toBeGreaterThanOrEqual(surfaceRect.left);
-        expect(actionsRect.right).toBeLessThanOrEqual(frameRect.right);
-        expect(actionsRect.top).toBeGreaterThanOrEqual(surfaceRect.top);
-        expect(actionsRect.bottom).toBeLessThanOrEqual(surfaceRect.bottom);
+        const overlay = expectedWidth >= 80;
+        if (overlay) {
+          expect(actionsRect.left).toBeGreaterThanOrEqual(surfaceRect.left);
+          expect(actionsRect.right).toBeLessThanOrEqual(frameRect.right);
+          expect(actionsRect.top).toBeGreaterThanOrEqual(surfaceRect.top);
+          expect(actionsRect.bottom).toBeLessThanOrEqual(surfaceRect.bottom);
+        } else {
+          expect(actionsRect.left).toBeGreaterThanOrEqual(0);
+          expect(actionsRect.right).toBeLessThanOrEqual(viewport);
+          expect(element.querySelector('[aria-label="Image actions"]')).not.toBeNull();
+        }
         const action = element.querySelector<HTMLButtonElement>(".chat-image-action")!;
         const rect = action.getBoundingClientRect();
-        expect(rect.width).toBe(30);
-        expect(rect.height).toBe(30);
-        expect(action.contains(document.elementFromPoint(rect.x + 15, rect.y + 15))).toBe(true);
+        expect(rect.width).toBe(overlay ? 30 : 44);
+        expect(rect.height).toBe(overlay ? 30 : 44);
+        expect(
+          action.contains(
+            document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2),
+          ),
+        ).toBe(true);
         expect(surfaceRect.width).toBeCloseTo(expectedWidth, 0);
         expect(getComputedStyle(surface).overflow).toBe("hidden");
       }

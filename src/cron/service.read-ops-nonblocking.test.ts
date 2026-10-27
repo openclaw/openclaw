@@ -405,7 +405,7 @@ describe("CronService read operations", () => {
     await addAtJob(stale.state, "later-job", baseMs + 60_000);
     await addAtJob(writer.state, "earlier-job", baseMs + 10_000);
     const previousRevision = cronStoreModule.getCronJobsStoreRevision(storePath);
-    const persist = vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision");
+    const persist = vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevisionByKey");
     persist.mockClear();
 
     await expect(remove(stale.state, "missing-job")).resolves.toEqual({

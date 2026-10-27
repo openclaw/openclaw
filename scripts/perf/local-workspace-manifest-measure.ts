@@ -1,14 +1,18 @@
 /**
  * Real state-read worker manifest benchmark, using synthetic repository-shaped files.
  * Node 26.12: node --import ./scripts/tsx.mjs scripts/perf/local-workspace-manifest-measure.ts prepare .local/buf28 [count=24000]
- * Run: node --import ./scripts/tsx.mjs scripts/perf/local-workspace-manifest-measure.ts run .local/buf28 <label> <canonical|projection|materialize|replace> [allocation]
+ * Use `prepare-edited` instead of `prepare` to edit 1% of admitted files after
+ * storing their original identities. Both versions repeatedly scan those same edits.
+ * Run: node --import ./scripts/tsx.mjs scripts/perf/local-workspace-manifest-measure.ts run .local/buf28 <label> <canonical|projection|materialize|replace> [allocation|cpu]
+ * `cpu` writes a worker .cpuprofile; `allocation` writes a full .heapprofile.
  * Alternate baseline/candidate labels at least five times. Baseline runs set
  * OPENCLAW_BENCH_BASELINE_DIR to a directory containing the original source paths.
  * OPENCLAW_BENCH_TRACE_GC=1 selects a separate promotion pass, never timing gates.
  * Batch: OPENCLAW_BENCH_BASELINE_DIR=<original-source-dir> node --import ./scripts/tsx.mjs scripts/perf/local-workspace-manifest-measure.ts batch .local/buf28 <label>
  * Batch retains disjoint baseline/candidate processes per instrumentation pass,
  * warms each action once, then runs five counterbalanced pairs serially.
- * Append `<action> control [calls=1]` for four same-source A/A timing pairs,
+ * Append `<action> control [calls=1]` for five same-source A/A timing pairs,
+ * or `<action> control-all [calls=1]` for five A/A pairs in all three passes,
  * or `<action> timing [calls=1]` for five A/B timing pairs. A block's calls run
  * consecutively without forced GC between them; normalize work totals by calls.
  * `<action> extra [calls=1]` runs only the predeclared sixth A/B pair, candidate first.
@@ -29,7 +33,7 @@ import type { LocalWorkspaceManifestAction } from "../../src/gateway/worker-envi
 import type { WorkerWorkspaceManifest } from "../../src/gateway/worker-environments/workspace-manifest.js";
 
 const [mode, scratchArgument, label, actionName, instrument, callsArgument] = process.argv.slice(2);
-assert.ok(mode === "prepare" || mode === "run" || mode === "serve" || mode === "batch");
+assert.ok(["prepare", "prepare-edited", "run", "serve", "batch"].includes(mode ?? ""));
 assert.ok(scratchArgument);
 const scratch = path.resolve(scratchArgument);
 const root = path.join(scratch, "workspace");
@@ -59,7 +63,7 @@ const actionNames = ["materialize", "canonical", "projection", "replace"] as con
 type ActionName = (typeof actionNames)[number];
 type MeasurementRequest = { kind: "warm" | "measure" | "stop"; action: ActionName; label: string };
 
-if (mode === "prepare") {
+if (mode === "prepare" || mode === "prepare-edited") {
   const count = Number(label ?? 24_000);
   assert.ok(Number.isSafeInteger(count) && count > 0);
   const paths = execFileSync("git", ["ls-files", "-z"], {
@@ -159,12 +163,39 @@ if (mode === "prepare") {
     },
   });
   await fs.writeFile(path.join(scratch, "manifest.json"), rawManifest);
+  let expectedRoot = resultingRoot;
+  let editedFiles = 0;
+  if (mode === "prepare-edited") {
+    const files = nodes.filter(
+      (node) => node.type === "file" && path.basename(node.path) !== ".gitignore",
+    );
+    editedFiles = Math.max(1, Math.floor(paths.length / 100));
+    assert.ok(files.length >= editedFiles);
+    for (let index = 0; index < editedFiles; index++) {
+      const node = files[Math.floor((index * files.length) / editedFiles)]!;
+      await fs.writeFile(path.join(root, node.path), "synthetic workspace edited content\n");
+    }
+    const currentNodes: typeof nodes = [];
+    await scanActualWorkspaceManifest({
+      root,
+      baseCommit,
+      buildCacheInputs: new Set(retained),
+      onEntry(node) {
+        currentNodes.push(node);
+      },
+    });
+    expectedRoot = localWorkspaceManifestRootReference(
+      createLocalWorkspaceManifestTree(currentNodes),
+      baseCommit,
+    );
+  }
   await fs.writeFile(
     path.join(scratch, "fixture.json"),
     JSON.stringify({
       files: paths.length,
       records: records.size,
-      resultingRoot,
+      resultingRoot: expectedRoot,
+      editedFiles,
       manifestRef: `sha256:${digest(rawManifest)}`,
       buildCacheInputs: retained,
       revision: 1,
@@ -174,16 +205,23 @@ if (mode === "prepare") {
   const { drainGlobalSingletonLifecycleState } =
     await import("../../src/shared/global-singleton.js");
   await drainGlobalSingletonLifecycleState();
-  console.log(JSON.stringify({ prepared: paths.length, records: records.size, resultingRoot }));
+  console.log(
+    JSON.stringify({
+      prepared: paths.length,
+      records: records.size,
+      resultingRoot: expectedRoot,
+      editedFiles,
+    }),
+  );
 } else if (mode === "batch") {
   assert.ok(label && /^[a-zA-Z0-9_-]+$/.test(label));
   const baseline = process.env.OPENCLAW_BENCH_BASELINE_DIR;
   assert.ok(baseline, "batch requires OPENCLAW_BENCH_BASELINE_DIR");
-  const control = instrument === "control";
+  const control = instrument === "control" || instrument === "control-all";
   const extra = instrument === "extra";
   const selectedActions = actionName ? [actionName as ActionName] : actionNames;
   assert.ok(selectedActions.every((name) => actionNames.includes(name)));
-  for (const pass of control || extra || instrument === "timing"
+  for (const pass of instrument === "control" || extra || instrument === "timing"
     ? ["timing"]
     : ["timing", "allocation", "promotion"]) {
     const launch = async (side: "base" | "candidate") => {
@@ -256,7 +294,7 @@ if (mode === "prepare") {
         console.log(JSON.stringify({ pass, action, warming: true }));
         await base.request({ kind: "warm", action, label: "warm" });
         await candidate.request({ kind: "warm", action, label: "warm" });
-        for (let pair = extra ? 6 : 1; pair <= (extra ? 6 : control ? 4 : 5); pair++) {
+        for (let pair = extra ? 6 : 1; pair <= (extra ? 6 : 5); pair++) {
           const sides =
             pair % 2 ? (["base", "candidate"] as const) : (["candidate", "base"] as const);
           for (const side of sides) {
@@ -284,6 +322,9 @@ if (mode === "prepare") {
   process.env.OPENCLAW_BENCH_RETAINED_WORKER_DIR = output;
   if (instrument === "allocation") {
     process.env.OPENCLAW_BENCH_SAMPLE_ALLOCATION = "1";
+  }
+  if (instrument === "cpu") {
+    process.env.OPENCLAW_BENCH_SAMPLE_CPU = "1";
   }
   await import("./worker-retained-heap-preload.js");
   const fixture = JSON.parse(await fs.readFile(path.join(scratch, "fixture.json"), "utf8"));
@@ -366,6 +407,7 @@ if (mode === "prepare") {
         action: name,
         node: process.version,
         files: fixture.files,
+        editedFiles: fixture.editedFiles ?? 0,
         records: fixture.records,
         operations,
         load: os.loadavg(),

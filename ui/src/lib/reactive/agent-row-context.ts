@@ -1,46 +1,18 @@
 import type { ApplicationContext } from "../../app/context-types.ts";
-import { projectSource } from "./projection.ts";
+import { createSharedSourceProjection } from "./shared-owner-projection.ts";
 
-type Subscription = {
-  listeners: Set<() => void>;
-  release: () => void;
-};
-
-const subscriptions = new WeakMap<ApplicationContext, Subscription>();
-
-function subscribeContext(context: ApplicationContext | undefined, notify: () => void) {
-  if (!context) {
-    return () => {};
-  }
-  let subscription = subscriptions.get(context);
-  if (!subscription) {
-    const listeners = new Set<() => void>();
-    const publish = () => {
-      for (const listener of listeners) {
-        listener();
-      }
-    };
+const projectContext = createSharedSourceProjection({
+  read: (context: ApplicationContext) => context,
+  subscribe: (context, notify) => {
     const stops = [context.agents, context.agentIdentity, context.gateway].map((source) =>
-      source.subscribe(publish),
+      source.subscribe(notify),
     );
-    subscription = { listeners, release: () => stops.forEach((stop) => stop()) };
-    subscriptions.set(context, subscription);
-  }
-  subscription.listeners.add(notify);
-  const current = subscription;
-  return () => {
-    if (current.listeners.delete(notify) && current.listeners.size === 0) {
-      current.release();
-      subscriptions.delete(context);
-    }
-  };
-}
+    return () => stops.forEach((stop) => stop());
+  },
+});
+const missingContext = { read: () => undefined, revision: () => 0 };
 
-/** Rows share upstream observation by application; each projection keeps its own lifetime. */
+/** Agent rows share one observed revision for their application's three owners. */
 export function projectAgentRowContext(context: ApplicationContext | undefined) {
-  return projectSource(context, {
-    read: (source) => source,
-    subscribe: subscribeContext,
-    equality: "revision",
-  });
+  return context ? projectContext(context) : missingContext;
 }

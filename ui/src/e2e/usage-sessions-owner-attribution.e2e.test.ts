@@ -18,6 +18,7 @@ import {
   waitForControlUiGatewayReady,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI usage sessions owner attribution",
@@ -117,16 +118,7 @@ const ownerSuite = createControlUiE2eSuite({
       signal.throwIfAborted();
       const state = await createOpenClawTestState({
         label: "usage-sessions-owner-attribution",
-        env: {
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-          VITEST: "1",
-        },
+        env: { ...deviceGatewayEnv },
       });
       ownerFixture = state;
       setLoggerOverride({
@@ -317,16 +309,7 @@ suite.define(() => {
           signal.throwIfAborted();
           const state = await createOpenClawTestState({
             label: "usage-detail-instance",
-            env: {
-              OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-              OPENCLAW_SKIP_CANVAS_HOST: "1",
-              OPENCLAW_SKIP_CHANNELS: "1",
-              OPENCLAW_SKIP_CRON: "1",
-              OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-              OPENCLAW_SKIP_PROVIDERS: "1",
-              OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-              VITEST: "1",
-            },
+            env: { ...deviceGatewayEnv },
           });
           fixture = state;
           setLoggerOverride({

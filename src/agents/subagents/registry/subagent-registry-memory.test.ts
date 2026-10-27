@@ -19,6 +19,7 @@ import {
   restoreSubagentRunPayload,
   subagentRuns,
 } from "./subagent-registry-memory.js";
+import { getLatestLiveSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
@@ -67,6 +68,7 @@ describe("completed subagent payload residency", () => {
     expect(resident.task).toBe(original.task.slice(0, 160));
     expect(resident.completion?.resultText).toBeUndefined();
     expect(resident.completion?.fallbackResultText).toBeUndefined();
+    // Readers (announce, agents_wait preview, cron follow-up) use the resident reply.
     expect(resident.completion?.terminalReply).toEqual(original.completion?.terminalReply);
     expect(isSubagentRunPayloadEvicted(resident)).toBe(true);
     expect(compactSubagentRunForMemory(resident)).toBe(resident);
@@ -124,6 +126,33 @@ describe("completed subagent payload residency", () => {
 });
 
 describe("subagent run memory indexes", () => {
+  it("reuses captured child links across run-state changes and retires them on an ownership move", () => {
+    const first = createRun("first");
+    const second = createRun("second");
+    subagentRuns.set(first.runId, first);
+    subagentRuns.set(second.runId, second);
+    const lookup = getSubagentSessionReadLookup(subagentRuns);
+    const links = lookup.captureTopology();
+    expect(links).toEqual([
+      { childSessionKey: first.childSessionKey, requesterSessionKey: "agent:main:main" },
+      { childSessionKey: second.childSessionKey, requesterSessionKey: "agent:main:main" },
+    ]);
+    for (const status of ["queued", "running", "terminal"] as const) {
+      subagentRuns.set(first.runId, { ...first, execution: { status } });
+      expect(lookup.captureTopology()).toBe(links);
+    }
+    subagentRuns.set(first.runId, { ...first, requesterSessionKey: "agent:main:moved" });
+    expect(lookup.captureTopology()).toEqual([
+      { childSessionKey: first.childSessionKey, requesterSessionKey: "agent:main:moved" },
+      { childSessionKey: second.childSessionKey, requesterSessionKey: "agent:main:main" },
+    ]);
+    expect(links[0]?.requesterSessionKey).toBe("agent:main:main");
+    subagentRuns.delete(second.runId);
+    expect(lookup.captureTopology()).toEqual([
+      { childSessionKey: first.childSessionKey, requesterSessionKey: "agent:main:moved" },
+    ]);
+  });
+
   it("selects unfinished work and due retention across replacement, deletion, and reset", () => {
     const history = createRun("history", {
       execution: { status: "terminal", endedAt: 2 },
@@ -224,6 +253,8 @@ describe("subagent run memory indexes", () => {
         scenario === "replacement" ? "main" : childSessionKey === "global" ? undefined : "research",
     };
     const selected = scenario === "unresolved" ? first : second;
+    const latest = () =>
+      getLatestLiveSubagentRunByChildSessionKey(childSessionKey, undefined, "MAIN");
     const authorize = () =>
       findAuthorizedSwarmCollectorRequest({
         childSessionKey,
@@ -233,6 +264,14 @@ describe("subagent run memory indexes", () => {
     subagentRuns.set(first.runId, first);
     subagentRuns.set(second.runId, second);
     expect(authorize()).toEqual(selected);
+    expect(latest()).toEqual(selected);
+    expect(
+      getLatestLiveSubagentRunByChildSessionKey(
+        childSessionKey,
+        (run) => run.runId === first.runId,
+        "main",
+      ),
+    ).toEqual(first);
     if (scenario === "unresolved") {
       expect([...getSubagentRunsForChildSession(childSessionKey, "main")]).toEqual([first]);
       expect([...getSubagentChildSessionCandidates(childSessionKey)]).toEqual([first, second]);
@@ -244,11 +283,14 @@ describe("subagent run memory indexes", () => {
     expect(authorize()).toEqual(second);
 
     subagentRuns.set(first.runId, first);
+    expect(latest()).toEqual(second);
     subagentRuns.delete(first.runId);
     expect(authorize()).toEqual(second);
+    expect(latest()).toEqual(second);
 
     subagentRuns.clear();
     expect(authorize()).toBeUndefined();
+    expect(latest()).toBeNull();
   });
 
   it("tracks distinct scheduler slot aliases across replacement and deletion", () => {
@@ -334,6 +376,10 @@ describe("subagent run memory indexes", () => {
       subagentRuns.set(first.runId, first);
       subagentRuns.set(second.runId, second);
       expect(select(first)).toEqual(expected(first, second));
+
+      const updated = { ...first, execution: { status: "terminal" as const, endedAt: 2 } };
+      subagentRuns.set(updated.runId, updated);
+      expect(select(updated)).toEqual(expected(second, updated));
 
       const replacement = {
         ...first,

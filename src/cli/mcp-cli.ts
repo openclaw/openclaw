@@ -31,6 +31,8 @@ import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import {
   loginMcpServer,
   readMcpCliOAuthStatus,
+  registerMcpLoginCommand,
+  type McpLoginOptions,
   type McpStatusAuthStatusJson,
 } from "./mcp-cli-oauth.js";
 import { probeMcpServers, resolveMcpProbeIssue } from "./mcp-cli-probe.js";
@@ -245,8 +247,8 @@ function applyMcpHttpControls(
     }
     server.sslVerify = sslVerify === "true";
   }
-  setOptionalField(server, "clientCert", normalizeStringifiedOptionalString(opts.clientCert));
-  setOptionalField(server, "clientKey", normalizeStringifiedOptionalString(opts.clientKey));
+  setOptionalField(server, "clientCert", readNonBlankString(opts.clientCert));
+  setOptionalField(server, "clientKey", readNonBlankString(opts.clientKey));
 }
 
 type McpStatusEntry = {
@@ -1075,18 +1077,14 @@ export function registerMcpCli(program: Command) {
       ),
     );
 
-  mcp
-    .command("login")
-    .description("Authorize an OAuth MCP server")
-    .argument("<name>", "MCP server name")
-    .option("--code <code>", "Authorization code from the OAuth redirect")
-    .action(
-      offlineMcpAction("login", async (owner, name: string, opts: { code?: string }) => {
-        const loaded = await loadMcpConfig();
-        const server = requireMcpServer(loaded, name);
-        await loginMcpServer({ name, server, code: opts.code, owner, fail });
-      }),
-    );
+  registerMcpLoginCommand(
+    mcp,
+    offlineMcpAction("login", async (owner, name: string, opts: McpLoginOptions) => {
+      const loaded = await loadMcpConfig();
+      const server = requireMcpServer(loaded, name);
+      await loginMcpServer({ name, server, code: opts.code, issuer: opts.issuer, owner, fail });
+    }),
+  );
 
   mcp
     .command("logout")

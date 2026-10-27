@@ -1161,6 +1161,8 @@ describe("gateway concurrency benchmark script", () => {
 
   it("parses bounded mock and live benchmark controls without booting a gateway", () => {
     expect(testing.parseOptions([]).gatewayRuntime).toBe(process.execPath);
+    expect(testing.parseOptions([]).postgres).toBe(false);
+    expect(testing.parseOptions(["--postgres"]).postgres).toBe(true);
     expect(
       testing.parseOptions([
         "--gateway-runtime",
@@ -2179,6 +2181,34 @@ syncBuiltinESMExports();\n`,
           await vi.waitFor(() => expect(mockAlive()).toBe(false));
         }
       }
+    });
+  });
+
+  it("isolates PostgreSQL runs with an env connection reference while keeping SQLite the default", async () => {
+    await withTempDir("gateway-postgres-config-", async (root) => {
+      const write = (postgres: boolean) => {
+        const configPath = testing.buildConfig(root, 12345, 64, 0, 0, ["main"], "mock");
+        if (postgres) {
+          testing.configurePostgresBenchConfig(configPath);
+        }
+        return configPath;
+      };
+      const sqlite = JSON.parse(await readFile(write(false), "utf8"));
+      expect(sqlite.database).toBeUndefined();
+      const first = JSON.parse(await readFile(write(true), "utf8"));
+      const second = JSON.parse(await readFile(write(true), "utf8"));
+      expect(first.database).toEqual({
+        engine: "postgres",
+        postgres: {
+          connection: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_BENCH_POSTGRES_CONNECTION",
+          },
+          schemaPrefix: expect.stringMatching(/^[a-z_][a-z0-9_]{0,26}$/u),
+        },
+      });
+      expect(second.database.postgres.schemaPrefix).not.toBe(first.database.postgres.schemaPrefix);
     });
   });
 

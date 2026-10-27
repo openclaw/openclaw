@@ -77,7 +77,7 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
     createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
   });
 
-  it("serializes concurrent provisioning for one container", async () => {
+  it("serializes provisioning and inspects each admitted container once", async () => {
     const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
     prepareCreation(true);
@@ -97,6 +97,7 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
     expect(second).toEqual(first);
     expect(calls("create")).toHaveLength(1);
     expect(calls("start")).toHaveLength(1);
+    expect(calls("inspect")).toHaveLength(2);
   });
 
   it.each(["docker", "podman"] as const)(

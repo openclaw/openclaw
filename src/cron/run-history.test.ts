@@ -99,7 +99,7 @@ function pruneHistory(
   const records = readCronRunRecordsInDatabase(db);
   const activeJobs = new Set(records.flatMap((row) => (row.jobId ? [row.jobId] : [])));
   const plan = planCronRunHistoryMaintenance(records, now, activeJobs);
-  return applyCronRunHistoryMaintenanceInDatabase(db, plan, now, schema).pruned;
+  return applyCronRunHistoryMaintenanceInDatabase(db, plan, schema).pruned;
 }
 
 async function readCronRunHistoryPage(options: ReadCronRunHistoryPageOptions) {
@@ -211,6 +211,12 @@ it("seeks linked runs before pagination without confusing public ids or ambiguou
 
 it("retains history across worker reads, isolates stores, and recovers only an exact receipt", () =>
   withHistoryState(async (storeKey) => {
+    const expectResult = async (result: NonNullable<CronRunLogEntry["result"]>) => {
+      for (const view of ["full", "summary"] as const) {
+        const page = await readCronRunHistoryPage({ storeKey, jobId: "job", runId: "third", view });
+        expect(page.entries.map((entry) => entry.result)).toEqual([result]);
+      }
+    };
     runOpenClawStateWriteTransaction(({ db }) => {
       recordCronRunInDatabase(db, outcome(storeKey, "first"));
       recordCronRunInDatabase(db, outcome(storeKey, "second"));
@@ -250,11 +256,16 @@ it("retains history across worker reads, isolates stores, and recovers only an e
     expect(
       (await readCronRunHistoryPage({ storeKey, jobId: "job", runId: "second" })).entries,
     ).toHaveLength(1);
-    await recordCronRun(outcome(storeKey, "third"));
+    await recordCronRun({
+      ...outcome(storeKey, "third"),
+      detail: outcomeDetail(storeKey, { runId: "third", result: { outcome: "no_change" } }),
+    });
+    await expectResult({ outcome: "no_change" });
     const refreshed = await readCronRunHistoryPage({ storeKey, jobId: "job" });
     expect(refreshed.total).toBe(3);
     expect(runIds(refreshed.entries)).toEqual(expect.arrayContaining(["first", "second", "third"]));
     const updated = outcome(storeKey, "third");
+    const result = { outcome: "blocked", summary: "Waiting for release approval." } as const;
     await recordCronRun({
       ...updated,
       detail: outcomeDetail(storeKey, {
@@ -262,6 +273,7 @@ it("retains history across worker reads, isolates stores, and recovers only an e
         runId: "third",
         summary: "Fresh delivery result",
         deliveryStatus: "delivered",
+        result,
       }),
     });
     const delivered = await readCronRunHistoryPage({
@@ -273,30 +285,7 @@ it("retains history across worker reads, isolates stores, and recovers only an e
     expect(delivered.entries).toMatchObject([
       { runId: "third", summary: "Fresh delivery result", deliveryStatus: "delivered" },
     ]);
-  }));
-
-it("preserves structured automation results through full and summary worker reads", () =>
-  withHistoryState(async (storeKey) => {
-    const results = [
-      { outcome: "no_change" },
-      { outcome: "blocked", summary: "Waiting for release approval." },
-    ] as const;
-    for (const result of results) {
-      const write = outcome(storeKey, result.outcome);
-      await recordCronRun({
-        ...write,
-        detail: outcomeDetail(storeKey, { runId: result.outcome, result }),
-      });
-    }
-    for (const view of ["full", "summary"] as const) {
-      const page = await readCronRunHistoryPage({ storeKey, jobId: "job", view });
-      expect(page.entries).toHaveLength(2);
-      for (const result of results) {
-        expect(page.entries.find((entry) => entry.runId === result.outcome)?.result).toEqual(
-          result,
-        );
-      }
-    }
+    await expectResult(result);
   }));
 
 it("pages large history without reading off-page payloads or changing completion order", () =>

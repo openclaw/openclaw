@@ -502,11 +502,7 @@ function classifyCliReplies(entries: SessionEntry[], provider: string | undefine
 function renderCliPreservedTurns(
   entries: SessionEntry[],
   replies: CliReply[],
-  params: {
-    sessionId?: string;
-    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
-    cliSessionBinding?: CliSessionBinding;
-  },
+  params: Parameters<typeof loadCliSessionPromptContext>[0],
 ): string | undefined {
   const cursor = params.cliSessionBinding?.transcriptCursor;
   const currentUserEntryId = params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.entryId;
@@ -609,9 +605,12 @@ export async function loadCliSessionPromptContext(
     params.rawTranscriptReseedReason === "auth-epoch" ||
     params.rawTranscriptReseedReason === "auth-unknown";
   if (contentBlocked) {
-    cliBackendLog.warn(
-      `cli session history refused across auth boundary: reason=${params.rawTranscriptReseedReason}`,
-    );
+    // Raw history only ever reseeds a fresh CLI session; a resumed one keeps its own context.
+    if (!params.nativeSessionId) {
+      cliBackendLog.warn(
+        `cli session history refused across auth boundary: reason=${params.rawTranscriptReseedReason}`,
+      );
+    }
     if (!assertActive) {
       return {
         reseedMessages: [],

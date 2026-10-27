@@ -236,8 +236,7 @@ it("keeps inspection noncreating and performs durable read, expiry, and scoped t
   });
 
   const expired = record("expired", "default", { expiresAt: 1 });
-  const sibling = record("conversation", "sibling");
-  seed(current, expired, sibling);
+  seed(current, expired);
   const row = bindingRows();
   const before = row.get(expired.bindingId);
   expect(await inspectRecord(expired.conversation)).toBeNull();
@@ -274,14 +273,57 @@ it("keeps inspection noncreating and performs durable read, expiry, and scoped t
     hostSql.restore();
   }
   expect(row.get(expired.bindingId)).toBeUndefined();
-  // A mismatched binding id cannot mutate a replacement target's metadata.
-  await touchRecord({
-    conversation: sibling.conversation,
-    bindingId: current.bindingId,
-    at: 99,
-  });
-  expect(await inspectRecord(sibling.conversation)).toEqual(sibling);
 });
+
+it.each(["touch", "remove"] as const)(
+  "does not persist or publish a rejected %s for a different binding ID",
+  async (operation) => {
+    const held = record("held");
+    seed(held);
+    const before = allRows();
+    const publications = recordPublications();
+    const result =
+      operation === "touch"
+        ? await touchRecord({ conversation: held.conversation, bindingId: "different", at: 99 })
+        : await removeRecords({ conversation: held.conversation, bindingId: "different" });
+    expect(result).toEqual(operation === "touch" ? held : []);
+    expect(publications).toEqual([]);
+    expect(allRows()).toEqual(before);
+  },
+);
+
+it.each(["touch", "remove"] as const)(
+  "still cleans invalid rows when %s rejects a different binding ID",
+  async (operation) => {
+    for (const condition of ["expired", "malformed", "missing"] as const) {
+      const held = record(condition, "default", condition === "expired" ? { expiresAt: 1 } : {});
+      if (condition !== "missing") {
+        seed(held);
+      }
+      if (condition === "malformed") {
+        runOpenClawStateWriteTransaction(({ db }) => {
+          db.prepare(
+            "UPDATE current_conversation_bindings SET record_json = ? WHERE binding_id = ?",
+          ).run("{", held.bindingId);
+        });
+      }
+      const publications = recordPublications();
+      const result =
+        operation === "touch"
+          ? await touchRecord({ conversation: held.conversation, bindingId: "different", at: 99 })
+          : await removeRecords({ conversation: held.conversation, bindingId: "different" });
+      expect(result).toEqual(operation === "touch" ? null : []);
+      expect(allRows()).toEqual([]);
+      if (condition === "missing") {
+        expect(publications).toEqual([]);
+      } else {
+        expect(publications).toHaveLength(1);
+        expect(facts(publications[0]!)).toEqual([{ kind: "absent" }]);
+        expect(publications[0]!.sessionKeys).toEqual([held.targetSessionKey]);
+      }
+    }
+  },
+);
 
 it("reuses resolved bindings until sync or worker writes publish new facts", async () => {
   const original = record("cached");

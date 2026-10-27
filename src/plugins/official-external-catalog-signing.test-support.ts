@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-export const CATALOG_PAYLOAD_TYPE = "openclaw.official-external-plugin-catalog-feed.v1";
+const CATALOG_PAYLOAD_TYPE = "openclaw.official-external-plugin-catalog-feed.v1";
 
 export function createSigningKey(keyId: string, privateKeyPem?: string) {
   const privateKey = privateKeyPem

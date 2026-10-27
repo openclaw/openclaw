@@ -6,10 +6,8 @@ import type {
   ControlUiBootstrapConfig,
   ControlUiEnvironment,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import "../components/app-topbar-solid.tsx";
 import { renderSidebarAgentCard } from "../components/app-sidebar-render.tsx";
 import { AppSidebarOwner, type AppSidebarElement } from "../components/app-sidebar.tsx";
-import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createContext, createGateway, createSessions } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
@@ -18,8 +16,6 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { makeBootRoster } from "./bootstrap.test-support.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import { bindControlUiDocumentHead, controlUiDocumentHead } from "./control-ui-document-head.ts";
-
-type EnvironmentElement = SolidBridgeElement<{ environment?: ControlUiEnvironment | null }>;
 
 const root = document.documentElement;
 const bootstrap = { basePath: "", assistantName: "OpenClaw", assistantAvatar: "O" };
@@ -62,19 +58,19 @@ afterEach(() => {
 
 setupSidebarTest();
 
-it("renders a matching stripe, favicon, avatar ring, and sidebar/topbar pills only when configured", async () => {
+it("renders and clears environment presentation, including the sidebar badge and avatar ring", async () => {
+  document.title = "OpenClaw Control";
   const favicon = icon("/favicon.svg", "image/svg+xml");
-  bindControlUiDocumentHead({ themeColors: [], favicons: [favicon] });
+  const png = icon("/favicon-32.png", "image/png");
+  bindControlUiDocumentHead({ themeColors: [], favicons: [favicon, png] });
 
-  const config = setupConfig({ environment: edge, seamColor: "#123456" });
+  const config = setupConfig({ environment: edge, seamColor: "#123456" }, {});
   const [cardEnvironment, setCardEnvironment] = createSignal<ControlUiEnvironment | null>(null);
   const context = {
     ...createContext(
       createGateway(createTestGatewayClient(async () => ({}))),
       createSessions("main", []),
-      makeBootRoster({
-        agents: [{ id: "main", name: "OpenClaw" }],
-      }),
+      makeBootRoster({ agents: [{ id: "main", name: "OpenClaw" }] }),
     ),
     get config() {
       cardEnvironment();
@@ -89,18 +85,12 @@ it("renders a matching stripe, favicon, avatar ring, and sidebar/topbar pills on
     sidebarProps,
   );
   const { container: sidebar } = mountSolid(() => renderSidebarAgentCard(host));
-  const topbar = document.createElement("openclaw-app-topbar") as EnvironmentElement;
-  document.body.append(topbar);
-  await topbar.updateComplete;
-
   expect(document.querySelector(".control-ui-environment-stripe")).toBeNull();
   expect(document.querySelector(".control-ui-environment-pill")).toBeNull();
   expect(favicon.getAttribute("href")).toBe("/favicon.svg");
 
   await refresh(config);
   setCardEnvironment(config.current.environment);
-  topbar.environment = config.current.environment;
-  await topbar.updateComplete;
 
   expect(document.querySelector(".control-ui-environment-stripe")).not.toBeNull();
   expectStyle("--control-ui-environment-color", "var(--control-ui-environment-amber)");
@@ -109,60 +99,34 @@ it("renders a matching stripe, favicon, avatar ring, and sidebar/topbar pills on
     expect(sidebar.querySelector(".control-ui-environment-pill")?.textContent).toBe("edge"),
   );
   expect(sidebar.querySelector(".sidebar-agent-card__avatar--environment")).not.toBeNull();
-  expect(topbar.querySelector(".control-ui-environment-pill")?.textContent).toBe("edge");
   expect(favicon.href).toContain("data:image/svg+xml,");
   expect(decodeURIComponent(favicon.href)).toContain("#f59e0b");
+  expect(png.type).toBe("image/svg+xml");
+  expect(document.title).toBe("OpenClaw Control · edge");
+  expect(root.hasAttribute("data-openclaw-environment")).toBe(true);
+
+  await refresh(config);
+  expect(config.current.environment).toBeNull();
+  expect(document.querySelector(".control-ui-environment-stripe")).toBeNull();
+  expect([favicon, png].map((link) => [link.getAttribute("href"), link.type])).toEqual([
+    ["/favicon.svg", "image/svg+xml"],
+    ["/favicon-32.png", "image/png"],
+  ]);
+  expectStyle("--control-ui-environment-color", "");
+  expectStyle("--control-ui-environment-ink", "");
+  expect(document.title).toBe("OpenClaw Control");
+  expect(root.hasAttribute("data-openclaw-environment")).toBe(false);
 });
 
-it.each([{ environment: edge }, { seamColor: "#123456" }])(
-  "clears presentation when bootstrap becomes unset: %j",
-  async (update) => {
-    document.title = "OpenClaw Control";
-    const svg = icon("/favicon.svg", "image/svg+xml");
-    const png = icon("/favicon-32.png", "image/png");
-    bindControlUiDocumentHead({ themeColors: [], favicons: [svg, png] });
-    const config = setupConfig(update, {});
-    await refresh(config);
-    if ("environment" in update) {
-      expect(document.querySelector(".control-ui-environment-stripe")).not.toBeNull();
-      expect(svg.getAttribute("href")).toContain("data:image/svg+xml,");
-      expect(png.type).toBe("image/svg+xml");
-      expect(document.title).toBe("OpenClaw Control · edge");
-      expect(root.hasAttribute("data-openclaw-environment")).toBe(true);
-    } else {
-      expectStyle("--ring", "#123456");
-      expectStyle("--accent", "#123456");
-    }
-    await refresh(config);
-    if ("environment" in update) {
-      expect(config.current.environment).toBeNull();
-      expect(document.querySelector(".control-ui-environment-stripe")).toBeNull();
-      expect([svg, png].map((link) => [link.getAttribute("href"), link.type])).toEqual([
-        ["/favicon.svg", "image/svg+xml"],
-        ["/favicon-32.png", "image/png"],
-      ]);
-      expectStyle("--control-ui-environment-color", "");
-      expectStyle("--control-ui-environment-ink", "");
-      expect(document.title).toBe("OpenClaw Control");
-      expect(root.hasAttribute("data-openclaw-environment")).toBe(false);
-    } else {
-      for (const property of [
-        "--ring",
-        "--accent",
-        "--accent-hover",
-        "--accent-muted",
-        "--accent-subtle",
-        "--accent-glow",
-        "--primary",
-        "--focus",
-        "--focus-ring",
-        "--focus-glow",
-      ]) {
-        expectStyle(property, "");
-      }
-    }
-  },
-);
+it("clears seam-only presentation when bootstrap becomes unset", async () => {
+  const config = setupConfig({ seamColor: "#123456" }, {});
+  await refresh(config);
+  expectStyle("--ring", "#123456");
+  expectStyle("--accent", "#123456");
+  await refresh(config);
+  expectStyle("--ring", "");
+  expectStyle("--accent", "");
+});
 
 it("applies public document environment metadata before authenticated bootstrap", async () => {
   root.setAttribute("data-openclaw-environment", JSON.stringify({ label: "team", color: "amber" }));

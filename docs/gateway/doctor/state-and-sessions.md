@@ -9,6 +9,12 @@ read_when:
 Checks 3-7b cover legacy on-disk state migrations, session integrity, model
 auth health, sandbox images, and plugin installs.
 
+If a shared-state or agent database migration refuses to continue, Doctor reports
+the cause before the database location so path redaction preserves the diagnosis.
+Native SQLite failures include their error codes. Stop the Gateway, preserve the
+database and its SQLite sidecars, resolve the reported cause, then rerun
+`openclaw doctor --fix` against the same state and configuration.
+
 ## Legacy data and PostgreSQL
 
 Run `openclaw doctor --fix` before porting SQLite stores to PostgreSQL. Port
@@ -43,7 +49,7 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
 
     The JSON plugin index at `plugins/installs.json` is retired. Doctor archives its original bytes before plugin discovery and reports the archive path. Current SQLite plugin indexes and install records remain authoritative; reinstall a missing plugin using its archived package spec.
 
-    Retired Skill Workshop proposals belong to Doctor, including the repair pass during `openclaw update`. Doctor exports each pending or quarantined draft to `<agentDir>/workshop-skills/.archive/.retired-proposals/<proposal-id>/`, drops the retired proposal tables, and removes `<state-dir>/skill-workshop/proposals/`. Normal Gateway and local CLI startup leave those artifacts untouched. A failed export keeps the tables and files and reports a warning; rerun `openclaw doctor --fix` after fixing the cause.
+    Retired Skill Workshop proposals belong to Doctor, including the repair pass during `openclaw update`. Doctor exports each pending or quarantined draft to the Workshop drafts directory `<agentDir>/workshop-skills/.drafts/<proposal-id>/` (review them with `/learn drafts`), moves drafts an earlier Doctor exported to `.archive/.retired-proposals/` there, drops the retired proposal tables, and removes `<state-dir>/skill-workshop/proposals/`. Normal Gateway and local CLI startup leave those artifacts untouched. A failed export keeps the tables and files and reports a warning; rerun `openclaw doctor --fix` after fixing the cause.
 
     A rewritten or truncated legacy audit raw archive does not stop Doctor or update finalization. Doctor quarantines it beside itself, preserves the sanitized archive and existing SQLite records, and reports the quarantined path once. Later repairs continue. See [legacy audit recovery](/cli/update/repair-and-recovery#skipped-legacy-audit-recovery) for retained backups and recovery limits.
 

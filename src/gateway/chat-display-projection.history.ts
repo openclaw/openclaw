@@ -6,7 +6,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import { prepareCronJobNameResolver } from "../cron/store/job-name.js";
 import {
   isCompletionReportInputProvenance,
   isCronExecutionInputProvenance,
@@ -395,9 +394,12 @@ function shouldHideProjectedHistoryMessage(
   if (
     roleContent.role === "user" &&
     provenance?.kind === "internal_system" &&
-    (provenance.sourceTool === "exec" || provenance.sourceTool === "cron_failure_repair")
+    (provenance.sourceTool === "exec" ||
+      provenance.sourceTool === "cron_failure_repair" ||
+      provenance.sourceTool === "tool_handoff")
   ) {
-    // Internal repair instructions belong to the model transcript, not the chat feed.
+    // Internal repair instructions and yielded tool results belong to the model transcript,
+    // not the chat feed.
     // Keep the agent's authored outcome visible, including requests for user help.
     return true;
   }
@@ -645,13 +647,6 @@ export function readForwardedCronJobIds(messages: readonly unknown[]) {
     const jobId = readForwardedSender(message).jobId;
     return jobId ? [jobId] : [];
   });
-}
-
-export async function prepareForwardedMessageCronJobNameResolver(
-  messages: readonly unknown[],
-  storePath?: string,
-) {
-  return await prepareCronJobNameResolver(readForwardedCronJobIds(messages), storePath);
 }
 
 export function projectForwardedMessages(

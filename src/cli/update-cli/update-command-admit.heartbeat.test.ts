@@ -5,17 +5,20 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as terminalNote from "../../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { retireHeartbeatWithDoctor } from "../../commands/doctor-heartbeat-retirement.js";
-import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
+import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
   type UpdateAdmissionContext,
 } from "../../infra/update-admission-contract.js";
 import { parseUpdateAdmissionVerdict } from "../../infra/update-run-schema.js";
 import { defaultRuntime } from "../../runtime.js";
+import * as stateReadOnly from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withStateMigrationBackupForTest } from "../../state/openclaw-state-schema.test-support.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import * as schemaPreflight from "./schema-preflight.js";
 import { updateAdmitCommand } from "./update-command-admit.js";
+import { snapshotUpdateFixtureFiles } from "./update-command-filesystem-snapshot.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const initialExitCode = process.exitCode;
@@ -49,7 +52,7 @@ function fixture(scenario: Scenario, withDatabase = true) {
   const config = {
     agents: { entries: { main: { workspace, heartbeat: { every: "30m", target: "none" } } } },
   };
-  fs.writeFileSync(configPath, JSON.stringify(config));
+  writeFixtureJsonSync(configPath, config);
   fs.writeFileSync(path.join(root, "package.json"), '{"name":"openclaw","version":"2026.9.8"}');
   const sourcePath = path.join(workspace, "HEARTBEAT.md");
   if (scenario.invalidSource) {
@@ -93,7 +96,7 @@ function fixture(scenario: Scenario, withDatabase = true) {
     supervisor: { version: "2026.9.9", host: "fixture", pid: process.pid },
   };
   const contextPath = path.join(home, "context.json");
-  fs.writeFileSync(contextPath, JSON.stringify(context));
+  writeFixtureJsonSync(contextPath, context);
   if (withDatabase) {
     const database = new DatabaseSync(path.join(state, "state", "openclaw.sqlite"));
     try {
@@ -131,20 +134,56 @@ function fixture(scenario: Scenario, withDatabase = true) {
       database.close();
     }
   }
-  const snapshot = () =>
-    listDirectoryTreeStrictSync(home)
-      .map((walkEntry) => walkEntry.dirent)
-      .filter((entry) => entry.isFile())
-      .map((entry) => {
-        const filename = path.join(entry.parentPath, entry.name);
-        return [
-          path.relative(home, filename),
-          fs.readFileSync(filename).toString("hex"),
-          fs.statSync(filename).mode,
-        ];
-      });
+  const snapshot = () => snapshotUpdateFixtureFiles(home);
   return { config, configPath, contextPath, sourcePath, snapshot };
 }
+
+it.each(["absent", "file", "unreadable"] as const)(
+  "checks unresolved cron update admission (heartbeat source: %s)",
+  async (sourceKind) => {
+    const f = fixture({
+      name: sourceKind,
+      scratch: source,
+      invalidSource: sourceKind === "unreadable",
+    });
+    writeFixtureJsonSync(f.configPath, {
+      agents: { entries: { main: { workspace: path.dirname(f.sourcePath) } } },
+    });
+    if (sourceKind === "absent") {
+      fs.unlinkSync(f.sourcePath);
+    }
+    {
+      using db = new DatabaseSync(resolveOpenClawStateSqlitePath());
+      const oldKey = path.join(
+        path.dirname(process.env.OPENCLAW_STATE_DIR!),
+        "old",
+        "cron",
+        "jobs.json",
+      );
+      db.prepare("UPDATE cron_jobs SET store_key = ?").run(oldKey);
+      db.prepare("UPDATE cron_job_scratch SET store_key = ?").run(oldKey);
+    }
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const before = f.snapshot();
+
+    await updateAdmitCommand(f.contextPath);
+
+    const blocked = sourceKind === "unreadable";
+    expect(process.exitCode).toBe(blocked ? 3 : 0);
+    expect(parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0])).toMatchObject({
+      verdict: blocked ? "refuse" : "admit",
+      reasons: blocked
+        ? [
+            expect.objectContaining({
+              code: "heartbeat-migration",
+              message: expect.stringContaining("regular file"),
+            }),
+          ]
+        : [],
+    });
+    expect(f.snapshot()).toEqual(before);
+  },
+);
 
 it.each<Scenario>([
   {
@@ -249,19 +288,16 @@ it.each([
     },
   };
   if (kind === "included") {
-    fs.writeFileSync(path.join(path.dirname(f.configPath), "agents.json"), JSON.stringify(agents));
+    writeFixtureJsonSync(path.join(path.dirname(f.configPath), "agents.json"), agents);
   }
-  fs.writeFileSync(
-    f.configPath,
-    JSON.stringify({
-      agents: kind === "included" ? { $include: "agents.json" } : agents,
-      ...(kind === "retired July reasoning"
-        ? { meta: { lastTouchedVersion: "2026.7.1-beta.1" } }
-        : {}),
-      ...(kind === "unrelated invalid field" ? { gateway: { port: "private-invalid-value" } } : {}),
-      ...(kind === "future-written" ? { meta: { lastTouchedVersion: "9999.1.1" } } : {}),
-    }),
-  );
+  writeFixtureJsonSync(f.configPath, {
+    agents: kind === "included" ? { $include: "agents.json" } : agents,
+    ...(kind === "retired July reasoning"
+      ? { meta: { lastTouchedVersion: "2026.7.1-beta.1" } }
+      : {}),
+    ...(kind === "unrelated invalid field" ? { gateway: { port: "private-invalid-value" } } : {}),
+    ...(kind === "future-written" ? { meta: { lastTouchedVersion: "9999.1.1" } } : {}),
+  });
   vi.stubEnv("OPENCLAW_CONFIG_READONLY", kind === "read-only" ? "1" : undefined);
   vi.stubEnv("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS", undefined);
   fs.writeFileSync(`${f.configPath}.bak`, "retained pre-upgrade backup\n");
@@ -270,10 +306,7 @@ it.each([
     const capture = schemaPreflight.captureTargetDatabaseSchemaContext;
     vi.spyOn(schemaPreflight, "captureTargetDatabaseSchemaContext").mockImplementationOnce(
       async (...args) => {
-        fs.writeFileSync(
-          f.configPath,
-          JSON.stringify({ agents, gateway: { port: "private-invalid-value" } }),
-        );
+        writeFixtureJsonSync(f.configPath, { agents, gateway: { port: "private-invalid-value" } });
         before = f.snapshot();
         return capture(...args);
       },
@@ -329,6 +362,67 @@ it.each([
     } else {
       fs.unlinkSync(f.sourcePath);
     }
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const before = f.snapshot();
+
+    await updateAdmitCommand(f.contextPath);
+
+    expect(parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0])).toMatchObject({
+      verdict: incomplete ? "refuse" : "admit",
+      reasons: incomplete
+        ? [
+            expect.objectContaining({
+              code: "heartbeat-migration",
+              message: expect.stringContaining("no complete name/interval/prompt entries"),
+            }),
+          ]
+        : [],
+    });
+    expect(process.exitCode).toBe(incomplete ? 3 : 0);
+    expect(f.snapshot()).toEqual(before);
+  },
+);
+
+it.each([false, true])(
+  "inspects configured PostgreSQL heartbeat scratch before activation (incomplete: %s)",
+  async (incomplete) => {
+    const f = fixture({
+      name: "postgres",
+      scratch: incomplete ? "tasks:\n- name: inbox\n  interval: 1h\n" : source,
+    });
+    fs.unlinkSync(f.sourcePath);
+    const anchorPath = resolveOpenClawStateSqlitePath();
+    const storePath = path.join(path.dirname(anchorPath), "postgres-fixture.sqlite");
+    fs.renameSync(anchorPath, storePath);
+    const anchor = new DatabaseSync(anchorPath);
+    anchor.exec("CREATE TABLE openclaw_engine_anchor (engine TEXT)");
+    anchor.close();
+    vi.stubEnv("TEST_DATABASE_DSN", "postgresql://127.0.0.1:1/heartbeat_admission");
+    writeFixtureJsonSync(f.configPath, {
+      ...f.config,
+      database: {
+        engine: "postgres",
+        postgres: {
+          connection: { source: "env", provider: "default", id: "TEST_DATABASE_DSN" },
+        },
+      },
+    });
+    vi.spyOn(schemaPreflight, "checkTargetDatabaseSchemasForContexts").mockResolvedValue({
+      incompatible: [],
+      indeterminate: [],
+    });
+    // Substitute only storage transport; run the real heartbeat queries against retained rows.
+    vi.spyOn(stateReadOnly, "withExistingOpenClawStateDatabaseReadOnly").mockImplementation(
+      (operation) => {
+        const selectedPath = getDatabaseEngineInput("state") ? storePath : anchorPath;
+        const db = new DatabaseSync(selectedPath, { readOnly: true });
+        try {
+          return operation({ db, path: selectedPath });
+        } finally {
+          db.close();
+        }
+      },
+    );
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     const before = f.snapshot();
 

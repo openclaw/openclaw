@@ -120,6 +120,27 @@ context.signal.throwIfAborted();
 output.textContent = `${report.words} words`;
 ```
 
+For a large contract, keep schemas out of the browser bundle with a small
+descriptor checked against `FeatureClientContract<typeof contract>`. Import the
+canonical contract as a type, include its `pluginId` and every operation's
+`kind`, and pass the canonical type explicitly:
+
+```typescript
+import type { FeatureClientContract } from "openclaw/plugin-sdk/feature-contract";
+import type { contract } from "./contract.js";
+
+const browserContract = {
+  pluginId: "writing",
+  operations: { analyze: { kind: "query" } },
+} satisfies FeatureClientContract<typeof contract>;
+
+const feature = createFeatureClient<typeof contract>(browserContract, context.host);
+```
+
+The canonical contract still supplies input, output, and event types. The
+backend continues validating schemas and authorizing operations; the browser
+descriptor only supplies routing and query-watch metadata.
+
 Backend inputs, outputs, and events are validated as bounded JSON. Define
 meaningful limits in the schemas as well. Use the plugin's existing runtime
 and storage APIs for durable state and services.

@@ -27,15 +27,22 @@ const MAX_VECTOR_BYTES = 2 * 1024 * 1024;
 const EMPTY_HISTORY = {};
 
 type DeliveredRow = { version: number; fields: SessionRowDeltaFields; bytes: number };
-const encodedRowBytes = new WeakMap<SessionRow, number>();
+const fixedFullRowBytes = new WeakMap<SessionRow, number>();
 
-function rowByteLength(row: SessionRow): number {
-  let bytes = encodedRowBytes.get(row);
+function fullRowByteLength(
+  row: SessionRow,
+  header: { key: string; agentId: string | undefined; version: number },
+): number {
+  let bytes = fixedFullRowBytes.get(row);
   if (bytes === undefined) {
-    bytes = Buffer.byteLength(serializeSessionRow(row));
-    encodedRowBytes.set(row, bytes);
+    // Only version digits vary by history; remove the placeholder zero and null bytes.
+    bytes =
+      Buffer.byteLength(JSON.stringify({ ...header, version: 0, full: null })) -
+      5 +
+      Buffer.byteLength(serializeSessionRow(row));
+    fixedFullRowBytes.set(row, bytes);
   }
-  return bytes;
+  return bytes + String(header.version).length;
 }
 
 type DeliveredAncestor = { key: string; content: string; chars: number; revision: string };
@@ -189,15 +196,14 @@ export class ConnectionSessionRows {
       const retain = bytes - (previous?.bytes ?? 0) - evictionBytes + charge <= MAX_VECTOR_BYTES;
       const next = { version: ++version, fields, bytes: charge };
       const header = { key: row.key, agentId: row.agentId, version: next.version };
-      const full = { ...header, full: row, ...(!retain ? { retain: false as const } : {}) };
-      let result: SessionRowWire = full;
+      let result: SessionRowWire | undefined;
       let encoding: string | undefined;
       if (retain && previous && sameGeneration) {
         const patch = { ...header, base: previous.version, ...diff(previous.fields, fields, row) };
-        const fullBytes =
-          Buffer.byteLength(JSON.stringify({ ...header, full: null })) - 4 + rowByteLength(row);
         const patchJSON = JSON.stringify(patch);
-        if (Buffer.byteLength(patchJSON) < fullBytes) {
+        const patchBytes = Buffer.byteLength(patchJSON);
+        // Each serialized member needs at least `"":0,` (five bytes), plus the outer braces.
+        if (patchBytes < 5 * fields.fieldCount + 1 || patchBytes < fullRowByteLength(row, header)) {
           result = patch;
           encoding = patchJSON;
         }
@@ -213,7 +219,7 @@ export class ConnectionSessionRows {
         evictions++;
       }
       update(identity, retain ? next : undefined);
-      return result;
+      return result ?? { ...header, full: row, ...(!retain ? { retain: false as const } : {}) };
     });
     return { wire, encoded, updates, count, bytes, version, generations, evictions };
   }

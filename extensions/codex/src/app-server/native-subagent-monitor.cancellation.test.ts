@@ -403,9 +403,7 @@ it("cancels the current generation after a retained Codex parent thread is reuse
       killed: 1,
       cancelledRequesters: [
         {
-          agentId: "main",
-          sessionKey,
-          sessionId: "physical-1",
+          ...cancelledRequester,
           lifecycleRevision: "revision-2",
           requesterTurnRunId: "current-parent-run",
         },

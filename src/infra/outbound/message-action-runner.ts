@@ -618,10 +618,10 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
           const preserveSendBuffer =
             action === "send" &&
             Boolean(gateway) &&
-            (channelPlugin?.actions?.resolveExecutionMode?.({
+            (channelPlugin.actions?.resolveExecutionMode?.({
               action: "send",
             }) === "gateway" ||
-              channelPlugin?.outbound?.deliveryMode === "gateway");
+              channelPlugin.outbound?.deliveryMode === "gateway");
 
           const hydrateActionAttachmentParams = () =>
             hydrateAttachmentParamsForAction({

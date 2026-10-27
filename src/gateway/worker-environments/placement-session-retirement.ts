@@ -65,16 +65,19 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
       const prepared = await placements.prepareMaintenancePlacements();
       return {
         // Session evidence survives until its remote owner is reclaimed or proven gone.
-        capture: () =>
-          prepared.placements.flatMap((placement) =>
-            placement.state === "failed" &&
-            isFailedWorkerPlacementEnvironmentGone({
-              environmentService: deps.environments,
-              placement,
-            })
-              ? []
-              : [placement.sessionKey],
-          ),
+        *capture() {
+          for (const placement of prepared.placements) {
+            if (
+              placement.state !== "failed" ||
+              !isFailedWorkerPlacementEnvironmentGone({
+                environmentService: deps.environments,
+                placement,
+              })
+            ) {
+              yield placement.sessionKey;
+            }
+          }
+        },
         dispose: prepared.release,
       };
     });

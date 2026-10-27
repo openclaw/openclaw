@@ -77,11 +77,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     ws.emitOpen();
     await vi.advanceTimersByTimeAsync(0);
     expect(dispatch).not.toHaveBeenCalled();
-    ws.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "handshake-challenge", ts: 1_800_000_000_000 },
-    });
+    ws.emitConnectChallenge({ nonce: "handshake-challenge", ts: 1_800_000_000_000 });
     await dispatched;
     expect(dispatch).toHaveBeenCalledOnce();
   });

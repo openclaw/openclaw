@@ -9,6 +9,11 @@ export type RuntimeProcessScriptFile = {
   dispose(): void;
 };
 export declare function createRuntimeProcessScriptFile(
-  name: "packageCliNodeProbe" | "nodeRuntimeProbe" | "daemonRuntimeProbe" | "updateStateSizes",
+  name:
+    | "bunSqliteLibraryProbe"
+    | "packageCliNodeProbe"
+    | "nodeRuntimeProbe"
+    | "daemonRuntimeProbe"
+    | "updateStateSizes",
   options?: RuntimeProcessScriptFileOptions,
 ): RuntimeProcessScriptFile;

@@ -3,6 +3,7 @@ import {
   GatewayProtocolRequestError,
   retainGatewayResponsePayload,
 } from "../../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
@@ -27,6 +28,22 @@ export const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>
 
 export function gatewayResponseError(message: string): GatewayProtocolRequestError {
   const error = new GatewayProtocolRequestError({ code: "UNAVAILABLE", message });
+  retainGatewayResponsePayload(error, undefined);
+  return error;
+}
+
+export function gatewayProtocolMismatchError(): GatewayClientRequestError {
+  const error = new GatewayClientRequestError({
+    code: "INVALID_REQUEST",
+    message: "protocol mismatch",
+    details: {
+      code: "PROTOCOL_MISMATCH",
+      clientMinProtocol: 5,
+      clientMaxProtocol: 5,
+      expectedProtocol: 4,
+      minimumProbeProtocol: 3,
+    },
+  });
   retainGatewayResponsePayload(error, undefined);
   return error;
 }

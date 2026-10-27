@@ -103,7 +103,9 @@ With `message` in the tool cap, scheduled agent turns can read messages and chan
 information on supported channel plugins without an inbound chat. Operator-created
 jobs use the current operator read policy. Agent-created jobs retain their recorded
 creator origin and account, and the channel's delegated read restrictions still
-apply. Delivery settings do not grant read access.
+apply. Delivery settings do not grant read access. Script payloads and condition triggers
+use the same recorded creator origin at message-action admission; the channel
+still enforces its own restrictions on reads and mutations.
 
 Scheduled agent turns can inspect their own job and remove it when finished,
 even without an interactive sender. This self-scoped `automations` tool does not
@@ -135,7 +137,10 @@ unbound, without that conversation's workspace or memory, and still rechecks the
 creator's device and grant. A removed or archived conversation pauses the job.
 
 Stored jobs are unchanged: a source is never inferred for an existing job, so
-jobs created before this behavior keep their recorded ownership check. A source
+jobs created before this behavior keep their recorded ownership check. Binding
+an older job that names its conversation only by key from an authenticated
+Control UI turn in that conversation stores that turn's source (see
+[Binding older jobs](/cli/cron#binding-older-jobs-to-their-conversation)). A source
 is also never captured for guests, scripts, unlinked jobs, jobs created without
 an authenticated operator turn (such as `cron.add` from the CLI), or another
 conversation. An authenticated owner update can bind it again

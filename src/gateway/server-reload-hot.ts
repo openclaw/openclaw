@@ -268,8 +268,8 @@ export function createGatewayReloadHandlers(
         // Plugin publication can reject its prepared registry. Keep config and
         // secret rollback available until that selection succeeds.
         publication?.assertInvokerOwned?.();
-        runtime?.publish();
         if (runtime) {
+          runtime.publish();
           params.setState(nextState);
           runtimeCommitted = true;
         }

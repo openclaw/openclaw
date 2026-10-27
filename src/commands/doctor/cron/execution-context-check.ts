@@ -251,7 +251,7 @@ function withCliBackend(cliBackend: string | undefined) {
 }
 
 /** Reviews every valid stored automation; a job that cannot be read is listed, not fatal. */
-export async function collectScheduledContextReport(params: {
+async function collectScheduledContextReport(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<ScheduledContextReport> {

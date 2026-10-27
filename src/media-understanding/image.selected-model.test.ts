@@ -1,11 +1,11 @@
 import { expect, it, vi } from "vitest";
+import { createModelAliasMetadata } from "../agents/embedded-agent-runner/model-alias-metadata.test-support.js";
 import { createEmptyPreparedModelRuntimeFixture } from "../agents/embedded-agent-runner/model.fixture.test-support.js";
 import { createEmptyAgentDiscoveryStores } from "../agents/embedded-agent-runner/model.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "../agents/embedded-agent-runner/model.static-id.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -14,17 +14,7 @@ import { resolveImageRuntime } from "./image-model-runtime.js";
 const provider = "image-selected-model";
 const baseUrl = "https://image-selected-model.example/v1";
 const modelRoute = { provider, baseUrl, api: "openai-completions" as const };
-function metadata(aliases: Record<string, string>) {
-  return createPluginMetadataSnapshotFixture({
-    plugins: [
-      {
-        id: provider,
-        providers: [provider],
-        modelIdNormalization: { providers: { [provider]: { aliases } } },
-      },
-    ],
-  });
-}
+const metadata = createModelAliasMetadata.bind(undefined, provider);
 
 it("uses supplied alias metadata exactly once despite conflicting ambient hooks", async () => {
   await withOpenClawTestState({ label: "image-selected-model" }, async (state) => {
@@ -38,7 +28,6 @@ it("uses supplied alias metadata exactly once despite conflicting ambient hooks"
     };
     await state.writeConfig(cfg);
     const metadataSnapshot = metadata({ entry: "middle", middle: "final", hooked: "wrong" });
-    const ambientMetadata = metadata({ entry: "wrong" });
     const normalizeModelId = vi.fn(({ modelId }: { modelId: string }) =>
       modelId === "middle" ? "hooked" : modelId,
     );
@@ -63,7 +52,6 @@ it("uses supplied alias metadata exactly once despite conflicting ambient hooks"
         metadataSnapshot,
         createStores: () => stores,
       }),
-      agentId: "main",
       workspaceDir: state.workspaceDir,
       pluginRegistry,
       configuredRuntimeModels,
@@ -72,30 +60,23 @@ it("uses supplied alias metadata exactly once despite conflicting ambient hooks"
         metadataSnapshot,
       ),
     };
-    await withPluginRuntimeGenerationScope(
-      { metadataSnapshot: ambientMetadata, pluginRegistry },
-      async () => {
-        let runtimeResources: AsyncDisposable | undefined;
-        try {
-          const runtime = await resolveImageRuntime(
-            {
-              cfg,
-              agentDir: state.agentDir(),
-              provider,
-              model: "entry",
-              authStore: { version: 1, profiles: {} },
-              preparedModelRuntime: snapshot,
-            },
-            (resources) => {
-              runtimeResources = resources;
-            },
-          );
-          expect(runtime.model).toMatchObject({ ...modelRoute, id: "hooked" });
-        } finally {
-          await runtimeResources?.[Symbol.asyncDispose]();
-        }
-      },
+    await using resources = new AsyncDisposableStack();
+    const runtime = await withPluginRuntimeGenerationScope(
+      { metadataSnapshot: metadata({ entry: "wrong" }), pluginRegistry },
+      () =>
+        resolveImageRuntime(
+          {
+            cfg,
+            agentDir: state.agentDir(),
+            provider,
+            model: "entry",
+            authStore: { version: 1, profiles: {} },
+            preparedModelRuntime: snapshot,
+          },
+          (lease) => resources.use(lease),
+        ),
     );
+    expect(runtime.model).toMatchObject({ ...modelRoute, id: "hooked" });
     expect(normalizeModelId).toHaveBeenCalledExactlyOnceWith({ provider, modelId: "middle" });
   });
 });

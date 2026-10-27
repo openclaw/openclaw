@@ -7,6 +7,7 @@ import { subscribeBrowserAuthRestored } from "../app/browser-http.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { resolveProfileAppearancePrefs } from "../app/server-prefs-profile.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
+import { observeDocumentRootAttributes } from "../lib/reactive/document-root-attributes.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import "../styles/session-background.css";
@@ -221,11 +222,11 @@ export function SessionBackgroundContent(
     }),
   );
   onSettled(() => {
-    const observer = new MutationObserver(notify);
-    observer.observe(host.ownerDocument.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-theme", "data-theme-mode", "data-theme-background"],
-    });
+    const stopTheme = observeDocumentRootAttributes(
+      host.ownerDocument,
+      ["data-theme", "data-theme-mode", "data-theme-background"],
+      notify,
+    );
     const stopAccessibility =
       accessibility &&
       listen(accessibility, "change", () => {
@@ -239,7 +240,7 @@ export function SessionBackgroundContent(
       }
     });
     return () => {
-      observer.disconnect();
+      stopTheme();
       stopAccessibility?.();
       request?.controller.abort();
       if (request?.url) {

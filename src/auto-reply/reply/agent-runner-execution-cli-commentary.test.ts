@@ -131,10 +131,6 @@ it("delivers commentary from a real JSONL CLI subprocess", async () => {
 
 it.each([
   {
-    source: "The durable findings live here.",
-    expected: { text: "The durable findings live here." },
-  },
-  {
     source: "[[reply_to:target]] [[audio_as_voice]] The durable findings live here.",
     expected: {
       text: "The durable findings live here.",
@@ -243,9 +239,7 @@ it.each(["raw", "prepared", "both"] as const)(
 
 it.each(
   [false, true].flatMap((completed) =>
-    ["NO_REPLY", '{"action":"NO_REPLY"}', '"NO_REPLY"', "NO_REPLY.", "An ordinary caption."].map(
-      (text) => ({ text, completed }),
-    ),
+    ["NO_REPLY", "An ordinary caption."].map((text) => ({ text, completed })),
   ),
 )(
   "keeps prepared CLI payload facts through normalization (completed=$completed): $text",

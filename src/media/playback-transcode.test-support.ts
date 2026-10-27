@@ -7,6 +7,20 @@ import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js"
 type Playback = typeof import("./playback-transcode.js");
 type SourceParams = Parameters<Playback["resolvePlaybackTranscode"]>[0];
 
+export async function readPlaybackSource(filePath: string) {
+  const sourcePath = await fs.realpath(filePath);
+  const { size, mtimeMs, ctimeMs } = await fs.stat(sourcePath);
+  return {
+    sourcePath,
+    sourceStat: {
+      size,
+      mtimeMs,
+      ctimeMs,
+      exactIdentity: await fs.stat(sourcePath, { bigint: true }),
+    },
+  };
+}
+
 export function usePlaybackFixture(prefix: string, mocks: string[]) {
   let playback: Playback;
   let home: TempHomeEnv;
@@ -26,25 +40,11 @@ export function usePlaybackFixture(prefix: string, mocks: string[]) {
       vi.resetModules();
     }
   });
-  async function readSource(filePath: string) {
-    const sourcePath = await fs.realpath(filePath);
-    const { size, mtimeMs, ctimeMs } = await fs.stat(sourcePath);
-    return {
-      sourcePath,
-      sourceStat: {
-        size,
-        mtimeMs,
-        ctimeMs,
-        exactIdentity: await fs.stat(sourcePath, { bigint: true }),
-      },
-    };
-  }
   return {
-    readSource,
     async createSource(fileName: string, contents: string | Uint8Array = "source") {
       const filePath = path.join(home.home, fileName);
       await fs.writeFile(filePath, contents);
-      return await readSource(filePath);
+      return await readPlaybackSource(filePath);
     },
     resolveTranscode: (params: SourceParams) => playback.resolvePlaybackTranscode(params),
     resolveMetadata: (params: SourceParams) => playback.resolvePlaybackMetadataForSource(params),

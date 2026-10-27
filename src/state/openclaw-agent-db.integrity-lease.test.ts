@@ -4,11 +4,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import { readSqliteCleanCloseSeal } from "../infra/sqlite-clean-close-seal.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -544,6 +547,13 @@ it("preserves dirty proof without quarantine SQL when a healthy peer closes befo
     env: owner.env,
   });
   expect(owner.cleanClose()).toBe(false);
+  const shared = openOpenClawStateDatabase({ env: owner.env });
+  const leaseSql = trackSqliteStatementExecutions(
+    sqlPublicationAnchor(shared.db),
+    ["lease"],
+    (sql) =>
+      /\b(?:from|into|update)\s+"?agent_database_leases"?(?=\s|\(|$)/i.test(sql) ? "lease" : null,
+  );
   const quarantineSql: string[] = [];
   const observer = observeHostDataSql((sql, database) => {
     if (
@@ -557,11 +567,13 @@ it("preserves dirty proof without quarantine SQL when a healthy peer closes befo
     releaseOpenClawAgentDatabaseLease(peerLease, { env: owner.env }, "uncheckpointed");
     expect(quarantineSql).toEqual([]);
   } finally {
+    leaseSql.restore();
     observer.restore();
   }
   expect(owner.cleanClose()).toBe(false);
   closeOpenClawAgentDatabaseByPath(owner.database.path);
   expect(owner.cleanClose()).toBe(true);
+  expect(leaseSql.counts.lease).toBe(1);
 });
 
 it.each(["closing", "unregistering", "reopening shared state before closing"])(

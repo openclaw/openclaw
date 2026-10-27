@@ -38,6 +38,8 @@ URL to fetch. `http(s)` only.
 Output format after main-content extraction. For Markdown responses, text mode
 normalizes prose whitespace but preserves indentation, repeated spaces, tabs,
 and blank lines inside code blocks fenced with backticks or tildes.
+Text mode removes complete link destinations, including nested parentheses.
+Readability text output keeps headings, paragraphs, and list items on separate lines.
 </ParamField>
 
 <ParamField path="maxChars" type="number">

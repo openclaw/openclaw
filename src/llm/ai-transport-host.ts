@@ -10,6 +10,7 @@ import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
 } from "../agents/provider-transport-fetch.js";
+import { hasGuardedFetchBeforeRequest } from "../infra/net/fetch-request-authority.js";
 import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAnthropicInlineContentBlocks } from "../media/anthropic-inline-images.js";
@@ -45,7 +46,8 @@ configureAiTransportHost({
       request?.proxy ||
       request?.tls ||
       getModelProviderLocalService(model) ||
-      (scope === "fetch" && getProviderAuthAuthority(model)),
+      // Request-owned Access checks must also survive asynchronous payload preparation.
+      (scope === "fetch" && (getProviderAuthAuthority(model) || hasGuardedFetchBeforeRequest())),
     );
   },
   unwrapModelTransportSentinels: unwrapModelHeaderSentinelsForProviderEgress,

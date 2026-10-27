@@ -13,32 +13,25 @@ import { preloadSessionMessageSubscriptions } from "../../lib/sessions/session-s
 import { PendingSessionCreate } from "./pending-session-create-lazy.ts";
 import { sessionRouteHints } from "./route-draft.ts";
 
-function sessionLoaderDeps(
-  face: BoardFace,
-  context: ApplicationContext,
-  location: RouteLocation,
-): string {
-  const search = new URLSearchParams(location.search);
-  const bridgedPath =
-    location.pathname === pathForRoute(face, context.basePath)
-      ? search.get(INTERNAL_SESSION_PATH_PARAM)
-      : null;
-  if (bridgedPath) {
-    search.delete(INTERNAL_SESSION_PATH_PARAM);
-  }
-  const serializedSearch = search.toString();
-  return `${gatewayPresentationScope(context.gateway).key}\u0000${bridgedPath ?? location.pathname}\u0000${
-    serializedSearch ? `?${serializedSearch}` : ""
-  }`;
-}
-
 function sessionPage(face: BoardFace) {
   return definePage({
     ...routePageSpec(face),
     // The application router temporarily maps dynamic session URLs onto the
     // static face route. Both locations describe the same loader match.
-    loaderDeps: (context: ApplicationContext, location: RouteLocation) =>
-      sessionLoaderDeps(face, context, location),
+    loaderDeps: (context: ApplicationContext, location: RouteLocation): string => {
+      const search = new URLSearchParams(location.search);
+      const bridgedPath =
+        location.pathname === pathForRoute(face, context.basePath)
+          ? search.get(INTERNAL_SESSION_PATH_PARAM)
+          : null;
+      if (bridgedPath) {
+        search.delete(INTERNAL_SESSION_PATH_PARAM);
+      }
+      const serializedSearch = search.toString();
+      return `${gatewayPresentationScope(context.gateway).key}\u0000${bridgedPath ?? location.pathname}\u0000${
+        serializedSearch ? `?${serializedSearch}` : ""
+      }`;
+    },
     loader: (context: ApplicationContext, options) => {
       // Subscription acquisition owns errors and retries after this speculative load.
       void preloadSessionMessageSubscriptions().catch(() => undefined);

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { i18n } from "../../../i18n/index.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { ChatDetailsPeople } from "./chat-details-people-list.tsx";
 import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import "../../../styles.css";
@@ -11,21 +12,7 @@ import "../../../styles.css";
 beforeEach(async () => {
   await i18n.setLocale("en");
   // JSDOM has no geometry. Overflow/resize behavior belongs to the browser test.
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      private readonly targets = new Set<Element>();
-      observe(target: Element) {
-        this.targets.add(target);
-      }
-      unobserve(target: Element) {
-        this.targets.delete(target);
-      }
-      disconnect() {
-        this.targets.clear();
-      }
-    },
-  );
+  stubTargetRetainingObserver("ResizeObserver");
 });
 afterEach(() => {
   cleanupSolid();

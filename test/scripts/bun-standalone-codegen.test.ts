@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
@@ -6,6 +7,7 @@ import vm from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { createStandaloneCodegenTransform } from "../../scripts/lib/bun-standalone-codegen.mjs";
 import { createStandaloneSourceParser } from "../../scripts/lib/bun-standalone-source-parser.mjs";
+import { requirePinnedBun } from "../../scripts/lib/pinned-bun.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { typeCheckSources } from "../helpers/typescript.js";
 
@@ -19,6 +21,68 @@ const program = {
 };
 
 describe("standalone fixed code generation", () => {
+  it.skipIf(process.platform === "win32")("captures remaining static programs", () => {
+    const root = fs.realpathSync(dirs.make("standalone-capture-"));
+    const runtimeRoot = path.join(root, "runtime");
+    const dist = path.join(runtimeRoot, "dist");
+    fs.mkdirSync(path.join(dist, "worker"), { recursive: true });
+    const sources = [
+      ["staged-inputs", "src/media/staged-inputs.ts"],
+      ["workspace-manifest", "src/gateway/worker-environments/workspace-path-exclusions.ts"],
+      ["workspace-hash-memo", "src/gateway/worker-environments/workspace-hash-memo.ts"],
+      ["workspace-seed-retention", "src/worker/workspace-seed-retention.ts"],
+    ].map(([name, owner], index) => {
+      const filename = path.join(dist, `${name}-fixture.mjs`);
+      fs.writeFileSync(
+        filename,
+        `import { compileFunction } from "node:vm";
+//#region ${owner}
+const SOURCE${index} = "const offset = ${index + 1};";
+export const run = compileFunction(\`\${SOURCE${index}}\nreturn value + offset + ${index};\`, ["value"]);`,
+      );
+      return filename;
+    });
+    fs.writeFileSync(
+      path.join(dist, "workspace-manifest-script.runtime-fixture.mjs"),
+      "//#region src/gateway/worker-environments/workspace-manifest-script.runtime.ts\nexport function run() { return 99; }\n",
+    );
+    const receiver = path.join(dist, "worker/workspace-rsync-receiver.mjs");
+    fs.writeFileSync(
+      receiver,
+      `import { compileFunction } from "node:vm";
+const REMOTE_WORKSPACE_ACCEPTED_RSYNC_RECEIVER_JS = "return 41;";
+const REMOTE_WORKSPACE_RSYNC_RECEIVER_JS = "return 42;";
+//#region src/worker/workspace-rsync-receiver.ts
+export const select = (accepted) => compileFunction(accepted ? REMOTE_WORKSPACE_ACCEPTED_RSYNC_RECEIVER_JS : REMOTE_WORKSPACE_RSYNC_RECEIVER_JS, ["require"]);`,
+    );
+    const driver = path.join(root, "capture.mjs");
+    fs.writeFileSync(
+      driver,
+      `import fs from "node:fs";
+import vm from "node:vm";
+import { createStandaloneCodegenAdapter } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-codegen.mjs", import.meta.url).href)};
+import { createStandaloneSourceParser } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-source-parser.mjs", import.meta.url).href)};
+const adapter = await createStandaloneCodegenAdapter({runtimeRoot:${JSON.stringify(runtimeRoot)},outputRoot:${JSON.stringify(path.join(root, "output"))},parse:createStandaloneSourceParser()});
+const values = ${JSON.stringify(sources)}.map(filename => {
+  const result = adapter.transform({filename,contents:fs.readFileSync(filename,"utf8")});
+  if (result.count !== 1) throw new Error("Missing fixed program transform");
+  return vm.runInNewContext(result.contents.replace(/^import[^;]+;/, "").replace("export ", "") + "\\nrun(40)");
+});
+const receiver = adapter.transform({filename:${JSON.stringify(receiver)},contents:fs.readFileSync(${JSON.stringify(receiver)},"utf8")});
+const selected = vm.runInNewContext(receiver.contents.replace(/^import[^;]+;/, "").replace("export ", "") + "\\n[select(true)(),select(false)()]");
+console.log(JSON.stringify({programs:adapter.programs.length,values,selected,residuals:adapter.residuals}));
+`,
+    );
+    const result = spawnSync(requirePinnedBun(), [driver], { encoding: "utf8", timeout: 30_000 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      programs: 6,
+      values: [41, 43, 45, 47],
+      selected: [41, 42],
+      residuals: [],
+    });
+  });
+
   it("keeps captured JavaScript outside typed callers and creates a fresh function per call", async () => {
     const directory = dirs.make("typed-static-program-");
     const programModule = path.join(directory, "programs.mjs");

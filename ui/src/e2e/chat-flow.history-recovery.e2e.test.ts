@@ -97,6 +97,7 @@ suite.define(() => {
       { key: deletedSession, kind: "direct", label: "Session C", updatedAt: 1 },
     ]);
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       methodResponses: {
         "chat.history": historyCases,
         "chat.startup": historyCases,
@@ -183,6 +184,7 @@ suite.define(() => {
       timestamp: baseTs + index,
     }));
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       // A stays fixed while B's shared history/startup snapshot grows below.
       historyMessages: currentSessionMessages,
       sessionTranscripts: {

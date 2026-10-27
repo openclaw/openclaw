@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { appendGitConfig, gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
+import {
+  gitMaintenanceEnvironment,
+  gitMaintenanceEnvironmentExpression,
+} from "../../infra/git-maintenance-env.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { NodeWorkerWorkspaceExecResult } from "../../worker/node-workspace-protocol.js";
@@ -47,7 +50,12 @@ const { origin, token } = JSON.parse(fs.readFileSync(0, "utf8"));
 const env = { ...process.env };
 for (const key of Object.keys(env)) if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key)) delete env[key];
 Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" });
-Object.assign(env, (${appendGitConfig.toString()})(${JSON.stringify(gitMaintenanceEnvironment())}, token ? [["http." + origin + ".extraheader", "Authorization: Basic " + Buffer.from("x-access-token:" + token).toString("base64")]] : []));
+Object.assign(env, token ? ${gitMaintenanceEnvironmentExpression([
+  [
+    '"http." + origin + ".extraheader"',
+    '"Authorization: Basic " + Buffer.from("x-access-token:" + token).toString("base64")',
+  ],
+])} : ${JSON.stringify(gitMaintenanceEnvironment())});
 const args = process.argv.slice(1);
 // Identity-scoped workspaces can put partial-clone .promisor files at MAX_PATH.
 if (process.platform === "win32") args.unshift("-c", "core.longpaths=true");

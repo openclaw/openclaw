@@ -1,36 +1,40 @@
 import { describe, expect, it, vi } from "vitest";
-import * as codeRegions from "./code-ranges.js";
+import * as codeRegions from "./code-regions.js";
+import { expectPrefixParity, regexWork, streamChunks } from "./streaming.test-support.js";
 import { createTextProjection } from "./text-projection.js";
 import { stripToolCallXmlTags, toolCallXmlTextFilter } from "./tool-call-xml.js";
 
 const CHUNK = 4;
 
-/** An ordinary frontend answer: fenced JSX with many tags, no tool-call markup. */
+function observeMarkdownOwnership() {
+  const spies = [
+    vi.spyOn(codeRegions, "findCodeRegions"),
+    vi.spyOn(codeRegions, "findCodeOwnership"),
+  ];
+  return {
+    characters: () =>
+      spies.reduce(
+        (total, spy) => total + spy.mock.calls.reduce((sum, [text]) => sum + text.length, 0),
+        0,
+      ),
+    restore: () => spies.forEach((spy) => spy.mockRestore()),
+  };
+}
+
+function streamXml(source: string, size = CHUNK) {
+  return streamChunks(
+    source,
+    size,
+    createTextProjection([
+      toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true),
+    ]),
+  );
+}
+
 function jsxAnswer(sections: number): string {
-  const parts: string[] = [];
-  for (let index = 0; index < sections; index += 1) {
-    parts.push(
-      `Section ${index} renders the following component.`,
-      "",
-      "```jsx",
-      `export function Card${index}({ title, items }) {`,
-      "  return (",
-      `    <section className="card card-${index}">`,
-      "      <h2>{title}</h2>",
-      "      <ul>",
-      "        {items.map((item) => (",
-      "          <li key={item.id}>{item.label}</li>",
-      "        ))}",
-      "      </ul>",
-      `      {items.length < ${index + 3} ? <p>Few items</p> : <p>Many items</p>}`,
-      "    </section>",
-      "  );",
-      "}",
-      "```",
-      "",
-    );
-  }
-  return parts.join("\n");
+  return "```jsx\n<div><p>{items.length < 3 ? <b>Few</b> : <i>Many</i>}</p></div>\n```\n".repeat(
+    sections,
+  );
 }
 
 /** An ordinary HTML answer whose line length periodically leaves "<p" at a delta edge. */
@@ -40,72 +44,54 @@ function htmlAnswer(size: number, lineBreak = true): string {
 }
 
 describe("toolCallXmlTextFilter streamed projection work", () => {
-  it("does not parse Markdown ownership for ordinary HTML/JSX markup", () => {
-    const source = jsxAnswer(20);
-    const regions = vi.spyOn(codeRegions, "findCodeRegions");
-    try {
-      const projection = createTextProjection([
-        toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true),
-      ]);
-      for (let offset = 0; offset < source.length; offset += CHUNK) {
-        projection.append(source.slice(offset, offset + CHUNK));
-      }
-      expect(projection.text).toBe(source);
-      // Every `<div>`/`<li>`/`<p>` used to pay a whole-reply Markdown parse.
-      const parsedCharacters = regions.mock.calls.reduce(
-        (total, [parsed]) => total + parsed.length,
-        0,
-      );
-      expect(parsedCharacters).toBeLessThan(source.length * 2);
-    } finally {
-      regions.mockRestore();
-    }
-  });
-
   it.each([
-    ["multiline", true],
-    ["single line", false],
-  ])("does not parse Markdown ownership for a partial ordinary tag prefix (%s)", (_, lineBreak) => {
-    const source = htmlAnswer(16_000, lineBreak);
-    const regions = vi.spyOn(codeRegions, "findCodeRegions");
+    ["JSX", jsxAnswer(20)],
+    ["multiline HTML", htmlAnswer(16_000)],
+    ["single-line HTML", htmlAnswer(16_000, false)],
+  ])("bounds Markdown ownership work for ordinary %s", (_name, source) => {
+    const work = observeMarkdownOwnership();
     try {
-      const projection = createTextProjection([
-        toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true),
-      ]);
-      for (let offset = 0; offset < source.length; offset += CHUNK) {
-        projection.append(source.slice(offset, offset + CHUNK));
-      }
-      expect(projection.text).toBe(source);
-      // A trailing "<p" can still become <parameter>; resolving that ambiguity must
-      // not reparse the whole Markdown document at every repeated tag boundary.
-      const parsedCharacters = regions.mock.calls.reduce(
-        (total, [parsed]) => total + parsed.length,
-        0,
-      );
-      expect(parsedCharacters).toBeLessThan(source.length * 2);
+      expect(streamXml(source).text).toBe(source);
+      expect(work.characters()).toBeLessThan(source.length * 2);
     } finally {
-      regions.mockRestore();
+      work.restore();
     }
   });
 
-  it("keeps the partial-prefix fast path after a fenced tool-call example", () => {
-    const source = `\`\`\`xml\n<tool_call>{"path":"a.ts"}</tool_call>\n\`\`\`\n\n${htmlAnswer(16_000)}`;
-    const regions = vi.spyOn(codeRegions, "findCodeRegions");
+  const literalFence = "```text\n<think>literal code</think>\n```\nOrdinary prose follows.\n\n";
+  it.each([
+    [
+      "a fenced tool-call example",
+      `\`\`\`xml\n<tool_call>{"path":"a.ts"}</tool_call>\n\`\`\`\n\n${htmlAnswer(16_000)}`,
+    ],
+    [
+      "an outer final tag before repeated fences",
+      `<final>${literalFence.repeat(Math.ceil(22_000 / literalFence.length))}</final>`,
+    ],
+  ])("keeps partial-prefix ownership work bounded after %s", (_, source) => {
+    const work = observeMarkdownOwnership();
     try {
-      const projection = createTextProjection([
-        toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true),
-      ]);
-      for (let offset = 0; offset < source.length; offset += CHUNK) {
-        projection.append(source.slice(offset, offset + CHUNK));
+      const filter = toolCallXmlTextFilter(
+        { stripFunctionResponseAfterPluralToolCalls: true },
+        true,
+      );
+      const projection = createTextProjection([filter]);
+      let delivered = "";
+      let parsedCharacters = 0;
+      for (let offset = 0; offset < source.length; offset += 98) {
+        const expected = filter.transform(source.slice(0, offset + 98));
+        const before = work.characters();
+        const result = projection.append(source.slice(offset, offset + 98));
+        parsedCharacters += work.characters() - before;
+        delivered = result.delta === null ? result.text : delivered + result.delta;
+        expect(result.text).toBe(expected);
+        expect(delivered).toBe(expected);
       }
       expect(projection.text).toBe(source);
-      const parsedCharacters = regions.mock.calls.reduce(
-        (total, [parsed]) => total + parsed.length,
-        0,
-      );
+      expect(parsedCharacters).toBeGreaterThan(0);
       expect(parsedCharacters).toBeLessThan(source.length * 2);
     } finally {
-      regions.mockRestore();
+      work.restore();
     }
   });
 
@@ -179,34 +165,7 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
         streaming,
       );
       for (const source of sources) {
-        // Compare retained state with a fresh canonical transform at each prefix.
-        const expected = Array.from({ length: source.length + 1 }, (_, end) =>
-          filter.transform(source.slice(0, end)),
-        );
-        const schedules = [
-          ...Array.from({ length: source.length + 1 }, (_, split) => [split, source.length]),
-          ...[1, 4].map((size) =>
-            Array.from({ length: Math.ceil(source.length / size) }, (_, index) =>
-              Math.min((index + 1) * size, source.length),
-            ),
-          ),
-        ];
-        for (const ends of schedules) {
-          const projection = createTextProjection([filter]);
-          let start = 0;
-          let previous = "";
-          for (const end of ends) {
-            const result = projection.append(source.slice(start, end));
-            expect(result.text, JSON.stringify({ source, streaming, start, end })).toBe(
-              expected[end],
-            );
-            if (result.delta !== null) {
-              expect(previous + result.delta).toBe(result.text);
-            }
-            previous = result.text;
-            start = end;
-          }
-        }
+        expectPrefixParity(source, () => createTextProjection([filter]), filter.transform);
       }
     }
   });
@@ -214,36 +173,15 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
   it("still strips a tool-call tag whose name is split across deltas", () => {
     const call = '<tool_call>{"path":"a.ts"}</tool_call>';
     const source = `Before.\n${call}\nAfter.`;
-    const projection = createTextProjection([
-      toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true),
-    ]);
-    for (const char of source) {
-      projection.append(char);
-    }
+    const projection = streamXml(source, 1);
     expect(projection.text).toBe(stripToolCallXmlTags(source));
     expect(projection.text).toBe("Before.\n\nAfter.");
-  });
-
-  it("preserves a quoted tool-call example inside fenced code", () => {
-    const source = '```xml\n<tool_call>{"path":"a.ts"}</tool_call>\n```\n\nDone.';
-    const projection = createTextProjection([
-      toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true),
-    ]);
-    for (let offset = 0; offset < source.length; offset += 3) {
-      projection.append(source.slice(offset, offset + 3));
-    }
-    expect(projection.text).toBe(source);
   });
 
   it("still strips a tool call that follows ordinary markup", () => {
     const call = '<tool_call>{"path":"a.ts"}</tool_call>';
     const source = `${jsxAnswer(2)}\n${call}\nAfter.`;
-    const projection = createTextProjection([
-      toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true),
-    ]);
-    for (let offset = 0; offset < source.length; offset += CHUNK) {
-      projection.append(source.slice(offset, offset + CHUNK));
-    }
+    const projection = streamXml(source);
     expect(projection.text).toBe(stripToolCallXmlTags(source));
     expect(projection.text).not.toContain('{"path":"a.ts"}');
   });
@@ -253,17 +191,10 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
     // CommonMark forbids backticks in a backtick fence's info string, so this line
     // does not own a code block for the canonical resolver.
     const source = `\`\`\`jsx \`code\`\n${call}\nDone.`;
-    const projection = createTextProjection([
-      toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true),
-    ]);
-    const deltas: string[] = [];
-    for (let offset = 0; offset < source.length; offset += CHUNK) {
-      const result = projection.append(source.slice(offset, offset + CHUNK));
-      deltas.push(result.delta ?? "");
-    }
+    const projection = streamXml(source);
     expect(projection.text).not.toContain(call);
     expect(projection.text).not.toContain('{"path":"a.ts"}');
-    expect(deltas.join("")).not.toContain('{"path":"a.ts"}');
+    expect(projection.deltas.join("")).not.toContain('{"path":"a.ts"}');
   });
 });
 
@@ -273,19 +204,7 @@ it("bounds work after unfenced XML while continuing the visible reply", () => {
   const source = lead + "The next step keeps the visible answer moving.\n".repeat(200);
   const filter = toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true);
   const projection = createTextProjection([filter]);
-  let testedCharacters: number;
-  const probe = vi.spyOn(RegExp.prototype, "test");
-  try {
-    for (let offset = 0; offset < source.length; offset += CHUNK) {
-      projection.append(source.slice(offset, offset + CHUNK));
-    }
-  } finally {
-    testedCharacters = probe.mock.calls.reduce(
-      (total, [text]) => total + (typeof text === "string" ? text.length : 0),
-      0,
-    );
-    probe.mockRestore();
-  }
+  const testedCharacters = regexWork(() => streamChunks(source, CHUNK, projection));
   expect(projection.text).toBe(filter.transform(source));
   expect(projection.text).toContain("The next step");
   expect(projection.text).not.toContain("<invoke");

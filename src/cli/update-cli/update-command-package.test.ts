@@ -39,6 +39,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
 import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
@@ -147,10 +148,7 @@ async function packageFixture(
   const writeInstall = async (packageRoot: string, version: string) => {
     await writePackageRoot(packageRoot, version);
     if (buildId) {
-      await fs.writeFile(
-        path.join(packageRoot, "dist/build-info.json"),
-        JSON.stringify({ buildId }),
-      );
+      await writeFixtureJson(path.join(packageRoot, "dist/build-info.json"), { buildId });
       await writePackageDistInventory(packageRoot);
     }
   };
@@ -765,7 +763,12 @@ it.each([
     let resultPath: string | undefined;
     mockDoctor(async (_argv, options) => {
       assert(typeof options === "object");
-      expect(options).toMatchObject({ timeoutMs: expectedDoctorTimeoutMs });
+      if (expectedDoctorTimeoutMs === undefined) {
+        expect(options.timeoutMs).toBeUndefined();
+      } else {
+        expect(options.timeoutMs).toBeGreaterThan(0);
+        expect(options.timeoutMs).toBeLessThanOrEqual(expectedDoctorTimeoutMs);
+      }
       resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
       assert(resultPath);
       await writeUpdatePostInstallDoctorResult({ resultPath, result: receipt });

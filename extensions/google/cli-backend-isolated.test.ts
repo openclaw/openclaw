@@ -28,10 +28,7 @@ describe("Gemini CLI isolated completion", () => {
   it("keeps an incompatible explicit profile out of shared auth health", async () => {
     await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
       const preparation = buildGoogleGeminiCliBackend().prepareExecution?.({
-        workspaceDir,
-        agentDir: path.join(workspaceDir, "agent"),
-        provider: "google-gemini-cli",
-        modelId: "gemini-3.1-flash-lite",
+        ...buildGeminiApiKeyPrepareContext(workspaceDir),
         authProfileId: "vercel-ai-gateway:default",
         authCredential: {
           type: "api_key",

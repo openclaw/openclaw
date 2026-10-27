@@ -27,6 +27,6 @@ CREATE TABLE "node_worker_turns" (
 
 CREATE UNIQUE INDEX "idx_node_worker_turns_active_owner" ON "node_worker_turns" (("owner_launch_id") ASC) WHERE ("state" = 'running');
 
-CREATE INDEX "idx_node_worker_turns_terminal_completed" ON "node_worker_turns" (("completed_at_ms") ASC NULLS FIRST, ("turn_id") ASC) WHERE "completed_at_ms" IS NOT NULL;
+CREATE INDEX "idx_node_worker_turns_terminal_completed" ON "node_worker_turns" (("completed_at_ms") ASC, ("turn_id") ASC) WHERE "completed_at_ms" IS NOT NULL;
 
 ALTER TABLE "node_worker_turns" ADD FOREIGN KEY ("owner_launch_id") REFERENCES "node_worker_launches" ("launch_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;

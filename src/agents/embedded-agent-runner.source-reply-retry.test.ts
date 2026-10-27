@@ -104,9 +104,8 @@ it.each([
   "keeps $mode delivery distinct after $failures $fault failure(s)",
   async ({ mode, fault, delivered, failures }) => {
     const id = [mode, fault, failures].join("-");
-    const sessionId = id;
     const sessionKey = "agent:test:workspace:group:c123:" + id;
-    const operation = runtime.operation({ sessionId, sessionKey, resetTriggered: false });
+    const operation = runtime.operation({ sessionId: id, sessionKey, resetTriggered: false });
     const config = {
       ...createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]),
       channels: workspaceConfig.channels,
@@ -161,7 +160,7 @@ it.each([
       ...source,
       agentId: "test",
       runId: id,
-      sessionId,
+      sessionId: id,
       agentSessionKey: sessionKey,
       agentAccountId: "default",
       messageActionTurnCapability: capability,
@@ -252,14 +251,14 @@ it.each([
   },
 );
 
-it.each(
-  (["subagent", "private", "webchat"] as const).flatMap((name) =>
-    ["NO_REPLY", "", "NO_REPLY\n<final></final>"].map((raw) => ({ raw, name })),
-  ),
-)("recovers a $name result after '$raw'", async ({ name, raw }) => {
+it.each([
+  ["subagent", "NO_REPLY", { lane: "subagent" }],
+  ["private", "", { privateCompletion: true }],
+  ["webchat", "NO_REPLY\n<final></final>", {}],
+] as const)("recovers a %s result after '%s'", async (name, raw, opts) => {
   const sessionKey = name === "private" ? "agent:test:private" : `agent:test:${name}:required`;
   const config = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
-  const id = `internal-${name}-${raw === "NO_REPLY" ? "silent" : raw ? "rendered-empty" : "empty"}`;
+  const id = `internal-${name}`;
   const admission = runtime.prepare(config, id, "test", "internal-result-recovery");
   const answer = `Recovered ${name} result`;
   let attempt = 0;
@@ -277,12 +276,7 @@ it.each(
         cfg: config,
         sessionKey,
         messageChannel: name === "webchat" ? "webchat" : "telegram",
-        opts:
-          name === "subagent"
-            ? { lane: "subagent" }
-            : name === "private"
-              ? { privateCompletion: true }
-              : {},
+        opts,
       }),
     });
     expect(result.payloads).toEqual([expect.objectContaining({ text: answer })]);

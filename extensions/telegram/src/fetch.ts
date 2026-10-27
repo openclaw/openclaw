@@ -140,7 +140,7 @@ function createDnsResultOrderLookup(order: TelegramDnsResultOrder): LookupFuncti
     callback: LookupCallback,
   ) => void;
   return (hostname, options, callback) => {
-    const baseOptions = typeof options === "number" ? { family: options } : { ...options };
+    const baseOptions = typeof options === "number" ? { family: options } : options;
     lookup(hostname, { ...baseOptions, order, verbatim: order === "verbatim" }, callback);
   };
 }

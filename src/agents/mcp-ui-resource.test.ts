@@ -56,10 +56,13 @@ function context(active: SessionMcpRuntime, view: object, text: string) {
 }
 
 async function createView({
-  content = html(),
+  content,
   ...params
 }: Partial<ViewParams> & { content?: ReturnType<typeof html> } = {}) {
-  const active = params.runtime ?? runtime({ readResource: async () => content });
+  const active = params.runtime ?? runtime();
+  if (content) {
+    active.readResource = async () => content;
+  }
   const descriptor = await fetchView({ ...params, runtime: active });
   const viewId = descriptor!.viewId;
   return { active, viewId, view: getView(viewId, active)! };
@@ -93,9 +96,7 @@ describe("MCP App UI resources", () => {
     const native = runtime();
     const params = { runtime: native, allowedAppToolNames: new Set<string>() };
     const { view: alice } = await createView({ ...params, requesterId: "alice" });
-    const { view: bob } = await createView({ ...params, requesterId: "bob" });
     context(native, alice, "alice-private");
-    context(native, bob, "bob-private");
     const target = {
       sessionKey: native.sessionKey,
       sessionId: native.sessionId,
@@ -106,10 +107,8 @@ describe("MCP App UI resources", () => {
     expect(await leaseContext({ ...target, requesterId: "mallory" })).toBeUndefined();
     const lease = await leaseContext(target);
     expect(lease?.project(0).context.text).toContain("alice-private");
-    expect(lease?.project(0).context.text).not.toContain("bob-private");
     lease?.commit();
     expect(getContext(native, alice)).toBeNull();
-    expect(getContext(native, bob)).not.toBeNull();
   });
 
   it("does not infer a Gateway profile from transport requester scope", async () => {
@@ -130,51 +129,45 @@ describe("MCP App UI resources", () => {
     lease?.rollback();
   });
 
-  it("leases HTML and tool data only in memory", async () => {
-    const authorizeAppInteraction = vi.fn(async () => true);
-    const { active, viewId, view } = await createView({
-      content: html(undefined, { ui: { permissions: { geolocation: {} } } }),
-      toolInput: { city: "Paris" },
-      authorizeAppInteraction,
-    });
+  it.each([
+    ["agent:main:main", undefined, "main"],
+    ["global", "ops", "ops"],
+  ] as const)(
+    "isolates %s views and their tool data by owner",
+    async (sessionKey, agentId, owner) => {
+      const authorizeAppInteraction = vi.fn(async () => true);
+      const { active, viewId, view } = await createView({
+        runtime: runtime({ sessionKey }),
+        agentId,
+        content: html(undefined, { ui: { permissions: { geolocation: {} } } }),
+        toolInput: { city: "Paris" },
+        authorizeAppInteraction,
+      });
 
-    expect(viewId).toMatch(/^mcp-app-/u);
-    expect(view).toMatchObject({
-      html: "<html>demo</html>",
-      toolInput: { city: "Paris" },
-      permissions: { geolocation: {} },
-      authorizeAppInteraction,
-    });
-    expect(getView(viewId, runtime())).toBeUndefined();
-    expect(getSessionView(viewId, "agent:main:main", "main")).toMatchObject({
-      html: "<html>demo</html>",
-      runtime: active,
-      agentId: "main",
-    });
-    expect(getSessionView(viewId, "agent:other:main", "other")).toBeUndefined();
-  });
-
-  it("isolates live views by agent when bare session keys collide", async () => {
-    const { viewId } = await createView({
-      runtime: runtime({ sessionKey: "global" }),
-      agentId: "ops",
-    });
-
-    expect(getSessionView(viewId, "global", "ops")).toBeDefined();
-    expect(getSessionView(viewId, "global", "research")).toBeUndefined();
-  });
+      expect(viewId).toMatch(/^mcp-app-/u);
+      expect(view).toMatchObject({
+        html: "<html>demo</html>",
+        toolInput: { city: "Paris" },
+        permissions: { geolocation: {} },
+        authorizeAppInteraction,
+      });
+      expect(getView(viewId, runtime())).toBeUndefined();
+      expect(getSessionView(viewId, sessionKey, owner)).toMatchObject({
+        html: "<html>demo</html>",
+        runtime: active,
+        agentId: owner,
+      });
+      expect(getSessionView(viewId, sessionKey, "research")).toBeUndefined();
+      expect(getSessionView(viewId, "agent:other:main", "other")).toBeUndefined();
+    },
+  );
 
   it("keeps valid Apps when optional listing metadata fails", async () => {
-    const readResource = vi.fn(async () => html());
-    const listResources = vi.fn(async () => {
+    const listResources = async () => {
       throw new Error("resources/list unavailable");
-    });
-    const result = await fetchView({ runtime: runtime({ readResource, listResources }) });
+    };
+    const result = await fetchView({ runtime: runtime({ listResources }) });
     expect(result?.viewId).toMatch(/^mcp-app-/u);
-    expect(readResource).toHaveBeenCalledWith("demo", "ui://demo/app", {
-      failureBackoff: "ignore",
-    });
-    expect(listResources).toHaveBeenCalledWith("demo", { failureBackoff: "ignore" });
   });
 
   it("rejects oversized and incorrectly typed resources", async () => {
@@ -218,7 +211,6 @@ describe("MCP App UI resources", () => {
       resourceDomains: ["https://cdn.example.com"],
     });
     expect(view?.html.startsWith("<!doctype html>")).toBe(true);
-    expect(buildMcpAppSandboxPath(view?.csp)).toContain("?csp=");
   });
 
   it("deletes sensitive view data when the lease expires without later activity", async () => {

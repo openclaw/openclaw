@@ -187,14 +187,91 @@ it("creates long-lived observations outside importer and caller authority", () =
   expect(scopes).toEqual([undefined]);
 });
 
-it("shares one watcher and reconciles a separate process's atomic replacement", async () => {
+it("keeps notification snapshots while duplicate subscriptions change during delivery", () => {
+  const directory = timedDirectory("reentrant");
+  const watch = vi.spyOn(nativeWatchFs, "watch");
+  const events: string[] = [];
+  const duplicate = (filename?: string) => events.push(`duplicate ${filename}`);
+  observe(
+    directory,
+    vi.fn((filename?: string) => {
+      events.push(`mutator ${filename}`);
+      if (filename === "outer") {
+        first.close();
+        observe(
+          directory,
+          vi.fn((name?: string) => events.push(`late ${name}`)),
+        );
+        change("change", "inner");
+      }
+    }),
+  );
+  const first = observeOwnedDirectory(directory, duplicate);
+  subscriptions.push(first, observeOwnedDirectory(directory, duplicate));
+  const change = watch.mock.calls[0]![2];
+  change("change", "outer");
+  first.close();
+  change("change", "next");
+  expect(events).toEqual([
+    "mutator outer",
+    "mutator inner",
+    "duplicate inner",
+    "late inner",
+    "duplicate outer",
+    "duplicate outer",
+    "mutator next",
+    "duplicate next",
+    "late next",
+  ]);
+  for (const subscription of subscriptions) {
+    subscription.close();
+  }
+  const replacement = observe(directory);
+  first.close();
+  watch.mock.calls.at(-1)![2]("change", "replacement");
+  expect(replacement).toHaveBeenCalledWith("replacement", "change");
+});
+
+it("keeps shared-source snapshots when delivery replaces a subscription", () => {
+  const directory = timedDirectory("source-reentrant");
+  const watch = vi.spyOn(nativeWatchFs, "watch");
+  const events: string[] = [];
+  observe(
+    directory,
+    vi.fn((filename) => {
+      events.push(`first ${filename}`);
+      if (filename === "outer") {
+        second.close();
+        observe(
+          directory,
+          vi.fn((name) => events.push(`late ${name}`)),
+          {
+            reconcileIntervalMs: 90_000,
+          },
+        );
+        change("change", "inner");
+      }
+    }),
+  );
+  const second = observeOwnedDirectory(directory, (filename) => events.push(`second ${filename}`), {
+    reconcileIntervalMs: 60_000,
+  });
+  subscriptions.push(second);
+  const change = watch.mock.calls[0]![2];
+  change("change", "outer");
+  change("change", "next");
+  expect(events).toEqual(["first outer", "first inner", "late inner", "first next", "late next"]);
+  expect(watch).toHaveBeenCalledOnce();
+});
+
+it("shares one watcher, forwards invalidation and reconciles an atomic replacement", async () => {
   vi.useFakeTimers({
     toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
   const directory = tempDirs.make("owned-directory-external-");
   const filename = path.join(directory, "profiles");
   fs.writeFileSync(filename, "before");
-  const watch = vi.spyOn(fs, "watch");
+  const watch = vi.spyOn(nativeWatchFs, "watch");
   const listener = vi.fn(() => fs.readFileSync(filename, "utf8"));
   const otherListener = vi.fn();
   observe(directory, listener);
@@ -209,13 +286,15 @@ it("shares one watcher and reconciles a separate process's atomic replacement", 
   expect(listener).toHaveLastReturnedWith("after");
   expect(otherListener).toHaveBeenCalledWith(undefined, undefined);
   expect(watch).toHaveBeenCalledTimes(1);
-});
-
-it("forwards native file invalidation without replacing the shared directory watch", () => {
-  const directory = tempDirs.make("owned-directory-events-");
-  const watch = vi.spyOn(nativeWatchFs, "watch");
-  const listener = observe(directory);
+  listener.mockClear();
   const resolve = vi.spyOn(path, "resolve");
+  const basename = vi.spyOn(path, "basename");
+  for (let index = 0; index < 1_000; index++) {
+    watch.mock.calls[0]![2]("rename", "state.sqlite-journal");
+  }
+  expect(listener).toHaveBeenCalledTimes(1_000);
+  expect(basename).not.toHaveBeenCalled();
+  listener.mockClear();
   watch.mock.calls[0]![2]("rename", "profiles");
   expect(listener).toHaveBeenCalledWith("profiles", "rename");
   listener.mockClear();

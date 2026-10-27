@@ -8,7 +8,6 @@ import {
 } from "../agents/run-termination.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type * as replyRunSettle from "../auto-reply/reply/reply-run-finalization-lease.js";
-import { createAbortError } from "../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { markDiagnosticRunProgress } from "../logging/diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic-runtime.js";
@@ -638,15 +637,13 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
         return false;
       }
       const backend = getAttachedBackend(operation);
-      staleExpiryReason ??= "no_activity";
+      // Read before aborting: the abort closes the retry wait that explains the stop.
+      const stop = watchdog.describeStop();
+      staleExpiryReason ??= stop.staleReason;
       apply({ type: "freeze" });
       setResult({ kind: "failed", code: "run_stalled" });
       detachUpstreamAbort();
-      abortInternally(
-        Object.assign(createAbortError("Reply operation stalled"), {
-          code: "OPENCLAW_SESSION_WATCHDOG",
-        }),
-      );
+      abortInternally(stop.error);
       try {
         backend?.cancel("superseded");
       } finally {

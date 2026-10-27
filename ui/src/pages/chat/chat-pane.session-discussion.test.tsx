@@ -7,11 +7,8 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import {
-  createSessionCapabilityFixture,
-  createTestChatPane,
-  type TestChatPane,
-} from "./chat-pane.test-support.ts";
+import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import {
   SessionDiscussionPanel,
   type SessionDiscussionPanelConfig,

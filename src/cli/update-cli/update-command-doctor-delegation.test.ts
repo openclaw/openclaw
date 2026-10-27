@@ -33,9 +33,10 @@ import { hasCommandProcessCleanupError, type SpawnResult } from "../../process/e
 import * as processRunner from "../../process/exec.js";
 import * as processDeadline from "../../process/process-deadline.js";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { waitForPidToExit } from "../../test-utils/process-tree.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import { runUpdateDoctorProcess } from "./update-command-doctor-child.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
@@ -63,10 +64,7 @@ beforeEach(() => {
     fs.mkdirSync(dir, { mode: 0o700 });
   }
   fs.writeFileSync(configPath, "{}\n");
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.9.99" }),
-  );
+  writeFixtureJsonSync(path.join(root, "package.json"), { name: "openclaw", version: "2026.9.99" });
   fs.writeFileSync(path.join(root, "dist", "index.js"), "");
   env = {
     HOME: root,
@@ -78,11 +76,7 @@ beforeEach(() => {
   }
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(path.join(root, "tmp"));
 });
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 function doctorOptions(
   runId: string,

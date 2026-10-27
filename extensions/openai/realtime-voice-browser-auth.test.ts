@@ -53,7 +53,6 @@ const {
   beginBridgeConnection,
   openSocket,
   emitServerEvent,
-  createJsonResponse,
   requireRecord,
   requireNestedRecord,
   expectRecordFields,
@@ -196,7 +195,7 @@ describe("OpenAI realtime voice browser authentication", () => {
 
   it("explains auth precedence when the selected API key is rejected", async () => {
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: createJsonResponse(
+      response: Response.json(
         { error: { message: "Incorrect API key provided: test-api-key-proj-***" } },
         { status: 401 },
       ),

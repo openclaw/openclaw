@@ -112,7 +112,11 @@ it.skipIf(!connection)(
       await client.query(originalIndex);
       const resumed = await stageAt("resumed.sqlite", true);
       expect(resumed.verification).toEqual(copied.verification);
-      expect(await run({ ...stage, resume: true })).toEqual(copied);
+      // Reusing a verified anchor performs no copy or statistics refresh on this attempt.
+      expect(await run({ ...stage, resume: true })).toEqual({
+        descriptorHash: copied.descriptorHash,
+        verification: copied.verification,
+      });
       expect(await hash(sourcePath)).toBe(original);
       expect(await hash(targetPath)).toBe(anchor);
     } finally {

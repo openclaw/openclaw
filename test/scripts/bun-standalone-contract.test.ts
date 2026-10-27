@@ -172,12 +172,38 @@ describe("standalone build interface", () => {
     });
   });
 
+  it.each(["--compile-aot", "--aot-source"])(
+    "normalizes retained trim features with %s",
+    (mode) => {
+      for (const flags of [
+        ["--trim-allow", "run,jit,run", "--trim-locales=en,de"],
+        ["--trim-locales=en,de", "--trim-allow=jit,run"],
+        ["--trim", "--trim-allow=run", "--trim-allow=jit", "--trim-locales=en,de"],
+      ]) {
+        const parsed = parseStandaloneArguments(["out", mode, ...flags]);
+        expect(parsed).toMatchObject({
+          aotCompileOptions: { trim: { allow: ["run", "jit"], locales: ["en", "de"] } },
+        });
+        if (!parsed.help) {
+          expect(parsed.compileFlags.filter((flag) => flag.startsWith("--trim-allow="))).toEqual([
+            "--trim-allow=run,jit",
+          ]);
+        }
+      }
+      expect(parseStandaloneArguments(["out", mode, "--trim-allow=run"])).toMatchObject({
+        aotCompileOptions: { trim: { allow: ["run"] } },
+      });
+    },
+  );
+
   it.each([
     ["--trim"],
     ["--explain"],
     ["--no-compile-function-source"],
     ["--disallow-code-generation-from-strings=strict"],
     ["--bytecode", "--trim"],
+    ["--trim-allow=run"],
+    ["--bytecode", "--trim-allow=run,jit"],
   ])("requires AOT for compiler options %j", (...flags) => {
     expect(() => parseStandaloneArguments(["out", ...flags])).toThrow("requires --compile-aot");
   });
@@ -191,6 +217,10 @@ describe("standalone build interface", () => {
     ["--trim-locales"],
     ["--trim-locales=en,"],
     ["--trim-locales=en"],
+    ["--trim-allow"],
+    ["--trim-allow="],
+    ["--trim-allow=run,"],
+    ["--trim-allow=ffi"],
     ["--explain="],
   ])("rejects incomplete or repeated AOT options %j", (...flags) => {
     expect(() => parseStandaloneArguments(["out", "--compile-aot", ...flags])).toThrow();
@@ -270,7 +300,7 @@ describe("standalone build interface", () => {
     const manifest = await createStandaloneManifest({
       outputRoot: root,
       mode: "jit",
-      bun: { version: "1.4.3", revision: "1.4.3+fixture", executableSha256: "a".repeat(64) },
+      bun: { version: "1.4.4", revision: "1.4.4+fixture", executableSha256: "a".repeat(64) },
       openclaw: { version: "2026.10.3", commit: "b".repeat(40) },
       embedded: { modules: 4, plugins: 1, workers: 2, inlineWorkers: 0 },
       plugins: { embedded: ["slack", "codex"], omitted: ["signal", "matrix"] },

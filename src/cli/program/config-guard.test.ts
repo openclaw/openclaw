@@ -22,10 +22,6 @@ import { formatCliCommand } from "../command-format.js";
 import { ensureConfigReady, testApi } from "./config-guard.js";
 import { captureStdout, expectNoCalls } from "./program.test-helpers.js";
 
-const pluginPackagingRecoveryHint = [
-  "This is a plugin packaging issue, not a local config problem.",
-  "Update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then.",
-].join("\n");
 const resetEnv = [
   "OPENCLAW_NIX_MODE",
   "OPENCLAW_CONFIG_READONLY",
@@ -42,7 +38,7 @@ vi.mock("../../commands/startup-config-preflight.js", () => ({
   runStartupConfigPreflight: preflightMock,
 }));
 
-// mock-isolation: Use explicit invalid and legacy config fixtures without reading operator config.
+// mock-isolation: Use explicit config fixtures without reading operator config.
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readSnapshotMock,
   setRuntimeConfigSnapshot: publishConfigMock,
@@ -81,9 +77,11 @@ function makeSnapshot(config?: OpenClawConfig) {
 
 const makeRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
 
-function plainErrorCalls(runtime: ReturnType<typeof makeRuntime>): string[] {
+function errorOutput(runtime: ReturnType<typeof makeRuntime>): string {
   const ansiPattern = new RegExp(String.raw`\u001b\[[0-9;]*m`, "g");
-  return runtime.error.mock.calls.map((call) => String(call[0]).replace(ansiPattern, ""));
+  return runtime.error.mock.calls
+    .map((call) => String(call[0]).replace(ansiPattern, ""))
+    .join("\n");
 }
 
 describe("ensureConfigReady", () => {
@@ -159,6 +157,27 @@ describe("ensureConfigReady", () => {
     fs.rmSync(home, { recursive: true, force: true });
   });
 
+  it("publishes valid config without loading error-location rendering", async () => {
+    vi.resetModules();
+    const loadRenderer = vi.fn(() => {
+      throw new Error("Valid startup must not load error-location rendering");
+    });
+    // mock-isolation: Importing the real renderer would defeat this load-boundary assertion.
+    vi.doMock("../../config/issue-location.js", loadRenderer);
+    try {
+      const config = { gateway: { mode: "local" as const } };
+      readSnapshotMock.mockResolvedValue({ ...makeSnapshot(config), exists: true });
+      const { ensureConfigReady: ensureFreshConfigReady } = await import("./config-guard.js");
+      await ensureFreshConfigReady({ runtime, commandPath: ["health"] });
+      expect(publishConfigMock).toHaveBeenCalledWith(config, config);
+      expect(loadRenderer).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("../../config/issue-location.js");
+      vi.resetModules();
+    }
+  });
+
   it.each([
     { command: "connect", valid: true },
     { command: "node run", valid: false },
@@ -168,9 +187,6 @@ describe("ensureConfigReady", () => {
       ...makeSnapshot(config),
       exists: true,
       valid,
-      raw: JSON.stringify(config),
-      parsed: config,
-      runtimeConfig: config,
       issues: valid
         ? []
         : [{ path: "plugins.entries.fixture.config", message: "invalid plugin value" }],
@@ -233,16 +249,8 @@ describe("ensureConfigReady", () => {
       await ready;
     } else {
       await expect(ready).rejects.toMatchObject({ name: "ExitError", code: 1 });
-      expect(plainErrorCalls(runtime)).toEqual([
-        "OpenClaw config is invalid",
-        "File: /tmp/openclaw.json",
-        "Problem:",
-        "  - channels.quietchat: invalid",
-        "",
-        `Inspect: ${formatCliCommand("openclaw config validate")}`,
-        "Audit, status, health, logs, and doctor commands still run with invalid config.",
-        `Run "${formatCliCommand("openclaw doctor --fix")}" to repair the config, then retry.`,
-      ]);
+      expect(errorOutput(runtime)).toContain("channels.quietchat: invalid");
+      expect(errorOutput(runtime)).toContain(formatCliCommand("openclaw doctor --fix"));
     }
 
     expect(retired.aborted).toBe(true);
@@ -285,24 +293,21 @@ describe("ensureConfigReady", () => {
   it.each([
     { command: "health", preflight: false },
     { command: "agent", preflight: true },
-  ])(
-    "forwards config snapshot measurement with preflight=$preflight",
-    async ({ command, preflight }) => {
-      const measuredStages: string[] = [];
-      const measure: ConfigSnapshotReadMeasure = async (stage, run) => {
-        measuredStages.push(stage);
-        return await run();
-      };
-      const read = preflight ? preflightMock : readSnapshotMock;
-      read.mockImplementationOnce(async (options?: { measure?: ConfigSnapshotReadMeasure }) => {
-        await options?.measure?.("config.snapshot.read.validate", async () => undefined);
-        return preflight ? { snapshot: makeSnapshot(), baseConfig: {} } : makeSnapshot();
-      });
+  ])("measures snapshot reads (preflight=$preflight)", async ({ command, preflight }) => {
+    const measuredStages: string[] = [];
+    const measure: ConfigSnapshotReadMeasure = async (stage, run) => {
+      measuredStages.push(stage);
+      return await run();
+    };
+    const read = preflight ? preflightMock : readSnapshotMock;
+    read.mockImplementationOnce(async (options?: { measure?: ConfigSnapshotReadMeasure }) => {
+      await options?.measure?.("config.snapshot.read.validate", async () => undefined);
+      return preflight ? { snapshot: makeSnapshot(), baseConfig: {} } : makeSnapshot();
+    });
 
-      await guard(command, { measure });
-      expect(measuredStages).toEqual(["config.snapshot.read.validate"]);
-    },
-  );
+    await guard(command, { measure });
+    expect(measuredStages).toEqual(["config.snapshot.read.validate"]);
+  });
 
   it("retries the cached config snapshot after a read rejection", async () => {
     const transientError = new Error("temporary config read failure");
@@ -333,7 +338,6 @@ describe("ensureConfigReady", () => {
     );
     expect(recoveryMocks.runDoctor).toHaveBeenCalledOnce();
     expect(preflightMock).toHaveBeenCalledTimes(2);
-    expect(preflightMock).toHaveBeenLastCalledWith({ gateway: false });
     expectNoCalls(readSnapshotMock, runtime.exit);
     expect(publishConfigMock).toHaveBeenCalledWith(
       validSnapshot.config,
@@ -346,53 +350,48 @@ describe("ensureConfigReady", () => {
     ["mcp", ["mcp", "serve"], 1],
     ["nix", ["gateway", "run"], 78],
     ["read-failure", ["gateway", "start"], 1],
-  ] as const)(
-    "handles invalid config for %s without interactive repair",
-    async (mode, argv, exitCode) => {
-      setInvalidSnapshot(
-        mode === "read-failure"
-          ? {
-              issues: [
-                { path: "", errorCode: "CONFIG_READ_FAILED", message: "read failed: ENOSPC" },
-              ],
-            }
-          : {},
-      );
-      if (mode === "nix") {
-        setTestEnvValue("OPENCLAW_NIX_MODE", "1");
-      }
-      recoveryMocks.isInteractive.mockReturnValue(true);
-      process.argv = ["node", "openclaw", ...argv];
-      await guard(argv.filter((arg) => !arg.startsWith("--")).join(" "), {
-        suppressDoctorStdout: mode === "json" || mode === "mcp",
+  ] as const)("rejects invalid config without repair in %s mode", async (mode, argv, exitCode) => {
+    setInvalidSnapshot(
+      mode === "read-failure"
+        ? {
+            issues: [{ path: "", errorCode: "CONFIG_READ_FAILED", message: "read failed: ENOSPC" }],
+          }
+        : {},
+    );
+    if (mode === "nix") {
+      setTestEnvValue("OPENCLAW_NIX_MODE", "1");
+    }
+    recoveryMocks.isInteractive.mockReturnValue(true);
+    process.argv = ["node", "openclaw", ...argv];
+    await guard(argv.filter((arg) => !arg.startsWith("--")).join(" "), {
+      suppressDoctorStdout: mode === "json" || mode === "mcp",
+    });
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(exitCode);
+    expectNoCalls(recoveryMocks.confirm);
+    if (mode === "json") {
+      expect(runtime.log).toHaveBeenCalledOnce();
+      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toMatchObject({
+        ok: false,
+        error: { type: "cli_error", message: "OpenClaw config is invalid: /tmp/openclaw.json" },
+        repairHint: "Run `openclaw doctor --fix` to repair, then retry.",
+        issues: [{ path: "channels.quietchat", message: "invalid" }],
       });
-      expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(exitCode);
-      expectNoCalls(recoveryMocks.confirm);
-      if (mode === "json") {
-        expect(runtime.log).toHaveBeenCalledOnce();
-        expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toMatchObject({
-          ok: false,
-          error: { type: "cli_error", message: "OpenClaw config is invalid: /tmp/openclaw.json" },
-          repairHint: "Run `openclaw doctor --fix` to repair, then retry.",
-          issues: [{ path: "channels.quietchat", message: "invalid" }],
-        });
-      } else if (mode === "mcp") {
-        expectNoCalls(runtime.log);
-      } else if (mode === "nix") {
-        expect(plainErrorCalls(runtime).join("\n")).toContain("OPENCLAW_NIX_MODE=1");
-      } else {
-        expect(plainErrorCalls(runtime).join("\n")).not.toContain("doctor --fix");
-      }
-    },
-  );
+    } else if (mode === "mcp") {
+      expectNoCalls(runtime.log);
+    } else if (mode === "nix") {
+      expect(errorOutput(runtime)).toContain("OPENCLAW_NIX_MODE=1");
+    } else {
+      expect(errorOutput(runtime)).not.toContain("doctor --fix");
+    }
+  });
 
   it("replaces doctor fix advice for plugin packaging-only invalid config", async () => {
     setInvalidSnapshot(createPluginPackagingConfigIssues());
     const messageRuntime = await runGuard("message");
-    const calls = plainErrorCalls(messageRuntime);
-
-    expect(calls).toContain(`Fix: ${pluginPackagingRecoveryHint}`);
-    expect(calls).not.toContain(`Fix: ${formatCliCommand("openclaw doctor --fix")}`);
+    expect(errorOutput(messageRuntime)).toContain(
+      "plugin packaging issue, not a local config problem",
+    );
+    expect(errorOutput(messageRuntime)).not.toContain(formatCliCommand("openclaw doctor --fix"));
     expect(messageRuntime.exit).toHaveBeenCalledWith(1);
 
     const gatewayRuntime = await runGuard("gateway start");

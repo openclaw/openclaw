@@ -5,7 +5,7 @@ import {
   runSetupWizardFinalize,
   runSetupWizardPrepare,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { expect, it } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import {
   createAllowlistSetupWizardProxy,
   createDelegatedSetupWizardProxy,
@@ -27,50 +27,25 @@ const wizardBase: ChannelSetupWizard = {
 };
 
 it("falls back when delegated surfaces are absent", async () => {
-  const wizard = createAllowlistSetupWizardProxy({
+  const createBase = vi.fn<Parameters<typeof createAllowlistSetupWizardProxy>[0]["createBase"]>(
+    () => wizardBase,
+  );
+  createAllowlistSetupWizardProxy({
     loadWizard: async () => wizardBase,
-    createBase: ({ promptAllowFrom, resolveAllowFromEntries, resolveGroupAllowlist }) => ({
-      ...wizardBase,
-      dmPolicy: {
-        label: "Demo",
-        channel: "demo" as never,
-        policyKey: "channels.demo.dmPolicy",
-        allowFromKey: "channels.demo.allowFrom",
-        getCurrent: () => "pairing",
-        setPolicy: (cfg) => cfg,
-        promptAllowFrom,
-      },
-      allowFrom: {
-        message: "Allow from",
-        placeholder: "id",
-        invalidWithoutCredentialNote: "need id",
-        parseId: () => null,
-        resolveEntries: resolveAllowFromEntries,
-        apply: (params) => params.cfg,
-      },
-      groupAccess: {
-        label: "Groups",
-        placeholder: "group",
-        currentPolicy: () => "allowlist",
-        currentEntries: () => [],
-        updatePrompt: () => false,
-        setPolicy: (params) => params.cfg,
-        resolveAllowlist: resolveGroupAllowlist,
-      },
-    }),
+    createBase,
     fallbackResolvedGroupAllowlist: (entries) => entries.map((input) => ({ input })),
   });
 
-  const { dmPolicy, allowFrom, groupAccess } = wizard;
-  expect(await promptFrom({ promptAllowFrom: dmPolicy?.promptAllowFrom })).toStrictEqual({});
+  const call = createBase.mock.calls[0];
+  assert(call);
+  const { promptAllowFrom, resolveAllowFromEntries, resolveGroupAllowlist } = call[0];
+  expect(await promptFrom({ promptAllowFrom })).toStrictEqual({});
   expect(
-    await resolveEntries({ resolveEntries: allowFrom?.resolveEntries, entries: ["alice"] }),
+    await resolveEntries({ resolveEntries: resolveAllowFromEntries, entries: ["alice"] }),
   ).toEqual([{ input: "alice", resolved: false, id: null }]);
-  const groups = await resolveAllowlist({
-    resolveAllowlist: groupAccess?.resolveAllowlist,
-    entries: ["general"],
-  });
-  expect(groups).toEqual([{ input: "general" }]);
+  expect(
+    await resolveAllowlist({ resolveAllowlist: resolveGroupAllowlist, entries: ["general"] }),
+  ).toEqual([{ input: "general" }]);
 });
 it("builds a direct proxy wizard with delegated status/prepare/finalize", async () => {
   const wizard = createDelegatedSetupWizardProxy({
@@ -96,8 +71,9 @@ it("builds a direct proxy wizard with delegated status/prepare/finalize", async 
   });
 
   expect(await wizard.status.resolveConfigured({ cfg: {} })).toBe(false);
-  const lines = await wizard.status.resolveStatusLines?.({ cfg: {}, configured: false });
-  expect(lines).toEqual(["line"]);
+  expect(await wizard.status.resolveStatusLines?.({ cfg: {}, configured: false })).toEqual([
+    "line",
+  ]);
   expect(await wizard.status.resolveSelectionHint?.({ cfg: {}, configured: false })).toBe("hint");
   expect(await wizard.status.resolveQuickstartScore?.({ cfg: {}, configured: false })).toBe(3);
   expect(await runSetupWizardPrepare({ prepare: wizard.prepare })).toEqual({

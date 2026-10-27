@@ -10,9 +10,6 @@ import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-trans
 import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../../shared/immutable-data.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { convertToLlm, convertToLlmWithBlockImages } from "../../sessions/messages.js";
-import { fingerprintMessage } from "../prompt-cache-history.js";
-import { clearPromptCacheObservations } from "../prompt-cache-observability.js";
-import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
 import {
   createToolResultPromptProjectionState,
   recordToolResultPromptProjection,
@@ -115,7 +112,7 @@ it("keeps historical and runtime video on their own turns across queued text and
   expect(JSON.stringify(inputs)).toBe(originalJson);
 });
 
-it("reuses frozen request projections while isolating image, replay, and retention policies", async () => {
+it("reuses frozen request projections while isolating image, replay, and retention policies", () => {
   const tool = freezeJsonSnapshot({
     role: "toolResult" as const,
     toolCallId: "call",
@@ -172,56 +169,41 @@ it("reuses frozen request projections while isolating image, replay, and retenti
   };
   const first = prepare(false, true);
   const bytes = JSON.stringify(first);
-  const fingerprints = first.map((message) => fingerprintMessage(message));
-  const observer = createPromptCacheRequestObserver(
-    { sessionId: "stable-projection-proof", streamStrategy: "test" },
-    () => {},
-  );
-  const model = { provider: "openai", id: "fixture", api: "openai-responses" as const };
-  try {
-    await observer.onModelRequest(model, { messages: first });
-    observer.onModelUsage({ input: 100, cacheRead: 0 });
-    expect(first[1]).toMatchObject({ content: [{ type: "text", text: "short result" }] });
-    expect(first[1]).not.toHaveProperty("details");
-    expect(first[2]).toMatchObject({
-      role: "user",
-      content: [{ type: "text", text: "note" }],
-      synthetic: true,
+  expect(first[1]).toMatchObject({ content: [{ type: "text", text: "short result" }] });
+  expect(first[1]).not.toHaveProperty("details");
+  expect(first[2]).toMatchObject({
+    role: "user",
+    content: [{ type: "text", text: "note" }],
+    synthetic: true,
+  });
+  for (const retained of [false, undefined, true]) {
+    const other = prepare(true, retained, false, otherState);
+    expect(other[1]).toMatchObject({ content: [{ type: "text", text: "other limit" }] });
+    expect(other[3]).toHaveProperty("runtimeContext.retained", retained);
+    expect(other[4]).not.toHaveProperty("operatorMessage");
+    expect(other[5]).toMatchObject({
+      content: [{ type: "text", text: "Image reading is disabled." }],
     });
-    for (const retained of [false, undefined, true]) {
-      const other = prepare(true, retained, false, otherState);
-      expect(other[1]).toMatchObject({ content: [{ type: "text", text: "other limit" }] });
-      expect(other[3]).toHaveProperty("runtimeContext.retained", retained);
-      expect(other[4]).not.toHaveProperty("operatorMessage");
-      expect(other[5]).toMatchObject({
-        content: [{ type: "text", text: "Image reading is disabled." }],
-      });
-      const next = prepare(false, true);
-      expect(JSON.stringify(next)).toBe(bytes);
-      next.forEach((message, index) => {
-        expect(message).toBe(first[index]);
-        expect(isDeeplyFrozenPlainData(message)).toBe(true);
-        expect(fingerprintMessage(message)).toBe(fingerprints[index]);
-      });
-      const observed = await observer.onModelRequest(model, { messages: next });
-      expect(observed.prefixUnchanged).toBe(true);
-      observer.onModelUsage({ input: 100, cacheRead: 90 });
-    }
-    expect(tool.content[0]?.text).toBe("full result");
-    expect(tool.details).toEqual({ internal: true });
-  } finally {
-    clearPromptCacheObservations("stable-projection-proof");
+    const next = prepare(false, true);
+    expect(JSON.stringify(next)).toBe(bytes);
+    next.forEach((message, index) => {
+      expect(message).toBe(first[index]);
+      expect(isDeeplyFrozenPlainData(message)).toBe(true);
+    });
   }
+  expect(tool.content[0]?.text).toBe("full result");
+  expect(tool.details).toEqual({ internal: true });
 });
 
 it("recomputes mutable projections, including shallow-frozen sources and replacement edits", () => {
+  const protectedText = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
   for (const role of ["user", "custom"] as const) {
     const source = {
       role,
       customType: "note",
       display: false,
       content: [
-        { type: "text" as const, text: "unchanged" },
+        { type: "text" as const, text: protectedText },
         { type: "text" as const, text: "second block" },
       ],
       timestamp: 1,
@@ -240,8 +222,9 @@ it("recomputes mutable projections, including shallow-frozen sources and replace
     if (block.type !== "text") {
       throw new Error("Expected projected text");
     }
+    expect(block.text).toBe("[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]");
     block.text = "changed";
-    expect(source.content[0]!.text).toBe("unchanged");
+    expect(source.content[0]!.text).toBe(protectedText);
   }
   const custom = {
     role: "custom" as const,

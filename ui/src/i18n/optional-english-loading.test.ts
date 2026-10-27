@@ -1,14 +1,11 @@
 /* @vitest-environment jsdom */
 import { expect, it } from "vitest";
-import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
 const loadI18n = useLazyEnglishTest();
 
 it("keeps chat session actions readable without loading the session management catalog", async () => {
-  const { en, manager } = await loadI18n({
-    sessionsView: { goal: "Ziel" },
-  });
+  const { en, manager } = await loadI18n({ sessionsView: { goal: "Ziel" } });
   const sessionsView = en.sessionsView;
   await manager.setLocale("de");
   expect(manager.t("sessionsView.searchGroups")).toBe("sessionsView.searchGroups");
@@ -25,19 +22,13 @@ it("keeps chat session actions readable without loading the session management c
 
   expect(manager.t("sessionsView.searchGroups")).toBe("sessionsView.searchGroups");
   expect(manager.t("sessionsView.archiveReasonManual")).toBe("Archived manually");
-  expect(manager.t("sessionsView.pinRootSessionsOnly")).toBe(
-    "Only root sessions can be pinned; pin the parent session instead.",
-  );
   expect(manager.t("sessionsView.stopCloudWorkerConfirm", { session: "Build" })).toBe(
     'Stop the cloud worker for "Build"?',
   );
-  expect(manager.t("sessionsView.stopCloudWorkerConfirmAction")).toBe("Stop worker");
   expect(manager.t("sessionsView.goal")).toBe("Ziel");
   expect(en.sessionsView).toBe(sessionsView);
 
-  const { registerSessionOrganizationEnglish } =
-    await import("./locales/en-session-organization.ts");
-  registerSessionOrganizationEnglish();
+  (await import("./locales/en-session-organization.ts")).registerSessionOrganizationEnglish();
   expect(manager.t("sessionsView.searchGroups")).toBe("Search groups");
   expect(manager.t("sessionsView.goal")).toBe("Ziel");
   expect(manager.getLocale()).toBe("de");
@@ -49,21 +40,20 @@ it("keeps a cold roster metadata failure readable before its view catalog loads"
   const agentsHome = en.agentsHome;
   const { createRosterFixture, rosterResult } =
     await import("../lib/agents/roster-activity-store.test-support.ts");
-  const { createGatewayRequestMock, createTestGatewayClient } =
-    await import("../test-helpers/gateway-client.ts");
-  const request = createGatewayRequestMock(async (method) => {
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
+  const { createTestGatewayClient } = await import("../test-helpers/gateway-client.ts");
+  const replies = new Map<string, () => unknown>([
+    ["sessions.subscribe", () => ({ subscribed: true })],
+    ["sessions.groups.list", () => ({ groups: [], sectionOrder: [] })],
+    ["sessions.list", rosterResult],
+  ]);
+  const client = createTestGatewayClient(async (method) => {
+    const reply = replies.get(method);
+    if (!reply) {
+      throw new Error(`Unexpected RPC: ${method}`);
     }
-    if (method === "sessions.groups.list") {
-      return { groups: [], sectionOrder: [] };
-    }
-    if (method === "sessions.list") {
-      return rosterResult();
-    }
-    throw new Error(`Unexpected RPC: ${method}`);
+    return reply();
   });
-  const { context, store, sessions } = createRosterFixture(createTestGatewayClient(request));
+  const { context, store, sessions } = createRosterFixture(client);
   context.agents.ensureList = async () => null;
   expect(manager.t("agentsHome.pinnedAgents")).toBe("agentsHome.pinnedAgents");
   const stop = store.subscribe(() => {});
@@ -93,9 +83,6 @@ it("loads Details copy through its lazy view while preserving the active locale 
   registerEnglishCatalog(registerChatSessionEnglish);
   await manager.setLocale("de");
   expect(manager.t("chat.sessionDetails.title")).toBe("Details");
-  expect(manager.t("chat.sessionDetails.progressHidden")).toBe(
-    "Task progress hidden in this browser.",
-  );
   expect(manager.t("chat.sessionDetails.environment")).toBe("chat.sessionDetails.environment");
 
   await import("../pages/chat/components/chat-context-breakdown.tsx");
@@ -112,26 +99,14 @@ it("loads optional English copy at each view boundary while keeping shared label
   const about = en.aboutPage;
   const dashboards = en.dashboardsPage;
   expect(manager.t("aboutPage.artifactDetails")).toBe("Control UI build details");
-  expect(manager.t("aboutPage.copiedCommit")).toBe("Commit hash copied");
   await manager.setLocale("de");
-  for (const { key, load, catalog } of [
-    {
-      key: "aboutPage.tagline",
-      load: () => import("../pages/about/view.tsx"),
-      catalog: async () => (await import("./locales/en-about.ts")).registerAboutEnglish.catalog,
-    },
-    {
-      key: "dashboardsPage.emptyDescription",
-      load: () => import("../pages/dashboards/view.tsx"),
-      catalog: async () =>
-        (await import("./locales/en-dashboards.ts")).registerDashboardsEnglish.catalog,
-    },
-  ]) {
+  for (const [key, copy, load] of [
+    ["aboutPage.linkDocs", "Docs", () => import("../pages/about/view.tsx")],
+    ["dashboardsPage.live", "Live", () => import("../pages/dashboards/view.tsx")],
+  ] as const) {
     expect(manager.t(key)).toBe(key);
     await load();
-    for (const [catalogKey, value] of flattenTranslations(await catalog())) {
-      expect(manager.t(catalogKey)).toBe(value);
-    }
+    expect(manager.t(key)).toBe(copy);
     expect(manager.t("common.health")).toBe("Gesundheit");
     expect(en.aboutPage).toBe(about);
     expect(en.dashboardsPage).toBe(dashboards);

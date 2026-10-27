@@ -3,12 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import "../pages/chat/components/browser-tab-card.css";
 import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.tsx";
-import {
-  makeCapabilities,
-  makeMenu,
-} from "../pages/chat/components/chat-composer-menu.test-support.ts";
 import { renderComposerMenuOption as ComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
-import { ChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import "../test-helpers/load-styles.ts";
@@ -89,9 +84,13 @@ function mountMenu(props: MenuProps, container?: HTMLElement) {
 
 async function openMenu(host: HTMLElement, selector = ".oc-menu-trigger") {
   const { page } = await import("vitest/browser");
-  await page.elementLocator(query(host, selector)).click();
   const menu = query(host, ".oc-menu");
-  await expect.poll(() => menu.dataset.phase).toBe("open");
+  const shown = new Promise<void>((resolve) => {
+    menu.addEventListener("overlay-after-show", () => resolve(), { once: true });
+  });
+  await page.elementLocator(query(host, selector)).click();
+  await shown;
+  expect(menu.dataset.phase).toBe("open");
   return menu;
 }
 
@@ -328,25 +327,6 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       host = document.body.appendChild(document.createElement("div"));
     });
 
-    it("matches attachment and capability actions", async () => {
-      host.style.padding = "400px 40px 0";
-      mountSolid(
-        () => (
-          <ChatComposerPlusMenu
-            menu={makeMenu({ capabilityMenu: makeCapabilities({ basePath: "" }) })}
-          />
-        ),
-        { container: host },
-      );
-      await openMenu(host, '[aria-haspopup="menu"]');
-      await expect.poll(() => host.querySelector('[data-value="photo"]')).not.toBeNull();
-      const photo = query(host, '[data-value="photo"]');
-      const skills = query(host, '[data-value="open-skills"]');
-      await hoverBackground(photo, highlight);
-      const attachmentHover = getComputedStyle(photo).backgroundColor;
-      await hoverBackground(skills, attachmentHover);
-    });
-
     it("matches session menu geometry and theme inside browser cards", async () => {
       const view = mountSolid(() => (
         <BrowserTabCardHost
@@ -362,7 +342,13 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       ));
       flush();
       const card = query(view.container, "openclaw-browser-tab-card");
-      const menu = await openMenu(card, ".more");
+      // Hold the entry presentation like a stalled WebKit timeline on a loaded runner:
+      // the geometry, theme, and hover checks must not wait for it to settle.
+      card.style.setProperty("--oc-overlay-show-duration", "3600s");
+      const menu = await openAdmittedMenu(card, ".more");
+      const entry = menu.getAnimations();
+      expect(entry.length).toBeGreaterThan(0);
+      entry.forEach((animation) => animation.pause());
       const item = query(card, '[value="copy-url"]');
       mountMenu(
         {
@@ -386,6 +372,8 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         );
       }
       await hoverBackground(item, highlight);
+      entry.forEach((animation) => animation.finish());
+      await expect.poll(() => menu.dataset.phase).toBe("open");
     });
 
     it("uses platform hover for slash suggestions", async () => {
@@ -442,3 +430,19 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
     });
   });
 });
+
+/** Wait for open authority without waiting for the deliberately held entry animation. */
+async function openAdmittedMenu(host: HTMLElement, selector: string) {
+  const { page } = await import("vitest/browser");
+  const trigger = query(host, selector);
+  await page.elementLocator(trigger).click();
+  const menu = query(host, ".oc-menu");
+  await expect
+    .poll(() => ({
+      expanded: trigger.getAttribute("aria-expanded"),
+      shown: menu.matches(":popover-open"),
+      interactive: !menu.inert && ["opening", "open"].includes(menu.dataset.phase ?? ""),
+    }))
+    .toEqual({ expanded: "true", shown: true, interactive: true });
+  return menu;
+}

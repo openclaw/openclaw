@@ -281,6 +281,8 @@ describe("dropStaleOpenAIReasoning", () => {
 });
 
 describe("isMessagingToolDuplicate", () => {
+  const finished = "Deployment finished.";
+  const passed = "Tests passed.";
   it.each([
     ["hello world", [], false],
     ["short", ["short"], false],
@@ -296,20 +298,12 @@ describe("isMessagingToolDuplicate", () => {
       ["Checking the deploy logs now."],
       false,
     ],
-    ["Deployment finished. Actually it failed.", ["Deployment finished."], false],
-    ["Deployment finished. 2 hosts restarted.", ["Deployment finished."], false],
+    ["Deployment finished. Actually it failed.", [finished], false],
+    ["Deployment finished. 2 hosts restarted.", [finished], false],
     ["Deployment finished!!!", ["Deployment finished"], true],
-    ["Deployment finished. Tests passed.", ["Deployment finished.", "Tests passed."], true],
-    [
-      "Deployment finished. Tests passed. Actually it failed.",
-      ["Deployment finished.", "Tests passed."],
-      false,
-    ],
-    [
-      "Deployment finished. All good!",
-      ["Deployment finished.", "Deployment finished. All good!"],
-      true,
-    ],
+    ["Deployment finished. Tests passed.", [finished, passed], true],
+    ["Deployment finished. Tests passed. Actually it failed.", [finished, passed], false],
+    ["Deployment finished. All good!", [finished, "Deployment finished. All good!"], true],
     [
       "Deployment to staging finished without any errors. Tests passed. Coverage unchanged.",
       [

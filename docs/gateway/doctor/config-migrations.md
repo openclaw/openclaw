@@ -24,6 +24,10 @@ Doctor keeps the config from before that hook, reports the failure, and continue
 with the remaining repairs. Warning-only results stay visible without changing
 config. Repair the affected plugin, then run `openclaw doctor --fix` again.
 
+If plugin migration obligations change during repair, Doctor reports the publication
+phase, expected and current plugin IDs, and changed field names. Diagnostic lists
+are bounded and omit configuration values; retained migration inputs stay protected.
+
 Doctor keeps plugin repair and diagnostic contracts available through later health
 checks and service finalization. It releases its private plugin resources when
 the flow ends, including failed runs.
@@ -121,6 +125,20 @@ setup image identities are not adopted as protected images.
 ## Runtime config migration
 
 ### Heartbeat to ordinary automations
+
+If a state directory was moved before its default cron partition was recorded,
+interactive `openclaw doctor --fix` asks which retained partition to use before
+migrating heartbeat settings. The inventory includes each partition's jobs,
+scratch, receipts, and run history. Cron remains paused until a partition is chosen;
+other Gateway functionality remains available with a valid config.
+Updates also continue with a valid config while partition selection is deferred.
+Unsafe heartbeat sources still require repair before migration.
+
+Noninteractive updates and `openclaw doctor --fix --yes` do not guess. They keep
+the original retired heartbeat fields and report: run `openclaw doctor --fix`
+interactively to select the cron partition and migrate heartbeat settings.
+Retired heartbeat fields already make the config invalid, so that older config
+still requires interactive Doctor before the Gateway can start.
 
 `openclaw doctor --fix` converts supported July 2026 or newer heartbeat settings,
 persisted monitors, and structured heartbeat tasks into ordinary editable
@@ -1301,7 +1319,7 @@ against the current SQLite owners before the import can rename profiles.
     | `session.maintenance.rotateBytes`                                 | removed (deprecated)                                                        |
     | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
     | `diagnostics.memoryPressureSnapshot`, legacy `diagnostics.memoryPressureBundle`                  | removed (automatic critical-memory snapshots were retired; no replacement automatic capture) |
-    | `skills.workshop.autonomous.mode: "propose"`, `skills.workshop.approvalPolicy`, `skills.workshop.maxPending` | `"off"`; proposal settings removed (Skill Workshop proposals were retired) |
+    | `skills.workshop.autonomous.enabled`, `skills.workshop.approvalPolicy`, `skills.workshop.maxPending` | `autonomous.mode` (`true` → `"propose"`, `false` → `"off"`); proposal queue settings removed |
 
     Doctor migrates MCP `type: "http"` to `transport: "streamable-http"` and `type: "sse"` to `transport: "sse"` in both server maps. An existing `transport` wins. For command-based servers, Doctor removes `type: "stdio"`; the command still selects stdio. The update-time Doctor pass uses the same backed-up config repair. Plugin bundle files keep their external `type` format: bundle loading translates recognized types, and CLI exports use the destination's required format. An unknown bundle HTTP transport is rejected instead of being treated as SSE; its original `type` remains available to the destination CLI.
 

@@ -233,24 +233,31 @@ export function createPlacementRecoveryActions(
       return;
     }
     // Once recovery accepts a result, finish this session's durable settlement.
-    const stagedOwners = await recoverPendingWorkspaceResults(deps, facts, environmentId);
+    const stagedOwners =
+      facts.pendingResults.size > 0
+        ? await recoverPendingWorkspaceResults(deps, facts, environmentId)
+        : undefined;
     if (resultsOnly === "results-only" || deps.isShuttingDown?.()) {
       return;
     }
-    facts = await placements.readProjection([sessionId], { current: true });
+    if (stagedOwners) {
+      facts = await placements.readProjection([sessionId], { current: true });
+    }
     if (deps.isShuttingDown?.()) {
       return;
     }
     const blocked =
-      stagedOwners.has(sessionId) ||
+      stagedOwners?.has(sessionId) ||
       facts.pendingResults.has(sessionId) ||
       facts.workspaceJournalOwnerSessionIds.has(sessionId);
     const moveOwners =
-      (await deps.recoverPlacementMoves?.(facts, environmentId)) ?? new Set<string>();
-    if (blocked || moveOwners.has(sessionId) || deps.isShuttingDown?.()) {
+      facts.moves.size > 0 ? await deps.recoverPlacementMoves?.(facts, environmentId) : undefined;
+    if (blocked || moveOwners?.has(sessionId) || deps.isShuttingDown?.()) {
       return;
     }
-    facts = await placements.readProjection([sessionId], { current: true });
+    if (moveOwners) {
+      facts = await placements.readProjection([sessionId], { current: true });
+    }
     for (const placement of facts.placements.values()) {
       if (environmentId !== undefined && placement.environmentId !== environmentId) {
         continue;
@@ -431,13 +438,17 @@ export function createPlacementRecoveryActions(
     }
     const candidates = await placements.readRecoveryCandidates();
     if (mode === "startup") {
+      const lookups = initialPlacements.map((placement) => ({
+        placement,
+        target: undefined,
+        dirty: false,
+      }));
       orphanCleanupPending =
-        initialPlacements.length > 0
+        lookups.length > 0
           ? {
-              placements: [...initialPlacements],
+              placements: lookups,
               initialDiscoveryPending: true,
-              unresolved: new Map(initialPlacements.map((placement) => [placement, undefined])),
-              dirty: new Set(),
+              unresolved: new Set(lookups),
               rootsBySession: new Map(),
               completedRoots: new Set(),
             }

@@ -41,6 +41,8 @@ import { insertRepositoryGitHubPublicationInDatabase } from "../gateway/github-r
 import { repositoryGitHubPublicationDigest } from "../gateway/github-repository-publication.kernel.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { preparePersonalGitHubSessionReceiptDeletion } from "./github-personal-publication-lifecycle.js";
 import {
@@ -82,15 +84,25 @@ import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-conte
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { createSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import {
+  listUserGitHubConnectionsAsync,
   mutateUserGitHubConnection,
   prepareUserGitHubConnection,
 } from "./user-github-connections.js";
 import { disconnectedUserGitHubConnection } from "./user-github-connections.kernel.js";
 import { updateUserGitHubConnection } from "./user-github-connections.test-support.js";
+import { userGitHubConnectionSchema } from "./user-github-connections.types.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
 
 let context: OpenClawStateWorkerContext;
 let root: string;
+const requester = {
+  version: 1 as const,
+  actor: { kind: "system" as const },
+  scopes: ["operator.admin"],
+  grant: null,
+};
+const requesterJson =
+  '{"version":1,"actor":{"kind":"system"},"scopes":["operator.admin"],"grant":null}';
 const scopes = new Set<ReturnType<typeof createGitHubPublicationWorkerScope>>();
 const sources = new Set<Awaited<ReturnType<typeof prepareGitHubPublicationSource>>>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -279,7 +291,7 @@ it("creates the lazy shared schema and replaces a missing lifecycle binding on i
       requestDigest: digestGitHubPublicationRequest({ ...request, sessionId }),
       sessionId,
       lifecycleRevision,
-      requester: { version: 1, actor: { kind: "system" }, scopes: ["operator.admin"], grant: null },
+      requester,
       now: 1000,
       worktree,
       identity: {
@@ -299,8 +311,7 @@ it("creates the lazy shared schema and replaces a missing lifecycle binding on i
     expectNoWorkerRequests(async () => {
       const expected = {
         lifecycle_revision: lifecycleRevision,
-        requester_authority_json:
-          '{"version":1,"actor":{"kind":"system"},"scopes":["operator.admin"],"grant":null}',
+        requester_authority_json: requesterJson,
       };
       expect(
         (
@@ -315,6 +326,69 @@ it("creates the lazy shared schema and replaces a missing lifecycle binding on i
   await expect(
     readGitHubPublicationRequestAsync({ requestId: inserted.request_id }),
   ).resolves.toEqual(inserted);
+});
+
+it("consumes validated connection replies without reparsing and keeps host redaction and isolation", async () => {
+  const owner = ensureProfileForEmail("connection-readback@example.test").id;
+  const now = Date.now();
+  const deviceCode = "synthetic-device-code".padEnd(40, "x");
+  const initial = updateUserGitHubConnection(
+    owner,
+    () => ({
+      ...disconnectedUserGitHubConnection(),
+      pending: {
+        kind: "device",
+        requestId: randomUUID(),
+        deviceCode,
+        userCode: "TEST-CODE",
+        verificationUri: "https://github.com/login/device",
+        createdAtMs: now,
+        expiresAtMs: now + 900000,
+        pollIntervalMs: 1000,
+        nextPollAtMs: now + 1000,
+      },
+    }),
+    () => {},
+  );
+  const parse = vi.spyOn(userGitHubConnectionSchema, "safeParse");
+  resetSecretRedactionRegistryForTest();
+  const prepared = await prepareUserGitHubConnection(owner);
+  expect(prepared.read()).toEqual(initial);
+  expect(isSecretValueRegisteredForRedaction(deviceCode)).toBe(true);
+  const detached = prepared.read()!;
+  detached.pending = undefined;
+  expect(prepared.read()).toEqual(initial);
+
+  resetSecretRedactionRegistryForTest();
+  expect(await listUserGitHubConnectionsAsync()).toContainEqual({ owner, connection: initial });
+  expect(isSecretValueRegisteredForRedaction(deviceCode)).toBe(true);
+
+  resetSecretRedactionRegistryForTest();
+  expect(
+    await mutateUserGitHubConnection(owner, { kind: "expire", nowMs: now }, () => {}),
+  ).toBeUndefined();
+  const renewed = await mutateUserGitHubConnection(
+    owner,
+    {
+      kind: "device",
+      generation: initial.generation,
+      requestId: initial.pending!.requestId,
+      device: {
+        ...initial.pending!,
+        kind: "device",
+        deviceCode,
+        userCode: "TEST-CODE",
+        verificationUri: "https://github.com/login/device",
+        pollIntervalMs: 1000,
+        nextPollAtMs: now + 2000,
+      },
+    },
+    () => {},
+  );
+  expect(renewed?.pending).toMatchObject({ deviceCode, nextPollAtMs: now + 2000 });
+  expect(isSecretValueRegisteredForRedaction(deviceCode)).toBe(true);
+  expect(parse).not.toHaveBeenCalled();
+  resetSecretRedactionRegistryForTest();
 });
 
 it("does not cancel a newer personal GitHub authorization", async () => {
@@ -681,14 +755,6 @@ describe("retained publication lifecycle authority", () => {
       requestId: randomUUID(),
     })),
   );
-  const requester = {
-    version: 1 as const,
-    actor: { kind: "system" as const },
-    scopes: ["operator.admin"],
-    grant: null,
-  };
-  const requesterJson =
-    '{"version":1,"actor":{"kind":"system"},"scopes":["operator.admin"],"grant":null}';
   const unavailable = "lifecycle authority is unavailable";
 
   function personalRow(requestId: string): PersonalGitHubPublicationRow {

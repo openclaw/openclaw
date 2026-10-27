@@ -7,7 +7,8 @@ import { resolveIdentityAvatarView } from "../../lib/identity-avatar-view.ts";
 import type { IdentityAvatarInput } from "../../lib/identity-avatar.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
-import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
+import { sharedProfileDirectoryProjection } from "../../lib/reactive/shared-application-projections.ts";
 
 // The Gateway context is document-wide; the last observed avatar releases its listener.
 const avatarGatewayContext = projectSource(null, {
@@ -20,7 +21,7 @@ export function useIdentityAvatarView(identity: Accessor<IdentityAvatarInput>) {
   const gateway = useAvatarGatewayContext();
   const application = useOptionalApplication();
   const directory = application
-    ? projectOwner(profileDirectory(application.gateway), (source) => source)
+    ? sharedProfileDirectoryProjection(profileDirectory(application.gateway))
     : undefined;
   return createMemo(() => {
     gateway();
