@@ -102,9 +102,19 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     const attemptFragments = [{ kind: "runtime-instruction" as const, text: "Turn instruction" }];
     const systemFragments = [{ kind: "runtime-instruction" as const, text: "System instruction" }];
     fixture.input.attempt.runtimeContextFragments = attemptFragments;
-    fixture.input.prepared.systemPrompt.runtimeContextFragments = systemFragments;
-
-    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+    await runEmbeddedAttemptPromptPhase(
+      {
+        ...fixture.input,
+        prepared: {
+          ...fixture.input.prepared,
+          systemPrompt: {
+            ...fixture.input.prepared.systemPrompt,
+            runtimeContextFragments: systemFragments,
+          },
+        },
+      },
+      fixture.promptState,
+    );
 
     const [contextInput] = mocks.preparePromptContext.mock.calls[0]!;
     expect(contextInput.attempt).toBe(fixture.input.attempt);

@@ -114,7 +114,7 @@ for (const includeMinorCollected of [true, false]) {
     includeObjectsCollectedByMajorGC: true,
     includeObjectsCollectedByMinorGC: includeMinorCollected,
   });
-  let live;
+  let live: ReturnType<typeof batch> | undefined = undefined;
   for (let done = 0; done < iterations; done += 128) {
     live = batch(Math.min(128, iterations - done), true);
   }

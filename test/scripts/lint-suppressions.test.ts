@@ -185,6 +185,7 @@ describe("production lint suppressions", () => {
         // The copy-count probe restores the native method after measurement.
         "scripts/perf/agent-fresh-array-copy-measure.ts|no-extend-native|2",
         // The owner probe executes its selected trusted source expression rather than a copied implementation.
+        "scripts/perf/attempt-prompt-context-measure.ts|typescript/no-implied-eval|1",
         "scripts/perf/attempt-stream-options-measure.ts|typescript/no-implied-eval|1",
         // The avatar dispatch probe forwards the original pool receiver and restores the method.
         "scripts/perf/avatar-inline-measure.ts|typescript/unbound-method|1",

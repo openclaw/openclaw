@@ -108,6 +108,7 @@ async function measure(
   arm: string,
   prepare: typeof candidate.normalizeMessagesForCurrentPromptBoundary,
   sample: number,
+  gc: NonNullable<typeof global.gc>,
 ) {
   let output = prepare(params);
   const expectedBytes = JSON.stringify(messages);
@@ -118,7 +119,7 @@ async function measure(
     }
   }
   run(500);
-  collectGarbage();
+  gc();
   const inspector = new Session();
   const sampled = values.mode === "allocation" || values.mode === "survivors";
   if (sampled) {
@@ -146,7 +147,7 @@ async function measure(
   let allocatedBytes: number | undefined;
   if (sampled) {
     if (values.mode === "survivors") {
-      collectGarbage({ type: "minor", execution: "sync" });
+      gc({ type: "minor", execution: "sync" });
     }
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
     const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
@@ -154,7 +155,7 @@ async function measure(
     allocatedBytes = sum(profile.head);
     inspector.disconnect();
   }
-  collectGarbage();
+  gc();
   const retainedBytes = process.memoryUsage().heapUsed - heapBefore;
   assert.equal(JSON.stringify(output), expectedBytes);
   assert.equal(JSON.stringify(messages), expectedBytes);
@@ -183,6 +184,6 @@ for (let sample = 0; sample < samples; sample++) {
     arms.push(["base", base]);
   }
   for (const [arm, owner] of sample % 2 === 0 ? arms.toReversed() : arms) {
-    await measure(arm, owner.normalizeMessagesForCurrentPromptBoundary, sample + 1);
+    await measure(arm, owner.normalizeMessagesForCurrentPromptBoundary, sample + 1, collectGarbage);
   }
 }
