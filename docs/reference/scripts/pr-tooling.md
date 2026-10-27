@@ -54,13 +54,12 @@ verification before installation; sharing changes only dependency identity.
 
 The audit signature covers executable inputs and dependency/build policy.
 Changes to those inputs, a different runtime, a tracked `dist/` tree, or an older
-wrapper without an audit retain full-tree keying. Symlinked SQL inputs also use
-the full tree, so their targets cannot escape the key. This prevents a changed hook
+wrapper without an audit retain full-tree keying. This prevents a changed hook
 from reading a new source path while reusing an installation based on the old
-read set. SQL contents can change without a new code audit and still invalidate
-the key. To renew an audit, trace the root/workspace hooks and allowed dependency
+read set. SQL schemas are executable inputs too: the generator passes them to
+SQLite. To renew an audit, trace the root/workspace hooks and allowed dependency
 builds, update the read set, then set `auditSha256` to SHA-256 of the selected
-`git ls-tree -r -z <revision>` rows (without the final NUL), excluding `dataFiles`.
+`git ls-tree -r -z <revision>` rows (without the final NUL).
 The current audit qualifies Darwin arm64 and its recorded Node ABI; other
 platforms retain full-tree isolation until their dependency builds are audited.
 The current wrapper can prepare dependencies for older retained workflows without

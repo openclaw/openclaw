@@ -592,7 +592,7 @@ function dependencyKey(rows, tree, audit) {
     const codeInputs = [...audit.files, ...audit.directories];
     const inputs = rows.filter((row, index) => {
       const name = names[index];
-      return audit.files.includes(name) || audit.dataFiles.includes(name) ||
+      return audit.files.includes(name) ||
         name === "pnpm-lock.yaml" || name.startsWith("patches/") ||
         /(?:^|\/)(?:package\.json|\.npmrc|\.pnpmfile\.[cm]js|pnpm-workspace\.yaml)$/.test(name) ||
         (name.endsWith("/tsconfig.json") && codeInputs.some((input) =>
@@ -602,12 +602,8 @@ function dependencyKey(rows, tree, audit) {
     });
     // Changed executable inputs may read new source paths. Keep the original
     // full-tree contract until their read set (including dependency hooks) is audited.
-    const audited = inputs.filter((row) => !audit.dataFiles.includes(row.slice(row.indexOf("\t") + 1)));
-    const digest = createHash("sha256").update(audited.join("\0")).digest("hex");
-    const indirectData = inputs.some((row) => row.startsWith("120000 ") &&
-      audit.dataFiles.includes(row.slice(row.indexOf("\t") + 1)));
-    if (digest === audit.auditSha256 && !indirectData &&
-        !names.some((name) => name.startsWith("dist/"))) {
+    const digest = createHash("sha256").update(inputs.join("\0")).digest("hex");
+    if (digest === audit.auditSha256 && !names.some((name) => name.startsWith("dist/"))) {
       identity = [inputs, audit.presence.map((path) =>
         names.some((name) => name === path || name.startsWith(`${path}/`)))];
     }

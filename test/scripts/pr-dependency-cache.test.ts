@@ -86,13 +86,10 @@ describePosix("frozen PR dependency identity", () => {
         .split("\0")
         .filter(Boolean)
         .map((row) => row.replace(/ 0\t/, "\t").replace(" ", " blob "));
-    const auditedRows = rows().filter(
-      (row) => !row.endsWith("\tsrc/page.ts") && !row.endsWith("\tschema.sql"),
-    );
+    const auditedRows = rows().filter((row) => !row.endsWith("\tsrc/page.ts"));
     const audit = {
-      files: ["scripts/prepare.mjs"],
+      files: ["scripts/prepare.mjs", "schema.sql"],
       directories: ["packages/example/src"],
-      dataFiles: ["schema.sql"],
       presence: ["src"],
       runtime: {
         platform: process.platform,
@@ -129,7 +126,7 @@ describePosix("frozen PR dependency identity", () => {
     write("schema.sql", "CREATE TABLE example (id TEXT);");
     const changedData = key();
     write("src/page.ts", "export const page = 3;");
-    expect(key()).toBe(changedData);
+    expect(key()).not.toBe(changedData);
     rmSync(join(root, "schema.sql"));
     symlinkSync("src/page.ts", join(root, "schema.sql"));
     const indirectData = key();

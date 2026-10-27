@@ -39,16 +39,14 @@
     "packages/normalization-core/tsconfig.json",
     "scripts/tsconfig.json",
     "src/tsconfig.json",
-    "src/gateway/tsconfig.json"
+    "src/gateway/tsconfig.json",
+    "src/state/openclaw-state-schema.sql",
+    "src/state/openclaw-agent-schema.sql"
   ],
   "directories": [
     "packages/gateway-protocol/src",
     "packages/normalization-core/src",
     "src/gateway/methods"
-  ],
-  "dataFiles": [
-    "src/state/openclaw-state-schema.sql",
-    "src/state/openclaw-agent-schema.sql"
   ],
   "presence": [
     ".git",
@@ -56,7 +54,7 @@
     "extensions",
     "git-hooks"
   ],
-  "auditSha256": "fe840d3c0ab865351010782fa4f0e77fa0fec14a2441f3dd2dd14b30fd5f07df",
+  "auditSha256": "e2b8b0481ce9f18ecece5a24465cf16022954555718e9552b8c7caa0af8478b0",
   "runtime": {
     "platform": "darwin",
     "arch": "arm64",
