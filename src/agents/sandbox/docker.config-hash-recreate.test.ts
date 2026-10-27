@@ -67,6 +67,12 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
       image: config.docker.image,
       ...entry,
     });
+  const allocatedContainer = (containerName = "oc-test-shared") => ({
+    containerName,
+    containerId: "c".repeat(64),
+    configHash: expect.any(String),
+    currentConfig: true,
+  });
   const prepareCreation = (missing = false) => {
     spawnState.inspectRunning = false;
     if (missing) {
@@ -91,12 +97,7 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
     const params = containerParams();
     const [first, second] = await Promise.all([ensure(params), ensure(params)]);
 
-    expect(first).toMatchObject({
-      containerName: "oc-test-shared",
-      containerId: "c".repeat(64),
-      configHash: expect.any(String),
-      currentConfig: true,
-    });
+    expect(first).toMatchObject(allocatedContainer());
     expect(second).toEqual(first);
     expect(calls("create")).toHaveLength(1);
     expect(calls("start")).toHaveLength(1);
@@ -109,45 +110,37 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
     "%s publishes allocation once through the backend entry point, including warm reuse",
     async (backendId) => {
       const target = await import("./docker-persistent-target.js");
-      const capture = vi
-        .spyOn(target, "captureDockerPersistentTarget")
-        .mockResolvedValue(undefined);
+      using capture = vi.spyOn(target, "captureDockerPersistentTarget");
+      capture.mockResolvedValue(undefined);
       const { createSandboxBackend, registerSandboxBackend } = await import("./backend.js");
-      try {
-        cfg.backend = backendId;
-        prepareCreation(true);
-        const params = { ...containerParams(), sessionKey: "shared" };
-        const first = await createSandboxBackend(params);
-        expect(calls("info")).toHaveLength(backendId === "podman" ? 1 : 0);
-        expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(1);
-        const published = registryMocks.updateRegistry.mock.calls[0]?.[0];
-        expect(published).toMatchObject({
-          containerName: first.runtimeId,
-          backendId,
-          sessionKey: "shared",
-          workspaceDir,
-          configHash: expect.any(String),
-          image: cfg.docker.image,
-        });
-        registryMocks.readRegistryEntry.mockResolvedValue(published);
-        const second = await createSandboxBackend(params);
-        expect(calls("info")).toHaveLength(backendId === "podman" ? 2 : 0);
-        expect(second.runtimeId).toBe(first.runtimeId);
-        expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(2);
-        expect(calls("create")).toHaveLength(1);
-        expect(calls("start")).toHaveLength(1);
+      cfg.backend = backendId;
+      prepareCreation(true);
+      const params = { ...containerParams(), sessionKey: "shared" };
+      const first = await createSandboxBackend(params);
+      expect(calls("info")).toHaveLength(backendId === "podman" ? 1 : 0);
+      expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(1);
+      const published = registryMocks.updateRegistry.mock.calls[0]?.[0];
+      expect(published).toMatchObject({
+        containerName: first.runtimeId,
+        backendId,
+        sessionKey: "shared",
+        workspaceDir,
+        configHash: expect.any(String),
+        image: cfg.docker.image,
+      });
+      registryMocks.readRegistryEntry.mockResolvedValue(published);
+      const second = await createSandboxBackend(params);
+      expect(calls("info")).toHaveLength(backendId === "podman" ? 2 : 0);
+      expect(second.runtimeId).toBe(first.runtimeId);
+      expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(2);
+      expect(calls("create")).toHaveLength(1);
+      expect(calls("start")).toHaveLength(1);
 
-        // An override of a built-in ID still relies on the generic publisher.
-        const restore = registerSandboxBackend(backendId, async () => first);
-        try {
-          await createSandboxBackend(params);
-          expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(3);
-        } finally {
-          restore();
-        }
-      } finally {
-        capture.mockRestore();
-      }
+      // An override of a built-in ID still relies on the generic publisher.
+      using overrides = new DisposableStack();
+      overrides.defer(registerSandboxBackend(backendId, async () => first));
+      await createSandboxBackend(params);
+      expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(3);
     },
   );
 
@@ -201,62 +194,59 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
     async (backendId) => {
       const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
       const registry = await vi.importActual<typeof import("./registry.js")>("./registry.js");
-      registryMocks.readRegistryEntry.mockImplementation(registry.readRegistryEntry);
-      registryMocks.updateRegistry.mockImplementation(registry.updateRegistry);
-      registryMocks.completeSandboxRegistryReservation.mockImplementation(
-        registry.completeSandboxRegistryReservation,
-      );
-      registryMocks.removeRegistryEntry.mockImplementation(registry.removeRegistryEntry);
-      try {
-        await withOpenClawTestState({ label: "sandbox-setup-recreation" }, async (state) => {
-          const stateWorkspaceDir = state.workspaceDir;
-          const retainedWorkspaceDir = state.path("retained-workspace");
-          fs.mkdirSync(retainedWorkspaceDir);
-          const stateConfig = createSandboxConfig([], []);
-          stateConfig.backend = backendId;
-          stateConfig.docker.setupCommand = "echo setup";
-          const containerName = backendId === "podman" ? "oc-test-podman-shared" : "oc-test-shared";
-          await registry.updateRegistry({
-            containerName,
-            backendId,
-            ...(backendId === "podman" ? { backendTarget: { key: "local", globalArgs: [] } } : {}),
-            sessionKey: "shared",
-            workspaceDir: retainedWorkspaceDir,
-            createdAtMs: 1,
-            lastUsedAtMs: 1,
-            image: stateConfig.docker.image,
-            configHash: "stale-hash",
-            runtimeState: "ready",
-          });
-          spawnState.inspectRunning = false;
-          spawnState.labelHash = "stale-hash";
-
-          await expect(
-            ensure({
-              ...(backendId === "podman" ? { engine: harness.PODMAN_SANDBOX_ENGINE } : {}),
-              ...containerParams(stateConfig, stateWorkspaceDir),
-            }),
-          ).resolves.toMatchObject({
-            containerName,
-            currentConfig: true,
-          });
-
-          await expect(registry.readRegistryEntry(containerName)).resolves.toMatchObject({
-            runtimeState: "ready",
-            createdAtMs: 1,
-            workspaceDir: retainedWorkspaceDir,
-            configHash: spawnState.labelHash,
-          });
-          expect(calls("exec")).toHaveLength(1);
-          expect(calls("rm")).toHaveLength(1);
-          expect(spawnState).toMatchObject({ containerExists: true, inspectRunning: true });
-        });
-      } finally {
-        registryMocks.readRegistryEntry.mockReset();
-        registryMocks.updateRegistry.mockReset();
-        registryMocks.completeSandboxRegistryReservation.mockReset();
-        registryMocks.removeRegistryEntry.mockReset();
+      using registryScope = new DisposableStack();
+      for (const name of [
+        "readRegistryEntry",
+        "updateRegistry",
+        "completeSandboxRegistryReservation",
+        "removeRegistryEntry",
+      ] as const) {
+        registryMocks[name].mockImplementation(registry[name]);
+        registryScope.defer(() => registryMocks[name].mockReset());
       }
+      await withOpenClawTestState({ label: "sandbox-setup-recreation" }, async (state) => {
+        const stateWorkspaceDir = state.workspaceDir;
+        const retainedWorkspaceDir = state.path("retained-workspace");
+        fs.mkdirSync(retainedWorkspaceDir);
+        const stateConfig = createSandboxConfig([], []);
+        stateConfig.backend = backendId;
+        stateConfig.docker.setupCommand = "echo setup";
+        const containerName = backendId === "podman" ? "oc-test-podman-shared" : "oc-test-shared";
+        await registry.updateRegistry({
+          containerName,
+          backendId,
+          ...(backendId === "podman" ? { backendTarget: { key: "local", globalArgs: [] } } : {}),
+          sessionKey: "shared",
+          workspaceDir: retainedWorkspaceDir,
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: stateConfig.docker.image,
+          configHash: "stale-hash",
+          runtimeState: "ready",
+        });
+        spawnState.inspectRunning = false;
+        spawnState.labelHash = "stale-hash";
+
+        await expect(
+          ensure({
+            ...(backendId === "podman" ? { engine: harness.PODMAN_SANDBOX_ENGINE } : {}),
+            ...containerParams(stateConfig, stateWorkspaceDir),
+          }),
+        ).resolves.toMatchObject({
+          containerName,
+          currentConfig: true,
+        });
+
+        await expect(registry.readRegistryEntry(containerName)).resolves.toMatchObject({
+          runtimeState: "ready",
+          createdAtMs: 1,
+          workspaceDir: retainedWorkspaceDir,
+          configHash: spawnState.labelHash,
+        });
+        expect(calls("exec")).toHaveLength(1);
+        expect(calls("rm")).toHaveLength(1);
+        expect(spawnState).toMatchObject({ containerExists: true, inspectRunning: true });
+      });
     },
   );
 
@@ -442,12 +432,7 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
         args: expect.arrayContaining(["create", "--name", containerName]),
       });
       if (state === "missing") {
-        await expect(operation).resolves.toMatchObject({
-          containerName,
-          containerId: "c".repeat(64),
-          currentConfig: true,
-          configHash: expect.any(String),
-        });
+        await expect(operation).resolves.toMatchObject(allocatedContainer(containerName));
         expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith(containerName);
         expect(spawnState.calls).toContainEqual(createCall);
       } else {
@@ -624,35 +609,28 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
         workdir: cfg.docker.workdir,
         workspaceAccess: cfg.workspaceAccess,
       });
-      const startedAt = vi
-        .spyOn(performance, "timeOrigin", "get")
-        .mockReturnValue(Date.now() - (scenario === "current Gateway use" ? 60_000 : 100));
-      const persistent =
+      using startedAt = vi.spyOn(performance, "timeOrigin", "get");
+      startedAt.mockReturnValue(Date.now() - (scenario === "current Gateway use" ? 60_000 : 100));
+      using persistent =
         scenario === "persistent custody"
-          ? vi
-              .spyOn(await import("./persistent-exec.js"), "hasSandboxPersistentExecCustody")
-              .mockResolvedValue(true)
+          ? vi.spyOn(await import("./persistent-exec.js"), "hasSandboxPersistentExecCustody")
           : undefined;
+      persistent?.mockResolvedValue(true);
       spawnState.calls.length = 0;
       registryMocks.updateRegistry.mockClear();
-      try {
-        if (!replace) {
-          await expect(ensure(params)).rejects.toThrow(
-            scenario === "restricted dispatch"
-              ? "restricted dispatch requires the current container config"
-              : "Sandbox mounts changed",
-          );
-          expectNoMutation();
-          expect(registryMocks.updateRegistry).not.toHaveBeenCalled();
-          return;
-        }
-        await expect(ensure(params)).resolves.toMatchObject({
-          currentConfig: true,
-        });
-      } finally {
-        startedAt.mockRestore();
-        persistent?.mockRestore();
+      if (!replace) {
+        await expect(ensure(params)).rejects.toThrow(
+          scenario === "restricted dispatch"
+            ? "restricted dispatch requires the current container config"
+            : "Sandbox mounts changed",
+        );
+        expectNoMutation();
+        expect(registryMocks.updateRegistry).not.toHaveBeenCalled();
+        return;
       }
+      await expect(ensure(params)).resolves.toMatchObject({
+        currentConfig: true,
+      });
       expect(calls("rm")).toHaveLength(1);
       expect(collectDockerFlagValues(calls("create")[0]!.args, "-v")).toEqual(
         expect.arrayContaining([
