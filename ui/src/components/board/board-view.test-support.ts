@@ -20,9 +20,7 @@ type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
 export const testId = (root: ParentNode, id: string) =>
   root.querySelector<HTMLElement>(`[data-test-id="${id}"]`);
 export function expectText(element: Element | null | undefined, ...contents: string[]) {
-  for (const content of contents) {
-    expect(element?.textContent).toContain(content);
-  }
+  contents.forEach((content) => expect(element?.textContent).toContain(content));
 }
 export const widgetSnapshot = (widget: Partial<BoardWidget> = {}) =>
   snapshot({ widgets: [boardWidget(widget)] });

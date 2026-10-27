@@ -100,7 +100,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const label = createMemo(() => session().label);
   const subtitleInput = createMemo(
     () => {
-      const snapshot = host().sidebarSnapshot ? session().snapshotSubtitle : undefined;
+      const snapshot = session().snapshot ? session().snapshotSubtitle : undefined;
       const input = snapshot ? null : sidebarSessionRowSubtitleParams(host(), session(), display());
       return {
         input,

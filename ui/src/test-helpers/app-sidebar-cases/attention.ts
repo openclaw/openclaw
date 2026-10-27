@@ -245,7 +245,11 @@ describe("AppSidebar session attention", () => {
   it("shows hourglass attention ahead of a run error", async () => {
     const { sidebar, dom } = await mountAttention([agentAttentionRow(sessionKey, {}, "hourglass")]);
 
-    expect(dom.query('[data-session-attention="agent"] svg circle')).not.toBeNull();
+    const glyph = dom.query<HTMLElement>('[data-session-attention="agent"] .session-css-icon');
+    const mask = glyph?.style.maskImage.match(/data:image\/svg\+xml,([^"\s]+)"/u)?.[1];
+    expect(mask).toBeDefined();
+    const artwork = new DOMParser().parseFromString(decodeURIComponent(mask!), "image/svg+xml");
+    expect(artwork.querySelector('circle[cx="12"][cy="12"][r="10"]')).not.toBeNull();
     expect(attentionLabel(sidebar, "agent")).toBe("Blocked: need the staging password");
     // The default sidebar keeps the note on the icon; it does not add a second line.
     expect(

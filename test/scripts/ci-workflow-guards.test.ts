@@ -5875,6 +5875,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const step = readCiWorkflow().jobs["build-artifacts"].steps.find(
         (entry: WorkflowStep) => entry.name === "Verify built browser native host",
       );
+      expect(step.env).toMatchObject({
+        OPENCLAW_E2E_USE_PREBUILT_DIST: "1",
+        OPENCLAW_VITEST_WORKER_CACHE: "1",
+        OPENCLAW_VITEST_MAX_WORKERS: "1",
+      });
       const root = tempDirs.make("openclaw-frozen-browser-proof-report-");
       const file = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
       const report = {

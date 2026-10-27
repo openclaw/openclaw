@@ -103,11 +103,16 @@ it.each([263, 362])(
       const card = find(".plugin-catalog-card");
       const identity = find(".installed-plugins-card__identity", card);
       const action = card.querySelector("button")!;
+      const title = find("h3", card).getBoundingClientRect();
+      const button = action.getBoundingClientRect();
+      expect(Math.abs(button.y + button.height / 2 - (title.y + title.height / 2))).toBeLessThan(1);
       const bounds = identity.getBoundingClientRect();
       for (const text of identity.querySelectorAll<HTMLElement>("h3,.plugin-card-author")) {
         const right = text.getBoundingClientRect().right;
         expect(right).toBeLessThanOrEqual(bounds.right + 1);
-        expect(right).toBeLessThan(action.getBoundingClientRect().left);
+        if (text.matches("h3")) {
+          expect(right).toBeLessThan(action.getBoundingClientRect().left);
+        }
       }
       expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
       expect(action.disabled).toBe(false);
@@ -129,18 +134,23 @@ it.each([263, 362])(
   },
 );
 
-it.each([263, 362])("centers installed status dots in a %ipx card header", async (width) => {
-  await renderCatalog({
-    result: { items: [{ ...entry, local: { ...entry.local, installed: true, state: "enabled" } }] },
-  });
-  find(".plugin-catalog-grid").style.gridTemplateColumns = `${width}px`;
-  const card = find(".plugin-catalog-card");
-  const header = find(".plugin-catalog-card__head", card).getBoundingClientRect();
-  const dot = find(".settings-status__dot", card).getBoundingClientRect();
-  expect(dot.width).toBeGreaterThan(0);
-  expect(Math.abs(dot.y + dot.height / 2 - (header.y + header.height / 2))).toBeLessThan(1);
-  expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
-});
+it.each([263, 362])(
+  "centers installed status dots on the title row in a %ipx card",
+  async (width) => {
+    await renderCatalog({
+      result: {
+        items: [{ ...entry, local: { ...entry.local, installed: true, state: "enabled" } }],
+      },
+    });
+    find(".plugin-catalog-grid").style.gridTemplateColumns = `${width}px`;
+    const card = find(".plugin-catalog-card");
+    const header = find(".plugin-card-title-row", card).getBoundingClientRect();
+    const dot = find(".settings-status__dot", card).getBoundingClientRect();
+    expect(dot.width).toBeGreaterThan(0);
+    expect(Math.abs(dot.y + dot.height / 2 - (header.y + header.height / 2))).toBeLessThan(1);
+    expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
+  },
+);
 
 it.each([
   [40, false],

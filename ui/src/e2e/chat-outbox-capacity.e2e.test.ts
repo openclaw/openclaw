@@ -17,14 +17,6 @@ const suite = createChatFlowE2eSuite();
 const largePngBytes = 2_404_765;
 const smallPngBytes = 25_536;
 
-function expectAttachmentBytes(actual: readonly string[], expected: readonly string[]) {
-  expect(actual).toHaveLength(expected.length);
-  for (const [index, bytes] of expected.entries()) {
-    // Keep exact byte and order proof without serializing megabytes on failure.
-    expect(actual[index] === bytes, `attachment ${index + 1} bytes`).toBe(true);
-  }
-}
-
 async function expectImages(images: Locator, count: number) {
   await expect.poll(() => images.count()).toBe(count);
   await expect
@@ -36,6 +28,15 @@ async function expectImages(images: Locator, count: number) {
       ),
     )
     .toBe(true);
+}
+
+function expectExactImageBytes(actual: string[] | null, expected: string[]) {
+  assert(actual, "Expected attachment bytes");
+  expect(actual).toHaveLength(expected.length);
+  // Compare every byte without sending multi-megabyte Base64 diffs to the reporter.
+  expected.forEach((bytes, index) => {
+    expect(actual[index] === bytes, `Attachment ${index + 1} exact bytes`).toBe(true);
+  });
 }
 
 async function readImageBytes(images: Locator) {
@@ -184,7 +185,7 @@ suite.define(() => {
             const payload = (await readOutboxQueue(page))[0]?.attachmentPayload;
             assert(payload, "Expected admitted payload reference");
             expect(await countOutboxPayloads(page)).toBe(1);
-            expectAttachmentBytes(await readOutboxPayloadBytes(page, payload.key), expectedBytes);
+            expectExactImageBytes(await readOutboxPayloadBytes(page, payload.key), expectedBytes);
             expect(requests[0]?.params).toMatchObject({
               message,
               queueMode: "steer",
@@ -203,7 +204,7 @@ suite.define(() => {
               })),
             );
             assert(Array.isArray(attachments));
-            expectAttachmentBytes(
+            expectExactImageBytes(
               attachments.map((attachment: unknown) => {
                 assert(
                   attachment &&
@@ -248,7 +249,7 @@ suite.define(() => {
               .locator(".chat-group.user", { hasText: message })
               .locator(".chat-message-image");
             await expectImages(deliveredImages, files.length);
-            expectAttachmentBytes(await readImageBytes(deliveredImages), expectedBytes);
+            expectExactImageBytes(await readImageBytes(deliveredImages), expectedBytes);
             await expect.poll(() => countOutboxPayloads(page)).toBe(0);
             await expectRequestCountStable(gateway, "chat.send", 1);
           } finally {

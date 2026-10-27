@@ -35,7 +35,12 @@ The icon rail stays separate from the selected navigation list. **Pages** opens
 available built-in pages, dashboards, and plugin destinations, **Sessions** opens conversations,
 and **Users** opens the people list. Its header selects **Online** (the default)
 or **All users**, including offline profiles from the authorized user directory.
-The header is a filter, not a collapse control. Pages always hides dashboards from
+The header is a filter, not a collapse control. Right-click a person, or focus their
+row and press Shift+F10, to open their actions. The **⋯** button appears beside
+their name on hover or keyboard focus and stays visible on touch screens. Use
+**Pin to sidebar** or **Unpin from sidebar** to manage your personal shortcut,
+**View activity** to open their feed, or copy/open their activity link in a new tab.
+Pages always hides dashboards from
 archived sessions and has no archive toggle. To find archived sessions in the
 sidebar, use the **Sessions** filter instead. Hover or focus an icon for its name.
 The active agent's avatar sits at the top of the rail and opens the agent menu;
@@ -117,8 +122,11 @@ the page topbar while the drawer is closed. Opening the drawer moves that action
 back to the rail, without a second header button. In team mode, creation opens the
 same agent picker as the rail. Native apps keep their native creation controls.
 
-In a single-owner list, session activity stays at the far-right edge, including
-when hover or keyboard focus reveals pin and archive actions.
+Standalone session activity and unread indicators stay at the far-right edge
+in grouped, ungrouped, pinned, and child rows, including when hover or keyboard
+focus reveals pin and archive actions. Owner avatars, session artwork, and their
+activity rings keep their leading attribution slot; team mode keeps its compact
+status layout.
 
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile

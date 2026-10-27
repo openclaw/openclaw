@@ -29,6 +29,7 @@ import {
 } from "../sessions/input-provenance.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { getRpcSourceIdentity } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourcesByRunId } from "../sessions/session-controller.storage.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -578,7 +579,11 @@ describe("startGatewayEventSubscriptions", () => {
     agentEventHandlerMocks.create.mockReturnValue(Object.assign(vi.fn(), { dispose: vi.fn() }));
     unsubs = startGatewayEventSubscriptions(params);
 
-    emit({ phase: "start", startedAt: 1_000 });
+    {
+      using scan = vi.spyOn(rpcSourcesByRunId, Symbol.iterator);
+      emit({ phase: "start", startedAt: 1_000 });
+      expect(scan).not.toHaveBeenCalled();
+    }
     transitions.push({ state: "Start-normalized", lifecycle: readLifecycleState(entry) });
     await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
 

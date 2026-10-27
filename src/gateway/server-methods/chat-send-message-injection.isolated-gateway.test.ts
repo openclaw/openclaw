@@ -41,8 +41,10 @@ import { reserveSessionControllerSource } from "../../sessions/session-controlle
 import { getGatewayRecoveryRuntime } from "../server-recovery-runtime-context.js";
 import {
   dispatchInboundMessageMock,
+  gatewayReplyMock,
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
+  onceMessage,
   rpcReq,
   testState,
   writeSessionStore,
@@ -365,3 +367,93 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
     },
   );
 });
+
+it(
+  "keeps public chat.send runnable when sessions.patch marks the conversation read",
+  { timeout: 30_000 },
+  async ({ signal }) => {
+    const sessionKey = "agent:main:read-ack-admission";
+    const sessionId = "read-ack-session";
+    sessionStoreDir ??= await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-iso-gw-"));
+    testState.sessionStorePath = path.join(sessionStoreDir, "sessions.json");
+    await writeSessionStore({ entries: { [sessionKey]: { sessionId, updatedAt: Date.now() } } });
+    dispatchInboundMessageMock.mockReset();
+    gatewayReplyMock.mockClear();
+    const replyText = "Accepted prompt completed after its read acknowledgement";
+    mockGetReplyFromConfigOnce(async () => ({ text: replyText }));
+
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const markerQueued = createDeferred();
+    const entries = await import("../../config/sessions/session-accessor.sqlite-entry.js");
+    const read = entries.loadSessionEntryForAdmission;
+    const readSpy = vi
+      .spyOn(entries, "loadSessionEntryForAdmission")
+      .mockImplementationOnce(async (...args) => {
+        const result = await read(...args);
+        entered.resolve();
+        await resume.promise;
+        return result;
+      });
+    const lifecycle = await import("../../sessions/session-controller.lifecycle.js");
+    const mutate = lifecycle.runSessionMutation;
+    const mutationSpy = vi.spyOn(lifecycle, "runSessionMutation").mockImplementation((params) => {
+      const result = mutate(params);
+      if (params.kind === "read-marker") {
+        markerQueued.resolve();
+      }
+      return result;
+    });
+    const runId = randomUUID();
+    const final = onceMessage<{ type: string; event?: string; payload?: ChatWirePayload }>(
+      ws,
+      (frame) =>
+        frame.type === "event" &&
+        frame.event === "chat" &&
+        frame.payload?.runId === runId &&
+        frame.payload.state === "final",
+      25_000,
+    );
+    let patch: ReturnType<typeof rpcReq> | undefined;
+    try {
+      const accepted = await rpcReq(ws, "chat.send", {
+        sessionKey,
+        message: "Synthetic read-acknowledgement overlap",
+        idempotencyKey: runId,
+      });
+      expect(accepted).toMatchObject({ ok: true, payload: { status: "started", runId } });
+      await withinTest(entered.promise, signal);
+      patch = rpcReq(ws, "sessions.patch", { key: sessionKey, unread: false });
+      await withinTest(markerQueued.promise, signal);
+      resume.resolve();
+      expect(await withinTest(patch, signal)).toMatchObject({ ok: true });
+      expect((await withinTest(final, signal)).payload).toMatchObject({
+        message: { content: [{ text: expect.stringContaining(replyText) }] },
+      });
+      await captureSessionControllerSettlement({
+        scope: testState.sessionStorePath!,
+        identities: [sessionKey],
+      });
+      const duplicate = await rpcReq(ws, "chat.send", {
+        sessionKey,
+        message: "Synthetic read-acknowledgement overlap",
+        idempotencyKey: runId,
+      });
+      expect(duplicate).toMatchObject({ ok: true });
+      expect(gatewayReplyMock).toHaveBeenCalledOnce();
+      expect(
+        await listSessionPendingInputs({
+          agentId: "main",
+          sessionKey,
+          sessionId,
+          storePath: testState.sessionStorePath!,
+        }),
+      ).toMatchObject({ total: 0 });
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([patch, final]);
+      readSpy.mockRestore();
+      mutationSpy.mockRestore();
+    }
+  },
+);

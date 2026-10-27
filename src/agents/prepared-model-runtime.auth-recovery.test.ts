@@ -4,6 +4,7 @@ import {
   getPreparedModelRuntimeMocks,
   usePreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
+import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -64,6 +65,7 @@ import {
 } from "./prepared-model-runtime.owner.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import * as pluginLifetime from "./prepared-model-runtime.plugin-lifetime.js";
+import { updateOwnersForScopedRefresh } from "./prepared-model-runtime.refresh-scope.js";
 
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
@@ -283,7 +285,10 @@ describe("configured plugin generation recovery", () => {
         const dispatch = loadDispatch();
         if (fails) {
           await expect(dispatch).rejects.toBe(failure);
-          await expect(prepare(input)).rejects.toBe(failure);
+          await expect(prepare(input)).rejects.toMatchObject({
+            message: failure.message,
+            stack: failure.stack,
+          });
           expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(1);
           expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
             expect.stringContaining("fresh registry acquisition failed"),
@@ -308,6 +313,90 @@ describe("configured plugin generation recovery", () => {
 });
 
 describe("auth publication generation recovery", () => {
+  it.each(["auth failure", "superseded replacement"] as const)(
+    "releases failed build graphs while keeping %s diagnostics for recovery",
+    async (mode) => {
+      const { input, snapshot } = await publishOwner();
+      const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot)!;
+      const owners = new Map([[ownerKey(owner.input), owner]]);
+      const publication = new PreparedModelRuntimeAuthPublicationOwner();
+      async function failPublication() {
+        const build = { registry: createEmptyPluginRegistry() };
+        const failure = Object.assign(
+          mode === "auth failure"
+            ? new Error("refresh failed", { cause: build })
+            : new PreparedModelRuntimePublicationSupersededError("refresh superseded", {
+                cause: build,
+                admissionBlocked: true,
+              }),
+          { code: "PLUGIN_REFRESH_FAILED", build },
+        );
+        // Plugin JavaScript can attach objects even to the standard diagnostic fields.
+        Object.defineProperties(failure, {
+          name: { value: { build, toString: () => "RefreshFailure" } },
+          message: { value: { build, toString: () => "refresh failed" } },
+        });
+        const reference = new WeakRef(build);
+        let observedOriginal = true;
+        if (mode === "auth failure") {
+          publication.enqueue([owner]);
+          const pending = owner.pending!.catch((error: unknown) => {
+            observedOriginal = error === failure;
+          });
+          await publication.drain({
+            owners,
+            publish: async () => {
+              throw failure;
+            },
+            publishOwners: () => {},
+          });
+          await pending;
+        } else {
+          updateOwnersForScopedRefresh(owners, undefined, failure);
+        }
+        return {
+          reference,
+          observedOriginal,
+          diagnostic: owner.refreshError,
+          expected: {
+            message: "refresh failed",
+            name: "RefreshFailure",
+            stack: failure.stack,
+            code: failure.code,
+          },
+        };
+      }
+      const completed = [];
+      for (let generation = 0; generation < 25; generation++) {
+        completed.push(await failPublication());
+      }
+      const control = new WeakRef({});
+      // Collect in a timer callback so JSC's conservative microtask stack cannot pin the last build.
+      await new Promise<void>((resolve) => {
+        setTimeout(() => {
+          queryObjects(WeakRef);
+          resolve();
+        }, 0);
+      });
+      expect(control.deref()).toBeUndefined();
+      expect(completed.filter(({ reference }) => reference.deref())).toHaveLength(0);
+      for (const { observedOriginal, diagnostic, expected } of completed) {
+        expect(observedOriginal).toBe(true);
+        expect(diagnostic).toMatchObject(expected);
+        expect(diagnostic?.cause).toBeUndefined();
+        if (mode === "superseded replacement") {
+          expect(diagnostic).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
+          expect(diagnostic).toMatchObject({ admissionBlocked: true });
+        }
+      }
+      expect(owner.needsRefresh).toBe(true);
+      await expect(prepare(input)).rejects.toBe(owner.refreshError);
+      if (mode === "auth failure") {
+        expect(owner.catalogRecovery?.error).toBe(owner.refreshError);
+      }
+    },
+  );
+
   it("preserves the retirement reason when an auth gate settles after its owner retires", async () => {
     const { snapshot } = await publishOwner();
     const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot)!;
@@ -472,9 +561,11 @@ describe("auth publication generation recovery", () => {
     const recorded = await failed.promise;
     await rejected;
     expect(recorded.cause).toBe(failure);
-    expect(owner.refreshError).toBe(recorded);
+    expect(owner.refreshError).not.toBe(recorded);
+    expect(owner.refreshError).toMatchObject({ message: recorded.message, stack: recorded.stack });
+    expect(owner.refreshError?.cause).toBeUndefined();
     expect(owner).toMatchObject({ pending: undefined, needsRefresh: true });
-    await expect(prepare(input)).rejects.toBe(recorded);
+    await expect(prepare(input)).rejects.toBe(owner.refreshError);
     expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
     expect(phases.filter((phase) => phase === "failed")).toHaveLength(1);
     expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(

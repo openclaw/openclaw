@@ -234,6 +234,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/device-pair-setup.ts":
       // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
       return "device-pair-setup-runtime";
+    case "ui/src/lib/channels/index.ts":
+      // Channel owners load on their first consumer, outside earlier shared boot captures.
+      return "channels-runtime";
     case "ui/src/pages/chat/talk/conversation.ts":
       return "talk-conversation-runtime";
     case "ui/src/pages/chat/chat-goal-operations.runtime.ts":
@@ -328,13 +331,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown.ts":
     case "ui/src/components/github-link-target.ts":
     case "ui/src/components/markdown-assistant-transcript.ts":
-    case "ui/src/components/markdown-audio-transcript.ts":
     case "ui/src/components/markdown-code-blocks.ts":
     case "ui/src/components/markdown-copy.ts":
     case "ui/src/components/markdown-details.ts":
     case "ui/src/components/markdown-file-links.ts":
     case "ui/src/components/markdown-github-refs.ts":
-    case "ui/src/components/markdown-hex-colors.ts":
     case "ui/src/components/markdown-human-mentions.ts":
     case "ui/src/components/markdown-icon.ts":
     case "ui/src/components/markdown-json.ts":

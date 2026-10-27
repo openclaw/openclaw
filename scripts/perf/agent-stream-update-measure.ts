@@ -9,6 +9,8 @@
  * --event-type text_delta|thinking_delta|toolcall_delta selects snapshot updates.
  * --transforms 1 (or 3) installs real adjacent stream-event decorators. Compare
  * against --transforms 0 to separate wrapper cost from the fixture generator.
+ * --plugin-bound includes a registered plugin's iterator membrane; --owner can
+ * select a frozen stream-wrapper.ts module for paired decorator measurements.
  * --mode promises counts Node promise initialization separately from timing.
  * --mode verify replays a fixed multi-turn recording with all update kinds, async
  * fragments and a blocking tool; compare its outputSha256 across revisions.
@@ -20,7 +22,8 @@
  * --dispatch session includes Agent state and AgentSession listener dispatch with
  * an in-memory transcript. Compare to --dispatch loop (the default) to attribute
  * listener promises. Session runs reset agent history before each prompt.
- * Accept lower allocation/update with stable CPU and identical delivery counts;
+ * --extensions 40 loads unrelated session extensions to measure delta handler scans.
+ * Accept lower allocation or CPU/update with identical delivery counts; report tradeoffs.
  * this measures the real agent loop, not whole-Gateway throughput or latency.
  */
 import assert from "node:assert/strict";
@@ -30,6 +33,8 @@ import { writeFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { runAgentLoop } from "../../packages/agent-core/src/agent-loop.js";
 import {
@@ -41,8 +46,10 @@ import {
 } from "../../packages/agent-core/src/agent-loop.test-support.js";
 import { Agent } from "../../packages/agent-core/src/agent.js";
 import type { AssistantMessageEvent } from "../../packages/llm-core/src/types.js";
-import { wrapStreamObjectEvents } from "../../src/agents/embedded-agent-runner/run/stream-wrapper.js";
 import type { MutableAssistantMessageEventStream } from "../../src/agents/stream-compat.js";
+import { PluginInstance } from "../../src/plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
+import { createPluginRecord } from "../../src/plugins/status.test-helpers.js";
 
 const { values } = parseArgs({
   options: {
@@ -55,20 +62,33 @@ const { values } = parseArgs({
     snapshots: { type: "string", default: "true" },
     "async-fragments": { type: "string", default: "false" },
     transforms: { type: "string", default: "0" },
+    "plugin-bound": { type: "boolean", default: false },
+    owner: { type: "string" },
     layer: { type: "string" },
     dispatch: { type: "string", default: "loop" },
+    extensions: { type: "string", default: "0" },
   },
 });
+const {
+  wrapStreamObjectEvents,
+}: typeof import("../../src/agents/embedded-agent-runner/run/stream-wrapper.js") = await import(
+  values.owner
+    ? pathToFileURL(resolve(values.owner)).href
+    : "../../src/agents/embedded-agent-runner/run/stream-wrapper.js"
+);
 const events = Number(values.events);
 const turns = Number(values.turns);
 const warmup = Number(values.warmup);
 const transforms = Number(values.transforms);
+const extensions = Number(values.extensions);
+assert(Number.isSafeInteger(extensions) && extensions >= 0);
 assert(Number.isSafeInteger(transforms) && transforms >= 0);
 assert(Number.isSafeInteger(events) && events > 0);
 assert(Number.isSafeInteger(turns) && turns > 0);
 assert(Number.isSafeInteger(warmup) && warmup > 0);
 assert(["timing", "allocation", "verify", "promises"].includes(values.mode));
 assert(values.dispatch === "loop" || values.dispatch === "session");
+assert(extensions === 0 || values.dispatch === "session");
 assert(values.dispatch === "loop" || (!values.layer && values.mode !== "verify"));
 if (values.layer) {
   const { measureStreamLayers } = await import("./agent-stream-update-layers.js");
@@ -129,7 +149,15 @@ const fragmentTail = {
 };
 let deliveries = 0;
 let observations = 0;
-function decorate(stream: MutableAssistantMessageEventStream) {
+const record = createPluginRecord({ id: "synthetic-stream", origin: "bundled" });
+const plugin = values["plugin-bound"]
+  ? new PluginInstance(record.id, {
+      record,
+      registry: { ...createEmptyPluginRegistry(), plugins: [record] },
+    })
+  : undefined;
+function decorate(source: MutableAssistantMessageEventStream) {
+  const stream = plugin?.wrap(source) ?? source;
   for (let index = 0; index < transforms; index++) {
     wrapStreamObjectEvents(stream, (event) => {
       if (event.type === eventType) {
@@ -157,9 +185,18 @@ async function createSession() {
   const { ModelRegistry } = await import("../../src/agents/sessions/model-registry.js");
   const { SessionManager } = await import("../../src/agents/sessions/session-manager.js");
   const { SettingsManager } = await import("../../src/agents/sessions/settings-manager.js");
-  const { createResourceLoader } =
-    await import("../../src/agents/sessions/agent-session-loop-resource-loader.test-support.js");
+  const { DefaultResourceLoader } = await import("../../src/agents/sessions/resource-loader.js");
   const manager = SessionManager.inMemory();
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: manager.getCwd(),
+    agentDir: manager.getCwd(),
+    extensionFactories: Array.from({ length: extensions }, () => (api) => {
+      api.on("session_start", () => {});
+    }),
+  });
+  await resourceLoader.reload();
+  assert.equal(resourceLoader.getExtensions().errors.length, 0);
+  assert.equal(resourceLoader.getExtensions().extensions.length, extensions);
   const result = new AgentSession({
     agent,
     systemPrompt: "synthetic probe",
@@ -169,7 +206,7 @@ async function createSession() {
       retry: { enabled: false },
     }),
     cwd: manager.getCwd(),
-    resourceLoader: await createResourceLoader(),
+    resourceLoader,
     modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     allowedToolNames: [],
     cleanupProviderSessionResourcesOnDispose: false,
@@ -374,6 +411,8 @@ console.log(
     turns,
     warmup,
     transforms,
+    pluginBound: Boolean(plugin),
+    extensions,
     observations,
     promisesPerUpdate: values.mode === "promises" ? promises / deliveries : undefined,
     deliveries,
@@ -385,3 +424,4 @@ console.log(
   }),
 );
 session?.dispose();
+await plugin?.dispose();

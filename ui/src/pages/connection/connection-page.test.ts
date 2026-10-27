@@ -115,7 +115,6 @@ async function mount(
 ) {
   const context = {
     gateway,
-    channels: { state: { channelsLastSuccess: null }, subscribe: () => () => undefined },
   } as unknown as ApplicationContext;
   const provider = createApplicationContextProvider(context);
   if (attached) {

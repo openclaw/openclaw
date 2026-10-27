@@ -165,6 +165,7 @@ export function createUiE2eVitestConfig(
     pool: "forks",
     runner: undefined,
     setupFiles: [],
+    includeTaskLocation: true,
   };
   const bundledSetup = {
     globalSetup: [chromiumSetup, "test/vitest/vitest.ui-e2e.bundled.global-setup.ts"],

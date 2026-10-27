@@ -23,6 +23,7 @@ import {
   completeRestartRecoveryTerminalDelivery,
 } from "./restart-recovery-receipt.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.entry-mutation.js";
+import { loadSessionEntry } from "./session-accessor.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   deleteSessionEntryRows,
@@ -159,6 +160,71 @@ async function withReplica(
 
 const it = baseIt.extend<{ fixture: Fixture }>({
   fixture: async ({ task: _task }, use) => withReplica(use),
+});
+
+it("shares identical stored skills across entries without sharing mutable reads", async ({
+  fixture,
+}) => {
+  const { database, scope, replica } = fixture;
+  const skillsSnapshot = {
+    prompt: "Shared synthetic instructions",
+    skills: [
+      {
+        name: "example",
+        requiredEnv: ["SYNTHETIC_KEY"],
+        source: { filePath: "/synthetic/skills/example/SKILL.md" },
+      },
+    ],
+    version: 1,
+  };
+  replaceSessionEntrySync(scope, { ...entry(), skillsSnapshot });
+  const firstState = hydrate(fixture);
+  const first = firstState.entry!.skillsSnapshot!;
+  const siblingScope = { ...scope, sessionKey: "agent:main:skills-sibling" };
+  replaceSessionEntrySync(siblingScope, {
+    ...entry("sibling", 1, "skills-sibling"),
+    skillsSnapshot,
+  });
+  const siblingTarget = sessionActorFileTarget(database, siblingScope.sessionKey);
+  const sibling = readSessionActorEntryFacts(siblingTarget)!.entry!.skillsSnapshot!;
+  expect(sibling).toBe(first);
+  expect(JSON.stringify(sibling)).toBe(JSON.stringify(skillsSnapshot));
+  expect(() => sibling.skills[0]!.requiredEnv!.push("MUTATION")).toThrow(TypeError);
+
+  const mutable = loadSessionEntry(siblingScope);
+  mutable!.skillsSnapshot!.skills[0]!.requiredEnv!.push("CALLER_ONLY");
+  expect(first.skills[0]!.requiredEnv).toEqual(["SYNTHETIC_KEY"]);
+
+  replaceSessionEntrySync(siblingScope, {
+    ...entry("sibling", 2, "skills-sibling"),
+    skillsSnapshot: { ...skillsSnapshot, version: 2 },
+  });
+  const changed = readSessionActorEntryFacts(siblingTarget)!.entry!.skillsSnapshot!;
+  expect(changed).not.toBe(first);
+  expect(changed.version).toBe(2);
+  expect(replica.read()!.entry!.skillsSnapshot).toBe(first);
+
+  let previous = first;
+  for (const snapshot of [
+    { version: 1, skills: skillsSnapshot.skills, prompt: skillsSnapshot.prompt },
+    { ...skillsSnapshot, prompt: "\ud800" },
+    { ...skillsSnapshot, prompt: "\ud801" },
+  ]) {
+    replaceSessionEntrySync(siblingScope, {
+      ...entry("sibling", 3, "skills-sibling"),
+      skillsSnapshot: snapshot,
+    });
+    const next = readSessionActorEntryFacts(siblingTarget)!.entry!.skillsSnapshot!;
+    expect(next).not.toBe(previous);
+    expect(JSON.stringify(next)).toBe(JSON.stringify(snapshot));
+    previous = next;
+  }
+
+  replica.invalidate();
+  const decoded = { ...entry(), skillsSnapshot: structuredClone(skillsSnapshot) };
+  retainEntry(firstState, { entry: decoded, snapshots: "full" }, "decoded-entry");
+  expect(decoded.skillsSnapshot).toBe(first);
+  expect(Object.isFrozen(decoded)).toBe(true);
 });
 
 function hydrate({ replica, load }: Fixture, epoch = "first", sequence = 0) {

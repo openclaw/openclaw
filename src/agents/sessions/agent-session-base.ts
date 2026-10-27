@@ -314,12 +314,17 @@ export abstract class AgentSessionBase {
         prepareToolResult();
       });
     }
-    return this.handleAgentEventUnlocked(event, prepareToolResult);
+    return this.handleAgentEventUnlocked(
+      event,
+      prepareToolResult,
+      event.type === "message_update" ? false : undefined,
+    );
   };
 
   private async handleAgentEventUnlocked(
     event: AgentEvent,
     prepareToolResult: () => boolean,
+    hasExtensionHandlers?: boolean,
   ): Promise<void> {
     if (event.type === "agent_start") {
       this.lastAssistantEntryId = undefined;
@@ -333,7 +338,8 @@ export abstract class AgentSessionBase {
     }
 
     let messageChanged = false;
-    if (this.currentExtensionRunner.hasHandlers(event.type)) {
+    // Delta dispatch reaches here synchronously; user-message retirement can run callbacks.
+    if (hasExtensionHandlers ?? this.currentExtensionRunner.hasHandlers(event.type)) {
       messageChanged = await this.emitExtensionEvent(event);
     }
     // Turn numbering belongs to the session, including turns with no extension listeners.

@@ -85,7 +85,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     load: Promise<void> | null;
   } = { page: null, load: null };
 
-  protected readonly refreshHistory = () => {
+  protected readonly refreshHistory = (options?: { replaceSession?: boolean }) => {
     const state = this.state;
     if (!state) {
       return;
@@ -95,7 +95,9 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
       void this.loadCatalogSession(catalogKey, false);
       return;
     }
-    resetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
+    if (options?.replaceSession || !state.chatRunId) {
+      resetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
+    }
     this.reconcileWaitingApprovalSnapshot();
     if (chatHistoryRequests(state).subscriptionError) {
       void syncSelectedSessionMessageSubscription(state);
