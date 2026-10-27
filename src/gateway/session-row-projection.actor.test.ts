@@ -164,6 +164,7 @@ it("publishes user and assistant actor previews without background reads or losi
     await appendSessionManagerActor({
       actor,
       toolResult: false,
+      message: { role: "assistant" },
       assertCurrent() {},
       append: {
         kind: "message",
