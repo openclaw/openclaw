@@ -112,39 +112,37 @@ export class VisitorAccessService {
   }
 
   /** The first current grant among target keys, optionally with an exact grantId. */
-  private findActiveGrant(keys: readonly string[], grantId?: string): LiveVisitorGrant | undefined {
+  private findActiveGrant(keys: Iterable<string>, grantId?: string): LiveVisitorGrant | undefined {
     this.assertOpen();
     if (!this.ready) {
       throw new VisitorAccessError("Visitor access is starting; retry shortly.");
     }
     const now = Date.now();
-    return keys
-      .map((key) => this.grants.get(key))
-      .find(
-        (entry): entry is LiveVisitorGrant =>
-          entry !== undefined &&
-          grantIdSchema.safeParse(entry.grant.grantId).success &&
-          (grantId === undefined || entry.grant.grantId === grantId) &&
-          !entry.controller.signal.aborted &&
-          (entry.grant.expiresAt === null || entry.grant.expiresAt > now),
-      );
+    for (const key of keys) {
+      const entry = this.grants.get(key);
+      if (
+        entry !== undefined &&
+        (grantId === undefined || entry.grant.grantId === grantId) &&
+        grantIdSchema.safeParse(entry.grant.grantId).success &&
+        !entry.controller.signal.aborted &&
+        (entry.grant.expiresAt === null || entry.grant.expiresAt > now)
+      ) {
+        return entry;
+      }
+    }
+    return undefined;
   }
 
   /** Plugin-internal onboarding API; see README "Onboarding record". */
   findActiveInvitation(grantId: string): ActiveVisitorInvitation | undefined {
-    const state = this.findActiveGrant([...this.grants.keys()], grantId);
-    return (
-      state && {
-        ...structuredClone(state.grant),
-        grantId: grantIdSchema.parse(state.grant.grantId),
-      }
-    );
+    const state = this.findActiveGrant(this.grants.keys(), grantId);
+    return state && { ...structuredClone(state.grant), grantId };
   }
 
   /** Plugin-internal onboarding API; see README "Onboarding record". */
   compareAndSetOnboarding(params: VisitorOnboardingCompareAndSet) {
     return this.serialize(async (): Promise<VisitorOnboardingUpdate> => {
-      const state = this.findActiveGrant([...this.grants.keys()], params.grantId);
+      const state = this.findActiveGrant(this.grants.keys(), params.grantId);
       if (!state) {
         return { applied: false, reason: "inactive" };
       }
