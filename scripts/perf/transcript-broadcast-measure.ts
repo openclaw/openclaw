@@ -1956,7 +1956,7 @@ const configPath = values["default-state-dir"]
   : path.join(output, "openclaw.json");
 writeFileSync(configPath, JSON.stringify(cfg));
 const chunk = values["answer-chunk"];
-function responseEvents(chunks: string[], phase?: "commentary") {
+function createTextResponse(chunks: string[], phase?: "commentary") {
   const text = chunks.join("");
   const item = {
     type: "message",
@@ -1966,7 +1966,7 @@ function responseEvents(chunks: string[], phase?: "commentary") {
     ...(phase ? { phase } : values["final-answer-phase"] ? { phase: "final_answer" } : {}),
     content: [{ type: "output_text", text, annotations: [] }],
   };
-  return [
+  const events = [
     {
       type: "response.output_item.added",
       output_index: 0,
@@ -1997,6 +1997,7 @@ function responseEvents(chunks: string[], phase?: "commentary") {
       },
     },
   ];
+  return { item, events };
 }
 function functionCallEvents(name: string, args: unknown, callId: string) {
   const item = {
@@ -2078,7 +2079,7 @@ async function stressSubagentEvents(body: unknown, input: unknown, purpose: stri
     if (state.cancelled) {
       throw new Error("stress subagent cohort was cancelled");
     }
-    return responseEvents([state.childResult]);
+    return createTextResponse([state.childResult]).events;
   }
   if (!isParent) {
     return undefined;
@@ -2152,10 +2153,10 @@ async function stressSubagentEvents(body: unknown, input: unknown, purpose: stri
     );
   }
   state.phase = "ack-issued";
-  return responseEvents([state.parentAck]);
+  return createTextResponse([state.parentAck]).events;
 }
-const events = responseEvents(Array.from({ length: chunkCount }, () => chunk));
-const utilityEvents = responseEvents(["Synthetic acknowledgement."]);
+const events = createTextResponse(Array.from({ length: chunkCount }, () => chunk)).events;
+const utilityEvents = createTextResponse(["Synthetic acknowledgement."]).events;
 let activeStreams = 0;
 let peakStreams = 0;
 let streamRequests = 0;
@@ -2360,7 +2361,9 @@ const mock = createServer((req, res) => {
           throw new Error(`Cron operator setup failed: ${contentText(setupOutput.output)}`);
         }
         cronOperatorSetupCompleted = true;
-        setupEvents = responseEvents(["Synthetic scheduled operator continuations created."]);
+        setupEvents = createTextResponse([
+          "Synthetic scheduled operator continuations created.",
+        ]).events;
       } else {
         const jobs = cronOperatorJobs.map(({ cohortId }) => ({
           name: `Synthetic operator continuation ${cohortId}`,
@@ -2672,11 +2675,11 @@ const mock = createServer((req, res) => {
         toolCalls += items.length;
         reasoningReplayKey = items.at(-1)?.call_id;
         const preamble = values["turn-start-phases"]
-          ? responseEvents(["I will inspect the synthetic workspace. "], "commentary")
-          : [];
-        const preambleItem = preamble.at(-1)?.response?.output[0];
+          ? createTextResponse(["I will inspect the synthetic workspace. "], "commentary")
+          : undefined;
+        const preambleItem = preamble?.item;
         toolAnswer = [
-          ...preamble.slice(0, -1),
+          ...(preamble?.events.slice(0, -1) ?? []),
           ...items.flatMap((item, toolIndex) => {
             const output_index = toolIndex + (preambleItem ? 1 : 0);
             return [
@@ -2709,7 +2712,7 @@ const mock = createServer((req, res) => {
         subagentAnswer ??
         toolAnswer ??
         (facts.purpose === "activity-recap"
-          ? responseEvents([`Synthetic recap for cohort ${cohort?.id}.`])
+          ? createTextResponse([`Synthetic recap for cohort ${cohort?.id}.`]).events
           : primary || continuation
             ? events
             : utilityEvents);
