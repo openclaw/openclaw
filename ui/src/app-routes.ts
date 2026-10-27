@@ -58,6 +58,7 @@ import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
 import { page as modelSetupPage } from "./pages/model-setup/route.ts";
 import { page as newSessionPage } from "./pages/new-session/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.tsx";
+import { canonicalPluginsRouteLocation } from "./pages/plugins/route-data.ts";
 import { pages as pluginsPages } from "./pages/plugins/route.tsx";
 import { page as portalsPage } from "./pages/portals/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
@@ -171,7 +172,9 @@ function canonicalRouteLocation(
     ? (resolveWorkboardRouteLocation(location, basePath).canonicalLocation ?? location)
     : routeId === "plugin"
       ? canonicalPluginTabLocation(location, basePath)
-      : location;
+      : routeId === "plugins" || routeId === "plugin-settings"
+        ? (canonicalPluginsRouteLocation(location, basePath) ?? location)
+        : location;
 }
 
 export function createApplicationRouter(): ApplicationRouter {

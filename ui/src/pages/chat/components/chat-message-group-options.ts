@@ -15,12 +15,7 @@ import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-co
 
 export type RenderMessageGroupOptions = Omit<
   GroupedMessageOptions,
-  | "isStreaming"
-  | "duplicateCount"
-  | "assistantMessageDisclosure"
-  | "messageActions"
-  | "entryId"
-  | "replyLine"
+  "isStreaming" | "assistantMessageDisclosure" | "messageActions" | "entryId" | "replyLine"
 > &
   ChatSendStatusActions &
   ForwardedAvatarOptions & {

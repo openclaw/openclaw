@@ -8,6 +8,9 @@
  * Repeat in counterbalanced order for candidate, then separately with --mode allocation.
  * --mode profile saves a CPU profile. --owner-file loads a saved baseline transcript-window
  * owner. Setup, hydration and durable readback are outside measurement.
+ * --owner-module selects another source owner for --owner-file substitution.
+ * --message-view exercises post-commit reload decisions for message appends.
+ * requestBytesPerAppend measures V8 command serialization, excluding broker framing.
  * Acceptance: identical committed rows/projections, less CPU or allocation, no material
  * untraced latency/GC regression. Report host load and rounded actor phase diagnostics.
  */
@@ -21,7 +24,7 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { GCProfiler } from "node:v8";
+import { GCProfiler, serialize } from "node:v8";
 import { MessageChannel, MessagePort, receiveMessageOnPort } from "node:worker_threads";
 import type {
   SessionActorHotState,
@@ -38,6 +41,11 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "2000" },
     mode: { type: "string", default: "timing" },
     "owner-file": { type: "string" },
+    "owner-module": {
+      type: "string",
+      default: "src/config/sessions/session-actor-transcript-window.worker.ts",
+    },
+    "message-view": { type: "boolean", default: false },
   },
 });
 assert(values.output, "--output must name a new directory");
@@ -59,10 +67,7 @@ Object.assign(process.env, {
   TMPDIR: path.join(output, "tmp"),
   OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
 });
-const ownerUrl = new URL(
-  "../../src/config/sessions/session-actor-transcript-window.worker.ts",
-  import.meta.url,
-);
+const ownerUrl = pathToFileURL(path.resolve(values["owner-module"]));
 const sourceUrl = values["owner-file"]
   ? pathToFileURL(path.resolve(values["owner-file"]))
   : ownerUrl;
@@ -89,7 +94,7 @@ const { createSqliteWorkerOperationAdmission, withSqliteWorkerOperationAdmission
   await import("../../src/infra/sqlite-worker-operation-admission.js");
 const { createSessionActorWorker } =
   await import("../../src/config/sessions/session-actor.worker.js");
-assert(ownerLoaded, "Selected transcript-window owner was not loaded");
+assert(ownerLoaded, "Selected append owner was not loaded");
 const { writeSessionEntry } =
   await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
 const { appendTranscriptEventsInTransaction } =
@@ -254,6 +259,7 @@ const commands: SqliteWorkerCommand<SessionActorOperations>[] = Array.from(
                 validateTurn: false,
               },
               options: {},
+              ...(values["message-view"] ? { view: {} } : {}),
             },
           },
         },
@@ -271,6 +277,8 @@ const commands: SqliteWorkerCommand<SessionActorOperations>[] = Array.from(
   },
 );
 const inspector = new Session();
+const requestBytesPerAppend =
+  commands.reduce((total, command) => total + serialize(command).byteLength, 0) / iterations;
 const gc = new GCProfiler();
 const timings: number[] = [];
 const phases: Record<string, number[]> = {};
@@ -410,6 +418,7 @@ try {
     rows,
     sessions,
     iterations,
+    requestBytesPerAppend,
     elapsedMs,
     cpuUsPerAppend: (used.user + used.system) / iterations,
     sampledBytesPerAppend: sampledBytes === undefined ? undefined : sampledBytes / iterations,

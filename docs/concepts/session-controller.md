@@ -312,6 +312,11 @@ progress. Watchdogs consume owner-held progress and deadlines, preserve healthy
 waits, and target the exact operation observed. Incoming user messages alone must
 not perpetually renew a stuck run's progress clock.
 
+Embedded-attempt watchdog bookkeeping checks the captured run lifecycle and
+controller ownership without re-entering person-access plugins on each progress
+event. Admission, tool execution, and effect commits still check the current
+access policy, so a revoked grant cannot authorize the next effect.
+
 A bounded recovery claim assumes the scheduler and clock can run. The watchdog
 requests Stop for stalled execution through the captured cancellation kernel.
 Frozen finalization instead has a distinct cleanup transition that preserves
