@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assert, describe, expect, it, vi } from "vitest";
@@ -19,8 +20,14 @@ import {
 } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
+import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
-import { stagePendingWorkerWorkspaceResult } from "./workspace-recovery.test-support.js";
+import { applyStagedWorkerWorkspace } from "./workspace-reconcile-apply.js";
+import {
+  gitInit,
+  manifestFor,
+  stagePendingWorkerWorkspaceResult,
+} from "./workspace-recovery.test-support.js";
 import {
   hasWorkerWorkspaceResultRef,
   workerWorkspaceResultRef,
@@ -51,6 +58,90 @@ describe("worker placement restart recovery", () => {
     expect(harness.environments.attachSession).not.toHaveBeenCalled();
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "saves an interrupted worker's files before releasing its claim (disconnected: %s)",
+    async (disconnected) => {
+      const workspacePath = path.join(support.testState.root, "gateway-workspace");
+      const workerPath = path.join(support.testState.root, "worker-workspace");
+      await fs.mkdir(workspacePath);
+      await fs.mkdir(workerPath);
+      await gitInit(workspacePath);
+      await fs.writeFile(path.join(workspacePath, "result.txt"), "base\n");
+      await fs.writeFile(path.join(workerPath, "result.txt"), "unfinished worker edit\n");
+      const base = await manifestFor(workspacePath);
+      const placements = createPlacementStore();
+      const original = await createHarness(support.testState.stateDb, placements);
+      const active = await original.placements.seedActive(2);
+      assert(active.state === "active");
+      const claim = await placements.claimTurn(makeClaimInput(active, "interrupted-worker"));
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+
+      const restartedStore = createWorkerSessionPlacementStore({
+        database: support.testState.stateDb,
+        now: () => 2_000,
+      });
+      const restarted = await createHarness(support.testState.stateDb, restartedStore, {
+        workspacePath,
+      });
+      restarted.markEnvironmentNodeDeviceId("interrupted-worker-node");
+      const tunnel = restarted.tunnelHandle(active.activeOwnerEpoch);
+      vi.mocked(tunnel.reconcileWorkspace).mockImplementation(
+        async ({ source, baseManifestRef }) => {
+          assert(source.kind === "local");
+          expect(restarted.log).toContain("teardown:stop");
+          expect(restarted.log.indexOf("teardown:stop")).toBeLessThan(
+            restarted.log.indexOf("workspace:quiesce"),
+          );
+          const current = await manifestFor(workerPath);
+          const applied = await applyStagedWorkerWorkspace({
+            root: source.path,
+            stagingRoot: workerPath,
+            baseManifestRef,
+            currentManifestRef: `sha256:${createHash("sha256").update(JSON.stringify(current)).digest("hex")}`,
+            base,
+            current,
+            journal: source.journal,
+            assertCurrent: source.assertCurrent,
+            acceptance: { kind: "reconcile" },
+          });
+          return {
+            ...applied,
+            changed: true,
+            verifyStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
+            getAppliedWorkspaceResult: () => applied,
+          };
+        },
+      );
+      vi.mocked(restarted.environments.startTunnel).mockResolvedValue(tunnel);
+      if (disconnected) {
+        vi.mocked(restarted.environments.startTunnel).mockRejectedValueOnce(
+          new WorkerTunnelOwnerDisconnectedError(),
+        );
+      }
+
+      await restarted.service.reconcile("startup");
+
+      if (disconnected) {
+        expectPlacement(restartedStore, "active", { turnClaim: { claimId: claim.claimId } });
+        expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
+        expect(restarted.environments.destroy).not.toHaveBeenCalled();
+        await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
+          "base\n",
+        );
+        await restarted.service.reconcileActive();
+      }
+      await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
+        "unfinished worker edit\n",
+      );
+      expectPlacement(restartedStore, "active", { turnClaim: null });
+      expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
+      expect(restarted.environments.destroy).not.toHaveBeenCalled();
+      expect(tunnel.launchTurn).not.toHaveBeenCalled();
+    },
+  );
 
   describe.each(["startup", "active"] as const)("%s recovery after worker retirement", (mode) => {
     it.each(["idle", "claimed turn", "pending result", "provider loss"] as const)(
@@ -395,7 +486,7 @@ describe("worker placement restart recovery", () => {
     expect(active.environmentId).not.toBe(provisioning.environmentId);
   });
 
-  it("does not recover a pending result through a worker with the legacy launch dialect", async () => {
+  it("keeps file custody when an old launch dialect cannot reconnect for cleanup", async () => {
     const placements = createPlacementStore();
     const originalHarness = await createHarness(support.testState.stateDb, placements);
     const active = await originalHarness.placements.seedActive(2);
@@ -410,16 +501,19 @@ describe("worker placement restart recovery", () => {
       now: () => 2_000,
     });
     const restartedHarness = await createHarness(support.testState.stateDb, restartedStore);
-    restartedHarness.markEnvironmentOwnerEpoch(2);
+    restartedHarness.markEnvironmentNodeDeviceId("legacy-worker-node");
     restartedHarness.markEnvironmentProtocolFeatures([WORKER_LAUNCH_V2_PROTOCOL_FEATURE]);
+    vi.mocked(restartedHarness.environments.startTunnel).mockRejectedValue(
+      new WorkerTunnelOwnerDisconnectedError(),
+    );
 
     await restartedHarness.service.reconcile();
 
-    expectPlacement(restartedStore, "failed", {
-      recoveryError: "Pending cloud workspace result lost its worker: session-1",
+    expectPlacement(restartedStore, "active", {
+      turnClaim: { claimId: claim.claimId },
     });
-    expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
-    expect(restartedHarness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
+    expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
   });
 
   it("does not adopt an active worker missing exec-authority launch support", async () => {

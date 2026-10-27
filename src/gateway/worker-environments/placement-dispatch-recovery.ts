@@ -16,11 +16,15 @@ import {
 } from "./placement-dispatch-orphan-cleanup.js";
 import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-results.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
+import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   PlacementRecoveryDeps,
   WorkerPlacementRecoveryAdmission,
 } from "./placement-recovery-contract.js";
-import { isCurrentActiveWorkerEnvironment } from "./placement-target.js";
+import {
+  isCurrentActiveWorkerEnvironment,
+  isExactAttachedEnvironment,
+} from "./placement-target.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 
 const admitRecovery: WorkerPlacementRecoveryAdmission = async (_sessionIds, run) => {
@@ -65,8 +69,23 @@ export function createPlacementRecoveryActions(
   ): Promise<void> => {
     const environment = environments.get(placement.environmentId);
     if (mode === "restart" && placement.turnClaim) {
-      // A new process never adopts execution authority from a saved turn claim.
-      // Staged results and move journals settle separately before reaching this path.
+      const claim = projectWorkerSessionTurnClaim(placement);
+      if (claim && isExactAttachedEnvironment(environment, placement)) {
+        // Retain files before stopping the old worker; this never adopts its execution authority.
+        await placements.retainInterruptedTurnWorkspace(claim, () => {
+          if (
+            deps.isShuttingDown?.() ||
+            !isExactAttachedEnvironment(environments.get(placement.environmentId), placement)
+          ) {
+            throw new Error("Interrupted worker file handoff lost its attachment owner");
+          }
+        });
+        await recoverPendingWorkspaceResults(
+          deps,
+          await placements.readProjection([placement.sessionId], { current: true }),
+        );
+        return;
+      }
       await failure.failActive(
         placement,
         new Error("Active worker turn claim cannot be proven live after gateway restart"),
@@ -239,8 +258,8 @@ export function createPlacementRecoveryActions(
     // Cancel old setup before environment reconciliation can perform provider work.
     // Existing allocations, staged results, and move journals retain their cleanup owners.
     if (mode === "startup") {
-      // Retire interrupted setup and explicitly abandoned resources. Only existing
-      // result rows and move journals authorize file settlement after restart.
+      // Retire interrupted setup and explicitly abandoned resources. Interrupted worker
+      // claims transfer only file custody to the existing result-settlement owner.
       for (const { sessionId } of await placements.readRecoveryCandidates()) {
         if (deps.isShuttingDown?.()) {
           return;
