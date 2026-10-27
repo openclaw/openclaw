@@ -57,6 +57,7 @@ function removedProfileFieldPatch(
 /** Live incognito sessions never enter durable stores; release pins via their memory owners. */
 async function clearRemovedIncognitoSessionAuthProfiles(
   params: Pick<RemovedSessionAuthProfileParams, "removedByAgent" | "assertCurrent">,
+  clearedSessions: Set<string>,
 ): Promise<void> {
   for (const owner of memorySessionActorOwners.list()) {
     const removed = params.removedByAgent.get(owner.agentId);
@@ -92,6 +93,7 @@ async function clearRemovedIncognitoSessionAuthProfiles(
             workerGuard: { assertCurrent },
           },
         );
+        clearedSessions.add(`${owner.agentId}:${sessionKey}`);
       }
     }
   }
@@ -100,13 +102,16 @@ async function clearRemovedIncognitoSessionAuthProfiles(
 /** Release only references to credentials whose owning store confirmed removal. */
 export async function clearRemovedSessionAuthProfiles(
   params: RemovedSessionAuthProfileParams,
-): Promise<void> {
+): Promise<number> {
   params.assertCurrent?.();
   clearRemovedQueuedAuthProfiles(params);
   if (params.removedByAgent.size === 0) {
-    return;
+    return 0;
   }
-  await clearRemovedIncognitoSessionAuthProfiles(params);
+  // Counts distinct cleared sessions, not patch calls: one session can carry
+  // both a current and a rollback reference to the removed account.
+  const clearedSessions = new Set<string>();
+  await clearRemovedIncognitoSessionAuthProfiles(params, clearedSessions);
   const { candidates, ...inventory } = prepareSessionStoreTargetInventory(params.cfg, [
     ...params.removedByAgent.keys(),
   ]);
@@ -210,6 +215,7 @@ export async function clearRemovedSessionAuthProfiles(
                     workerGuard: { assertCurrent },
                   },
                 );
+                clearedSessions.add(`${agentId}:${sessionKey}`);
               }
             }
           },
@@ -217,4 +223,5 @@ export async function clearRemovedSessionAuthProfiles(
       }
     }
   });
+  return clearedSessions.size;
 }

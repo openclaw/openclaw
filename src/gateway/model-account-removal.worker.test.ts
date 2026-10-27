@@ -12,7 +12,10 @@ import { connectUserModelAccountAsync } from "../state/user-model-account-operat
 import { listUserModelAccounts, readUserModelAuthProfile } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createModelAccountConnectService } from "./model-account-connect.js";
+import {
+  createModelAccountConnectService,
+  getModelAccountRemoval,
+} from "./model-account-connect.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -37,6 +40,18 @@ const connect = (ownerProfileId: string, label: string) =>
     assertCurrent() {},
   });
 
+/** The destructive entry point stays Gateway-internal: off the service object and its shipped type. */
+function removalFor(service: ReturnType<typeof createModelAccountConnectService>) {
+  // @ts-expect-error removeAsync must not appear on the SDK-shipped service type.
+  void service.removeAsync;
+  expect(service).not.toHaveProperty("removeAsync");
+  const removal = getModelAccountRemoval(service);
+  if (!removal) {
+    throw new Error("createModelAccountConnectService did not register its removal operation");
+  }
+  return removal;
+}
+
 it("removes an owned credential through the worker, retires retained grants and clears current/rollback pins across agents", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     await state.writeConfig(cfg);
@@ -50,6 +65,7 @@ it("removes an owned credential through the worker, retires retained grants and 
       assertCurrent() {},
     });
     const service = createModelAccountConnectService({ getConfig: () => cfg });
+    const removal = removalFor(service);
     try {
       for (const agent of ["main", "writer"]) {
         await sessionAccessor.replaceSessionEntry(session(agent), {
@@ -73,7 +89,7 @@ it("removes an owned credential through the worker, retires retained grants and 
           authProfileOverride: kept,
         });
       }
-      const result = await service.removeAsync(
+      const result = await removal.removeAsync(
         { owner, actorProfileId: owner, assertCurrent() {} },
         removed,
       );
@@ -81,6 +97,8 @@ it("removes an owned credential through the worker, retires retained grants and 
         removed: true,
         authProfileId: removed,
         sessionCleanup: "complete",
+        // Both agents' pinned sessions were cleared once; kept sessions do not count.
+        clearedSessions: 2,
         links: [{ authProfileId: kept }],
       });
       expect(readUserModelAuthProfile(removed)).toBeUndefined();
@@ -106,8 +124,8 @@ it("removes an owned credential through the worker, retires retained grants and 
         ).toBe(kept);
       }
       expect(
-        await service.removeAsync({ owner, actorProfileId: owner, assertCurrent() {} }, removed),
-      ).toMatchObject({ removed: false, sessionCleanup: "complete" });
+        await removal.removeAsync({ owner, actorProfileId: owner, assertCurrent() {} }, removed),
+      ).toMatchObject({ removed: false, sessionCleanup: "complete", clearedSessions: 0 });
     } finally {
       grant.dispose();
       await service.stop();
@@ -127,12 +145,13 @@ it("reports confirmed deletion separately from failed session cleanup and suppor
       authProfileOverride: removed,
     });
     const service = createModelAccountConnectService({ getConfig: () => cfg });
+    const removal = removalFor(service);
     const action = { owner, actorProfileId: owner, assertCurrent() {} };
     try {
       const discovery = vi
         .spyOn(targets, "listKnownSessionStoreAgentIdsAsync")
         .mockRejectedValueOnce(new Error("synthetic unreadable store"));
-      expect(await service.removeAsync(action, removed)).toMatchObject({
+      expect(await removal.removeAsync(action, removed)).toMatchObject({
         removed: true,
         sessionCleanup: "pending",
         links: [],
@@ -140,9 +159,10 @@ it("reports confirmed deletion separately from failed session cleanup and suppor
       expect(readUserModelAuthProfile(removed)).toBeUndefined();
       expect(sessionAccessor.loadSessionEntryReadOnly(scope)?.authProfileOverride).toBe(removed);
       discovery.mockRestore();
-      expect(await service.removeAsync(action, removed)).toMatchObject({
+      expect(await removal.removeAsync(action, removed)).toMatchObject({
         removed: false,
         sessionCleanup: "complete",
+        clearedSessions: 1,
       });
       expect(sessionAccessor.loadSessionEntryReadOnly(scope)?.authProfileOverride).toBeUndefined();
       expect(listUserModelAccounts({ profileId: owner }).accounts).toEqual([]);
@@ -158,12 +178,13 @@ it("rejects an admin-shaped actor targeting another owner and rejects shared IDs
     const actorProfileId = ensureProfileForEmail("admin@example.test").id;
     const removed = (await connect(owner, "private")).authProfileId;
     const service = createModelAccountConnectService({ getConfig: () => cfg });
+    const removal = removalFor(service);
     try {
       await expect(
-        service.removeAsync({ owner, actorProfileId, assertCurrent() {} }, removed),
+        removal.removeAsync({ owner, actorProfileId, assertCurrent() {} }, removed),
       ).rejects.toThrow();
       await expect(
-        service.removeAsync(
+        removal.removeAsync(
           { owner, actorProfileId: owner, assertCurrent() {} },
           "synthetic:shared",
         ),
@@ -230,8 +251,9 @@ it("clears removed current and rollback pins from live incognito sessions withou
       },
     }));
     const service = createModelAccountConnectService({ getConfig: () => cfg });
+    const removal = removalFor(service);
     try {
-      const result = await service.removeAsync(
+      const result = await removal.removeAsync(
         { owner, actorProfileId: owner, assertCurrent() {} },
         removed,
       );
@@ -296,9 +318,10 @@ it("does not create an incognito memory owner for removal without live incognito
     const removed = (await connect(owner, "no-incognito")).authProfileId;
     const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
     const service = createModelAccountConnectService({ getConfig: () => cfg });
+    const removal = removalFor(service);
     try {
       expect(
-        await service.removeAsync({ owner, actorProfileId: owner, assertCurrent() {} }, removed),
+        await removal.removeAsync({ owner, actorProfileId: owner, assertCurrent() {} }, removed),
       ).toMatchObject({ removed: true, sessionCleanup: "complete" });
       expect(memorySessionActorOwners.read({ agentId: "main", path: sentinel })).toBeUndefined();
       expect(fs.existsSync(sentinel)).toBe(false);
@@ -333,10 +356,11 @@ it("clears incognito pins for agents that have no durable session store", async 
       },
     }));
     const service = createModelAccountConnectService({ getConfig: () => cfg });
+    const removal = removalFor(service);
     try {
       expect(sessionAccessor.loadSessionEntryReadOnly(scope)?.authProfileOverride).toBe(removed);
       expect(
-        await service.removeAsync({ owner, actorProfileId: owner, assertCurrent() {} }, removed),
+        await removal.removeAsync({ owner, actorProfileId: owner, assertCurrent() {} }, removed),
       ).toMatchObject({ removed: true, sessionCleanup: "complete" });
       expect(sessionAccessor.loadSessionEntryReadOnly(scope)?.authProfileOverride).toBeUndefined();
       expect(fs.existsSync(sentinel)).toBe(false);
@@ -368,20 +392,22 @@ it("reports incognito cleanup as pending when the memory patch fails and clears 
       },
     }));
     const service = createModelAccountConnectService({ getConfig: () => cfg });
+    const removal = removalFor(service);
     const action = { owner, actorProfileId: owner, assertCurrent() {} };
     const patch = vi
       .spyOn(sessionAccessor, "patchSessionEntryCore")
       .mockRejectedValueOnce(new Error("synthetic incognito cleanup failure"));
     try {
-      expect(await service.removeAsync(action, removed)).toMatchObject({
+      expect(await removal.removeAsync(action, removed)).toMatchObject({
         removed: true,
         sessionCleanup: "pending",
       });
       expect(sessionAccessor.loadSessionEntryReadOnly(scope)?.authProfileOverride).toBe(removed);
       patch.mockRestore();
-      expect(await service.removeAsync(action, removed)).toMatchObject({
+      expect(await removal.removeAsync(action, removed)).toMatchObject({
         removed: false,
         sessionCleanup: "complete",
+        clearedSessions: 1,
       });
       expect(sessionAccessor.loadSessionEntryReadOnly(scope)?.authProfileOverride).toBeUndefined();
     } finally {

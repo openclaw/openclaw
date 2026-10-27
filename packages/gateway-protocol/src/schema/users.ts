@@ -227,6 +227,9 @@ export const UsersRemoveModelAccountResultSchema = closedObject({
   removed: Type.Boolean(),
   links: Type.Array(UserProfileAuthLinkSchema),
   sessionCleanup: Type.Union([Type.Literal("complete"), Type.Literal("pending")]),
+  // Sessions whose current or rollback selection referenced the removed account
+  // and were cleared by this request; present once session cleanup completes.
+  clearedSessions: Type.Optional(Type.Integer()),
 });
 
 export const UsersListAuthLinksParamsSchema = closedObject({ profileId: UserProfileIdSchema });

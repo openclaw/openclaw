@@ -141,6 +141,27 @@ function requireLinkableProvider(provider: string | undefined, authProfileId: st
   return provider;
 }
 
+/**
+ * Destructive personal-account removal. Internal to the Gateway: it shares the
+ * owning service's write serialization and authority, but is deliberately not a
+ * member of the service object, whose inferred type ships in SDK declarations
+ * through `GatewayRequestContext.modelAccountConnectService`. A destructive
+ * member joins that contract only with an explicit SDK-owner decision.
+ */
+export type ModelAccountRemovalOperation = {
+  removeAsync(
+    action: ModelAccountConnectWorkerAction,
+    authProfileId: string,
+  ): Promise<UsersRemoveModelAccountResult>;
+};
+
+const removalOperations = new WeakMap<object, ModelAccountRemovalOperation>();
+
+/** Gateway RPC and internal callers only; undefined for foreign service objects. */
+export function getModelAccountRemoval(service: object): ModelAccountRemovalOperation | undefined {
+  return removalOperations.get(service);
+}
+
 /** One Gateway lifetime owns sign-in steps and authority; provider methods only stage credentials. */
 export function createModelAccountConnectService(options: {
   getConfig: () => OpenClawConfig;
@@ -327,7 +348,7 @@ export function createModelAccountConnectService(options: {
     }
   };
 
-  return {
+  const service = {
     /** @deprecated Await listLinksAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     listLinks(action: ModelAccountConnectAction): UsersListAuthLinksResult {
       warnModelAccountConnectDeprecation("listLinks");
@@ -465,59 +486,6 @@ export function createModelAccountConnectService(options: {
       authProfileId: string,
     ): Promise<UsersSelectModelAccountResult> {
       return changeLink(action, "select", authProfileId);
-    },
-    async removeAsync(
-      action: ModelAccountConnectWorkerAction,
-      authProfileId: string,
-    ): Promise<UsersRemoveModelAccountResult> {
-      assertRunning(action);
-      // Admin access to another person's defaults is not authority to delete their credential.
-      if (action.actorProfileId !== action.owner || !isUserModelAuthProfileId(authProfileId)) {
-        throw new ModelAccountConnectAuthorityError();
-      }
-      const context = captureOpenClawStateWorkerContext();
-      const previous = [...operations.values()];
-      return retainWrite(async () => {
-        const result = await removeUserModelAccountAsync(
-          {
-            profileId: action.owner,
-            authProfileId,
-            authorityProfileIds: [action.owner],
-            assertCurrent: action.assertCurrent,
-          },
-          { context },
-        );
-        if (result.provider) {
-          supersede(action.owner, result.provider, previous);
-        }
-        // No rollback of a deleted credential when a separate session store is unavailable.
-        // The same ID remains a valid cleanup retry after deletion.
-        let sessionCleanup: "complete" | "pending" = "pending";
-        try {
-          action.assertCurrent();
-          const cfg = options.getConfig();
-          const agents = await listKnownSessionStoreAgentIdsAsync(cfg);
-          // Incognito namespaces are memory-only, so their agents never appear in
-          // durable discovery; live owners still pin the removed credential.
-          const removedByAgent = new Map(agents.map((agent) => [agent, new Set([authProfileId])]));
-          for (const { agentId } of memorySessionActorOwners.list()) {
-            if (!removedByAgent.has(agentId)) {
-              removedByAgent.set(agentId, new Set([authProfileId]));
-            }
-          }
-          await clearRemovedSessionAuthProfiles({
-            cfg,
-            removedByAgent,
-            rewriteConfig: (current) => current,
-            assertCurrent: action.assertCurrent,
-          });
-          sessionCleanup = "complete";
-        } catch {
-          // Return only the committed account result, never store paths or credential details.
-        }
-        options.onChanged?.();
-        return { authProfileId, removed: result.removed, links: result.links, sessionCleanup };
-      });
     },
     async start(
       action: ModelAccountConnectAction,
@@ -716,4 +684,67 @@ export function createModelAccountConnectService(options: {
       operations.clear();
     },
   };
+  removalOperations.set(service, {
+    async removeAsync(
+      action: ModelAccountConnectWorkerAction,
+      authProfileId: string,
+    ): Promise<UsersRemoveModelAccountResult> {
+      assertRunning(action);
+      // Admin access to another person's defaults is not authority to delete their credential.
+      if (action.actorProfileId !== action.owner || !isUserModelAuthProfileId(authProfileId)) {
+        throw new ModelAccountConnectAuthorityError();
+      }
+      const context = captureOpenClawStateWorkerContext();
+      const previous = [...operations.values()];
+      return retainWrite(async () => {
+        const result = await removeUserModelAccountAsync(
+          {
+            profileId: action.owner,
+            authProfileId,
+            authorityProfileIds: [action.owner],
+            assertCurrent: action.assertCurrent,
+          },
+          { context },
+        );
+        if (result.provider) {
+          supersede(action.owner, result.provider, previous);
+        }
+        // No rollback of a deleted credential when a separate session store is unavailable.
+        // The same ID remains a valid cleanup retry after deletion.
+        let sessionCleanup: "complete" | "pending" = "pending";
+        let clearedSessions: number | undefined;
+        try {
+          action.assertCurrent();
+          const cfg = options.getConfig();
+          const agents = await listKnownSessionStoreAgentIdsAsync(cfg);
+          // Incognito namespaces are memory-only, so their agents never appear in
+          // durable discovery; live owners still pin the removed credential.
+          const removedByAgent = new Map(agents.map((agent) => [agent, new Set([authProfileId])]));
+          for (const { agentId } of memorySessionActorOwners.list()) {
+            if (!removedByAgent.has(agentId)) {
+              removedByAgent.set(agentId, new Set([authProfileId]));
+            }
+          }
+          clearedSessions = await clearRemovedSessionAuthProfiles({
+            cfg,
+            removedByAgent,
+            rewriteConfig: (current) => current,
+            assertCurrent: action.assertCurrent,
+          });
+          sessionCleanup = "complete";
+        } catch {
+          // Return only the committed account result, never store paths or credential details.
+        }
+        options.onChanged?.();
+        return {
+          authProfileId,
+          removed: result.removed,
+          links: result.links,
+          sessionCleanup,
+          ...(sessionCleanup === "complete" ? { clearedSessions } : {}),
+        };
+      });
+    },
+  });
+  return service;
 }

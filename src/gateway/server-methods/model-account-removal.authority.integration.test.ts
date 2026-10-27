@@ -35,6 +35,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { getModelAccountRemoval } from "../model-account-connect.js";
 import type { OperatorScope } from "../operator-scopes.js";
 import {
   connectGatewayClient,
@@ -544,16 +545,23 @@ it.for(["revoked", "disconnected"] as const)(
         if (!service) {
           throw new Error("Model-account service is unavailable in the test Gateway");
         }
-        const realRemove = service.removeAsync.bind(service);
-        vi.spyOn(service, "removeAsync").mockImplementationOnce(async (...removeArgs) => {
-          try {
-            return await realRemove(...removeArgs);
-          } finally {
-            // The client reply can reject as soon as its socket closes. Wait for
-            // the full service operation, including its cleanup attempt, first.
-            serviceSettled.resolve();
-          }
-        });
+        // Removal is Gateway-internal: patch the service-bound removal operation.
+        const removal = getModelAccountRemoval(service);
+        if (!removal) {
+          throw new Error("Model-account removal operation is unavailable in the test Gateway");
+        }
+        const realRemove = removal.removeAsync.bind(removal);
+        vi.spyOn(removal, "removeAsync").mockImplementationOnce(
+          async (...removeArgs: Parameters<typeof realRemove>) => {
+            try {
+              return await realRemove(...removeArgs);
+            } finally {
+              // The client reply can reject as soon as its socket closes. Wait for
+              // the full service operation, including its cleanup attempt, first.
+              serviceSettled.resolve();
+            }
+          },
+        );
         return action;
       });
     const hold = vi

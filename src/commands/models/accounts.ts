@@ -428,7 +428,9 @@ export async function modelsAccountsRemoveCommand(
       }
       if (!options.json) {
         runtime.log(
-          "Chat selections cleared. Chats resolve credentials using remaining personal and Gateway defaults.",
+          typeof result.clearedSessions === "number"
+            ? `Cleared the removed account's selection from ${result.clearedSessions} chat${result.clearedSessions === 1 ? "" : "s"}. Chats resolve credentials using remaining personal and Gateway defaults.`
+            : "Chat selections cleared. Chats resolve credentials using remaining personal and Gateway defaults.",
         );
       }
     },

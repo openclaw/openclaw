@@ -20,6 +20,7 @@ import {
   ModelAccountConnectAuthorityError,
   ModelAccountConnectInputError,
 } from "../model-account-connect-errors.js";
+import { getModelAccountRemoval } from "../model-account-connect.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -101,7 +102,15 @@ export const usersAuthConnectHandlers: GatewayRequestHandlers = {
   "users.removeModelAccount": connectHandler(
     "users.removeModelAccount",
     validateUsersRemoveModelAccountParams,
-    (service, action, params) => service.removeAsync(action, params.authProfileId),
+    (service, action, params) => {
+      // Destructive removal is not part of the shipped service contract; resolve
+      // the Gateway-internal operation bound to this exact service instance.
+      const removal = getModelAccountRemoval(service);
+      if (!removal) {
+        throw new Error("Model-account service is not running.");
+      }
+      return removal.removeAsync(action, params.authProfileId);
+    },
   ),
   "users.authConnect.start": connectHandler(
     "users.authConnect.start",
