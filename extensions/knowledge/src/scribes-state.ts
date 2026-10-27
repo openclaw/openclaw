@@ -57,6 +57,7 @@ export type ScribeRun = {
   ts: number;
   runAtMs?: number;
   status?: "ok" | "error" | "skipped";
+  completionStatus?: "succeeded" | "failed" | "unknown";
   summary?: string;
   error?: string;
   durationMs?: number;

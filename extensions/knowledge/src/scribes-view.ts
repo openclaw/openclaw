@@ -325,15 +325,33 @@ function availableRow(
   return row;
 }
 
-// "12 runs, all succeeded" / "2 of 10 recent runs failed" from run history.
+/** A run that errored, or was skipped because it could not complete. */
+const runFailed = (run: ScribeRun) => run.status === "error" || run.completionStatus === "failed";
+
+// "3 recent runs, all succeeded" / "1 of 3 recent runs failed" from run history.
 function runsSummary(runs: ScribeRun[]) {
   if (!runs.length) {
     return "";
   }
-  const failed = runs.filter((run) => run.status === "error").length;
-  return failed
-    ? `${failed} of ${plural(runs.length, "recent run")} failed`
+  const failed = runs.filter(runFailed).length,
+    skipped = runs.filter((run) => run.status === "skipped" && !runFailed(run)).length;
+  if (failed) {
+    return `${failed} of ${plural(runs.length, "recent run")} failed`;
+  }
+  return skipped
+    ? `${skipped} of ${plural(runs.length, "recent run")} skipped`
     : `${plural(runs.length, "recent run")}, all succeeded`;
+}
+
+// One run's line: its error when it failed or was skipped, otherwise its summary.
+function runText(run: ScribeRun) {
+  if (runFailed(run)) {
+    return run.error ?? "Failed";
+  }
+  if (run.status === "skipped") {
+    return run.error ? `Skipped: ${run.error}` : "Skipped";
+  }
+  return run.summary ?? "Finished";
 }
 
 function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
@@ -529,8 +547,8 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
     const line = el("div", undefined, "scribe-run");
     line.append(
       el("time", when(run.runAtMs ?? run.ts)),
-      el("span", run.status === "error" ? (run.error ?? "Failed") : (run.summary ?? "Finished")),
-      run.status === "error" ? statusChip("failing") : el("span"),
+      el("span", runText(run)),
+      runFailed(run) ? statusChip("failing") : el("span"),
     );
     rows.append(line);
   }

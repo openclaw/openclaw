@@ -21,6 +21,7 @@ function fixture(world: {
   sessions?: Record<string, { key: string; label: string; archived?: boolean }>;
   jobs?: unknown[];
   history?: Record<string, unknown[]>;
+  runs?: unknown[];
   canWrite?: boolean;
 }) {
   // HTMLDialogElement is incomplete in jsdom.
@@ -54,7 +55,7 @@ function fixture(world: {
         };
       case "cron.runs":
         return {
-          entries: [
+          entries: world.runs ?? [
             {
               ts: 1_793_000_000_000,
               status: "ok",
@@ -271,6 +272,33 @@ it("runs, pauses, turns off and opens an On scribe from its detail", async () =>
     ]),
   );
   expect(load).toHaveBeenCalled();
+});
+
+it("reports a skipped run that could not complete as failed", async () => {
+  const { render, ui } = fixture({
+    sessions: {
+      "Scribe · Review unlinked claims": {
+        key: "s-review",
+        label: "Scribe · Review unlinked claims",
+      },
+    },
+    jobs: [reviewJob],
+    runs: [
+      {
+        ts: 1_793_000_000_000,
+        status: "skipped",
+        completionStatus: "failed",
+        error: "agent tool caller authority is no longer active",
+      },
+    ],
+  });
+  ui.s.scribe = "unlinked-review";
+  const view = await render();
+  expect(view.textContent).toContain("1 of 1 recent run failed");
+  expect(view.querySelector(".scribe-run")?.textContent).toContain(
+    "agent tool caller authority is no longer active",
+  );
+  expect(view.querySelector(".scribe-run .scribe-chip-warn")?.textContent).toBe("Failing");
 });
 
 it("repairs a scribe whose conversation was archived", async () => {
