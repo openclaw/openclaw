@@ -11,7 +11,7 @@ import {
   startControlUiE2eServer,
   type MockGatewayWindow,
 } from "../../test-helpers/control-ui-e2e.ts";
-import { pluginMethodResponses, pluginMethods } from "./plugins.e2e.test-support.ts";
+import { matrixDetail, pluginMethodResponses, pluginMethods } from "./plugins.e2e.test-support.ts";
 const basePath = "/ui";
 const suite = createControlUiE2eSuite({
   name: "Mounted catalog startup",
@@ -47,75 +47,96 @@ const suite = createControlUiE2eSuite({
   },
 });
 suite.define(() => {
-  it("opens readable owner/plugin links and preserves legacy links on reload", async () => {
+  it.each([
+    ["Linear", "ch_QG9wZW5jbGF3L2xpbmVhcg", "/ui/plugins/openclaw/linear", false],
+    ["Matrix", "ch_bWF0cml4", "/ui/plugins/ch_bWF0cml4", true],
+  ] as const)("reloads %s catalog links from %s", async (name, id, pathname, inferMount) => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
       async ({ page }) => {
-        const id = "ch_QG9wZW5jbGF3L2xpbmVhcg";
+        const summary = "Find, create, and update Linear issues, projects, and comments.";
         const plugin = {
+          ...matrixDetail.plugin,
           id,
-          catalog: {
-            name: "Linear",
-            summary: "Find, create, and update Linear issues, projects, and comments.",
-            author: "openclaw",
-            official: true,
-            categories: ["productivity"],
-          },
-          local: {
-            present: false,
-            installed: false,
-            enabled: false,
-            state: "not-installed",
-            action: "install",
-          },
+          catalog: { ...matrixDetail.plugin.catalog, name, summary },
         };
+        if (inferMount) {
+          await page.addInitScript(createControlUiMockSameOriginGatewayScript());
+          await page.addInitScript(() => {
+            // Init-script order is unspecified: ignore the mock fixture's mount assignment.
+            Object.defineProperty(window, "__OPENCLAW_CONTROL_UI_BASE_PATH__", {
+              configurable: true,
+              get: () => "",
+              set: () => {},
+            });
+          });
+        }
         const gateway = await installMockGateway(page, {
           basePath,
           featureMethods: pluginMethods,
           methodResponses: {
             ...pluginMethodResponses(),
-            "plugins.catalog.browse": { items: [plugin] },
-            "plugins.catalog.get": {
-              plugin,
-              detail: {
-                origin: "clawhub",
-                packageName: "@openclaw/linear",
-                author: { handle: "openclaw", displayName: "OpenClaw" },
-                readme: "Find, create, and update Linear issues, projects, and comments.",
-                topics: [],
-                configuration: [],
-                mcpServers: [],
-                skills: [],
-                versions: [],
+            ...(!inferMount && {
+              "plugins.catalog.browse": { items: [plugin] },
+              "plugins.catalog.get": {
+                plugin,
+                detail: {
+                  ...matrixDetail.detail,
+                  packageName: "@openclaw/linear",
+                  readme: summary,
+                },
               },
-            },
+            }),
           },
         });
         const origin = suite.server.baseUrl.slice(0, -1);
-        const pathname = "/ui/plugins/openclaw/linear";
         await page.goto(origin + "/ui/plugins/" + id + "?probe=1#catalog");
-        const heading = page.getByRole("heading", { name: "Linear", exact: true, level: 1 });
+        if (inferMount) {
+          await page.waitForFunction(
+            () => window.openclawControlUi?.snapshot().routeReady === true,
+          );
+          expect(
+            await page.evaluate(
+              () => (window as MockGatewayWindow)["__OPENCLAW_CONTROL_UI_BASE_PATH__"],
+            ),
+          ).toBe("");
+          await page.screenshot({
+            path: suite.artifactDir + "/catalog-startup.png",
+            animations: "disabled",
+          });
+          await expect.poll(() => new URL(page.url()).pathname).toBe(pathname);
+        }
+        const heading = page.getByRole("heading", { name, exact: true, level: 1 });
         await heading.waitFor();
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          page.locator(".content"),
-          [heading],
-          { animations: "disabled" },
-        );
-        await writeFile(suite.artifactDir + "/linear-detail.png", frame.png);
+        if (!inferMount) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator(".content"),
+            [heading],
+            { animations: "disabled" },
+          );
+          await writeFile(suite.artifactDir + "/linear-detail.png", frame.png);
+        }
         expect(new URL(page.url()).pathname).toBe(pathname);
         await page.reload();
         await heading.waitFor();
         expect(new URL(page.url()).pathname).toBe(pathname);
         expect(new URL(page.url()).search).toBe("?probe=1");
         expect(new URL(page.url()).hash).toBe("#catalog");
+        if (inferMount) {
+          await page.screenshot({
+            path: suite.artifactDir + "/mounted-catalog.png",
+            animations: "disabled",
+          });
+          return;
+        }
         expect((await gateway.getRequests("plugins.catalog.get", { id })).length).toBeGreaterThan(
           0,
         );
         await page.goto(origin + "/ui/plugins");
         const link = page
           .getByRole("region", { name: "Explore plugins" })
-          .getByRole("link", { name: "Linear", exact: true })
+          .getByRole("link", { name, exact: true })
           .first();
         await link.waitFor();
         expect(await link.getAttribute("href")).toBe(pathname);
@@ -126,51 +147,6 @@ suite.define(() => {
         await page.goBack();
         await link.waitFor();
         expect(new URL(page.url()).pathname).toBe("/ui/plugins");
-      },
-    );
-  });
-  it("keeps a catalog detail on reload without an injected mount path", async () => {
-    await suite.withPage(
-      { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
-      async ({ page }) => {
-        await page.addInitScript(createControlUiMockSameOriginGatewayScript());
-        await installMockGateway(page, {
-          basePath,
-          featureMethods: pluginMethods,
-          methodResponses: pluginMethodResponses(),
-        });
-        await page.addInitScript(() => {
-          // Init-script order is unspecified: ignore the mock fixture's mount assignment
-          // regardless of whether it runs before or after this accessor is installed.
-          Object.defineProperty(window, "__OPENCLAW_CONTROL_UI_BASE_PATH__", {
-            configurable: true,
-            get: () => "",
-            set: () => {},
-          });
-        });
-        const pathname = "/ui/plugins/ch_bWF0cml4";
-        await page.goto(suite.server.baseUrl.slice(0, -1) + pathname + "?probe=1#catalog");
-        await page.waitForFunction(() => window.openclawControlUi?.snapshot().routeReady === true);
-        expect(
-          await page.evaluate(
-            () => (window as MockGatewayWindow)["__OPENCLAW_CONTROL_UI_BASE_PATH__"],
-          ),
-        ).toBe("");
-        await page.screenshot({
-          path: suite.artifactDir + "/catalog-startup.png",
-          animations: "disabled",
-        });
-        await expect.poll(() => new URL(page.url()).pathname).toBe(pathname);
-        await page.getByRole("heading", { name: "Matrix", exact: true, level: 1 }).waitFor();
-        await page.reload();
-        await page.getByRole("heading", { name: "Matrix", exact: true, level: 1 }).waitFor();
-        expect(new URL(page.url()).pathname).toBe(pathname);
-        expect(new URL(page.url()).search).toBe("?probe=1");
-        expect(new URL(page.url()).hash).toBe("#catalog");
-        await page.screenshot({
-          path: suite.artifactDir + "/mounted-catalog.png",
-          animations: "disabled",
-        });
       },
     );
   });
