@@ -15,7 +15,7 @@ function previewHarness(builtinToolNames: string[] = []) {
   const raw: string[] = [];
   const h = createSubscribedSessionHarness({
     runId: "preview-barrier",
-    builtinToolNames,
+    builtinToolNames: new Set(builtinToolNames),
     onPartialReply: (payload) => {
       previews.push({ ...payload });
     },
