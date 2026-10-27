@@ -193,6 +193,8 @@ export async function prepareEmbeddedAttemptHistory(
     contextEngine: activeContextEngine,
     agentId: sessionAgentId,
     appendOnlyRuntimeContext: transcriptPolicy.appendOnlyRuntimeContext,
+    clearsTurnScopedSystemUpdates:
+      transcriptPolicy.inHistorySystemUpdates && attempt.model.api === "anthropic-messages",
     messages: activeSession.messages,
     availableTools: new Set(capabilityToolNames),
     citationsMode: attempt.config?.memory?.citations,

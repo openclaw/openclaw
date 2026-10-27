@@ -221,7 +221,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_session_row_selection_resets_total`             | counter   | none                                                                                      |
 | `openclaw_session_row_partition_cache_total`              | counter   | `task`, `outcome`                                                                         |
 | `openclaw_session_row_partition_revisions_total`          | counter   | `reason`                                                                                  |
-| `openclaw_worker_message_payload_bytes_total`             | counter   | `kind`, `direction`                                                                       |
+| `openclaw_worker_message_payload_bytes_total`             | counter   | `kind`, `direction`, `request_class` (SQLite only)                                        |
 | `openclaw_worker_message_unmeasured_total`                | counter   | `kind`, `direction`                                                                       |
 | `openclaw_child_process_spawn_total`                      | counter   | `family`, `operation`                                                                     |
 | `openclaw_memory_rss_bytes`                               | histogram | none                                                                                      |
@@ -240,6 +240,20 @@ managed heaps and buffers; they do not measure total native or allocator memory.
 when a later read fails, rather than reported as zero or retained from an older
 sample. Other platforms do not expose these gauges. OpenClaw does not currently
 expose a total SQLite or jemalloc allocation counter.
+
+SQLite `sqlite_request` and `sqlite_reply` payload byte series add `request_class`
+from the active writer job, using the same closed vocabulary as
+`openclaw_worker_request_seconds{kind="sqlite_writer"}`. Unknown or unattributed
+classes use `other`; continuation frames keep their job's class. Other message
+kinds and the message-count/unmeasured-count metrics retain their existing labels.
+No payload decoding or extra serialization is performed for attribution.
+
+```promql
+# Known SQLite request payload MB/min by bounded request class
+sum by (request_class) (
+  rate(openclaw_worker_message_payload_bytes_total{kind="sqlite_request",direction="to_worker"}[5m])
+) * 60 / 1e6
+```
 
 Worker message counters describe posts and receives on Gateway main-thread worker transports,
 with `direction="to_worker"` or `direction="from_worker"`. The fixed `kind` labels
@@ -1267,7 +1281,7 @@ attributes.
   <Accordion title="Series cap and overflow accounting">
     The exporter retains at most **16,384 aggregate label sets** across counters, gauges, and histograms. Each histogram consumes one entry, regardless of its bucket count; the rendered scrape has more time series. The WebSocket frame-size family is different: its nine cumulative scalar bounds each consume an entry, so 200 event names use 1,800 entries.
 
-    A fixed catalog of 139 metric families reserves **15,552 entries**, leaving **832 shared entries**. Each family can retain at most **128 entries** or its reserve, whichever is larger. Unused reserves are not borrowed. This protects late RPC, run, model, tool, GC, and memory observations from startup traffic in other families. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
+    A fixed catalog of 139 metric families reserves **16,000 entries**, leaving **384 shared entries**. Each family can retain at most **128 entries** or its reserve, whichever is larger. Unused reserves are not borrowed. This protects late RPC, run, model, tool, GC, and memory observations from startup traffic in other families. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
 
     The following reserves apply per family (all names have the `openclaw_` prefix):
 
@@ -1276,14 +1290,17 @@ attributes.
     | 2,048 | `gateway_ws_event_frame_bytes` |
     | 1,024 | `worker_request_phase_seconds` |
     | 640 | `worker_heap_space_used_bytes` |
-    | 512 | `gateway_rpc_client_requests_total`, `worker_queue_depth`, `worker_queue_wait_seconds`, `worker_request_seconds` |
+    | 512 | `gateway_rpc_client_requests_total`, `worker_message_payload_bytes_total`, `worker_queue_depth`, `worker_queue_wait_seconds`, `worker_request_seconds` |
     | 384 | `gc_duration_seconds` |
     | 256 | All other `gateway_rpc_*` families; `gateway_ws_event_bytes_total`, `gateway_ws_event_wire_bytes_total`, `gateway_ws_events_total`, `gateway_ws_session_event_bytes_total`, `gateway_ws_session_event_frames_total`; `heap_space_bytes` |
     | 128 | `run_completed_total`, `run_duration_seconds`, `harness_run_total`, `harness_run_duration_seconds`, `model_call_total`, `model_call_duration_seconds`, `model_cost_usd_total`, `model_failover_total`, `model_tokens_total`, `model_usage_duration_seconds`, `gen_ai_client_token_usage`, `tool_catalog_total`, `tool_catalog_tools_total`, `tool_execution_blocked_total`, `tool_execution_total`, `tool_execution_duration_seconds`, `code_mode_worker_heap_bytes`, `code_mode_worker_memory_bytes`, `heap_old_generation_after_gc_bytes`, `heap_old_generation_after_gc_ratio`, `heap_size_limit_bytes`, `heap_used_ratio`, `memory_bytes`, `worker_count`, `worker_heap_sampled_count`, `worker_heap_used_bytes`, `worker_external_bytes`, `worker_array_buffers_bytes`, `worker_gc_collections_total`, `worker_gc_duration_seconds_total`, `worker_gc_reclaimed_bytes_total`, `worker_heap_used_high_water_bytes`, `worker_tasks_completed_total` |
-    | 64 | `session_row_selections_total`, `session_row_selection_rows_total`, `worker_started_total`, `worker_retired_total`, `worker_message_payload_bytes_total`, `worker_message_unmeasured_total`, `worker_messages_total` |
+    | 64 | `session_row_selections_total`, `session_row_selection_rows_total`, `worker_started_total`, `worker_retired_total`, `worker_message_unmeasured_total`, `worker_messages_total` |
     | 32 | `chat_send_phase_seconds`, `session_row_partition_cache_total`, `worktree_preparation_seconds` |
     | 8 | `session_row_partition_revisions_total` |
     | 4 | Every other cataloged family |
+
+    The `worker_message_payload_bytes_total` family reserves 512 series for the
+    bounded SQLite request classes in both directions plus other message kinds.
 
     These budgets cover 170 RPC methods (including two client kinds per method), 400 worker request/queue label sets, 400 worker phase label sets, 200 WebSocket event names, 390 worker heap-space label sets, and 250 main/worker GC label sets without using the shared pool. Worker heap spaces multiply `script × space`; GC can multiply `thread × kind × reason × slot`. The GC `reason` and reusable Code Mode `slot` labels retain callback attribution and per-isolate correlation with heap samples. Worker phases multiply `kind × request_class × phase`: 400 fully timed request combinations would need 2,800 phase entries, exceeding that family's 1,024-entry limit. Reservations guarantee capacity, not unlimited cardinality.
 

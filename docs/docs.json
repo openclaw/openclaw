@@ -2591,6 +2591,7 @@
                     "pages": [
                       "gateway/security/index",
                       "gateway/security/trust-model",
+                      "gateway/security/presets",
                       "gateway/security/running-the-audit",
                       "gateway/security/audit-checks",
                       "gateway/security/hardened-baseline",

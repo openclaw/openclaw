@@ -160,6 +160,7 @@ export function createGitHubPublishTool(
     sessionId?: string;
     runId?: string;
     onYield?: SessionsYieldCallback;
+    senderIsOwner?: boolean;
   } = {},
 ): AnyAgentTool {
   const publicationAvailable = options.publicationAvailable !== false;
@@ -248,6 +249,7 @@ export function createGitHubPublishTool(
           requestOwners,
           onYield: options.onYield,
           signal,
+          senderIsOwner: options.senderIsOwner,
           fenceSuccessors: true,
           run: ({ assertCurrent, signal: handoffSignal }) =>
             withGatewayToolCallerIdentity(
