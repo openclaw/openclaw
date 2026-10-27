@@ -573,6 +573,7 @@ export async function attachAuthenticatedGatewayConnect(
       `mode=${connectParams.client.mode} role=${role} auth=${authMethod}`,
       `version=${formatForLog(connectParams.client.version)} platform=${formatForLog(connectParams.client.platform)}`,
       `build=${formatForLog(connectParams.client.buildId?.trim() || "legacy")} remote=${remoteAddr ?? "?"}`,
+      `locality=${pairingLocality}`,
       authenticatedUserId ? `user=${formatForLog(authenticatedUserId)}` : undefined,
     ]
       .filter(Boolean)
