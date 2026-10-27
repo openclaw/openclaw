@@ -91,9 +91,10 @@ replay earlier snapshots unchanged. The watch registry and existing read-access
 gates still determine what the model may see; a watch never grants send access.
 
 Embedded turns also carry producer-marked conversation and delivery instructions
-beside the current turn. Subagent launch instructions, including completion policy,
-spawn-profile instructions, and attachment guidance, apply to that run and travel with it;
-ordinary child follow-ups do not rewrite the system prefix when they omit them.
+beside the current turn. Subagent role, rules, output format, restrictions, and
+conditional spawning rules remain in the system prompt on launch and follow-up.
+The task message carries the actual completion mode, depth, requester, and label.
+Unmarked spawn-profile and attachment additions keep their existing system placement.
 Configured instructions outside the marked conversation section remain in the
 system prompt. Skill, tool, memory, and configuration refreshes retain their
 existing update behavior.

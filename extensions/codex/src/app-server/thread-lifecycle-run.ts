@@ -1,8 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import {
-  embeddedAgentLog,
-  splitExtraSystemPrompt,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
 import {
@@ -61,6 +58,7 @@ import {
   throwIfCodexThreadLifecycleAborted,
   tryReuseCodexLiveThread,
 } from "./thread-lifecycle-warm.js";
+import { splitCodexExtraSystemPrompt } from "./thread-prompt.js";
 import { isTransientCodexRestrictedTurn } from "./thread-restricted-resume.js";
 import { materializePendingSupervisionBranch } from "./thread-supervision.js";
 
@@ -162,7 +160,7 @@ export async function startOrResumeThread(
           ? input.developerInstructions
           : joinPresentSections(
               input.developerInstructions,
-              splitExtraSystemPrompt(params.params).turn,
+              splitCodexExtraSystemPrompt(params.params).turn,
             );
       return context;
     };

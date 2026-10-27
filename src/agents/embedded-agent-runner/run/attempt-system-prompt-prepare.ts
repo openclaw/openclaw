@@ -30,6 +30,7 @@ import { buildModelToolsUnavailablePrompt } from "../../model-tool-support.js";
 import { prepareProjectMemoryBootstrap } from "../../project-memory-bootstrap.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { resolveAgentRuntimePrompt } from "../../runtime-prompt.js";
+import { SUBAGENT_STANDING_INSTRUCTIONS } from "../../subagents/spawn/subagent-system-prompt.js";
 import type { buildConfiguredAgentSystemPrompt } from "../../system-prompt-config.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
@@ -341,10 +342,16 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     attempt.preparedTtsPreferences ??
     (effectivePromptMode === "full" ? await prepareTtsPreferences() : undefined);
   phases?.mark("attempt.system-prompt.render");
-  // Child launch policy belongs to that run; ordinary follow-ups do not restore it.
-  const extraPrompt = isSubagentSessionKey(attempt.sessionKey)
-    ? { persistent: undefined, turn: attempt.extraSystemPrompt }
-    : splitExtraSystemPrompt(attempt);
+  const extraPrompt = splitExtraSystemPrompt(attempt);
+  const subagent = isSubagentSessionKey(attempt.sessionKey);
+  // The spawn envelope also serves harnesses that do not render embedded prompts.
+  // Embedded sessions supply the same standing policy on launch and follow-up.
+  const persistent =
+    subagent &&
+    (extraPrompt.persistent === SUBAGENT_STANDING_INSTRUCTIONS ||
+      extraPrompt.persistent?.startsWith(`${SUBAGENT_STANDING_INSTRUCTIONS}\n\n`))
+      ? extraPrompt.persistent.slice(SUBAGENT_STANDING_INSTRUCTIONS.length).trimStart()
+      : extraPrompt.persistent;
   const turnInstructions: RuntimeContextFragment[] =
     !params.isRawModelRun && extraPrompt.turn
       ? [
@@ -355,7 +362,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         ]
       : [];
   const extraSystemPrompt = joinPresentTextSegments([
-    extraPrompt.persistent,
+    subagent ? SUBAGENT_STANDING_INSTRUCTIONS : undefined,
+    persistent,
     buildModelToolsUnavailablePrompt(params.modelToolsEnabled),
   ]);
 

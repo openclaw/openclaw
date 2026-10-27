@@ -194,24 +194,18 @@ describe("buildAttemptSystemPrompt", () => {
   registerParityHostLifecycle();
 
   it.each(["conversation", "subagent"] as const)(
-    "preserves the provider prefix across runs with different %s instructions",
+    "preserves the provider prefix and standing policy across %s follow-ups",
     async (kind) => {
       const requests: Record<string, unknown>[] = [];
       const messages: Parameters<typeof convertToLlm>[0] = [];
+      const child = buildSubagentSpawnEnvelope({
+        completionMode: "collector",
+        spawnMode: "session",
+        task: "Inspect synthetic inputs.",
+        childSessionKey: "agent:main:subagent:prefix-fixture",
+      });
       for (const turn of ["operator", "completion"]) {
-        const context =
-          kind === "conversation"
-            ? `Current conversation: ${turn}. Use this turn's delivery target.`
-            : turn === "operator"
-              ? `${
-                  buildSubagentSpawnEnvelope({
-                    completionMode: "collector",
-                    spawnMode: "session",
-                    task: "Inspect synthetic inputs.",
-                    childSessionKey: "agent:main:subagent:prefix-fixture",
-                  }).systemPrompt
-                }\n\nProfile instruction.\n\nAttachment: inputs/fixture.txt`
-              : undefined;
+        const context = `Current conversation: ${turn}. Use this turn's delivery target.`;
         const { prepared } = await preparePermissionPrompt({
           attemptOverrides:
             kind === "conversation"
@@ -219,16 +213,20 @@ describe("buildAttemptSystemPrompt", () => {
                   extraSystemPrompt: `Persistent policy.\n\n${context}\n\nLater configured guidance.`,
                   extraSystemPromptTurnContext: {
                     start: "Persistent policy.\n\n".length,
-                    text: context!,
+                    text: context,
                   },
                 }
               : {
                   sessionKey: "agent:main:subagent:prefix-fixture",
                   promptMode: "minimal",
-                  extraSystemPrompt: context,
+                  extraSystemPrompt: turn === "operator" ? child.systemPrompt : undefined,
                 },
         });
-        messages.push({ role: "user", content: `Handle ${turn}`, timestamp: 1 });
+        messages.push({
+          role: "user",
+          content: kind === "subagent" && turn === "operator" ? child.message : `Handle ${turn}`,
+          timestamp: 1,
+        });
         for (const fragment of prepared.runtimeContextFragments ?? []) {
           messages.push(buildSystemUpdateMessage(fragment.text, "runtime-context", true));
         }
@@ -238,22 +236,33 @@ describe("buildAttemptSystemPrompt", () => {
           context: { systemPrompt: prepared.systemPromptText, messages: convertToLlm(messages) },
         });
         requests.push(payload);
+        const system = JSON.stringify(payload.system);
         if (kind === "conversation") {
-          expect(JSON.stringify(payload.system)).toContain("Persistent policy.");
-          expect(JSON.stringify(payload.system)).toContain("Later configured guidance.");
-        }
-        if (context) {
-          expect(JSON.stringify(payload.system)).not.toContain(
-            JSON.stringify(context).slice(1, -1),
-          );
-          expect(JSON.stringify(payload.messages)).toContain(JSON.stringify(context).slice(1, -1));
+          expect(system).toContain("Persistent policy.");
+          expect(system).toContain("Later configured guidance.");
+          expect(system).not.toContain(context);
+          expect(JSON.stringify(payload.messages)).toContain(context);
+        } else {
+          for (const rule of [
+            "## Your Role",
+            "Focus: assigned task only.",
+            "## Output Format",
+            "No automations/persistent state.",
+            "leaf workers cannot spawn",
+            "Collector runs must use collector descendants",
+          ]) {
+            expect(system).toContain(rule);
+          }
+          expect(system).not.toContain("apply only to this turn");
+          expect(system).not.toContain("Inspect synthetic inputs.");
+          expect(system.match(/(?<!#)# Subagent Context/g)).toHaveLength(1);
         }
       }
       expect(JSON.stringify(requests[1]!.system)).toBe(JSON.stringify(requests[0]!.system));
       const firstMessages = requests[0]!.messages as unknown[];
-      expect(
-        JSON.stringify((requests[1]!.messages as unknown[]).slice(0, firstMessages.length)),
-      ).toBe(JSON.stringify(firstMessages));
+      expect((requests[1]!.messages as unknown[]).slice(0, firstMessages.length)).toEqual(
+        firstMessages,
+      );
     },
   );
 
