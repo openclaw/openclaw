@@ -88,7 +88,7 @@ const getSessionProviders = (session: SessionUsageEntry): string[] =>
     ...(session.usage?.modelUsage ?? []).map((entry) => entry.provider),
   ]);
 
-const getSessionModels = (session: SessionUsageEntry): string[] =>
+export const getSessionModels = (session: SessionUsageEntry): string[] =>
   normalizeQueryValues([
     session.model,
     ...(session.usage?.modelUsage ?? []).map((entry) => entry.model),
@@ -419,7 +419,10 @@ function compareUsageOverviewSessions(options: UsageOverviewOptions) {
       (a.label || a.key).localeCompare(b.label || b.key));
 }
 
-function compactSession(session: SessionUsageEntry, days: ReadonlySet<string>): SessionUsageEntry {
+export function compactUsageOverviewSession(
+  session: SessionUsageEntry,
+  days: ReadonlySet<string>,
+): SessionUsageEntry {
   if (!session.usage) {
     return session;
   }
@@ -560,7 +563,7 @@ export function buildUsageOverview(params: {
     selected.size ? scoped.map((session) => [session.key, session]) : [],
   );
   const toRow = (session: SessionUsageEntry) =>
-    params.compact === false ? session : compactSession(session, days);
+    params.compact === false ? session : compactUsageOverviewSession(session, days);
   const accumulator = createUsageAggregateAccumulator();
   const overview: SessionsUsageOverview = {
     total: roster.length,

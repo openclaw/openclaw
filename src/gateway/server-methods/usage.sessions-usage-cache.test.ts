@@ -182,6 +182,7 @@ describe("sessions.usage result cache and owner attribution", () => {
     const entries = Array.from({ length: 60 }, (_, index) => ({
       sessionId: `page-${index + 1}`,
       updatedAt: index + 1,
+      model: index % 2 ? "Beta" : "Alpha",
     }));
     const tokens = Object.fromEntries(entries.map((entry, index) => [entry.sessionId, index + 1]));
     const query = fixture(entries, tokens);
@@ -200,6 +201,10 @@ describe("sessions.usage result cache and owner attribution", () => {
     const filtered = await query({ projection: "overview", query: "minTokens:55" });
     expect(filtered.sessions).toHaveLength(6);
     expect(filtered.totals.totalTokens).toBe(345);
+    const alpha = await query({ projection: "overview", query: "model:ALPH" });
+    expect(alpha.sessions).toHaveLength(30);
+    expect(alpha.totals.totalTokens).toBe(900);
+    expect(alpha.overview?.filterOptions.model).toEqual(["Alpha", "Beta"]);
     expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(1);
     expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(1);
 
@@ -207,6 +212,9 @@ describe("sessions.usage result cache and owner attribution", () => {
     publishSessionCostUsageUpdated("main");
     const updated = await query({ projection: "overview", sort: "tokens", sortDirection: "desc" });
     expect(updated.sessions[0]).toMatchObject({ sessionId: "page-1", usage: { totalTokens: 100 } });
+    expect((await query({ projection: "overview", query: "model:alpha" })).totals.totalTokens).toBe(
+      999,
+    );
     expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
 
     // Context predicates hydrate a different source snapshot, unlike usage-only filters.
@@ -391,8 +399,8 @@ describe("usage creator attribution", () => {
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const query = fixture(
         [
-          ownedRow("ada", 1, ada.id, { visibility: "shared" }),
-          ownedRow("bob", 2, bob.id, { visibility: "shared" }),
+          ownedRow("ada", 1, ada.id, { visibility: "shared", model: "Alpha" }),
+          ownedRow("bob", 2, bob.id, { visibility: "shared", model: "Alpha" }),
         ],
         { ada: 10, bob: 20 },
       );
@@ -409,8 +417,9 @@ describe("usage creator attribution", () => {
         [bob.id, ["agent:main:bob"], 20],
       ] as const) {
         const viewer = usageClient(profileId);
-        const result = await query({ limit: 20 }, viewer, roleConfig);
-        expect(await query({ limit: 20 }, viewer, roleConfig)).toEqual(result);
+        const overview = { projection: "overview", query: "model:Alpha" };
+        const result = await query(overview, viewer, roleConfig);
+        expect(await query(overview, viewer, roleConfig)).toEqual(result);
         expect(result.sessions.map(({ key }) => key)).toEqual(expectedKeys);
         expect(result.totals.totalTokens).toBe(tokens);
       }

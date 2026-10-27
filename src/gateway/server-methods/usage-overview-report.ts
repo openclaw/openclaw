@@ -3,10 +3,16 @@ import {
   buildUsageOverviewReport,
   type UsageOverviewPackedUsage,
   type UsageOverviewReportInput,
+  type UsageOverviewTask,
+  type UsageOverviewTaskResult,
 } from "../../infra/session-cost-usage-overview-report.js";
 import type { UsageDailyBucket } from "../../infra/session-cost-usage.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import {
+  selectUsageModelCohorts,
+  type UsageModelCohorts,
+} from "../../shared/usage-model-cohorts.js";
 import type {
   SessionUsageEntry,
   UsageOverviewOptions,
@@ -17,12 +23,14 @@ import type {
 export type UsageOverviewUsage = {
   packed: UsageOverviewPackedUsage[];
   refs: Map<string, readonly [number, number]>;
+  /** Completed preparation follows this snapshot's existing cache lifetime. */
+  prepared?: { members: string; cohorts: UsageModelCohorts };
 };
 
 export const usageOverviewRowKey = (row: Pick<SessionUsageEntry, "agentId" | "key">) =>
   `${row.agentId ?? ""}\u0000${row.key}`;
 
-const pool = new WorkerTaskPool<UsageOverviewReportInput, UsageOverviewSlice>({
+const pool = new WorkerTaskPool<UsageOverviewTask, UsageOverviewTaskResult>({
   workerClass: "compute",
   sharedCompute: true,
   workerUrl: resolveRuntimeProcessEntrypointUrl("usageOverview"),
@@ -72,6 +80,30 @@ function usageOverviewReportInput(
 const usageOverviewMembers = (rows: readonly SessionUsageEntry[]) =>
   rows.map((row) => `${usageOverviewRowKey(row)}\u0000${row.hasContextWeight ? 1 : 0}`).join("\n");
 
+export async function prepareUsageOverviewUsage(params: {
+  usage: UsageOverviewUsage;
+  rows: SessionUsageEntry[];
+  dayBucket: UsageDailyBucket;
+}): Promise<void> {
+  const input = usageOverviewReportInput({ ...params, options: {} });
+  const result = await pool.run(
+    { kind: "prepare", input },
+    {
+      signal: getAsyncWorkSignal(),
+      inputBytes: usageOverviewInputBytes(params.usage, params.rows.length),
+    },
+  );
+  if (result.kind !== "prepared") throw new Error("Expected prepared Usage cohorts");
+  params.usage.prepared = { members: usageOverviewMembers(params.rows), cohorts: result.value };
+}
+
+function usageOverviewInputBytes(usage: UsageOverviewUsage, rows: number) {
+  return usage.packed.reduce(
+    (sum, { batch }) => sum + batch.values.byteLength + batch.offsets.byteLength,
+    rows * 512,
+  );
+}
+
 /** Overview report runner for one request; `undefined` when it has no packed overview. */
 export type UsageOverviewReporter = {
   /** Aggregate off the Gateway thread; repeated rows reuse the running report. */
@@ -91,23 +123,66 @@ export function createUsageOverviewReporter(params: {
   if (!usage || !options) {
     return undefined;
   }
-  let report: { members: string; slice: Promise<UsageOverviewSlice> } | undefined;
+  let report:
+    | {
+        members: string;
+        rows: SessionUsageEntry[];
+        cohort: boolean;
+        slice: Promise<UsageOverviewSlice>;
+      }
+    | undefined;
   return {
     run(rows) {
       const members = usageOverviewMembers(rows);
       if (report?.members !== members) {
-        const input = usageOverviewReportInput({ rows, usage, options, dayBucket });
-        const packedBytes = usage.packed.reduce(
-          (sum, { batch }) => sum + batch.values.byteLength + batch.offsets.byteLength,
-          0,
-        );
-        report = {
-          members,
-          slice: pool.run(input, {
-            signal: getAsyncWorkSignal(),
-            inputBytes: packedBytes + input.rows.length * 512,
-          }),
-        };
+        const previous = report;
+        // This request's context hydration clones rows without changing model usage.
+        if (
+          previous?.cohort &&
+          rows.length === previous.rows.length &&
+          rows.every((row, index) => {
+            const source = previous.rows[index]!;
+            return (
+              row.key === source.key &&
+              row.agentId === source.agentId &&
+              row.sessionId === source.sessionId &&
+              row.usage === source.usage
+            );
+          })
+        ) {
+          report = {
+            ...previous,
+            members,
+            rows,
+            slice: previous.slice.then((slice) => withVisibleUsageOverviewRows(slice, rows)),
+          };
+        } else {
+          const prepared = usage.prepared;
+          const query =
+            prepared?.members === members
+              ? selectUsageModelCohorts(prepared.cohorts, options)
+              : undefined;
+          const task: UsageOverviewTask = query
+            ? { kind: "cohorts", input: query, options, dayBucket }
+            : {
+                kind: "report",
+                input: usageOverviewReportInput({ rows, usage, options, dayBucket }),
+              };
+          report = {
+            members,
+            rows,
+            cohort: Boolean(query),
+            slice: pool
+              .run(task, {
+                signal: getAsyncWorkSignal(),
+                inputBytes: usageOverviewInputBytes(usage, rows.length),
+              })
+              .then((result) => {
+                if (result.kind !== "report") throw new Error("Expected Usage report");
+                return result.value;
+              }),
+          };
+        }
       }
       return report.slice;
     },

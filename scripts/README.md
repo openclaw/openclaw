@@ -81,6 +81,54 @@ database state after collecting results.
 
 ## Control UI warm interactions
 
+### Real-Gateway Usage model filters
+
+`bench-usage-gateway.ts` measures the production Usage page against isolated
+Gateways with durable synthetic session transcripts. It compares two installed
+source checkouts using one frozen production UI build, so the experiment isolates
+backend changes. Both checkouts must contain identical copies of the driver and
+`scripts/lib/usage-bench-{child,rtt}.ts`. It does not build, install, contact a
+provider, or use an operator's Gateway state.
+
+Start with the three-session smoke, which includes mixed-model usage and saved
+context, before increasing volume:
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts \
+  --base <baseline-checkout> --head <candidate-checkout> --ui <frozen-ui-build> \
+  --out <new-output-directory> --sessions 3 --smoke
+```
+
+The smoke checks both model filters with one baseline/candidate/baseline triplet
+at Chromium 4× and at localhost and 100 ms added RTT. The candidate must dispatch
+one prepared-cohort task per model query, without preparing or resending raw
+rows. Totals and visible session counts must match independent fixture values.
+This is specifically a qualification workload for the prepared-cohort path;
+an older candidate without that path is expected to fail the work-count assertion.
+
+For qualification, use `--sessions 12000 --pairs 20` without `--smoke`. It seeds
+180 days and 96 models, retaining the same population throughout. Each distinct
+model query receives 20 interleaved triplets in each 1×/4× and localhost/100 ms
+cell. Keep the two queries separate when computing medians, p95 and min–max;
+baseline/baseline results are the same-host control. Record host load and judge
+noisy wall times with CPU and work counts. A clean median regression is at most
+5% with no worse p95; any 20% regression requires investigation.
+
+Outputs include actual RPC latency/bytes, Gateway process and main-thread CPU,
+Chromium thread-tick task/script/layout/style CPU, worker dispatch counts and
+packed bytes, resource snapshots, and cleanup failures. Child output streams
+redact each generated fixture token before writing setup or shutdown logs.
+Chromium throttling does
+not throttle the Node Gateway. The TCP relay adds 50 ms in each direction without
+interpreting HTTP or WebSocket messages; scheduling delay and backpressure may
+add more, and TCP handshakes are undelayed. Localhost bypasses the relay.
+Automation-to-visible-assertion wall time is not INP. Population activation is
+recorded separately from warm filters; per-cell memory snapshots do not establish
+bounded multi-snapshot retention. The unchanged UI cannot demonstrate a renderer
+optimization from a backend-only change. Keep failed output for diagnosis.
+
+### Synthetic Gateway interactions
+
 Build with `pnpm ui:build`, then collect the production renderer's desktop and
 mobile interactions against the synthetic Gateway:
 

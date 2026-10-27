@@ -51,14 +51,12 @@ import { respondError } from "./response.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import {
   formatDateLabel,
-  resolveDateInterpretation,
-  resolveDateRange,
   resolveDayBucket,
-  type DateInterpretation,
-  type DateRange,
+  resolveUsageDateRangeOrRespond,
 } from "./usage-date-range.js";
 import {
   createUsageOverviewReporter,
+  prepareUsageOverviewUsage,
   withVisibleUsageOverviewRows,
 } from "./usage-overview-report.js";
 import {
@@ -113,24 +111,6 @@ async function resolveSessionUsageFileOrRespond(
     return null;
   }
   return { config, key, ...resolved };
-}
-
-function resolveUsageDateRangeOrRespond(
-  params: Parameters<typeof resolveDateRange>[0],
-  respond: RespondFn,
-): { interpretation: DateInterpretation; range: DateRange } | null {
-  const interpretation = resolveDateInterpretation(params);
-  if (!interpretation.ok) {
-    respondError(respond, ErrorCodes.INVALID_REQUEST, interpretation.error);
-    return null;
-  }
-
-  const range = resolveDateRange(params, interpretation.value);
-  if (!range.ok) {
-    respondError(respond, ErrorCodes.INVALID_REQUEST, range.error);
-    return null;
-  }
-  return { interpretation: interpretation.value, range: range.value };
 }
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
@@ -402,6 +382,18 @@ export const usageHandlers: GatewayRequestHandlers = {
               hasContextWeight: Boolean(merged.contextWeight),
               contextWeight: includeContextWeight ? (merged.contextWeight ?? null) : undefined,
             });
+          }
+
+          if (overviewSummaries) {
+            await budget.read(
+              () =>
+                prepareUsageOverviewUsage({
+                  usage: overviewSummaries.usage,
+                  rows: sessions.filter((row) => !creatorKey || row.creatorKey === creatorKey),
+                  dayBucket: resolveUsageCostWorkerDayBucket(dayBucket),
+                }),
+              () => undefined,
+            );
           }
 
           return {

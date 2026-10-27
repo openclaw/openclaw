@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -12,6 +13,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { promptReport } from "../../config/sessions/system-prompt-report.test-support.js";
 import * as sessionCostUsage from "../../infra/session-cost-usage.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -291,6 +293,22 @@ it.for([
     const release = createDeferred();
     // Created after the cleanup hook is registered.
     const owned: { projection?: SessionRowProjection; releaseProfileCatalog?: () => void } = {};
+    const dispatches: string[] = [];
+    const actualRun = WorkerTaskPool.prototype.run;
+    WorkerTaskPool.prototype.run = new Proxy(actualRun, {
+      apply(target, receiver, args) {
+        const task = args[0];
+        if (
+          isRecord(task) &&
+          (task.kind === "prepare" || task.kind === "cohorts" || task.kind === "report") &&
+          isRecord(task.input) &&
+          Array.isArray(task.input.rows)
+        ) {
+          dispatches.push(task.kind);
+        }
+        return Reflect.apply(target, receiver, args);
+      },
+    });
     const actualReporter = usageOverviewReport.createUsageOverviewReporter;
     // Hold every worker report after it completes, so access can change before publication.
     const reporter = vi
@@ -312,6 +330,7 @@ it.for([
     onTestFinished(async () => {
       release.resolve();
       reporter.mockRestore();
+      WorkerTaskPool.prototype.run = actualRun;
       owned.projection?.dispose();
       owned.releaseProfileCatalog?.();
       await state.cleanup();
@@ -352,6 +371,7 @@ it.for([
         updatedAt: timestamp - index,
         createdActor: { type: "human", source: "profile", id: viewer.id },
         visibility: "shared",
+        ...(index === 0 ? { systemPromptReport: promptReport(timestamp, 100, 0) } : {}),
       });
       await persistSessionTranscriptTurn(scope, {
         cwd: state.workspaceDir,
@@ -378,6 +398,10 @@ it.for([
       endMs: timestamp + 1,
     });
     owned.projection = await createSessionRowProjection({ cfg: config, getConfig: () => config });
+    const context = bindSessionRowProjection(
+      { getRuntimeConfig: () => config } as GatewayRequestContext,
+      () => owned.projection,
+    );
     const respond = vi.fn();
     const request = Promise.resolve(
       expectDefined(
@@ -385,14 +409,18 @@ it.for([
         "registered usage handler",
       )({
         req: { type: "req", id: "overview-revocation", method: "sessions.usage" },
-        params: { agentId: "main", range: "all", projection: "overview", offset },
+        params: {
+          agentId: "main",
+          range: "all",
+          projection: "overview",
+          query: "model:synthetic",
+          includeContextWeight: false,
+          offset,
+        },
         respond,
         client,
         isWebchatConnect: () => false,
-        context: bindSessionRowProjection(
-          { getRuntimeConfig: () => config } as GatewayRequestContext,
-          () => owned.projection,
-        ),
+        context,
       }),
     );
     await Promise.race([
@@ -424,5 +452,45 @@ it.for([
     expect(result.sessions.map((row) => row.key)).toEqual(
       offset === 0 ? visible.map(({ sessionKey }) => sessionKey) : [],
     );
+    if (!revoke) {
+      // Hydrating saved context changes metadata, not this model-only aggregation.
+      expect(dispatches).toEqual(["prepare", "cohorts"]);
+      expect(result.sessions[0]).toMatchObject({
+        sessionId: sessions[0]!.sessionId,
+        hasContextWeight: true,
+      });
+      expect(result.sessions[0]!.contextWeight).toBeUndefined();
+
+      const read = async (query: string, includeContextWeight = false) => {
+        dispatches.length = 0;
+        const reply = vi.fn();
+        await coreGatewayHandlers["sessions.usage"]!({
+          req: { type: "req", id: query, method: "sessions.usage" },
+          params: {
+            agentId: "main",
+            range: "all",
+            projection: "overview",
+            query,
+            includeContextWeight,
+          },
+          respond: reply,
+          client,
+          isWebchatConnect: () => false,
+          context,
+        });
+        expect(reply).toHaveBeenCalledOnce();
+        const [success, payload] = reply.mock.calls[0]!;
+        expect(success).toBe(true);
+        return payload as SessionsUsageResult;
+      };
+      const contextOnly = await read("has:context");
+      expect(dispatches).toEqual(["prepare", "report"]);
+      expect(contextOnly.totals.totalTokens).toBe(17);
+      expect(contextOnly.sessions.map((row) => row.sessionId)).toEqual([sessions[0]!.sessionId]);
+      const withContext = await read("model:synthetic", true);
+      expect(dispatches).toEqual(["prepare", "cohorts"]);
+      expect(withContext.totals.totalTokens).toBe(40);
+      expect(withContext.sessions[0]!.contextWeight).toEqual(promptReport(timestamp, 100, 0));
+    }
   },
 );

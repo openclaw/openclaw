@@ -1,10 +1,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import {
   createTimeZoneDayKeyFormatter,
   resolveTimezone,
   resolveTimeZoneDayStartMs,
 } from "../../infra/format-time/format-datetime.js";
 import type { UsageDailyBucket } from "../../infra/session-cost-usage.js";
+import { respondError } from "./response.js";
+import type { RespondFn } from "./types.js";
 
 export type DateRange = { startMs: number; endMs: number; includeUntimestamped?: boolean };
 // Keep validation and parsed timestamps in one result so handlers cannot forward
@@ -318,3 +321,21 @@ export const resolveDateRange = (
   }
   return { ok: true, value: { startMs, endMs: todayEndMs } };
 };
+
+export function resolveUsageDateRangeOrRespond(
+  params: Parameters<typeof resolveDateRange>[0],
+  respond: RespondFn,
+): { interpretation: DateInterpretation; range: DateRange } | null {
+  const interpretation = resolveDateInterpretation(params);
+  if (!interpretation.ok) {
+    respondError(respond, ErrorCodes.INVALID_REQUEST, interpretation.error);
+    return null;
+  }
+
+  const range = resolveDateRange(params, interpretation.value);
+  if (!range.ok) {
+    respondError(respond, ErrorCodes.INVALID_REQUEST, range.error);
+    return null;
+  }
+  return { interpretation: interpretation.value, range: range.value };
+}
