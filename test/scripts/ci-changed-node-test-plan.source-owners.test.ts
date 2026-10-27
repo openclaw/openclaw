@@ -729,6 +729,17 @@ describe("CI changed Node test plan", () => {
       expected: ["test/gateway-hook-concurrency.e2e.test.ts"],
     },
     {
+      changedPath: "src/sessions/session-controller.steer.ts",
+      expected: [
+        "test/gateway-background-process-restart.e2e.test.ts",
+        "test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts",
+      ],
+    },
+    {
+      changedPath: "src/auto-reply/reply/queue/drain.ts",
+      expected: ["test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts"],
+    },
+    {
       changedPath: "node-runtime-recovery.mjs",
       expected: ["test/scripts/node-runtime-recovery.built-cli.e2e.test.ts"],
     },

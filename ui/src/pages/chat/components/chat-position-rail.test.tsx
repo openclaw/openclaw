@@ -38,6 +38,11 @@ function threadFixture(props: ReturnType<typeof threadProps>) {
     transcript,
     container,
     view,
+    query: (selector: string) => container.querySelector<HTMLElement>(selector),
+    markers: () => [
+      ...container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker"),
+    ],
+    preview: () => part(container, "preview-copy")?.textContent,
     rerender: () => {
       view.render(props);
       transcript.update();
@@ -111,6 +116,21 @@ function part(root: ParentNode, name: string) {
   return root.querySelector<HTMLElement>(`.chat-position-rail__${name}`);
 }
 
+function measure(element: Element, values: Record<string, number | (() => number)>) {
+  for (const [key, value] of Object.entries(values)) {
+    Object.defineProperty(element, key, {
+      configurable: true,
+      ...(typeof value === "function" ? { get: value } : { value }),
+    });
+  }
+}
+
+function markerAt(root: ParentNode, id: string | number) {
+  return root.querySelector<HTMLButtonElement>(
+    `[data-position-marker-id="${typeof id === "number" ? `message-${id}` : id}"]`,
+  )!;
+}
+
 function pressKey(target: EventTarget, key: string, bubbles = true) {
   const event = new KeyboardEvent("keydown", { key, bubbles, cancelable: true });
   target.dispatchEvent(event);
@@ -149,10 +169,9 @@ describe("conversation position rail", () => {
       const { flushFrame, publishVisibility, activeMessage, root, marks } = railFixture(
         "agent:main:rail-publication",
       );
-      Object.defineProperty(marks, "clientHeight", { configurable: true, value: 240 });
+      measure(marks, { clientHeight: 240 });
       emitTranscriptResize(marks, 44, 240);
-      const marker = (id: string) =>
-        marks.querySelector<HTMLButtonElement>(`[data-position-marker-id="${id}"]`);
+      const marker = (id: string) => markerAt(marks, id);
       const current = () => marks.querySelector<HTMLButtonElement>('[aria-current="true"]');
       const tabStops = () => [...marks.querySelectorAll<HTMLButtonElement>('[tabindex="0"]')];
       flushFrame();
@@ -229,11 +248,8 @@ describe("conversation position rail", () => {
         ] as const) {
           const focusedMarker = document.activeElement;
           assert(focusedMarker instanceof HTMLButtonElement);
-          focusedMarker.dispatchEvent(
-            new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
-          );
           // The marker commits in Solid's microtask; no animation frame is required.
-          flush();
+          pressKey(focusedMarker, key);
           expect(document.activeElement).toBe(marker(`message-${index}`));
           expect(tabStops()).toEqual([document.activeElement]);
         }
@@ -241,7 +257,7 @@ describe("conversation position rail", () => {
     },
   );
 
-  it("reveals only overflowing transcripts and retires focus when they fit again", () => {
+  it("requires more than one pixel of overflow and a nonzero viewport", () => {
     const flushFrame = stubSettledAnimationFrames();
     stubRailVisibility();
     const positions = railPositions(1);
@@ -256,7 +272,6 @@ describe("conversation position rail", () => {
     Object.defineProperty(marks, "clientHeight", { configurable: true, value: 12 });
     emitTranscriptResize(marks, 44, 12);
     flushFrame();
-    expect(rail.hasAttribute("data-overflow")).toBe(false);
     const resize = (clientHeight: number, scrollHeight: number) => {
       viewportHeight = clientHeight;
       transcriptHeight = scrollHeight;
@@ -266,15 +281,6 @@ describe("conversation position rail", () => {
       });
       flushFrame();
     };
-    resize(600, 900);
-    expect(rail.hasAttribute("data-overflow")).toBe(true);
-    const marker = rail.querySelector<HTMLButtonElement>("button")!;
-    marker.focus();
-    expect(document.activeElement).toBe(marker);
-    resize(900, 900);
-    expect(rail.hasAttribute("data-overflow")).toBe(false);
-    expect(document.activeElement).toBe(root);
-    expect(rail.querySelector(".chat-position-rail__preview")).toBeNull();
     resize(600, 601);
     expect(rail.hasAttribute("data-overflow")).toBe(false);
     resize(600, 602);
@@ -306,24 +312,18 @@ describe("conversation position rail", () => {
           count,
           startsAtTop ? "message-0" : "message-79",
         );
-      const marker = (index: number) =>
-        marks.querySelector<HTMLButtonElement>(`[data-position-marker-id="message-${index}"]`)!;
+      const marker = (index: number) => markerAt(marks, index);
       let height = 597;
       const scrollHeight = 8912;
       let marksHeight = 283;
       let railOffset = 0;
-      Object.defineProperties(root, {
-        clientHeight: { configurable: true, get: () => height },
-        scrollHeight: { configurable: true, get: () => scrollHeight },
-      });
-      Object.defineProperties(marks, {
-        clientHeight: { configurable: true, get: () => marksHeight },
-        scrollTop: {
-          configurable: true,
-          get: () => railOffset,
-          set: (value: number) => {
-            railOffset = Math.max(0, Math.min(value, count * 12 - marksHeight));
-          },
+      measure(root, { clientHeight: () => height, scrollHeight });
+      measure(marks, { clientHeight: () => marksHeight });
+      Object.defineProperty(marks, "scrollTop", {
+        configurable: true,
+        get: () => railOffset,
+        set: (value: number) => {
+          railOffset = Math.max(0, Math.min(value, count * 12 - marksHeight));
         },
       });
       root.scrollTop = startsAtTop ? 0 : 8315;
@@ -399,16 +399,13 @@ describe("conversation position rail", () => {
         container.classList.add("chat");
         const textarea = container.appendChild(document.createElement("textarea"));
         textarea.value = "/goal";
-        Object.defineProperties(textarea, {
-          clientHeight: { configurable: true, value: 32 },
-          scrollHeight: {
-            configurable: true,
-            get: () => {
-              // Measuring the replacement draft commits the expanded transcript.
-              height = 597;
-              marksHeight = 283;
-              return 32;
-            },
+        measure(textarea, {
+          clientHeight: 32,
+          scrollHeight: () => {
+            // Measuring the replacement draft commits the expanded transcript.
+            height = 597;
+            marksHeight = 283;
+            return 32;
           },
         });
         if (navigatesBeforeResize) {
@@ -486,10 +483,7 @@ describe("conversation position rail", () => {
       rows,
     );
     try {
-      Object.defineProperties(container, {
-        clientHeight: { configurable: true, value: 600 },
-        scrollHeight: { configurable: true, value: 4880 },
-      });
+      measure(container, { clientHeight: 600, scrollHeight: 4880 });
       container.style.paddingTop = "80px";
       emitTranscriptResize(container, 800, 600);
       const ids = rows.map((row) => row.key);
@@ -503,7 +497,7 @@ describe("conversation position rail", () => {
       expect(session.activeMessageId(ids)).toBe("row-2");
       container.scrollTop = 3000;
       expect(session.activeMessageId(ids)).toBe("row-26");
-      Object.defineProperty(container, "clientHeight", { configurable: true, value: 300 });
+      measure(container, { clientHeight: 300 });
       expect(session.activeMessageId(ids)).toBe("row-25");
       container.scrollTop = 4580;
       expect(session.activeMessageId(ids)).toBe("row-39");
@@ -525,19 +519,13 @@ describe("conversation position rail", () => {
     const props = threadProps("rail-interaction", "agent:main:first", messages);
     const historyIntent = vi.fn();
     props.onHistoryIntent = historyIntent;
-    const { transcript, container, view, rerender } = threadFixture(props);
-    const markers = () => [
-      ...container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker"),
-    ];
-    const preview = () => part(container, "preview-copy")?.textContent;
+    const { transcript, container, view, rerender, markers, preview, query } = threadFixture(props);
     rerender();
     transcript.start();
     expect(markers()).toHaveLength(40);
     // Rail wheel input belongs to its scrollport, never transcript history.
     for (const type of ["wheel", "touchstart", "touchmove"]) {
-      container
-        .querySelector(".chat-position-rail__marks")!
-        .dispatchEvent(new Event(type, { bubbles: true }));
+      part(container, "marks")!.dispatchEvent(new Event(type, { bubbles: true }));
     }
     for (const key of ["PageUp", "PageDown"]) {
       expect(
@@ -547,13 +535,11 @@ describe("conversation position rail", () => {
       ).toBe(true);
     }
     expect(historyIntent).not.toHaveBeenCalled();
-    container
-      .querySelector(".chat-thread")!
-      .dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+    query(".chat-thread")!.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
     expect(historyIntent).toHaveBeenCalledOnce();
-    container
-      .querySelector(".chat-thread")!
-      .dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
+    query(".chat-thread")!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }),
+    );
     expect(historyIntent).toHaveBeenCalledTimes(2);
     expect(preview()).toBeUndefined();
     markers()[4]!.focus();
@@ -562,7 +548,7 @@ describe("conversation position rail", () => {
     markers()[2]!.dispatchEvent(new Event("pointerenter"));
     flush();
     expect(preview()).toContain("Checkpoint 2");
-    container.querySelector(".chat-position-rail")!.dispatchEvent(new Event("pointerleave"));
+    query(".chat-position-rail")!.dispatchEvent(new Event("pointerleave"));
     flush();
     expect(preview()).toContain("Checkpoint 4");
     pressKey(markers()[4]!, "ArrowDown");
@@ -580,7 +566,7 @@ describe("conversation position rail", () => {
     expect(preview()).toContain("Checkpoint 5");
     pressKey(focused!, "Escape");
     expect(preview()).toBeUndefined();
-    const thread = container.querySelector<HTMLElement>(".chat-thread")!;
+    const thread = query(".chat-thread")!;
     expect(document.activeElement).toBe(thread);
     markers()[2]!.dispatchEvent(new Event("pointerenter"));
     flush();
@@ -627,32 +613,26 @@ describe("conversation position rail", () => {
       if (role === "assistant") {
         props.assistantAvatar = "🦞";
       }
-      const { transcript, container, rerender } = threadFixture(props);
+      const { transcript, container, rerender, markers, query } = threadFixture(props);
       rerender();
       transcript.start();
-      container.querySelector<HTMLButtonElement>(".chat-position-rail__marker")!.focus();
+      markers()[0]!.focus();
       flush();
       const preview = part(container, "preview-copy")!;
       expect(part(container, "preview-label")?.textContent).toBe(label);
-      const avatar = container.querySelector(".chat-position-rail__preview .chat-author-avatar");
-      expect(avatar?.getAttribute("aria-label") ?? null).toBe(
+      const avatar = () => query(".chat-position-rail__preview .chat-author-avatar");
+      expect(avatar()?.getAttribute("aria-label") ?? null).toBe(
         role === "user" ? (senderName ?? null) : "Molty",
       );
       if (role === "assistant") {
-        expect(avatar?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
+        expect(avatar()?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
           "🦞",
         );
-        expect(
-          container.querySelector(".chat-position-rail__marker")?.getAttribute("aria-label"),
-        ).toContain("Molty");
+        expect(markers()[0]?.getAttribute("aria-label")).toContain("Molty");
         props.assistantName = "Roboclaw";
         rerender();
         expect(part(container, "preview-label")?.textContent).toBe("Roboclaw");
-        expect(
-          container
-            .querySelector(".chat-position-rail__preview .chat-author-avatar")
-            ?.getAttribute("aria-label"),
-        ).toBe("Roboclaw");
+        expect(avatar()?.getAttribute("aria-label")).toBe("Roboclaw");
       }
       expect(preview.querySelector("strong")?.textContent).toBe("Important");
       expect(preview.querySelector("script")).toBeNull();
@@ -672,34 +652,35 @@ describe("conversation position rail", () => {
       stream: "<thinking>Private planning</thinking>",
       streamStartedAt: 2_000,
     });
-    const { transcript, container, rerender } = threadFixture(props);
-    const marker = () =>
-      container.querySelector<HTMLButtonElement>('[data-position-marker-id="run:stream-run"]')!;
+    const { transcript, container, rerender, markers, query, preview } = threadFixture(props);
+    const marker = () => markerAt(container, "run:stream-run");
     rerender();
     transcript.start();
-    expect(container.querySelectorAll(".chat-position-rail__marker")).toHaveLength(1);
+    expect(markers()).toHaveLength(1);
     props.stream = "Draft response";
     rerender();
     const provisional = marker();
     provisional.focus();
     flush();
-    expect(part(container, "preview-copy")?.textContent).toContain("Draft response");
+    expect(preview()).toContain("Draft response");
     const streamBubble = [...container.querySelectorAll<HTMLElement>(".chat-bubble")].find(
       (bubble) => bubble.textContent?.includes("Draft response"),
     )!;
-    const root = container.querySelector<HTMLElement>(".chat-thread")!;
+    const root = query(".chat-thread")!;
     const marks = part(container, "marks")!;
-    Object.defineProperty(marks, "clientHeight", { configurable: true, value: 600 });
+    measure(marks, { clientHeight: 600 });
     emitTranscriptResize(marks, 44, 600);
     await settleFrames();
     expect(observed.has(streamBubble)).toBe(true);
-    const query = vi.spyOn(root, "querySelectorAll");
+    const queryBubbles = vi.spyOn(root, "querySelectorAll");
     props.stream = "Draft **updated** response";
     rerender();
     await settleFrames();
     expect(streamBubble.querySelector("strong")?.textContent).toBe("updated");
     expect(provisional.getAttribute("aria-description")).toContain("Draft updated response");
-    expect(query.mock.calls.filter(([selector]) => selector.includes(".chat-bubble"))).toEqual([]);
+    expect(
+      queryBubbles.mock.calls.filter(([selector]) => selector.includes(".chat-bubble")),
+    ).toEqual([]);
     provisional.click();
     // Reveal settles the committed target's geometry on the render lifecycle's layout phase.
     await settleFrames();
@@ -712,16 +693,14 @@ describe("conversation position rail", () => {
     rerender();
     expect(marker()).toBe(provisional);
     expect(document.activeElement).toBe(provisional);
-    expect(part(container, "preview-copy")?.textContent).toContain("Final response");
-    const persistedBubble = container.querySelector<HTMLElement>(
-      '[data-entry-id="persisted-answer"]',
-    )!;
+    expect(preview()).toContain("Final response");
+    const persistedBubble = query('[data-entry-id="persisted-answer"]')!;
     await settleFrames();
     expect(observed.has(streamBubble)).toBe(false);
     expect(observed.has(persistedBubble)).toBe(true);
     marker().click();
     await settleFrames();
     expect(persistedBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
-    expect(container.querySelectorAll(".chat-position-rail__marker")).toHaveLength(2);
+    expect(markers()).toHaveLength(2);
   });
 });

@@ -198,6 +198,9 @@ describe("embedded attempt harness pinning", () => {
     const sessionEntry = makeSessionEntry("mixed-provider-session", {
       agentHarnessId: "codex",
       modelSelectionLocked: true,
+      permissionMode: "guarded",
+      sessionRoot: tmpDir,
+      blindPrompt: true,
       pluginExtensions: {
         codex: {
           supervision: {
@@ -225,6 +228,9 @@ describe("embedded attempt harness pinning", () => {
       agentHarnessId: "codex",
       agentHarnessRuntimeOverride: "codex",
       modelSelectionLocked: true,
+      permissionMode: "guarded",
+      sessionRoot: tmpDir,
+      blindPrompt: true,
       toolsAllow: ["read", "web_search"],
       codeModeOverride: false,
     });

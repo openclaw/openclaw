@@ -654,6 +654,7 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 }
 
 .sidebar-session-owner-filter .picker-select__trigger {
+  gap: 4px;
   min-height: 30px;
   padding: 4px 6px;
   border: 0;
@@ -676,6 +677,13 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 .sidebar--rail .sidebar-session-toolbar__button {
   width: 28px;
   height: 28px;
+}
+
+.sidebar--rail .sidebar-session-sort {
+  width: auto;
+  max-width: 50%;
+  gap: 2px;
+  opacity: 1;
 }
 
 html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-panel-header {

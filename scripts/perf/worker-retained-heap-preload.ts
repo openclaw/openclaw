@@ -125,7 +125,7 @@ const script = path.basename(process.argv[1] ?? "");
 if (
   output &&
   !isMainThread &&
-  /^(sqlite-store|prepared-model-catalog|git-operation|session-accessor\.sqlite-archive|openclaw-state-read|openclaw-state-lease-heartbeat|gateway-state-owner-heartbeat|worker-native-lifecycle|control-ui-file|identity-avatar-file|provider-prompt-state|client-credential)\.worker(?:\.baseline)?\.[cm]?[jt]s$/.test(
+  /^(?:(sqlite-store|prepared-model-catalog|git-operation|session-accessor\.sqlite-archive|openclaw-state-read|openclaw-state-lease-heartbeat|gateway-state-owner-heartbeat|worker-native-lifecycle|control-ui-file|identity-avatar-file|provider-prompt-state|client-credential)\.worker(?:\.baseline)?|storage-worker)\.[cm]?[jt]s$/.test(
     script,
   )
 ) {

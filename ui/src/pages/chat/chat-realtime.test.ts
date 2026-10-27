@@ -36,8 +36,7 @@ function inspectSession(): InspectableRealtimeTalkSession {
 
 async function start() {
   await state.toggleRealtimeTalk();
-  const session = inspectSession();
-  return { session, callbacks: session.callbacks };
+  return inspectSession();
 }
 
 function mockVideo() {
@@ -45,7 +44,7 @@ function mockVideo() {
 }
 
 async function startVideo() {
-  const { session } = await start();
+  const session = await start();
   session.callbacks.onVideoCapability?.(true);
   return session;
 }
