@@ -116,3 +116,32 @@ it.each(["remove", "unmount"])(
     expect(vi.getTimerCount()).toBe(1);
   },
 );
+
+it("disables only fresh Resume while the session is busy and preserves receipt recovery", () => {
+  const onGoalAction = vi.fn();
+  const onGoalEdit = vi.fn();
+  const onCheck = vi.fn(async () => true);
+  const view = mountGoal(
+    { ...goal, status: "blocked" },
+    {
+      canAct: true,
+      connected: true,
+      resumeBusy: true,
+      onGoalAction,
+      onGoalEdit,
+    },
+  );
+  const resume = view.query<HTMLButtonElement>('[aria-label="Resume goal"]')!;
+  expect(resume.disabled).toBe(true);
+  expect(view.query<HTMLButtonElement>('[aria-label="Edit goal"]')!.disabled).toBe(false);
+  expect(view.query<HTMLButtonElement>('[aria-label="Clear goal"]')!.disabled).toBe(false);
+  resume.click();
+  expect(onGoalAction).not.toHaveBeenCalled();
+  view.update({ resumeBusy: false });
+  expect(resume.disabled).toBe(false);
+  resume.click();
+  expect(onGoalAction).toHaveBeenCalledExactlyOnceWith(goal.id, "resume");
+  view.update({ resumeBusy: true, resumeRecovery: { pending: false, onCheck } });
+  view.query<HTMLButtonElement>(".agent-chat__goal-resume")!.click();
+  expect(onCheck).toHaveBeenCalledOnce();
+});

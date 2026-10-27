@@ -74,6 +74,13 @@ export function formatGoalElapsed(elapsedMs: number): string {
     return `${totalMinutes}m ${seconds}s`;
   }
   const hours = Math.floor(totalMinutes / 60);
+  const days = Math.floor(hours / 24);
+  if (days >= 7) {
+    return `${Math.floor(days / 7)}wk ${days % 7}d`;
+  }
+  if (days > 0) {
+    return `${days}d ${hours % 24}h`;
+  }
   const minutes = String(totalMinutes % 60).padStart(2, "0");
   return `${hours}h ${minutes}m ${seconds}s`;
 }
