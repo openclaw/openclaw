@@ -143,12 +143,10 @@ try {
       simulatedClaimsPerMinute: 10,
       writerRequestsPerSimulatedMinute: 0,
     }));
-    // oxlint-disable-next-line typescript/unbound-method -- Restore the exact method; apply below preserves its receiver.
-    const postMessage = Worker.prototype.postMessage;
-    Worker.prototype.postMessage = function (
-      this: Worker,
-      ...args: Parameters<Worker["postMessage"]>
-    ) {
+    // Restore the exact descriptor; Reflect.apply below preserves the receiver.
+    const postMessageDescriptor = Object.getOwnPropertyDescriptor(Worker.prototype, "postMessage");
+    assert(postMessageDescriptor, "Worker.prototype.postMessage descriptor");
+    const countClaims = function (this: Worker, ...args: Parameters<Worker["postMessage"]>) {
       const request = asOptionalRecord(args[0]);
       if (request?.type === "execute" && request.input instanceof Uint8Array) {
         const command = asOptionalRecord(deserialize(request.input));
@@ -161,12 +159,16 @@ try {
           row.writerRequestsPerSimulatedMinute++;
         }
       }
-      return postMessage.apply(this, args);
+      return Reflect.apply(postMessageDescriptor.value, this, args);
     };
+    Object.defineProperty(Worker.prototype, "postMessage", {
+      ...postMessageDescriptor,
+      value: countClaims,
+    });
     try {
       await run(active.length * 10);
     } finally {
-      Worker.prototype.postMessage = postMessage;
+      Object.defineProperty(Worker.prototype, "postMessage", postMessageDescriptor);
     }
     await run(active.length * 20);
     gc();
