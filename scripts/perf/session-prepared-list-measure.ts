@@ -1,6 +1,8 @@
 // Owner-level Team-shaped list workload; transport/tool-turn proof stays in team-shape-stress.ts.
 // Run on an approved quiet host with --expose-gc --import ./scripts/tsx.mjs.
 // --collector-presentation adds prepared event rows for an unrestricted operator.
+// --list-shape sidebar|full|search|agent isolates warm list allocation and CPU per shape.
+// Shape mode seeds exactly --sessions rows across eight agents; full is a full-row page.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -40,6 +42,7 @@ const { values } = parseArgs({
     "collector-presentation": { type: "boolean", default: false },
     "search-workload": { type: "boolean", default: false },
     "search-profile": { type: "boolean", default: false },
+    "list-shape": { type: "string" },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -48,22 +51,36 @@ assert(!values["cpu-profile"] || values.mode === "timing", "Separate CPU and hea
 assert(global.gc, "Run with --expose-gc");
 const integer = (name: "sessions" | "iterations" | "warmup" | "updates-per-list", min = 1) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
-const sessions = integer("sessions", 100);
+const sessions = integer("sessions", values["list-shape"] ? 200 : 100);
 const iterations = integer("iterations");
 const warmup = integer("warmup");
 const updatesPerList = integer("updates-per-list", 0);
 const root = path.resolve(values["state-dir"]);
+const presentationSourceHash = createHash("sha256")
+  .update(readFileSync(new URL("../../src/gateway/session-row-presentation.ts", import.meta.url)))
+  .digest("hex");
+const filterSourceHash = createHash("sha256")
+  .update(readFileSync(new URL("../../src/gateway/session-list-filters.ts", import.meta.url)))
+  .digest("hex");
 const anchor = Date.UTC(2026, 9, 25);
+const siblingSessions = values["list-shape"] ? Math.floor(sessions / 16) : 0;
 const fixture = await generateTeamShapeStressFixture({
   stateDir: root,
   port: 40984,
   seed: 224,
   now: anchor,
-  sessions,
+  sessions: sessions - siblingSessions * 7,
   transcriptMiB: 0,
 });
 process.env = { ...fixture.env };
 const cfg: OpenClawConfig = JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH!, "utf8"));
+const siblings = ["reviewer", "researcher", "planner", "builder", "tester", "writer", "helper"];
+if (siblingSessions) {
+  for (const agentId of siblings) {
+    cfg.agents!.entries![agentId] = { workspace: path.join(root, "workspace", agentId) };
+  }
+  writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(cfg));
+}
 const [
   config,
   memory,
@@ -103,6 +120,26 @@ if (values["search-workload"]) {
   main.model = "openai/gpt-4.1";
 }
 config.setRuntimeConfigSnapshot(cfg);
+if (siblingSessions) {
+  const { writeSessionEntry } =
+    await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
+  for (const agentId of siblings) {
+    agentDb.runOpenClawAgentWriteTransaction(
+      (database) => {
+        for (let index = 0; index < siblingSessions; index++) {
+          writeSessionEntry(database, `agent:${agentId}:dashboard:fixture-${index}`, {
+            sessionId: `${agentId}-${index}`,
+            updatedAt: anchor - index * 1000,
+            label: `Synthetic ${agentId} dashboard ${index}`,
+            status: "done",
+            ...(index % 5 === 0 ? { archivedAt: anchor - index * 1000 } : {}),
+          });
+        }
+      },
+      { agentId },
+    );
+  }
+}
 plugins.setActivePluginRegistry(pluginRegistry.createEmptyPluginRegistry());
 const releaseForeground = foreground.retainSessionListForegroundWork();
 const inspector = new Session();
@@ -242,6 +279,18 @@ if (values.mode === "verify") {
       includeUnknown: choose([false, true]),
     });
   }
+}
+
+if (values["list-shape"]) {
+  const shapes: Record<string, SessionsListParams> = {
+    sidebar: { source: "sidebar", rowMode: "sidebar", limit: 100, archived: false },
+    full: { source: "sessions-page", limit: 100, archived: "all" },
+    search: { source: "sessions-page", search: "dashboard", limit: 100, archived: "all" },
+    agent: { source: "sessions-page", agentId: "reviewer", limit: 100, archived: false },
+  };
+  const query = shapes[values["list-shape"]];
+  assert(query, "Unknown --list-shape");
+  cases.splice(0, cases.length, query);
 }
 
 function canonicalResult(result: SessionsListResult | GatewaySessionRow): string {
@@ -665,6 +714,18 @@ try {
   }
   writeFileSync(path.join(root, "golden.json"), JSON.stringify(golden, null, 2));
   const bytes = allocation ? sampledBytes(allocation) : undefined;
+  const leafBytes = new Map<string, number>();
+  const rankLeaves = (node: HeapProfiler.SamplingHeapProfileNode) => {
+    const { functionName, url, lineNumber, columnNumber } = node.callFrame;
+    const frame = `${functionName || "(anonymous)"} ${url}:${lineNumber + 1}:${columnNumber + 1}`;
+    leafBytes.set(frame, (leafBytes.get(frame) ?? 0) + node.selfSize);
+    for (const child of node.children) {
+      rankLeaves(child);
+    }
+  };
+  if (allocation) {
+    rankLeaves(allocation.head);
+  }
   const partitionTotals = (metrics: typeof beforeSelections) =>
     metrics.partitions.reduce(
       (total, part) => ({ hits: total.hits + part.hits, misses: total.misses + part.misses }),
@@ -682,6 +743,12 @@ try {
   const sampled = cpu ? sampledCpu(cpu) : undefined;
   const result = {
     mode: values.mode,
+    presentationSourceHash,
+    filterSourceHash,
+    listShape: values["list-shape"],
+    allocationLeaves: Array.from(leafBytes)
+      .toSorted((a, b) => b[1] - a[1])
+      .slice(0, 30),
     runningCandidateWorkload: values["running-candidates"],
     cpuProfile: values["cpu-profile"],
     reconciliation: values.reconciliation,
