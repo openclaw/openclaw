@@ -44,7 +44,7 @@ export async function monitorWebChannel(...args: unknown[]): Promise<unknown> {
   const loaded = loadFacadeModuleAtLocationSync<{
     monitorWebChannel: (...args: unknown[]) => Promise<unknown>;
   }>({
-    location: { ...location, pluginId: record.id },
+    location: { ...location, pluginId: record.id, origin: record.origin },
     boundary: {
       boundaryLabel: "plugin root",
       rejectHardlinks: shouldRejectHardlinkedPluginFiles({
