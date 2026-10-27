@@ -120,7 +120,10 @@ suite.define(() => {
         await gateway.setOnline(true);
         await page.clock.resume();
         await waitForControlUiGatewayReady(page);
-        await status.waitFor({ state: "detached" });
+        await page.locator(".sidebar-shell__footer .gateway-status--connected").waitFor();
+        await status.getByText("Connected", { exact: true }).waitFor();
+        expect(await spinnerLocator.count()).toBe(0);
+        expect(await status.getByRole("button").count()).toBe(0);
       },
     ),
   );

@@ -170,7 +170,10 @@ suite.define(() => {
               await pages.getByRole("link", { name: "Operations", exact: true }).click();
               await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/ops");
               await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
-              if (width < 900) {
+              if (
+                width < 900 &&
+                (await navigationDrawerToggle(page).getAttribute("aria-expanded")) === "false"
+              ) {
                 await navigationDrawerToggle(page).click();
               }
             }
