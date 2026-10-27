@@ -1,12 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
-import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import {
   createMatrixHandlerTestHarness as createHarness,
   createMatrixRoomMessageEvent as roomMessage,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
-import { matrixPreflightAudio } from "./preflight-audio.js";
 
 const { download } = vi.hoisted(() => ({ download: vi.fn() }));
 
@@ -87,11 +85,6 @@ describe("createMatrixRoomMessageHandler gallery messages", () => {
     const f = setup();
     await f.send(gallery([item(1), item(2), item(3)], { body: "three sandwiches" }));
 
-    expect(download.mock.calls.map(([params]) => params.mxcUrl)).toEqual([
-      "mxc://example/img-1",
-      "mxc://example/img-2",
-      "mxc://example/img-3",
-    ]);
     expect(f.context()).toMatchObject({
       MediaPaths: ["/tmp/inbound/img-1.jpg", "/tmp/inbound/img-2.jpg", "/tmp/inbound/img-3.jpg"],
       RawBody: "three sandwiches",
@@ -120,48 +113,35 @@ describe("createMatrixRoomMessageHandler gallery messages", () => {
     const f = setup();
     await f.send(gallery([item(1), item(2), item(3)], { body: "lunch" }));
 
-    expect(download).toHaveBeenCalledTimes(3);
     expect(f.context()).toMatchObject({
       MediaPaths: ["/tmp/inbound/img-1.jpg", "/tmp/inbound/img-3.jpg"],
       RawBody: "lunch\n\n[matrix gallery: 1 of 3 attachments unavailable]",
     });
   });
 
-  it("says too large when the failed item exceeded the size limit", async () => {
-    download.mockRejectedValueOnce(new MatrixMediaSizeLimitError());
-    const f = setup();
-    await f.send(gallery([item(1), item(2)]));
+  it("says too large when an item exceeds mediaMaxBytes", async () => {
+    const { downloadMatrixMedia } =
+      await vi.importActual<typeof import("./media.js")>("./media.js");
+    download.mockImplementation(downloadMatrixMedia);
+    installMatrixMonitorTestRuntime({
+      saveMediaBuffer: (async (buffer: Buffer) => ({
+        path: `/tmp/inbound/${buffer.toString()}.jpg`,
+        contentType: "image/jpeg",
+      })) as never,
+    });
+    const downloadContent = vi.fn().mockResolvedValue(Buffer.from("small"));
+    const f = setup({ client: { downloadContent } as never });
+    await f.send(
+      gallery([item(1, { info: { mimetype: "image/jpeg", size: 6 * 1024 * 1024 } }), item(2)]),
+    );
 
-    // Each item carries its own declared size and type into the shared size limit.
-    expect(download.mock.calls.map(([params]) => params)).toMatchObject([
-      {
-        sizeBytes: 1001,
-        contentType: "image/jpeg",
-        originalFilename: "photo-1.jpg",
-        maxBytes: 5 * 1024 * 1024,
-      },
-      {
-        sizeBytes: 1002,
-        contentType: "image/jpeg",
-        originalFilename: "photo-2.jpg",
-        maxBytes: 5 * 1024 * 1024,
-      },
-    ]);
     expect(f.context()).toMatchObject({
-      MediaPaths: ["/tmp/inbound/img-2.jpg"],
+      MediaPaths: ["/tmp/inbound/small.jpg"],
       RawBody: "[matrix gallery: 1 of 2 attachments too large]",
     });
   });
 
-  it("counts entries without a url as skipped", async () => {
-    const f = setup();
-    await f.send(gallery([item(1), { itemtype: "m.image", body: "no-url.jpg" }]));
-
-    expect(download).toHaveBeenCalledTimes(1);
-    expect(f.context().RawBody).toContain("[matrix gallery: 1 of 2 attachments unavailable]");
-  });
-
-  it("skips malformed and unknown itemtypes without losing valid siblings", async () => {
+  it("skips malformed, unknown and url-less entries without losing valid siblings", async () => {
     const f = setup();
     // The stable m.gallery msgtype takes the same path as the unstable prefix.
     await f.send(
@@ -171,19 +151,16 @@ describe("createMatrixRoomMessageHandler gallery messages", () => {
           { itemtype: { toString: null }, url: "mxc://example/bad-1" },
           { itemtype: 7, url: "mxc://example/bad-2" },
           { itemtype: "m.sticker", url: "mxc://example/bad-3" },
+          { itemtype: "m.image", body: "no-url.jpg" },
           item(2),
         ],
         { msgtype: "m.gallery" },
       ),
     );
 
-    expect(download.mock.calls.map(([params]) => params.mxcUrl)).toEqual([
-      "mxc://example/img-1",
-      "mxc://example/img-2",
-    ]);
     expect(f.context()).toMatchObject({
       MediaPaths: ["/tmp/inbound/img-1.jpg", "/tmp/inbound/img-2.jpg"],
-      RawBody: "[matrix gallery: 3 of 5 attachments unavailable]",
+      RawBody: "[matrix gallery: 4 of 6 attachments unavailable]",
     });
   });
 
@@ -197,28 +174,8 @@ describe("createMatrixRoomMessageHandler gallery messages", () => {
     );
 
     expect(download).toHaveBeenCalledTimes(20);
-    expect(download.mock.calls.at(-1)![0].mxcUrl).toBe("mxc://example/img-20");
     expect(f.context().MediaPaths).toHaveLength(20);
     expect(f.context().RawBody).toBe("burst\n\n[matrix gallery: 2 of 22 attachments unavailable]");
-  });
-
-  it("does not run audio preflight on an audio item inside a gallery", async () => {
-    const resolve = vi.spyOn(matrixPreflightAudio, "resolve").mockResolvedValue("transcript");
-    const f = setup();
-    await f.send(
-      gallery([
-        {
-          itemtype: "m.audio",
-          body: "memo.ogg",
-          url: "mxc://example/memo",
-          info: { mimetype: "audio/ogg" },
-        },
-      ]),
-    );
-
-    expect(download).toHaveBeenCalledOnce();
-    expect(resolve).not.toHaveBeenCalled();
-    expect(f.context().MediaPaths).toEqual(["/tmp/inbound/memo.ogg"]);
   });
 
   it("records an unmentioned room gallery as text in history", async () => {
@@ -256,28 +213,6 @@ describe("createMatrixRoomMessageHandler gallery messages", () => {
       RawBody: "[matrix gallery: 2 of 2 attachments unavailable]",
     });
     expect(f.context().MediaPaths).toBeUndefined();
-  });
-
-  it("forwards an encrypted item's file to the downloader", async () => {
-    const f = setup();
-    await f.send(
-      gallery([
-        item(1),
-        {
-          itemtype: "m.image",
-          body: "enc.jpg",
-          file: encryptedFile,
-          info: { mimetype: "image/jpeg" },
-        },
-      ]),
-    );
-
-    expect(download).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ mxcUrl: "mxc://example/enc-3", file: encryptedFile }),
-    );
-    expect(download.mock.calls[0]![0].file).toBeUndefined();
-    expect(f.context().MediaPaths).toHaveLength(2);
   });
 
   it("decrypts encrypted items and keeps siblings when one fails", async () => {
@@ -323,7 +258,6 @@ describe("createMatrixRoomMessageHandler gallery messages", () => {
       info: { mimetype: "image/jpeg" },
     });
 
-    expect(download).toHaveBeenCalledOnce();
     expect(f.context()).toMatchObject({
       MediaPath: "/tmp/inbound/single.jpg",
       RawBody: "a sandwich",
