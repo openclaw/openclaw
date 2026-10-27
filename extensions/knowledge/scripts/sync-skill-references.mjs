@@ -20,7 +20,7 @@ const topics = [
   "writing.md",
   "meeting-entity-example.md",
 ];
-const SCRIBE_SKILLS = ["knowledge-ingest", "knowledge-unlinked-claims"];
+const SCRIBE_SKILLS = new Set(["knowledge-ingest", "knowledge-unlinked-claims"]);
 for (const name of (await readdir(root)).filter((entry) => entry.startsWith("knowledge-"))) {
   // Automation setup routes to ingestion skills; it does not publish content.
   if (name === "knowledge-automation") {
@@ -30,7 +30,7 @@ for (const name of (await readdir(root)).filter((entry) => entry.startsWith("kno
     ...(name === "knowledge-recall" ? ["conventions.md"] : ["conventions.md", "publication.md"]),
     ...topics,
     // Scribe skills share the setup, repair and result-line steps.
-    ...(SCRIBE_SKILLS.includes(name) ? ["scribe-setup.md"] : []),
+    ...(SCRIBE_SKILLS.has(name) ? ["scribe-setup.md"] : []),
   ];
   for (const file of files) {
     const source = await readFile(path.join(root, "shared", file), "utf8");
