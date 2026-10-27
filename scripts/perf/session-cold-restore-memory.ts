@@ -79,7 +79,6 @@ async function owners() {
   return Promise.all([
     import("../../src/state/openclaw-agent-db.js"),
     import("../../src/infra/kysely-sync.js"),
-    import("../../src/config/sessions/session-cold-storage-chunks.js"),
     import("../../src/config/sessions/session-cold-storage-codec.js"),
     import("../../src/state/openclaw-state-db.js"),
   ]);
@@ -97,7 +96,9 @@ async function prepare() {
     }),
   );
   isolateEnvironment();
-  const [agent, queries, chunksOwner, codec, state] = await owners();
+  const [agent, queries, codec, state] = await owners();
+  const { hashSessionColdChunks } =
+    await import("../../src/config/sessions/session-cold-storage-chunks.js");
   const { replaceSessionEntrySync } =
     await import("../../src/config/sessions/session-accessor.sqlite-entry.js");
   const sessions = positive(values.sessions, "sessions");
@@ -197,7 +198,7 @@ async function prepare() {
         });
         manifest.envelopeBytes.push(envelopeBytes);
       }
-      const hash = chunksOwner.hashSessionColdChunks(chunks);
+      const hash = hashSessionColdChunks(chunks);
       agent.runOpenClawAgentWriteTransaction(({ db }) => {
         const sql = queries.getNodeSqliteKysely<DB>(db);
         queries.executeSqliteQuerySync(
@@ -240,7 +241,7 @@ async function measureWorker() {
   const loaded = await owners();
   const agent = loaded[0];
   const queries = loaded[1];
-  const state = loaded[4];
+  const state = loaded[3];
   const { readSessionColdTranscript } =
     await import("../../src/config/sessions/session-cold-storage-state.js");
   const { transcriptEventJsonSql } =
