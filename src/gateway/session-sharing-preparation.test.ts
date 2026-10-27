@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { afterEach, expect, it as baseIt, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -14,6 +15,7 @@ import { addSessionMember, removeSessionMember } from "../config/sessions/sessio
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDatabaseIdentityBirthtime } from "../infra/sqlite-worker-identity.js";
+import * as worker from "../infra/sqlite-worker-store.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   registerOpenClawAgentDatabase,
@@ -21,11 +23,15 @@ import {
 } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { prepareOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -109,6 +115,42 @@ function expectWithoutHostSql(action: () => void) {
     sql.restore();
   }
 }
+
+it("discovers sharing facts after an already-opening writer publishes registration", async ({
+  state,
+  signal,
+}) => {
+  const storePath = state.statePath("sessions.sqlite");
+  const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
+  const sessionKey = "agent:main:opening-writer";
+  const harness = sharingHarness(cfg, sessionKey, storePath);
+  harness.write({ sessionId: "opening-writer", updatedAt: 1 });
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  await closeStateDatabaseForTest();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const open = worker.openAgentDatabaseSqliteWorkerStore;
+  vi.spyOn(worker, "openAgentDatabaseSqliteWorkerStore").mockImplementationOnce(async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return open(...args);
+  });
+  const opening = prepareOpenClawAgentDatabaseExecution(
+    { agentId: "main", path: storePath, env: state.env },
+    () => {},
+  );
+  try {
+    await withinTest(entered.promise, signal);
+    const facts = harness.prepare();
+    release.resolve();
+    using prepared = releasing(await facts);
+    expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("opening-writer");
+  } finally {
+    release.resolve();
+    await opening;
+  }
+});
 
 it.for(["runtime", "automation"])(
   "retains sharing facts across metadata but invalidates broad %s changes",
@@ -497,28 +539,46 @@ it("requires an existing session before preparing sharing facts", async ({ state
 });
 
 // Alias retargets apply to the next preparation; captured requests retain their physical store.
-it("does not transfer prepared sharing facts through a same-path replacement", async ({
-  state,
-}) => {
-  const original = state.statePath("original", "session.sqlite");
-  const replacement = state.statePath("replacement", "session.sqlite");
-  const sessionKey = "agent:main:sharing";
-  for (const storePath of [original, replacement]) {
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey, storePath },
-      { sessionId: "identical", lifecycleRevision: "same", updatedAt: 1, visibility: "shared" },
-    );
-    await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-  }
-  const cfg = { agents: { entries: { main: {} } }, session: { store: original } };
-  await state.writeConfig(cfg);
-  setRuntimeConfigSnapshot(cfg);
-  using prepared = releasing(
-    await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" }),
-  );
-  expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("identical");
-  fs.renameSync(original, state.statePath("retired.sqlite"));
-  fs.renameSync(replacement, original);
-  registerOpenClawAgentDatabase({ agentId: "main", path: original, env: state.env });
-  expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
-});
+it.for(["pending", "prepared"] as const)(
+  "does not transfer %s sharing facts through a same-path replacement",
+  async (phase, { state }) => {
+    const original = state.statePath("original", "session.sqlite");
+    const replacement = state.statePath("replacement", "session.sqlite");
+    const sessionKey = "agent:main:sharing";
+    for (const storePath of [original, replacement]) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey, storePath },
+        {
+          sessionId: phase === "pending" ? storePath : "identical",
+          lifecycleRevision: "same",
+          updatedAt: 1,
+          visibility: "shared",
+        },
+      );
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+    }
+    const cfg = { agents: { entries: { main: {} } }, session: { store: original } };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const ready = createDeferred();
+    const pending = prepareSessionMutationFacts({
+      cfg,
+      sessionKey,
+      agentId: "main",
+      storageReady: phase === "pending" ? ready.promise : undefined,
+    });
+    using prepared = phase === "prepared" ? releasing(await pending) : undefined;
+    if (prepared) {
+      expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("identical");
+    }
+    fs.renameSync(original, state.statePath("retired.sqlite"));
+    fs.renameSync(replacement, original);
+    registerOpenClawAgentDatabase({ agentId: "main", path: original, env: state.env });
+    ready.resolve();
+    if (prepared) {
+      expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
+    } else {
+      await expect(pending.then((read) => read.release())).rejects.toThrow(unavailableMessage);
+    }
+  },
+);
