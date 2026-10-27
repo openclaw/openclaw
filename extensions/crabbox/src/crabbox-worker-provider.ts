@@ -111,8 +111,14 @@ export function createCrabboxWorkerProvider(
   });
   const activeProvisions = new Set<{ leaseId: string }>();
   const warmImages = createCrabboxWarmImageManager({
-    isLeaseActive: (leaseId) =>
-      activeProvisions.values().some((owner) => owner.leaseId === leaseId),
+    isLeaseActive: (leaseId) => {
+      for (const owner of activeProvisions) {
+        if (owner.leaseId === leaseId) {
+          return true;
+        }
+      }
+      return false;
+    },
     state: dependencies.state,
     warn,
     info: dependencies.info,

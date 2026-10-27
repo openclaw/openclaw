@@ -31,6 +31,9 @@ import {
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
   WARM_IMAGE_MAX_ENTRIES,
+  type WarmImageRecord,
+  type WarmProfileRecord,
+  type WarmColdReason,
 } from "./crabbox-worker-warm-image-records.js";
 import {
   assertCrabboxWarmImageMigrationReady,
@@ -43,9 +46,6 @@ import {
   sameCrabboxWarmImageGeneration as sameImage,
   withCrabboxWarmImageDisplayFacts,
   type CrabboxState,
-  type WarmImageRecord,
-  type WarmProfileRecord,
-  type WarmColdReason,
 } from "./crabbox-worker-warm-image-store.js";
 
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;

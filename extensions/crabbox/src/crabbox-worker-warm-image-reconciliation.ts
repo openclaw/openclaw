@@ -15,12 +15,12 @@ import {
   crabboxWarmImageHoldingLeaseIds,
   isCrabboxWarmImageHeld,
   withoutCrabboxWarmImageOperation,
+  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-records.js";
 import {
   clearCrabboxWarmImageCapture,
   sameCrabboxWarmImageGeneration as sameImage,
   type openCrabboxWarmImageStore,
-  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 
 type RetirementContext = CheckpointContext | MaintenanceContext;

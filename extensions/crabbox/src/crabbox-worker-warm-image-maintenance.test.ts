@@ -11,11 +11,12 @@ import {
   expectText,
 } from "./crabbox-warm-scenarios.test-support.js";
 import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
+import type { WarmImageOperation } from "./crabbox-worker-warm-image-records.js";
 import { jsonResult, managedBinary, PROFILE } from "./crabbox-worker-warm-image.test-support.js";
 
 const RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
 const REFRESH_MS = 24 * 60 * 60 * 1_000;
-const retirement = { type: "retire", checkpointId: "chk_expired" };
+const retirement = { type: "retire", checkpointId: "chk_expired" } satisfies WarmImageOperation;
 const deletion = ["checkpoint", "delete", "chk_expired"];
 const deletionArgs = (...binaries: string[]) => binaries.map((binary) => [binary].concat(deletion));
 const absence = () => commandResult({ stdout: "checkpoint absent id=chk_expired\n" });

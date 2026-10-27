@@ -7,10 +7,8 @@ import { pause, warmRecord } from "./crabbox-warm-scenarios.test-support.js";
 import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
-import {
-  recoverCrabboxWarmImageCapture,
-  type WarmProfileRecord,
-} from "./crabbox-worker-warm-image-store.js";
+import type { WarmProfileRecord } from "./crabbox-worker-warm-image-records.js";
+import { recoverCrabboxWarmImageCapture } from "./crabbox-worker-warm-image-store.js";
 import * as warmImageStore from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 import {

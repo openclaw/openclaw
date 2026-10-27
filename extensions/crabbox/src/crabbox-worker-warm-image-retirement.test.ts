@@ -14,10 +14,10 @@ import {
   warmAllocation,
 } from "./crabbox-warm-scenarios.test-support.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import type { WarmProfileRecord } from "./crabbox-worker-warm-image-records.js";
 import {
   listCrabboxWarmImages,
   openCrabboxWarmImageStore,
-  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 import {
   checkpointResult,

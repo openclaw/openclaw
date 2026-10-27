@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { OpenClawPluginApi, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   PluginStateCompareIntent,
   PluginStateKeyedStore,
@@ -19,75 +19,13 @@ import {
   projectCrabboxLegacyWarmLeases,
   WARM_IMAGE_MAX_ENTRIES,
   withoutCrabboxWarmImageOperation,
-  type WarmImageOperation,
+  type WarmAllocationRecord,
+  type WarmColdReason,
+  type WarmImageRecord,
+  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-records.js";
 
 export type CrabboxState = Pick<OpenClawPluginApi["runtime"]["state"], "openKeyedStoreV2">;
-
-type WorkerNodeRuntimeIdentity = NonNullable<
-  NonNullable<Parameters<WorkerProvider["provision"]>[2]>["nodeRuntimeIdentity"]
->;
-export type WarmStartStatus = Parameters<
-  NonNullable<NonNullable<Parameters<WorkerProvider["provision"]>[2]>["reportStartStatus"]>
->[0];
-export type WarmColdReason = Extract<WarmStartStatus, { mode: "cold" }>["reason"];
-
-export type WarmImageRecord = {
-  checkpointId: string;
-  kind: string;
-  state: "pending" | "available";
-  createdAtMs: number;
-  preparationKey: string | null;
-  cacheKey: string | null;
-  purpose: "session" | "reserve" | null;
-  lastDemandAtMs: number | null;
-  pinned?: { atMs: number };
-  baseCommit?: string;
-  /** Runtime content attested by successful preparation before this capture. */
-  runtimeIdentity?: WorkerNodeRuntimeIdentity;
-};
-
-export type WarmAllocationRecord = {
-  coldReason?: WarmColdReason;
-  choice: { kind: "cold" } | { kind: "checkpoint"; checkpointId: string };
-  machineClass: string;
-  /** Absent in existing Linux allocations. */
-  os?: CrabboxOperatingSystem;
-  phase: "pending" | "prepared" | "enrolled";
-  /** Failed detected setup must never be published, including during teardown. */
-  captureSkipped?: string;
-  preparationKey: string | null;
-  cacheKey: string | null;
-  purpose: "session" | "reserve" | null;
-  demandAtMs: number | null;
-  imageGeneration: { checkpointId: string; createdAtMs: number } | null;
-  /** A cold preparation admitted against a pin may replace only that publication. */
-  publicationBase?: { checkpointId: string; createdAtMs: number };
-  baseCommit?: string;
-  /** Frozen target; preparation/enrollment must verify it before capture can publish it. */
-  runtimeIdentity?: WorkerNodeRuntimeIdentity;
-};
-
-export type WarmProfileRecord = {
-  version: 3;
-  latestColdReason?: WarmColdReason;
-  /** Configured profile that most recently allocated from this key; display only. */
-  profileId?: string;
-  backend?: string;
-  machineClass?: string;
-  os?: CrabboxOperatingSystem;
-  projectLabel?: string;
-  projectRoot?: string;
-  projectKey?: string;
-  recipePreparation?: RecipePreparation;
-  recipePreparationAtMs?: number;
-  image?: WarmImageRecord;
-  previous?: WarmImageRecord;
-  /** Latest native-capture refusal; retained for display without suppressing later attempts. */
-  captureUnsupported?: { atMs: number; provider: string; message: string };
-  allocations: Record<string, WarmAllocationRecord>;
-  operation?: WarmImageOperation;
-};
 
 export class CrabboxWarmImageRequestError extends Error {}
 // Match the former enrollment registry's capacity without evicting replay obligations;

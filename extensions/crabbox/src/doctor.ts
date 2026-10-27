@@ -15,11 +15,11 @@ import {
   CRABBOX_WARM_IMAGE_WAIT_HINT,
   WARM_IMAGE_MAX_ENTRIES,
   crabboxWarmImageHoldingLeaseIds,
+  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-records.js";
 import {
   admitCrabboxWarmImageProfile,
   projectCrabboxWarmImage,
-  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 
 export const CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID = "crabbox/cloud-worker-profiles";
