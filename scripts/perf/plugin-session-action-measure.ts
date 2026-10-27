@@ -66,8 +66,11 @@ let responses = 0;
 const options = {
   req: { id: "synthetic", type: "req", method: "plugins.sessionAction" },
   params: { pluginId: "synthetic-plugin-43", actionId: "session_activity", payload: payloads[0] },
-  client: { connect: { role: "operator", scopes: ["operator.read"] } },
-  context: { getRuntimeConfig: () => ({}) },
+  // Only these fields are consumed by this read-only action fixture.
+  client: {
+    connect: { role: "operator", scopes: ["operator.read"] },
+  } as GatewayRequestHandlerOptions["client"],
+  context: { getRuntimeConfig: () => ({}) } as GatewayRequestHandlerOptions["context"],
   isWebchatConnect: () => false,
   respond: (ok, payload, error) => {
     assert(ok && !error);
@@ -77,17 +80,13 @@ const options = {
   },
 } satisfies Pick<
   GatewayRequestHandlerOptions,
-  "req" | "params" | "respond" | "isWebchatConnect"
-> & {
-  client: unknown;
-  context: unknown;
-};
+  "req" | "params" | "client" | "context" | "respond" | "isWebchatConnect"
+>;
 const handler = pluginHostHookHandlers["plugins.sessionAction"];
 assert(handler);
 async function run(count: number) {
   for (let index = 0; index < count; index++) {
     options.params.payload = payloads[index % payloads.length];
-    // Only these fields are consumed by this read-only action fixture.
     await handler!(options as GatewayRequestHandlerOptions);
   }
 }
