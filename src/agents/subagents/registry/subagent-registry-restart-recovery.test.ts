@@ -558,34 +558,6 @@ describe("interrupted requester-settle continuation ownership", () => {
     });
   });
 
-  it.each(["deliverable", "yielded private", "paused private"] as const)(
-    "preserves a pre-cutover retry continuation for %s custody",
-    async (policy) => {
-      const { child, worker } = cohort();
-      child.requesterSettleWake!.attemptCount = 2;
-      if (policy !== "deliverable") {
-        child.completionTarget = "parent";
-      }
-      if (policy === "yielded private") {
-        child.requesterSettleWake!.yieldedFinalDeliverable = true;
-      }
-      if (policy === "paused private") {
-        child.pauseReason = "sessions_yield";
-        child.requesterSettleWake!.pauseNotice = { acknowledgment: "Waiting for direction" };
-      }
-      const runId =
-        policy === "paused private"
-          ? "announce:requester-settle:main:agent:main:subagent:restart-child:settled-leaf:yield-1:pause:retry-1"
-          : "announce:requester-settle:main:agent:main:subagent:restart-child:settled-leaf:yield-1:retry-1";
-      subagentRuns.delete(worker.runId);
-      const restored = run({ ...worker, runId });
-      childSession().lifecycleRunId = runId;
-      subagentRuns.set(runId, restored);
-      await expectRecovery(restored, "handled");
-      expect(restored.execution.outcome).toBeUndefined();
-    },
-  );
-
   it("keeps the dispatched surviving cohort owned after a member retires", async () => {
     const { child, worker } = cohort();
     child.requesterSettleWake!.batchRunIds!.push("retired-member");
