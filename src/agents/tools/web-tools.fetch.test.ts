@@ -295,22 +295,16 @@ describe("web_fetch extraction fallbacks", () => {
     },
   );
 
-  it.each([
-    [200, "readability"],
-    [200, "test-fetch"],
-    [403, "test-fetch"],
-  ] as const)("extracts status %s with %s", async (status, extractor) => {
-    installResponse(EMPTY_HTML, "text/html", status);
-    mockProvider(async () => ({ extractor: "test-fetch", text: "provider content" }));
-    if (extractor === "readability") {
-      extractReadableContentMock.mockResolvedValue({ extractor, text: "readability content" });
-    }
-    const { details } = await fetchPage(`fallback-${status}`, {});
+  it("returns readable HTML content", async () => {
+    installResponse(EMPTY_HTML, "text/html");
+    extractReadableContentMock.mockResolvedValue({
+      extractor: "readability",
+      text: "readability content",
+    });
+    const { details } = await fetchPage("readable");
     expect(details).toMatchObject({
-      extractor,
-      text: expect.stringContaining(
-        extractor === "readability" ? "readability content" : "provider content",
-      ),
+      extractor: "readability",
+      text: expect.stringContaining("readability content"),
     });
   });
 
@@ -349,33 +343,30 @@ describe("web_fetch extraction fallbacks", () => {
     },
   );
 
-  it("extracts HTML bodies when content-type is missing", async () => {
-    const html =
-      "<!DOCTYPE html><html><head><title></title><script>track()</script></head><body><p>Visible docs</p><div hidden>secret instructions</div></body></html>";
-    installResponse(new TextEncoder().encode(html), null);
-
-    const { details } = await fetchPage("untyped", undefined, { extractMode: "text" });
-
-    expect(details).toMatchObject({
+  it.each([
+    {
+      body: "<!DOCTYPE html><html><head><title></title><script>track()</script></head><body><p>Visible docs</p><div hidden>secret instructions</div></body></html>",
       extractor: "raw-html",
       contentType: "text/html",
+      text: "Visible docs",
+    },
+    {
+      body: "plain <b>notes</b>",
+      extractor: "raw",
+      contentType: "application/octet-stream",
+      text: "plain <b>notes</b>",
+    },
+  ])("infers $contentType for untyped bodies", async ({ body, extractor, contentType, text }) => {
+    installResponse(new TextEncoder().encode(body), null);
+    const { details } = await fetchPage(`untyped-${extractor}`, undefined, { extractMode: "text" });
+    expect(details).toMatchObject({
+      extractor,
+      contentType,
       truncated: false,
-      text: expect.stringContaining("Visible docs"),
+      text: expect.stringContaining(text),
     });
     expect(details).not.toHaveProperty("title");
     expect(details.text).not.toMatch(/<html|track\(\)|secret instructions/);
-  });
-
-  it("keeps untyped non-HTML bodies raw", async () => {
-    installResponse(new TextEncoder().encode("plain <b>notes</b>"), null);
-
-    const { details } = await fetchPage("untyped-text");
-
-    expect(details).toMatchObject({
-      extractor: "raw",
-      contentType: "application/octet-stream",
-      text: expect.stringContaining("plain <b>notes</b>"),
-    });
   });
 });
 

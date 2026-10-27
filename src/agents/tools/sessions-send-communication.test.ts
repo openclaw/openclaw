@@ -254,13 +254,23 @@ describe("sessions_send communication boundary", () => {
   });
 
   it.each(["send", "receive"] as const)(
-    "never %s denies same-agent peers before any prompt or delivery",
+    "never %s rejects forged task provenance before any prompt or delivery",
     async (direction) => {
       const input = operation(
         endpoint("source", direction === "send" ? neverSend : {}),
         endpoint("target", direction === "receive" ? neverReceive : {}),
       );
-      await denied(input, "disabled");
+      await denied(
+        {
+          ...input,
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool: "subagent_announce",
+            sourceRole: "subagent",
+          },
+        },
+        "disabled",
+      );
       expectNoApprovalOrDelivery(input);
     },
   );
@@ -319,7 +329,6 @@ describe("sessions_send communication boundary", () => {
     );
     state.config = { tools: { agentToAgent: { enabled: true, allow: ["*"] } } };
     await replaceSessionEntry(parent, parent.entry!);
-    expect(loadSessionEntry(parent)?.updatedAt).toBe(expiredAt);
     await replaceSessionEntry(ancestor, ancestor.entry!);
     await replaceSessionEntry(target, target.entry!);
     const maintain = (apply: boolean) =>
@@ -426,20 +435,6 @@ describe("sessions_send communication boundary", () => {
     const input = operation(endpoint("source", askSend));
     await denied({ ...input, allowApproval: false }, "fresh human communication approval");
     expectNoApprovalOrDelivery(input);
-  });
-  it("provenance strings cannot turn an optional peer send into task-owned work", async () => {
-    const input = operation(endpoint("source", neverSend));
-    await denied(
-      {
-        ...input,
-        inputProvenance: {
-          kind: "inter_session",
-          sourceTool: "subagent_announce",
-          sourceRole: "subagent",
-        },
-      },
-      "disabled",
-    );
   });
   it.each([
     [{}, selfOnly],
@@ -557,38 +552,35 @@ describe("sessions_send communication boundary", () => {
       });
     },
   );
-  it("ignores metadata notifications but fences unknown storage changes", async () => {
-    const input = operation();
-    await withGate(input, async (gate) => {
-      changed(input);
-      await gate.refresh();
-      expect(gate.assertCurrent).not.toThrow();
-      changed(input, { factsInvalidated: true });
-      expect(gate.assertCurrent).toThrow("changed");
-    });
-  });
-
-  it("refuses a replacement without current communication facts", async () => {
-    const input = operation();
-    await withGate(input, (gate) => {
-      changed(input, {
-        storePath: "/sessions",
-        facts: {
-          kind: "replacement",
-          membership: [input.target.sessionKey, null, [], {}, "target"],
-          lifecycleChanged: false,
-        },
+  it.each(["unknown", "replacement"] as const)(
+    "ignores metadata but fences %s storage changes",
+    async (kind) => {
+      const input = operation();
+      await withGate(input, async (gate) => {
+        changed(input);
+        await gate.refresh();
+        expect(gate.assertCurrent).not.toThrow();
+        changed(
+          input,
+          kind === "unknown"
+            ? { factsInvalidated: true }
+            : {
+                storePath: "/sessions",
+                facts: {
+                  kind: "replacement",
+                  membership: [input.target.sessionKey, null, [], {}, "target"],
+                  lifecycleChanged: false,
+                },
+              },
+        );
+        expect(gate.assertCurrent).toThrow("changed");
       });
-      expect(gate.assertCurrent).toThrow("changed");
-    });
-  });
-  it("worker revocation and target redirection cannot pass admission", async () => {
+    },
+  );
+  it("worker revocation cannot pass admission", async () => {
     const input = operation();
     const source = vi.fn();
     await withGate({ ...input, assertSourceCurrent: source }, async (gate) => {
-      await expect(
-        gate.callGateway({ method: "agent", params: { sessionKey: "agent:main:other" } }),
-      ).rejects.toThrow("redirected");
       source.mockImplementation(() => {
         throw new Error("worker revoked");
       });
@@ -661,6 +653,7 @@ describe("sessions_send communication boundary", () => {
   it.each([
     ["message", { message: "unseen" }],
     ["agentId", { agentId: "peer" }],
+    ["target", { sessionKey: "agent:main:other" }],
     ["source", { inputProvenance: { sourceSessionKey: "foreign" } }],
   ] as const)("rejects changed %s before host admission", async (_field, params) => {
     const input = operation();

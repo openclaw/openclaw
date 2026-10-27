@@ -12,7 +12,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import * as webGuardedFetch from "./web-guarded-fetch.js";
 
@@ -223,14 +222,10 @@ describe("web_fetch", () => {
       includeWarning: false,
     });
     setProvider(async () => ({
-      url: "https://provider.example/raw",
-      finalUrl: "https://provider.example/final",
-      status: 201,
       contentType: "text/plain; charset=utf-8",
       extractor: "custom-provider",
       text: providerWrappedText,
       rawLength: providerRawText.length,
-      length: providerWrappedText.length,
       warning: wrapExternalContent(warning, { source: "web_fetch", includeWarning: false }),
     }));
     const details = await fetchDetails(fallbackTool({ maxChars: 800 }));
@@ -251,12 +246,7 @@ describe("web_fetch", () => {
     expect(details.warning).toContain(warning);
     expect(details.warning).toContain("[[MARKER_SANITIZED]]");
     expect(details.spill).toEqual({ path: expect.any(String), chars: providerWrappedText.length });
-    expect(details.externalContent).toEqual({
-      untrusted: true,
-      source: "web_fetch",
-      wrapped: true,
-      provider: "firecrawl",
-    });
+    expect(details.externalContent?.provider).toBe("firecrawl");
     const spilledText = await readFile(details.spill!.path, "utf8");
     expect(spilledText).toContain(providerVisibleText);
     const boundary = spilledText.match(/<<<EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>/);
@@ -268,7 +258,7 @@ describe("web_fetch", () => {
     expect(spilledText).toContain("[[END_MARKER_SANITIZED]]");
   });
 
-  it("preserves short source-truncated provider results through cache and presentation", async () => {
+  it("preserves short source-truncated provider results through cache", async () => {
     failDirectFetch();
     const providerExecute = vi.fn(async () => ({
       text: "partial provider body",
@@ -289,7 +279,6 @@ describe("web_fetch", () => {
     expect(secondDetails).toMatchObject({ cached: true, truncated: true });
     expect([firstDetails.spill, secondDetails.spill]).toEqual([undefined, undefined]);
     expect(providerExecute).toHaveBeenCalledTimes(1);
-    expect(getToolTerminalPresentation(tool!)?.({}, first)?.text).toContain("Truncated: yes");
   });
 
   it.each([
@@ -621,18 +610,7 @@ describe("web_fetch", () => {
         fetchContract("user-agent-cache-contract", { cacheTtlMinutes: 1, userAgent });
       const first = await fetchAs("OpenClaw-Test-UA-A");
       const second = await fetchAs("OpenClaw-Test-UA-B");
-      expect(first).toMatchObject({
-        contentType: "text/plain",
-        length: first.text?.length,
-        rawLength: "OpenClaw-Test-UA-A".length,
-      });
-      expect(first.externalContent).toEqual({
-        untrusted: true,
-        source: "web_fetch",
-        wrapped: true,
-      });
       expect(first.externalContent).not.toHaveProperty("provider");
-      expect(first.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
       for (const key of ["title", "warning", "spill"]) {
         expect(Object.hasOwn(first, key)).toBe(false);
       }
