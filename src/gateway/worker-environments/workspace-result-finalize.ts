@@ -14,6 +14,7 @@ import {
   attachErrorDiagnostic,
   formatErrorMessageForDisplay,
 } from "../../infra/error-diagnostics.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
@@ -33,7 +34,11 @@ import {
   type WorkerSessionWorkspace,
 } from "./session-workspace.js";
 import { transferSkillResources } from "./skill-resource-transfer.js";
-import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import {
+  WorkerRunnerUnavailableError,
+  WorkerTunnelOwnerDisconnectedError,
+  type WorkerTunnelHandle,
+} from "./tunnel-contract.js";
 import { latestDurableWorkspaceConflict, waitForTurnOperation } from "./worker-turn-admission.js";
 import { prepareWorkerTurnAttachments } from "./worker-turn-attachments.js";
 import { WorkerWorkspaceReconciliationError } from "./worker-turn-failure.js";
@@ -136,10 +141,15 @@ export async function recoverWorkspaceBeforeTurn(params: {
     if (params.signal?.aborted && error === params.signal.reason) {
       throw error;
     }
-    throw new WorkerWorkspaceReconciliationError(
-      `Cloud worker workspace recovery could not complete: ${workspaceError(error)}`,
-      { cause: error },
+    const disconnected = collectNestedErrorCandidates(error).some(
+      (cause) => cause instanceof WorkerTunnelOwnerDisconnectedError,
     );
+    throw disconnected
+      ? new WorkerRunnerUnavailableError()
+      : new WorkerWorkspaceReconciliationError(
+          `Cloud worker workspace recovery could not complete: ${workspaceError(error)}`,
+          { cause: error },
+        );
   }
 }
 

@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
-import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
+import {
+  WorkerTunnelOwnerDisconnectedError,
+  type WorkerWorkspaceTunnelHandle,
+} from "./tunnel-contract.js";
 import {
   cleanupWorkerTurnLauncherTest,
   ENVIRONMENT_ID,
@@ -30,7 +33,7 @@ import { withStagedWorkerWorkspaceResult } from "./workspace-result-staging.js";
 beforeEach(setupWorkerTurnLauncherTest);
 afterEach(cleanupWorkerTurnLauncherTest);
 
-async function fixture() {
+async function fixture(quiescenceError?: Error) {
   const local = path.join(root, "gateway");
   const remote = path.join(root, "worker");
   await fs.mkdir(local);
@@ -68,7 +71,12 @@ async function fixture() {
       throw new Error("workspace is already synchronized");
     },
     stop: async () => {},
-    quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
+    quiesceWorkspace: async () => {
+      if (quiescenceError) {
+        throw quiescenceError;
+      }
+      return { assertActive: async () => {}, resume: async () => {} };
+    },
     reconcileWorkspace: async (request) => {
       if (request.source.kind !== "local") {
         throw new Error("expected local source");
@@ -231,4 +239,17 @@ it("retains recovery custody when input publication fails before execution", asy
   await expect(fs.stat(path.join(f.remote, "incoming/file.txt"))).rejects.toMatchObject({
     code: "ENOENT",
   });
+});
+
+it("classifies an offline node during input refresh while retaining recovery custody", async () => {
+  const f = await fixture(new WorkerTunnelOwnerDisconnectedError());
+  const claim = await f.claim("offline-input");
+  await expect(f.execute(claim, true)).rejects.toMatchObject({
+    name: "WorkerRunnerUnavailableError",
+    code: "runner-offline",
+  });
+  expect(placements.validateTurnClaim(claim)).toBe(true);
+  const [pending] = await placements.listPendingWorkspaceResultsAsync();
+  expect(pending).toMatchObject({ claimId: claim.claimId, workspaceAcceptedAtMs: null });
+  expect(pending?.recoveryRequestedAtMs).toEqual(expect.any(Number));
 });
