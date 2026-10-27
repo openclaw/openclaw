@@ -49,8 +49,8 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Complete cached rows measure 1,280,058 B; retain only 64 B of build variance.
-  chatBootJsGzipBytes: 1_280_122,
+  // Complete cached rows add 13,498 B; preserve the previous Chat headroom.
+  chatBootJsGzipBytes: 1_274_861 + 13_498,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
