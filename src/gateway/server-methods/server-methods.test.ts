@@ -4253,7 +4253,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     restoreContextEngineRegistryState();
   });
 
-  it("rate-limits request-driven refreshes for fresh cached health", async () => {
+  it("reuses freshly collected health across request-driven refresh cadences", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-28T12:00:00Z"));
     const cached = createHealthSnapshot({});
@@ -4262,15 +4262,18 @@ describe("gateway healthHandlers.health cache freshness", () => {
     for (let index = 0; index < 3; index += 1) {
       await requestHealthSnapshot({ cached, refreshHealthSnapshot });
     }
-    expect(refreshHealthSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshHealthSnapshot).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(HEALTH_REFRESH_INTERVAL_MS - 1);
     await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
-    expect(refreshHealthSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshHealthSnapshot).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
     await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
-    expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
+    expect(refreshHealthSnapshot).not.toHaveBeenCalled();
+
+    await requestHealthSnapshot({ cached, refreshHealthSnapshot });
+    expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
   });
 
   it("does not throttle stale cached health refreshes", async () => {
@@ -4299,19 +4302,28 @@ describe("gateway healthHandlers.health cache freshness", () => {
     );
   });
 
-  it("restarts request-driven health refreshes when the clock moves backward", async () => {
+  it("refreshes prior cached health when the clock moves backward", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-28T12:00:00Z"));
     const cached = createHealthSnapshot({});
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
 
     await requestHealthSnapshot({ cached, refreshHealthSnapshot });
-    expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
+    expect(refreshHealthSnapshot).not.toHaveBeenCalled();
 
     vi.setSystemTime(Date.now() - HEALTH_REFRESH_INTERVAL_MS);
-    await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
+    const fresh = createHealthSnapshot({ ts: Date.now() });
+    refreshHealthSnapshot.mockResolvedValue(fresh);
+    const { respond } = await requestHealthSnapshot({ cached, refreshHealthSnapshot });
+    expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ...fresh, childRuntime: healthyChildRuntime },
+      undefined,
+    );
 
-    expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
+    await requestHealthSnapshot({ cached: fresh, refreshHealthSnapshot });
+    expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
   });
 
   it("bypasses a fresh cache for explicit admin probes", async () => {
@@ -4327,6 +4339,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: true,
       includeSensitive: true,
+      origin: "health_rpc",
     });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -4366,6 +4379,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
       includeSensitive: false,
+      origin: "health_rpc",
     });
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -4393,6 +4407,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
       includeSensitive: false,
+      origin: "health_rpc",
     });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -4431,6 +4446,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
       includeSensitive: false,
+      origin: "health_rpc",
     });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -4470,6 +4486,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
       includeSensitive: false,
+      origin: "health_rpc",
     });
   });
 
@@ -4505,6 +4522,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
       includeSensitive: false,
+      origin: "health_rpc",
     });
     expect(getEventLoopHealth).not.toHaveBeenCalled();
     expect(mockCallArg(respond)).toBe(true);
@@ -4739,17 +4757,14 @@ describe("gateway healthHandlers.health cache freshness", () => {
       });
       const cached = summary(previousAccountIds);
       const fresh = summary(nextAccountIds);
-      const refreshHealthSnapshot = vi
-        .fn()
-        .mockResolvedValueOnce(cached)
-        .mockResolvedValueOnce(fresh);
+      const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
 
       await requestHealthSnapshot({
         cached,
         refreshHealthSnapshot,
         runtimeSnapshot: runtime(previousAccountIds),
       });
-      expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
+      expect(refreshHealthSnapshot).not.toHaveBeenCalled();
 
       const { respond } = await requestHealthSnapshot({
         cached,
@@ -4757,10 +4772,11 @@ describe("gateway healthHandlers.health cache freshness", () => {
         runtimeSnapshot: runtime(nextAccountIds, uninitializedAccountId),
       });
 
-      expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
+      expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
       expect(refreshHealthSnapshot).toHaveBeenLastCalledWith({
         probe: false,
         includeSensitive: false,
+        origin: "health_rpc",
       });
       expect(respond).toHaveBeenCalledWith(
         true,

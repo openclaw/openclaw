@@ -12,6 +12,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "./native-tool-policy.js";
+// Load catalog code with the harness; client acquisition stays in loadModelCatalog.
+import { createCodexAppServerModelCatalog } from "./src/app-server/model-catalog.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
@@ -113,11 +115,7 @@ export function createCodexAppServerAgentHarness(
   );
   const sessionCatalogControlFactory = options.sessionCatalogControlFactory;
   const sessionRuntime = options.runtime;
-  let modelCatalog:
-    | ReturnType<
-        typeof import("./src/app-server/model-catalog.js").createCodexAppServerModelCatalog
-      >
-    | undefined;
+  let modelCatalog: ReturnType<typeof createCodexAppServerModelCatalog> | undefined;
   let disposed = false;
   const resolveAttemptPluginConfig = (config: OpenClawConfig | undefined) =>
     resolvePluginConfigObject(config, "codex") ??
@@ -224,8 +222,6 @@ export function createCodexAppServerAgentHarness(
       });
     },
     loadModelCatalog: async (params) => {
-      const { createCodexAppServerModelCatalog } =
-        await import("./src/app-server/model-catalog.js");
       if (disposed) {
         return { entries: [] };
       }

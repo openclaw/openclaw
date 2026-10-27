@@ -385,6 +385,7 @@ type GatewayResidentBridgeContext = {
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;
     includeSensitive?: boolean;
+    origin?: import("../server/health-state.js").GatewayHealthRefreshOrigin;
   }) => Promise<HealthSummary>;
   /** Durable cloud-worker lifecycle; absent from lightweight in-process contexts. */
   workerEnvironmentService?: WorkerEnvironmentServiceContract;

@@ -19,6 +19,7 @@ import {
   hasActiveSharedCodexAppServerWork,
 } from "./app-server/shared-client-lifecycle.js";
 import { findCodexAppServerSpawnError } from "./app-server/spawn-error.js";
+import { withAbortableTimeout } from "./app-server/timeout.js";
 import {
   createCodexCatalogRequestSnapshot,
   createCodexSessionCatalogControlFromRequests,
@@ -38,6 +39,10 @@ import {
   type CodexCatalogListRequest,
 } from "./session-catalog-list-request.js";
 import type { CodexCatalogPreviewCache } from "./session-catalog-native-projection.js";
+import {
+  CodexCatalogNativeWalks,
+  type CodexCatalogNativeWalk,
+} from "./session-catalog-native-walk.js";
 import { CodexCatalogSourceBackoff } from "./session-catalog-source-backoff.js";
 import type {
   CodexSessionCatalogControl,
@@ -91,6 +96,7 @@ export function createCodexSessionCatalogControl(params: {
   const retiringState = new Map<string, Promise<void>>();
   const directHomes = new Map<string, Promise<string>>();
   const residentRequests = new Set<Promise<CodexCatalogIndex>>();
+  const nativeWalks = new CodexCatalogNativeWalks();
   let generation = params.getRuntimeConfig();
   let residentEpoch = 0;
   let starting = 0;
@@ -99,6 +105,7 @@ export function createCodexSessionCatalogControl(params: {
   let retiring: Promise<void> | undefined;
   const retireIndexes = (): Promise<void> => {
     residentEpoch++;
+    const nativeDrain = nativeWalks.retire();
     const closing: Promise<void>[] = [];
     for (const [homeId, index] of indexes) {
       const writes = index.retire().finally(() => {
@@ -111,12 +118,16 @@ export function createCodexSessionCatalogControl(params: {
     }
     indexes.clear();
     directHomes.clear();
-    const drain = Promise.allSettled([retiring, ...closing]).then(() => {
+    const drain = Promise.allSettled([nativeDrain, retiring, ...closing]).then((results) => {
       if (retiring === drain) {
         retiring = undefined;
       }
+      if (results[0]?.status === "rejected") {
+        throw results[0].reason;
+      }
     });
     retiring = drain;
+    void drain.catch(() => {});
     return drain;
   };
   const resolveResident = async (
@@ -182,6 +193,7 @@ export function createCodexSessionCatalogControl(params: {
             )
           : undefined);
       let nativeAttempt: ReturnType<CodexCatalogSourceBackoff["begin"]> | undefined;
+      let nativeWalk: CodexCatalogNativeWalk | undefined;
       const readNativePage = async <T>(
         query: CodexThreadListParams,
         remainingRows: number,
@@ -202,6 +214,7 @@ export function createCodexSessionCatalogControl(params: {
               }
             : undefined,
           remainingRows,
+          foreground ? undefined : nativeWalk,
         );
         const attempt = foreground
           ? requests.beginList(foreground)
@@ -257,7 +270,36 @@ export function createCodexSessionCatalogControl(params: {
         state: params.openResidentState?.(homeId),
         runNativeWalk: async (run) => {
           try {
-            const result = await run();
+            // Socket servers and Windows retain their existing shared-client
+            // contract; their transport close cannot certify POSIX process containment.
+            const result =
+              runtime.start.transport !== "stdio" || process.platform === "win32"
+                ? await run()
+                : await nativeWalks.run(
+                    {
+                      ...requestOptions,
+                      authProfileId: null,
+                      timeoutMs: runtime.requestTimeoutMs,
+                      assertCurrent: () => {
+                        source?.assertCurrent();
+                        if (
+                          closed ||
+                          params.getRuntimeConfig() !== config ||
+                          residentEpoch !== epoch
+                        ) {
+                          throw new Error("Codex catalog configuration changed");
+                        }
+                      },
+                    },
+                    async (walk) => {
+                      nativeWalk = walk;
+                      try {
+                        return await run();
+                      } finally {
+                        nativeWalk = undefined;
+                      }
+                    },
+                  );
             if (nativeAttempt?.allowed) {
               nativeAttempt.resolved();
             }
@@ -356,6 +398,7 @@ export function createCodexSessionCatalogControl(params: {
     catalogPreview?: true,
     catalogPreviewCache?: CodexCatalogPreviewCache,
     catalogRows?: number,
+    nativeWalk?: CodexCatalogNativeWalk,
   ): CodexSessionCatalogRequestSnapshot => {
     const pluginConfig = params.getPluginConfig();
     const runtime = source?.appServer ?? resolveRuntimeOptions({ pluginConfig });
@@ -363,6 +406,57 @@ export function createCodexSessionCatalogControl(params: {
     return createCodexCatalogRequestSnapshot(
       runtime.requestTimeoutMs,
       async (method, requestParams, timeoutMs, assertCurrent, observation) => {
+        if (nativeWalk) {
+          try {
+            observation?.phase("acquire-client");
+          } catch {
+            // Diagnostic callbacks cannot change native walk behavior.
+          }
+          const walk = nativeWalk;
+          const pageBudget = timeoutMs ?? runtime.requestTimeoutMs;
+          const started = performance.now();
+          const message = `codex app-server ${method} timed out`;
+          const operation = (async () => {
+            const client = await walk.client(pageBudget);
+            const { requestCodexAppServerClientJson } = await import("./app-server/request.js");
+            walk.signal.throwIfAborted();
+            const remaining =
+              pageBudget > 0 ? pageBudget - (performance.now() - started) : pageBudget;
+            if (pageBudget > 0 && remaining <= 0) {
+              throw new Error(message);
+            }
+            return await requestCodexAppServerClientJson<
+              CodexAppServerRequestResult<typeof method>
+            >({
+              client,
+              method,
+              requestParams,
+              timeoutMs: remaining,
+              signal: walk.signal,
+              assertCurrent: () => {
+                walk.signal.throwIfAborted();
+                source?.assertCurrent();
+                assertCurrent?.();
+              },
+              config: requestOptions.config,
+              ...(catalogPreview && method === CODEX_CONTROL_METHODS.listThreads
+                ? { catalogPreview, catalogRows, catalogPreviewCache }
+                : {}),
+              ...(observation ? { controlObservation: observation } : {}),
+            });
+          })();
+          try {
+            return await withAbortableTimeout({
+              promise: operation,
+              signal: walk.signal,
+              timeoutMs: pageBudget,
+              timeoutMessage: message,
+            });
+          } catch (error) {
+            walk.abort(error);
+            throw error;
+          }
+        }
         const { codexControlRequest } = await import("./command-rpc.js");
         return await codexControlRequest(pluginConfig, method, requestParams, {
           ...requestOptions,
@@ -504,14 +598,26 @@ export function createCodexSessionCatalogControl(params: {
       hasActiveSharedCodexAppServerWork() ||
       [...indexes.values()].some((index) => index.hasActiveWork()),
     async disconnect() {
-      await retireIndexes();
+      let failure: { error: unknown } | undefined;
+      try {
+        await retireIndexes();
+      } catch (error) {
+        failure = { error };
+      }
       await Promise.allSettled(residentRequests);
       // Node disconnect owns these transports; Gateway service retirement does not.
-      const clients = getSharedCodexAppServerClientState();
-      if (clients.liveClients.size > 0 || clients.startup.pending.size > 0) {
-        const { clearSharedCodexAppServerClientAndWait } =
-          await import("./app-server/shared-client.js");
-        await clearSharedCodexAppServerClientAndWait();
+      try {
+        const clients = getSharedCodexAppServerClientState();
+        if (clients.liveClients.size > 0 || clients.startup.pending.size > 0) {
+          const { clearSharedCodexAppServerClientAndWait } =
+            await import("./app-server/shared-client.js");
+          await clearSharedCodexAppServerClientAndWait();
+        }
+      } catch (error) {
+        failure ??= { error };
+      }
+      if (failure) {
+        throw failure.error;
       }
     },
     async start() {
@@ -545,8 +651,15 @@ export function createCodexSessionCatalogControl(params: {
     },
     async stop() {
       closed = true;
-      await retireIndexes();
-      await Promise.allSettled(residentRequests);
+      const settled = await Promise.allSettled([
+        retireIndexes(),
+        nativeWalks.close(),
+        Promise.allSettled(residentRequests),
+      ]);
+      const failure = settled.find((result) => result.status === "rejected");
+      if (failure?.status === "rejected") {
+        throw failure.reason;
+      }
     },
     forRequest,
     forUpstream,

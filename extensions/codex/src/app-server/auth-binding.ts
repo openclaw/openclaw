@@ -2,16 +2,9 @@ import {
   fingerprintResolvedAuthProfileCredential,
   type AgentHarnessAuthBindingFingerprintParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  resolveApiKeyForProfile,
-  type AuthProfileCredential,
-  type AuthProfileStore,
-} from "openclaw/plugin-sdk/agent-runtime";
+import type { AuthProfileCredential, AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-auth";
-import {
-  isCodexResponsesOAuthCredential,
-  resolveCodexResponsesOAuthProfileFingerprint,
-} from "./responses-oauth.js";
+import { isCodexResponsesOAuthCredential } from "./responses-oauth.js";
 
 type CodexAppServerPreparedAuthBinding = {
   authProfileStore: AuthProfileStore;
@@ -46,6 +39,8 @@ export async function prepareCodexAppServerAuthBinding(
   if (credential.type === "oauth") {
     if (isCodexResponsesOAuthCredential(credential)) {
       const store = structuredClone(params.authProfileStore);
+      const { resolveCodexResponsesOAuthProfileFingerprint } =
+        await import("./responses-oauth-runtime.js");
       const fingerprint = await resolveCodexResponsesOAuthProfileFingerprint({
         profileId: params.authProfileId,
         store,
@@ -71,6 +66,7 @@ export async function prepareCodexAppServerAuthBinding(
       ? { fingerprint, authProfileStore: structuredClone(params.authProfileStore) }
       : undefined;
   }
+  const { resolveApiKeyForProfile } = await import("openclaw/plugin-sdk/agent-runtime");
   const resolved = await resolveApiKeyForProfile({
     cfg: params.config,
     store: params.authProfileStore,

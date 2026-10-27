@@ -5,8 +5,10 @@ import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
 import { STATE_DIR } from "../../config/paths.js";
 import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions.js";
+import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-status-state.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGatewaySuspendAdmissionPhase } from "../../process/gateway-work-admission.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAgentSelectionState } from "../agent-list.js";
@@ -28,9 +30,32 @@ let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 
 type HealthAudience = "public" | "admin";
 type HealthRefreshStrength = "passive" | "probe";
+const healthRefreshOrigins = [
+  "periodic",
+  "host_thaw",
+  "post_connect",
+  "cached_health_rpc",
+  "health_rpc",
+  "unspecified",
+] as const;
+export type GatewayHealthRefreshOrigin = (typeof healthRefreshOrigins)[number];
+const healthLog = createSubsystemLogger("gateway/health");
+
+type HealthRefreshObservation = {
+  collectionId: string;
+  origin: GatewayHealthRefreshOrigin;
+  audience: HealthAudience;
+  strength: HealthRefreshStrength;
+  startedAtMs: number;
+  startedMonotonicMs: number;
+  cpu: ReturnType<typeof readRefreshCpuUsage>;
+  coalescedOrigins: Set<GatewayHealthRefreshOrigin>;
+  coalescedRequests: number;
+};
 type HealthRefreshOperation = {
   generation: number;
   promise: Promise<HealthSummary>;
+  observation?: HealthRefreshObservation;
 };
 type HealthRefreshState = {
   nextGeneration: number;
@@ -50,6 +75,54 @@ const healthRefreshStates: Record<HealthAudience, HealthRefreshState> = {
     inFlight: { passive: null, probe: null },
   },
 };
+
+function readRefreshCpuUsage() {
+  const usage: { process?: NodeJS.CpuUsage; thread?: NodeJS.CpuUsage } = {};
+  try {
+    usage.process = process.cpuUsage();
+  } catch {
+    // An unavailable counter must not fail a health request or become idle CPU.
+  }
+  try {
+    usage.thread =
+      typeof process.threadCpuUsage === "function" ? process.threadCpuUsage() : undefined;
+  } catch {
+    // Older runtimes can expose the API without supporting its native counter.
+  }
+  return usage;
+}
+
+function refreshCpuDelta(current?: NodeJS.CpuUsage, previous?: NodeJS.CpuUsage) {
+  if (!current || !previous) {
+    return undefined;
+  }
+  const user = current.user - previous.user;
+  const system = current.system - previous.system;
+  return Number.isFinite(user + system) && user >= 0 && system >= 0 ? { user, system } : undefined;
+}
+
+function observeHealthRefresh(
+  phase: "started" | "coalesced" | "completed",
+  observation: HealthRefreshObservation,
+  fields: Record<string, unknown> = {},
+) {
+  const record = {
+    phase,
+    collectionId: observation.collectionId,
+    pid: process.pid,
+    origin: observation.origin,
+    audience: observation.audience,
+    strength: observation.strength,
+    startedAtMs: observation.startedAtMs,
+    startedMonotonicMs: observation.startedMonotonicMs,
+    ...fields,
+  };
+  try {
+    healthLog.info("health refresh", record);
+  } catch {
+    // Opt-in local observations never change collection, cache or retry behavior.
+  }
+}
 
 export function buildGatewaySnapshot(opts: {
   client: GatewayClient | null;
@@ -133,6 +206,7 @@ export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | n
 export async function refreshGatewayHealthSnapshot(opts?: {
   probe?: boolean;
   includeSensitive?: boolean;
+  origin?: GatewayHealthRefreshOrigin;
   getRuntimeSnapshot?: () => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
@@ -142,6 +216,7 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   const audience: HealthAudience = includeSensitive ? "admin" : "public";
   const state = healthRefreshStates[audience];
   const strength: HealthRefreshStrength = opts?.probe === false ? "passive" : "probe";
+  const origin = healthRefreshOrigins.find((value) => value === opts?.origin) ?? "unspecified";
   // Passive callers can reuse a stronger probe, but an explicit probe must not
   // inherit a passive refresh that deliberately skipped live channel checks.
   const existing =
@@ -149,11 +224,43 @@ export async function refreshGatewayHealthSnapshot(opts?: {
       ? (state.inFlight.probe ?? state.inFlight.passive)
       : state.inFlight.probe;
   if (existing) {
+    const observation = existing.observation;
+    if (observation) {
+      observation.coalescedRequests = Math.min(
+        Number.MAX_SAFE_INTEGER,
+        observation.coalescedRequests + 1,
+      );
+      if (!observation.coalescedOrigins.has(origin)) {
+        observation.coalescedOrigins.add(origin);
+        observeHealthRefresh("coalesced", observation, {
+          joiningOrigin: origin,
+          joinedAtMs: Date.now(),
+          joinedMonotonicMs: performance.now(),
+        });
+      }
+    }
     return existing.promise;
   }
 
   const generation = state.nextGeneration + 1;
   state.nextGeneration = generation;
+  const observation: HealthRefreshObservation | undefined = isDiagnosticFlagEnabled("health")
+    ? {
+        collectionId: `${process.pid}:${audience}:${generation}`,
+        origin,
+        audience,
+        strength,
+        startedAtMs: Date.now(),
+        startedMonotonicMs: performance.now(),
+        cpu: readRefreshCpuUsage(),
+        coalescedOrigins: new Set(),
+        coalescedRequests: 0,
+      }
+    : undefined;
+  if (observation) {
+    observeHealthRefresh("started", observation);
+  }
+  let succeeded = false;
   const promise = (async () => {
     const { collectGatewayHealthSnapshot } = await import("../health/collector.js");
     let runtimeSnapshot: ChannelRuntimeSnapshot | undefined;
@@ -197,12 +304,31 @@ export async function refreshGatewayHealthSnapshot(opts?: {
         broadcastHealthUpdate(snap);
       }
     }
+    succeeded = true;
     return snap;
   })().finally(() => {
+    if (observation) {
+      const cpu = readRefreshCpuUsage();
+      const completedAtMs = Date.now();
+      const completedMonotonicMs = performance.now();
+      // These counters include concurrent work and observation overhead; they
+      // describe interval overlap, never CPU exclusively owned by the collector.
+      observeHealthRefresh("completed", observation, {
+        outcome: succeeded ? "success" : "failure",
+        completedAtMs,
+        completedMonotonicMs,
+        elapsedMs: completedMonotonicMs - observation.startedMonotonicMs,
+        cpuScope: "process_and_calling_thread_interval_overlap",
+        processCpuUsageUs: refreshCpuDelta(cpu.process, observation.cpu.process),
+        threadCpuUsageUs: refreshCpuDelta(cpu.thread, observation.cpu.thread),
+        coalescedRequests: observation.coalescedRequests,
+        coalescedOrigins: [...observation.coalescedOrigins],
+      });
+    }
     if (state.inFlight[strength]?.generation === generation) {
       state.inFlight[strength] = null;
     }
   });
-  state.inFlight[strength] = { generation, promise };
+  state.inFlight[strength] = { generation, promise, observation };
   return promise;
 }

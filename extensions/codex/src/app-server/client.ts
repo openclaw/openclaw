@@ -770,12 +770,27 @@ export class CodexAppServerClient {
   async closeAndWait(options?: {
     exitTimeoutMs?: number;
     forceKillDelayMs?: number;
+    terminateOwnedProcess?: true;
   }): Promise<CodexAppServerCloseResult> {
     this.markClosed(new Error("codex app-server client is closed"));
-    const [result] = await Promise.all([
+    const closing = [
       closeCodexAppServerTransportAndWait(this.child, options),
       this.waitForCloseWork(),
-    ]);
+    ] as const;
+    let result: CodexAppServerCloseResult;
+    if (options?.terminateOwnedProcess) {
+      // Local cleanup failure must not release an owned native process early.
+      const [physical, local] = await Promise.allSettled(closing);
+      if (physical.status === "rejected") {
+        throw physical.reason;
+      }
+      if (local.status === "rejected") {
+        throw local.reason;
+      }
+      result = physical.value;
+    } else {
+      [result] = await Promise.all(closing);
+    }
     // Codex can discard terminal handles before OS cleanup. Later ancestry
     // containment cannot discharge a command whose descendants already reparented.
     return this.nativeExecutionObserved ? { ...result, cleanup: "uncertain" } : result;

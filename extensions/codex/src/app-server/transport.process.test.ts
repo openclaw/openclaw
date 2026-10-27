@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { describe, expect, it, vi } from "vitest";
+import * as processContainment from "./transport-process-containment.js";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
 import type { PosixProcess } from "./transport-process-snapshot.js";
@@ -209,6 +210,124 @@ process.stdin.on("end", () => process.exit(0));
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it
+    .skipIf(process.platform !== "linux")
+    .each(["default", "owned", "containment-refused", "kill-refused", "kill-threw"] as const)(
+    "keeps managed wrapper process cleanup evidence distinct: %s",
+    async (mode) => {
+      // openclaw-temp-dir: allow reuses the process suite's owned-fixture cleanup.
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-wrapper-close-"));
+      const logPath = path.join(tempDir, "processes.jsonl");
+      const wrapperPath = path.join(tempDir, "wrapper.mjs");
+      const childPath = path.join(tempDir, "child.mjs");
+      const mirroredSignalPath = path.join(tempDir, "mirrored-signal");
+      await fs.writeFile(logPath, "");
+      await fs.writeFile(
+        childPath,
+        `
+import { appendFileSync } from "node:fs";
+const [logPath] = process.argv.slice(2);
+process.stdin.resume();
+process.stdin.on("end", () => process.exit(0));
+appendFileSync(logPath, JSON.stringify({ role: "shared-descendant", pid: process.pid, pgid: process.ppid }) + "\\n");
+`,
+      );
+      // Match the supported npm launcher's inherited pipes and signal mirroring.
+      await fs.writeFile(
+        wrapperPath,
+        `
+import { spawn } from "node:child_process";
+import { appendFileSync } from "node:fs";
+const [childPath, logPath, mirroredSignalPath] = process.argv.slice(2);
+const child = spawn(process.execPath, [childPath, logPath], { stdio: "inherit" });
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => { if (!child.killed) child.kill(signal); });
+}
+child.on("exit", (code, signal) => {
+  if (signal) {
+    appendFileSync(mirroredSignalPath, signal);
+    process.kill(process.pid, signal);
+  }
+  else process.exit(code ?? 1);
+});
+appendFileSync(logPath, JSON.stringify({ role: "root", pid: process.pid, pgid: process.pid }) + "\\n");
+`,
+      );
+      const wrapper = spawn(
+        process.execPath,
+        [wrapperPath, childPath, logPath, mirroredSignalPath],
+        {
+          detached: true,
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
+      const wrapperClosed = once(wrapper, "close");
+      let restoreContainment: (() => void) | undefined;
+      let restoreKill: (() => void) | undefined;
+      try {
+        const events = await waitForFixtureEvents(logPath, 2);
+        const descendantPid = events.find((event) => event.role === "shared-descendant")?.pid;
+        expect(descendantPid).toBeDefined();
+        const before = await processSnapshot.readCodexAppServerProcessSnapshot();
+        const descendant = before.find((row) => row.pid === descendantPid);
+        expect(descendant).toMatchObject({ ppid: wrapper.pid, pgid: wrapper.pid });
+        if (mode === "containment-refused") {
+          const spy = vi
+            .spyOn(processContainment, "terminateCodexAppServerDescendants")
+            .mockResolvedValue(undefined);
+          restoreContainment = () => spy.mockRestore();
+        }
+        if (mode === "kill-refused" || mode === "kill-threw") {
+          const kill = wrapper.kill.bind(wrapper);
+          const spy = vi.spyOn(wrapper, "kill").mockImplementation((signal) => {
+            if (signal !== "SIGKILL") {
+              return kill(signal);
+            }
+            if (mode === "kill-threw") {
+              throw new Error("owned root kill refused");
+            }
+            return false;
+          });
+          restoreKill = () => spy.mockRestore();
+        }
+
+        const options = mode === "default" ? {} : { terminateOwnedProcess: true as const };
+        await expect(closeCodexAppServerTransportAndWait(wrapper, options)).resolves.toEqual({
+          exited: true,
+          cleanup: mode === "owned" ? "closed" : "uncertain",
+        });
+        await wrapperClosed;
+        expect(wrapper.exitCode).toBe(mode === "containment-refused" ? 0 : null);
+        expect(wrapper.signalCode).toBe(mode === "containment-refused" ? null : "SIGKILL");
+        const mirrored = await fs.readFile(mirroredSignalPath, "utf8").catch(() => "");
+        expect(mirrored).toBe(mode === "owned" || mode === "containment-refused" ? "" : "SIGKILL");
+        // A later opt-in cannot promote a prior close's uncertain evidence.
+        await expect(
+          closeCodexAppServerTransportAndWait(wrapper, { terminateOwnedProcess: true }),
+        ).resolves.toEqual({ exited: true, cleanup: mode === "owned" ? "closed" : "uncertain" });
+
+        // A conservative result and physical process exit are separate facts.
+        const after = await processSnapshot.readCodexAppServerProcessSnapshot();
+        expect(after.some((row) => row.pid === wrapper.pid)).toBe(false);
+        expect(
+          after.some(
+            (row) =>
+              row.pid === descendantPid &&
+              row.startedAt === descendant?.startedAt &&
+              !processSnapshot.isDeadProcessState(row.state),
+          ),
+        ).toBe(false);
+        expect(await listProcesses(tempDir)).toEqual([]);
+      } finally {
+        restoreContainment?.();
+        restoreKill?.();
+        await removeTaskOwnedFixtureProcesses(tempDir);
+        await wrapperClosed;
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([
     ["reuse", true],
