@@ -446,7 +446,7 @@ try {
                         await page.waitForTimeout(4_100);
                         await frames(page);
                         const checkpointState = await page.evaluate(
-                          ({ identity, timeOrigin }) => {
+                          ({ identity, timeOrigin: initialTimeOrigin }) => {
                             if (
                               Reflect.get(window, "openclawMemoryDocumentIdentity") !== identity
                             ) {
@@ -457,7 +457,10 @@ try {
                             const clearedFixtureRequests = requests.length;
                             requests.length = 0;
                             return {
-                              timeOrigin: { initial: timeOrigin, current: performance.timeOrigin },
+                              timeOrigin: {
+                                initial: initialTimeOrigin,
+                                current: performance.timeOrigin,
+                              },
                               clearedFixtureRequests,
                               resources: Reflect.get(window, "openclawResourceCounts")(),
                             };

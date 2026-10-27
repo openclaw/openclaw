@@ -175,10 +175,18 @@ export function createEngineMemoryScenarios(): EngineScenario[] {
         for (let round = 1; round <= 3; round++) {
           for (const [index, key] of keys.entries()) {
             await navigateToControlUiSession(page, key);
-            await page
-              .locator(".chat-pane-cache__pane--active")
-              .getByText(`Memory session ${index} message 1999.`, { exact: false })
-              .waitFor();
+            const pane = page.locator(".chat-pane-cache__pane--active");
+            const lastMessage = pane.getByText(`Memory session ${index} message 1999.`, {
+              exact: false,
+            });
+            const latest = pane.locator('.chat-scroll-to-bottom[data-visible="true"]');
+            // Revisited panes may restore a scrolled position; this workload measures
+            // retained transcripts, not automatic scroll-to-latest behavior.
+            await lastMessage.or(latest).first().waitFor();
+            if (!(await lastMessage.isVisible())) {
+              await latest.click();
+            }
+            await lastMessage.waitFor();
           }
           await checkpoint(`loaded-${round}`);
           const composer = page.locator(".chat-pane-cache__pane--active textarea").first();
