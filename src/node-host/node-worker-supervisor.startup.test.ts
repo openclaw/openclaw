@@ -39,6 +39,7 @@ import {
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_ENDPOINT,
+  TEST_WORKER_SOURCE,
   testNodeWorkerEnvironmentIdentity,
   testNodeWorkerLaunchIdentity,
   testIsolatedWorkerLaunchInput as launchInput,
@@ -155,10 +156,8 @@ describe("node worker startup", () => {
       writeWorker(
         bundleRoot,
         input,
-        `import fs from "node:fs";
-import { spawnSync } from "node:child_process";
-import { createInterface } from "node:readline";
-const started = new Promise(resolve => process.once("message", message => {
+        `import { spawnSync } from "node:child_process";
+process.once("message", message => {
   const keys = Object.keys(message).sort();
   const expected = ${JSON.stringify(expectedKeys)};
   if (message.type !== "openclaw-worker-start-v1" || JSON.stringify(keys) !== JSON.stringify(expected)) {
@@ -169,16 +168,8 @@ const started = new Promise(resolve => process.once("message", message => {
   const group = spawnSync("ps", ["-p", String(process.pid), "-o", "pgid="], { encoding: "utf8" });
   if (group.status !== 0) process.exit(25);
   fs.writeFileSync(${JSON.stringify(reportPath)}, JSON.stringify({ pid: process.pid, pgid: Number(group.stdout.trim()), keys }));
-  resolve();
-}));
-await started;
-const lines = createInterface({ input: process.stdin });
-lines.once("line", line => {
-  const turn = JSON.parse(line);
-  fs.writeSync(1, JSON.stringify({ type: "result", turnId: turn.turnId, retainWorker: false,
-    result: { status: "completed", transcriptLeafId: "leaf-1", transcriptNextSeq: 2 } }) + "\\n");
-  process.exit(0);
-});`,
+});
+${TEST_WORKER_SOURCE}`,
       );
       let adapterPid: number | undefined;
       observeNodeWorkerAdapters((adapter) => {
