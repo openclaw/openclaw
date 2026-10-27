@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import type { Evidence } from "./model.js";
 import { PublicationFiles } from "./publication-files.js";
+import { truncateWhole } from "./text-window.js";
 
 /** Read originals with bounded memory, no UTF-8 or size assumption. Never follow
  * links or accept a file that changes while it is being read. */
@@ -86,7 +87,7 @@ export function inspectEvidence(root: string, e: Evidence, previewChars = 0) {
       }
       excerptChars += s.length;
       if (excerpt.length < previewChars) {
-        excerpt += s.slice(0, previewChars - excerpt.length);
+        excerpt += truncateWhole(s, previewChars - excerpt.length);
       }
       if (e.quote && !found) {
         const part = tail + s;
@@ -293,7 +294,7 @@ export class EvidenceInspector {
     if (e.quote && !cited.includes(e.quote)) {
       throw new Error("Evidence locator does not match");
     }
-    const excerpt = cited.slice(0, previewChars);
+    const excerpt = truncateWhole(cited, previewChars);
     return {
       size: file.size,
       sha256: file.sha256,

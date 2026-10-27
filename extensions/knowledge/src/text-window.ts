@@ -14,6 +14,15 @@ export function splitsPair(text: string, offset: number): boolean {
   );
 }
 
+/** Bound free text at a character cap without splitting a trailing surrogate pair. */
+export function truncateWhole(text: string, maxChars: number): string {
+  let end = Math.min(text.length, maxChars);
+  if (splitsPair(text, end)) {
+    end--;
+  }
+  return text.slice(0, end);
+}
+
 /** Bound a text field by characters and serialized bytes; offsets are UTF-16. */
 export function textWindow(text: string, offset = 0, maxChars = TEXT_PAGE_DEFAULT_CHARS) {
   if (

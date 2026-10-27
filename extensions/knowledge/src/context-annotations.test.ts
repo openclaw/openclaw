@@ -128,6 +128,24 @@ it("context annotations preserve assertion text/lifecycle, append evidence, and 
   expect((await f.service.record({ id: original.id }, f.owner)).record!.lifecycle).toBe("active");
 });
 
+it("related statement text keeps an astral emoji whole at the cap", async () => {
+  const f = await setup();
+  const original = await f.claim({ body: `${"x".repeat(3999)}\u{1F600}tail` });
+  const second = await f.claim();
+  await f.annotate(second.id, {
+    continuity: [
+      {
+        id: original.id,
+        relation: "reaffirms",
+        basis: "Same source context",
+        evidence: f.evidence,
+      },
+    ],
+  });
+  const read = await f.service.record({ id: second.id, includeEvidence: true }, f.owner);
+  expect(read.relatedStatements![0]!.text).toBe("x".repeat(3999));
+});
+
 it("uncertain identity and attribution retain evidence; cross-scope guesses and forged evidence are rejected", async () => {
   const f = await setup(),
     person = await f.page("Alex", "person"),

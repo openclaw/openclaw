@@ -8,7 +8,7 @@ import type {
 import { RECORD_RESPONSE_MAX_BYTES } from "./limits.js";
 import type { Envelope, LoadedRecord } from "./model.js";
 import { eligible } from "./retrieval.js";
-import { splitsPair } from "./text-window.js";
+import { splitsPair, truncateWhole } from "./text-window.js";
 import type { SampleVault } from "./vault.js";
 
 const summary = ({
@@ -268,7 +268,7 @@ export async function inspectRecord(vault: SampleVault, input: RecordInput): Pro
     );
     let remaining = input.maxEvidenceChars ?? 4000;
     const preview = <T extends { excerpt: string; excerptTruncated: boolean }>(e: T): T => {
-      const excerpt = e.excerpt.slice(0, remaining);
+      const excerpt = truncateWhole(e.excerpt, remaining);
       remaining -= excerpt.length;
       return {
         ...e,
@@ -289,7 +289,7 @@ export async function inspectRecord(vault: SampleVault, input: RecordInput): Pro
       },
     }));
     result.evidence = detail.evidence.map((e) => {
-      const excerpt = e.excerpt.slice(0, remaining);
+      const excerpt = truncateWhole(e.excerpt, remaining);
       remaining -= excerpt.length;
       return Object.assign(e, {
         excerpt,

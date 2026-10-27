@@ -67,6 +67,31 @@ it("claim cards use one scan per page, preserve pagination and omit evidence/ful
   expect(concise.records.every((r: any) => !r.card)).toBeTruthy();
 });
 
+it("claim cards keep an astral emoji whole at the body cap", async () => {
+  const vault = new SampleVault(),
+    data = await vault.scan();
+  const claim = data.records.find((r) => r.id === "sample_claim_pilot");
+  const records = [
+    {
+      ...claim!,
+      body: `${"x".repeat(3999)}\u{1F600}tail`,
+      metadata: { ...claim!.metadata },
+    },
+  ];
+  data.records = [...data.records.filter((r) => r.kind !== "claim"), ...records];
+  vault.scan = async () => data;
+  vault.detail = () => {
+    throw new Error("Card lists must not call detail");
+  };
+  const result = checked(
+    "records",
+    await vault.list({ kind: "claim", includeCards: true, limit: 50 }),
+  );
+  const card = result.records[0]!.card;
+  expect(card.body).toBe("x".repeat(3999));
+  expect(card.truncated).toBe(true);
+});
+
 it("relationship browse batches deduplicated eligible endpoints in one scan per page", async () => {
   const vault = new SampleVault(),
     data = await vault.scan();

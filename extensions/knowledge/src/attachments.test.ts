@@ -91,6 +91,19 @@ async function upload(f: any, bytes: any, metadata = {}) {
   return result.evidence;
 }
 
+it("evidence preview keeps an astral emoji whole at the default excerpt cap", async () => {
+  const f = await fixture();
+  const bytes = Buffer.from(`${"x".repeat(3999)}\u{1F600}tail`);
+  const evidence = await upload(f, bytes);
+  const receipt = await f.service.save_page(draft([evidence]), f.owner);
+  const read = await createKnowledgeService(f.api).record(
+    { includeEvidence: true, id: receipt.id },
+    f.owner,
+  );
+  expect(read.evidence![0]!.excerpt).toBe("x".repeat(3999));
+  expect(read.evidence![0]!.excerptTruncated).toBe(true);
+});
+
 it("large Unicode source survives chunking, bounded preview, restart, search and byte-exact download", async () => {
   const f = await fixture(),
     bytes = Buffer.from("Original 🌱 evidence with Unicode\n".repeat(6000));

@@ -7,6 +7,40 @@ import { useTestTempDirs } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
+// The excerpt cap must not split an astral character in two, on either inspector path.
+it("keeps an astral emoji whole at the excerpt cap", async () => {
+  const root = tempDirs.make("knowledge-inspector-emoji-");
+  await mkdir(path.join(root, "artifacts"));
+  const bytes = Buffer.from(`${"x".repeat(3999)}\u{1F600}tail`);
+  await writeFile(path.join(root, "artifacts/emoji.txt"), bytes);
+  const citation = {
+    path: "artifacts/emoji.txt",
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+  };
+  for (const inspect of [
+    (preview: number) => inspectEvidence(root, citation, preview),
+    (preview: number) => new EvidenceInspector(root).inspect(citation, preview),
+  ]) {
+    const result = inspect(4000);
+    expect(result.excerpt).toBe("x".repeat(3999));
+    expect(result.excerptTruncated).toBe(true);
+  }
+  const whole = Buffer.from(`ok \u{1F600}`);
+  await writeFile(path.join(root, "artifacts/whole.txt"), whole);
+  const fits = {
+    path: "artifacts/whole.txt",
+    sha256: createHash("sha256").update(whole).digest("hex"),
+  };
+  for (const inspect of [
+    (preview: number) => inspectEvidence(root, fits, preview),
+    (preview: number) => new EvidenceInspector(root).inspect(fits, preview),
+  ]) {
+    const result = inspect(4000);
+    expect(result.excerpt).toBe("ok 😀");
+    expect(result.excerptTruncated).toBe(false);
+  }
+});
+
 // The shared inspector replaces per-citation streaming reads, so it must return
 // the same result or the same error as inspectEvidence for every citation shape.
 it("EvidenceInspector matches inspectEvidence for every citation shape", async () => {
