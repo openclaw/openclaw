@@ -188,10 +188,12 @@ Candidate update admission validates the projected configuration without changin
 the live config, databases, or backups. The installed updater can then run
 Doctor's backed-up data migration before the legacy settings are removed.
 Package updates using candidate admission also inspect the original heartbeat
-files. Unsafe or unreadable sources refuse the update before the running Gateway
-stops, including when an older updater omits workspace files from its private
-rehearsal. Differing scratch or a file retained after completed conversion does
+files. Unsafe or unreadable sources that still need conversion refuse the update
+before the running Gateway stops, including when an older updater omits workspace
+files from its private rehearsal. Differing scratch or a file retained after completed conversion does
 not block admission: Doctor preserves the originals and reports them for review.
+After completed conversion, Doctor only checks whether the path exists; it does
+not read the recreated file or follow its symlink.
 Unrelated invalid fields, unsupported legacy shapes, and heartbeat repairs in
 read-only, future-written, or included configuration still require operator
 repair before admission.
