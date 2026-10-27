@@ -151,3 +151,30 @@ it("invalidates cached projection after an offline branch change without changin
     state: "current",
   });
 });
+
+it("skips current recap transcript reads during archive bursts and still refreshes new activity", async () => {
+  await messages(1);
+  await ensure();
+  complete.mockClear();
+  const sourceReads = vi.spyOn(summarySource, "readActivitySummarySource");
+  const notify = async () => {
+    const work = new AsyncWorkScope();
+    work.run(() => {
+      for (const reason of ["archive", "unarchive", "archive"] as const) {
+        service.handleLifecycle({ sessionKey: target.key, agentId: target.agentId, reason });
+      }
+    });
+    await work.drain();
+  };
+
+  await notify();
+  expect(sourceReads).not.toHaveBeenCalled();
+  expect(complete).not.toHaveBeenCalled();
+  expect(view()?.state).toBe("current");
+
+  await messages(1, 1);
+  await notify();
+  expectPrompt(1, recap, ["assistant: Outcome 1"]);
+  expect(view()?.state).toBe("current");
+  expect(read()?.activitySummary).toMatchObject({ coveredMessages: 2, totalMessages: 2 });
+});

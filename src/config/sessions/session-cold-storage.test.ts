@@ -66,6 +66,7 @@ import {
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
 import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
+import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
 
@@ -268,9 +269,11 @@ describe("cold transcript storage workers", () => {
       await expectCounts(maintain(fixture), 0);
     }
     expect(archiveStarts()).toBe(before);
+    await restoreSessionColdTranscript(fixture.scope);
     const first = await loadTranscriptEvents(fixture.scope);
     expect(first).toHaveLength(3);
     expect(leases()).toEqual(baselineLeases);
+    await restoreSessionColdTranscript(sibling);
     expect(await loadTranscriptEvents(sibling)).toEqual(siblingEvents);
     expect(leases()).toEqual(baselineLeases);
     expect(fixture.snapshot()).toEqual(original);
@@ -684,7 +687,7 @@ describe("cold transcript storage workers", () => {
     },
   );
 
-  it("preserves cold metadata, refuses synchronous history and retention deletion, and restores on async read", async () => {
+  it("preserves cold metadata and reads exact async history without restoring it", async () => {
     const fixture = await createFixture();
     const stats = readTranscriptStatsSync(fixture.scope);
     const version = readTranscriptContextVersionInTransaction(
@@ -692,6 +695,7 @@ describe("cold transcript storage workers", () => {
       historicalId,
     );
     const events = loadTranscriptEventsSync(fixture.scope);
+    const hydrated = await prepareSessionTranscriptHydration(fixture.scope).read();
     assertSessionTranscriptHot(fixture.database(), historicalId);
     const hotPlan = planSessionStateDeleteIfUnreferenced({
       archiveDirectory: path.dirname(fixture.scope.storePath),
@@ -733,11 +737,22 @@ describe("cold transcript storage workers", () => {
     ).toBeNull();
     const hostSql = observeHostDataSql();
     try {
+      await expect(loadTranscriptEvents({ ...fixture.scope, maxEventBytes: 1 })).rejects.toThrow(
+        "Trajectory transcript store is too large to export",
+      );
       await expect(loadTranscriptEvents(fixture.scope)).resolves.toEqual(events);
+      await expect(prepareSessionTranscriptHydration(fixture.scope).read()).resolves.toEqual(
+        hydrated,
+      );
       expect(hostSql.queries).toEqual([]);
     } finally {
       hostSql.restore();
     }
+    expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
+    expect(
+      rows(fixture, "SELECT * FROM transcript_events WHERE session_id = ?", historicalId),
+    ).toEqual([]);
+    await restoreSessionColdTranscript(fixture.scope);
     assertSessionTranscriptHot(fixture.database(), historicalId);
     expect(fixture.snapshot()).toEqual(fixture.original);
   });
