@@ -150,12 +150,16 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     inputProvenance: attempt.inputProvenance,
   };
   const promptBuildMessages = input.activeSession.messages;
-  const promptEvent = { prompt: effectivePrompt, messages: promptBuildMessages };
+  // A reload continuation's prompt is synthetic; prompt hooks see the user's request.
+  const promptEvent = {
+    prompt: attempt.pluginRuntimeRefreshUserPrompt ?? effectivePrompt,
+    messages: promptBuildMessages,
+  };
   const hookResult = preserveExactPrompt
     ? undefined
     : await resolvePromptBuildHookResult({
         config: attempt.config ?? getRuntimeConfig(),
-        prompt: attempt.pluginRuntimeRefreshUserPrompt ?? effectivePrompt,
+        prompt: promptEvent.prompt,
         messages: promptBuildMessages,
         hookCtx,
         hookRunner: input.hookRunner,
