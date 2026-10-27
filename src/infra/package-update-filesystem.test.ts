@@ -569,7 +569,6 @@ it.each([
   const rename = fs.rename.bind(fs);
   const denied = activation ? stage : backupRoot;
   let attempts = 0;
-  let revoked = false;
   vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
     if (String(from) === denied && ++attempts === 1) {
       throw errno("EPERM: package is in use", "EPERM");
@@ -577,14 +576,14 @@ it.each([
     return rename(from, to);
   });
   wait.mockImplementationOnce(async () => {
-    revoked = change === "owner";
     const replaced = activation ? path.dirname(liveRoot) : backupRoot;
-    if (!revoked) {
+    if (change !== "owner") {
       await rename(replaced, `${replaced}.retained`);
       await fs.mkdir(replaced);
     }
   });
-  const assertCurrent = assertOwner(() => revoked, errno("update owner revoked", "EPERM"));
+  const revoked = () => change === "owner" && wait.mock.calls.length > 0;
+  const assertCurrent = assertOwner(revoked, errno("update owner revoked", "EPERM"));
 
   await expect(
     activation
@@ -607,10 +606,13 @@ it.each([
   // Nothing moves after the refusal; a changed backup still gets its candidate back.
   const retained = change === "retained backup" ? `${backupRoot}.retained` : denied;
   await expectFile(path.join(retained, "marker.txt"), activation ? "staged" : "original");
-  if (change === "owner") {
+  if (activation) {
+    await expectMissing(path.join(root, "live", "next"));
+  } else if (change === "owner") {
     await expectMissing(liveRoot);
-  } else if (!activation) {
+  } else {
     await expectFile(path.join(liveRoot, "marker.txt"), "candidate");
+    await expectMissing(path.join(root, "displaced"));
   }
 });
 
