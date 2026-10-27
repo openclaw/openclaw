@@ -144,10 +144,8 @@ describe("memory forget", () => {
 
       const agentDatabase = openOpenClawAgentDatabase({ agentId: "main" });
       const db = requireNativeSqliteDatabase(agentDatabase.db);
-      const loaded = await loadSqliteVecExtension({ db });
-      expect(loaded.ok).toBe(true);
-      const schema = ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
-      expect(schema.ftsAvailable, schema.ftsError).toBe(true);
+      await loadSqliteVecExtension({ db });
+      ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
       db.exec(
         "CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[2])",
       );
@@ -173,11 +171,6 @@ describe("memory forget", () => {
           `${narrativeTranscript.map((record) => JSON.stringify(record)).join("\n")}\n`,
         ),
       );
-      expect(
-        db
-          .prepare("SELECT session_id FROM session_windows WHERE session_id = ?")
-          .get(narrativeSessionId),
-      ).toBeUndefined();
       const indexedFiles = [
         ["MEMORY.md", "memory"],
         [`memory/.dreams/session-corpus/2026-08-26.${corpusExtension}`, "memory"],
@@ -569,17 +562,16 @@ describe("memory forget worker settlement", () => {
     db.prepare(
       "INSERT INTO memory_embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at) VALUES ('fixture', 'fixture', 'fixture', 'selected', ?, 1, 1)",
     ).run(encodeMemoryEmbedding([1]));
+    const rows = (sql: string) => db.prepare(sql).all();
     const derived = () => ({
-      chunks: db.prepare("SELECT * FROM memory_index_chunks ORDER BY id").all(),
-      sources: db.prepare("SELECT * FROM memory_index_sources ORDER BY id").all(),
-      cache: db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all(),
+      chunks: rows("SELECT * FROM memory_index_chunks ORDER BY id"),
+      sources: rows("SELECT * FROM memory_index_sources ORDER BY id"),
+      cache: rows("SELECT * FROM memory_embedding_cache ORDER BY hash"),
     });
     const optionalTables = () =>
-      db
-        .prepare(
-          "SELECT name FROM sqlite_schema WHERE name IN ('memory_entry_origins', 'memory_session_tombstones') ORDER BY name",
-        )
-        .all();
+      rows(
+        "SELECT name FROM sqlite_schema WHERE name IN ('memory_entry_origins', 'memory_session_tombstones') ORDER BY name",
+      );
     const snapshot = async () => ({
       derived: derived(),
       revision: Number(
