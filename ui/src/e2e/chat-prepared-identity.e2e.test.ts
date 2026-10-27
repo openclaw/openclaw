@@ -19,7 +19,8 @@ const publication = {
   catalog: { models: [] },
 } satisfies ModelsSnapshotEvent;
 
-async function openPendingChat() {
+async function openPendingChat(slugHint = target.slugHint) {
+  const routeTarget = { ...target, slugHint };
   const page = await newChatPage(suite);
   const gateway = await installMockGateway(page, {
     subscriptionInitialHistory: false,
@@ -29,11 +30,11 @@ async function openPendingChat() {
     historyMessages: [{ role: "assistant", content: historyText }],
     heldMethods: ["sessions.resolve", "chat.startup", "models.list"],
   });
-  const href = `${suite.server.baseUrl}chat/main/earlier-title-12345678`;
+  const href = `${suite.server.baseUrl}chat/main/${slugHint}-12345678`;
   await page.goto(href);
   const connect = await gateway.waitForRequest("connect");
-  expect(connect.params).toMatchObject({ modelCatalog: target });
-  await gateway.waitForRequest("sessions.resolve", { match: target });
+  expect(connect.params).toMatchObject({ modelCatalog: routeTarget });
+  await gateway.waitForRequest("sessions.resolve", { match: routeTarget });
   const context = await getControlUiContextHandle(page);
   const observation = await context.evaluateHandle((appContext) => {
     const observed = { accepted: false };
@@ -56,10 +57,38 @@ async function openPendingChat() {
       agentId: "main",
       displayName: "Current title",
     });
-  return { page, gateway, href, observation, composer, resolve };
+  return { page, gateway, href, observation, composer, resolve, routeTarget };
 }
 
 suite.define(() => {
+  it("keeps live title updates after identity confirmation needs no URL change", async () => {
+    const { page, gateway, observation, composer, resolve, routeTarget } =
+      await openPendingChat("current-title");
+    await gateway.emitGatewayEvent("models.snapshot", { ...publication, target: routeTarget });
+    await expect.poll(() => observation.evaluate((value) => value.accepted)).toBe(true);
+    await expect.poll(() => composer.isEditable()).toBe(true);
+    await composer.fill("Keep the confirmed conversation draft");
+    await gateway.resolveDeferred("chat.startup");
+    await page.getByText(historyText, { exact: true }).waitFor();
+    await resolve();
+    await gateway.emitGatewayEvent("sessions.changed", {
+      sessionKey,
+      reason: "title",
+      session: {
+        key: sessionKey,
+        kind: "direct",
+        sessionId: `session:${sessionKey}`,
+        updatedAt: Date.now(),
+        displayName: "Renamed after confirmation",
+      },
+    });
+    await expect.poll(() => page.title()).toContain("Renamed after confirmation");
+    await expect.poll(() => page.url()).toContain("/chat/main/renamed-after-confirmation-12345678");
+    expect(await composer.inputValue()).toBe("Keep the confirmed conversation draft");
+    expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
+    await observation.dispose();
+  });
+
   it.each(["matching", "conflicting", "rejected"] as const)(
     "preserves prepared history and drafts with a %s initial resolution",
     async (reply) => {

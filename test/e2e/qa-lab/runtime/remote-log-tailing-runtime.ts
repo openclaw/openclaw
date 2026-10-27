@@ -155,7 +155,7 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
         "--interval",
         "50",
         "--limit",
-        "1",
+        "200",
         "--max-bytes",
         "4096",
       ],
@@ -170,17 +170,31 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
       stderr += String(chunk);
     });
     const followOutput = await withOwnedFollowChild(child, async () => {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 250);
-      });
-      await appendFile(logPath, logLine("qa-follow-line"));
       const deadline = Date.now() + 10_000;
-      while (!stdout.includes("qa-follow-line") && Date.now() < deadline) {
+      const records = () =>
+        stdout
+          .split("\n")
+          .slice(0, -1)
+          .map((line) => JSON.parse(line) as { type?: string; message?: string });
+      while (!records().some((record) => record.type === "meta") && Date.now() < deadline) {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 50);
         });
       }
-      if (!stdout.includes("qa-follow-line")) {
+      if (!records().some((record) => record.type === "meta")) {
+        throw new Error(`follow did not receive initial snapshot: ${stderr}`);
+      }
+      // Each poll logs its admitted connection; the window must also retain the appended record.
+      await appendFile(logPath, logLine("qa-follow-line"));
+      while (
+        !records().some((record) => record.message === "qa-follow-line") &&
+        Date.now() < deadline
+      ) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+      }
+      if (!records().some((record) => record.message === "qa-follow-line")) {
         throw new Error(`follow did not receive appended record: ${stderr}`);
       }
       return stdout;

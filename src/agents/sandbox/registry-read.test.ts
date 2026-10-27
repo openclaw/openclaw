@@ -28,6 +28,7 @@ import {
   readBrowserRegistry,
   assertSandboxRegistryEntryCurrent as assertCurrent,
   assertSandboxBrowserRegistryEntryCurrent as assertBrowserCurrent,
+  assertSandboxRegistryRetirementCurrent as assertRetirementCurrent,
   readRegisteredSandboxRuntimeIds,
   readRegistry,
   readRegistryEntry,
@@ -102,6 +103,49 @@ function recordRegistryFacts() {
 }
 
 describe("registry race safety", () => {
+  it.each(["container", "browser"] as const)(
+    "keeps retirement authority current across %s activity, replacement, and unknown writes",
+    async (kind) => {
+      const update = (patch: { lastUsedAtMs?: number; createdAtMs?: number } = {}) =>
+        kind === "container"
+          ? updateRegistry(containerEntry({ runtimeState: "removing", ...patch }))
+          : updateBrowserRegistry(browserEntry(patch));
+      const read = kind === "container" ? readRegistry : readBrowserRegistry;
+      await update();
+      const [selected] = (await read()).entries;
+      await expect(assertRetirementCurrent(kind, selected!)).resolves.toBeUndefined();
+      await update({ lastUsedAtMs: 2 });
+      await expect(assertRetirementCurrent(kind, selected!)).resolves.toBeUndefined();
+
+      await removeSandboxRegistryGeneration(kind, selected!);
+      await expect(assertRetirementCurrent(kind, selected!)).rejects.toThrow("generation changed");
+      await update({ createdAtMs: 2 });
+      await expect(assertRetirementCurrent(kind, selected!)).rejects.toThrow("generation changed");
+      const [replacement] = (await read()).entries;
+      await expect(assertRetirementCurrent(kind, replacement!)).resolves.toBeUndefined();
+      // A superseded worker receipt leaves the generation unknown until it is read again.
+      const observe = admission.observeSqliteWorkerCommittedFacts;
+      vi.spyOn(admission, "observeSqliteWorkerCommittedFacts").mockImplementation(
+        (owner, listener) =>
+          observe(owner, (receipt) => {
+            writeNative(
+              kind === "container"
+                ? { operation: "update", entry: { ...replacement!, lastUsedAtMs: 4 } }
+                : {
+                    operation: "updateBrowser",
+                    entry: browserEntry({ createdAtMs: 2, lastUsedAtMs: 4 }),
+                  },
+            );
+            listener(receipt);
+          }),
+      );
+      await update({ createdAtMs: 2, lastUsedAtMs: 3 });
+      await expect(assertRetirementCurrent(kind, replacement!)).rejects.toThrow(
+        "generation changed",
+      );
+    },
+  );
+
   it("publishes every native batch row before observers and discards nested or outer rollback", () => {
     using recording = recordRegistryFacts();
     const { facts } = recording;

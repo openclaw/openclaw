@@ -287,8 +287,16 @@ it("shares producer envelopes across matching authority and divergent baselines"
       let rowEncodings = 0;
       let envelopeEncodings = 0;
       let sharingKeyEncodings = 0;
+      let ancestorFieldEncodings = 0;
       const encoding = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
         const value: unknown = args[0];
+        if (
+          isRecord(value) &&
+          Object.keys(value).length === 1 &&
+          (Object.hasOwn(value, "ancestorSessions") || Object.hasOwn(value, "ancestorSessionRefs"))
+        ) {
+          ancestorFieldEncodings++;
+        }
         if (
           Array.isArray(value) &&
           value.length === 10 &&
@@ -384,6 +392,8 @@ it("shares producer envelopes across matching authority and divergent baselines"
       expect(rowEncodings).toBeLessThanOrEqual(16);
       // Two wire capabilities per group, plus one legacy envelope per authority.
       expect(envelopeEncodings).toBeLessThanOrEqual(10);
+      // Empty ancestor fields are constant across divergent connection histories.
+      expect(ancestorFieldEncodings).toBe(0);
     } finally {
       detach();
       await connection.mentionInbox.dispose();

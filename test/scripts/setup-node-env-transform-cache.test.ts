@@ -38,12 +38,14 @@ it("retains shared transform inputs while excluding membership inventories and t
     "test/vitest/vitest.ui-e2e.bundled.global-setup.ts",
     "test/vitest/vitest.channel-paths.mjs",
     "test/vitest/nested/vitest.database-worker-core-paths.mjs",
+    "test/vitest/nested/vitest.unit-fast-paths.mjs",
     "src/state/schema.sql",
   ];
   const excluded = [
     "test/vitest/vitest.database-worker-core-paths.mjs",
     "test/vitest/vitest.extension-database-workers-paths.mjs",
     "test/vitest/vitest.ui-e2e.config.ts",
+    "test/vitest/vitest.unit-fast-paths.mjs",
     "node_modules/example/package.json",
     ".ci-harness/package.json",
     "docs/example.md",

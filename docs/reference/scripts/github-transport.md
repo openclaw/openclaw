@@ -28,7 +28,16 @@ Writer identity uses the protected CLI with included headers on both transports
 to retain the native writer route. Reviewer assignment requires REST and verifies
 the retained assignee. The CI watcher polls GraphQL summaries, expanding details
 for failures or pending checks after CI succeeds; primary quota exhaustion selects
-REST with complete check/status and workflow evidence.
+REST with complete check/status and workflow evidence. In `--completion ci-run`
+mode, active polling revalidates the attached run and attempt-specific job pages
+with REST ETags. Only a successful `304 Not Modified` reuses the previous body;
+changed responses and new attempts replace that evidence. Missing ETags retain
+ordinary fresh reads. Validators live only for this watcher and credential/host
+scope. PR head, lifecycle, and conflict observations remain fresh each poll, and
+completed runs do not reload job progress. `gh api --include` uses the protected
+CLI’s native caller-authenticated route, not the pooled relay; authenticated
+304s avoid GitHub’s primary quota but still make network requests and remain
+subject to secondary limits.
 
 Successful authentication is reused within one shell operation and its nested
 worktree entries; new processes and changed credential selection require a new

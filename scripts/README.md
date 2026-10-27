@@ -170,6 +170,14 @@ paint filmstrip. `large-transcript-return-bottom` measures the native Scroll to
 latest action separately. WebKit lacks long-animation-frame entries; unsupported
 counters are reported explicitly rather than interpreted as zero work.
 
+Style/layout census can select the existing `settings-open`, `settings-sections`,
+and `data-*` actions together with `theme-switch-cycles` and
+`sidebar-live-style-cycles`. The latter exercise real preference and session
+lifecycle publications. `workboard-style-cycles` loads the native plugin and its
+1,000-card fixture, preserving its virtual window; use `--source-root`, `--compare-source-root`, and
+`--control-source-root` to bind its plugin assets to the corresponding bundle's
+source checkout. The manifest records each plugin tree and asset hash.
+
 Use `--steps memory --viewport desktop --pairs 1` for the opt-in cross-engine
 retention census, or select individual `memory-route-usage`,
 `memory-long-session`, `memory-workboard-updates`, and

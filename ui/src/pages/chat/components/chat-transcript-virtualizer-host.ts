@@ -86,9 +86,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.endAnchor.recordLayoutCorrection(before, after);
     this.scheduleEndReconcile();
   };
-  // A boot re-anchor can precede its native extent; only reader geometry may override it.
-  private beforeMeasure = () => this.initialRange.reading && this.offsetState.syncNativeOffset?.();
-  readonly layout = new TranscriptLayoutOwner(this.recordEndLayoutCorrection, this.beforeMeasure);
+  readonly layout = new TranscriptLayoutOwner(this.recordEndLayoutCorrection);
   private readonly followEnd = () =>
     this.scrollToEnd({
       source: "auto",
@@ -250,16 +248,18 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     });
     // Initial placement owns compensation; an estimated end is not a native scroll target.
     this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
+    // A boot re-anchor can precede its native extent; only reader geometry may override it.
+    const beforeMeasure = () => this.initialRange.reading && this.offsetState.syncNativeOffset?.();
     this.presentation = createTranscriptPresentation(
       () => this.scrollElement,
       this.virtualizer,
       () => this.rowRefs.elements,
-      this.beforeMeasure,
+      beforeMeasure,
     );
     this.rowRefs = new TranscriptRowRefs(this.virtualizer, {
       isCurrentRow: (element, key) =>
         this.threadInnerElement?.contains(element) === true && this.rowIndexesByKey.has(key),
-      beforeMeasure: this.beforeMeasure,
+      beforeMeasure,
       onMount: () => this.queueLayout(),
     });
     this.scrollRestoreHost = {
@@ -303,6 +303,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     const target = this.callbacks.geometryEventTarget;
     this.stopGeometry =
       target && listen(target, SIDEBAR_GEOMETRY_COMMIT_EVENT, this.handleGeometryCommit);
+    // Virtual-core exposes its lifecycle hooks as bound arrow functions.
     const { _didMount: mountVirtualizer } = this.virtualizer;
     this.cleanupVirtualizer = mountVirtualizer();
     if (this.offsetState.pendingScrollOffset) {

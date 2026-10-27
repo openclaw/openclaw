@@ -156,6 +156,8 @@ it.each(["runtime", "doctor"] as const)(
           "exec_approvals_config",
           "local_workspace_projections",
           "local_workspace_manifest_nodes",
+          "local_workspace_source_path_sets",
+          "local_workspace_tree_packs",
           "sqlite_stat1",
           "sqlite_stat4",
         ],

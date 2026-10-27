@@ -88,6 +88,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
   createInitialStateSchemaShape,
+  expectStateSchemaRepair as expectRepair,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 import { createUnsafeIndexDrift } from "./sqlite-index-drift.test-support.js";
@@ -194,18 +195,6 @@ function withDatabase<T>(
 
 function withReadOnlyDatabase(pathname: string, read: (database: DatabaseSync) => void) {
   withDatabase(pathname, read, { readOnly: true });
-}
-
-async function expectRepair(
-  options: NonNullable<Parameters<typeof repairOpenClawStateDatabaseSchema>[0]>,
-  changes: unknown[],
-  warnings: unknown[] = [],
-) {
-  expect(
-    await withStateMigrationBackupForTest(options, () =>
-      repairOpenClawStateDatabaseSchema(options),
-    ),
-  ).toEqual({ changes, warnings });
 }
 
 function expectMigrations(
@@ -1640,6 +1629,7 @@ describe("openclaw state database", () => {
       { kind: "local-client-credentials-v29", path: fixture.databasePath },
       { kind: "automation-policy-fence-v30", path: fixture.databasePath },
       { kind: "local-workspace-manifests-v31", path: fixture.databasePath },
+      { kind: "local-workspace-cas-v35", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -1848,6 +1838,7 @@ describe("openclaw state database", () => {
       { kind: "local-client-credentials-v29", path: seeded.databasePath },
       { kind: "automation-policy-fence-v30", path: seeded.databasePath },
       { kind: "local-workspace-manifests-v31", path: seeded.databasePath },
+      { kind: "local-workspace-cas-v35", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     await expectRepair(options, [
@@ -2086,6 +2077,7 @@ describe("openclaw state database", () => {
       { kind: "local-client-credentials-v29", path: databasePath },
       { kind: "automation-policy-fence-v30", path: databasePath },
       { kind: "local-workspace-manifests-v31", path: databasePath },
+      { kind: "local-workspace-cas-v35", path: databasePath },
     ]);
 
     await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));

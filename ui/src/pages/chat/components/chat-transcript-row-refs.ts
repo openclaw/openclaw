@@ -28,9 +28,7 @@ export class TranscriptRowRefs {
         this.callbacks.isCurrentRow(row, key) &&
         this.virtualizer.elementsCache.get(key) !== row
       ) {
-        // Observer registration reuses the known size; only the synchronous
-        // fallback measures geometry and needs the native offset first.
-        if (!prepared && !this.virtualizer.targetWindow?.ResizeObserver) {
+        if (!prepared) {
           this.callbacks.beforeMeasure();
           prepared = true;
         }

@@ -222,6 +222,36 @@ describe("ManagedWorktreeService provisioned state", () => {
     await expect(provisionIncludedFiles(repo, destination)).resolves.toEqual([]);
   });
 
+  it("preserves modification times when provisioning prepared build inputs and outputs", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "prepared/\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), "prepared/**\n");
+    await git(repo, "add", ".gitignore", ".worktreeinclude");
+    await git(repo, "commit", "-m", "include prepared build state");
+    const prepared = path.join(repo, "prepared");
+    await fs.mkdir(prepared);
+    // The output sorts first; recreating times would make its input appear newer.
+    const entries = [
+      { name: "artifact", content: "compiled output\n", seconds: 1_700_000_010 },
+      { name: "input", content: "build input\n", seconds: 1_700_000_000 },
+    ];
+    for (const entry of entries) {
+      const source = path.join(prepared, entry.name);
+      await fs.writeFile(source, entry.content);
+      await fs.utimes(source, entry.seconds, entry.seconds);
+    }
+
+    const created = await service.create({ repoRoot: repo, name: "prepared", baseRef: "HEAD" });
+
+    for (const entry of entries) {
+      const target = path.join(created.path, "prepared", entry.name);
+      expect(await fs.readFile(target, "utf8")).toBe(entry.content);
+      expect((await fs.stat(target)).mtimeMs).toBe(entry.seconds * 1000);
+    }
+    const output = await fs.stat(path.join(created.path, "prepared", "artifact"));
+    const input = await fs.stat(path.join(created.path, "prepared", "input"));
+    expect(output.mtimeMs).toBeGreaterThan(input.mtimeMs);
+  });
+
   it.skipIf(process.platform === "win32")(
     "batches supported literal UTF-8 paths without expanding wildcard or magic names",
     async () => {

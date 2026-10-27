@@ -178,18 +178,10 @@ it.each([false, true])(
       expect(fs.existsSync(databasePath)).toBe(false);
       await replaceSessionEntry(target, { sessionId: "metadata-without-transcript", updatedAt: 1 });
       expect(await read()).toBe(true);
-      expect(
-        await prepareSessionEntryPresenceRead({
-          ...target,
-          sessionKey: target.sessionKey.toUpperCase(),
-        }).read(),
-      ).toBe(true);
-      expect(
-        await prepareSessionEntryPresenceRead({
-          ...target,
-          sessionKey: `${target.sessionKey}-sibling`,
-        }).read(),
-      ).toBe(false);
+      const presence = (sessionKey: string) =>
+        prepareSessionEntryPresenceRead({ ...target, sessionKey }).read();
+      expect(await presence(target.sessionKey.toUpperCase())).toBe(true);
+      expect(await presence(`${target.sessionKey}-sibling`)).toBe(false);
       if (incognito) {
         expect(observed.workers).toHaveLength(workersBefore);
         expect(fs.existsSync(databasePath)).toBe(false);
