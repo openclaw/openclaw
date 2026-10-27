@@ -41,7 +41,9 @@ function projectLmstudioHistory(context: Context, model: Model): Context {
         content: message.content
           .filter((block) => block.type !== "thinking" || !block.redacted)
           .map((block) =>
-            block.type === "thinking" ? { ...block, thinkingSignature: undefined } : block,
+            block.type === "thinking"
+              ? Object.assign({}, block, { thinkingSignature: undefined })
+              : block,
           ),
       };
     }),

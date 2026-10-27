@@ -44,7 +44,7 @@ const responseFormat = {
 };
 const structuredReply = `data: ${JSON.stringify({ id: "completion_probe", choices: [{ index: 0, delta: { content: '{"tag":"READY"}' }, finish_reason: "stop" }], usage: { prompt_tokens: 11, completion_tokens: 17, total_tokens: 28 } })}\n\ndata: [DONE]\n\n`;
 
-function sse(events: Array<Record<string, unknown>>): string {
+function sse(events: Array<{ type: string } & Record<string, unknown>>): string {
   return events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
 }
 
@@ -127,8 +127,11 @@ async function withTransport(
       await run({
         requests,
         model,
-        call: (context = { messages: [user] }, options, selected = model) =>
-          wrapped(selected, context, { apiKey: "synthetic-key", ...options }),
+        call: (context, options, selected = model) =>
+          wrapped(selected, context ?? { messages: [user] }, {
+            apiKey: "synthetic-key",
+            ...options,
+          }),
       });
     },
   );
@@ -315,7 +318,7 @@ it.each(["openai-completions", "anthropic-messages"] as const)(
           api: sourceApi,
           content: assistant.content.map((block) =>
             block.type === "thinking" && sourceApi === "openai-completions"
-              ? { ...block, thinkingSignature: "reasoning_content" }
+              ? Object.assign({}, block, { thinkingSignature: "reasoning_content" })
               : block,
           ),
         };
