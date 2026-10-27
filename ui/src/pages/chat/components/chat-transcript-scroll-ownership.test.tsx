@@ -135,6 +135,20 @@ afterEach(() => {
   resetTranscriptTestDom();
 });
 
+it("retires an instant end command without writing its native offset twice", async () => {
+  const { transcript, mount } = createPolicyTranscript("instant-end-retirement");
+  const { container } = await mount();
+  viewport(container, 400, 2000);
+  container.scrollTop = 1600;
+  const writes = recordWrites(container);
+
+  transcript.scrollToEnd({ behavior: "auto" });
+
+  expect(container.scrollTop).toBe(1600);
+  expect(writes).toHaveLength(1);
+  expect(transcript.isProgrammaticScroll).toBe(false);
+});
+
 it.each(["resize clamp", "native return"] as const)(
   "distinguishes a %s after same-range reader scrolling before composer layout",
   async (movement) => {

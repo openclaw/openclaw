@@ -624,11 +624,10 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.presentation.measureRowsWithoutScrollAdjustment();
     }
     const element = this.scrollElement;
-    if (element) {
-      // Cancellation is one instant target replacement, never the multi-frame
-      // restoration API.
-      this.virtualizer.scrollToOffset(element.scrollTop, { behavior: "instant" });
-    }
+    // Only smooth native motion needs replacement; instant targets just retire.
+    return element && measureSkippedRows
+      ? this.virtualizer.scrollToOffset(element.scrollTop, { behavior: "instant" })
+      : this.virtualizer.cancelScroll();
   }
 
   syncMessageRows(

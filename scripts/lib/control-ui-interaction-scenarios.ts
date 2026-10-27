@@ -124,7 +124,10 @@ export type InteractionScenario = {
   explicitOnly?: boolean;
   fixture?: InteractionFixtureOptions;
   /** Large-data campaigns replace only their domain's synthetic Gateway responses. */
-  fixtureOverrides?: (sandbox?: InteractionSandbox) => InteractionFixtureOverrides;
+  fixtureOverrides?: (
+    sandbox: InteractionSandbox | undefined,
+    base: ReturnType<typeof createInteractionFixture>,
+  ) => InteractionFixtureOverrides;
   createRequestHandlers?: (
     defaults: Readonly<Record<string, (params: unknown) => unknown>>,
   ) => Record<string, (params: unknown) => unknown>;
@@ -150,7 +153,7 @@ export function createScenarioFixture(
   sandbox?: InteractionSandbox,
 ): ControlUiMockGatewayScenario & { sessions: InteractionSession[] } {
   const base = createInteractionFixture(buildId, version, scenario.fixture, sandbox);
-  const overrides = scenario.fixtureOverrides?.(sandbox);
+  const overrides = scenario.fixtureOverrides?.(sandbox, base);
   return {
     ...base,
     ...overrides,

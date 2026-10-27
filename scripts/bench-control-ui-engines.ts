@@ -29,6 +29,7 @@ import {
   type ControlUiEngine,
   type EngineMetrics,
 } from "./lib/control-ui-engine-metrics.ts";
+import { createEngineStreamingScenarios } from "./lib/control-ui-engine-streaming-scenarios.ts";
 import { frames } from "./lib/control-ui-interaction-navigation.ts";
 import {
   createScenarioFixture,
@@ -150,6 +151,7 @@ try {
   const catalog: EngineScenario[] = [
     ...createEngineBootScenarios(servers[0]!.server.baseUrl),
     ...createEngineActionScenarios(),
+    ...createEngineStreamingScenarios(),
     ...interactionScenarios.filter(
       (scenario) =>
         ids?.includes(scenario.id) ||
@@ -228,6 +230,7 @@ try {
             const errors: Array<{ message: string; phase: string }> = [];
             let phase = "setup";
             page.on("pageerror", (error: Error) => errors.push({ message: error.message, phase }));
+            let tracingStarted = false;
             let measurement: Awaited<ReturnType<typeof startEngineMeasurement>> | undefined;
             try {
               await page.addInitScript("globalThis.__name = (fn) => fn");
@@ -265,17 +268,18 @@ try {
                 });
               }
               await page.addInitScript(
-                ({ key, gatewayUrl }: { key: string; gatewayUrl: string }) => {
+                ({ key, gatewayUrl, settings }) => {
                   if (window === window.top) {
                     localStorage.setItem(
                       key,
-                      JSON.stringify({ gatewayUrl, lobsterPetVisits: false }),
+                      JSON.stringify({ ...settings, gatewayUrl, lobsterPetVisits: false }),
                     );
                   }
                 },
                 {
                   key: controlUiBundledSettingsStorageKey(slot.server.baseUrl),
                   gatewayUrl: controlUiBundledGatewayUrl(slot.server.baseUrl),
+                  settings: scenario.settings,
                 },
               );
               const fixture = createScenarioFixture(
@@ -326,6 +330,7 @@ try {
                   snapshots: false,
                   sources: true,
                 });
+                tracingStarted = true;
               }
               measurement = await startEngineMeasurement(page, engine, {
                 trace: values.trace,
@@ -375,7 +380,7 @@ try {
                 if (pair === 0 || observation.status === "failed") {
                   await page.screenshot({ path: path.join(artifactDir, `${artifactPrefix}.png`) });
                 }
-                if (values.trace) {
+                if (tracingStarted) {
                   await context.tracing.stop({
                     path: path.join(artifactDir, `${artifactPrefix}.trace.zip`),
                   });

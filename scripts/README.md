@@ -150,6 +150,19 @@ Mobile transcript-top uses a native scrollport jump because Playwright's mobile
 WebKit driver has no wheel input; it is not a wheel-latency measurement. Tracing
 omits DOM snapshots so snapshot traversal does not dominate attribution.
 
+Streaming coverage is selectable with `--steps streaming-645-deltas`,
+`streaming-645-deltas-slow`, `streaming-large-transcript`, `streaming-two-panes`,
+and `streaming-tool-code`. The slow case delivers the same 645 snapshots at
+15 Hz instead of 30 Hz; this throttles delivery, not CPU (WebKit has no matching
+Chromium CPU-throttling API). Every pane must retain native typing, render the
+complete reply, and follow its growing tail; the tool/code case keeps its tool
+output expanded. `large-transcript-fast-scroll` traverses 2,000 messages over
+120 animation frames and reports frame gaps, estimated dropped frames, mounted
+rows, and viewport-center blank samples. These are DOM geometry samples, not a
+paint filmstrip. `large-transcript-return-bottom` measures the native Scroll to
+latest action separately. WebKit lacks long-animation-frame entries; unsupported
+counters are reported explicitly rather than interpreted as zero work.
+
 Build with `pnpm ui:build`, then collect the production renderer's desktop and
 mobile interactions against the synthetic Gateway:
 
