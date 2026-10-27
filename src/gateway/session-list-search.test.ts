@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import * as stringCoerce from "@openclaw/normalization-core/string-coerce";
 import { expect, test, vi } from "vitest";
 import { SessionRunStatusSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { registerAgentHarness } from "../agents/harness/registry.js";
@@ -42,6 +43,65 @@ function searchTargets(rows: [string, SessionEntry][]) {
     ]),
   );
 }
+
+test("unchanged goal searches normalize only the query and refresh with the entry revision", () => {
+  const rows: [string, SessionEntry][] = Array.from({ length: 40 }, (_, index) => [
+    `agent:main:goal-${index}`,
+    {
+      sessionId: `session-${index}`,
+      updatedAt: now,
+      totalTokens: 1200,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      goal: {
+        schemaVersion: 1,
+        id: `goal-${index}`,
+        objective: "Investigate 日本語 🦞 MiXeD",
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+        tokenStart: 0,
+        tokensUsed: 0,
+        tokenBudget: 2000,
+        continuationTurns: 0,
+      },
+    },
+  ]);
+  const rowContext = buildSessionListRowMetadataContext({ now });
+  const targets = searchTargets(rows);
+  const params: SessionListFilterParams = {
+    cfg: {},
+    opts: {},
+    now,
+    entries: () => rows,
+    getTarget: (key) => targets.get(key),
+    modelSearchMayMatch: () => false,
+    configuredAgentIds: new Set(["main"]),
+    getRowContext: () => rowContext,
+    involvementKeys: () => new Set(),
+  };
+  const lower = vi.spyOn(stringCoerce, "normalizeLowercaseStringOrEmpty");
+  try {
+    for (const search of ["日本語", "🦞", "MIXED", "Pursuing goal (1.2k/2k)"]) {
+      params.opts = { search };
+      expect(searchKeys(params)).toEqual(rows.map(([key]) => key));
+      lower.mockClear();
+      params.now += 1000;
+      expect(searchKeys(params)).toEqual(rows.map(([key]) => key));
+      expect(lower.mock.calls).toEqual([[search], [search.toLowerCase()]]);
+    }
+    const [key, previous] = rows[0]!;
+    rows[0] = [key, { ...previous, totalTokens: 2500 }];
+    targets.set(key, searchTargets([rows[0]]).get(key)!);
+    params.opts = { search: "Goal unmet (2.5k/2k)" };
+    expect(searchKeys(params)).toEqual([key]);
+    rows[0] = [key, { ...rows[0][1], goal: undefined }];
+    targets.set(key, searchTargets([rows[0]]).get(key)!);
+    expect(searchKeys(params)).toEqual([]);
+  } finally {
+    lower.mockRestore();
+  }
+});
 
 test("non-status vocabulary misses skip per-row run state and model facts", () => {
   const rowContext = buildSessionListRowMetadataContext({ now });
@@ -95,15 +155,12 @@ test("non-status vocabulary misses skip per-row run state and model facts", () =
     getModelFacts,
     modelCatalog: [{ provider: "fixture", id: "raw-alias", name: "Fixture" }],
     modelSearchMayMatch: (search) =>
-      modelFacts.mayMatchSessionRowModelSearch(
-        {
-          cfg: params.cfg,
-          modelCatalog: params.modelCatalog,
-          rowContext,
-          rows: rows.map(([, entry]) => ({ agentId: "main", entry })),
-        },
-        search,
-      ),
+      modelFacts.prepareSessionRowModelSearch({
+        cfg: params.cfg,
+        modelCatalog: params.modelCatalog,
+        rowContext,
+        rows: rows.map(([, entry]) => ({ agentId: "main", entry })),
+      })(search),
     configuredAgentIds: new Set(["main"]),
     getRowContext: () => rowContext,
     involvementKeys: () => new Set(),
@@ -152,10 +209,11 @@ test("automatic runtime labels use loaded vocabulary without per-row support che
     expect(facts.thinkingProjection.agentRuntime.id).toBe("dynamic-runtime");
     supports.mockClear();
     expect(
-      modelFacts.mayMatchSessionRowModelSearch(
-        { cfg, rowContext, rows: [{ agentId: "main", entry }] },
-        "dynamic-runtime",
-      ),
+      modelFacts.prepareSessionRowModelSearch({
+        cfg,
+        rowContext,
+        rows: [{ agentId: "main", entry }],
+      })("dynamic-runtime"),
     ).toBe(true);
     expect(supports).not.toHaveBeenCalled();
   });
@@ -207,17 +265,14 @@ test("native models and prepared runtime labels outside the catalog retain their
     getTarget: (sessionKey) => targets.get(sessionKey),
     getModelFacts,
     modelSearchMayMatch: (search) =>
-      modelFacts.mayMatchSessionRowModelSearch(
-        {
-          cfg,
-          rowContext,
-          modelCatalog: [],
-          rows: [
-            { agentId: "main", entry, preparedRuntimeOwnership: ownership, preparedAcpMeta: acp },
-          ],
-        },
-        search,
-      ),
+      modelFacts.prepareSessionRowModelSearch({
+        cfg,
+        rowContext,
+        modelCatalog: [],
+        rows: [
+          { agentId: "main", entry, preparedRuntimeOwnership: ownership, preparedAcpMeta: acp },
+        ],
+      })(search),
     configuredAgentIds: new Set(["main"]),
     getRowContext: () => rowContext,
     involvementKeys: () => new Set(),
@@ -353,7 +408,13 @@ test("search preserves the eager predicate's rows and order across vocabulary su
     {
       sessionId: `row-${index}`,
       updatedAt: index,
-      displayName: choose([undefined, "Per-session controls", "München", "한국어"]),
+      displayName: choose([
+        undefined,
+        "Per-session controls",
+        "München",
+        "한국어",
+        "日本語 🦞 MiXeD",
+      ]),
       label: choose([undefined, "Sparse title", "Investigation"]),
       status: choose([undefined, ...persistedStatuses]),
       modelProvider: choose(providers),
@@ -435,18 +496,15 @@ test("search preserves the eager predicate's rows and order across vocabulary su
     getTarget: (key) => targets.get(key),
     getModelFacts: (key) => facts.get(key)!,
     modelSearchMayMatch: (search) =>
-      modelFacts.mayMatchSessionRowModelSearch(
-        {
-          cfg: params.cfg,
-          rowContext,
-          rows: rows.map(([key, entry]) => ({
-            agentId: targets.get(key)!.agentId,
-            entry,
-            materialized: { source: facts.get(key)! },
-          })),
-        },
-        search,
-      ),
+      modelFacts.prepareSessionRowModelSearch({
+        cfg: params.cfg,
+        rowContext,
+        rows: rows.map(([key, entry]) => ({
+          agentId: targets.get(key)!.agentId,
+          entry,
+          materialized: { source: facts.get(key)! },
+        })),
+      })(search),
     configuredAgentIds: new Set(["main", "research"]),
     identityNames: new Map([
       ["main", "Helpful Assistant"],
@@ -480,6 +538,9 @@ test("search preserves the eager predicate's rows and order across vocabulary su
     "per session controls",
     "München",
     "한국어",
+    "日本語",
+    "🦞",
+    "MIXED",
     "agent:main",
   ];
   const searches = [...vocabulary];

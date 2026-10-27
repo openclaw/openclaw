@@ -1,11 +1,80 @@
 import { expect, it, vi } from "vitest";
+import { registerAgentHarness } from "../agents/harness/registry.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
 import type { PreparedGatewayModelCatalog } from "./server-model-catalog.types.js";
 import { createSessionRowProjectionCatalog } from "./session-row-projection-catalog.js";
+import { createSessionRowModelFactsReader } from "./session-row-projection-materialize.js";
+import { create as createRow } from "./session-row-projection-record.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
+
+it("reuses model search vocabulary until the row facts owner publishes a change", () => {
+  const target = {
+    agentId: "main",
+    key: "agent:main:search",
+    storeTarget: { agentId: "main", storePath: "/synthetic/search" },
+  };
+  let row = createRow(target, {
+    sessionId: "search",
+    updatedAt: 1,
+    modelProvider: "fixture",
+    model: "first-model",
+  });
+  let invalidate = () => {};
+  const rows = vi.fn(() => [row]);
+  const state = { cfg: {}, rowContext: buildSessionListRowMetadataContext({ now: 1 }) };
+  const owner = {
+    rows,
+    lookup: () => row,
+    dirty: new Set<string>(),
+    readSourceEntry: () => row.storedEntry,
+    state: () => state,
+    onFactsChange: (listener: () => void) => {
+      invalidate = listener;
+    },
+  };
+  const reader = createSessionRowModelFactsReader(owner);
+  expect(reader.modelSearchMayMatch("first-model")).toBe(true);
+  expect(reader.modelSearchMayMatch("unmatched")).toBe(false);
+  expect(rows).toHaveBeenCalledOnce();
+  row = createRow(target, { ...row.storedEntry!, model: "next-model" });
+  invalidate();
+  expect(reader.modelSearchMayMatch("next-model")).toBe(true);
+  expect(reader.modelSearchMayMatch("first-model")).toBe(false);
+  expect(rows).toHaveBeenCalledTimes(2);
+  for (const alias of ["first-scope", "second-scope", "first-scope"]) {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "fixture",
+      source: "fixture.ts",
+      provider: {
+        id: "fixture",
+        label: "Fixture",
+        auth: [],
+        normalizeModelId: ({ modelId }) => (modelId === "next-model" ? alias : modelId),
+      },
+    });
+    withPluginRuntimeRegistryScope(registry, () => {
+      expect(reader.modelSearchMayMatch(alias)).toBe(true);
+      expect(reader.modelSearchMayMatch("other-scope")).toBe(false);
+      expect(reader.modelSearchMayMatch("late-runtime")).toBe(false);
+      const scans = rows.mock.calls.length;
+      registerAgentHarness({
+        id: "late-runtime",
+        label: "Late runtime",
+        runAttempt: () => {
+          throw new Error("Search must not execute a turn");
+        },
+      });
+      expect(reader.modelSearchMayMatch("late-runtime")).toBe(true);
+      expect(rows).toHaveBeenCalledTimes(scans);
+    });
+  }
+});
 
 it("retains completed catalog facts during runtime replacement and adopts completed or failed publications", async () => {
   const pluginRegistry = createEmptyPluginRegistry();
