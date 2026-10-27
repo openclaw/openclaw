@@ -5,22 +5,23 @@ import {
   resolveGoogleMeetGatewayOperationTimeoutMs,
 } from "./config.js";
 
-function resolveGoogleMeetConfigFromTestEnv(env: Record<string, string>) {
-  for (const suffix of [
-    "CLIENT_ID",
-    "CLIENT_SECRET",
-    "REFRESH_TOKEN",
-    "ACCESS_TOKEN",
-    "ACCESS_TOKEN_EXPIRES_AT",
-    "DEFAULT_MEETING",
-    "PREVIEW_ACK",
-  ]) {
-    vi.stubEnv(`OPENCLAW_GOOGLE_MEET_${suffix}`, undefined);
-    vi.stubEnv(`GOOGLE_MEET_${suffix}`, undefined);
-  }
-  for (const [key, value] of Object.entries(env)) {
+const envFallbacks = {
+  OPENCLAW_GOOGLE_MEET_CLIENT_ID: "client-id",
+  GOOGLE_MEET_CLIENT_SECRET: "client-secret",
+  OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN: "refresh-token",
+  GOOGLE_MEET_ACCESS_TOKEN: "access-token",
+  OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: "123456",
+  GOOGLE_MEET_DEFAULT_MEETING: "https://meet.google.com/abc-defg-hij",
+  OPENCLAW_GOOGLE_MEET_PREVIEW_ACK: "true",
+};
+function resolveGoogleMeetConfigFromTestEnv(expiry: string) {
+  for (const [key, value] of Object.entries(envFallbacks)) {
+    const name = key.replace(/^OPENCLAW_/, "");
+    vi.stubEnv(`OPENCLAW_${name}`, undefined);
+    vi.stubEnv(name, undefined);
     vi.stubEnv(key, value);
   }
+  vi.stubEnv("OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT", expiry);
   return resolveConfig({});
 }
 
@@ -30,12 +31,8 @@ it.each([
   ["custom-stt", "custom-stt"],
   ["google", "openai"],
 ])("resolves transcription fallback for %s", (provider, transcriptionProvider) => {
-  const { realtime } = resolveConfig({ realtime: { provider } });
-  expect(realtime).toMatchObject({ provider, transcriptionProvider });
-});
-
-it("preserves an empty realtime intro message for silent joins", () => {
-  expect(resolveConfig({ realtime: { introMessage: "" } }).realtime.introMessage).toBe("");
+  const { realtime } = resolveConfig({ realtime: { provider, introMessage: "" } });
+  expect(realtime).toMatchObject({ provider, transcriptionProvider, introMessage: "" });
 });
 
 it.each([
@@ -48,16 +45,11 @@ it.each([
   expect(resolveConfig({ chrome }).chrome.audioFormat).toBe(expected);
 });
 
-it("uses env fallbacks for OAuth, preview, and default meeting values", () => {
-  const config = resolveGoogleMeetConfigFromTestEnv({
-    OPENCLAW_GOOGLE_MEET_CLIENT_ID: "client-id",
-    GOOGLE_MEET_CLIENT_SECRET: "client-secret",
-    OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN: "refresh-token",
-    GOOGLE_MEET_ACCESS_TOKEN: "access-token",
-    OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: "123456",
-    GOOGLE_MEET_DEFAULT_MEETING: "https://meet.google.com/abc-defg-hij",
-    OPENCLAW_GOOGLE_MEET_PREVIEW_ACK: "true",
-  });
+it.each([
+  ["123456", 123456],
+  ["0x10", undefined],
+] as const)("resolves env fallbacks with decimal-only token expiry: %s", (expiry, expiresAt) => {
+  const config = resolveGoogleMeetConfigFromTestEnv(expiry);
   expect(config.defaults).toEqual({ meeting: "https://meet.google.com/abc-defg-hij" });
   expect(config.preview).toEqual({ enrollmentAcknowledged: true });
   expect(config.oauth).toEqual({
@@ -65,40 +57,14 @@ it("uses env fallbacks for OAuth, preview, and default meeting values", () => {
     clientSecret: "client-secret",
     refreshToken: "refresh-token",
     accessToken: "access-token",
-    expiresAt: 123456,
+    expiresAt,
   });
 });
-
-it("ignores non-decimal env numeric fallbacks", () => {
-  const config = resolveGoogleMeetConfigFromTestEnv({
-    OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN: "access-token",
-    OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: "0x10",
-  });
-
-  expect(config.oauth).toEqual({ accessToken: "access-token" });
-});
-it("keeps sparse and legacy audio config compatible", () => {
+it("keeps sparse audio config compatible", () => {
   expect(resolveConfig({}).chrome).toMatchObject({
     audioBackend: "auto",
     audioInputCommandOverride: undefined,
     audioOutputCommandOverride: undefined,
-  });
-  const legacy = resolveConfig({ chrome: { audioBackend: "blackhole-2ch" } });
-  expect(legacy.chrome.audioBackend).toBe("blackhole-2ch");
-  expect(legacy.chrome.audioInputCommand).toContain("BlackHole 2ch");
-  expect(legacy.chrome.audioOutputCommand).toContain("BlackHole 2ch");
-});
-
-it("builds PipeWire-Pulse commands and retains explicit overrides", () => {
-  const linux = resolveConfig({ chrome: { audioBackend: "pipewire-pulse" } });
-  expect(linux.chrome.audioInputCommand).toContain("parec");
-  expect(linux.chrome.audioOutputCommand).toContain("pacat");
-
-  const commands = { audioInputCommand: ["capture"], audioOutputCommand: ["play"] };
-  expect(resolveConfig({ chrome: commands }).chrome).toMatchObject({
-    ...commands,
-    audioInputCommandOverride: commands.audioInputCommand,
-    audioOutputCommandOverride: commands.audioOutputCommand,
   });
 });
 

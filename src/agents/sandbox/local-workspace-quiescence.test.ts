@@ -41,7 +41,6 @@ vi.mock("./docker.js", () => ({
 }));
 // mock-isolation: The fixture chooses runtime visibility; mount-plan tests cover actual backing visibility.
 vi.mock("./mount-plan.js", () => ({
-  // This fixture owns runtime selection; mount-plan.test.ts covers actual backing visibility.
   sandboxContainerShowsWorkspacePaths: mocks.imageBacking,
 }));
 import {
@@ -142,7 +141,21 @@ it("persists exact container and browser custody before pausing and resumes only
   expect(mocks.browserCurrent).toHaveBeenCalledTimes(3);
   await resume();
   expect(commands("unpause")).toEqual([browserId, id].map((runtimeId) => ["unpause", runtimeId]));
+  expect(persist).toHaveBeenCalledTimes(4);
+  expect(retained).toEqual([]);
 });
+
+it.each([false, true])(
+  "clears orphaned custody only when present (retained=%s)",
+  async (orphaned) => {
+    mocks.read.mockResolvedValue({ entries: [] });
+    retained = orphaned ? [{ name: "gone", id }] : [];
+    await (await quiesce()).resume();
+    expect(retained).toEqual([]);
+    expect(persist.mock.calls).toEqual(orphaned ? [[[]]] : []);
+    expect(mocks.command).not.toHaveBeenCalled();
+  },
+);
 
 it("records each released generation before a later resume failure and re-fences running recovery", async () => {
   const otherId = "b".repeat(64);
@@ -290,35 +303,18 @@ it("fences a dedicated stream writer and requires settlement before retiring its
     receipt: { version: 1, target, attemptId, parentContainerId: id, containerId: childId },
   };
   mocks.custody.mockResolvedValue([record]);
-  mocks.command.mockImplementation(async (_engine, args: string[]) => ({
-    code: 0,
-    stderr: "",
-    stdout: args.includes("{{.State.Paused}}")
-      ? "true"
-      : args[0] === "inspect"
-        ? `${args.at(-1) === childId ? childId : id} true false`
-        : "",
-  }));
+  mockEngine({ owned: id, [`openclaw-stream-${attemptId}`]: childId }, () => {});
   const persistCustody = vi.fn();
-  const { resume, retire } = await quiesceLocalWorkspace({
-    workspaceDir: entry.workspaceDir,
-    retained: [],
-    persist: persistCustody,
-    assertCurrent: () => {},
-  });
+  const { resume, retire } = await quiesce({ persist: persistCustody });
   expect(persistCustody).toHaveBeenLastCalledWith([
     { name: entry.containerName, id },
     { name: `openclaw-stream-${attemptId}`, id: childId },
   ]);
-  expect(
-    mocks.command.mock.calls.filter((call) => call[1][0] === "pause").map((call) => call[1][1]),
-  ).toEqual([id, childId]);
+  expect(commands("pause")).toEqual([id, childId].map((runtimeId) => ["pause", runtimeId]));
   await expect(retire()).rejects.toThrow("Settle persistent streams");
-  expect(mocks.command.mock.calls.some((call) => call[1][0] === "rm")).toBe(false);
+  expect(commands("rm")).toEqual([]);
   await resume();
-  expect(
-    mocks.command.mock.calls.filter((call) => call[1][0] === "unpause").map((call) => call[1][1]),
-  ).toEqual([childId, id]);
+  expect(commands("unpause")).toEqual([childId, id].map((runtimeId) => ["unpause", runtimeId]));
   expect(mocks.custodyCurrent).toHaveBeenCalledWith(record);
   expect(persistCustody).toHaveBeenLastCalledWith([]);
 

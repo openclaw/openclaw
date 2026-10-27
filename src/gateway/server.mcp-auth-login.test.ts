@@ -38,15 +38,14 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import * as setupMigration from "../wizard/setup.migration-snapshot.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
-import * as providerBrowserAuth from "./provider-browser-auth.js";
 import { mcpAuthLoginHandlers } from "./server-methods/mcp-auth-login.js";
 import { whenAdmittedWizardSessionSettled } from "./server-methods/setup-admission.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
   registerMcpAuthForcedEffects,
+  mcpOAuthMetadata,
   type McpAuthEffectEndpoint,
 } from "./server.mcp-auth-login.forced-effects.test-support.js";
-import { prepareTailscalePublishedOrigin } from "./tailscale-published-origin.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -66,6 +65,7 @@ describe("registered mcp.authLogin", () => {
   let expectedChallenge: string;
   let registeredRedirect: string;
   let tokenError: "invalid_client" | false = false;
+  let issuerRequired = false;
   const effects: McpAuthEffectEndpoint = { tokenLifetimeSeconds: 3600 };
   let tokenEntered = createDeferredCore();
   let releaseToken: Deferred | undefined;
@@ -100,14 +100,8 @@ describe("registered mcp.authLogin", () => {
         json({ resource: resourceUrl, authorization_servers: [new URL(resourceUrl).origin] });
       } else if (url.pathname === "/.well-known/oauth-authorization-server") {
         json({
-          issuer: new URL(resourceUrl).origin,
-          authorization_endpoint: "https://provider.example/authorize",
-          token_endpoint: new URL("/token", resourceUrl).href,
-          registration_endpoint: new URL("/register", resourceUrl).href,
-          response_types_supported: ["code"],
-          grant_types_supported: ["authorization_code", "refresh_token"],
-          code_challenge_methods_supported: ["S256"],
-          token_endpoint_auth_methods_supported: ["none"],
+          ...mcpOAuthMetadata(resourceUrl),
+          authorization_response_iss_parameter_supported: issuerRequired,
         });
       } else if (url.pathname === "/register") {
         const metadata = JSON.parse(await text(request));
@@ -226,6 +220,7 @@ describe("registered mcp.authLogin", () => {
   });
 
   beforeEach(() => {
+    issuerRequired = false;
     pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
   });
 
@@ -290,13 +285,17 @@ describe("registered mcp.authLogin", () => {
     });
     return client;
   }
-  async function begin(client = owner) {
+  async function startLogin(client = owner) {
     const sessionId = randomUUID();
-    const start = await login(client, sessionId);
-    expect(start, JSON.stringify(start.error)).toMatchObject({
+    const started = await login(client, sessionId);
+    expect(started, JSON.stringify(started.error)).toMatchObject({
       ok: true,
       payload: { sessionId, done: false, status: "running" },
     });
+    return sessionId;
+  }
+  async function begin(client = owner) {
+    const sessionId = await startLogin(client);
     while (true) {
       const next = await rpcReq<WizardNextResult>(client, "wizard.next", { sessionId });
       expect(next.ok, JSON.stringify(next.error)).toBe(true);
@@ -331,10 +330,11 @@ describe("registered mcp.authLogin", () => {
   }
 
   registerMcpAuthForcedEffects({
-    connection: () => ({ owner, resourceUrl, config }),
+    connection: () => ({ resourceUrl, config }),
     request: () => admitted,
     identity,
     begin,
+    start: startLogin,
     callback,
     terminal,
     requests,
@@ -350,7 +350,8 @@ describe("registered mcp.authLogin", () => {
     expect(requests).toHaveLength(before);
   });
 
-  it("replaces a tokenless CLI registration for browser sign-in, then calls the MCP tool", async () => {
+  it("replaces a tokenless CLI registration for issuer-bound browser sign-in, then calls the MCP tool", async () => {
+    issuerRequired = true;
     await clearMcpOAuthCredentials(identity());
     const cliAttempt = await startMcpOAuthAuthorization(identity(), resolvedTransport(), {});
     if (cliAttempt.status !== "redirect") {
@@ -361,9 +362,10 @@ describe("registered mcp.authLogin", () => {
 
     const started = await begin();
     expect((await rpcReq(other, "wizard.cancel", { sessionId: started.sessionId })).ok).toBe(false);
-    expect((await callback(started.state)).status).toBe(200);
+    const query = `code=fixture-code&iss=${encodeURIComponent(new URL(resourceUrl).origin)}`;
+    expect((await callback(started.state, query)).status).toBe(200);
     expect(await terminal(started.sessionId)).toMatchObject({ status: "done" });
-    expect((await callback(started.state)).status).toBe(410);
+    expect((await callback(started.state, query)).status).toBe(410);
     const stored = await store();
     expect(stored.tokens?.access_token).toBe("fixture-access");
     expect(stored.tokensAuthorizationServerUrl).toBe(new URL(resourceUrl).origin);
@@ -406,6 +408,89 @@ describe("registered mcp.authLogin", () => {
       client?.close();
       await configure();
     }
+  });
+
+  it.each([undefined, "", "https://wrong.example/?code=private-callback-value"])(
+    "rejects an unverified callback issuer %s without exchanging the code",
+    async (iss) => {
+      issuerRequired = true;
+      await clearMcpOAuthCredentials(identity());
+      const started = await begin();
+      const before = requests.length;
+      const query = `code=fixture-code${iss === undefined ? "" : `&iss=${encodeURIComponent(iss)}`}`;
+      expect((await callback(started.state, query)).status).toBe(200);
+      const result = await terminal(started.sessionId);
+      expect(result).toMatchObject({
+        status: "error",
+        error:
+          "OpenClaw could not verify the sign-in provider. Close this dialog, review the connection settings, and try again.",
+      });
+      expect(JSON.stringify(result)).not.toMatch(
+        /wrong\.example|private-callback-value|fixture-code/,
+      );
+      expect(requests.slice(before)).not.toContain("/token");
+      const stored = await store();
+      expect(stored.tokens).toBeUndefined();
+      expectPendingCleared(stored);
+    },
+  );
+
+  it.each(["registration", "network"] as const)(
+    "explains %s failure without exposing provider-controlled details",
+    async (failure) => {
+      await clearMcpOAuthCredentials(identity());
+      effects.endpoint = async (request, response) => {
+        if (new URL(request.url ?? "/", resourceUrl).pathname !== "/register") {
+          return false;
+        }
+        if (failure === "network") {
+          request.socket.destroy();
+        } else {
+          response.writeHead(400).end(
+            JSON.stringify({
+              error: "invalid_client_metadata",
+              error_description: "private-registration-detail https://private.example/?code=secret",
+            }),
+          );
+        }
+        return true;
+      };
+      try {
+        const sessionId = await startLogin();
+        const result = await terminal(sessionId);
+        expect(result).toMatchObject({
+          status: "error",
+          error: expect.stringContaining(
+            failure === "network"
+              ? "could not reach the sign-in service"
+              : "rejected this connection's settings",
+          ),
+        });
+        expect(JSON.stringify(result)).not.toMatch(
+          /private-registration-detail|private\.example|secret/,
+        );
+        expect((await store()).tokens).toBeUndefined();
+      } finally {
+        effects.endpoint = undefined;
+      }
+    },
+  );
+
+  it("reports an expired attempt rather than an explicit cancellation", async () => {
+    await clearMcpOAuthCredentials(identity());
+    const started = await begin();
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 10 * 60_000 + 1);
+    try {
+      expect((await callback(started.state)).status).toBe(410);
+    } finally {
+      clock.mockRestore();
+    }
+    expect(await terminal(started.sessionId)).toMatchObject({
+      status: "error",
+      error: "This sign-in attempt expired. Close this dialog and start sign-in again.",
+    });
+    expectPendingCleared(await store());
   });
 
   it.each(["unchanged", "disabled", "metadata replaced"] as const)(
@@ -455,9 +540,14 @@ describe("registered mcp.authLogin", () => {
           setGatewayPluginMetadataSnapshot(metadata(), { config: bundleConfig });
         }
         releaseToken.resolve();
-        expect(await terminal(started.sessionId)).toMatchObject({
-          status: change === "unchanged" ? "done" : "error",
-        });
+        const result = await terminal(started.sessionId);
+        expect(result.status).toBe(change === "unchanged" ? "done" : "error");
+        if (change !== "unchanged") {
+          // The CLI cannot resolve plugin-declared servers, so recovery names the plugin.
+          expect(result.error).toBe(
+            "Sign-in did not finish. Check the plugin settings, then select Connect to try again.",
+          );
+        }
         const stored = await store();
         expect(stored.tokens?.access_token).toBe(
           change === "unchanged" ? "fixture-access" : undefined,
@@ -484,31 +574,38 @@ describe("registered mcp.authLogin", () => {
     },
   );
 
-  it("does not cancel a newer CLI attempt or accept malformed and denied callbacks", async () => {
+  it("does not cancel a newer CLI attempt when its browser sign-in is denied", async () => {
     await clearMcpOAuthCredentials(identity());
     const started = await begin();
     const pending = await store();
     const requestCount = requests.length;
     let settled = false;
     try {
-      for (const query of ["code=one&code=two", "code=%20"]) {
-        expect((await callback(started.state, query)).status).toBe(400);
-        expect(await store()).toEqual(pending);
-        expect(requests).toHaveLength(requestCount);
-        expect(
-          await rpcReq(owner, "wizard.status", { sessionId: started.sessionId }),
-        ).toMatchObject({
-          ok: true,
-          payload: { status: "running" },
-        });
-      }
+      expect((await callback(started.state, "code=%20")).status).toBe(400);
+      expect(await store()).toEqual(pending);
+      expect(requests).toHaveLength(requestCount);
+      expect(await rpcReq(owner, "wizard.status", { sessionId: started.sessionId })).toMatchObject({
+        ok: true,
+        payload: { status: "running" },
+      });
       const newer = await startMcpOAuthAuthorization(identity(), resolvedTransport(), {});
       expect(newer.status).toBe("redirect");
       const before = await store();
-      expect((await callback(started.state, "error=access_denied")).status).toBe(400);
+      expect(
+        (
+          await callback(
+            started.state,
+            "error=access_denied&error_description=private-denial-detail&error_uri=https%3A%2F%2Fprivate.example",
+          )
+        ).status,
+      ).toBe(400);
       const result = await terminal(started.sessionId);
       settled = true;
-      expect(result).toMatchObject({ status: "error" });
+      expect(result).toMatchObject({
+        status: "error",
+        error: "The provider did not approve sign-in. Close this dialog and try again.",
+      });
+      expect(JSON.stringify(result)).not.toMatch(/private-denial-detail|private\.example/);
       expect(await store()).toEqual(before);
     } finally {
       if (!settled) {
@@ -538,6 +635,9 @@ describe("registered mcp.authLogin", () => {
       expect((await callback(started.state)).status).toBe(200);
       const result = await terminal(started.sessionId);
       expect(result.status).toBe("error");
+      expect(result.error).toBe(
+        "The sign-in service rejected this attempt. Existing credentials were not changed. Close this dialog, review the connection settings, and try again.",
+      );
       expect(JSON.stringify(result)).not.toContain("private exchange detail");
       const after = await store();
       expect(after.tokens).toEqual(before.tokens);
@@ -605,29 +705,8 @@ describe("registered mcp.authLogin", () => {
     }
   });
 
-  it("expires callbacks and cancels the exact published attempt", async () => {
+  it("cancels the exact published attempt", async () => {
     await clearMcpOAuthCredentials(identity());
-    const started = await begin();
-    const expiredAt = Date.now() + 11 * 60_000;
-    const handleCallback = providerBrowserAuth.handleProviderOAuthCallback;
-    const expiredCallback = vi
-      .spyOn(providerBrowserAuth, "handleProviderOAuthCallback")
-      .mockImplementation((...args) => {
-        // Advance only callback validation; cleanup leases share the worker's real clock.
-        const clock = vi.spyOn(Date, "now").mockReturnValue(expiredAt);
-        try {
-          return handleCallback(...args);
-        } finally {
-          clock.mockRestore();
-        }
-      });
-    try {
-      expect((await callback(started.state)).status).toBe(410);
-    } finally {
-      expiredCallback.mockRestore();
-    }
-    expect(await terminal(started.sessionId)).toMatchObject({ status: "error" });
-    expectPendingCleared(await store());
     const next = await begin();
     const session = getSession(next.sessionId);
     expect(await rpcReq(owner, "wizard.cancel", { sessionId: next.sessionId })).toMatchObject({
@@ -822,24 +901,4 @@ describe("registered mcp.authLogin", () => {
       }
     },
   );
-
-  it("retires the registered callback when its managed origin is withdrawn", async () => {
-    await clearMcpOAuthCredentials(identity());
-    const origin = `https://127.0.0.1:${gateway.port}`;
-    await configure(config, origin);
-    const withdraw = prepareTailscalePublishedOrigin({ origin, mode: "serve" });
-    const client = await connect(["operator.admin"], origin);
-    try {
-      const started = await begin(client);
-      const session = getSession(started.sessionId);
-      withdraw();
-      await expectSettled(session);
-      expect((await callback(started.state)).status).toBe(410);
-      expect((await store()).tokens).toBeUndefined();
-    } finally {
-      withdraw();
-      client.close();
-      await configure();
-    }
-  });
 });

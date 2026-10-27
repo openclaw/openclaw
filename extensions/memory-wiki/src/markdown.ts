@@ -104,7 +104,6 @@ function capWikiValueWithHash(raw: string, maxBytes: number, fallback: string): 
 export function slugifyWikiSegment(raw: string): string {
   const slug = normalizeLowercaseStringOrEmpty(raw)
     .replace(/[^\p{L}\p{N}\p{M}]+/gu, "-")
-    .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
   if (!slug) {
     return "page";
@@ -343,8 +342,11 @@ function findNotesHumanBlock(
   return { start: bodyOffset + start, end: bodyOffset + endMarker + HUMAN_END_MARKER.length };
 }
 
-export function extractHumanNotesBlock(page: string): string | null {
-  const block = findNotesHumanBlock(page);
+export function extractHumanNotesBlock(
+  page: string,
+  options?: { producerMarkdown?: boolean },
+): string | null {
+  const block = findNotesHumanBlock(page, options?.producerMarkdown);
   if (!block) {
     return null;
   }
@@ -442,14 +444,17 @@ export function formatWikiLink(params: {
   sourceRelativeTo?: string;
   title: string;
 }): string {
-  const withoutExtension = params.relativePath.replace(/\.md$/i, "");
   if (params.renderMode === "obsidian") {
-    return `[[${withoutExtension}|${params.title}]]`;
+    return `[[${params.relativePath.replace(/\.md$/i, "")}|${params.title}]]`;
   }
   const linkTarget = params.sourceRelativeTo
     ? path.posix.relative(path.posix.dirname(params.sourceRelativeTo), params.relativePath)
     : params.relativePath;
-  return `[${params.title}](${linkTarget})`;
+  // Angle brackets keep spaces and parentheses inside the link destination.
+  const destination = /[\s()<>]/.test(linkTarget)
+    ? `<${linkTarget.replace(/[<>]/g, "\\$&")}>`
+    : linkTarget;
+  return `[${params.title}](${destination})`;
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {

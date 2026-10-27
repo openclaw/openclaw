@@ -102,26 +102,45 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("resolves built-in branding before the palette and catalog load", () => {
-  const id = "knot";
-  patchSettings({ theme: id });
-  setCurrentThemeBranding(resolveThemeBranding({ mascot: "none", critters: [] }));
-  const { gateway } = createGatewayStoreTestStore();
-  const theme = createApplicationTheme(loadSettings(), gateway);
-  try {
-    expect(theme.branding).toEqual({
-      ...resolveThemeBranding(undefined),
-      mascot: "claw",
-      workingPhrases: undefined,
-      critters: [],
-      avatarHat: undefined,
-    });
-    expect(currentThemeBranding()).toEqual(theme.branding);
-  } finally {
-    theme.dispose();
-    document.getElementById(`openclaw-theme-palette-${id}`)?.remove();
-  }
-});
+it.each([
+  ["knot", "dark", "claw", "claw", "claw", true],
+  ["knot", "light", "claw", "claw", "claw", true],
+  ["crt", "dark", "none", "mark", "dots", false],
+  ["crt", "light", "none", "mark", "dots", false],
+  ["phosphor", "dark", "none", "mark", "dots", false],
+  ["phosphor", "light", "none", "mark", "dots", false],
+] as const)(
+  "resolves %s branding before loading its %s palette",
+  (id, themeMode, mascot, brandIcon, workingIndicator, lobsterdex) => {
+    patchSettings({ theme: id, themeMode });
+    setCurrentThemeBranding(resolveThemeBranding({ mascot: "none", critters: [] }));
+    const { gateway } = createGatewayStoreTestStore();
+    const theme = createApplicationTheme(loadSettings(), gateway);
+    try {
+      expect(theme.branding).toEqual({
+        mascot,
+        brandName: "OpenClaw",
+        brandIcon,
+        workingIndicator,
+        lobsterdex,
+        communityLinks: true,
+        workingPhrases: undefined,
+        critters: [],
+        avatarHat: undefined,
+      });
+      expect(currentThemeBranding()).toEqual(theme.branding);
+      const palette = expectDefined(
+        document.getElementById(`openclaw-theme-palette-${id}`),
+        "built-in theme palette",
+      );
+      palette.dispatchEvent(new Event("load"));
+      expect(document.documentElement.dataset).toMatchObject({ themeId: id, themeMode });
+    } finally {
+      theme.dispose();
+      document.getElementById(`openclaw-theme-palette-${id}`)?.remove();
+    }
+  },
+);
 
 it("notifies leaf branding consumers when a newly selected built-in palette loads", async () => {
   const { gateway, current } = createGatewayStoreTestStore();
@@ -394,6 +413,11 @@ it("does not report a previous palette failure after a local theme switch", asyn
     patchSettings({ theme: replacement.id });
     await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe(replacement.id));
     expect(applicationTheme.settings.theme).toBe(replacement.id);
+    let currentReadSettled = false;
+    void applicationTheme.catalog?.read?.result.then(() => {
+      currentReadSettled = true;
+    });
+    await vi.waitFor(() => expect(currentReadSettled).toBe(true));
     expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
       "--bg: #332211;",
     );
@@ -540,6 +564,8 @@ it.each([
           palette ? { id: personal.id } : {},
         ),
       );
+      const retiredRead = expectDefined(applicationTheme.catalog?.read, "retired catalog read");
+      expect(applicationTheme.catalog?.read).toBe(retiredRead);
       if (boundary === "client") {
         gateway.connect();
       }
@@ -574,6 +600,7 @@ it.each([
       } else {
         await vi.waitFor(() => expect(applicationTheme.catalog?.themes).toEqual(BUILTIN_THEMES));
       }
+      await expect(retiredRead.result).resolves.toBeUndefined();
       retired.resolve(palette ? { ...response, theme: personal, definition } : catalog());
       await retired.promise;
       if (palette) {

@@ -521,6 +521,8 @@ async function preparePreExistingFailure(
       repositoryId,
       pr: evidence.pr,
       head: evidence.head,
+      ciRunId: evidence.runId,
+      ciRunAttempt: evidence.runAttempt,
       main: qualifiedMain,
       statusId: combined[0].statusId,
     });

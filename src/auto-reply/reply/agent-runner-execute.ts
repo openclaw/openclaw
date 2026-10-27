@@ -61,6 +61,10 @@ export function continueStalledReplyTurn({
   runFollowupTurn: FinalizeReplyAgentRunInput["runFollowupTurn"];
   guidance?: string;
 }): boolean {
+  // A rerun would hit the same saturated quota.
+  if (replyOperation.staleExpiryReason === "rate_limited") {
+    return false;
+  }
   // Preflight can stall before admission persists the request. Transcript-only
   // recovery cannot answer that input; leave its notice with dispatch.
   if (
@@ -154,7 +158,7 @@ export async function executePreparedReplyAgentRun(
       }
     : context.opts;
   const activitySummaryCompletion =
-    !context.isHeartbeat && context.sessionKey && context.storePath
+    context.sessionKey && context.storePath
       ? getGatewayContextResolver(
           context.replyOperation,
         )?.()?.sessionActivitySummaries?.beginCompletion(
@@ -238,8 +242,7 @@ async function executePreparedReplyAgentRunWithCompletion(
   // New input and its recovery claim share admission; otherwise lifecycle start owns the claim.
   await admitFollowupRunLifecycle(followupRun);
   const runWithGoalReturn = createGoalContinuationReturn(
-    !context.isHeartbeat &&
-      sessionKey &&
+    sessionKey &&
       storePath &&
       activeSessionEntry?.goal?.status === "active" &&
       (activeSessionEntry.agentHarnessId === undefined ||
@@ -319,7 +322,7 @@ async function executePreparedReplyAgentRunWithCompletion(
         }
         await checkpointBeforeAgentReply(hookCheckpoint);
         activeSessionEntry = getActiveSessionEntry();
-        return { ...hookResult, reply: hookReply };
+        return hookResult;
       },
     },
     () =>

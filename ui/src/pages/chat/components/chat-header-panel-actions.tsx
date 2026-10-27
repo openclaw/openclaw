@@ -13,9 +13,10 @@ import {
   type MenuEntry,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { ClearCompanion, ExternalPanelLink } from "../chat-pane-embedded-view.tsx";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ClearCompanion, ExternalPanelLink } from "../chat-panel-header-actions.tsx";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import {
   ensureSidebarConversation,
@@ -34,6 +35,8 @@ import {
 import type { HeaderMenuQuickAction } from "./chat-header-session-menu.ts";
 import { useChatQuickActionEntries, type ChatQuickAction } from "./chat-quick-action.tsx";
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type HeaderPanelAction = HeaderMenuQuickAction & { shortcut?: KeyboardShortcutCombo };
 

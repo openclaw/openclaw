@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
 import { createBackupArchive, type BackupCreateOptions } from "../infra/backup-create.js";
 import { resolveBackupNamespace, type BackupRetentionOptions } from "../infra/backup-retention.js";
@@ -44,7 +45,9 @@ export async function backupCreateCommand(
       stopArchive = stop;
       const options = {
         ...opts,
-        log: opts.log ?? (opts.json ? undefined : (message: string) => runtime.log(message)),
+        log:
+          opts.log ??
+          (opts.json ? undefined : (message: string) => runtime.log(sanitizeTerminalText(message))),
       };
       if (opts.to !== undefined) {
         const { createOffsiteBackupArchive } = await import("./backup-remote.js");
@@ -113,10 +116,12 @@ export async function backupCreateCommand(
         }
       }
       lines.push(...(result.warnings ?? []));
-      runtime.log(lines.join("\n"));
+      runtime.log(lines.map(sanitizeTerminalText).join("\n"));
       if (result.location) {
         runtime.log(
-          `Uploaded to ${result.location.name}/backups/${result.location.namespace}/${result.location.key} (${result.location.storedBytes} stored bytes).${result.localArchiveRetained ? " Local archive retained." : ""}`,
+          sanitizeTerminalText(
+            `Uploaded to ${result.location.name}/backups/${result.location.namespace}/${result.location.key} (${result.location.storedBytes} stored bytes).${result.localArchiveRetained ? " Local archive retained." : ""}`,
+          ),
         );
       }
       if (result.retention) {

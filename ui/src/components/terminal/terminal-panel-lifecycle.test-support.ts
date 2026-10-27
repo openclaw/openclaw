@@ -1,7 +1,8 @@
-import { afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalPanelToggleDetail } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
@@ -45,11 +46,10 @@ export function queueCatalog(catalog: CatalogSessionKey, agentId = "ops") {
 export function panelTestStorage(
   create: CreateGhosttyTerminalMock,
   timers = false,
-  afterUnmount = () => {},
+  afterUnmount: () => void | Promise<void> = () => {},
+  beforeUnmount = () => {},
 ) {
-  beforeAll(async () => {
-    await import("@openclaw/libterminal/browser");
-  });
+  beforeAll(async () => void (await import("@openclaw/libterminal/browser")));
   beforeEach(async () => {
     if (timers) {
       vi.useFakeTimers();
@@ -59,9 +59,10 @@ export function panelTestStorage(
     await i18n.setLocale("en");
   });
   afterEach(async () => {
+    beforeUnmount();
     document.body.replaceChildren();
     await Promise.resolve();
-    afterUnmount();
+    await afterUnmount();
     create.mockReset();
     vi.unstubAllGlobals();
     if (timers) {
@@ -72,6 +73,9 @@ export function panelTestStorage(
 
 export const panelButton = (panel: HTMLElement, selector = ".tabstrip-new") =>
   panel.querySelector<HTMLButtonElement>(selector);
+
+export const waitForPanelReady = (panel: HTMLElement) =>
+  waitForFast(() => expect(panelButton(panel)?.disabled).toBe(false));
 
 export function togglePanel(panel: OpenClawTerminalPanel, detail: TerminalPanelToggleDetail) {
   panel.handleToggleRequest(new CustomEvent("openclaw:terminal-toggle", { detail }));

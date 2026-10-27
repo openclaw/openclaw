@@ -35,20 +35,6 @@ import {
   runOpenClawAgentWriteAdmissions as writeMany,
 } from "./openclaw-agent-write-admission.js";
 
-function directTiming(ms: number, outcome = "ok") {
-  return {
-    operation: "direct",
-    outcome,
-    pid: process.pid,
-    threadId,
-    isMainThread,
-    reentrant: false,
-    elapsedMs: ms,
-    queueWaitMs: 0,
-    writerExecutionMs: ms,
-    completionDelayMs: 0,
-  };
-}
 const slowMessage = "slow agent database reservation";
 function warning(fields: Record<string, unknown>) {
   return [expect.objectContaining(fields), slowMessage];
@@ -231,6 +217,42 @@ it("keeps a missing reservation current when its database is created", async () 
   });
 });
 
+it.each(["symlink", "hardlink"] as const)(
+  "borrows one foreground admission for %s aliases without admitting a worker reservation",
+  async (kind) => {
+    const { options, root } = makeFixture("openclaw-batch-alias-");
+    fs.writeFileSync(options.path, "database");
+    const aliasDirectory = path.join(root, "alias");
+    const alias = {
+      ...options,
+      path:
+        kind === "symlink"
+          ? path.join(aliasDirectory, path.basename(options.path))
+          : path.join(root, "alias.sqlite"),
+    };
+    if (kind === "symlink") {
+      fs.symlinkSync(root, aliasDirectory, process.platform === "win32" ? "junction" : "dir");
+    } else {
+      fs.linkSync(options.path, alias.path);
+    }
+    await write(options, async () => {
+      expect(await writeMany([alias, options], () => "read complete")).toBe("read complete");
+    });
+    await workerWrite(options, async () => {
+      await expect(writeMany([alias, options], () => "unsafe read")).rejects.toThrow(
+        "cannot reenter an active SQLite writer admission",
+      );
+    });
+    const distinct = { ...options, path: path.join(root, "distinct.sqlite") };
+    fs.writeFileSync(distinct.path, "other database");
+    await write(options, async () => {
+      await expect(writeMany([options, distinct], () => "unsafe read")).rejects.toThrow(
+        "cannot reenter an active SQLite writer admission",
+      );
+    });
+  },
+);
+
 it.each([
   { count: 773, outcome: "ok" },
   { count: 5_000, outcome: "error" },
@@ -295,6 +317,65 @@ it("releases earlier reservations when a later database path is invalid", async 
   expect(await follower).toBe("released");
 });
 
+it.each(["worker", "multiple stores"] as const)(
+  "identifies the inherited %s admission when refusing a nested session read",
+  async (kind) => {
+    const { options } = makeFixture(
+      "openclaw-reentry-diagnostic-",
+      "usage",
+      path.join(...Array.from({ length: 12 }, () => "long-directory"), "agent.sqlite"),
+    );
+    const second = { ...options, path: path.join(path.dirname(options.path), "second.sqlite") };
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const consume = vi.fn();
+    const run = async () => {
+      const request = trackWorkerRequest("sqlite_writer", "session.entry.patch.commit");
+      request.started();
+      const privateRequest = trackWorkerRequest("sqlite_writer", "private-command-payload");
+      privateRequest.started();
+      await Promise.resolve();
+      now = 350;
+      const error = await writeMany(
+        kind === "worker" ? [options] : [options, second],
+        consume,
+      ).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain(
+        "Session read batch cannot reenter an active SQLite writer admission",
+      );
+      expect(String(error)).toContain(`"operation":"${kind === "worker" ? "worker" : "direct"}"`);
+      expect(String(error)).toContain('"ageMs":250');
+      expect(String(error)).toContain(`"threadId":${threadId}`);
+      expect(String(error)).toContain(`"isMainThread":${isMainThread}`);
+      expect(String(error)).toContain('"database":');
+      expect(String(error)).toContain("agent.sqlite");
+      expect(String(error)).not.toContain(path.dirname(options.path));
+      expect(String(error).length).toBeLessThan(600);
+      if (kind === "worker") {
+        expect(String(error)).toContain(
+          '"workerOperations":["session.entry.patch.commit","other"]',
+        );
+      } else {
+        expect(String(error)).toContain('"caller":"session-manager.write"');
+      }
+      expect(String(error)).not.toContain("private-command-payload");
+      expect(consume).not.toHaveBeenCalled();
+      request.completed();
+      privateRequest.completed();
+    };
+    if (kind === "worker") {
+      await workerWrite(options, run);
+    } else {
+      await write(options, run, false, undefined, undefined, "session-manager.write");
+    }
+    await expect(writeMany([options], () => "released")).resolves.toBe("released");
+  },
+);
+
 function fixture() {
   const base = makeFixture(
     "openclaw-reservation-diagnostic-",
@@ -316,13 +397,29 @@ function fixture() {
   return { ...base, clock, warnings };
 }
 
-it.each(["ok", "error"] as const)(
-  "reports both the slow direct holder and its long-waiting fast follower (%s)",
-  async (outcome) => {
+it.each([
+  ["direct", "ok"],
+  ["direct", "error"],
+  ["worker", "error"],
+] as const)(
+  "reports the slow %s holder and queued follower after %s settlement",
+  async (kind, outcome) => {
     const { options, clock, warnings, entered, release, order, hold } = fixture();
     const releaseFollower = createDeferred();
     const failure = new Error("synthetic-private-error");
     const value = { result: "synthetic-private-result" };
+    const controller = new AbortController();
+    const reserve = (run: () => Promise<typeof value>, holder = false) =>
+      kind === "worker"
+        ? workerWrite(options, run, undefined, holder ? controller.signal : undefined)
+        : write(
+            options,
+            run,
+            false,
+            undefined,
+            undefined,
+            holder ? "session-manager.write" : undefined,
+          );
     const observations: unknown[] = [];
     const diagnostics = channel("openclaw.agent-database.reservation");
     const observe = (observation: unknown) => {
@@ -332,21 +429,20 @@ it.each(["ok", "error"] as const)(
     const first = withSqliteReaderOwner(
       { operation: "synthetic-private-operation", ownerKind: "main" },
       () =>
-        write(
-          options,
-          async () => {
-            order.push("holder");
-            await hold();
-            if (outcome === "error") {
-              throw failure;
-            }
-            return value;
-          },
-          false,
-          undefined,
-          undefined,
-          "session-manager.write",
-        ),
+        reserve(async () => {
+          order.push("holder");
+          await hold();
+          if (kind === "worker") {
+            const request = trackWorkerRequest("sqlite_writer", "session.entry.patch.commit");
+            request.started();
+            request.completed();
+            controller.signal.throwIfAborted();
+          }
+          if (outcome === "error") {
+            throw failure;
+          }
+          return value;
+        }, true),
     );
     const settled = first.then(
       (result) => ({ result }),
@@ -354,7 +450,7 @@ it.each(["ok", "error"] as const)(
     );
     await entered.promise;
     clock.now = 100;
-    const next = write(options, async () => {
+    const next = reserve(async () => {
       order.push("follower");
       // The holder's diagnostic continuation may run after the follower starts.
       await releaseFollower.promise;
@@ -362,6 +458,9 @@ it.each(["ok", "error"] as const)(
       return value;
     });
     try {
+      if (kind === "worker") {
+        controller.abort(failure);
+      }
       expect(order).toEqual(["holder"]);
       clock.now = 1_600;
       release.resolve();
@@ -373,21 +472,29 @@ it.each(["ok", "error"] as const)(
       expect(await next).toBe(value);
       expect(order).toEqual(["holder", "follower"]);
       expect(warnings).toEqual([
-        [{ ...directTiming(1_600, outcome), caller: "session-manager.write" }, slowMessage],
         warning({
-          operation: "direct",
+          operation: kind,
+          outcome,
+          writerExecutionMs: 1_600,
+          reentrant: false,
+          ...(kind === "direct" ? { caller: "session-manager.write" } : {}),
+        }),
+        warning({
+          operation: kind,
           outcome: "ok",
           queueWaitMs: 1_500,
           writerExecutionMs: 25,
-          blockingOperation: "direct",
-          blockingCaller: "session-manager.write",
+          blockingOperation: kind,
+          ...(kind === "direct"
+            ? { blockingCaller: "session-manager.write" }
+            : { blockingWorkerOperations: ["session.entry.patch.commit"] }),
         }),
       ]);
       expect(JSON.stringify(warnings)).not.toContain("synthetic-private");
       expect(JSON.stringify(warnings)).not.toContain(options.path);
       expect(observations).toEqual([
         warnings[0]![0],
-        expect.objectContaining({ operation: "direct", writerExecutionMs: 25 }),
+        expect.objectContaining({ operation: kind, writerExecutionMs: 25 }),
       ]);
       expect(JSON.stringify(observations)).not.toContain("synthetic-private");
     } finally {
@@ -430,57 +537,6 @@ it("attributes a reentrant Worker reservation without letting foreground callbac
       blockingWorkerOperations: ["session.entry.patch.commit"],
     }),
   );
-});
-
-it("keeps an aborted worker reservation until settlement and reports it once", async () => {
-  const { options, clock, warnings, entered, release, order, hold, record } = fixture();
-  const controller = new AbortController();
-  const reason = new Error("synthetic-private-abort");
-  const first = workerWrite(
-    options,
-    async () => {
-      order.push("holder");
-      await hold();
-      const request = trackWorkerRequest("sqlite_writer", "session.entry.patch.commit");
-      request.started();
-      request.completed();
-      controller.signal.throwIfAborted();
-    },
-    undefined,
-    controller.signal,
-  );
-  const failed = expect(first).rejects.toBe(reason);
-  await entered.promise;
-  const next = workerWrite(options, record("follower"));
-  try {
-    controller.abort(reason);
-    expect(order).toEqual(["holder"]);
-    clock.now = 1_000;
-    release.resolve();
-    await failed;
-    await next;
-    expect(order).toEqual(["holder", "follower"]);
-    expect(warnings).toEqual([
-      warning({
-        operation: "worker",
-        outcome: "error",
-        writerExecutionMs: 1_000,
-        reentrant: false,
-      }),
-      warning({
-        operation: "worker",
-        outcome: "ok",
-        queueWaitMs: 1_000,
-        writerExecutionMs: 0,
-        blockingOperation: "worker",
-        blockingWorkerOperations: ["session.entry.patch.commit"],
-      }),
-    ]);
-    expect(JSON.stringify(warnings)).not.toContain("synthetic-private");
-  } finally {
-    release.resolve();
-    await Promise.allSettled([first, next]);
-  }
 });
 
 it("reports each ordered-read reservation across an awaited read without reporting reentrant borrowing", async () => {
@@ -593,7 +649,10 @@ it("delivers reservation timing and request trace through the diagnostic log tra
         message: slowMessage,
         level: "WARN",
         trace,
-        attributes: { subsystem: "session-sqlite", ...directTiming(1_250) },
+        attributes: expect.objectContaining({
+          subsystem: "session-sqlite",
+          writerExecutionMs: 1_250,
+        }),
       }),
     ]);
   } finally {

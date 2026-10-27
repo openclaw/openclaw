@@ -1,11 +1,10 @@
-import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
-import type { Server } from "node:net";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { vi } from "vitest";
 import plugin from "../index.js";
 import { resolveRuntimeConfig } from "./credentials.js";
 import { legacyWireFixture } from "./prepared.test-support.js";
+import type { EvaluationInput } from "./schema.js";
 
 export function mockFetch(implementation: typeof globalThis.fetch) {
   const fetch = vi.fn(implementation);
@@ -33,12 +32,10 @@ export function stubAmbientProxies() {
 export function collectRequest(request: IncomingMessage, handle: (body: string) => void) {
   const chunks: Buffer[] = [];
   request.on("data", (chunk: Buffer) => chunks.push(chunk));
-  request.on("end", () => {
-    handle(Buffer.concat(chunks).toString("utf8"));
-  });
+  request.on("end", () => handle(Buffer.concat(chunks).toString("utf8")));
 }
 
-export const choiceAnswer = (
+const choiceAnswer = (
   choice: string,
   probabilities: Record<string, number>,
   confidence: number,
@@ -49,12 +46,63 @@ export const scoreAnswer = (
   legend: Record<string, unknown>,
   confidence: number,
 ) => ({ type: "score" as const, score, confidence, probabilities, legend });
-export const closeServer = (server: Server) =>
-  new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
 
-export function registeredDecisionProvider(
+const input = {
+  model: "jev-test",
+  state: { evidence: "synthetic only" },
+  questions: {
+    q: { type: "noul", instructions: { question: "Escalate?" } },
+    c: { type: "choice", criteria: { keep: "Keep", skip: null } },
+    s: { type: "score", criteria: [null, { impact: ["widespread", true, 2] }] },
+  },
+} satisfies EvaluationInput;
+const response = {
+  model: input.model,
+  answers: {
+    q: { type: "noul", noul: 0.37 },
+    c: choiceAnswer("skip", { keep: 0.5, skip: 0.49 }, 0.5),
+    s: scoreAnswer(0.607, { 0: 0.4, 1: 0.6 }, { 0: null, 1: input.questions.s.criteria[1] }, 0.5),
+  },
+  usage: { input_tokens: 12, output_tokens: 3 },
+};
+const localCriteria = ["", '{"impact":["widespread",true,2]}'];
+export const mixedFixture = {
+  input,
+  response,
+  batch: {
+    ...input,
+    questions: { ...input.questions, q: { ...input.questions.q, type: "boolean" as const } },
+  },
+  localInput: {
+    ...input,
+    questions: {
+      ...input.questions,
+      c: { ...input.questions.c, instructions: null },
+      s: { ...input.questions.s, instructions: null, criteria: localCriteria },
+    },
+  },
+  localResponse: {
+    ...response,
+    answers: {
+      ...response.answers,
+      s: { ...response.answers.s, legend: { 0: "", 1: localCriteria[1] } },
+    },
+    latency_ms: 15.7,
+  },
+  result: {
+    status: "ok",
+    result: {
+      model: "jev-test",
+      answers: {
+        q: { type: "boolean", probabilityTrue: 0.37 },
+        c: response.answers.c,
+        s: { type: "score", score: 0.607, confidence: 0.5, probabilities: [0.4, 0.6] },
+      },
+      usage: { inputTokens: 12, outputTokens: 3 },
+    },
+  },
+};
+export function registeredPreparedDecisionProvider(
   current: () => ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>,
 ) {
   const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
@@ -62,10 +110,17 @@ export function registeredDecisionProvider(
     runtime: { config: { current } },
     registerDecisionProvider,
   } as unknown as OpenClawPluginApi);
-  const provider = registerDecisionProvider.mock.calls[0]?.[0];
-  assert(provider);
+  const provider = registerDecisionProvider.mock.calls[0]![0];
   if (provider.contractVersion !== 2) {
-    throw new Error("TypeSafe fixture registered an unexpected decision contract");
+    throw new Error("Expected the prepared TypeSafe provider");
   }
-  return legacyWireFixture(provider, () => resolveRuntimeConfig(current()));
+  return provider;
+}
+
+export function registeredDecisionProvider(
+  current: () => ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>,
+) {
+  return legacyWireFixture(registeredPreparedDecisionProvider(current), () =>
+    resolveRuntimeConfig(current()),
+  );
 }

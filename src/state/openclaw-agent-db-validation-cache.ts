@@ -94,7 +94,10 @@ function observeValidationPath(pathname: string, admission: boolean): void {
       invalidateOpenClawAgentDatabaseValidation(pathname, validation.identity);
     }
   };
-  const watched = observeOwnedDirectory(path.dirname(pathname), (filename) => {
+  const watched = observeOwnedDirectory(path.dirname(pathname), (filename, event) => {
+    if (event === "change" && filename !== undefined) {
+      return;
+    }
     if (
       filename === undefined ||
       (process.platform === "win32"

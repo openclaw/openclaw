@@ -1,5 +1,8 @@
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 // In-flow "earlier history" boundary rendered above the virtualized transcript.
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type ChatHistoryBoundaryProps = {
   hasMore: boolean;
@@ -20,10 +23,14 @@ export function ChatHistoryBoundary(props: ChatHistoryBoundaryProps) {
       <button
         class="chat-history-boundary__action"
         type="button"
-        disabled={props.loading}
+        aria-disabled={props.loading ? "true" : undefined}
         aria-busy={props.loading ? "true" : "false"}
         aria-label={label()}
-        onClick={() => props.onShowEarlier()}
+        onClick={() => {
+          if (!props.loading) {
+            props.onShowEarlier();
+          }
+        }}
       >
         <span role="status">{label()}</span>
       </button>

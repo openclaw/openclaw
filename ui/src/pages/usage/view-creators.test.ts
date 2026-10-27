@@ -26,6 +26,17 @@ function selectIdentity(select: HTMLSelectElement, value: string) {
   select.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+function mountCreators(creator: SessionUsageCreator, onSelect = (_key: string | null) => {}) {
+  return mountView(() =>
+    UsageCreators({
+      groups: [group(creator)],
+      selectedKey: null,
+      mode: "cost",
+      onSelect,
+    }),
+  ).container;
+}
+
 it("keeps all creator choices after filtering and passes opaque identities through row and select actions", () => {
   const alex = human("alex", "Alex Morgan", true);
   const jordan = human("jordan", "Jordan Lee");
@@ -77,22 +88,33 @@ it("keeps all creator choices after filtering and passes opaque identities throu
 });
 
 it.each([
-  { actor: undefined, label: "Unattributed" },
+  { actor: undefined, label: "Not recorded" },
   { actor: { type: "system" as const }, label: "System" },
 ])("labels $label attribution explicitly without displaying the filter key", ({ actor, label }) => {
   const onSelect = vi.fn<(key: string | null) => void>();
-  const { container } = mountView(() =>
-    UsageCreators({
-      groups: [group({ key: "unattributed:opaque-key", actor })],
-      selectedKey: null,
-      mode: "cost",
-      onSelect,
-    }),
-  );
+  const container = mountCreators({ key: "unattributed:opaque-key", actor }, onSelect);
   const button = container.querySelector<HTMLButtonElement>("tbody button")!;
   expect(button.textContent).toContain(label);
   expect(container.textContent).not.toContain("opaque-key");
   expect(container.textContent).toContain("not per-turn billing");
   button.click();
   expect(onSelect).toHaveBeenCalledWith("unattributed:opaque-key");
+});
+
+it.each([
+  ["telegram:group:-100123:topic:2051", "Telegram group · topic 2051"],
+  ["200482621", "Telegram user 200482621"],
+  ["telegram:200482621", "Telegram user 200482621"],
+  ["telegram:group:-100123", "Telegram group"],
+])("names the legacy channel creator %s as %s", (id, label) => {
+  const container = mountCreators({
+    key: JSON.stringify(["human", "channel", "main", "telegram", "default", id]),
+    actor: {
+      type: "human",
+      id,
+      identity: { type: "legacy", actorType: "human", source: null, id },
+    },
+  });
+  // Raw sender ids read as people and places, never as opaque keys.
+  expect(container.querySelector(".usage-creator-name")?.textContent).toContain(label);
 });

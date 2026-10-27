@@ -2,6 +2,7 @@ import { formatErrorMessage } from "./errors.js";
 import { formatGatewayLockFailure } from "./gateway-lock-diagnostics.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+import { Utf8InputError } from "./utf8-input.js";
 
 type LegacyMigrationStateLockOptions = {
   stateDir: string;
@@ -54,6 +55,9 @@ export async function withLegacyMigrationStateLock(
       throw error;
     }
     result.warnings.push(`${options.errorLabel}: ${String(error)}`);
+    if (error instanceof Utf8InputError) {
+      result.warningDisposition = "recoverable";
+    }
   } finally {
     try {
       await lock.run(() => options.beforeRelease?.());

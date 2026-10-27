@@ -18,6 +18,7 @@ import {
   type SettledBridgeRequest,
   type SourceLocation,
 } from "openclaw/plugin-sdk/code-mode-executor-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { serveWorkerTasks, type WorkerTaskChannel } from "openclaw/plugin-sdk/worker-task-server";
 import {
   EvalFlags,
@@ -27,7 +28,6 @@ import {
   type JSValueHandle,
   type Snapshot,
 } from "quickjs-wasi";
-import { readSourceLocation } from "./source-location.js";
 import type { QuickJsWorkerPayload as CodeModeWorkerPayload } from "./worker-types.js";
 
 type CodeModeWorkerResult = CodeModeVmResult<Snapshot>;
@@ -60,13 +60,6 @@ function notifyWorkerFailure(
   });
 }
 
-type VmRun = {
-  vm: QuickJS;
-  didTimeout: () => boolean;
-  setBudget: (timeoutMs: number) => void;
-  pauseBudget: () => void;
-};
-
 // Workers are reusable; every VM owns its own bridge state, including failures
 // and cancellations, so a later session cannot inherit a previous run's state.
 type BridgeState = {
@@ -95,6 +88,58 @@ function formatQuickJsError(
     return header;
   }
   return `${header}\n${sourceStack}`;
+}
+
+function readSourceLocation(vm: QuickJS): SourceLocation | undefined {
+  // Old snapshots have no record. Read data descriptors without invoking guest getters.
+  const descriptor = vm.global.getOwnPropertyDescriptor(SOURCE_LOCATION_KEY);
+  if (!descriptor) {
+    return undefined;
+  }
+  try {
+    if (
+      descriptor.writable ||
+      descriptor.configurable ||
+      descriptor.enumerable ||
+      !descriptor.value?.isString
+    ) {
+      return undefined;
+    }
+    const value: unknown = JSON.parse(descriptor.value.toString());
+    if (!isRecord(value)) {
+      return undefined;
+    }
+    const { file, lineOffset, lineCount, columnOffset, endColumn } = value;
+    const isOffset = (offset: unknown): offset is number =>
+      typeof offset === "number" && Number.isSafeInteger(offset) && offset >= 0;
+    if (
+      file !== USER_SOURCE_FILE ||
+      !isOffset(lineOffset) ||
+      !isOffset(lineCount) ||
+      lineCount === 0 ||
+      !isOffset(columnOffset) ||
+      !isOffset(endColumn) ||
+      endColumn === 0 ||
+      !Number.isSafeInteger(lineOffset + lineCount) ||
+      (lineCount === 1 && endColumn <= columnOffset)
+    ) {
+      return undefined;
+    }
+    return {
+      file,
+      lineOffset,
+      lineCount,
+      columnOffset,
+      endColumn,
+    };
+  } catch {
+    // Malformed optional guest metadata must not replace the execution error.
+    return undefined;
+  } finally {
+    descriptor.value?.dispose();
+    descriptor.get?.dispose();
+    descriptor.set?.dispose();
+  }
 }
 
 function errorMessage(error: unknown, location?: SourceLocation): string {
@@ -201,7 +246,7 @@ function createHostCancelRequestHandler(params: {
   };
 }
 
-async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Promise<VmRun> {
+async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState) {
   const startedAt = performance.now();
   let deadlineMs = startedAt + input.config.timeoutMs;
   let timedOut = false;
@@ -298,7 +343,7 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Prom
         timedOut ||= deadlineReached();
         paused = true;
       },
-      setBudget: (timeoutMs) => {
+      setBudget: (timeoutMs: number) => {
         paused = false;
         timedOut = false;
         deadlineMs = performance.now() + timeoutMs;

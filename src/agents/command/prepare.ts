@@ -251,6 +251,7 @@ export async function prepareAgentCommandExecution(
     storePath,
     isNewSession,
     previousSessionId,
+    automaticReset,
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
@@ -347,7 +348,6 @@ export async function prepareAgentCommandExecution(
     ...(sessionEntryRaw &&
     isSyntheticSourceReplyTurn({
       inputProvenance: commandOpts.inputProvenance,
-      isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
     })
       ? {
           // Direct Gateway wakes have no inbound dispatcher to apply effective reply policy.
@@ -475,6 +475,7 @@ export async function prepareAgentCommandExecution(
       storePath,
       isNewSession,
       previousSessionId,
+      ...(automaticReset ? { automaticReset } : {}),
       persistedThinking,
       persistedVerbose,
       sessionAgentId,

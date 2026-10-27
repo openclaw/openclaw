@@ -1,9 +1,11 @@
+import fs from "node:fs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
+import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { settlePendingPackageActivation } from "../../infra/package-update-activation.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
@@ -16,6 +18,7 @@ import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js"
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { prepareManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import { resolveLegacyGatewayManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-legacy-store.js";
 import { ManagedHandoffCustodyRetainedError } from "../../infra/update-managed-service-handoff-reclamation.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import {
@@ -44,6 +47,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
 import { formatCliCommand } from "../command-format.js";
+import { getGatewayChannelWarnings } from "../daemon-cli/restart-health-diagnostics.js";
 import {
   confirmGatewayReachable,
   resolveGatewayRestartProbeContext,
@@ -129,14 +133,22 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   }
   let retained: RetainedUpdateCustodyReport | undefined;
   const prepareHandoffRepair = async () => {
-    const store = await prepareManagedHandoffLeaseStore();
+    // Admission keys custody by the canonical installation, not a lexical slot.
+    const root = resolveUpdateInstallRoot(await resolveUpdateRoot());
     try {
-      // Admission keys custody by the canonical installation, not a lexical slot.
-      return await store.prepareRepair(
-        resolveUpdateInstallRoot(await resolveUpdateRoot()),
-        env,
-        timeoutMs,
-      );
+      const repair = await (
+        await prepareManagedHandoffLeaseStore()
+      ).prepareRepair(root, env, timeoutMs);
+      const legacy = resolveLegacyGatewayManagedUpdateLeaseDatabasePath();
+      if (repair || !legacy || !fs.existsSync(legacy)) {
+        return repair;
+      }
+      // An earlier macOS Gateway's handoff stays in its own store until repaired.
+      const store = await prepareManagedHandoffLeaseStore({
+        databasePath: legacy,
+        serviceManagerEnv: resolveServiceManagerEnv(),
+      });
+      return await store.prepareRepair(root, env, timeoutMs);
     } catch (error) {
       if (!(error instanceof ManagedHandoffCustodyRetainedError)) {
         throw error;
@@ -267,6 +279,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   const [gateway, http, expectedVersion, expectedBuildId] = await Promise.all([
     confirmGatewayReachable({ port, ...context, env }),
     waitForGatewayHttpReadiness({
+      requireChannelHealth: false,
       config: context.config,
       port,
       attempts: 1,
@@ -285,9 +298,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     gateway.gatewayVersion !== expectedVersion ||
     gateway.gatewayBuildId !== expectedBuildId ||
     gateway.activatedPluginErrors.length ||
-    gateway.channelProbeErrors.length ||
-    http.healthz !== 200 ||
-    http.readyz !== 200
+    !(http.coreReady ?? (http.healthz === 200 && http.readyz === 200))
   ) {
     return await finalizeRepair();
   }
@@ -333,7 +344,16 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   const message = reconciled.length
     ? `Gateway is healthy. Reconciled ${reconciled.length} abandoned update run${reconciled.length === 1 ? "" : "s"}. No maintenance or service restart was needed.`
     : "Gateway is healthy. Abandoned update runs are already reconciled. No maintenance or service restart was needed.";
-  reportRepairResult(opts, acknowledged, message, retained);
+  const warnings = getGatewayChannelWarnings(gateway, http).map(({ id }) => id);
+  reportRepairResult(
+    opts,
+    acknowledged,
+    message +
+      (warnings.length
+        ? ` Channel health warnings: ${warnings.join(", ")}. Run openclaw channels status --probe.`
+        : ""),
+    retained,
+  );
 }
 
 function reportRepairResult(

@@ -14,6 +14,7 @@ import {
   subscribeModelCatalogChanges,
   type ModelCatalogPresentation,
 } from "./model-catalog-store.ts";
+import { listen } from "./reactive/listener.ts";
 
 /** A view's subscription and request lifetime; display rows remain owned by the catalog cache. */
 export class ModelCatalogReader {
@@ -24,6 +25,7 @@ export class ModelCatalogReader {
   };
   private controller?: AbortController;
   private unsubscribe?: () => void;
+  private deferredRead = false;
   failed = false;
 
   constructor(
@@ -31,7 +33,10 @@ export class ModelCatalogReader {
     private readonly options: {
       timeoutMs?: GatewayProtocolRequestOptions["timeoutMs"];
       onResult?: (result: ModelCatalogResult) => void;
+      /** Observes admitted reads, including event refreshes; current failures reject. */
+      onRead?: (read: Promise<ModelCatalogResult | undefined>) => void;
       onError?: (error: unknown) => void;
+      isPresented?: () => boolean;
     } = {},
   ) {}
 
@@ -90,9 +95,11 @@ export class ModelCatalogReader {
       },
       scope,
     );
+    const stopVisibility = listen(document, "visibilitychange", () => this.resume());
     this.unsubscribe = () => {
       unwatchCache();
       unwatchEvents();
+      stopVisibility();
     };
     return true;
   }
@@ -112,18 +119,24 @@ export class ModelCatalogReader {
     }
     this.controller?.abort();
     this.controller = undefined;
+    if (document.visibilityState === "hidden" || this.options.isPresented?.() === false) {
+      this.deferredRead = true;
+      return Promise.resolve(undefined);
+    }
+    this.deferredRead = false;
     const cached = peekModelCatalog(binding.client, binding.scope);
     if (cached) {
       this.failed = false;
       this.options.onResult?.(cached);
+      const read = Promise.resolve(cached);
+      this.options.onRead?.(read);
       this.notify();
-      return Promise.resolve(cached);
+      return read;
     }
     const controller = new AbortController();
     this.controller = controller;
     this.failed = false;
-    this.notify();
-    return loadModelCatalog(binding.client, {
+    const read = loadModelCatalog(binding.client, {
       ...binding.scope,
       signal: controller.signal,
       timeoutMs: this.options.timeoutMs,
@@ -145,9 +158,22 @@ export class ModelCatalogReader {
         this.failed = true;
         this.options.onError?.(error);
         this.notify();
+        if (this.options.onRead) {
+          throw error;
+        }
         return undefined;
       },
     );
+    this.options.onRead?.(read);
+    this.notify();
+    // Existing callers consume errors through onError; observers also receive the rejection.
+    return this.options.onRead ? read.catch(() => undefined) : read;
+  }
+
+  resume(): void {
+    if (this.deferredRead) {
+      void this.read();
+    }
   }
 
   clear(): void {
@@ -157,5 +183,6 @@ export class ModelCatalogReader {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.failed = false;
+    this.deferredRead = false;
   }
 }

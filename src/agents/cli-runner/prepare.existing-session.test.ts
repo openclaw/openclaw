@@ -26,6 +26,7 @@ import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   createCliRunnerPrepareFixture,
+  createTestCliSessionBinding,
   createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServerConfig,
   createWeatherSkillFixture,
@@ -331,17 +332,7 @@ it("keeps a stored Claude conversation across the upgrade while excluding native
       invalidatedReason: "prompt-tools",
     });
     await executePreparedCliRun(upgraded);
-    upgradedBinding = {
-      sessionId: nativeSessionId,
-      authEpoch: upgraded.authEpoch,
-      authEpochVersion: upgraded.authEpochVersion,
-      extraSystemPromptHash: upgraded.extraSystemPromptHash,
-      messageToolPolicyHash: upgraded.messageToolPolicyHash,
-      promptToolNamesHash: upgraded.promptToolNamesHash,
-      cwdHash: upgraded.cwdHash,
-      mcpConfigHash: upgraded.preparedBackend.mcpConfigHash,
-      mcpResumeHash: upgraded.preparedBackend.mcpResumeHash,
-    };
+    upgradedBinding = createTestCliSessionBinding(upgraded, nativeSessionId);
   } finally {
     await upgraded.preparedBackend.cleanup?.();
   }

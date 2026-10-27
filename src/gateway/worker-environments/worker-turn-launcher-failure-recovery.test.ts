@@ -1,9 +1,12 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import * as rootLogger from "../../logger.js";
 import type { SpawnResult } from "../../process/exec.js";
@@ -17,6 +20,7 @@ import { requestContext } from "../server-methods/sessions-read-cache.test-suppo
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
+import { journalOwner } from "./placement-suite.test-support.js";
 import {
   WorkerRunnerCapacityError,
   WorkerRunnerUnavailableError,
@@ -34,6 +38,7 @@ import {
   runIdentity,
 } from "./worker-turn-launcher-flow.test-support.js";
 import * as fx from "./worker-turn-launcher.test-support.js";
+import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 
 afterAll(closeStateDatabaseForTest);
 
@@ -52,9 +57,7 @@ function heldOperation() {
 
 function activePlacement() {
   const active = fx.placements.get(fx.SESSION_ID);
-  if (active?.state !== "active") {
-    throw new Error("expected active placement");
-  }
+  assert(active?.state === "active", "expected active placement");
   return active;
 }
 
@@ -68,11 +71,13 @@ function workerEnvironment(tunnel: Parameters<typeof fx.createWorkerTurnTunnel>[
   });
 }
 
+function strictEnvironment(overrides: Partial<fx.WorkerTurnEnvironmentService> = {}) {
+  return { ...fx.unusedEnvironments(), get: vi.fn(fx.attachedEnvironment), ...overrides };
+}
+
 async function failPendingWorkspace(error: Error) {
   const [pending] = await fx.placements.listPendingWorkspaceResultsAsync();
-  if (!pending) {
-    throw new Error("Expected pending workspace recovery");
-  }
+  assert(pending, "Expected pending workspace recovery");
   await fx.placements.failWorkspaceResultAndReleaseTurn(pending, error);
 }
 
@@ -116,12 +121,14 @@ describe("worker turn launcher failure recovery", () => {
     async (source) => {
       await fx.seedActivePlacement();
       const loss = new WorkerNodeLostError();
+      const environment = fx.attachedEnvironment();
+      assert(environment.bootstrapReceipt);
+      environment.bootstrapReceipt.protocolFeatures.push(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE);
       const recovered = vi.fn(() => failPendingWorkspace(loss));
       const provider = createLauncher({
         reconcileActivePlacement: recovered,
-        environments: {
-          ...fx.unusedEnvironments(),
-          get: () => fx.attachedEnvironment(),
+        environments: strictEnvironment({
+          get: () => environment,
           acquireTurnCredential: async () => fx.credential(),
           acknowledgeCredentialDelivery: async () => true,
           startTunnel: async () =>
@@ -131,22 +138,22 @@ describe("worker turn launcher failure recovery", () => {
                 request.onDispatchReady?.();
                 await fx.placements.markWorkspaceResultPending(request.turnClaim);
                 return {
-                  stdout: JSON.stringify({
-                    status: "failed",
-                    reason: "node-lost",
-                    transcriptLeafId: null,
-                    transcriptNextSeq: 1,
-                  }),
-                  stderr: "unrelated diagnostic",
+                  ...success(
+                    JSON.stringify({
+                      status: "failed",
+                      reason: "node-lost",
+                      transcriptLeafId: null,
+                      transcriptNextSeq: 1,
+                    }),
+                    "unrelated diagnostic",
+                  ),
                   code: source === "supervisor" ? 1 : 0,
-                  signal: null,
                   killed: source === "supervisor",
-                  termination: "exit",
                   ...(source === "supervisor" ? { nodeLoss: loss } : {}),
                 };
               },
             }),
-        },
+        }),
       });
       const attempt = executeTurn(provider, "node-loss", vi.fn());
       await expect(attempt).rejects.toBeInstanceOf(WorkerNodeLostError);
@@ -164,8 +171,7 @@ describe("worker turn launcher failure recovery", () => {
       nodeDeviceId: "node-worker",
       sshEndpoint: null,
     };
-    const environments: fx.WorkerTurnEnvironmentService = {
-      ...fx.unusedEnvironments(),
+    const environments = strictEnvironment({
       get: () => environment,
       acquireTurnCredential: async () => fx.credential(),
       acknowledgeCredentialDelivery: async () => true,
@@ -183,7 +189,7 @@ describe("worker turn launcher failure recovery", () => {
         }),
       stopTunnel: teardown.run,
       destroy: vi.fn(async () => environment),
-    };
+    });
     const provider = createLauncher({ environments });
     const workerTurn = fx.turn("run-dead-worker");
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
@@ -409,14 +415,7 @@ describe("worker turn launcher failure recovery", () => {
         timestamp: 1,
       }),
     );
-    await manager.appendMessageAsync({
-      role: "toolResult",
-      toolCallId: "call-replay",
-      toolName: "read",
-      content: [{ type: "text", text: "result" }],
-      isError: false,
-      timestamp: 2,
-    });
+    await manager.appendMessageAsync(makeTextToolResult("call-replay", "read", "result", false, 2));
     const launchTurn = vi.fn(async (): Promise<SpawnResult> => {
       throw new Error("unexpected worker handoff");
     });
@@ -451,12 +450,7 @@ describe("worker turn launcher failure recovery", () => {
   it("preserves an unresolved rollback journal when pre-launch recovery conflicts", async () => {
     await fx.seedActivePlacement();
     const active = activePlacement();
-    const owner = {
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      placementGeneration: active.generation,
-    };
+    const owner = journalOwner(active);
     const basePack = Buffer.from("conflicted journal snapshot");
     const fileEntry = (text: string) => ({
       path: "blocked.txt",
@@ -465,22 +459,18 @@ describe("worker turn launcher failure recovery", () => {
       size: Buffer.byteLength(text),
       sha256: createHash("sha256").update(text).digest("hex"),
     });
-    await fx.placements.beginWorkspaceReconciliation(owner, {
-      version: 1,
-      temporaryNonce: "e".repeat(32),
-      baseManifestRef: active.workspaceBaseManifestRef,
-      currentManifestRef: `sha256:${"f".repeat(64)}`,
-      baseEntries: [fileEntry("base\n")],
-      appliedEntries: [fileEntry("worker\n")],
-      baseTree: "d".repeat(40),
-      basePackSha256: createHash("sha256").update(basePack).digest("hex"),
-      basePack,
-    });
+    await fx.placements.beginWorkspaceReconciliation(
+      owner,
+      workspaceJournal(active.workspaceBaseManifestRef, `sha256:${"f".repeat(64)}`, {
+        temporaryNonce: "e".repeat(32),
+        baseEntries: [fileEntry("base\n")],
+        appliedEntries: [fileEntry("worker\n")],
+        baseTree: "d".repeat(40),
+        basePack,
+      }),
+    );
     await fs.writeFile(path.join(fx.root, "blocked.txt"), "local\n");
-    const environments: fx.WorkerTurnEnvironmentService = {
-      ...fx.unusedEnvironments(),
-      get: vi.fn(() => fx.attachedEnvironment()),
-    };
+    const environments = strictEnvironment();
     const workspaceQueue = heldOperation();
     const workspaceOperations: NonNullable<fx.WorkerTurnLauncherOptions["workspaceOperations"]> = {
       async run(environmentId, operation) {
@@ -556,9 +546,7 @@ describe("worker turn launcher failure recovery", () => {
       >(async (claim) => {
         const current = fx.placements.get(fx.SESSION_ID);
         const currentClaim = current && projectWorkerSessionTurnClaim(current);
-        if (!currentClaim) {
-          throw new Error("Expected the live interrupted turn claim");
-        }
+        assert(currentClaim, "Expected the live interrupted turn claim");
         expect(currentClaim).toMatchObject({ sessionId: claim.sessionId, runId: claim.runId });
         expect(fx.placements.validateTurnClaim(currentClaim)).toBe(true);
         await partial.run();
@@ -648,11 +636,9 @@ describe("worker turn launcher failure recovery", () => {
       }),
       stop: vi.fn(async () => {}),
     };
-    const environments: fx.WorkerTurnEnvironmentService = {
-      ...fx.unusedEnvironments(),
-      get: vi.fn(() => fx.attachedEnvironment()),
+    const environments = strictEnvironment({
       startTunnel: vi.fn(async () => tunnel),
-    };
+    });
     const reconcileActivePlacement = vi.fn(async () => {
       const placement = fx.placements.get(fx.SESSION_ID);
       if (placement?.state !== "failed" || placement.turnClaim !== null) {
@@ -713,11 +699,10 @@ describe("worker turn launcher failure recovery", () => {
       nodeDeviceId: "paired-node-1",
       sshEndpoint: null,
     };
-    const environments: fx.WorkerTurnEnvironmentService = {
-      ...fx.unusedEnvironments(),
+    const environments = strictEnvironment({
       get: vi.fn(() => environment),
       startTunnel: vi.fn(async () => tunnel),
-    };
+    });
     const reconcileActivePlacement = vi.fn(async () => {});
     const provider = createLauncher({
       environments,

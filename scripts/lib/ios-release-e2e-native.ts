@@ -30,6 +30,7 @@ import {
   summarizeIOSBuildTiming,
 } from "./ios-release-e2e-diagnostics.js";
 import { prepareIOSReleaseGateway } from "./ios-release-gateway.js";
+import { waitForIOSSimulatorHeadroom } from "./ios-simulator-headroom.js";
 import { hasUnjoinedWork, runManagedCommand } from "./managed-child-process.mjs";
 
 const DEVICE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro";
@@ -666,6 +667,7 @@ export async function createNativeDependencies(options: {
                   authenticated: false,
                   dispatchEntered: false,
                   responseReceived: false,
+                  attempts: 0,
                   timings,
                 };
                 fixtureEvidence[operation === "setup-status" ? "setupStatusRpc" : "setupRpc"] =
@@ -688,34 +690,59 @@ export async function createNativeDependencies(options: {
                           }, 10_000)
                         : undefined;
                     try {
-                      const response = await callGateway<T>({
-                        config: {},
-                        configPath: readyInstance.configPath,
-                        url: readyInstance.url,
-                        token: readyInstance.gatewayToken,
-                        ignoreEnvUrlOverride: true,
-                        deviceIdentity: null,
-                        sharedStateMode: "read-only",
-                        method:
-                          operation === "setup-status"
-                            ? "device.pair.setupStatus"
-                            : "device.pair.setupCode",
-                        params,
-                        timeoutMs: operation === "setup-code" ? 60_000 : 30_000,
-                        signal: fixtureSignal,
-                        onHelloOk: () => {
-                          rpcEvidence.authenticated = true;
-                          timings.authenticatedMs ??= elapsed();
-                        },
-                        assertDispatchCurrent: () => {
+                      for (;;) {
+                        rpcEvidence.attempts++;
+                        rpcEvidence.authenticated = false;
+                        rpcEvidence.dispatchEntered = false;
+                        try {
+                          const response = await callGateway<T>({
+                            config: {},
+                            configPath: readyInstance.configPath,
+                            url: readyInstance.url,
+                            token: readyInstance.gatewayToken,
+                            ignoreEnvUrlOverride: true,
+                            deviceIdentity: null,
+                            sharedStateMode: "read-only",
+                            method:
+                              operation === "setup-status"
+                                ? "device.pair.setupStatus"
+                                : "device.pair.setupCode",
+                            params,
+                            timeoutMs: operation === "setup-code" ? 60_000 : 30_000,
+                            signal: fixtureSignal,
+                            onHelloOk: () => {
+                              rpcEvidence.authenticated = true;
+                              timings.authenticatedMs ??= elapsed();
+                            },
+                            assertDispatchCurrent: () => {
+                              requireLiveFixture();
+                              rpcEvidence.dispatchEntered = true;
+                              timings.dispatchEnteredMs ??= elapsed();
+                            },
+                          });
+                          rpcEvidence.responseReceived = true;
+                          timings.responseReceivedMs = elapsed();
+                          return response;
+                        } catch (error) {
+                          // A stalled handshake may close before setupCode is sent.
+                          // Only reconnect when the transport confirms no request was dispatched.
+                          if (
+                            operation !== "setup-code" ||
+                            rpcEvidence.attempts >= 3 ||
+                            fixtureSignal.aborted ||
+                            hasUnjoinedWork(error) ||
+                            !isGatewayTransportError(error) ||
+                            error.requestDispatched !== false ||
+                            rpcEvidence.dispatchEntered
+                          ) {
+                            throw error;
+                          }
                           requireLiveFixture();
-                          rpcEvidence.dispatchEntered = true;
-                          timings.dispatchEnteredMs ??= elapsed();
-                        },
-                      });
-                      rpcEvidence.responseReceived = true;
-                      timings.responseReceivedMs = elapsed();
-                      return response;
+                          console.error(
+                            `iOS qualification: ${operation} attempt ${rpcEvidence.attempts} ${error.kind} before dispatch; retrying`,
+                          );
+                        }
+                      }
                     } finally {
                       timings.elapsedMs = elapsed();
                       clearTimeout(slowTimer);
@@ -733,15 +760,27 @@ export async function createNativeDependencies(options: {
                   if (!options.signal.aborted) {
                     requireLiveFixture();
                   }
-                  if (isGatewayTransportError(error) && error.kind === "timeout") {
-                    const failure = new OperationError(operation, "timeout");
+                  if (isGatewayTransportError(error)) {
+                    const failure = new OperationError(
+                      operation,
+                      error.kind === "timeout" ? "timeout" : "failed",
+                    );
                     failure.diagnostic.context.push(
+                      `rpc-attempts:${rpcEvidence.attempts}`,
+                      `rpc-transport-kind:${error.kind}`,
                       `rpc-authenticated:${rpcEvidence.authenticated}`,
                       `rpc-dispatch-entered:${rpcEvidence.dispatchEntered}`,
                     );
                     if (typeof error.requestDispatched === "boolean") {
                       failure.diagnostic.context.push(
                         `rpc-request-dispatched:${error.requestDispatched}`,
+                      );
+                    }
+                    if (error.kind === "closed") {
+                      failure.diagnostic.context.push(
+                        `rpc-close-code:${error.code ?? "unknown"}`,
+                        // Arbitrary close reasons can contain credentials.
+                        `rpc-close-reason:${error.reason === "invalid-handshake" ? error.reason : "withheld"}`,
                       );
                     }
                     throw failure;
@@ -794,6 +833,17 @@ export async function createNativeDependencies(options: {
                       },
                     );
                   }
+                  await phase("simulator-headroom", async () => {
+                    const readiness = await waitForIOSSimulatorHeadroom(fixtureSignal).catch(
+                      (error: unknown) => {
+                        throw operationError("simulator-headroom", error);
+                      },
+                    );
+                    fixtureEvidence.simulatorHeadroom = readiness;
+                    if (readiness.status !== "ready") {
+                      throw new OperationError("simulator-headroom", "timeout");
+                    }
+                  });
                 }
               } catch (error) {
                 if (!options.signal.aborted) {

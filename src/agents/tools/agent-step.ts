@@ -21,11 +21,7 @@ import {
   prepareSessionsSendCommunication,
   type SessionSendReplyAdmission,
 } from "./sessions-send-communication.js";
-
-export type AgentStepSession = {
-  sessionId: string;
-  lifecycleRevision?: string;
-};
+import type { AgentStepSession } from "./sessions-send-tool.types.js";
 
 export async function runAgentStep(params: {
   agentId?: string;
@@ -117,8 +113,9 @@ export async function runAgentStep(params: {
     });
   }
   let response: Record<string, unknown> | undefined;
+  const callGateway = communication?.callGateway ?? gatewayCall;
   try {
-    response = await (communication?.callGateway ?? gatewayCall)({
+    response = await callGateway({
       method: "agent",
       // This is a returned result, not a new request to the peer. Consuming it
       // must not require an acknowledgment or repeat an already delivered final.
@@ -163,10 +160,13 @@ export async function runAgentStep(params: {
 
   const resolvedRunId =
     typeof response?.runId === "string" && response.runId ? response.runId : stepIdem;
-  await waitForAgentRunReply({
+  const result = await waitForAgentRunReply({
     runId: resolvedRunId,
     timeoutMs: Math.min(params.timeoutMs, 60_000),
     callGateway: gatewayCall,
     untilTerminal: true,
   });
+  if (result.status !== "ok") {
+    throw new Error(result.error ?? `Requester continuation ended with ${result.status}.`);
+  }
 }

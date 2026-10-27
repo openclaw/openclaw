@@ -8,8 +8,8 @@ import {
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { mapNestedStrings } from "../shared/map-nested-strings.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { readTableColumns } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 
@@ -81,7 +81,7 @@ function listSharedStateSessionKeyColumns(
   });
 }
 
-export function collectSharedStateSessionKeys(database: EngineConnection): Set<string> {
+function collectSharedStateSessionKeys(database: EngineConnection): Set<string> {
   const db = getNodeSqliteKysely<DynamicSharedStateDatabase>(database);
   const keys = new Set<string>();
   for (const { table, column, json } of listSharedStateSessionKeyColumns(database)) {
@@ -192,7 +192,7 @@ function collectJsonStringValues(value: unknown, values: Set<string>): void {
   }
 }
 
-export function readRepairJournal(database: EngineConnection): ReservedKeyRename[] {
+function readRepairJournal(database: EngineConnection): ReservedKeyRename[] {
   const db = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "state_leases">>(database);
   const row = executeSqliteQueryTakeFirstSync(
     database,
@@ -217,12 +217,13 @@ export function readRepairJournal(database: EngineConnection): ReservedKeyRename
   });
 }
 
-export function readRepairJournalReadOnly(env: NodeJS.ProcessEnv): ReservedKeyRename[] {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly((database) => readRepairJournal(database.db), {
-      env,
-    }) ?? []
-  );
+export function readReservedIncognitoKeyRepairState(database: EngineConnection) {
+  const occupiedKeys = collectSharedStateSessionKeys(database);
+  return {
+    occupiedKeys,
+    reservedKeys: [...occupiedKeys].filter(isIncognitoSessionKey),
+    renames: readRepairJournal(database),
+  };
 }
 
 export function writeRepairJournal(

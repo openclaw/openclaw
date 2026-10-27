@@ -18,11 +18,6 @@ import type {
 import type { ChatSessionVersionsMobileProps } from "./chat-session-versions-mobile.tsx";
 import type { ContinueInTerminalDialogProps } from "./continue-in-terminal-dialog.tsx";
 
-export type ChatPaneParentSession = {
-  key: string;
-  title: string;
-};
-
 export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
 
 export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
@@ -31,6 +26,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   mergedChrome: boolean;
   navDrawerOpen?: boolean;
   gatewayStatus?: GatewayStatusProps | null;
+  savedConversation?: boolean;
   title: string;
   agent?: AgentIdentity & { name: string };
   titlePending?: boolean;
@@ -52,7 +48,10 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
     authReady: boolean;
     connectionId?: string;
   } | null;
-  parentSession: ChatPaneParentSession | null;
+  parentSession: {
+    key: string;
+    title: string;
+  } | null;
   branch: string | null;
   branches: SessionBranch[];
   branchSwitchDisabledReason: string | null;
@@ -63,7 +62,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   runningSubagentCount?: number;
   dashboardWidgetMenu?: Parameters<typeof ChatDashboardMenu>[0]["widgetMenu"];
   setDashboardControls?: (action: Element | undefined) => void;
-  panelActionDestinations?: { main: boolean; side: boolean; dashboard: boolean };
+  panelActionDestinations?: { main: boolean; side: boolean };
   /** The surrounding desktop frame supplies the Panels toggle. */
   externalPanelsToggle?: boolean;
   detailsControl?: ChatDetailsViewProps;

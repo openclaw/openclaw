@@ -5,8 +5,13 @@ import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transactio
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionActorHotState } from "./session-actor-contract.js";
-import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
+import {
+  createSessionActorCommittedOutcome,
+  projectSessionActorCommittedOutcome,
+  restoreSessionActorCommittedOutcome,
+} from "./session-actor-receipt.js";
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
+import { addSessionMember } from "./session-sharing-store.native.js";
 
 // mock-isolation: Count real receipt encodings separately from residency/transport work.
 vi.mock("node:v8", async (importOriginal) => {
@@ -48,8 +53,50 @@ function expectRetry(f: Fixture, command: Mutation) {
   });
 }
 
-it("publishes only newly committed events with exact stored UTF-8 sizes, including noncanonical JSON", async () => {
-  await withActor(async (f) => {
+it("detaches read and committed metadata while retaining the actor's current facts", () =>
+  withActor(async (f) => {
+    const participant = { identity: { type: "agent" as const, id: "peer" }, promptedAt: 10 };
+    f.participant(participant);
+    addSessionMember(f.scope, { identityId: "viewer", addedBy: "owner", addedAt: 1 });
+    f.restartActor();
+    let before: SessionActorHotState;
+    {
+      using decode = vi.spyOn(JSON, "parse");
+      before = f.read();
+      expect(
+        decode.mock.calls.filter(
+          ([json]) => json.includes('"actor_id"') && json.includes('"contribution_count"'),
+        ),
+      ).toHaveLength(1);
+    }
+    const command: Mutation = {
+      type: "session.actor.patch",
+      input: {
+        target: f.target,
+        expected: before.version,
+        commandId: "metadata-isolation",
+        phaseId: "turn",
+        reducers: [{ kind: "activity", updatedAt: 20 }],
+      },
+    };
+    await f.prepare(command);
+    const outcome = f.mutate(command);
+    assert(outcome.kind === "committed");
+    const current = f.read();
+    for (const snapshot of [before, outcome.receipt.postimage]) {
+      Object.assign(snapshot.target, { sessionKey: "caller edit" });
+      Object.assign(snapshot.version, { sequence: -1 });
+      snapshot.participants[0]!.identity.id = "caller edit";
+      snapshot.members[0]!.identityId = "caller edit";
+    }
+    expect(f.read()).toEqual(current);
+    f.participant({ ...participant, promptedAt: 30 });
+    expect(f.read().participants[0]).toMatchObject({ contributionCount: 2, lastPromptedAt: 30 });
+    expect(current.participants[0]).toMatchObject({ contributionCount: 1, lastPromptedAt: 10 });
+  }));
+
+it("publishes only newly committed events with exact stored UTF-8 sizes, including noncanonical JSON", () =>
+  withActor(async (f) => {
     runSqliteImmediateTransactionSync(f.database.db, () => {
       appendTranscriptEventsInTransaction(f.database, f.scope, [
         {
@@ -85,8 +132,7 @@ it("publishes only newly committed events with exact stored UTF-8 sizes, includi
         commandId: "model-change-retry",
       },
     });
-  });
-});
+  }));
 
 function hot(rawSeq: number, generation = "generation"): SessionActorHotState {
   return {
@@ -202,3 +248,66 @@ it("keeps append receipts independent of retained transcript length", async () =
   // Scalar sequence/count encodings may grow; retained history must not cross the worker boundary.
   expect(Math.max(...receiptBytes) - Math.min(...receiptBytes)).toBeLessThan(128);
 });
+
+it("refuses to restore a receipt without its exact command preimage", () => {
+  const before = hot(1);
+  const outcome = createSessionActorCommittedOutcome({
+    phase: "appendTranscriptEvent",
+    command: { commandId: "append", phaseId: "turn" },
+    before,
+    after: { ...hot(2), entry: before.entry },
+    applied: { value: { projectionNeedsReconcile: false }, reducers: [] },
+  });
+  const wire = projectSessionActorCommittedOutcome(outcome, before);
+  expect(wire.receipt.postimage.entry).toBeUndefined();
+  for (const reference of [undefined, { ...before, writeToken: "another-revision" }]) {
+    expect(() => restoreSessionActorCommittedOutcome(wire, reference)).toThrow(
+      "Session actor receipt entry reference is unavailable",
+    );
+    expect(wire.receipt.postimage.entry).toBeUndefined();
+  }
+  expect(restoreSessionActorCommittedOutcome(wire, before).receipt.postimage.entry).toBe(
+    before.entry,
+  );
+});
+
+it("omits only the unchanged entry held by an append command", () =>
+  withActor(async (f) => {
+    const prompt = "synthetic instructions ".repeat(1600);
+    f.writeEntry({ ...f.nativeEntry()!, skillsSnapshot: { prompt, skills: [] } });
+    for (const mode of ["matching", "stale", "changed"] as const) {
+      const before = f.read();
+      const command: Mutation = {
+        type: "session.actor.appendTranscriptEvent",
+        input: {
+          target: f.target,
+          sessionId: f.scope.sessionId,
+          lifecycleRevision: null,
+          commandId: `resident-append-${mode}`,
+          phaseId: "turn",
+          entryReference: mode === "stale" ? "stale-token" : before.writeToken,
+          reducers: mode === "changed" ? [{ kind: "activity", updatedAt: 20 }] : undefined,
+          eventJson: JSON.stringify({
+            type: "custom",
+            customType: "synthetic-receipt",
+            id: `new-event-${mode}`,
+            parentId: null,
+            data: { content: "x".repeat(6 * 1024) },
+          }),
+        },
+      };
+      await f.prepare(command);
+      const outcome = f.mutate(command);
+      assert(outcome.kind === "committed");
+      if (mode === "matching") {
+        expect(serialize(outcome).byteLength).toBeLessThan(16 * 1024);
+      } else {
+        expect(outcome.receipt.postimage).toEqual(f.read());
+        outcome.receipt.postimage.entry!.skillsSnapshot!.prompt = "caller edit";
+      }
+      expect(before.entry?.skillsSnapshot?.prompt).toBe(prompt);
+      expect(f.read().entry?.skillsSnapshot?.prompt).toBe(prompt);
+      expect(f.nativeEntry()?.skillsSnapshot?.prompt).toBe(prompt);
+      expect(f.nativeEntry()?.updatedAt).toBe(mode === "changed" ? 20 : before.entry?.updatedAt);
+    }
+  }));

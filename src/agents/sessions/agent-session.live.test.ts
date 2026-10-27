@@ -1,5 +1,5 @@
 // Live end-to-end checks for AgentSession turns, compaction, and follow-up delivery.
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../live-test-helpers.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { cleanupLiveSessions } from "./agent-session-live-cleanup.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -126,14 +127,7 @@ function assistantText(message: AgentMessage): string {
 }
 
 afterEach(async () => {
-  for (const session of sessions.splice(0)) {
-    session.dispose();
-  }
-  await Promise.all(
-    tempRoots.splice(0).map(async (root) => {
-      await rm(root, { recursive: true, force: true });
-    }),
-  );
+  await cleanupLiveSessions(sessions, tempRoots);
 });
 
 describeLive("AgentSession live", () => {

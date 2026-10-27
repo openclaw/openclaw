@@ -1,13 +1,22 @@
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { MessagePort } from "node:worker_threads";
 import { expect, it } from "vitest";
 import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
+import {
+  publishRemoteModelCatalogSnapshot,
+  withRemoteModelCatalogSnapshot,
+  type ActiveRemoteModelCatalog,
+} from "../model-catalog/remote-overlay.js";
+import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import {
   createCatalogFixture,
@@ -24,7 +33,7 @@ import type {
 } from "./prepared-model-catalog-worker.types.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
-const { makeTempDir } = usePreparedCatalogWorkerFixtures();
+const { makeTempDir, observeWorkers } = usePreparedCatalogWorkerFixtures();
 
 function createCatalogPool(env: NodeJS.ProcessEnv) {
   return new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
@@ -42,6 +51,7 @@ function createCatalogPool(env: NodeJS.ProcessEnv) {
 
 function catalogTask(value: PreparedModelCatalogWorkerInput): PreparedModelCatalogWorkerTask {
   return {
+    context: prepareModelCatalogWorkerContext(value),
     value,
     request: {
       kind: "catalog",
@@ -50,6 +60,99 @@ function catalogTask(value: PreparedModelCatalogWorkerInput): PreparedModelCatal
     },
   };
 }
+
+it("shares remote catalog revisions across workspaces without retaining superseded copies", async () => {
+  const fixture = await createCatalogFixture(makeTempDir, 0);
+  writeFixtureFiles(path.join(fixture.root, "plugin"), {
+    "index.cjs": `module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register() {} };`,
+    "openclaw.plugin.json": {
+      id: PLUGIN_ID,
+      providers: [PROVIDER_ID],
+      configSchema: { type: "object", additionalProperties: false },
+      modelCatalog: {
+        providers: {
+          [PROVIDER_ID]: {
+            api: "openai-completions",
+            baseUrl: "https://catalog.invalid/v1",
+            models: [{ id: "manifest-model", name: "Manifest model" }],
+          },
+        },
+      },
+    },
+  });
+  const catalog = (source: string, revision: string): ActiveRemoteModelCatalog => ({
+    sourceUrl: `https://${source}.invalid/catalog.json`,
+    revision,
+    generatedAt: 1,
+    providers: { [PROVIDER_ID]: { models: [{ id: `${source}-${revision}` }] } },
+    recommendations: {},
+    pricing: {},
+    upstreamPricing: {},
+  });
+  const initial = catalog("first", "one");
+  setRemoteModelCatalogOverlaySourcesForTest();
+  expect(publishRemoteModelCatalogSnapshot(initial, null)).toBe(true);
+  const memory = Promise.withResolvers<MessagePort>();
+  const observer = observeWorkers((worker) => {
+    worker.on("message", (message: { status?: string; port?: MessagePort }) => {
+      if (message.status === "memory" && message.port instanceof MessagePort) {
+        memory.resolve(message.port);
+      }
+    });
+  });
+  observer.subscribe();
+  const pool = createCatalogPool(fixture.env);
+  try {
+    const run = async (
+      workspace: string,
+      remoteCatalog: ActiveRemoteModelCatalog | null,
+      generations: number,
+    ) => {
+      const workspaceDir = path.join(fixture.root, workspace);
+      fs.mkdirSync(workspaceDir, { recursive: true });
+      const config = {
+        plugins: fixture.config.plugins,
+        models: { catalogRefresh: { url: remoteCatalog?.sourceUrl ?? initial.sourceUrl } },
+      };
+      const value = createPreparedModelCatalogWorkerInput({
+        agentFacts: makeCatalogAgentFacts(catalogInput(fixture, { workspaceDir, config })),
+        pluginMetadataSnapshot: loadPluginMetadataSnapshot({
+          config,
+          env: fixture.env,
+          workspaceDir,
+        }),
+      });
+      const result = await pool.run(catalogTask({ ...value, remoteCatalog }), {
+        timeoutMs: 30_000,
+      });
+      if (result.status !== "ok" || result.kind !== "catalog") {
+        throw new Error(JSON.stringify(result));
+      }
+      expect(result.snapshot.entries.map((row) => row.id)).toContain(
+        remoteCatalog?.providers[PROVIDER_ID]?.models[0]?.id ?? "manifest-model",
+      );
+      const port = await memory.promise;
+      const sample = once(port, "message");
+      port.postMessage(undefined);
+      const [retained] = await sample;
+      expect(retained.retainedData).toContainEqual(
+        expect.objectContaining({ structure: "catalog-remote", generations }),
+      );
+    };
+    await run("one", initial, 1);
+    await run("two", initial, 1);
+    await run("one", catalog("first", "two"), 2);
+    await run("two", catalog("first", "two"), 2);
+    await run("one", catalog("second", "two"), 3);
+    await run("two", catalog("second", "two"), 2);
+    await run("one", null, 2);
+    await run("two", null, 1);
+  } finally {
+    await pool.close();
+    observer.close();
+    setRemoteModelCatalogOverlaySourcesForTest();
+  }
+}, 120_000);
 
 it("bounds catalog worker retention across repeated fleet preparations", async () => {
   const fixture = await createCatalogFixture(makeTempDir, 0);
@@ -166,6 +269,9 @@ type NativeCatalogSample = {
   neighborRejected?: boolean;
   effects?: number;
   controlCollected?: boolean;
+  descriptorReads?: number;
+  snapshotFrozen?: boolean;
+  snapshotBytes?: string;
 };
 
 async function createNativeCatalogFixture(options: {
@@ -273,6 +379,65 @@ export function register(api) {
     },
   };
 }
+
+it("freezes cloned remote catalog data without inspecting each model property again", async () => {
+  const remoteCatalog: ActiveRemoteModelCatalog = {
+    sourceUrl: "https://freeze-probe.invalid/catalog.json",
+    revision: "synthetic-revision",
+    generatedAt: 1,
+    providers: {
+      probe: {
+        models: Array.from({ length: 100 }, (_, index) => ({
+          id: `remote-probe-${index}`,
+          input: ["text"],
+          cost: { input: 1, output: 2 },
+        })),
+      },
+    },
+    recommendations: { probe: ["remote-probe-0"] },
+    pricing: {},
+    upstreamPricing: {},
+  };
+  await using fixture = await createNativeCatalogFixture({
+    // Instrument only the private worker, after its first task installs this plugin.
+    setup: `const descriptor = Object.getOwnPropertyDescriptor;
+const freeze = Object.freeze;
+let descriptorReads = 0;
+let snapshot;
+let rows = new Set();
+Object.getOwnPropertyDescriptor = function(value, key) {
+  if (rows.has(value) && !Object.isFrozen(value)) descriptorReads++;
+  return descriptor(value, key);
+};
+Object.freeze = function(value) {
+  if (value?.sourceUrl === "https://freeze-probe.invalid/catalog.json") {
+    snapshot = value;
+    rows = new Set(value.providers.probe.models);
+    descriptorReads = 0;
+  }
+  return freeze(value);
+};`,
+    catalog: `if (snapshot) {
+  Object.getOwnPropertyDescriptor = descriptor;
+  Object.freeze = freeze;
+  const pending = [snapshot];
+  let snapshotFrozen = true;
+  while (pending.length) {
+    const value = pending.pop();
+    snapshotFrozen &&= Object.isFrozen(value);
+    for (const child of Object.values(value)) {
+      if (child && typeof child === "object") pending.push(child);
+    }
+  }
+  extra = { descriptorReads, snapshotFrozen, snapshotBytes: JSON.stringify(snapshot) };
+}`,
+  });
+  await fixture.run(0);
+  const observed = await withRemoteModelCatalogSnapshot(remoteCatalog, () => fixture.run(1));
+  expect(observed.snapshotBytes).toBe(JSON.stringify(remoteCatalog));
+  expect(observed.snapshotFrozen).toBe(true);
+  expect(observed.descriptorReads).toBe(0);
+}, 60_000);
 
 it("reuses one installed native ESM evaluation across 20 catalog context changes", async () => {
   await using fixture = await createNativeCatalogFixture({

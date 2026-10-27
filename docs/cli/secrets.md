@@ -120,6 +120,8 @@ openclaw secrets store get LOG_LEVEL
 
 Secret values never appear in human, `--json`, or `--plain` output. `store get` refuses a `secret` entry as write-only by design and exits `2`. It exits `3` when the name does not exist. Environment-kind values are readable.
 
+Human-readable `store list` and `store get` output escapes terminal controls in environment values. Use `--json` or `--plain` when you need the original value.
+
 Team-scoped `env` entries reach Gateway-hosted commands run by OpenClaw's own exec tool, including OpenClaw Code Mode calls into `openclaw:core:exec` and Codex `gateway_exec`. Explicit per-call env wins over store values. Sandbox, remote `node`, ACP, and Codex-native shell execution do not receive them. `secret` entries stay out of subprocesses by default. With `secrets.egressProxy.enabled: true`, Gateway-hosted exec receives only authenticated sentinels and the Gateway replaces them at HTTPS egress. See [Secret egress proxy](/gateway/secrets#secret-egress-proxy).
 
 <Warning>
@@ -249,7 +251,7 @@ openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --json
 
 `--dry-run` validates preflight without writing files. Exec SecretRef checks are skipped by default in dry-run. Write mode rejects plans containing exec SecretRefs/providers unless `--allow-exec`. Use `--allow-exec` to opt in to exec provider checks/execution in either mode.
 
-`--from` must point to a regular file no larger than 16 MiB (16,777,216 bytes). The byte limit applies to the complete serialized file, including whitespace.
+`--from` must point to a regular file containing valid UTF-8 no larger than 16 MiB (16,777,216 bytes). The byte limit applies to the complete serialized file, including whitespace.
 
 What `apply` may update:
 

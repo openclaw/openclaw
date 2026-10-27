@@ -7,6 +7,7 @@ import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import type { SessionConfig } from "../types.base.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveSessionWorkStartError } from "./lifecycle.js";
+import { createRestartRecoveryTombstoneFixture } from "./main-session-recovery-fixtures.test-support.js";
 import {
   resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
@@ -73,14 +74,17 @@ const pendingDelivery = {
 };
 
 it.each<NormalizationCase>([
-  ["noncanonical ID", { sessionId: "legacy:session", pluginExtensions: { memory: {} } }],
+  [
+    "legacy numeric strings",
+    { spawnDepth: "2", inputTokens: "32", runtimeMs: "0", estimatedCostUsd: "0.25" },
+    { spawnDepth: 2, inputTokens: 32, runtimeMs: 0, estimatedCostUsd: 0.25 },
+  ],
   [
     "retired conversation link",
     { conversationLink: { url: "https://example.test" }, pluginExtensions },
     session({ pluginExtensions: structuredClone(pluginExtensions) }),
     ["conversationLink"],
   ],
-  ["known archive reason", archived, { archiveReason: "active-session-cap" }],
   [
     "orphan archive metadata",
     { archivedBy: actor, archiveReason: "active-session-cap" },
@@ -146,6 +150,14 @@ it.each<NormalizationCase>([
       expect(entry).not.toHaveProperty(property);
     }
   }
+});
+
+it("keeps unusable legacy spawn depth available for offline repair", () => {
+  const input = session({ spawnDepth: "1e3" });
+  expect(() => normalizePersistedSessionEntryShape(input)).toThrow(
+    'Session field "spawnDepth" must be a finite number',
+  );
+  expect(input).toHaveProperty("spawnDepth", "1e3");
 });
 
 it("retains valid snooze metadata without turning it into a work-admission barrier", () => {
@@ -330,16 +342,7 @@ it("fails closed while trusted session initialization is pending", () => {
 it("keeps restart-recovery tombstones terminal when archive metadata is missing", () => {
   const entry = {
     sessionId: "failed-session",
-    mainRestartRecovery: {
-      cycleId: "cycle-1",
-      revision: 4,
-      chargedAttempts: 3,
-      tombstone: {
-        reason: "automatic recovery exhausted",
-        recoveredSessionId: "dashboard-successor",
-        recoveredSessionKey: "agent:main:dashboard:successor",
-      },
-    },
+    mainRestartRecovery: createRestartRecoveryTombstoneFixture(),
   };
 
   const key = "agent:main:matrix:channel:room-a";

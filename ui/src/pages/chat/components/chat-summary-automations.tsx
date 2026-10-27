@@ -1,23 +1,50 @@
-import { For, Show, createMemo, createSignal, onSettled, untrack } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createMemo,
+  createSignal,
+  isPending,
+  latest,
+  onSettled,
+} from "solid-js";
 import type { CronCompactJob } from "../../../api/types.ts";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { gatewayPresentationScope } from "../../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { isCronInventoryInvalidation } from "../../../lib/cron/inventory-connection.ts";
 import { loadCompactCronJobsPage, retireCronJobsRequest } from "../../../lib/cron/jobs.ts";
 import { createInitialCronState } from "../../../lib/cron/state.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod, canPresentGatewayMethod } from "../../../lib/gateway-methods.ts";
+import { createGatewayRetryOwner } from "../../../lib/gateway-retry.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { resolveUiConversationIdentity } from "../../../lib/sessions/session-key.ts";
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
-import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import "../../../styles/chat/summary-automations.css";
-import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
+import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { SessionAutomationResult } from "./session-automation-result.tsx";
+import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
+
+class AutomationReadError extends Error {
+  constructor(
+    message: string,
+    readonly readDenied: boolean,
+  ) {
+    super(message);
+  }
+}
 
 export type SessionAutomationInventoryProps = {
   gateway: ApplicationGateway | undefined;
@@ -39,9 +66,14 @@ export function createSessionAutomationInventory(
   const publish = () => setRevision((value) => value + 1);
   // The loader owns synchronous request state; Solid only observes its revision.
   let cron = createInitialCronState<CronCompactJob>();
-  let showError = false;
+  const [receipt, setReceipt] = createSignal<{
+    state: typeof cron;
+    result: Promise<void>;
+  }>();
   let readAccess = false;
   let dirty = true;
+  let retryPending = false;
+  const retry = createGatewayRetryOwner();
   let active = true;
   let presentationScope = 0;
   const visible = (isPresented = presented()) =>
@@ -53,10 +85,24 @@ export function createSessionAutomationInventory(
     revision();
     return cron;
   };
-  const error = () => {
-    revision();
-    return showError;
-  };
+  const scope = createMemo(state);
+  // Observe the admitted read, including its trailing refresh. Consumers never send an RPC.
+  // Throw the settled failure in the readiness slot so pending probes can retain the retry UI.
+  const read = createMemo<AutomationReadError | undefined>(() => {
+    const current = scope();
+    const admitted = receipt();
+    return admitted?.state === current
+      ? admitted.result.then(() => {
+          if (current.cronJobsError) {
+            return new AutomationReadError(
+              current.cronJobsError,
+              current.cronJobsReadDenied === true,
+            );
+          }
+          return undefined;
+        })
+      : Promise.resolve(undefined);
+  });
 
   const readable = () => {
     revision();
@@ -64,6 +110,8 @@ export function createSessionAutomationInventory(
   };
 
   function reset(source: ApplicationGateway | undefined, key: string, retain = false) {
+    retry.reset();
+    retryPending = false;
     retireCronJobsRequest(cron);
     readAccess = canPresentGatewayMethod(source?.snapshot, "cron.list", "operator.read", {
       requireAdvertisement: false,
@@ -85,17 +133,21 @@ export function createSessionAutomationInventory(
       canCallGatewayMethod(source?.snapshot, "cron.list", "operator.read", {
         requireAdvertisement: false,
       });
-    const scope = source ? gatewayPresentationScope(source).key : 0;
-    if (retain && readAccess && scope !== 0 && scope === presentationScope) {
+    const nextPresentationScope = source ? gatewayPresentationScope(source).key : 0;
+    if (
+      retain &&
+      readAccess &&
+      nextPresentationScope !== 0 &&
+      nextPresentationScope === presentationScope
+    ) {
       next.cronJobs = cron.cronJobs;
       next.cronJobsSnapshotRevision = cron.cronJobsSnapshotRevision;
       next.cronJobsTotal = cron.cronJobsTotal;
       next.cronJobsHasMore = cron.cronJobsHasMore;
       next.cronJobsNextOffset = cron.cronJobsNextOffset;
     }
-    presentationScope = scope;
+    presentationScope = nextPresentationScope;
     cron = next;
-    showError = false;
     dirty = true;
     publish();
   }
@@ -104,10 +156,12 @@ export function createSessionAutomationInventory(
     append = false,
     isPresented = presented(),
     event,
+    refresh = false,
   }: {
     append?: boolean;
     isPresented?: boolean;
     event?: unknown;
+    refresh?: boolean;
   } = {}) {
     const current = cron;
     if (
@@ -119,16 +173,34 @@ export function createSessionAutomationInventory(
     ) {
       return;
     }
+    retry.cancel();
+    retryPending = false;
     dirty = false;
-    const pending = loadCompactCronJobsPage(current, { append, event });
+    const alreadyLoading = current.cronLoading || current.cronJobsLoadingMore;
+    const pending = loadCompactCronJobsPage(current, { append, event, refresh });
+    // Coalesced events return early; retain the active read's completion receipt.
+    if (!alreadyLoading && (current.cronLoading || current.cronJobsLoadingMore)) {
+      setReceipt({ state: current, result: pending });
+    }
     publish();
     await pending;
     if (cron !== current || !active || !host()?.isConnected) {
       return;
     }
     // The loader pauses trailing reads while hidden; retain one visible catch-up.
-    dirty ||= !visible();
-    showError = current.cronJobsError !== null;
+    const failed = current.cronJobsError !== null;
+    dirty ||= !visible() || failed;
+    if (failed && visible() && !current.cronJobsReadDenied) {
+      retryPending = true;
+      retry.schedule(() => {
+        retryPending = false;
+        if (cron === current) {
+          void load();
+        }
+      });
+    } else if (!failed || current.cronJobsReadDenied) {
+      retry.reset();
+    }
     publish();
   }
 
@@ -159,14 +231,17 @@ export function createSessionAutomationInventory(
               reset(source, key, identity === nextIdentity && readAccess === nextReadAccess);
               identity = nextIdentity;
             }
-            if (dirty) {
+            if (dirty && !retryPending && !cron.cronJobsReadDenied) {
               void load();
             }
           });
           const unsubscribeEvents = source.subscribeEvents((event) => {
-            if (current() && event.event === "cron") {
+            if (
+              current() &&
+              (event.event === "cron" || isCronInventoryInvalidation(event, source.snapshot))
+            ) {
               dirty = true;
-              void load({ event: event.payload });
+              void load({ event: event.event === "cron" ? event.payload : undefined });
             }
           });
           void load();
@@ -174,6 +249,8 @@ export function createSessionAutomationInventory(
             unsubscribe();
             unsubscribeEvents();
             connection.dispose();
+            retry.reset();
+            retryPending = false;
             retireCronJobsRequest(cron);
           };
         });
@@ -181,10 +258,12 @@ export function createSessionAutomationInventory(
           <For each={[presented()]}>
             {(shown) => {
               onSettled(() => {
-                if (shown) {
+                if (shown && !cron.cronJobsReadDenied) {
                   void load({ isPresented: true });
                 }
                 return () => {
+                  retry.cancel();
+                  retryPending = false;
                   dirty = true;
                 };
               });
@@ -197,7 +276,10 @@ export function createSessionAutomationInventory(
   );
   onSettled(() => {
     const activate = () => {
-      if (dirty) {
+      if (!visible()) {
+        retry.cancel();
+        retryPending = false;
+      } else if (dirty && !cron.cronJobsReadDenied) {
         void load();
       }
     };
@@ -206,6 +288,7 @@ export function createSessionAutomationInventory(
     activate();
     return () => {
       active = false;
+      retry.reset();
       stopVisibility();
       stopFocus();
     };
@@ -218,24 +301,52 @@ export function createSessionAutomationInventory(
     hasMore: () => state().cronJobsHasMore,
     loading: () => state().cronLoading || state().cronJobsLoadingMore,
     loaded: () => state().cronJobsSnapshotRevision !== null,
-    connected: () => state().connected,
+    connected: () => scope().connected,
     available: () => readable() && Boolean(state().cronSessionFilter),
     readable,
-    error,
-    refresh: () => load(),
+    error: () => state().cronJobsError !== null,
+    read,
+    refresh: () => load({ refresh: true }),
     loadMore: () => load({ append: true }),
   };
 }
 
 export type SessionAutomationInventory = ReturnType<typeof createSessionAutomationInventory>;
 
+/** Readiness is separate from rows so refresh errors retain their DOM and focus. */
+export function SessionAutomationRead(props: {
+  inventory: SessionAutomationInventory;
+  loading?: JSX.Element;
+  error: JSX.Element;
+  readDeniedOnly?: boolean;
+}) {
+  const ready = () => {
+    const failure = latest(props.inventory.read);
+    if (failure) {
+      throw failure;
+    }
+    return !props.inventory.loaded() && isPending(props.inventory.read) ? props.loading : null;
+  };
+  return (
+    <Errored
+      fallback={(error) => {
+        const cause = error();
+        return !props.readDeniedOnly ||
+          (cause instanceof AutomationReadError && cause.readDenied) ? (
+          <Loading>{props.error}</Loading>
+        ) : null;
+      }}
+    >
+      <Loading fallback={props.loading}>{ready()}</Loading>
+    </Errored>
+  );
+}
+
 export type ChatSummaryAutomationsProps = SessionAutomationInventoryProps & {
+  /** Reset local reveal/focus intent without retiring the logical inventory. */
+  presentationIdentity?: object;
   /** Supplied only by the native desktop Details composition. */
   desktop?: { expanded: boolean; onExpandedChange: (expanded: boolean) => void };
-  /** Stable session-owned instance shared with mobile, when supplied by the parent. */
-  inventory?: SessionAutomationInventory;
-  /** A positive native fact only; false does not exclude paused automations. */
-  hasAutomation?: boolean;
   onNavigate?: (jobId: string) => void;
 };
 
@@ -251,22 +362,25 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       }
     };
   };
-  const initialInventory = untrack(() => props.inventory);
-  const inventory = initialInventory ?? createSessionAutomationInventory(props, () => host);
+  const inventory = createSessionAutomationInventory(props, () => host);
   const presented = createMemo(() => props.presented);
   const sessionKey = createMemo(() => props.sessionKey);
-  // Reopening or replacing the session resets only the local reveal count.
+  const presentation = createMemo(() => props.presentationIdentity);
+  // Reopening or replacing the presentation resets only the local reveal count.
   const [shown, setShown] = createSignal(() => {
+    presentation();
     presented();
     sessionKey();
     return 10;
   });
   const jobs = () => inventory.jobs().slice(0, shown());
+  const formatSchedule = createSessionAutomationSchedule();
   const hasCachedRows = () => inventory.jobs().length > shown();
   const more = () => hasCachedRows() || (inventory.hasMore() && !inventory.error());
 
   async function reveal(button: HTMLButtonElement) {
     const key = props.sessionKey;
+    const presentationIdentity = props.presentationIdentity;
     const source = props.gateway;
     const first = jobs().length;
     const count = shown() + 10;
@@ -285,7 +399,9 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
         return;
       }
     }
+    // Cancel the old presentation before reading props held by an async frame.
     if (
+      latest(() => props.presentationIdentity) !== presentationIdentity ||
       props.sessionKey !== key ||
       props.gateway !== source ||
       !props.presented ||
@@ -300,6 +416,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
         const target = firstRevealedId ? jobLinks.get(firstRevealedId) : undefined;
         const activeElement = host.ownerDocument.activeElement;
         if (
+          latest(() => props.presentationIdentity) === presentationIdentity &&
           props.sessionKey === key &&
           props.gateway === source &&
           props.presented &&
@@ -315,10 +432,12 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
 
   async function retry(button: HTMLButtonElement) {
     const key = props.sessionKey;
+    const presentationIdentity = props.presentationIdentity;
     const source = props.gateway;
     const focused = host.ownerDocument.activeElement === button;
     await inventory.refresh();
     if (
+      latest(() => props.presentationIdentity) !== presentationIdentity ||
       props.sessionKey !== key ||
       props.gateway !== source ||
       inventory.error() ||
@@ -332,6 +451,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       onSettled(() => {
         const target = jobLinks.get(inventory.jobs()[0]?.id ?? "");
         if (
+          latest(() => props.presentationIdentity) === presentationIdentity &&
           props.sessionKey === key &&
           props.gateway === source &&
           props.presented &&
@@ -355,10 +475,30 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     if (inventory.connected() && job.runningAtMs !== undefined) {
       return t("common.running");
     }
-    return job.schedule ? sessionAutomationSchedule(job.schedule) : "";
+    return job.schedule ? formatSchedule(job.schedule) : "";
   }
+  const errorNotice = () =>
+    inventory.connected() && (
+      <div class="chat-summary__automation-error">
+        <span role="status">
+          {t(
+            inventory.loaded()
+              ? "chat.sessionDetails.automationUpdateError"
+              : "chat.sessionDetails.automationError",
+          )}
+        </span>
+        <button
+          type="button"
+          class="chat-summary__automation-retry"
+          aria-disabled={isPending(inventory.read) ? "true" : "false"}
+          onClick={(event) => void retry(event.currentTarget)}
+        >
+          {t("common.retry")}
+        </button>
+      </div>
+    );
   const content = () => (
-    <div class="chat-summary__automations" aria-busy={inventory.loading() ? "true" : "false"}>
+    <div class="chat-summary__automations" aria-busy={isPending(inventory.read) ? "true" : "false"}>
       <For each={jobs()} keyed={(job) => job.id}>
         {(job) => {
           let row: HTMLAnchorElement | undefined;
@@ -405,61 +545,47 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
                 )}
                 {job().autoDisabled && <span class="chat-summary__automation-attention" />}
               </span>
-              <HoverMarquee
-                class="chat-summary__automation-title"
-                content={job().name.trim() || job().id}
-                options={{ host: () => row }}
-              />
-              {state() && (
-                <span
-                  class={[
-                    "chat-summary__automation-state",
-                    { "is-attention": Boolean(job().autoDisabled) },
-                  ]}
-                  title={metadataTitle()}
-                >
-                  {running() ? (
-                    <>
-                      <span class="session-run-spinner" aria-hidden="true" />
-                      <span class="sr-only">{state()}</span>
-                    </>
-                  ) : (
-                    <HoverMarquee
-                      class="chat-summary__automation-metadata"
-                      content={state()}
-                      options={{ host: () => row, stationary: true }}
-                    />
+              <span class="chat-summary__automation-copy">
+                <span class="chat-summary__automation-heading">
+                  <HoverMarquee
+                    class="chat-summary__automation-title"
+                    content={job().name.trim() || job().id}
+                    options={{ host: () => row }}
+                  />
+                  {state() && (
+                    <span
+                      class={[
+                        "chat-summary__automation-state",
+                        { "is-attention": Boolean(job().autoDisabled) },
+                      ]}
+                      title={metadataTitle()}
+                    >
+                      {running() ? (
+                        <>
+                          <span class="session-run-spinner" aria-hidden="true" />
+                          <span class="sr-only">{state()}</span>
+                        </>
+                      ) : (
+                        <HoverMarquee
+                          class="chat-summary__automation-metadata"
+                          content={state()}
+                          options={{ host: () => row, stationary: true }}
+                        />
+                      )}
+                    </span>
                   )}
                 </span>
-              )}
+                <SessionAutomationResult job={job()} />
+              </span>
             </a>
           );
         }}
       </For>
-      {inventory.error() && inventory.connected() && (
-        <div class="chat-summary__automation-error">
-          <span role="status">
-            {t(
-              inventory.loaded()
-                ? "chat.sessionDetails.automationUpdateError"
-                : "chat.sessionDetails.automationError",
-            )}
-          </span>
-          <button
-            type="button"
-            class="chat-summary__automation-retry"
-            aria-disabled={inventory.loading() ? "true" : "false"}
-            onClick={(event) => void retry(event.currentTarget)}
-          >
-            {t("common.retry")}
-          </button>
-        </div>
-      )}
       {more() && (
         <button
           type="button"
           class="chat-summary__automation-more"
-          disabled={!hasCachedRows() && (inventory.loading() || !inventory.connected())}
+          disabled={!hasCachedRows() && (isPending(inventory.read) || !inventory.connected())}
           onClick={(event) => void reveal(event.currentTarget)}
         >
           {t("chat.sessionDetails.automationShowMore")}
@@ -469,53 +595,49 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   );
   return (
     <openclaw-chat-summary-automations ref={(element) => (host = element)}>
-      {initialInventory ? null : inventory.lifecycle}
-      <Show when={inventory.readable()}>
-        <Show
-          when={inventory.jobs().length > 0}
-          fallback={
-            <>
-              {props.hasAutomation &&
-                inventory.available() &&
-                inventory.connected() &&
-                !inventory.loaded() &&
-                !inventory.error() && (
-                  <div class="chat-summary__automation-pending" role="status">
+      {inventory.lifecycle}
+      <ChatLazyBoundary>
+        <Show when={inventory.readable()}>
+          <Show when={inventory.jobs().length > 0}>
+            <Show
+              when={props.desktop}
+              fallback={
+                <details class="chat-details__group" data-details-group="automations" open>
+                  <summary class="chat-details__caption">
                     {t("chat.sessionDetails.automations")}
-                    <span class="session-run-spinner" aria-hidden="true" />
-                    <span class="sr-only">{t("chat.sessionDetails.automationLoading")}</span>
-                  </div>
-                )}
-              {inventory.error() && inventory.connected() && content()}
-            </>
-          }
-        >
-          <Show
-            when={props.desktop}
-            fallback={
-              <details class="chat-details__group" data-details-group="automations" open>
-                <summary class="chat-details__caption">
-                  {t("chat.sessionDetails.automations")}
-                  <Icon name="chevronDown" />
-                </summary>
-                {content()}
-              </details>
-            }
-          >
-            {(desktop) => (
-              <ChatDetailsDesktopSection
-                section="automations"
-                title={t("chat.sessionDetails.automations")}
-                expanded={desktop().expanded}
-                presented={props.presented}
-                onExpandedChange={(expanded) => desktop().onExpandedChange(expanded)}
-              >
-                {content()}
-              </ChatDetailsDesktopSection>
-            )}
+                    <Icon name="chevronDown" />
+                  </summary>
+                  {content()}
+                </details>
+              }
+            >
+              {(desktop) => (
+                <ChatDetailsDesktopSection
+                  section="automations"
+                  title={t("chat.sessionDetails.automations")}
+                  expanded={desktop().expanded}
+                  presented={props.presented}
+                  onExpandedChange={(expanded) => desktop().onExpandedChange(expanded)}
+                >
+                  {content()}
+                </ChatDetailsDesktopSection>
+              )}
+            </Show>
           </Show>
+          <SessionAutomationRead
+            inventory={inventory}
+            readDeniedOnly
+            error={
+              <div
+                class="chat-summary__automations"
+                aria-busy={isPending(inventory.read) ? "true" : "false"}
+              >
+                {errorNotice()}
+              </div>
+            }
+          />
         </Show>
-      </Show>
+      </ChatLazyBoundary>
     </openclaw-chat-summary-automations>
   );
 }

@@ -83,7 +83,7 @@ import {
   type SharedCodexAppServerClientEntry,
   type SharedCodexAppServerClientStartup,
 } from "./shared-client-lifecycle.js";
-import { shouldTrackDesktopGeneration } from "./shared-client-start-policy.js";
+import * as codexStartup from "./shared-client-start-policy.js";
 import {
   resolveCodexAppServerSpawnIdentity,
   type CodexAppServerClientProcessIdentity,
@@ -122,7 +122,7 @@ type CodexAppServerClientStartupOptions = Omit<
     onManagedFallback?: (startOptions: CodexAppServerStartOptions) => boolean;
   };
 
-async function prepareCodexAppServerClient(options?: CodexAppServerClientOptions) {
+export async function prepareCodexAppServerClient(options?: CodexAppServerClientOptions) {
   const lifetime = getSharedCodexAppServerClientState().startup;
   const abandonSignal = options?.abandonSignal
     ? AbortSignal.any([lifetime.controller.signal, options.abandonSignal])
@@ -212,7 +212,7 @@ async function resolveCodexAppServerClientStartContext(
     (requestedStartOptions.homeScope === "user"
       ? undefined
       : resolveDefaultAgentDir(options?.config ?? {}));
-  const desktopGeneration = shouldTrackDesktopGeneration(
+  const desktopGeneration = codexStartup.shouldTrackDesktopGeneration(
     requestedStartOptions,
     options?.pluginConfig,
   )
@@ -762,7 +762,7 @@ async function startInitializedCodexAppServerClientOnce(
       throw error;
     }
     const runtimeArtifactModule = params.runtimeArtifactMode
-      ? await waitForStartup(() => import("./runtime-artifact.js"))
+      ? await waitForStartup(codexStartup.loadRuntimeArtifact)
       : undefined;
     const runtimeArtifactBeforeStart = runtimeArtifactModule
       ? await waitForStartup(() =>
@@ -795,7 +795,6 @@ async function startInitializedCodexAppServerClientOnce(
         starting = CodexAppServerClient.start(startOptions, async () => {
           await params.assertCurrentAsync?.();
           assertStartupCurrent();
-          resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt);
         });
         return starting;
       });
@@ -988,7 +987,7 @@ export function captureSharedCodexAppServerCatalogLifetime(
 }
 
 /** Registration ends on retirement even when sibling leases keep the process alive. */
-function captureSharedClientRegistration(client: CodexAppServerClient): () => boolean {
+export function captureSharedClientRegistration(client: CodexAppServerClient): () => boolean {
   const state = getSharedCodexAppServerClientState();
   const entry = getCurrentSharedClientEntry(client);
   return () =>

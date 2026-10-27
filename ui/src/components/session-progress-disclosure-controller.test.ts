@@ -54,6 +54,50 @@ function wheelThenAdvance(transcript: ReturnType<typeof observeTranscript>, ms =
   advance(ms);
 }
 
+it.each(["pointerup", "pointercancel", "lostpointercapture", "blur", "second pointer"])(
+  "releases a header drag on %s and accepts the next drag",
+  (reason) => {
+    const fixture = disclosure({}, true);
+    fixture.show();
+    const summary = fixture.card().querySelector("summary")!;
+    const captured = new Set<number>();
+    summary.setPointerCapture = (id) => captured.add(id);
+    summary.hasPointerCapture = (id) => captured.has(id);
+    summary.releasePointerCapture = (id) => captured.delete(id);
+    const pointer = (target: EventTarget, type: string, id: number, y: number) => {
+      const event = new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientY: y,
+      });
+      Object.defineProperties(event, {
+        pointerId: { value: id },
+        isPrimary: { value: id === 1 },
+      });
+      target.dispatchEvent(event);
+    };
+    pointer(summary, "pointerdown", 1, 100);
+    pointer(summary, "pointermove", 1, 80);
+    fixture.expectChoice(true, "20px");
+    if (reason === "blur") {
+      window.dispatchEvent(new Event("blur"));
+    } else if (reason === "second pointer") {
+      pointer(document, "pointerdown", 2, 80);
+    } else {
+      pointer(summary, reason, 1, 80);
+    }
+    expect(captured.size).toBe(0);
+    pointer(summary, "pointermove", 1, 50);
+    fixture.expectChoice(true, "20px");
+    pointer(summary, "pointerdown", 1, 100);
+    pointer(summary, "pointermove", 1, 90);
+    fixture.expectChoice(true, "30px");
+    pointer(summary, "pointerup", 1, 90);
+    expect(captured.size).toBe(0);
+  },
+);
+
 it("parks disclosure gestures and restores the retained choice on reveal", () => {
   const fixture = disclosure({ cardLifetime: {} });
   const view = fixture.show();
@@ -110,37 +154,19 @@ it.each([
       fixture.click();
     }
     expectChoice(manualOpen, partial ? "48px" : "");
-    show();
-    expectChoice(manualOpen, partial ? "48px" : "");
-    let remounted = false;
-    for (const [revision, final, remount] of [
-      [3, false, false],
-      [4, true, false],
-      [4, true, true],
-      [5, false, false],
-    ] as const) {
-      if (remount) {
-        fixture.unmount();
-        remounted = true;
-      }
-      show(cardLifetime, revision, final);
-      expectChoice(!retained && remounted ? initialOpen : manualOpen, partial ? "48px" : "");
-    }
+    fixture.unmount();
+    show(cardLifetime, 4, true);
+    expectChoice(retained ? manualOpen : initialOpen, partial ? "48px" : "");
     const replacement = {};
     show(replacement, 1);
     expectChoice(initialOpen);
     expect(fixture.body().style.minHeight).toBe("");
-    fixture.unmount();
-    show(replacement, 1);
-    expectChoice(initialOpen);
   },
 );
 
 it.each([
-  "history",
   "delayed history",
   "keyboard replacement",
-  "pointer replacement",
   "programmatic replacement",
   "scope replacement",
   "header",
@@ -151,36 +177,30 @@ it.each([
   if (choice !== "header") {
     const transcript = observeTranscript(fixture.container, transcriptCleanups);
     await Promise.resolve();
-    if (choice !== "history") {
-      transcript.thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -200, bubbles: true }));
+    transcript.thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -200, bubbles: true }));
+    advance(301);
+    expect(fixture.card().open).toBe(true);
+    if (choice === "keyboard replacement") {
+      transcript.thread.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp" }));
+    } else if (choice === "programmatic replacement") {
+      publishTranscriptScroll(transcript.thread, {
+        type: "offset",
+        delta: 0,
+        scrolling: false,
+        touching: false,
+        programmatic: true,
+      });
+    } else if (choice === "scope replacement") {
+      context.gatewayScope = {};
+      fixture.show();
+      await Promise.resolve();
+    }
+    transcript.scroll(200);
+    if (choice !== "delayed history") {
       advance(301);
       expect(fixture.card().open).toBe(true);
-      if (choice === "keyboard replacement") {
-        transcript.thread.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp" }));
-      } else if (choice === "pointer replacement") {
-        transcript.thread.dispatchEvent(new PointerEvent("pointerdown"));
-      } else if (choice === "programmatic replacement") {
-        publishTranscriptScroll(transcript.thread, {
-          type: "offset",
-          delta: 0,
-          scrolling: false,
-          touching: false,
-          programmatic: true,
-        });
-      } else if (choice === "scope replacement") {
-        context.gatewayScope = {};
-        fixture.show();
-        await Promise.resolve();
-      }
-      transcript.scroll(200);
-      if (choice !== "delayed history") {
-        advance(301);
-        expect(fixture.card().open).toBe(true);
-        wheelThenAdvance(transcript);
-        expect(fixture.card().open).toBe(true);
-      }
-    } else {
-      transcript.wheel(200);
+      wheelThenAdvance(transcript);
+      expect(fixture.card().open).toBe(true);
     }
     advance(201);
     wheelThenAdvance(transcript);

@@ -397,6 +397,7 @@ it("discovers disk probes off thread before sampling", async () => {
   let discoverySql: string[] | undefined;
   const requestedEnvironments: string[] = [];
   const warn = vi.fn();
+  using _ = vi.spyOn(Date, "now").mockReturnValue(2000);
   const monitor = createWorkerPlacementDiskSpaceMonitor({
     placements: store,
     runnerAvailability: { read: () => undefined, version: () => 0 },
@@ -416,7 +417,6 @@ it("discovers disk probes off thread before sampling", async () => {
       },
     },
     warn,
-    now: () => 2000,
   });
   await monitor.sweep();
 

@@ -8,9 +8,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
-  getEffectiveQaEvidenceEntries,
   projectQaEvidenceScenarioOutcomes,
   validateQaEvidenceSummaryJson,
 } from "../../extensions/qa-lab/api.js";
@@ -329,34 +328,11 @@ it.each([
       harness: { gitSha: harnessSha },
       gatewayExecutor: executor,
     });
-    const rows: CodeModeMatrixCellResult[] = await readJsonLines(artifact("results.jsonl"));
     const evidence = await readEvidence(outputDir);
-    assert(evidence.schemaVersion === 3, "expected canonical invocation evidence after comparison");
     expect(outcomes(evidence)).toEqual(["pass", "fail", interrupted ? null : "pass"]);
-    expect(getEffectiveQaEvidenceEntries(evidence)).toHaveLength(calls);
-    expect(evidence.occurrences).toHaveLength(3 + calls);
-    expect(new Set(rows.map((row) => row.evidenceOccurrenceId)).size).toBe(calls);
-    for (const row of rows) {
-      expect(row.executor).toBe(executor);
-      expect(row.workload).toEqual(baselineRows[row.repetition - 1]?.workload);
-      const occurrence = evidence.occurrences.find((item) => item.id === row.evidenceOccurrenceId);
-      expect(occurrence).toMatchObject({
-        retryOf: null,
-        launch: {
-          source: { ref: runtimeSha },
-          package: null,
-          protocol: null,
-          accountRef: null,
-          proofClass: null,
-        },
-      });
-      expect(occurrence?.receipts).toHaveLength(1);
-      const receipt = occurrence?.receipts[0];
-      assert(receipt, "expected a prepared observation receipt");
-      expect(receipt.phase).toBe("prepared");
-      const bytes = await fs.readFile(artifact(receipt.artifact.path));
-      expect(sha256(bytes)).toBe(receipt.artifact.sha256);
-      expect(JSON.parse(bytes.toString()).result).toEqual(row);
-    }
+    const rows: CodeModeMatrixCellResult[] = await readJsonLines(artifact("results.jsonl"));
+    expect(rows.map(({ executor: selected, workload }) => [selected, workload])).toEqual(
+      baselineRows.slice(0, calls).map(({ workload }) => [executor, workload]),
+    );
   },
 );

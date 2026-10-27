@@ -3,18 +3,7 @@ import { buildAnthropicCliBackend } from "./cli-backend.js";
 
 const invoke = '<invoke name="Bash">';
 const parameter = '<parameter name="command">pwd</parameter>';
-const MOCK_RAW_TOOL_OUTPUT = [
-  "I'll inspect the synthetic report.",
-  "",
-  invoke,
-  '<parameter name="command">wc -l /tmp/mock-report.md</parameter>',
-  '<parameter name="description">Verify the mock report</parameter>',
-  "</invoke>",
-  "",
-  "12 /tmp/mock-report.md",
-  "",
-  "The synthetic report has 12 lines.",
-].join("\n");
+const MOCK_RAW_TOOL_OUTPUT = [invoke, parameter, "</invoke>"].join("\n");
 
 const backend = buildAnthropicCliBackend();
 const context = { backendId: backend.id, backend: backend.config };
@@ -22,11 +11,10 @@ const rawToolError = {
   kind: "result",
   errorText: expect.stringContaining("raw tool protocol appeared as assistant text"),
 };
+const parseFrame = (event: Record<string, unknown>) =>
+  backend.parseJsonlEvent?.(JSON.stringify(event), context);
 function parseResult(...lines: string[]) {
-  return backend.parseJsonlEvent?.(
-    JSON.stringify({ type: "result", subtype: "success", result: lines.join("\n") }),
-    context,
-  );
+  return parseFrame({ type: "result", subtype: "success", result: lines.join("\n") });
 }
 
 it("classifies the native Claude refresh-lock diagnostic as contention", () => {
@@ -44,41 +32,31 @@ it.each([
   expect(backend.classifyErrorCode?.(message)).toBeUndefined();
 });
 
-it("projects Claude CLI compaction status lifecycle without inferring from the boundary", () => {
-  const parseLifecycle = (event: unknown) =>
-    backend.parseJsonlLifecycleEvent?.(JSON.stringify(event), context);
-  const status = { type: "system", subtype: "status" };
-  const end = { kind: "compaction", phase: "end" };
-
-  expect(parseLifecycle({ ...status, status: "compacting" })).toEqual({
-    kind: "compaction",
-    phase: "start",
-  });
-  expect(parseLifecycle({ ...status, status: null, compact_result: "success" })).toEqual({
-    ...end,
-    completed: true,
-  });
-  expect(parseLifecycle({ ...status, status: null, compact_result: "failed" })).toEqual({
-    ...end,
-    completed: false,
-  });
-  expect(parseLifecycle({ compact_result: "success" })).toEqual({
-    ...end,
-    completed: true,
-  });
-  expect(parseLifecycle({ type: "system", subtype: "compact_boundary" })).toBeNull();
+const statusEvent = (fields: Record<string, unknown>) => ({
+  type: "system",
+  subtype: "status",
+  ...fields,
+});
+const end = { kind: "compaction", phase: "end" };
+const lifecycleCases = [
+  [statusEvent({ status: "compacting" }), { kind: "compaction", phase: "start" }],
+  [statusEvent({ status: null, compact_result: "failed" }), { ...end, completed: false }],
+  [{ compact_result: "success" }, { ...end, completed: true }],
+  [{ type: "system", subtype: "compact_boundary" }, null],
+];
+it("projects native compaction lifecycle without inferring from the boundary", () => {
+  for (const [event, expected] of lifecycleCases) {
+    expect(backend.parseJsonlLifecycleEvent?.(JSON.stringify(event), context)).toEqual(expected);
+  }
 });
 
-it.each(["\\u003C"])(
-  "rejects the %s-escaped JSON form reported by upstream Claude Code",
-  (escapedLessThan) => {
-    const line = JSON.stringify({ type: "result", result: MOCK_RAW_TOOL_OUTPUT }).replaceAll(
-      "<",
-      escapedLessThan,
-    );
-    expect(backend.parseJsonlEvent?.(line, context)).toEqual(rawToolError);
-  },
-);
+it("rejects the escaped JSON form reported by upstream Claude Code", () => {
+  const line = JSON.stringify({ type: "result", result: MOCK_RAW_TOOL_OUTPUT }).replaceAll(
+    "<",
+    "\\u003C",
+  );
+  expect(backend.parseJsonlEvent?.(line, context)).toEqual(rawToolError);
+});
 
 it("does not let inline close prose before the parameter mask an observed truncated leak", () => {
   expect(
@@ -124,10 +102,5 @@ it.each([
 
 it("ignores malformed and non-terminal JSONL frames", () => {
   expect(backend.parseJsonlEvent?.("not json <invoke <parameter", context)).toBeNull();
-  expect(
-    backend.parseJsonlEvent?.(
-      JSON.stringify({ type: "assistant", result: MOCK_RAW_TOOL_OUTPUT }),
-      context,
-    ),
-  ).toBeNull();
+  expect(parseFrame({ type: "assistant", result: MOCK_RAW_TOOL_OUTPUT })).toBeNull();
 });

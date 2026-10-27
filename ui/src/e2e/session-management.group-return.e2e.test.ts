@@ -17,7 +17,61 @@ async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
 }
 
-suite.define(() =>
+suite.define(() => {
+  it("moves sessions between rendered groups when Person grouping falls back", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+      const key = "agent:main:planning";
+      const rows = [
+        sessionRow(key, "Release checklist", 2, { category: "Planning", kind: "group" }),
+        sessionRow("agent:main:ready", "Documentation review", 1, { category: "Ready" }),
+      ];
+      await page.addInitScript(() =>
+        localStorage.setItem("openclaw:sidebar:sessions:grouping", "person"),
+      );
+      const gateway = await support.installMockGateway(page, {
+        sessionKey: key,
+        sessionGroups: ["Planning", "Ready"],
+        sessions: rows,
+        methodResponses: {
+          // An authoritative roster without multiple owners renders category groups,
+          // but must retain the Person preference for later multi-owner rosters.
+          "sessions.list": { ...support.sessionsListResponse(rows), owners: [] },
+        },
+      });
+      await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, key));
+      const section = (id: string) => page.locator(`[data-session-section="${id}"]`);
+      const row = (id: string) => section(id).locator(`[data-session-key="${key}"]`);
+      await row("category:Planning").waitFor();
+      await chooseSidebarMenuOption(page, "Hide empty groups", "Never");
+      await closeSidebarMenu(page);
+      await section("groups").waitFor();
+      // Start on the visible link: synthetic DragEvents do not prove native acceptance.
+      await row("category:Planning")
+        .locator(".sidebar-recent-session__link")
+        .dragTo(section("category:Ready").locator(".sidebar-recent-sessions__head"));
+      await expect.poll(() => gateway.getSessionRow(key)).toMatchObject({ category: "Ready" });
+      await row("category:Ready").waitFor();
+      await row("category:Ready")
+        .locator(".sidebar-recent-session__link")
+        .dragTo(section("groups").locator(".sidebar-recent-sessions__head"));
+      await expect.poll(() => gateway.getSessionRow(key)).toMatchObject({ category: null });
+      await row("groups").waitFor();
+      expect(
+        (await gateway.getRequests("sessions.patch")).map((request) => request.params),
+      ).toEqual([
+        { key, agentId: "main", expectedSessionId: rows[0]!.sessionId, category: "Ready" },
+        { key, agentId: "main", expectedSessionId: rows[0]!.sessionId, category: null },
+      ]);
+      expect(
+        await page.evaluate(() => localStorage.getItem("openclaw:sidebar:sessions:grouping")),
+      ).toBe("person");
+      const reads = (await gateway.getRequests("sessions.list")).length;
+      await gateway.closeLatest();
+      await gateway.waitForRequest("sessions.list", { after: reads });
+      await row("groups").waitFor();
+    });
+  });
+
   it("moves a categorized group session back to Groups", () =>
     ui.withSessionPage(
       suite,
@@ -44,6 +98,8 @@ suite.define(() =>
         });
 
         await page.goto(`${suite.server.baseUrl}chat`);
+        await chooseSidebarMenuOption(page, "Status", "All");
+        await closeSidebarMenu(page);
         const done = page.locator('[data-session-section="category:Done"]');
         const groups = page.locator('[data-session-section="groups"]');
         const row = done.locator(`[data-session-key="${key}"]`);
@@ -79,5 +135,5 @@ suite.define(() =>
         await capture("after-dark");
       },
       { colorScheme: "light" },
-    )),
-);
+    ));
+});

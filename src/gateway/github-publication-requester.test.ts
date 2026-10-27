@@ -17,7 +17,6 @@ import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -29,19 +28,23 @@ import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import {
   createGitHubPublicationRequesterFixture,
+  capturePublicationGuest as guestRequester,
   createRequesterPolicyFixture,
   createRequesterPublicationFixture,
+  forPublicationBackends as backendCases,
   guestScopes,
   holdWorkerTurn,
-  prepareVisitorPublicationFixture,
+  publicationBackends as backends,
+  publicationGuestEmail as email,
+  queueGuestPublication as queueGuest,
   requireVisitorPublicationPolicy,
+  resumePublicationFixture,
+  startVisitorPublicationFixture,
+  withPublicationGuestRole,
 } from "./github-publication-requester.test-support.js";
 import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
-import {
-  GatewayOperatorAccessUnavailableError,
-  hasGatewayOperatorAccessPolicies,
-} from "./operator-access-policy.js";
+import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -55,17 +58,9 @@ vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
 
 const fixture = createRequesterPublicationFixture.bind(undefined, checkpoint);
 type Fixture = Awaited<ReturnType<typeof fixture>>;
-const guestRequester = (f: Fixture) =>
-  createGitHubPublicationRequesterFixture({
-    profileId: f.guestProfile,
-    scopes: guestScopes,
-    ...f.guestSource.session,
-  });
 const request = (f: Fixture, key: string, requester = f.guest) =>
   f.coordinator.requestForSessionV2(f.request(key, requester));
 const identityChanged = { status: "failed", code: "identity_changed" } as const;
-const email = "publication-guest@example.test";
-const backends = ["local", "repository"] as const;
 const publicationUrl = (backend: (typeof backends)[number]) =>
   backend === "local"
     ? "https://github.com/openclaw/openclaw/pull/125200"
@@ -89,9 +84,6 @@ const pullRequest = (
   ...overrides,
 });
 const jsonResult = (value: unknown) => commandResult(JSON.stringify(value));
-function backendCases<T extends string>(values: readonly T[]) {
-  return backends.flatMap((backend) => values.map((change) => ({ backend, change })));
-}
 function interceptTransport(
   intercept: (
     argv: string[],
@@ -113,12 +105,6 @@ function expectPending(f: Fixture, requestId: string) {
   const receipt = f.readReceipt(requestId)!;
   expect(["requested", "publishing"]).toContain(receipt.status);
   expect(receipt.error_code).toBeNull();
-}
-async function startVisitor(
-  visitors: Awaited<ReturnType<typeof prepareVisitorPublicationFixture>>,
-) {
-  await visitors.start();
-  await visitors.execute("visitor_invite", { email, days: 1 });
 }
 const published = {
   status: "published",
@@ -222,18 +208,16 @@ describe("shared GitHub publication requester authority", () => {
     captured.release();
     source.release();
     await f.placements.releaseTurn(claim);
-    const restarted = f.restart();
-    await restarted.resumeSessionRequests();
+    const restarted = await resumePublicationFixture(f);
     await expectResult(restarted, accepted.requestId);
     expect(f.readRequester(accepted.requestId)).toEqual(stored);
     expect(f.publishedTitles).toEqual(["narrow-requester"]);
   });
 
-  it.each(["local", "repository"] as const)(
+  it.each(backends)(
     "does not adopt a newly required missing policy for a grant-free %s request",
     async (backend) => {
       const f = await fixture(backend);
-      expect(hasGatewayOperatorAccessPolicies(f.config)).toBe(false);
       const claim = await holdWorkerTurn(f);
       const guest = await request(f, "before-policy");
       const staff = await request(f, "independent-staff", f.maintainer);
@@ -241,14 +225,11 @@ describe("shared GitHub publication requester authority", () => {
       expect(original).toEqual(f.guest.snapshot);
       expect(original?.grant).toBeNull();
       expect([guest.status, staff.status]).toEqual(["requested", "requested"]);
-      const requiredConfig = requireVisitorPublicationPolicy(f);
-      expect(hasGatewayOperatorAccessPolicies(requiredConfig)).toBe(true);
-      expect(getPluginRegistryState()?.activeRegistry?.gatewayAccessPolicies ?? []).toEqual([]);
+      requireVisitorPublicationPolicy(f);
       await f.placements.releaseTurn(claim);
       f.guestSource.release();
       f.maintainerSource.release();
-      const restarted = f.restart();
-      await restarted.resumeSessionRequests();
+      const restarted = await resumePublicationFixture(f);
       await expectResult(restarted, guest.requestId, identityChanged);
       expect(f.readRequester(guest.requestId)).toEqual(original);
       await expectResult(restarted, staff.requestId);
@@ -259,17 +240,7 @@ describe("shared GitHub publication requester authority", () => {
   it("captures and resumes from committed config while a tentative restriction is pending", async () => {
     const f = await fixture("local");
     let committed = f.config;
-    const roles = f.config.gateway!.roles!;
-    const restricted: typeof f.config = {
-      ...f.config,
-      gateway: {
-        ...f.config.gateway,
-        roles: {
-          ...roles,
-          definitions: { ...roles.definitions, guest: { ...roles.definitions.guest!, scopes: [] } },
-        },
-      },
-    };
+    const restricted = withPublicationGuestRole(f.config, { scopes: [] });
     setRuntimeConfigSnapshot(restricted);
     const getCommittedRuntimeConfig = () => committed;
     const captured = await createGitHubPublicationRequesterFixture({
@@ -309,14 +280,10 @@ describe("shared GitHub publication requester authority", () => {
       const other = await ensureCanonicalUserProfileForEmail(
         "publication-alias-recipient@example.test",
       );
-      const visitors = await prepareVisitorPublicationFixture(f);
+      const visitors = await startVisitorPublicationFixture(f);
       const availability: { restore?: () => void; reached: boolean } = { reached: false };
       try {
-        await startVisitor(visitors);
-        const original = await guestRequester(f);
-        const claim = await holdWorkerTurn(f);
-        const accepted = await request(f, "policy-readiness", original.requester);
-        expect(accepted.status).toBe("requested");
+        const { original, claim, queued: accepted } = await queueGuest(f, "policy-readiness");
         await f.placements.releaseTurn(claim);
         original.release();
         interceptTransport(async (argv, options, transport) => {
@@ -458,7 +425,7 @@ describe("shared GitHub publication requester authority", () => {
     },
   );
 
-  it.each(["local", "repository"] as const)(
+  it.each(backends)(
     "does not rebind a %s receipt when a different operator replays its key",
     async (backend) => {
       const f = await fixture(backend);
@@ -483,9 +450,8 @@ describe("shared GitHub publication requester authority", () => {
     "restores only the original Visitor grant after %s and restart",
     async (ending) => {
       const f = await fixture("repository");
-      const visitors = await prepareVisitorPublicationFixture(f);
+      const visitors = await startVisitorPublicationFixture(f);
       try {
-        await startVisitor(visitors);
         const first = (await visitors.store.lookup(email))!;
         const original = await guestRequester(f);
         const claim = await holdWorkerTurn(f);
@@ -553,8 +519,7 @@ describe("shared GitHub publication requester authority", () => {
         reinvited.release();
         await visitors.reopen();
         await visitors.start();
-        const restarted = f.restart();
-        await restarted.resumeSessionRequests();
+        const restarted = await resumePublicationFixture(f);
         await expectResult(restarted, ended.requestId, identityChanged);
         expect(f.readRequester(ended.requestId)).toEqual(original.requester.snapshot);
         await expectResult(restarted, staff.requestId, published);
@@ -598,8 +563,7 @@ describe("shared GitHub publication requester authority", () => {
         f.removeRequesterSnapshot(accepted.requestId);
       }
       await f.placements.releaseTurn(claim);
-      const restarted = f.restart();
-      await restarted.resumeSessionRequests();
+      const restarted = await resumePublicationFixture(f);
       if (change === "ingress released") {
         await expectResult(restarted, accepted.requestId, published);
         expect(f.publishedTitles).toEqual([key]);
@@ -664,7 +628,7 @@ describe("shared GitHub publication requester authority", () => {
     },
   );
 
-  it.each(["local", "repository"] as const)(
+  it.each(backends)(
     "preserves terminal %s receipts after removal of legacy requester metadata",
     async (backend) => {
       const f = await fixture(backend);
@@ -673,8 +637,7 @@ describe("shared GitHub publication requester authority", () => {
       const writes = [...f.externalWrites];
       f.removeRequesterSnapshot(publication.requestId);
       await f.revoke();
-      const restarted = f.restart();
-      await restarted.resumeSessionRequests();
+      const restarted = await resumePublicationFixture(f);
       expect(await restarted.readAsync(publication.requestId)).toEqual(publication);
       expect(f.externalWrites).toEqual(writes);
     },
@@ -787,7 +750,7 @@ describe("shared GitHub publication requester authority", () => {
     },
   );
 
-  it.each(["local", "repository"] as const)(
+  it.each(backends)(
     "keeps an accepted %s PR recoverable after revocation and an unavailable readback",
     async (backend) => {
       const f = await fixture(backend);

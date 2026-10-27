@@ -555,6 +555,11 @@ private actor LocalFixtureChatStore {
             let events = try JSONDecoder().decode([OpenClawAgentEventPayload].self, from: wire)
             startupSnapshot = OpenClawChatInFlightRun(runId: runID, text: "", events: events)
         }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture"),
+           let runID = self.activeRunID
+        {
+            startupSnapshot = OpenClawChatInFlightRun(runId: runID, text: "", events: self.externalRunEvents)
+        }
         let historyMessages: [OpenClawChatMessage] = if self.fixture.sessionIDPrefix == "screenshot-fixture",
                                                         ProcessInfo.processInfo.arguments
                                                             .contains("--openclaw-subagent-wait-fixture"),
@@ -728,8 +733,52 @@ private actor LocalFixtureChatStore {
         // Chat and its session sidebar independently subscribe to the fixture transport.
         let id = UUID()
         self.eventContinuations[id] = continuation
+        if self.fixture.sessionIDPrefix == "screenshot-fixture",
+           ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture"),
+           !self.externalRunStarted
+        {
+            self.externalRunStarted = true
+            Task {
+                try? await Task.sleep(for: .seconds(4))
+                self.publishExternalRunStatus()
+                try? await Task.sleep(for: .seconds(8))
+                self.publishExternalRunTool()
+            }
+        }
         continuation.onTermination = { [weak self] _ in
             Task { await self?.removeEventContinuation(id) }
+        }
+    }
+
+    private var externalRunStarted = false
+    private var externalRunEvents: [OpenClawAgentEventPayload] = []
+
+    private func publishExternalRunStatus() {
+        self.activeRunID = "fixture-external-run"
+        let wire = Data(#"""
+        {"runId":"fixture-external-run","sessionKey":"main","state":"status",
+         "phase":"starting_model","seq":1}
+        """#.utf8)
+        if let event = try? JSONDecoder().decode(OpenClawChatEventPayload.self, from: wire) {
+            let statusWire = Data(#"""
+            {"runId":"fixture-external-run","seq":1,"stream":"run_status","data":{"phase":"starting_model"}}
+            """#.utf8)
+            if let status = try? JSONDecoder().decode(OpenClawAgentEventPayload.self, from: statusWire) {
+                self.externalRunEvents.append(status)
+            }
+            self.publish(.chat(event))
+        }
+    }
+
+    private func publishExternalRunTool() {
+        let wire = Data(#"""
+        {"runId":"fixture-external-run","seq":2,"stream":"tool",
+         "data":{"phase":"start","name":"read","toolCallId":"external-read",
+                 "args":{"path":"external-fixture.txt"}}}
+        """#.utf8)
+        if let event = try? JSONDecoder().decode(OpenClawAgentEventPayload.self, from: wire) {
+            self.externalRunEvents.append(event)
+            self.publish(.agent(event))
         }
     }
 
@@ -966,6 +1015,13 @@ private actor LocalFixtureChatStore {
 
     private static func seedMessages(fixture: LocalChatFixture) -> [OpenClawChatMessage] {
         let now = Date().timeIntervalSince1970 * 1000
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture") {
+            return [Self.message(
+                role: "user",
+                text: "Read external-fixture.txt. Sent from another client.",
+                timestamp: now,
+                transcriptMessageID: "fixture-external-user")]
+        }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-system-notices-fixture") {
             return [
                 OpenClawChatMessage(

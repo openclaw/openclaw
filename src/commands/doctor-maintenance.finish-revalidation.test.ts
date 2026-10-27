@@ -46,6 +46,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import { doctorMaintenanceTestEnv } from "./doctor-maintenance.admission.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { mockDoctorServicePlatform } from "./doctor-maintenance.state-owner.test-support.js";
 import {
@@ -158,14 +159,10 @@ type Continuation =
 type LegacyCatalog = "exact" | "conflict-on-recheck" | "different-state";
 
 function withLegacyWriter<T>(pathname: string, write: (db: DatabaseSync) => T): T {
-  const db = openNodeSqliteDatabase(pathname);
-  try {
-    db.enableDefensive?.(false);
-    db.exec("PRAGMA writable_schema = ON");
-    return write(db);
-  } finally {
-    db.close();
-  }
+  using db = openNodeSqliteDatabase(pathname);
+  db.enableDefensive?.(false);
+  db.exec("PRAGMA writable_schema = ON");
+  return write(db);
 }
 
 async function runDoctorFinishForStoppedUnit(
@@ -182,21 +179,10 @@ async function runDoctorFinishForStoppedUnit(
   const home = tempDirs.make("openclaw-doctor-finish-");
   return await withEnvAsync(
     {
+      ...doctorMaintenanceTestEnv,
       HOME: home,
       USERPROFILE: home,
       APPDATA: path.join(home, "AppData"),
-      OPENCLAW_HOME: undefined,
-      OPENCLAW_STATE_DIR: undefined,
-      OPENCLAW_CONFIG_PATH: undefined,
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_SUPERVISOR_MODE: undefined,
-      OPENCLAW_SERVICE_REPAIR_POLICY: undefined,
-      OPENCLAW_SERVICE_MARKER: undefined,
-      OPENCLAW_SERVICE_KIND: undefined,
-      OPENCLAW_SYSTEMD_UNIT: undefined,
-      OPENCLAW_UPDATE_RUN_ID: undefined,
-      OPENCLAW_UPDATE_IN_PROGRESS: undefined,
-      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: undefined,
     },
     async () => {
       const boundedInspection = scenario === "slow-loadunit-admission";
@@ -244,37 +230,33 @@ async function runDoctorFinishForStoppedUnit(
         const pathname = openOpenClawStateDatabase().path;
         closeOpenClawStateDatabaseForTest();
         if (scenario === "gateway-lifecycle-contended") {
-          const db = new DatabaseSync(pathname);
-          try {
-            const startedAt = getFileLockProcessStartTime(process.pid);
-            if (startedAt === null) {
-              throw new Error("Current process start identity is unavailable");
-            }
-            const now = Date.now();
-            db.prepare(
-              `INSERT INTO state_leases
+          using db = new DatabaseSync(pathname);
+          const startedAt = getFileLockProcessStartTime(process.pid);
+          if (startedAt === null) {
+            throw new Error("Current process start identity is unavailable");
+          }
+          const now = Date.now();
+          db.prepare(
+            `INSERT INTO state_leases
                  (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
                VALUES ('gateway-owner', 'global', 'test-gateway', ?, ?, ?, ?, ?)`,
-            ).run(
-              now + 60_000,
-              now,
-              JSON.stringify({
-                owner: {
-                  pid: process.pid,
-                  host: hostname(),
-                  startedAt,
-                  processNamespace: readGatewayLockProcessNamespace(),
-                },
-                port: gatewayPort.port,
-                mode: "supervised",
-                supervisor: { kind: "systemd", name: "openclaw-gateway.service" },
-              }),
-              now,
-              now,
-            );
-          } finally {
-            db.close();
-          }
+          ).run(
+            now + 60_000,
+            now,
+            JSON.stringify({
+              owner: {
+                pid: process.pid,
+                host: hostname(),
+                startedAt,
+                processNamespace: readGatewayLockProcessNamespace(),
+              },
+              port: gatewayPort.port,
+              mode: "supervised",
+              supervisor: { kind: "systemd", name: "openclaw-gateway.service" },
+            }),
+            now,
+            now,
+          );
         }
         // Publish damaged bytes only after seeding the serving lease in the valid catalog.
         createDanglingSkillWorkshopReviewIndex(pathname);

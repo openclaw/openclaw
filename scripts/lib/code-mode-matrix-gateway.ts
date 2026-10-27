@@ -32,6 +32,7 @@ import {
   type MatrixPerformanceTask,
 } from "./code-mode-matrix-performance-fixtures.ts";
 import type { MatrixPerformanceFixture } from "./code-mode-matrix-performance-types.ts";
+import { createGatewayMatrixProcessSupervisor } from "./code-mode-matrix-process-owner.ts";
 import {
   classifyCodeModeMatrixProviderFailure,
   matrixProviderEnv,
@@ -1456,9 +1457,10 @@ export async function runGatewayMatrixCell(
     NO_COLOR: "1",
   };
   const startedAt = Date.now();
-  const { createProcessSupervisor } = await import("../../src/process/supervisor/supervisor.js");
+  const supervisor = await createGatewayMatrixProcessSupervisor(
+    params.runtime.processOwnerBootstrap,
+  );
   const { runCommandWithTimeout } = await import("../../src/process/exec.js");
-  const supervisor = createProcessSupervisor();
   const scopeKey = `code-mode-matrix:${randomUUID()}`;
   const cleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
   let child: ManagedRun | undefined;

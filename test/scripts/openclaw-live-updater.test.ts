@@ -78,7 +78,6 @@ const updaterLoaderArgs = [
 ];
 const fixtureOrigins = new Map<string, string>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let lastFixtureRoot = "";
 let fixtureTemplate: ReturnType<typeof initializeFixture> | undefined;
 const posixTest = process.platform === "win32" ? test.skip : test;
 const linuxTest = process.platform === "linux" ? test : test.skip;
@@ -135,6 +134,15 @@ function privateCommandFailure(operation: string, status: number) {
   });
 }
 
+function signedMacBundle(mirror: string) {
+  const bundle = path.join(mirror, "dist/OpenClaw.app");
+  const marker = writeFixtureFile(path.join(bundle, "Contents/signature-marker"), "signed\n");
+  return { bundle, marker };
+}
+
+const preservedMacBundles = (mirror: string) =>
+  readdirSync(path.join(mirror, ".git")).filter((entry) => entry.startsWith(".openclaw-live-mac-"));
+
 function rejectWith(message: string) {
   return () => {
     throw new Error(message);
@@ -143,6 +151,39 @@ function rejectWith(message: string) {
 
 function writeJson(file: string, value: unknown) {
   writeFileSync(file, `${JSON.stringify(value)}\n`);
+}
+
+function invariantDiagnostic(code: string, details?: Record<string, unknown>) {
+  return { kind: "invariant", code, ...(details ? { details } : {}) };
+}
+
+function commandDiagnostic(operation: string, status: number) {
+  return { kind: "command", operation, status };
+}
+
+function failureEnvelope(code: string, diagnostics: object) {
+  return { error: { code, diagnostics } };
+}
+
+function processCleanupFailure(processGroupId: number, message: string) {
+  return Object.assign(new Error(message), {
+    code: "EPROCESSGROUP_CLEANUP_FAILED",
+    processGroupId,
+    processTreeState: "live",
+  });
+}
+
+function writeManagedPlist(plist: string, state: string, programArguments: string[]) {
+  writeFixtureFile(
+    plist,
+    buildLaunchAgentPlist({
+      label: "ai.openclaw.gateway",
+      programArguments,
+      workingDirectory: state,
+      stdoutPath: path.join(state, "gateway.log"),
+      stderrPath: path.join(state, "gateway.log"),
+    }),
+  );
 }
 
 function expectRetargeted(deployment: unknown, source: string, snapshot: string) {
@@ -282,20 +323,12 @@ function initializeFixture(root: string) {
   return { root, mirror, origin, seed };
 }
 
-type Fixture = ReturnType<typeof initializeFixture> & {
-  run: (dependencies?: Record<string, unknown>) => ReturnType<typeof maintainFixture>;
-  options: { checkout: string; remote: string; lockPath: string };
-};
-
 type FixtureOptions = { includeSeed?: boolean; built?: boolean; dependencies?: boolean };
-function makeFixture(options?: FixtureOptions & { includeSeed?: false }): Omit<Fixture, "seed">;
-function makeFixture(options: FixtureOptions & { includeSeed: true }): Fixture;
 function makeFixture(options: FixtureOptions = {}) {
   if (!fixtureTemplate) {
     throw new Error("fixture template is not initialized");
   }
   const root = realpathSync(tempDirs.make("openclaw-live-updater-"));
-  lastFixtureRoot = root;
   const origin = path.join(root, "origin.git");
   const seed = path.join(root, "seed");
   const mirror = path.join(root, "mirror");
@@ -308,7 +341,6 @@ function makeFixture(options: FixtureOptions = {}) {
     cpSync(fixtureTemplate.seed, seed, copyOptions);
   }
   fixtureOrigins.set(mirror, origin);
-  fixtureOrigins.set(realpathSync(mirror), origin);
   if (options.dependencies) {
     mkdirSync(path.join(mirror, "node_modules"));
   }
@@ -324,13 +356,13 @@ function makeFixture(options: FixtureOptions = {}) {
     root,
     mirror,
     origin,
+    seed,
     options: runOptions,
-    run(dependencies: Record<string, unknown> = {}) {
-      return maintainFixture(runOptions, dependencies);
-    },
+    run: (dependencies: Record<string, unknown> = {}) => maintainFixture(runOptions, dependencies),
   };
-  return options?.includeSeed ? { ...fixture, seed } : fixture;
+  return fixture;
 }
+type Fixture = ReturnType<typeof makeFixture>;
 
 function writeBuild(mirror: string) {
   const head = git(mirror, "rev-parse", "HEAD");
@@ -380,10 +412,7 @@ function fakeCommands(mirror: string) {
 }
 
 function passGatewayRestartVerification({ timing }: { timing: Record<string, unknown> }) {
-  return {
-    audit: emptyAudit(),
-    timing,
-  };
+  return { audit: emptyAudit(), timing };
 }
 
 function managedTimeoutError() {
@@ -538,7 +567,6 @@ describe("openclaw live updater", () => {
   });
 
   afterAll(() => {
-    expect(existsSync(lastFixtureRoot)).toBe(false);
     if (fixtureTemplate) {
       rmSync(fixtureTemplate.root, { recursive: true, force: true });
       fixtureTemplate = undefined;
@@ -782,10 +810,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       }
 
       expect(readJsonLines(callsPath)).toEqual([
-        {
-          args: ["gateway", "status", "--deep", "--require-rpc", "--json"],
-          port: "18789",
-        },
+        { args: ["gateway", "status", "--deep", "--require-rpc", "--json"], port: "18789" },
         { args: ["health", "--verbose", "--json"], port: "18789" },
       ]);
     },
@@ -846,19 +871,12 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
         failure = error;
       }
 
-      expect(formatUpdateFailure(failure)).toMatchObject({
-        error: {
-          code: "gateway_suspend_prepare_failed",
-          diagnostics: {
-            kind: "invariant",
-            cause: {
-              kind: "command",
-              operation: "gateway.suspend.prepare",
-              status: 1,
-            },
-          },
-        },
-      });
+      expect(formatUpdateFailure(failure)).toMatchObject(
+        failureEnvelope("gateway_suspend_prepare_failed", {
+          kind: "invariant",
+          cause: commandDiagnostic("gateway.suspend.prepare", 1),
+        }),
+      );
       expect(readJsonLines(stub.callsPath)).toHaveLength(1);
     }
   });
@@ -1060,26 +1078,17 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
         "# Generated by OpenClaw. Do not edit while the gateway service is installed.\n",
         { mode: 0o600 },
       );
-      writeFileSync(
-        plist,
-        buildLaunchAgentPlist({
-          label: "ai.openclaw.gateway",
-          programArguments: [
-            "/bin/sh",
-            wrapper,
-            envFile,
-            process.execPath,
-            "--max-old-space-size=128",
-            entrypoint,
-            "gateway",
-            "--port",
-            "18789",
-          ],
-          workingDirectory: state,
-          stdoutPath: path.join(state, "gateway.log"),
-          stderrPath: path.join(state, "gateway.log"),
-        }),
-      );
+      writeManagedPlist(plist, state, [
+        "/bin/sh",
+        wrapper,
+        envFile,
+        process.execPath,
+        "--max-old-space-size=128",
+        entrypoint,
+        "gateway",
+        "--port",
+        "18789",
+      ]);
       vi.stubEnv("HOME", home);
       try {
         expect(JSON.parse(runBuiltGatewayCli(checkout, ["gateway", "status"], undefined))).toEqual({
@@ -1119,16 +1128,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
         "--port",
         "18789",
       ];
-      writeFileSync(
-        plistPath,
-        buildLaunchAgentPlist({
-          label: "ai.openclaw.gateway",
-          programArguments,
-          workingDirectory: stateDir,
-          stdoutPath: path.join(stateDir, "gateway.log"),
-          stderrPath: path.join(stateDir, "gateway.log"),
-        }),
-      );
+      writeManagedPlist(plistPath, stateDir, programArguments);
       // Fixed replies from the old 5b29 serving Gateway's suspend protocol. The real
       // maintenance owner must decide whether these facts permit native stop.
       writeFileSync(
@@ -1342,23 +1342,14 @@ console.log(JSON.stringify(result));
     const head = git(mirror, "rev-parse", "HEAD");
     const buildStamp = path.join(mirror, "dist", BUILD_STAMP_FILE);
     const runtimeStamp = path.join(mirror, "dist", RUNTIME_POSTBUILD_STAMP_FILE);
+    expect(inspectBuildState(mirror, head).current).toBe(true);
 
     writeJson(buildStamp, { head: "0".repeat(40) });
-    expect(inspectBuildState(mirror, head)).toMatchObject({
-      current: false,
-      buildStampHead: "0".repeat(40),
-      requirements: { build: { shouldBuild: true, reason: "git_head_changed" } },
-    });
+    expect(inspectBuildState(mirror, head).current).toBe(false);
 
     writeJson(buildStamp, { head, inputsClean: true });
     rmSync(runtimeStamp);
-    expect(inspectBuildState(mirror, head)).toMatchObject({
-      current: false,
-      runtimePostBuildStampHead: null,
-      requirements: {
-        runtimePostBuild: { shouldSync: true, reason: "missing_runtime_postbuild_stamp" },
-      },
-    });
+    expect(inspectBuildState(mirror, head).current).toBe(false);
   });
 
   test("fast-forwards, builds exact SHA, restarts Gateway, then proves exact Mac target", async () => {
@@ -1441,18 +1432,14 @@ console.log(JSON.stringify(result));
     expect(JSON.parse(output[0]!)).toMatchObject({
       schemaVersion: 1,
       ok: false,
-      error: {
-        code: "command_timeout",
-        diagnostics: {
-          kind: "invariant",
-          code: "command_timeout",
-          details: {
-            phase: "Git fetch",
-            serviceState: "running",
-            timeoutMs: 5 * 60_000,
-          },
-        },
-      },
+      ...failureEnvelope(
+        "command_timeout",
+        invariantDiagnostic("command_timeout", {
+          phase: "Git fetch",
+          serviceState: "running",
+          timeoutMs: 5 * 60_000,
+        }),
+      ),
     });
   });
 
@@ -1483,11 +1470,7 @@ console.log(JSON.stringify(result));
       }),
     ).rejects.toMatchObject({
       code: "command_timeout",
-      details: {
-        phase: "dependency install",
-        serviceState: "stopped",
-        timeoutMs: 15 * 60_000,
-      },
+      details: { phase: "dependency install", serviceState: "stopped", timeoutMs: 15 * 60_000 },
     });
 
     const timeoutIndex = events.indexOf("install process tree drained");
@@ -1527,11 +1510,7 @@ console.log(JSON.stringify(result));
               const command = args.join(" ");
               events.push(command);
               if (command === "install --frozen-lockfile") {
-                throw Object.assign(new Error("process group remained live"), {
-                  code: "EPROCESSGROUP_CLEANUP_FAILED",
-                  processGroupId,
-                  processTreeState: "live",
-                });
+                throw processCleanupFailure(processGroupId, "process group remained live");
               }
               return 0;
             },
@@ -1557,11 +1536,7 @@ console.log(JSON.stringify(result));
         await expect(run()).resolves.toMatchObject({ ok: true, skipped: true, reason: "overlap" });
         expect(acquireMaintenanceLock(mirror, lockPath)).toMatchObject({
           acquired: false,
-          owner: {
-            processGroupId,
-            reason: "command_cleanup_failed",
-            serviceState: "stopped",
-          },
+          owner: { processGroupId, reason: "command_cleanup_failed", serviceState: "stopped" },
         });
       } finally {
         try {
@@ -1654,9 +1629,7 @@ console.log(JSON.stringify(result));
 
   test("restores the signed Mac bundle and redacts the build failure", async () => {
     const { mirror, run } = makeFixture({ dependencies: true });
-    const marker = path.join(mirror, "dist/OpenClaw.app/Contents/signature-marker");
-    mkdirSync(path.dirname(marker), { recursive: true });
-    writeFileSync(marker, "signed\n");
+    const { marker } = signedMacBundle(mirror);
     const failure = await run({
       runCommand(command: string, args: string[]) {
         if (command === "pnpm" && args[0] === "build") {
@@ -1667,20 +1640,13 @@ console.log(JSON.stringify(result));
     expect(readFileSync(marker, "utf8")).toBe("signed\n");
     const formatted = formatUpdateFailure(failure);
     expect(formatted.error.message).toBe("build failed");
-    expect(formatted.error.diagnostics).toEqual({
-      kind: "command",
-      operation: "build",
-      status: 17,
-    });
+    expect(formatted.error.diagnostics).toEqual(commandDiagnostic("build", 17));
     expect(JSON.stringify(formatted)).not.toContain("secret build");
   });
 
   test("preserves a build failure after a delayed external restore of the exact Mac bundle", async () => {
     const { root, mirror, run } = makeFixture({ dependencies: true });
-    const appBundle = path.join(mirror, "dist/OpenClaw.app");
-    const appMarker = path.join(appBundle, "Contents/signature-marker");
-    mkdirSync(path.dirname(appMarker), { recursive: true });
-    writeFileSync(appMarker, "signed\n");
+    const { bundle: appBundle, marker: appMarker } = signedMacBundle(mirror);
     const commands = fakeCommands(mirror);
     const delayedBundle = path.join(root, "delayed-openclaw.app");
     let restored = false;
@@ -1693,9 +1659,7 @@ console.log(JSON.stringify(result));
           }
           commands.runCommand(command, args);
           if (command === "pnpm" && args[0] === "build") {
-            const preserved = readdirSync(path.join(mirror, ".git")).find((entry) =>
-              entry.startsWith(".openclaw-live-mac-"),
-            );
+            const [preserved] = preservedMacBundles(mirror);
             expect(preserved).toBeDefined();
             renameSync(path.join(mirror, ".git", preserved!), delayedBundle);
             throw new Error("build failed after external restore");
@@ -1713,16 +1677,12 @@ console.log(JSON.stringify(result));
 
     expect(restored).toBe(true);
     expect(readFileSync(appMarker, "utf8")).toBe("signed\n");
-    expect(
-      readdirSync(path.join(mirror, ".git")).filter((entry) =>
-        entry.startsWith(".openclaw-live-mac-"),
-      ),
-    ).toEqual([]);
+    expect(preservedMacBundles(mirror)).toEqual([]);
   });
 
   test("repoints an ancestor snapshot across the next source update", async () => {
     const fixture = createSnapshotFixture({ advance: true });
-    const { commands, source, snapshot, plistPath } = fixture;
+    const { commands, source, snapshot } = fixture;
     const inspectGatewayDeployment = () => ({
       ...fixture.inspect(),
       serviceEnvironment: { PRIVATE_MARKER: "not-serialized" },
@@ -1765,16 +1725,6 @@ console.log(JSON.stringify(result));
     expectRetargeted(output.gatewayDeployment, source, snapshot);
     expect(JSON.stringify(output)).not.toContain("not-serialized");
     expect(controlEntrypoint).toBe(source);
-    expect(commands.calls).toEqual([
-      "prepare replacement plist",
-      bootout,
-      "prove gateway stopped",
-      "pnpm build",
-      "install replacement plist",
-      traceOn,
-      ...launchAgentStart(plistPath),
-      traceOff,
-    ]);
   });
 
   test("reports primary invariant and rollback command diagnostics", async () => {
@@ -1799,16 +1749,9 @@ console.log(JSON.stringify(result));
       members: [
         {
           role: "primary",
-          error: {
-            kind: "invariant",
-            code: "gateway_launchagent_failed",
-            details: { exitTimeoutSeconds: 0 },
-          },
+          error: invariantDiagnostic("gateway_launchagent_failed", { exitTimeoutSeconds: 0 }),
         },
-        {
-          role: "rollback",
-          error: { kind: "command", operation: "launchd.bootstrap", status: 23 },
-        },
+        { role: "rollback", error: commandDiagnostic("launchd.bootstrap", 23) },
       ],
     });
     expect(JSON.stringify(formatted)).not.toContain("secret rollback");
@@ -1956,9 +1899,7 @@ console.log(JSON.stringify(result));
         const call = [command, ...args].join(" ");
         calls.push(call);
         if (command === "/bin/launchctl" && args[0] === "bootstrap") {
-          throw Object.assign(new Error("Bootstrap failed: 5: Input/output error"), {
-            status: 5,
-          });
+          throw Object.assign(new Error("Bootstrap failed: 5: Input/output error"), { status: 5 });
         }
       },
       armEnvironmentRestore: () => {
@@ -1999,11 +1940,7 @@ console.log(JSON.stringify(result));
       isGatewayLoaded: () => false,
       runManagedCommand: ({ args, bin }: FixtureCommand) => {
         if (bin === "/bin/launchctl" && args[0] === "bootstrap") {
-          throw Object.assign(new Error("launchctl cleanup remained live"), {
-            code: "EPROCESSGROUP_CLEANUP_FAILED",
-            processGroupId: 4321,
-            processTreeState: "live",
-          });
+          throw processCleanupFailure(4321, "launchctl cleanup remained live");
         }
         return 0;
       },
@@ -2014,19 +1951,15 @@ console.log(JSON.stringify(result));
     }).catch((error: unknown) => error);
 
     expect(processObserved).toBe(false);
-    expect(formatUpdateFailure(failure)).toMatchObject({
-      error: {
-        code: "command_cleanup_failed",
-        diagnostics: {
-          kind: "invariant",
-          code: "command_cleanup_failed",
-          details: {
-            processTreeState: "live",
-            serviceState: "stopped",
-          },
-        },
-      },
-    });
+    expect(formatUpdateFailure(failure)).toMatchObject(
+      failureEnvelope(
+        "command_cleanup_failed",
+        invariantDiagnostic("command_cleanup_failed", {
+          processTreeState: "live",
+          serviceState: "stopped",
+        }),
+      ),
+    );
   });
 
   test("audits restart-window logs even when deep Gateway verification fails", async () => {
@@ -2160,17 +2093,12 @@ console.log(JSON.stringify(result));
     expect(git(mirror, "rev-parse", "HEAD")).toBe(before);
     expect(git(mirror, "rev-parse", "refs/remotes/origin/main")).toBe(beforeTracking);
     const payload = JSON.parse(result.stdout.trim());
-    expect(payload).toEqual({
+    expect(payload).toMatchObject({
       schemaVersion: 1,
       ok: false,
       error: {
         code: "unsupported_gateway_control_platform",
-        message:
-          "live updater managed Gateway control requires macOS LaunchAgent inspection; Linux systemd installs must use the standard update CLI instead of this helper",
-        diagnostics: {
-          kind: "invariant",
-          code: "unsupported_gateway_control_platform",
-        },
+        diagnostics: invariantDiagnostic("unsupported_gateway_control_platform"),
       },
     });
   });

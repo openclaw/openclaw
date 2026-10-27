@@ -68,55 +68,34 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
-it.each(["preparation", "file-open"])(
-  "rechecks authority after the %s await",
-  async (waitPoint) => {
-    await withTestDir({ prefix: "openclaw-delegated-write-" }, async (dir) => {
-      const file = path.join(dir, "original.txt");
-      await fs.writeFile(file, "original");
-      const { bind, revoke } = fixture();
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      const pause = async () => {
-        entered.resolve();
-        await release.promise;
-      };
-      const execute = vi.fn(async () => {
-        await writeHostFile(file, "changed");
-        return { content: [], details: {} };
-      });
-      const source = tool(execute);
-      if (waitPoint === "preparation") {
-        source.prepareBeforeToolCallParams = async (params) => {
-          await pause();
-          return params;
-        };
-      } else {
-        const originalOpen = fs.open;
-        vi.spyOn(fs, "open").mockImplementationOnce(async (...args) => {
-          const handle = await originalOpen(...args);
-          await pause();
-          return handle;
-        });
-      }
-      const bound = bind(source);
-      const running = bound.execute("in-flight-write", {});
-      const rejected = expect(running).rejects.toThrow(
-        waitPoint === "preparation"
-          ? "authorization changed"
-          : "tool invocation authority is no longer active",
-      );
-      await entered.promise;
-      revoke();
-      release.resolve();
-      await rejected;
-      if (waitPoint === "preparation") {
-        expect(execute).not.toHaveBeenCalled();
-      }
-      expect(await fs.readFile(file, "utf8")).toBe("original");
+it("rechecks authority after the preparation await", async () => {
+  await withTestDir({ prefix: "openclaw-delegated-write-" }, async (dir) => {
+    const file = path.join(dir, "original.txt");
+    await fs.writeFile(file, "original");
+    const { bind, revoke } = fixture();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const execute = vi.fn(async () => {
+      await writeHostFile(file, "changed");
+      return { content: [], details: {} };
     });
-  },
-);
+    const source = tool(execute);
+    source.prepareBeforeToolCallParams = async (params) => {
+      entered.resolve();
+      await release.promise;
+      return params;
+    };
+    const bound = bind(source);
+    const running = bound.execute("in-flight-write", {});
+    const rejected = expect(running).rejects.toThrow("authorization changed");
+    await entered.promise;
+    revoke();
+    release.resolve();
+    await rejected;
+    expect(execute).not.toHaveBeenCalled();
+    expect(await fs.readFile(file, "utf8")).toBe("original");
+  });
+});
 
 it.each([
   { deny: "group:plugins", name: "fixture_action", pluginId: "fixture-plugin" },

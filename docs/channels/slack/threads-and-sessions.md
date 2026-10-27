@@ -38,6 +38,8 @@ Manual reply tags are supported:
 - `[[reply_to_current]]`
 - `[[reply_to:<id>]]`
 
+When reply threading is enabled, streaming replies honor the final answer's explicit target. If that target differs from the preview's thread, OpenClaw sends the final answer separately rather than editing or appending it in the old thread.
+
 For explicit Slack thread replies from the `message` tool, set `replyBroadcast: true` with `action: "send"` and `threadId` or `replyTo` to ask Slack to also broadcast the thread reply to the parent channel. This maps to Slack's `chat.postMessage` `reply_broadcast` flag and is only supported for text or Block Kit sends, not media uploads.
 
 When a `message` tool call runs inside a Slack thread and targets the same channel, OpenClaw normally inherits the current Slack thread according to the effective account, chat-type, or per-channel `replyToMode`. Automatic replies and same-channel `send` or `upload-file` calls use the same per-channel override. Set `topLevel: true` on `action: "send"` or `action: "upload-file"` to force a new parent-channel message instead. `threadId: null` is accepted as the same top-level opt-out.

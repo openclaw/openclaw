@@ -4,6 +4,7 @@ import {
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { createZeroUsage } from "../../packages/ai/src/utils/usage.js";
 import type { Usage } from "../llm/types.js";
 
 export type ContextUsage = NonNullable<Usage["contextUsage"]>;
@@ -22,6 +23,7 @@ type UsageTokenFields = {
   cacheRead?: number;
   cacheWrite?: number;
   cacheWrite1h?: number;
+  cacheWrite5m?: number;
   cacheTelemetry?: Usage["cacheTelemetry"];
   contextUsage?: ContextUsage;
   usageReport?: Usage["usageReport"];
@@ -83,20 +85,7 @@ export type OpenAiChatCompletionsUsage = ReturnType<typeof toOpenAiChatCompletio
 export type AssistantUsageSnapshot = Usage;
 
 export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      total: 0,
-    },
-  };
+  return createZeroUsage();
 }
 
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
@@ -198,6 +187,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   const cacheWrite1h = normalizeTokenCount(
     raw.cacheWrite1h ?? raw.cache_creation?.ephemeral_1h_input_tokens,
   );
+  const cacheWrite5m = normalizeTokenCount(raw.cacheWrite5m);
 
   const directInput = asFiniteNumber(raw.input);
   const rawInputValue =
@@ -275,9 +265,18 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   }
 
   if (
-    [input, output, cacheRead, cacheWrite, contextUsage, reasoningTokens, total, cost].every(
-      (value) => value === undefined,
-    )
+    [
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+      cacheWrite1h,
+      cacheWrite5m,
+      contextUsage,
+      reasoningTokens,
+      total,
+      cost,
+    ].every((value) => value === undefined)
   ) {
     return undefined;
   }
@@ -288,6 +287,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     cacheRead,
     cacheWrite,
     ...(cacheWrite1h !== undefined ? { cacheWrite1h } : {}),
+    ...(cacheWrite5m !== undefined ? { cacheWrite5m } : {}),
     ...(raw.cacheTelemetry?.state === "available" || raw.cacheTelemetry?.state === "unavailable"
       ? { cacheTelemetry: { state: raw.cacheTelemetry.state } }
       : {}),

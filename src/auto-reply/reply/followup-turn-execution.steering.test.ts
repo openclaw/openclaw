@@ -28,7 +28,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
-  createFollowupTurnTestTypingController as createTypingController,
   createFollowupTurnTestTurn as createTurn,
   executeFollowupTurnForTest as executeFollowupTurn,
   getFollowupTurnTestState,
@@ -46,6 +45,7 @@ import { isFollowupRunAborted } from "./queue/types.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const state = getFollowupTurnTestState();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -54,7 +54,7 @@ beforeEach(resetFollowupTurnTestState);
 function executeTurn(turn: AdmittedFollowupTurn, defaultModel = "claude") {
   return executeFollowupTurn({
     turn,
-    defaults: { typing: createTypingController(), typingMode: "never", defaultModel },
+    defaults: { typing: createMockTypingController(), typingMode: "never", defaultModel },
     onToolResult: vi.fn(async () => {}),
     onCompactionNoticePayload: vi.fn(async () => {}),
   });
@@ -195,6 +195,7 @@ describe("queued turn steering", () => {
             },
             session: {
               ...target,
+              resolvedSessionModel: { provider: "anthropic", model: "claude" },
               cfg: {},
               entry: turn.session.current(),
               clientRunId,

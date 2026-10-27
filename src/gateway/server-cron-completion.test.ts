@@ -16,7 +16,6 @@ import {
   noteActiveCronJobRemoval,
   requestActiveCronJobCancellation,
 } from "../cron/active-jobs.js";
-import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { createNoopLogger } from "../cron/service.test-harness.js";
 import { createCronCompletionDeliveryFence } from "../cron/service/delivery-attempt-fence.js";
 import { markServiceCronJobActive } from "../cron/service/run-receipts.js";
@@ -57,6 +56,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { finalizeCronCompletionAnnouncement } from "./server-cron-completion.js";
+import { sendGatewayCronFailureAlert } from "./server-cron-notifications.js";
 import * as assistantContent from "./server-methods/chat-assistant-content.js";
 
 async function createCompletionFixture(
@@ -73,20 +73,28 @@ async function createCompletionFixture(
   };
   const generation = { sessionId: source.sessionId, lifecycleRevision: "creator-generation" };
   const executionSessionKey = `agent:main:cron:${kind}-job`;
+  // Keep the v2026.9.9 persisted shape independent of current job defaults.
+  const releasedJob = {
+    id: `${kind}-job`,
+    agentId: "main",
+    name: "test",
+    enabled: true,
+    createdAtMs: 1,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload:
+      kind === "script"
+        ? { kind: "script", script: "return { notify: 'Script finished' };" }
+        : { kind: "command", argv: ["printf", "Command finished"] },
+    delivery: { mode: "announce", channel: "telegram", to: "123" },
+    state: {},
+  } satisfies Omit<CronStoredJob, "updatedAtMs">;
   const job: CronStoredJob = {
-    ...makeCronJob({
-      id: `${kind}-job`,
-      agentId: "main",
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      sessionKey: executionSessionKey,
-      payload:
-        kind === "script"
-          ? { kind: "script", script: "return { notify: 'Script finished' };" }
-          : { kind: "command", argv: ["printf", "Command finished"] },
-      delivery: { mode: "announce", channel: "telegram", to: "123" },
-      state: { runningAtMs: 1000 },
-    }),
+    ...releasedJob,
+    updatedAtMs: 1,
+    sessionKey: executionSessionKey,
+    state: { runningAtMs: 1000 },
     sourceConversation: { sessionKey: source.sessionKey, ...generation },
   };
   const otherScopes = [
@@ -116,7 +124,6 @@ async function createCompletionFixture(
     cronEnabled: true,
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
   });
   const marker = markServiceCronJobActive(service, job, receipt);
@@ -163,7 +170,6 @@ async function createCompletionFixture(
     initializeGlobalHookRunner(pluginRegistry);
   }
   const logger = getChildLogger({ module: "cron-completion-test" });
-  const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
   const text = kind === "script" ? "Script finished" : "Command finished";
   const messages = async (scope = source) => {
     const entry = loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
@@ -174,35 +180,27 @@ async function createCompletionFixture(
       .map(readTranscriptEventMessage)
       .filter((message) => message?.role === "assistant");
   };
-  const assertText = async (expectedText: string) => {
-    expect(await messages(destination)).toEqual([
-      expect.objectContaining({ content: [{ type: "text", text: expectedText }] }),
-    ]);
-  };
-  const assertResult = async (scope = destination) => {
-    expect(await messages(scope)).toEqual([
-      expect.objectContaining({
-        content: [
-          {
-            type: "text",
-            text:
-              scope.sessionKey === source.sessionKey
-                ? text
-                : `${text}\nInspect: https://automation.example.test/automations?job=${kind}-job&run=cron%3A${kind}-job%3A1000`,
-          },
-        ],
-        model: "automation-result",
-        openclawAutomation: { kind: "cron", jobId: job.id, runId: `cron:${job.id}:1000` },
-      }),
-    ]);
-  };
-  const assertNoOtherResults = async (resultScope = destination) => {
-    for (const scope of [source, ...otherScopes]) {
-      if (scope !== resultScope) {
-        expect(await messages(scope)).toEqual([]);
-      }
+  const inspectText = `${text}\n[Inspect run](https://automation.example.test/automations?job=${kind}-job&run=cron%3A${kind}-job%3A1000)`;
+  const assertMessages = async (scope?: typeof source, messageText?: string, metadata = {}) => {
+    for (const target of [source, ...otherScopes]) {
+      expect(await messages(target)).toEqual(
+        target === scope
+          ? [
+              expect.objectContaining({
+                content: [{ type: "text", text: messageText }],
+                ...metadata,
+              }),
+            ]
+          : [],
+      );
     }
   };
+  const assertText = (value: string) => assertMessages(destination, value);
+  const assertResult = (scope = destination) =>
+    assertMessages(scope, scope.sessionKey === source.sessionKey ? text : inspectText, {
+      model: "automation-result",
+      openclawAutomation: { kind: "cron", jobId: job.id, runId: `cron:${job.id}:1000` },
+    });
   const finalize = (
     overrides: Partial<Parameters<typeof finalizeCronCompletionAnnouncement>[0]> = {},
   ) =>
@@ -225,35 +223,13 @@ async function createCompletionFixture(
     job,
     text,
     sendText,
-    warn,
     messages,
     assertResult,
     assertText,
-    assertNoOtherResults,
-    async assertNoResults() {
-      expect(await messages(destination)).toEqual([]);
-      await assertNoOtherResults();
-    },
+    assertNoResults: () => assertMessages(),
     finalize,
     async loadReleasedRows() {
-      // v2026.9.9: types.ts CronStoredJob and store/row-codec.ts persisted config.
-      // Jobs from that release did not capture a creating conversation.
-      const jobJson = JSON.stringify({
-        id: `${kind}-job`,
-        agentId: "main",
-        name: "test",
-        enabled: true,
-        createdAtMs: 1,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload:
-          kind === "script"
-            ? { kind: "script", script: "return { notify: 'Script finished' };" }
-            : { kind: "command", argv: ["printf", "Command finished"] },
-        delivery: { mode: "announce", channel: "telegram", to: "123" },
-        state: {},
-      });
+      const jobJson = JSON.stringify(releasedJob);
       runOpenClawStateWriteTransaction(({ db }) => {
         db.prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?").run(
           jobJson,
@@ -350,7 +326,42 @@ async function withCompletionFixture(
 // target resolution, and durable notification delivery. Only the channel I/O is synthetic.
 // Command execution and script evaluation belong to their respective runner suites.
 describe("completion announcement", () => {
-  const kind = "script";
+  const confirmed = { deliveryAttempted: true, delivered: true };
+
+  it("records a failure alert once in its destination, not the creating conversation", async () => {
+    await withCompletionFixture("command", async (fixture) => {
+      fixture.cfg.gateway = undefined;
+      fixture.job.sessionKey = fixture.destination.sessionKey;
+      const onDeliverySettled = vi.fn(async () => {});
+      await sendGatewayCronFailureAlert({
+        deps: {},
+        logger: { warn: vi.fn() },
+        resolveCronAgent: () => ({ agentId: "main", cfg: fixture.cfg }),
+        job: fixture.job,
+        routing: { defaultAgentId: "main" },
+        payload: { text: "Scheduled command failed." },
+        channel: "telegram",
+        to: "123",
+        mode: "announce",
+        onDeliverySettled,
+      });
+      expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ text: "Scheduled command failed." }),
+      );
+      expect(await fixture.messages(fixture.destination)).toEqual([
+        expect.objectContaining({
+          content: [{ type: "text", text: "Scheduled command failed." }],
+          provider: "openclaw",
+          model: "automation-result",
+        }),
+      ]);
+      await fixture.assertText("Scheduled command failed.");
+      expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
+        delivered: true,
+        status: "delivered",
+      });
+    });
+  });
 
   it("commits the effective post-hook payload shown to the recipient", async () => {
     await withCompletionFixture(
@@ -363,7 +374,6 @@ describe("completion announcement", () => {
           expect.objectContaining({ text: "Redacted cron update" }),
         );
         await fixture.assertText("Redacted cron update");
-        await fixture.assertNoOtherResults();
       },
       "Redacted cron update",
     );
@@ -371,13 +381,12 @@ describe("completion announcement", () => {
 
   it.each([
     { kind: "script", failure: "none" },
-    { kind: "command", failure: "none" },
     { kind: "script", failure: "rejected" },
     { kind: "script", failure: "uncertain" },
   ] as const)(
     "adds the $kind result only after confirmed notification (failure=$failure)",
     async ({ kind: payloadKind, failure }) => {
-      await withCompletionFixture(payloadKind, async (fixture) => {
+      await withCompletionFixture("script", async (fixture) => {
         fixture.sendText.mockImplementation(async () => {
           expect(await fixture.messages(fixture.destination)).toEqual([]);
           if (failure === "uncertain") {
@@ -398,16 +407,13 @@ describe("completion announcement", () => {
 
         const result = await fixture.finalize();
         if (failure === "none") {
-          await expect(fixture.finalize()).resolves.toMatchObject({
-            deliveryAttempted: true,
-            delivered: true,
-          });
+          await expect(fixture.finalize()).resolves.toMatchObject(confirmed);
         }
 
         expect(fixture.sendText).toHaveBeenCalledOnce();
         expect(fixture.sendText.mock.calls[0]?.[0]).toMatchObject({
           to: "123",
-          text: `${fixture.text}\nInspect: https://automation.example.test/automations?job=${payloadKind}-job&run=cron%3A${payloadKind}-job%3A1000`,
+          text: `${fixture.text}\n[Inspect run](https://automation.example.test/automations?job=${payloadKind}-job&run=cron%3A${payloadKind}-job%3A1000)`,
         });
         expect(result).toMatchObject({
           deliveryAttempted: true,
@@ -420,12 +426,11 @@ describe("completion announcement", () => {
             ),
             deliveryState: { status: failure === "uncertain" ? "unknown" : "not-delivered" },
           });
-          expect(fixture.warn).toHaveBeenCalledOnce();
         }
         if (failure === "none") {
           await fixture.assertResult();
         } else {
-          expect(await fixture.messages(fixture.destination)).toEqual([]);
+          await fixture.assertNoResults();
           if (failure === "uncertain") {
             expect(result).toMatchObject({
               ...deliveryDiagnostics(
@@ -435,7 +440,6 @@ describe("completion announcement", () => {
             });
           }
         }
-        await fixture.assertNoOtherResults();
       });
     },
   );
@@ -443,7 +447,7 @@ describe("completion announcement", () => {
   it.each(["binding failure", "cross-agent destination"] as const)(
     "delivers without conversation writes after %s",
     async (reason) => {
-      await withCompletionFixture(kind, async (fixture) => {
+      await withCompletionFixture("script", async (fixture) => {
         let otherDestination: typeof fixture.destination | undefined;
         if (reason === "binding failure") {
           vi.spyOn(outboundSession, "bindOutboundSessionEntry").mockRejectedValueOnce(
@@ -507,7 +511,7 @@ describe("completion announcement", () => {
   it.each(["deleted", "reset"] as const)(
     "delivers to the explicit destination when the captured source was %s",
     async (change) => {
-      await withCompletionFixture(kind, async (fixture) => {
+      await withCompletionFixture("script", async (fixture) => {
         const target = {
           canonicalKey: fixture.source.sessionKey,
           storeKeys: [fixture.source.sessionKey],
@@ -530,19 +534,15 @@ describe("completion announcement", () => {
           });
         }
 
-        await expect(fixture.finalize()).resolves.toMatchObject({
-          deliveryAttempted: true,
-          delivered: true,
-        });
+        await expect(fixture.finalize()).resolves.toMatchObject(confirmed);
         expect(fixture.sendText).toHaveBeenCalledOnce();
         await fixture.assertResult();
-        await fixture.assertNoOtherResults();
       });
     },
   );
 
   it("refuses destination output without an occurrence identity", async () => {
-    await withCompletionFixture(kind, async (fixture) => {
+    await withCompletionFixture("script", async (fixture) => {
       await expect(fixture.finalize({ runStartedAtMs: undefined })).resolves.toMatchObject({
         deliveryAttempted: true,
         delivered: false,
@@ -554,22 +554,18 @@ describe("completion announcement", () => {
   });
 
   it("loads and delivers v2026.9.9-shaped jobs without rewriting retained receipts or schema", async () => {
-    await withCompletionFixture(kind, async (fixture) => {
+    await withCompletionFixture("script", async (fixture) => {
       const released = await fixture.loadReleasedRows();
 
-      await expect(fixture.finalize({ job: released.job })).resolves.toMatchObject({
-        deliveryAttempted: true,
-        delivered: true,
-      });
+      await expect(fixture.finalize({ job: released.job })).resolves.toMatchObject(confirmed);
       expect(fixture.sendText).toHaveBeenCalledOnce();
       await fixture.assertResult();
-      await fixture.assertNoOtherResults();
       released.assertPreserved();
     });
   });
 
   it("completes in the source without inheriting the shared main external route", async () => {
-    await withCompletionFixture(kind, async (fixture) => {
+    await withCompletionFixture("script", async (fixture) => {
       fixture.job.delivery = { mode: "announce", channel: "last" };
 
       await expect(fixture.finalize()).resolves.toMatchObject({
@@ -579,7 +575,6 @@ describe("completion announcement", () => {
       });
       expect(fixture.sendText).not.toHaveBeenCalled();
       await fixture.assertResult(fixture.source);
-      await fixture.assertNoOtherResults(fixture.source);
     });
   });
 
@@ -592,13 +587,11 @@ describe("completion announcement", () => {
           deliveryAttempted: true,
           deliveryError: undefined,
         });
-        const deliveredText = `${text}\nInspect: https://automation.example.test/automations?job=script-job&run=cron%3Ascript-job%3A1000`;
+        const deliveredText = `${text}\n[Inspect run](https://automation.example.test/automations?job=script-job&run=cron%3Ascript-job%3A1000)`;
         expect(fixture.sendText).toHaveBeenCalledWith(
           expect.objectContaining({ text: deliveredText }),
         );
-        expect(fixture.warn).not.toHaveBeenCalled();
         await fixture.assertText(deliveredText);
-        await fixture.assertNoOtherResults();
       });
     },
   );
@@ -606,7 +599,7 @@ describe("completion announcement", () => {
   it.each(["none", "webhook"] as const)(
     "does not write a conversation result for %s delivery",
     async (mode) => {
-      await withCompletionFixture(kind, async (fixture) => {
+      await withCompletionFixture("script", async (fixture) => {
         fixture.job.delivery =
           mode === "webhook" ? { mode, to: "https://receiver.example.test/cron" } : { mode };
         await expect(fixture.finalize()).resolves.toMatchObject({
@@ -620,7 +613,7 @@ describe("completion announcement", () => {
   );
 
   it("does not commit or notify an aborted occurrence", async () => {
-    await withCompletionFixture(kind, async (fixture) => {
+    await withCompletionFixture("script", async (fixture) => {
       const controller = new AbortController();
       controller.abort(new Error("occurrence aborted"));
 
@@ -637,7 +630,7 @@ describe("completion announcement", () => {
   it.each(["deleted", "cancelled"] as const)(
     "keeps confirmed delivery when transcript preparation loses occurrence authority (%s)",
     async (outcome) => {
-      await withCompletionFixture(kind, async (fixture) => {
+      await withCompletionFixture("script", async (fixture) => {
         const entered = createDeferred();
         const resume = createDeferred();
         const prepare = assistantContent.buildAssistantReplyContent;

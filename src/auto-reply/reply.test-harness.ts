@@ -68,34 +68,9 @@ vi.mock("../agents/embedded-agent.runtime.js", async (importOriginal) => ({
 
 vi.mock("./reply/agent-runner-run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./reply/agent-runner-run.js")>()),
-  runReplyAgent: async (params: {
-    commandBody: string;
-    followupRun: {
-      prompt: string;
-      run: {
-        agentDir: string;
-        agentId: string;
-        config: unknown;
-        execOverrides?: unknown;
-        inputProvenance?: unknown;
-        messageProvider?: string;
-        model: string;
-        ownerNumbers?: string[];
-        provider: string;
-        reasoningLevel?: unknown;
-        senderIsOwner?: boolean;
-        sessionFile: string;
-        sessionId: string;
-        sessionKey: string;
-        skillsSnapshot?: unknown;
-        thinkLevel?: unknown;
-        timeoutMs?: number;
-        verboseLevel?: unknown;
-        workspaceDir: string;
-        bashElevated?: unknown;
-      };
-    };
-  }) => {
+  runReplyAgent: async (
+    params: Parameters<typeof import("./reply/agent-runner-run.js").runReplyAgent>[0],
+  ) => {
     const result = await replyRuntimeMockState.mocks.runEmbeddedAgent({
       prompt: params.followupRun.prompt || params.commandBody,
       agentDir: params.followupRun.run.agentDir,

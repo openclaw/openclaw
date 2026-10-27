@@ -71,7 +71,7 @@ Add `--runtime <executable>` to start the built Gateway on another runtime, such
 
 ## The `computer` agent tool
 
-The built-in `computer` tool takes one action per call. Choose `target: "gateway"` for the Gateway desktop or `target: "node"` for a paired node. Supplying `node` also selects the node route. With neither selector, the first call uses the configured Gateway computer, otherwise the sole connected computer-capable node. A configured but unavailable Gateway computer reports its error; it never silently redirects input to a node. Later calls retain the selected host unless explicitly changed. Cloud sessions retain their fixed desktop and reject host overrides.
+The built-in `computer` tool takes one action per call. Choose `target: "gateway"` for the Gateway desktop or `target: "node"` for a paired node. Supplying `node` also selects the node route. With neither selector, the first call uses the configured Gateway computer, otherwise the sole connected computer-capable node. When the Gateway has no computer provider configured, the tool schema omits `target: "gateway"` and the guidance asks the model to omit `target` or use `target: "node"`; an explicit `target: "gateway"` reports the missing provider and names the paired-node retry instead of silently redirecting input. A configured but unavailable Gateway computer reports its error; it never silently redirects input to a node. Later calls retain the selected host unless explicitly changed. Cloud sessions retain their fixed desktop and reject host overrides.
 
 On the MCP tool path, computer control belongs to the admitted agent run and is released when that run ends. A later run can then use the same computer. Recording and file-transfer actions remain unavailable on this path.
 
@@ -257,6 +257,8 @@ Updates preserve existing desktop configuration, explicit plugin enablement or d
 - **Capability-based**: the tool requires a connected node to advertise both `computer.act` and `screen.snapshot`. The bundled macOS app and the opt-in experimental `cua-computer` plugin fulfill the same command pair.
 
 Provider descriptors declare `contractVersion: 2`. Invalid capability descriptors or `computer.act` result envelopes are rejected with `COMPUTER_CONTRACT_MISMATCH`.
+
+The receiver accepts optional numeric `cursorX` and `cursorY` receipt fields from independently updated paired macOS nodes, including `v2026.8.1`. Unknown fields and invalid field types remain rejected.
 
 Direct `node.invoke` calls to the provider-backed `computer.act` command must include an `executionId` UUID in the action parameters. The built-in `computer` tool supplies it automatically.
 

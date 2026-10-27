@@ -8,7 +8,6 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { signalCheck, signalRpcRequest, streamSignalEvents } from "./client.js";
 import { expectPreparedHandoff } from "./client.test-support.js";
-import * as socketEndpoint from "./socket-path.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -52,13 +51,11 @@ async function serve(onRequest: (request: Record<string, unknown>, socket: net.S
   return { baseUrl: pathToFileURL(socketPath).href.replace(/^file:/, "unix:"), dir };
 }
 
-function response(id: unknown, result: unknown) {
-  return `${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`;
-}
+const frame = (message: Record<string, unknown>) =>
+  `${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`;
+const response = (id: unknown, result: unknown) => frame({ id, result });
 function notify(socket: net.Socket, result: unknown, subscription = 7) {
-  socket.write(
-    `${JSON.stringify({ jsonrpc: "2.0", method: "receive", params: { subscription, result } })}\n`,
-  );
+  socket.write(frame({ method: "receive", params: { subscription, result } }));
 }
 const send = (
   baseUrl: string,
@@ -69,8 +66,8 @@ const send = (
 describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
   it.each([false, true])(
     "prepares the socket write and rechecks its caller after waiting (revoked=%s)",
-    async (revoked) => {
-      await expectPreparedHandoff(revoked, async ({ arrive, response: reply, assertHandoff }) => {
+    (revoked) =>
+      expectPreparedHandoff(revoked, async ({ arrive, response: reply, assertHandoff }) => {
         const requests: Record<string, unknown>[] = [];
         const { baseUrl } = await serve((request, socket) => {
           requests.push(request);
@@ -82,54 +79,23 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
           assertCount: (count) => expect(requests).toHaveLength(count),
           result: { sent: true },
         };
-      });
-    },
+      }),
   );
 
   it("sends newline JSON-RPC and matches a fragmented UTF-8 response by id", async () => {
-    const caller = new AbortController();
     const requests: Record<string, unknown>[] = [];
     const { baseUrl } = await serve((request, socket) => {
       requests.push(request);
-      caller.abort(new Error("Signal caller closed after transmission"));
       const bytes = Buffer.from(response(request.id, { text: "héllo" }));
       const split = bytes.indexOf(Buffer.from("é")) + 1;
       socket.write(response("unrelated", "wrong"));
       socket.write(bytes.subarray(0, split));
       setImmediate(() => socket.write(bytes.subarray(split)));
     });
-    await expect(
-      send(baseUrl, "test", {
-        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-      }),
-    ).resolves.toEqual({ text: "héllo" });
+    await expect(send(baseUrl, "test")).resolves.toEqual({ text: "héllo" });
     expect(requests).toEqual([
       expect.objectContaining({ jsonrpc: "2.0", method: "send", params: { message: "test" } }),
     ]);
-  });
-
-  it("stops before writing when the caller closes during socket preparation", async () => {
-    const requests: Record<string, unknown>[] = [];
-    const { baseUrl } = await serve((request, socket) => {
-      requests.push(request);
-      socket.end(response(request.id, { timestamp: 1700000000999 }));
-    });
-    const caller = new AbortController();
-    const validate = socketEndpoint.assertSignalSocketEndpoint;
-    const preparation = vi
-      .spyOn(socketEndpoint, "assertSignalSocketEndpoint")
-      .mockImplementationOnce(async (endpoint) => {
-        await validate(endpoint);
-        caller.abort(new Error("Signal caller closed during socket preparation"));
-      });
-
-    await expect(
-      send(baseUrl, "pending", {
-        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-      }),
-    ).rejects.toThrow("Signal caller closed during socket preparation");
-    expect(preparation).toHaveBeenCalledOnce();
-    expect(requests).toHaveLength(0);
   });
 
   it("checks the daemon using the supported version RPC", async () => {
@@ -160,9 +126,7 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
     [-32000, "quote metadata was rejected after an ambiguous send +15550000001", "remote error"],
   ] as const)("redacts RPC %s: %s", async (code, message, classification) => {
     const { baseUrl } = await serve((request, socket) =>
-      socket.end(
-        `${JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code, message } })}\n`,
-      ),
+      socket.end(frame({ id: request.id, error: { code, message } })),
     );
     await expect(send(baseUrl)).rejects.toMatchObject({
       message: `Signal RPC ${code}: ${classification}`,

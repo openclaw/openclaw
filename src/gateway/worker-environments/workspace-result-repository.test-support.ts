@@ -153,6 +153,7 @@ export function useRepositoryWorkspaceResultFixture() {
         sessionId: SESSION_ID,
         ownerSignal,
         isOwnerCurrent: () => true,
+        supportsGitResults: async () => true,
         workspaceTransfer: service,
         runWorkspaceCommand: async (command) =>
           await runtime.exec(
@@ -236,6 +237,7 @@ export function useRepositoryWorkspaceResultFixture() {
       createWithRequest: vi.fn(async () => attachedEnvironment()),
       attachSession: vi.fn(async () => credential()),
       destroy: vi.fn(async () => attachedEnvironment()),
+      reclaim: vi.fn(async () => attachedEnvironment()),
       startTunnel: vi.fn(async () => tunnel),
       stopTunnel: vi.fn(async () => {}),
       reconcileEnvironment: vi.fn(async () => {}),
@@ -270,12 +272,17 @@ export function useRepositoryWorkspaceResultFixture() {
         { workspaceAcceptedAtMs: null, recoveryRequestedAtMs: expect.any(Number), ...extra },
       ]);
     };
+    const notes: string[] = [];
     const stop = createWorkerPlacementReclaim({
       ...operations,
       runReclaimBarrier: async ({ begin, reclaim }) =>
         await reclaim(await resolveWorkspace(), await begin()),
-      withPreparedRecovery: createWorkerWorkspaceRecoveryFixture({ resolveWorkspace })
-        .withPreparedRecovery,
+      withPreparedRecovery: createWorkerWorkspaceRecoveryFixture({
+        resolveWorkspace,
+        reportNote: async ({ note }) => {
+          notes.push(note);
+        },
+      }).withPreparedRecovery,
     });
     return {
       ...operations,
@@ -292,6 +299,8 @@ export function useRepositoryWorkspaceResultFixture() {
       expectSettled,
       expectUnaccepted,
       stop,
+      notes,
+      workspaceTransfer: service,
       tunnel,
       ownerSignal,
     };

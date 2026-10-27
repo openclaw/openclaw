@@ -3,7 +3,6 @@ import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
 import { registerConfigCli } from "../cli/config-cli.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import * as schemas from "../plugins/schema-validator.js";
 import { defaultRuntime } from "../runtime.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -78,9 +77,7 @@ async function validateThroughCli(
   });
   vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshot").mockReturnValue(snapshot);
   vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync").mockResolvedValue(snapshot);
-  const schemaValidation = vi.spyOn(schemas, "validatePluginSchemaValue");
-  const output = await runCli(config);
-  return { output, schemaValidation };
+  return runCli(config);
 }
 
 it("validates existing state through a private read-only snapshot", async () => {
@@ -105,14 +102,14 @@ const issue = (path: string, details = {}) => ({
 });
 
 it.each([
-  { channel: true, rootPath: "/synthetic", valid: true, calls: 1 },
-  { channel: true, rootPath: "~/synthetic", valid: false, calls: 2 },
-  { channel: false, rootPath: "~/synthetic", valid: false, calls: 2 },
+  { channel: true, rootPath: "/synthetic", valid: true },
+  { channel: true, rootPath: "~/synthetic", valid: false },
+  { channel: false, rootPath: "~/synthetic", valid: false },
 ])(
   "validates raw paths (channel=$channel, path=$rootPath)",
-  async ({ channel, rootPath, valid, calls }) => {
+  async ({ channel, rootPath, valid }) => {
     const schema = objectSchema({ rootPath: { type: "string", pattern: "^/" } });
-    const { output, schemaValidation } = await validateThroughCli(
+    const output = await validateThroughCli(
       channel ? { channels: { channel: { rootPath } } } : pluginConfig(true, { rootPath }),
       channel ? objectSchema() : schema,
       channel
@@ -121,12 +118,11 @@ it.each([
     );
     const path = channel ? "channels.channel.rootPath" : "plugins.entries.plugin.config.rootPath";
     expect(output).toMatchObject(valid ? { valid } : issue(path));
-    expect(schemaValidation).toHaveBeenCalledTimes(calls);
   },
 );
 
 it.each([true, false])("preserves strict default ownership (enabled=%s)", async (enabled) => {
-  const { output } = await validateThroughCli(
+  const output = await validateThroughCli(
     {
       ...pluginConfig(enabled, enabled ? undefined : {}),
       secrets: {

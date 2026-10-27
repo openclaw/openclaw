@@ -6,9 +6,13 @@ import { writeSessionEntry } from "../../src/config/sessions/session-accessor.sq
 import { replaceSessionOwnerInTransaction } from "../../src/config/sessions/session-accessor.sqlite-owner.js";
 import { recordSessionParticipantFromWorker } from "../../src/config/sessions/session-accessor.sqlite-participants.native.js";
 import { appendTranscriptEventsInTransaction } from "../../src/config/sessions/session-accessor.sqlite-transcript-store.js";
+import { mutatePendingInput } from "../../src/config/sessions/session-pending-input-operations.kernel.js";
 import type { InternalSessionEntry } from "../../src/config/sessions/types.js";
 import { executeSqliteQuerySync } from "../../src/infra/kysely-sync.js";
-import { runOpenClawAgentWriteTransaction } from "../../src/state/openclaw-agent-db.js";
+import {
+  runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabase,
+} from "../../src/state/openclaw-agent-db.js";
 import { runOpenClawStateWriteTransaction } from "../../src/state/openclaw-state-db.js";
 import { userProfilesDb } from "../../src/state/user-profiles-internal.js";
 import { ensureUserProfilesSchema } from "../../src/state/user-profiles-schema.js";
@@ -25,6 +29,9 @@ export type TeamShapeSessionsOptions = {
   transcriptBytes?: number;
   longTranscriptEntries?: number;
   longTranscriptSessions?: number;
+  chatStartupSessions?: number;
+  /** Stable category mix for the reusable dev-Gateway load harness. */
+  teamStress?: boolean;
 };
 
 const MESSAGE_BYTES = 64 * 1024;
@@ -60,12 +67,14 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
   const transcriptBytes = options.transcriptBytes ?? 64 * 1024 * 1024;
   const longTranscriptEntries = options.longTranscriptEntries ?? 0;
   const longTranscriptSessions = Math.min(options.longTranscriptSessions ?? 4, options.sessions);
+  const chatStartupSessions = options.chatStartupSessions ?? 0;
   for (const [label, value] of Object.entries({
     sessions: options.sessions,
     retainedRuns: options.retainedRuns,
     transcriptBytes,
     longTranscriptEntries,
     longTranscriptSessions,
+    chatStartupSessions,
     now: options.now,
   })) {
     if (!Number.isSafeInteger(value) || value < 0) {
@@ -74,6 +83,9 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
   }
   if (options.sessions === 0 && transcriptBytes !== 0) {
     throw new Error("transcriptBytes requires at least one session");
+  }
+  if (chatStartupSessions > options.sessions) {
+    throw new Error("chatStartupSessions must not exceed sessions");
   }
   const env = { ...process.env, OPENCLAW_STATE_DIR: options.stateDir };
   const databaseOptions = { agentId: "main", env };
@@ -119,6 +131,18 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
   let archivedCount = 0;
   let totalWeight = 0;
   const rootCount = teamShapeRootSessionCount(options.sessions);
+  const stressCounts = options.teamStress
+    ? {
+        subagent: options.retainedRuns,
+        archivedDashboard: Math.floor((options.sessions * 4_400) / 10_800),
+        dashboard: Math.floor((options.sessions * 400) / 10_800),
+        explicit: Math.floor((options.sessions * 200) / 10_800),
+        channel: 0,
+        cron: 0,
+        other: 0,
+      }
+    : undefined;
+  const stressTargets: Array<{ sessionKey: string; agentId: string }> = [];
   const latestCreation =
     options.retainedRuns > 0
       ? options.now - 60_000 - options.retainedRuns * TEAM_SHAPE_RUN_SLOT_MS
@@ -127,13 +151,59 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
     runOpenClawAgentWriteTransaction((database) => {
       for (let index = offset; index < Math.min(offset + 100, options.sessions); index++) {
         const sessionId = `team-shape-session-${index}`;
-        const sessionKey = `agent:main:${sessionId}`;
-        const updatedAt = options.now - Math.floor(random() ** 2 * 30 * DAY_MS);
+        const startupUuid = `${(index + 1).toString(16).padStart(8, "0")}-1659-4000-8000-000000000001`;
+        const startupTarget = index < chatStartupSessions;
+        const isChild = index >= rootCount && index < rootCount + options.retainedRuns;
+        // Keep child ordering aligned with seedTeamShapeExtras' retained-run owner.
+        const rootIndex = index < rootCount ? index : index - options.retainedRuns;
+        const stressCategory = !stressCounts
+          ? undefined
+          : isChild
+            ? "subagent"
+            : rootIndex < stressCounts.dashboard
+              ? "dashboard"
+              : rootIndex < stressCounts.dashboard + stressCounts.explicit
+                ? "explicit"
+                : rootIndex <
+                    stressCounts.dashboard + stressCounts.explicit + stressCounts.archivedDashboard
+                  ? "archivedDashboard"
+                  : index % 25 === 0
+                    ? "channel"
+                    : index % 25 === 1
+                      ? "cron"
+                      : "other";
+        const sessionKey =
+          stressCategory === "dashboard" || stressCategory === "archivedDashboard"
+            ? `agent:main:dashboard:${startupUuid}`
+            : stressCategory === "subagent"
+              ? `agent:main:subagent:${startupUuid}`
+              : stressCategory === "channel"
+                ? `agent:main:discord:channel:synthetic-${index}`
+                : stressCategory === "cron"
+                  ? `agent:main:cron:synthetic-${index}`
+                  : startupTarget
+                    ? `agent:main:dashboard:${startupUuid}`
+                    : `agent:main:${sessionId}`;
+        // Keep the live stress cohort inside normal maintenance age limits for the campaign.
+        const ageDays = stressCategory === "dashboard" ? 6 : stressCategory ? 29 : 30;
+        const updatedAt = options.now - Math.floor(random() ** 2 * ageDays * DAY_MS);
         const createdAt = Math.min(updatedAt - Math.floor(random() * 7 * DAY_MS), latestCreation);
         const profileId = `team-shape-profile-${index % 24}`;
-        const visibility = VISIBILITIES[index % 10 < 7 ? 0 : (index % 10) - 6]!;
-        const archived = index % 5 === 0;
-        const isChild = index >= rootCount && index < rootCount + options.retainedRuns;
+        const visibility = startupTarget
+          ? "shared"
+          : VISIBILITIES[index % 10 < 7 ? 0 : (index % 10) - 6]!;
+        const archived = stressCategory
+          ? stressCategory === "archivedDashboard"
+          : !startupTarget && index % 5 === 0;
+        if (
+          stressCounts &&
+          (stressCategory === "channel" || stressCategory === "cron" || stressCategory === "other")
+        ) {
+          stressCounts[stressCategory]++;
+        }
+        if (stressCategory && !archived && !isChild && stressTargets.length < 64) {
+          stressTargets.push({ sessionKey, agentId: "main" });
+        }
         const entry: InternalSessionEntry = {
           sessionId,
           updatedAt,
@@ -150,6 +220,9 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
             : { type: "human", source: "profile", id: profileId },
           visibility,
           status: index % 13 === 0 ? "failed" : "done",
+          ...(startupTarget && index % 2 === 1
+            ? { providerOverride: "openai", modelOverride: "gpt-4.1" }
+            : {}),
           ...(archived ? { archivedAt: updatedAt } : {}),
           ...(index % 31 === 0 ? { pinnedAt: updatedAt } : {}),
         };
@@ -180,6 +253,51 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
         totalWeight += weight;
       }
     }, databaseOptions);
+    await yieldTurn();
+  }
+  // Offline native fixture writes model durable inputs left after an interrupted request.
+  // No delivery/replay metadata is present, so Gateway recovery keeps them for display.
+  for (const [index, session] of sessions.slice(0, chatStartupSessions).entries()) {
+    for (let input = 0; input < 2; input++) {
+      const id = `startup-pending-${index}-${input}`;
+      const identity = {
+        ...session,
+        inputId: id,
+        runId: id,
+        idempotencyKey: id,
+        requestHash: createHash("sha256").update(id).digest("hex"),
+        lifecycleGeneration: "synthetic-prior-process",
+      };
+      const owner = {
+        writeTransaction: <T>(
+          operationLabel: string,
+          _owner: string,
+          write: (database: OpenClawAgentDatabase) => T,
+        ) => runOpenClawAgentWriteTransaction(write, databaseOptions, { operationLabel }),
+        admit: () => {},
+      };
+      mutatePendingInput(
+        {
+          ...identity,
+          kind: "stage",
+          expected: { kind: "stage", current: true },
+          trackCompletion: false,
+          messageJson: JSON.stringify({
+            role: "user",
+            content: `Synthetic interrupted chat input ${index}/${input}`,
+            timestamp: options.now,
+            idempotencyKey: id,
+          }),
+        },
+        owner,
+        () => {},
+      );
+      mutatePendingInput(
+        { ...identity, kind: "finish", disposition: "interrupted" },
+        owner,
+        () => {},
+      );
+    }
     await yieldTurn();
   }
   let logicalTranscriptBytes = 0;
@@ -281,11 +399,29 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
     transcriptMessages,
     longTranscriptEntries,
     longTranscriptSessions: longTranscriptEntries > 0 ? longTranscriptSessions : 0,
+    ...(chatStartupSessions
+      ? {
+          chatStartupTargets: sessions
+            .slice(0, chatStartupSessions)
+            .map((session, index) =>
+              Object.assign(
+                { sessionKey: session.sessionKey, minimumPendingInputs: 2 },
+                index % 2 === 0
+                  ? { shortId: (index + 1).toString(16).padStart(8, "0") }
+                  : { requireMetadata: true },
+                index < longTranscriptSessions && longTranscriptEntries > 0
+                  ? { minimumMessages: 1 }
+                  : {},
+              ),
+            ),
+        }
+      : {}),
     thinkingSignatureBytes,
     visibilityCounts,
     ownerCount,
     participantCount,
     archivedCount,
+    ...(stressCounts ? { stressCounts, stressTargets } : {}),
     generationMs: performance.now() - started,
   };
 }

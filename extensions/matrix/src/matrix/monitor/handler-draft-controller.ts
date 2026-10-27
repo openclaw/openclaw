@@ -160,7 +160,7 @@ export async function createMatrixDraftController(params: {
     });
   };
 
-  const advanceDraftBlockBoundary = (options?: { fallbackToLatestEnd?: boolean }) => {
+  const advanceDraftBlockBoundary = () => {
     const completedBoundary = pendingDraftBoundaries.shift();
     if (completedBoundary) {
       if (completedBoundary.messageGeneration === currentDraftMessageGeneration) {
@@ -168,9 +168,7 @@ export async function createMatrixDraftController(params: {
       }
       return;
     }
-    if (options?.fallbackToLatestEnd) {
-      currentDraftBlockOffset = latestDraftFullText.length;
-    }
+    currentDraftBlockOffset = latestDraftFullText.length;
   };
 
   const resetDraftBlockOffsets = () => {

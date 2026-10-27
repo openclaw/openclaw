@@ -4,6 +4,7 @@ import {
   attachPluginApiFacades,
   type OpenClawPluginApiWithoutFacades,
 } from "../plugins/api-facades.js";
+import { createPluginInlineViewResult } from "../plugins/inline-view.js";
 import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
 import type { PluginServiceSchedulerV1 } from "../plugins/service-scheduler.types.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -24,6 +25,8 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
   const { agent, lifecycle, runContext, session, ...flatApi } = api;
   const mergedApi = {
     id: "test-plugin",
+    inlineView: (viewId, payload, options) =>
+      createPluginInlineViewResult(api.id ?? "test-plugin", viewId, payload, options),
     name: "test-plugin",
     source: "test",
     registrationMode: "full",
@@ -84,7 +87,6 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerTrustedToolPolicy() {},
     registerToolMetadata() {},
     registerControlUiDescriptor() {},
-    registerBoardWidgetContentKind() {},
     registerRuntimeLifecycle() {},
     registerAgentEventSubscription() {},
     emitAgentEvent: () => ({ emitted: false as const, reason: "test api" }),

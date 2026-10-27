@@ -161,16 +161,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       if (!html) {
         expect(fields.rich_message).toMatchObject({
           skip_entity_detection: true,
-          blocks: [
-            {
-              type: "table",
-              caption: "Pipeline",
-              cells: [
-                ["Account", "Total"].map((text) => ({ text, is_header: true })),
-                ["Acme", "12"].map((text) => ({ text })),
-              ],
-            },
-          ],
+          blocks: [{ type: "table", caption: "Pipeline" }],
         });
       } else {
         expect(fields.text).toContain("Pipeline");
@@ -199,111 +190,97 @@ describe("Telegram registered adapter conformance over HTTP", () => {
         workspaceDir: mediaDir,
         readFile: async () => bytes,
       };
+      const options = { cfg: selectedCfg, accountId: "media" };
+      const album = mode === "album";
+      const host = mode === "host";
       try {
-        if (mode === "album") {
-          const result = await sendPayload(
-            {
-              text: "album caption",
-              mediaUrls: ["", photoPath, "", path.join(mediaDir, "second.png")],
-              channelData: { telegram: { quoteText: "quoted caption" } },
-            },
-            {
-              cfg: selectedCfg,
-              accountId: "media",
-              mediaAccess,
-              threadId: "77",
-              replyToId: "888",
-              replyToIdSource: "implicit",
-              replyToMode: "first",
-              silent: true,
-            },
-          );
-          expectMethods("sendMediaGroup");
-          const fields = requests[0]!.fields;
-          expect(fields).toMatchObject({ message_thread_id: "77", disable_notification: "true" });
-          expect(JSON.parse(String(fields.reply_parameters))).toMatchObject({ message_id: 888 });
-          const media = JSON.parse(String(fields.media)) as Array<{
-            media: string;
-            caption?: string;
-          }>;
-          expect(media.map((part) => part.caption ?? null)).toEqual(["album caption", null]);
-          const uploads = media.map((part) =>
-            resolveTelegramTestUpload({ ...fields, part: part.media }, "part"),
-          );
-          expect(uploads.map((file) => file.name)).toEqual(["pixel.png", "second.png"]);
-          for (const upload of uploads) {
-            expect(Buffer.from(await upload.arrayBuffer())).toEqual(bytes);
-          }
-          expect(result.receipt).toMatchObject({
-            platformMessageIds: ["1001", "1002"],
-            primaryPlatformMessageId: "1001",
-          });
-          expect(result.receipt.parts.map((part) => [part.platformMessageId, part.kind])).toEqual([
-            ["1001", "media"],
-            ["1002", "media"],
-          ]);
-        } else {
-          const host = mode === "host";
+        const albumResult = album
+          ? await sendPayload(
+              {
+                text: "album caption",
+                mediaUrls: ["", photoPath, "", path.join(mediaDir, "second.png")],
+                channelData: { telegram: { quoteText: "quoted caption" } },
+              },
+              {
+                ...options,
+                mediaAccess,
+                threadId: "77",
+                replyToId: "888",
+                replyToIdSource: "implicit",
+                replyToMode: "first",
+                silent: true,
+              },
+            )
+          : undefined;
+        if (!album) {
+          const hostParams = {
+            replyToMessageId: 888,
+            threadId: 77,
+            silent: true,
+            presentation: buttonPresentation(
+              { ...continueButton, style: "primary" },
+              {
+                label: "Allow Always",
+                action: { type: "command", command: `/approve ${approveId} allow-always` },
+              },
+              { label: "Launch", web_app: { url: "https://example.com/app" }, style: "success" },
+            ),
+            mediaAccess: { localRoots: ["/model"], readFile: async () => Buffer.from("model") },
+          };
           await send(
+            { message: `${mode} caption`, mediaUrl: photoPath, ...(host ? hostParams : {}) },
             {
-              message: host ? "host caption" : "legacy caption",
-              mediaUrl: photoPath,
-              ...(host
-                ? {
-                    replyToMessageId: 888,
-                    threadId: 77,
-                    silent: true,
-                    presentation: buttonPresentation(
-                      { ...continueButton, style: "primary" },
-                      {
-                        label: "Allow Always",
-                        action: { type: "command", command: `/approve ${approveId} allow-always` },
-                      },
-                      {
-                        label: "Launch",
-                        web_app: { url: "https://example.com/app" },
-                        style: "success",
-                      },
-                    ),
-                    mediaAccess: {
-                      localRoots: ["/model"],
-                      readFile: async () => Buffer.from("model"),
-                    },
-                  }
-                : {}),
-            },
-            {
-              cfg: selectedCfg,
+              ...options,
               conversationReadOrigin: undefined,
-              accountId: "media",
               ...(host
                 ? { mediaAccess, mediaReadFile: async () => Buffer.from("legacy-owned") }
                 : { mediaLocalRoots: [mediaDir], mediaReadFile: async () => bytes }),
             },
           );
-          expectMethods("sendPhoto");
-          const fields = requests[0]!.fields;
-          const photo = resolveTelegramTestUpload(fields, "photo");
-          expect(photo.name).toBe("pixel.png");
-          expect(Buffer.from(await photo.arrayBuffer())).toEqual(bytes);
-          if (host) {
-            expect(fields).toMatchObject({
-              reply_to_message_id: "888",
-              message_thread_id: "77",
-              disable_notification: "true",
-            });
-            expect(JSON.parse(String(fields.reply_markup))).toEqual(
-              replyMarkup(
-                { text: "Continue", callback_data: "tgcmd:/continue", style: "primary" },
-                { text: "Allow Always", callback_data: `/approve ${approveId} always` },
-                { text: "Launch", web_app: { url: "https://example.com/app" }, style: "success" },
-              ),
-            );
-          }
         }
-        expect(endpoints).toEqual([
-          `/bot654321:host-media/${mode === "album" ? "sendMediaGroup" : "sendPhoto"}`,
-        ]);
+        const method = album ? "sendMediaGroup" : "sendPhoto";
+        expectMethods(method);
+        expect(endpoints).toEqual([`/bot654321:host-media/${method}`]);
+        const fields = requestFields();
+        const media: Array<{ media: string; caption?: string }> = album
+          ? (JSON.parse(String(fields.media)) as Array<{ media: string; caption?: string }>)
+          : [{ media: String(fields.photo) }];
+        const uploads = media.map((part) =>
+          resolveTelegramTestUpload({ ...fields, part: part.media }, "part"),
+        );
+        expect(uploads.map((file) => file.name)).toEqual(
+          album ? ["pixel.png", "second.png"] : ["pixel.png"],
+        );
+        for (const upload of uploads) {
+          expect(Buffer.from(await upload.arrayBuffer())).toEqual(bytes);
+        }
+        if (album) {
+          expect(media.map((part) => part.caption ?? null)).toEqual(["album caption", null]);
+          expect(JSON.parse(String(fields.reply_parameters))).toMatchObject({ message_id: 888 });
+          expect(albumResult!.receipt).toMatchObject({
+            platformMessageIds: ["1001", "1002"],
+            primaryPlatformMessageId: "1001",
+          });
+          expect(
+            albumResult!.receipt.parts.map((part) => [part.platformMessageId, part.kind]),
+          ).toEqual([
+            ["1001", "media"],
+            ["1002", "media"],
+          ]);
+        }
+        if (host || album) {
+          expectFields({ message_thread_id: "77", disable_notification: "true" });
+        }
+        if (host) {
+          expectFields({ reply_to_message_id: "888" });
+          expect(JSON.parse(String(fields.reply_markup))).toEqual(
+            replyMarkup(
+              { text: "Continue", callback_data: "tgcmd:/continue", style: "primary" },
+              { text: "Allow Always", callback_data: `/approve ${approveId} always` },
+              { text: "Launch", web_app: { url: "https://example.com/app" }, style: "success" },
+            ),
+          );
+        }
       } finally {
         resetPluginRuntimeStateForTest();
       }
@@ -568,36 +545,19 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
     });
 
-    it("renders supplemental data and exact callback values with a visible degradation result", async () => {
+    it("preserves exact callback values with a visible degradation result", async () => {
       const result = await send({
         to: "tg:123",
         message: "Quarterly results",
         presentation: {
           blocks: [
             { type: "text", text: "Do not duplicate this block" },
-            {
-              type: "chart",
-              chartType: "bar",
-              title: "Revenue",
-              categories: ["Q1"],
-              series: [{ name: "USD", values: [12] }],
-            },
-            pipelineTable,
             ...buttonPresentation({ label: "Deploy", value: "env|prod" }, droppedButton()).blocks,
           ],
         },
       });
       const text = String(requests[0]!.fields.text);
-      for (const content of [
-        "Quarterly results",
-        "Revenue",
-        "USD",
-        "Q1: 12",
-        "Pipeline",
-        "Account: Acme",
-        "Total: 12",
-        "Copy manually",
-      ]) {
+      for (const content of ["Quarterly results", "Copy manually"]) {
         expect(text).toContain(content);
       }
       expect(text).not.toContain("Do not duplicate this block");

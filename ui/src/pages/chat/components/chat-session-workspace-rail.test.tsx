@@ -1,13 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush } from "solid-js";
+import { createSignal, flush, onSettled } from "solid-js";
 import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-} from "../chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "../chat-application-context.test-support.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
+import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
 import {
   getSessionWorkspace,
@@ -29,6 +30,7 @@ function createWorkspace(overrides: WorkspaceFixture = {}): SessionWorkspaceProp
   return {
     sessionKey: "agent:main:workspace",
     loading: false,
+    readResult: overrides.loading ? new Promise<void>(() => {}) : undefined,
     error: null,
     activeId: null,
     filter: "all",
@@ -45,9 +47,15 @@ function createWorkspace(overrides: WorkspaceFixture = {}): SessionWorkspaceProp
   };
 }
 
-function mountWorkspace(workspace: SessionWorkspaceProps) {
+async function mountWorkspace(workspace: SessionWorkspaceProps) {
   const [current, setCurrent] = createSignal(workspace);
   const view = mountSolid(() => <SessionWorkspaceRail workspace={current()} />);
+  if (!workspace.loading) {
+    await new Promise<void>((resolve) => {
+      onSettled(resolve);
+    });
+    flush();
+  }
   return {
     ...view,
     update(this: void, next: SessionWorkspaceProps = workspace) {
@@ -97,13 +105,116 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("keeps Files search usable during a failed owner read and retries without duplicate requests", async () => {
+  setupDesktopLayout();
+  const first = createDeferred<List>();
+  const retry = createDeferred<List>();
+  const listFiles = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
+    sessionKey: "agent:main:workspace",
+    agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
+    client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
+    sessions: createSessionCapabilityFixture({ listFiles }),
+    handleOpenSidebar: () => {},
+  });
+  const props = () =>
+    createSessionWorkspaceProps(state, { expanded: true, presentation: "desktop" });
+  const [current, setCurrent] = createSignal(props());
+  const mounted = mountSolid(() => <SessionWorkspaceRail workspace={current()} />);
+  const stop = sessionWorkspaceForHost(state).subscribe(() => setCurrent(props()));
+  onTestFinished(() => {
+    stop();
+    mounted.unmount();
+  });
+  expect(button(mounted.container, "Search files")).not.toBeNull();
+  expect(mounted.container.querySelector("[aria-busy=true]")).not.toBeNull();
+  first.reject(new Error("Files unavailable; retry"));
+  await waitForSolid(() =>
+    expect(mounted.getByRole("alert").textContent).toContain("Files unavailable; retry"),
+  );
+  mounted.getByRole("button", { name: "Retry" }).click();
+  expect(listFiles).toHaveBeenCalledTimes(2);
+  retry.resolve({
+    sessionKey: state.sessionKey,
+    root: "/synthetic/workspace",
+    files: [],
+    browser: { path: "", entries: [{ path: "notes.md", name: "notes.md", kind: "file" }] },
+  });
+  await waitForSolid(() => expect(button(mounted.container, "notes.md")).not.toBeNull());
+  expect(mounted.queryByRole("alert")).toBeNull();
+  expect(listFiles).toHaveBeenCalledTimes(2);
+});
+
+it.each(["desktop", undefined] as const)(
+  "keeps available files usable after a %s refresh fails",
+  async (presentation) => {
+    const onOpenFile = vi.fn();
+    const workspace = createWorkspace({
+      presentation,
+      onOpenFile,
+      list: {
+        root: "/synthetic/workspace",
+        files: [file("notes.md")],
+        browser: { path: "", entries: [] },
+      },
+    });
+    const mounted = await mountWorkspace(workspace);
+    onTestFinished(mounted.unmount);
+    const row = mounted.getByRole("button", { name: /^notes\.md$/ });
+    const disclosure = row.closest("details");
+    if (!presentation) {
+      expect(disclosure).not.toBeNull();
+    }
+    disclosure?.querySelector("summary")?.click();
+    const expanded = disclosure?.open;
+    for (const error of ["Artifacts unavailable", "Workspace refresh unavailable"]) {
+      mounted.update({ ...workspace, error });
+      await waitForSolid(() => expect(mounted.getByRole("alert").textContent).toBe(error));
+      expect(mounted.getByRole("button", { name: /^notes\.md$/ })).toBe(row);
+      expect(disclosure?.open).toBe(expanded);
+      mounted.getByRole("button", { name: /^notes\.md$/ }).click();
+      expect(onOpenFile).toHaveBeenLastCalledWith(
+        "notes.md",
+        "session",
+        ...(presentation ? ["preview"] : []),
+      );
+      mounted.update(workspace);
+      await waitForSolid(() => expect(mounted.queryByRole("alert")).toBeNull());
+      expect(mounted.getByRole("button", { name: /^notes\.md$/ })).toBe(row);
+      expect(disclosure?.open).toBe(expanded);
+    }
+  },
+);
+
+it.each(["desktop", undefined] as const)(
+  "shows loading when a ready %s workspace changes to a pending session",
+  async (presentation) => {
+    setupDesktopLayout();
+    const mounted = await mountWorkspace(
+      createWorkspace({
+        presentation,
+        list: { root: "/synthetic/workspace", files: [file("old.md")] },
+      }),
+    );
+    onTestFinished(mounted.unmount);
+    expect(mounted.container.textContent).toContain("old.md");
+    mounted.update(
+      createWorkspace({ presentation, sessionKey: "agent:main:other", loading: true }),
+    );
+    await waitForSolid(() =>
+      expect(mounted.container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull(),
+    );
+    expect(mounted.container.textContent).not.toContain("old.md");
+  },
+);
+
 describe("session workspace path actions", () => {
   it.each([
     ["reports/monthly", false, "reports"],
     ["reports", true, null],
   ] as const)(
     "keeps folder recovery available for %s (loading: %s)",
-    (path, loading, parentPath) => {
+    async (path, loading, parentPath) => {
       const onBrowsePath = vi.fn();
       const workspace = createWorkspace({
         browserPath: path,
@@ -111,7 +222,7 @@ describe("session workspace path actions", () => {
         list: { files: [], root: "/workspace" },
         onBrowsePath,
       });
-      const { container: mount } = mountWorkspace(workspace);
+      const { container: mount } = await mountWorkspace(workspace);
       const parent = button(mount, "..");
       if (parentPath === null) {
         expect(parent).toBeNull();
@@ -129,6 +240,9 @@ describe("session workspace path actions", () => {
     clipboard();
     const entry = file("README.md");
     const result = { sessionKey: "agent:main:current", root: "/workspace", files: [entry] };
+    const fileRequested = createDeferred();
+    const fileRead = createDeferred();
+    onTestFinished(() => fileRead.resolve());
     const state = {
       client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
       connected: true,
@@ -139,15 +253,19 @@ describe("session workspace path actions", () => {
       sidebarContent: null,
       sessions: {
         listFiles: vi.fn().mockResolvedValue(result),
-        getFile: vi.fn().mockResolvedValue({
-          ...result,
-          file: { ...entry, previewKind: "text", contentEncoding: "utf8", content: "# Readme" },
+        getFile: vi.fn(async () => {
+          fileRequested.resolve();
+          await fileRead.promise;
+          return {
+            ...result,
+            file: { ...entry, previewKind: "text", contentEncoding: "utf8", content: "# Readme" },
+          };
         }),
       },
     } as unknown as SessionWorkspaceHost;
     createSessionWorkspaceProps(state, { expanded: true });
     await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
-    const { container, update } = mountWorkspace(
+    const { container, update } = await mountWorkspace(
       createSessionWorkspaceProps(state, { expanded: true }),
     );
     const renderRows = () => update(createSessionWorkspaceProps(state, { expanded: true }));
@@ -156,9 +274,16 @@ describe("session workspace path actions", () => {
     assert(preview);
     preview.focus();
     preview.click();
-    await vi.waitFor(() =>
-      expect(state.sessionWorkspaceState?.previews[0]?.content.kind).toBe("file"),
-    );
+    const opened = state.sessionWorkspaceState?.previews[0];
+    assert(opened?.readResult);
+    await fileRequested.promise;
+    expect(opened.content.kind).toBe("loading");
+    fileRead.resolve();
+    // This receipt includes the lazy content import, file read, and current-preview publication.
+    await opened.readResult;
+    expect(state.sessionWorkspaceState?.previews[0]).toBe(opened);
+    expect(opened.content.kind).toBe("file");
+    expect(state.sessions.getFile).toHaveBeenCalledOnce();
     renderRows();
     expect(container.querySelector(".chat-workspace-rail__file--active")?.textContent).toContain(
       "README.md",
@@ -193,7 +318,7 @@ describe("session workspace path actions", () => {
       activeId: `file:${paths[1]}`,
       onOpenFile,
     });
-    const { container: mount, update } = mountWorkspace(workspace);
+    const { container: mount, update } = await mountWorkspace(workspace);
     update(workspace);
     expect(fileNames(mount)).toEqual([
       "inventory.csv",
@@ -237,7 +362,7 @@ describe("session workspace path actions", () => {
       },
       onOpenFile,
     });
-    const { container: mount } = mountWorkspace(workspace);
+    const { container: mount } = await mountWorkspace(workspace);
 
     const row = mount.querySelector<HTMLElement>(
       ".chat-workspace-rail__list:not(.chat-workspace-rail__list--browser) .chat-workspace-rail__file",
@@ -263,7 +388,7 @@ describe("session workspace path actions", () => {
     expect(onOpenFile).toHaveBeenCalledWith("src/edited.ts", "session");
   });
 
-  it("retains disclosure state and expands search matches", () => {
+  it("retains disclosure state and expands search matches", async () => {
     const workspace = createWorkspace({
       list: {
         files: [file("src/edited.ts")],
@@ -277,7 +402,7 @@ describe("session workspace path actions", () => {
         ],
       },
     });
-    const { container: mount, update } = mountWorkspace(workspace);
+    const { container: mount, update } = await mountWorkspace(workspace);
     const [changed, artifacts] = mount.querySelectorAll("details");
     assert(changed && artifacts, "Expected Changed and Artifacts disclosures");
     expect([changed.open, artifacts.open]).toEqual([true, false]);
@@ -315,7 +440,7 @@ describe("session workspace path actions", () => {
     ["artifacts", true, 1],
     ["all", true, 3],
     ["all", false, 3],
-  ] as const)("recovers empty %s searches (browser: %s)", (filter, browser, restored) => {
+  ] as const)("recovers empty %s searches (browser: %s)", async (filter, browser, restored) => {
     const workspace = createWorkspace({
       list: {
         files: [file("report.csv"), file("report.md", "read")],
@@ -323,7 +448,7 @@ describe("session workspace path actions", () => {
         ...(browser ? { browser: { path: "", entries: [] } } : {}),
       },
     });
-    const { container: mount, update } = mountWorkspace(workspace);
+    const { container: mount, update } = await mountWorkspace(workspace);
     workspace.onSearch = (query) => {
       workspace.browserSearch = query;
       if (workspace.list?.browser) {
@@ -363,10 +488,10 @@ describe("session workspace path actions", () => {
       update();
       expect(mount.textContent).not.toContain("No matching files.");
     }
-    expect(mount.textContent).toContain(workspace.error);
+    await waitForSolid(() => expect(mount.textContent).toContain(workspace.error));
   });
 
-  it("matches every Files group without collapsing internal spaces", () => {
+  it("matches every Files group without collapsing internal spaces", async () => {
     const query = "  A  B  ";
     const workspace = createWorkspace({
       browserSearch: query,
@@ -380,7 +505,7 @@ describe("session workspace path actions", () => {
         },
       },
     });
-    const { container: mount, update } = mountWorkspace(workspace);
+    const { container: mount, update } = await mountWorkspace(workspace);
     expect(fileNames(mount)).toEqual(["a  b.csv", "a  b.md", "A  b", "a  b.csv"]);
     expect(searchInput(mount).value).toBe(query);
 
@@ -392,13 +517,7 @@ describe("session workspace path actions", () => {
 function setupDesktopLayout() {
   // JSDOM has no layout observation or font loading. These tests exercise the
   // workspace owner; real-browser proof owns overflow and disclosure motion.
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      disconnect() {}
-    },
-  );
+  stubTargetRetainingObserver("ResizeObserver");
   vi.stubGlobal("matchMedia", (media: string) => ({
     media,
     matches: false,
@@ -408,7 +527,7 @@ function setupDesktopLayout() {
   const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
   Object.defineProperty(document, "fonts", {
     configurable: true,
-    value: { ready: Promise.resolve() },
+    value: Object.assign(new EventTarget(), { ready: Promise.resolve() }),
   });
   onTestFinished(() => {
     if (previousFonts) {
@@ -432,6 +551,7 @@ it("desktop browses lazy directories and restores activity after global search c
       ],
       browser: {
         path: options?.path ?? "",
+        truncated: options?.path === "docs",
         ...(options?.search ? { search: options.search } : {}),
         entries: options?.search
           ? [{ path: "docs/read.md", name: "read.md", kind: "file" as const }]
@@ -444,26 +564,41 @@ it("desktop browses lazy directories and restores activity after global search c
       },
     }),
   );
-  const state: SessionWorkspaceHost = {
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
     sessionKey: "agent:main:workspace",
-    connected: true,
-    connectionEpoch: 1,
-    hello: null,
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
     client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
     sessions: createSessionCapabilityFixture({ listFiles }),
-    sidebarContent: null,
     handleOpenSidebar: () => {},
-  };
+  });
   const props = () =>
     createSessionWorkspaceProps(state, { expanded: true, presentation: "desktop" });
-  const mounted = mountWorkspace(props());
+  const mounted = await mountWorkspace(props());
   const unsubscribe = sessionWorkspaceForHost(state).subscribe(() => mounted.update(props()));
   try {
     await vi.waitFor(() => expect(button(mounted.container, "docs")).not.toBeNull());
     button(mounted.container, "docs")!.click();
     await vi.waitFor(() => expect(button(mounted.container, "docs/untouched.md")).not.toBeNull());
     expect(listFiles.mock.calls.map(([, options]) => options?.path)).toEqual(["", "docs"]);
+    expect(mounted.container.textContent).toContain(
+      "Showing the first matching files. Refine the search to narrow results.",
+    );
+    const directory = getSessionWorkspace(state).directories!.docs!;
+    directory.browser = {
+      ...directory.browser!,
+      entries: [{ path: "docs/refreshed.md", name: "refreshed.md", kind: "file" }],
+    };
+    sessionWorkspaceForHost(state).publish();
+    await vi.waitFor(() => expect(button(mounted.container, "docs/refreshed.md")).not.toBeNull());
+    expect(button(mounted.container, "docs/untouched.md")).toBeNull();
+    directory.browser = {
+      ...directory.browser,
+      entries: [{ path: "docs/refreshed.md", name: "renamed.md", kind: "file" }],
+    };
+    sessionWorkspaceForHost(state).publish();
+    await vi.waitFor(() =>
+      expect(button(mounted.container, "docs/refreshed.md")?.textContent).toContain("renamed.md"),
+    );
     props().onSetFilter("changed");
     flush();
     button(mounted.container, "Search files")!.click();
@@ -487,7 +622,7 @@ it("desktop browses lazy directories and restores activity after global search c
   }
 });
 
-it("desktop distinguishes incomplete matching searches from empty complete results", () => {
+it("desktop distinguishes incomplete matching searches from empty complete results", async () => {
   setupDesktopLayout();
   const warning = "Showing the first matching files. Refine the search to narrow results.";
   const navigation = {
@@ -526,7 +661,7 @@ it("desktop distinguishes incomplete matching searches from empty complete resul
       },
     },
   });
-  const mounted = mountWorkspace(workspace);
+  const mounted = await mountWorkspace(workspace);
   try {
     expect(
       [
@@ -566,7 +701,7 @@ it("desktop distinguishes incomplete matching searches from empty complete resul
   }
 });
 
-it("desktop folder falls back from a saved session-only filter without mutating it", () => {
+it("desktop folder falls back from a saved session-only filter without mutating it", async () => {
   setupDesktopLayout();
   const workspace = createWorkspace({
     presentation: "desktop",
@@ -582,7 +717,7 @@ it("desktop folder falls back from a saved session-only filter without mutating 
       },
     },
   });
-  const mounted = mountWorkspace(workspace);
+  const mounted = await mountWorkspace(workspace);
   try {
     expect(button(mounted.container, "README.md")).not.toBeNull();
     expect(button(mounted.container, "report.md")).toBeNull();
@@ -616,20 +751,16 @@ it("mobile restores folder search and root groups without mixing global search r
           : [{ path: "docs", name: "docs", kind: "directory" as const }],
     },
   }));
-  const state: SessionWorkspaceHost = {
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
     sessionKey: "agent:main:workspace",
-    connected: true,
-    connectionEpoch: 1,
-    hello: null,
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
     client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
     sessions: createSessionCapabilityFixture({ listFiles }),
-    sidebarContent: null,
     handleOpenSidebar: () => {},
-  };
+  });
   const props = () =>
     createSessionWorkspaceProps(state, { expanded: true, presentation: "mobile" });
-  const mounted = mountWorkspace(props());
+  const mounted = await mountWorkspace(props());
   const unsubscribe = sessionWorkspaceForHost(state).subscribe(() => mounted.update(props()));
   onTestFinished(() => {
     unsubscribe();

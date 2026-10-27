@@ -1,14 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { buildBackupScheduleJob } from "../../cron/backup-command.js";
-import { CronService } from "../../cron/service.js";
-import { createNoopLogger } from "../../cron/service.test-harness.js";
 import type { CronJob } from "../../cron/types.js";
 import type { BackupRunRecord } from "../../state/backup-run-records.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
+import { createReadService } from "./cron-read.test-support.js";
+import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
 import type { RespondFn } from "./types.js";
 
 const ledger = vi.hoisted(() => vi.fn<() => Promise<BackupRunRecord[]>>());
@@ -26,14 +25,11 @@ afterEach(() => {
 });
 
 async function invoke(params: Record<string, unknown>, jobs: CronJob[] = []) {
-  const cron = new CronService({
-    scheduler: createTestGatewayScheduler(),
+  const cron = createReadService({
     storePath: "/unused/backup-rpc/jobs.json",
     cronEnabled: false,
     defaultAgentId: "main",
-    log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   vi.spyOn(cron, "list").mockResolvedValue(jobs);
@@ -60,39 +56,18 @@ async function invoke(params: Record<string, unknown>, jobs: CronJob[] = []) {
 }
 
 it("backup.status returns destination freshness, cron-owned schedules and config-only storage", async () => {
-  const history = (archivePath: string, extra: Partial<BackupRunRecord> = {}) => {
-    const latestOk: BackupRunRecord = {
-      id: `${archivePath}:ok`,
-      archivePath,
-      createdAt: 10,
-      kind: "archive",
-      status: "ok",
-      ...extra,
-    };
-    const latest: BackupRunRecord = {
-      ...latestOk,
-      id: `${archivePath}:failed`,
-      createdAt: 20,
-      status: "failed",
-      archivePath: archivePath.replace("old", "new"),
-    };
-    return { latest, latestOk };
+  // Latest-vs-successful selection and namespace grouping belong to backup-run-records.test.ts.
+  const run: BackupRunRecord = {
+    id: "offsite-ok",
+    archivePath: "",
+    createdAt: 10,
+    kind: "archive",
+    status: "ok",
+    target: "offsite",
+    namespace: "host",
+    bytes: 12,
   };
-  const offsite = history("", { target: "offsite", namespace: "host", bytes: 12 });
-  offsite.latest.error = "disk unavailable";
-  const targets = [
-    { kind: "archive", target: "offsite", namespace: "host", ...offsite },
-    { kind: "archive", target: "/new.tar", ...history("/old.tar") },
-    {
-      kind: "sqlite-snapshot",
-      target: "/new-db",
-      ...history("/old-db", { kind: "sqlite-snapshot" }),
-    },
-  ];
-  ledger.mockResolvedValue([
-    ...targets.map(({ latest }) => latest),
-    ...targets.map(({ latestOk }) => latestOk),
-  ]);
+  ledger.mockResolvedValue([run]);
   const job: CronJob = {
     ...buildBackupScheduleJob({
       mode: "offsite",
@@ -108,32 +83,30 @@ it("backup.status returns destination freshness, cron-owned schedules and config
     state: { nextRunAtMs: 70_000 },
   };
   const respond = await invoke({}, [job]);
-  expect(respond).toHaveBeenCalledWith(
-    true,
-    {
-      targets,
-      schedules: [
-        {
-          id: "backup-job",
-          mode: "offsite",
-          target: "offsite",
-          namespace: "host",
-          enabled: true,
-          everyMs: 60_000,
-          nextRunAtMs: 70_000,
-        },
-      ],
-      locations: [
-        {
-          name: "offsite",
-          provider: "filesystem",
-          displayTarget: "/missing/remote",
-          encrypted: false,
-        },
-      ],
-    },
-    undefined,
-  );
+  expectRpcResult(respond, {
+    targets: [
+      { kind: "archive", target: "offsite", namespace: "host", latest: run, latestOk: run },
+    ],
+    schedules: [
+      {
+        id: "backup-job",
+        mode: "offsite",
+        target: "offsite",
+        namespace: "host",
+        enabled: true,
+        everyMs: 60_000,
+        nextRunAtMs: 70_000,
+      },
+    ],
+    locations: [
+      {
+        name: "offsite",
+        provider: "filesystem",
+        displayTarget: "/missing/remote",
+        encrypted: false,
+      },
+    ],
+  });
 });
 
 it("backup.status requires read scope and rejects unsupported parameters before reading", async () => {
@@ -144,10 +117,6 @@ it("backup.status requires read scope and rejects unsupported parameters before 
     allowed: false,
     missingScope: "operator.read",
   });
-  expect(await invoke({ unexpected: true })).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code: "INVALID_REQUEST" }),
-  );
+  expectRpcError(await invoke({ unexpected: true }), { code: "INVALID_REQUEST" });
   expect(ledger).not.toHaveBeenCalled();
 });

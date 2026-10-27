@@ -65,7 +65,12 @@ function directoryResponse(extraNames: string[]): UsersListResult {
   };
 }
 
-async function installOwnerGateway(page: Page, archived = false, extraNames: string[] = []) {
+async function installOwnerGateway(
+  page: Page,
+  archived = false,
+  extraNames: string[] = [],
+  initialPage: "chat" | "sessions" = "chat",
+) {
   await routeAvatarFixtures(page, [{ id: "profile-ada", background: "#7c3aed", label: "A" }]);
   const result = sessionsListResponse(archived);
   const gateway = await installMockGateway(page, {
@@ -97,11 +102,15 @@ async function installOwnerGateway(page: Page, archived = false, extraNames: str
     sessionKey,
   });
   await page.goto(
-    archived
-      ? `${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`
-      : controlUiSessionUrl(suite.server.baseUrl, sessionKey),
+    initialPage === "sessions"
+      ? `${suite.server.baseUrl}sessions`
+      : archived
+        ? `${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`
+        : controlUiSessionUrl(suite.server.baseUrl, sessionKey),
   );
-  await page.getByText("Owner assignment outcome proof.", { exact: true }).waitFor();
+  if (initialPage === "chat") {
+    await page.getByText("Owner assignment outcome proof.", { exact: true }).waitFor();
+  }
   await gateway.deferNext("sessions.assignOwner");
   return gateway;
 }
@@ -223,20 +232,47 @@ async function expandAssignment(assignTo: Locator, compact: boolean) {
 }
 
 suite.define(() => {
+  it.each(["sidebar", "header"])(
+    "filters the hovered assignment submenu from the %s without clicking search",
+    (surface) =>
+      suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const gateway = await installOwnerGateway(page);
+        await openSessionActions(page, surface);
+        const { assignTo, panel } = ownerControls(page);
+        await assignTo.hover();
+        const search = panel.getByRole("searchbox");
+        await expectBrowser(search).toBeVisible();
+        await page.keyboard.type("zz");
+        await expectBrowser(search).toHaveValue("zz");
+        await expectBrowser(panel).toContainText("No matching people or agents");
+        await page.keyboard.press("Escape");
+        await expectBrowser(search).toHaveValue("");
+        await page.keyboard.type("carol");
+        await expectBrowser(search).toHaveValue("carol");
+        await expectBrowser(search).toBeFocused();
+        await expectBrowser(panel.locator('[role="menuitemradio"] .session-menu__text')).toHaveText(
+          ["Carol"],
+        );
+        expect(await gateway.getRequests("sessions.assignOwner")).toHaveLength(0);
+        await page.keyboard.press("ArrowDown");
+        await expectBrowser(assignee(panel, "Carol")).toBeFocused();
+        await page.keyboard.press("Enter");
+        await expectAssignmentRequest(gateway, "profile-carol");
+      }),
+  );
+
   it.each([1280, 390])(
     "keeps the Sessions page owner selected and assignment failures visible at width %i",
     (width) =>
       suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
         async ({ page }) => {
-          const gateway = await installOwnerGateway(page);
-          await page.goto(`${suite.server.baseUrl}sessions`);
-          await gateway.deferNext("sessions.assignOwner");
+          const gateway = await installOwnerGateway(page, false, [], "sessions");
           const roster = page.locator("openclaw-sessions-page");
           const row = roster.locator("tbody tr").filter({
             has: page.getByRole("checkbox", { name: `Select session: ${sessionKey}`, exact: true }),
           });
-          await row.getByRole("button", { name: "Open session menu", exact: true }).click();
+          await row.getByRole("button", { name: "Open session menu" }).click();
           const assignTo = page.getByRole("menuitem", { name: /^Assign to…?$/u });
           await expandAssignment(assignTo, width < 560);
           const current = assignee(page, "Bob");
@@ -700,8 +736,8 @@ suite.define(() => {
           ).toBeVisible();
           if (surface === "header") {
             await openSessionActions(page, surface);
-            const { assignTo, panel } = ownerControls(page);
-            await assignTo.hover();
+            await openSessionMenuSubmenu(page, "Assign to…");
+            const { panel } = ownerControls(page);
             const retainedOwner = assignee(panel, "Bob");
             await expectBrowser(retainedOwner).toHaveAttribute("aria-checked", "true");
             await expectBrowser(retainedOwner).toBeDisabled();

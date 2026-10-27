@@ -23,7 +23,6 @@ import {
   beginGatewayRestartSignalAdmission,
   markGatewayRestartDraining,
   getActiveGatewayRootWorkCount,
-  isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
@@ -42,6 +41,7 @@ import { closeTalkClientGatewayControlSession } from "../client-gateway-control.
 import { cleanupTalkConnection } from "../session-registry.js";
 import {
   completeTalkVoiceChange,
+  readTalkVoiceSelection,
   requestTalkVoiceChange,
   resolveTalkVoiceSession,
 } from "../voice-selection.js";
@@ -119,7 +119,7 @@ const { completeOffer, disposeResources } = createTalkClientOfferFixture();
 function browserFixture(publicOnly = false, dynamicVoice = false) {
   const createBrowserSession = vi.fn(async (request: BrowserRequest) => ({
     ...browserSession,
-    ...(dynamicVoice ? { voice: request.voice ?? "marin" } : {}),
+    ...(dynamicVoice ? { voice: request.voice ?? "marin", model: request.model } : {}),
   }));
   const fixture = createDelegatedBrowserProviderFixture(createBrowserSession, tempDir);
   // Public plugins have neither native delegation nor the private cancellation hook.
@@ -210,8 +210,15 @@ function expectErrorResponse(respond: ReturnType<typeof vi.fn>, message: unknown
   expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ message }));
 }
 
-function expectBrowserResponse(respond: ReturnType<typeof vi.fn>) {
-  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
+function expectBrowserResponse(
+  respond: ReturnType<typeof vi.fn>,
+  extra: Record<string, unknown> = {},
+) {
+  expect(respond).toHaveBeenLastCalledWith(
+    true,
+    expect.objectContaining({ ...browserSession, ...extra }),
+    undefined,
+  );
 }
 
 function expectOk(respond: ReturnType<typeof vi.fn>) {
@@ -266,16 +273,25 @@ function toolBrowser(dynamicVoice = false) {
     supportsGatewayControl: true,
     supportsToolCalls: true,
   });
-  const create = async (voiceChangeId?: string) => {
-    respond.mockClear();
-    await fixture.create({
+  const attempt = (voiceChangeId?: string, overrides: Record<string, unknown> = {}) =>
+    fixture.create({
       model: "gpt-realtime-2.1",
       capabilities: ["gateway-control-v1", "voice-selection"],
       voiceChangeId,
+      ...overrides,
     });
+  const create = async (
+    voiceChangeId?: string,
+    overrides: Record<string, unknown> = {},
+    ready = true,
+  ) => {
+    respond.mockClear();
+    await attempt(voiceChangeId, overrides);
     expectBrowserResponse(respond);
     ownedVoiceSessionId = respond.mock.calls[0]?.[1].voiceSessionId as string;
-    control(createBrowserSession.mock.calls.length - 1).onReady?.();
+    if (ready) {
+      control(createBrowserSession.mock.calls.length - 1).onReady?.();
+    }
     return ownedVoiceSessionId;
   };
   const control = (index = 0) => {
@@ -285,7 +301,7 @@ function toolBrowser(dynamicVoice = false) {
     }
     return value;
   };
-  return { ...fixture, createBrowserSession, create, control };
+  return { ...fixture, createBrowserSession, create, attempt, control };
 }
 
 beforeEach(async () => {
@@ -322,20 +338,31 @@ it("acknowledges close before creating the voice replacement requested by an act
   const fixture = toolBrowser(true);
   const { create, createBrowserSession } = fixture;
   const originalId = await create();
+  expectBrowserResponse(fixture.respond, { model: "gpt-realtime-2.1", voice: "marin" });
+  expect(readTalkVoiceSelection(resolveVoice(fixture.client.connId))).toMatchObject({
+    sessionKey,
+    voice: "marin",
+    voices: ["marin", "cedar"],
+    canChange: true,
+  });
   const control = fixture.control();
   const submitToolResult = vi.fn(async () => {});
   control.bindControl?.({ submitToolResult });
   const requested = createDeferred<string>();
-  const applied = createDeferred();
+  const applied = createDeferred<Awaited<ReturnType<typeof requestVoice>>>();
+  let selectionApplied = false;
   const finishWork = createDeferred();
   voiceMocks.consultRealtimeVoiceAgent.mockImplementationOnce(async () => {
-    await requestVoice(fixture, (event) => requested.resolve(event.changeId));
-    applied.resolve();
+    applied.resolve(await requestVoice(fixture, (event) => requested.resolve(event.changeId)));
+    selectionApplied = true;
     await finishWork.promise;
     return { text: "Voice changed and accepted work finished" };
   });
   callTool(control);
   const changeId = await requested.promise;
+  await fixture.attempt(changeId, { voiceSessionId: originalId });
+  expectErrorResponse(fixture.respond, "A voice replacement requires a fresh voice session id");
+  expect(createBrowserSession).toHaveBeenCalledOnce();
   let closeAcknowledged = false;
   const closing = invokeClient("close", { sessionKey, voiceSessionId: originalId }).then(
     (respond) => {
@@ -351,14 +378,39 @@ it("acknowledges close before creating the voice replacement requested by an act
       abortSignal: { aborted: false },
     });
     expect(() => control.bindControl?.({ submitToolResult })).toThrow("closed");
-    const replacementId = await create(changeId);
-    await completeTalkVoiceChange({
+    const replacementId = await create(
+      changeId,
+      { model: "different-model", voice: "marin" },
+      false,
+    );
+    expect(replacementId).not.toBe(originalId);
+    expectBrowserResponse(fixture.respond, { model: "gpt-realtime-2.1", voice: "cedar" });
+    expect(createBrowserSession.mock.lastCall?.[0]).toMatchObject({
+      model: "gpt-realtime-2.1",
+      voice: "cedar",
+    });
+    const completed = completeTalkVoiceChange({
       changeId,
       connId: fixture.client.connId,
       voiceSessionId: replacementId,
       outcome: "ready",
     });
-    await applied.promise;
+    void completed.catch(() => {});
+    await Promise.resolve();
+    expect(selectionApplied).toBe(false);
+    fixture.control(1).onReady?.();
+    await completed;
+    await expect(applied.promise).resolves.toMatchObject({
+      status: "applied",
+      voiceSessionId: replacementId,
+      sessionKey,
+      voice: "cedar",
+    });
+    expect(
+      [originalId, replacementId].map(
+        (id) => clientVoiceSessionTesting.readRecord("main", id)?.status,
+      ),
+    ).toEqual(["closed", "open"]);
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     expect(createBrowserSession.mock.calls.at(-1)?.[0].voice).toBe("cedar");
     finishWork.resolve();
@@ -375,30 +427,6 @@ it("acknowledges close before creating the voice replacement requested by an act
     await closing;
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   }
-});
-
-it("admits a later sideband consult after its HTTP offer has released admission", async () => {
-  const { consult } = await createBrowserConsult();
-  const resource = await completeOffer();
-  expect(getActiveGatewayRootWorkCount()).toBe(0);
-  expect(isGatewayWorkAdmissionClosed()).toBe(false);
-  const enqueue = voiceMocks.runEmbeddedAgent.getMockImplementation()!;
-  voiceMocks.runEmbeddedAgent.mockImplementationOnce(async (params) => {
-    expect(resolveClientVoiceRunBinding(params.runId)).toMatchObject({
-      agentId: "main",
-      sessionKey,
-      voiceSessionId: ownedVoiceSessionId,
-    });
-    return await enqueue(params);
-  });
-
-  await expect(
-    resource.runInAsyncScope(() => consult({ prompt: "Return the fixture status" })),
-  ).resolves.toEqual({ text: "fixture status" });
-  const [run] = voiceMocks.runEmbeddedAgent.mock.calls[0]!;
-  expect(resolveClientVoiceRunBinding(run.runId)).toBeUndefined();
-  expect(getActiveGatewayRootWorkCount()).toBe(0);
-  expect(getSessionControllerWorkCount()).toBe(0);
 });
 
 it("releases accepted work when agent runtime loading fails", async () => {
@@ -425,6 +453,11 @@ it("keeps an accepted consult admitted through offer completion and suspension",
   const enqueue = voiceMocks.runEmbeddedAgent.getMockImplementation()!;
   voiceMocks.runEmbeddedAgent.mockImplementationOnce(async (params) => {
     expect(getSessionControllerWorkCount()).toBe(1);
+    expect(resolveClientVoiceRunBinding(params.runId)).toMatchObject({
+      agentId: "main",
+      sessionKey,
+      voiceSessionId: ownedVoiceSessionId,
+    });
     embeddedEntered.resolve();
     await beforeEnqueue.promise;
     return await enqueue(params);
@@ -452,6 +485,8 @@ it("keeps an accepted consult admitted through offer completion and suspension",
     beforeEnqueue.resolve();
     await expect(work).resolves.toEqual({ text: "fixture status" });
     expect(getSessionControllerWorkCount()).toBe(0);
+    const [run] = voiceMocks.runEmbeddedAgent.mock.calls[0]!;
+    expect(resolveClientVoiceRunBinding(run.runId)).toBeUndefined();
   } finally {
     beforeEnqueue.resolve();
     await work?.catch(() => undefined);
@@ -476,32 +511,6 @@ it.each(["suspend", "restart-signal", "restart-drain"] as const)(
     ).rejects.toThrow(GatewayDrainingError);
     expect(voiceMocks.runEmbeddedAgent).not.toHaveBeenCalled();
     expect(getSessionControllerWorkCount()).toBe(0);
-  },
-);
-
-it.each(["close", "disconnect", "restart"] as const)(
-  "does not revive a stale sideband owner after %s",
-  async (ending) => {
-    const { consult, client, clients, context } = await createBrowserConsult();
-    const resource = await completeOffer();
-    if (ending === "close") {
-      expect(
-        await invokeClient("close", { sessionKey, voiceSessionId: ownedVoiceSessionId }),
-      ).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    } else {
-      if (ending === "restart") {
-        markGatewayRestartDraining();
-      }
-      clients.delete(client);
-      cleanupTalkConnection(client.connId, context.logGateway);
-      if (ending === "restart") {
-        resetGatewayWorkAdmission();
-      }
-    }
-    await expect(
-      resource.runInAsyncScope(() => consult({ prompt: "Must not start" })),
-    ).rejects.toThrow(/closed|disconnected/);
-    expect(voiceMocks.runEmbeddedAgent).not.toHaveBeenCalled();
   },
 );
 

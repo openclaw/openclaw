@@ -142,10 +142,12 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
       envFingerprint: undefined,
       defaultDiscoveryCompatible: false,
       compatibleConfigFingerprints: undefined,
-      revision: Symbol("plugin-metadata-snapshot"),
       configIdentities: new WeakSet(),
     },
     snapshots: new Map(),
+    derivedIndexes: new WeakMap(),
+    preparedManifests: new WeakMap(),
+    snapshotManifestFacts: new WeakMap(),
     discovery: new Map(),
     sharedDiscovery: new Map(),
     projections: new WeakMap(),
@@ -164,6 +166,7 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
 
 /** Invalidate discovery facts without retiring callbacks owned by this operation. */
 export function invalidatePluginCacheMetadata(cache: PluginCache): void {
+  cache.inspectionNativeEsmPolicy = undefined;
   cache.sourceAdmissions?.invalidate();
   cache.metadata = createPluginMetadataCache();
   cache.sdk.native.parents.clear();
@@ -353,6 +356,7 @@ export function retirePluginCacheInstance(
 export function retirePluginCache(
   cache: PluginCache,
   beforeRetire?: () => void,
+  options?: { waitForSettlement?: boolean },
 ): Promise<PluginHostCleanupResult> {
   const retained = getPluginCacheRetainers(cache);
   if (retained.retirement) {
@@ -367,7 +371,7 @@ export function retirePluginCache(
     }
     const work = new AsyncWorkScope();
     try {
-      return await work.track(() => beginPluginCacheRetirement(cache, beforeRetire));
+      return await work.track(() => beginPluginCacheRetirement(cache, beforeRetire, options));
     } finally {
       await work.drain();
     }
@@ -381,6 +385,7 @@ export function retirePluginCache(
 function beginPluginCacheRetirement(
   cache: PluginCache,
   beforeRetire?: () => void,
+  options?: { waitForSettlement?: boolean },
 ): Promise<PluginHostCleanupResult> {
   if (cache.retirement) {
     return cache.retirement;
@@ -398,7 +403,10 @@ function beginPluginCacheRetirement(
     // Registry teardown owns host hooks before instance disposal; then join remaining cleanup.
     const [registry] = await Promise.allSettled([registries]);
     const outcomes = await Promise.allSettled(
-      [...resources].map(async (resource) => ({ resource, result: await resource.dispose() })),
+      [...resources].map(async (resource) => ({
+        resource,
+        result: await resource.dispose(undefined, options),
+      })),
     );
     const nativeAdmissions = cache.sourceAdmissions;
     if (nativeAdmissions) {
@@ -474,7 +482,6 @@ export function getPluginCacheRoot(rootDir: string): PluginRootCacheRecord {
       files: new Map(),
       checkedEntries: new Map(),
       paths: new Map(),
-      artifactLoadsInProgress: new Set(),
       artifacts: new Map(),
       runtimeArtifacts: new Map(),
       entryBoundaries: new Map(),
@@ -495,10 +502,13 @@ function mergeRootFacts<T>(target: Map<string, T>, source: Map<string, T>): void
 
 /** Bind aliases only after a checked file establishes their shared package boundary. */
 export function bindPluginCacheRoot(rootDir: string, canonicalRoot: string): PluginRootCacheRecord {
+  const root = getPluginCacheRoot(rootDir);
+  if (root.rootDir === canonicalRoot) {
+    return root;
+  }
   const cache = getPluginCache();
   const lexical = path.resolve(rootDir);
   const canonical = path.resolve(canonicalRoot);
-  const root = getPluginCacheRoot(lexical);
   root.rootDir = canonical;
   const existing = cache.roots.get(canonical);
   if (existing && existing !== root) {
@@ -512,9 +522,6 @@ export function bindPluginCacheRoot(rootDir: string, canonicalRoot: string): Plu
     mergeRootFacts(root.entryPaths, existing.entryPaths);
     root.directory ??= existing.directory;
     root.publicSurfaceBoundary ??= existing.publicSurfaceBoundary;
-    for (const artifact of existing.artifactLoadsInProgress) {
-      root.artifactLoadsInProgress.add(artifact);
-    }
     Object.assign(existing, root);
   }
   cache.roots.set(canonical, root);

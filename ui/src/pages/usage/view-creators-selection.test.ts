@@ -1,30 +1,23 @@
 import { expect, it, vi } from "vitest";
-import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { selectUsageExport } from "./export-menu.test-support.ts";
 import type { UsageSessionEntry } from "./types.ts";
 import { mountView, texts } from "./view-render.test-support.ts";
-import { projectUsageData, createUsageProps, usageSession } from "./view.test-support.ts";
+import { projectUsageData, usageFixture, usageSession, usageTotals } from "./view.test-support.ts";
 import { renderUsage } from "./view.tsx";
-
-const costTotals = (cost: number) => ({
-  ...createEmptyCostUsageTotals(),
-  input: cost * 100,
-  inputCost: cost,
-  totalTokens: cost * 100,
-  totalCost: cost,
-});
 
 function creatorSession(id: string, multiplier: number) {
   const daily = [
     { date: "2026-05-14", cost: multiplier },
     { date: "2026-05-15", cost: 9 * multiplier },
-  ].map(({ date, cost }) => Object.assign(costTotals(cost), { date, tokens: cost * 100, cost }));
+  ].map(({ date, cost }) =>
+    Object.assign(usageTotals(cost * 100, cost), { date, tokens: cost * 100, cost }),
+  );
   return {
     ...usageSession(`agent:main:${id}`, "main", "fixture"),
     creatorKey: id,
     createdActor: { type: "human" as const, id, label: id },
     usage: {
-      ...costTotals(10 * multiplier),
+      ...usageTotals(1000 * multiplier, 10 * multiplier),
       firstActivity: Date.parse("2026-05-14T12:00:00Z"),
       activityDates: daily.map((day) => day.date),
       dailyBreakdown: daily,
@@ -33,19 +26,14 @@ function creatorSession(id: string, multiplier: number) {
 }
 
 function mountSessions(sessions: UsageSessionEntry[], limit: number, selectedDays?: string[]) {
-  const base = createUsageProps();
   const projected = projectUsageData(sessions, selectedDays ? { selectedDays } : undefined);
   const onExportJson = vi.fn();
   const onExportCsv = vi.fn();
-  const props = {
-    ...base,
-    data: { ...base.data, ...projected, sessions: projected.sessions.slice(0, limit) },
-    filters: selectedDays ? { ...base.filters, endDate: "2026-05-15", selectedDays } : base.filters,
-    callbacks: {
-      ...base.callbacks,
-      display: { ...base.callbacks.display, onExportJson, onExportCsv },
-    },
-  };
+  const props = usageFixture(
+    { ...projected, sessions: projected.sessions.slice(0, limit) },
+    selectedDays ? { endDate: "2026-05-15", selectedDays } : {},
+  );
+  Object.assign(props.callbacks.display, { onExportJson, onExportCsv });
   return { ...mountView(() => renderUsage(props)), onExportJson, onExportCsv };
 }
 

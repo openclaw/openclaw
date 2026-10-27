@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { addSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../../bash-process-registry.test-support.js";
+import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
+import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import type { NormalizedUsage } from "../../usage.js";
+import * as compactionRuntime from "../compaction-runtime-context.js";
 import { buildContextEnginePromptCacheInfo } from "./attempt-context-engine-helpers.js";
 
 const hostHookStateMocks = vi.hoisted(() => ({
@@ -83,7 +88,6 @@ describe("resolvePromptBuildHookResult drain cache", () => {
       },
     });
     expect(result.toolsAllow).toEqual([]);
-    expect(runBeforePromptBuild).toHaveBeenCalledOnce();
   });
 
   it("reuses drained injections across retries and releases them when the run ends", async () => {
@@ -121,15 +125,15 @@ describe("buildAfterTurnRuntimeContext", () => {
     modelId: "gpt-5.4",
     thinkLevel: "off",
   };
-  const runtimeParams = (overrides: Partial<RuntimeAttempt> = {}) => ({
+  const runtimeParams = <T extends Partial<RuntimeAttempt>>(overrides: T) => ({
     attempt: { ...base, ...overrides },
     workspaceDir: "/tmp/workspace",
     agentDir: "/tmp/agent",
   });
-  const runtime = (overrides: Partial<RuntimeAttempt>) =>
-    buildAfterTurnRuntimeContext(runtimeParams(overrides));
 
-  it("preserves session-id-scoped processes with borrowed policy", () => {
+  it.each([true, false])("preserves process scope and model policy (locked=%s)", (locked) => {
+    // The two process snapshots must observe the same elapsed runtime.
+    using _ = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     resetProcessRegistryForTests();
     for (const [id, scopeKey, pid] of [
       ["sess-session-id", "session-123", 1234],
@@ -140,43 +144,52 @@ describe("buildAfterTurnRuntimeContext", () => {
         scopeKey,
       });
     }
-    const legacy = buildAfterTurnRuntimeContext({
-      ...runtimeParams({ sessionId: "session-123", sandboxSessionKey: "agent:main" }),
-      activeAgentId: "main",
-    });
-    expect(legacy.activeProcessSessions).toHaveLength(1);
-    expect(legacy).toMatchObject({
-      activeProcessSessions: [{ sessionId: "sess-session-id", command: "sleep 600", pid: 1234 }],
-      transcriptStorage: { kind: "sqlite" },
-    });
-  });
-
-  it("keeps the primary model for a locked after-turn runtime context", () => {
-    const runtimeContext = runtime({
-      sessionKey: "agent:main:session:locked",
+    let attemptEnumerations = 0;
+    const params = runtimeParams({
+      agentId: "main",
+      sessionId: "session-123",
+      sessionKey: "session-123",
       sandboxSessionKey: "global",
       sandboxAgentId: "main",
-      config: { agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } } },
+      messageChannel: "slack",
+      messageProvider: "slack",
+      agentAccountId: "workspace-account",
+      currentChannelId: "channel-123",
+      currentThreadTs: "123.456",
+      currentMessageId: "message-123",
+      trigger: "cron",
+      inputProvenance: { kind: "external_user" },
+      authProfileId: "openai:p1",
+      authProfileIdSource: "user",
       modelId: "gpt-5.5",
       agentHarnessId: "openclaw",
-      modelSelectionLocked: true,
-    });
-
-    expect(runtimeContext).toMatchObject({
-      modelSelectionLocked: true,
-      sandboxSessionKey: "global",
-      sandboxAgentId: "main",
-      provider: "openai",
-      model: "gpt-5.5",
-    });
-  });
-
-  it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
-    const legacy = runtime({
-      trigger: "heartbeat",
-      inputProvenance: { kind: "external_user" },
-      sessionKey: "agent:main:session:abc",
-      authProfileId: "openai:p1",
+      modelSelectionLocked: locked,
+      toolsAllow: ["read", "exec"],
+      skillsSnapshot: { prompt: "Selected skills", skills: [{ name: "example" }] },
+      senderId: "sender-123",
+      thinkLevel: "low",
+      reasoningLevel: "on",
+      bashElevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      extraSystemPrompt: "Synthetic after-turn policy",
+      ownerNumbers: ["owner-123"],
+      runtimePlan: buildAgentRuntimePlan({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        workspaceDir: "/tmp/workspace",
+        providerRuntimeHandle: {
+          provider: "openai",
+          modelId: "gpt-5.5",
+          workspaceDir: "/tmp/workspace",
+          prepared: true,
+        },
+        preparedAuthPlan: {
+          providerForAuth: "openai",
+          modelId: "gpt-5.5",
+          authProfileProviderForAuth: "openai",
+          forwardedAuthProfileId: "openai:p1",
+          forwardedAuthProfileSource: "user",
+        },
+      }),
       config: {
         agents: {
           defaults: {
@@ -186,13 +199,78 @@ describe("buildAfterTurnRuntimeContext", () => {
         },
       },
     });
-
-    expect(legacy).toMatchObject({
-      provider: "openrouter",
-      model: "anthropic/claude-sonnet-4-5",
+    const request = { ...params, cwd: "/tmp/workspace/subdir", activeAgentId: "main" };
+    const legacyOverrides = {
+      modelCallUrgency: resolveModelCallUrgency(params.attempt),
+      runtimeAuthPlan: params.attempt.runtimePlan?.auth,
+      workspaceDir: request.workspaceDir,
+      cwd: request.cwd,
+      agentDir: request.agentDir,
+      harnessRuntime: params.attempt.agentHarnessId,
+      activeProcessSessions: listActiveProcessSessionReferences({
+        scopeKey: resolveProcessToolScopeKey({
+          sessionKey: params.attempt.sessionKey,
+          sessionId: params.attempt.sessionId,
+          agentId: request.activeAgentId,
+        }),
+      }),
+    };
+    const realBuild = compactionRuntime.buildEmbeddedCompactionRuntimeContext;
+    using compactionBuilder = vi
+      .spyOn(compactionRuntime, "buildEmbeddedCompactionRuntimeContext")
+      .mockImplementation((candidate, profile) => {
+        const execute = (input: Parameters<typeof realBuild>[0]) => {
+          const reads: { key: PropertyKey; present: boolean; value: unknown }[] = [];
+          const output = realBuild(
+            new Proxy(input, {
+              get(target, key, receiver) {
+                const value = Reflect.get(target, key, receiver);
+                reads.push({ key, present: Object.hasOwn(target, key), value });
+                return value;
+              },
+            }),
+            profile,
+          );
+          return { reads, output };
+        };
+        // Execute both through the real builder, including target and auth resolution.
+        const projected = execute(candidate);
+        const legacy = execute({ ...params.attempt, ...legacyOverrides });
+        expect(projected.reads).toEqual(legacy.reads);
+        expect(projected.output).toEqual(legacy.output);
+        for (const { key, value } of projected.reads) {
+          if (Object.hasOwn(params.attempt, key) && !Object.hasOwn(legacyOverrides, key)) {
+            expect(value).toBe(Reflect.get(params.attempt, key));
+          }
+        }
+        return projected.output;
+      });
+    const context = buildAfterTurnRuntimeContext({
+      ...request,
+      attempt: new Proxy(params.attempt, {
+        ownKeys(target) {
+          attemptEnumerations++;
+          return Reflect.ownKeys(target);
+        },
+      }),
+    });
+    expect(compactionBuilder).toHaveBeenCalledOnce();
+    expect(attemptEnumerations).toBe(0);
+    expect(context.activeProcessSessions).toHaveLength(1);
+    expect(context).toMatchObject({
+      activeProcessSessions: [{ sessionId: "sess-session-id", command: "sleep 600", pid: 1234 }],
+      transcriptStorage: { kind: "sqlite" },
+      modelSelectionLocked: locked,
+      sandboxSessionKey: "global",
+      sandboxAgentId: "main",
+      provider: locked ? "openai" : "openrouter",
+      model: locked ? "gpt-5.5" : "anthropic/claude-sonnet-4-5",
       modelCallUrgency: "background",
     });
-    expect(legacy.authProfileId).toBeUndefined();
+    if (!locked) {
+      expect(context.authProfileId).toBeUndefined();
+    }
+    expect(context.runtimeAuthPlan).toBe(locked ? params.attempt.runtimePlan?.auth : undefined);
   });
   it("derives afterTurn token count from the current assistant usage snapshot", () => {
     const lastCallUsage = {

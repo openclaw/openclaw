@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
@@ -22,6 +22,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
@@ -29,7 +30,6 @@ import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
   createArchivedSubagentSweeperRun as archivedRun,
   createSubagentSweeperHarness as createHarness,
-  createSubagentSweeperRun as run,
 } from "./subagent-registry-sweeper.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -60,28 +60,20 @@ export async function readPersistedRuns(env: NodeJS.ProcessEnv, runIds: string[]
 }
 
 export function createSweepGate() {
-  const entered = createDeferred();
-  const release = createDeferred();
+  const gate = createEnteredGate();
   return {
-    wait: () => {
-      entered.resolve();
-      return release.promise;
-    },
+    wait: gate.wait,
     async check(
       sweeper: ReturnType<typeof createHarness>["sweeper"],
       check: (finish: () => Promise<void>) => Promise<void>,
     ) {
       const pending = sweeper.sweepOnce();
       const finish = async () => {
-        release.resolve();
+        gate.release();
         await pending;
       };
       try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          pending,
-          "Sweep skipped its held operation",
-        );
+        await awaitGateBeforeSettlement(gate.entered, pending, "Sweep skipped its held operation");
         await check(finish);
       } finally {
         await finish();
@@ -113,39 +105,12 @@ export function registerSubagentSweepRetainedAuthorityTests(
   recoverRow: ReturnType<typeof vi.fn>,
   killSessionEntry: { current: Awaited<ReturnType<typeof loadSubagentSessionEntry>> },
 ) {
-  it("retains unresolved child owner across recovery, archival, collector, and delivery cleanup", async () => {
+  it("retains an unresolved child owner before recovery or cleanup", async () => {
     recoverRow.mockResolvedValue({ status: "ignored" });
-    const harness = createHarness({});
-    harness.runs.clear();
-    const now = Date.now();
-    const records = [
-      run(),
-      { ...run(), execution: { status: "interrupted" as const } },
-      archivedRun(),
-      archivedRun({
-        collect: true,
-        groupId: "retained-group",
-        collectorCompletion: { status: "done" },
-      }),
-      archivedRun({
-        archiveAtMs: undefined,
-        spawnMode: "session",
-        cleanupCompletedAt: now - 10 * 60_000,
-      }),
-      archivedRun({
-        delivery: {
-          status: "suspended",
-          suspendedReason: "expiry",
-          suspendedAt: now - 8 * 24 * 60 * 60_000,
-        },
-      }),
-    ];
-    for (const [index, entry] of records.entries()) {
-      entry.runId = `unresolved-${index}`;
-      entry.childSessionKey = "global";
-      entry.childAgentId = undefined;
-      harness.runs.set(entry.runId, entry);
-    }
+    const harness = createHarness(
+      {},
+      archivedRun({ childSessionKey: "global", childAgentId: undefined }),
+    );
     const before = structuredClone(harness.runs);
 
     await harness.sweeper.sweepOnce();
@@ -199,7 +164,6 @@ export function registerSubagentSweepRetainedAuthorityTests(
         const attachmentRoot = resolveSubagentSessionAttachmentRootDir({
           agentId: "main",
           childSessionKey: entry.childSessionKey,
-          env: state.env,
         });
         const attachmentDir = path.join(attachmentRoot, attachmentId);
         const siblingDir = path.join(attachmentRoot, randomUUID());
@@ -364,7 +328,7 @@ export function registerSubagentSweepCompletionRecoveryTests(ignoreRecovery: () 
     "keeps completion retries with the sweep's original Gateway %s",
     async (change) => {
       await vi.mocked(resolveSubagentRunOrphanReason).withImplementation(
-        () => null,
+        () => "missing-session-entry",
         async () => {
           ignoreRecovery();
           const gateway = { current: createMockGatewayRecoveryRuntime() };

@@ -11,34 +11,24 @@ vi.mock("./windows-user-sid.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./windows-user-sid.js")>()),
   readWindowsUserSid: windowsSid,
 }));
+// mock-isolation: Native ancestry would otherwise read real host PIDs behind the synthetic table.
+vi.mock("@openclaw/proc-safe/identity", () => ({ readProcessAncestry: () => null }));
 vi.mock("../shared/pid-alive.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../shared/pid-alive.js")>()),
   isPidDefinitelyDead: () => false,
 }));
-// Synthetic package identities keep Windows path classification independent of the host.
-vi.mock("node:fs", async (importOriginal) => {
-  const fs = await importOriginal<typeof import("node:fs")>();
-  const io = {
-    readFileSync: (file: string) =>
-      JSON.stringify({
-        name:
-          file.replaceAll("\\", "/").replace(/^[A-Za-z]:/, "") === "/app/package.json"
-            ? "openclaw"
-            : "unrelated-service",
-      }),
-    realpathSync: (file: string) => file,
-    statSync: () => ({ isDirectory: () => false }),
-    readdirSync: () => [],
-    readlinkSync: () => "/app",
-  };
-  return { ...fs, ...io, default: { ...fs, ...io } };
-});
 import { inspectOtherOpenClawProcesses } from "./openclaw-process-census.js";
 
 const self = process.pid;
 const launcher = self + 1;
 const peer = self + 2;
 const references = { runId: "update-run-123", artifactPaths: ["/tmp/retained runtime"] };
+const processRow = (pid: number, commandLine: string, cwd = "C:\\app") => ({
+  pid,
+  parentPid: 0,
+  commandLine,
+  cwd,
+});
 beforeEach(() => {
   windows.mockReset();
   windowsSid.mockReset();
@@ -56,23 +46,13 @@ it.each([
 ])(
   "excludes a Windows updater ancestor only with an earlier start ($parentStart, $commandLine)",
   ({ parentStart, commandLine }) => {
-    mockProcessPlatform("win32");
-    const processRow = (pid: number, argv: string, cwd = "C:\\app") => ({
-      pid,
-      parentPid: 0,
-      commandLine: argv,
-      cwd,
-    });
     windows.mockReturnValue([
       {
         ...processRow(self, "openclaw update repair"),
         parentPid: launcher,
         startIdentity: "200",
       },
-      {
-        ...processRow(launcher, commandLine),
-        startIdentity: String(parentStart),
-      },
+      { ...processRow(launcher, commandLine), startIdentity: String(parentStart) },
       processRow(peer, 'node "C:\\Temp\\Retained Runtime\\tree\\worker.js"'),
       processRow(peer + 1, "node worker.js", "c:/temp/retained runtime/tree"),
       { pid: peer + 2 },
@@ -92,12 +72,7 @@ it.each([
     ).toEqual({
       matchingPids: [
         ...(parentStart >= 200 ? [launcher] : []),
-        peer,
-        peer + 1,
-        peer + 4,
-        peer + 5,
-        peer + 6,
-        peer + 8,
+        ...[0, 1, 4, 5, 6, 8].map((offset) => peer + offset),
       ],
       unverifiedPids: [peer + 2, peer + 7, peer + 9],
       warnings: [peer + 2, peer + 7, peer + 9].map((pid) => expect.stringContaining(`PID ${pid}`)),
@@ -105,156 +80,74 @@ it.each([
   },
 );
 
-it.each([
-  {
-    name: "denied unrelated process, same account",
-    sid: "S-1-5-21-100",
-    facts: { accessDenied: true },
-  },
-  {
-    name: "denied process, different account",
-    sid: "S-1-5-21-200",
-    facts: { accessDenied: true },
-    unverified: true,
-  },
-  {
-    name: "denied process, unknown caller",
-    sid: undefined,
-    facts: { accessDenied: true },
-    unverified: true,
-  },
-  {
-    name: "denied process, legacy record",
-    sid: "S-1-5-21-100",
-    legacy: true,
-    facts: { accessDenied: true },
-    unverified: true,
-  },
-  {
-    name: "unexplained missing identity",
-    sid: "S-1-5-21-100",
-    facts: {},
-    unverified: true,
-  },
-  {
-    name: "protected unrelated process",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: peer + 10, startIdentity: "100" },
-  },
-  {
-    name: "pre-handoff process with reused parent PID",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: launcher, startIdentity: "100" },
-  },
-  {
-    name: "protected later-born process with a reused parent PID",
-    sid: "S-1-5-21-100",
-    facts: {
-      parentPid: peer + 10,
-      startIdentity: "300",
-      executable: "C:\\Windows\\DefenderSessionHelper.exe",
-    },
-    parents: [{ pid: peer + 10, parentPid: 0, startIdentity: "400" }],
-    unverified: true,
-  },
-  {
-    name: "unreadable process after the recorded family boot ended",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: peer + 10, startIdentity: "300" },
-    familyExited: true,
-  },
-  {
-    name: "runtime holder behind a reused parent PID",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: peer + 10, startIdentity: "300", cwd: "/tmp/retained runtime/tree" },
-    parents: [{ pid: peer + 10, parentPid: 0, startIdentity: "400" }],
-    matching: true,
-  },
-  {
-    name: "positive OpenClaw identity with unrelated ancestry",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: 0, startIdentity: "300", commandLine: "openclaw-gateway" },
-    matching: true,
-    familyExited: true,
-  },
-  {
-    name: "readable unrelated process from another account",
-    sid: "S-1-5-21-200",
-    facts: { parentPid: peer + 10, startIdentity: "100" },
-  },
-  {
-    name: "descendant born in the same millisecond",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: launcher, startIdentity: "200" },
-    matching: true,
-  },
-  {
-    name: "unreadable descendant",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: launcher, startIdentity: "300" },
-    matching: true,
-  },
-  {
-    name: "surviving descendant after the recorded driver's PID is reused",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: launcher, startIdentity: "300" },
-    parents: [{ pid: launcher, parentPid: 0, startIdentity: "400" }],
-    matching: true,
-  },
-  {
-    name: "surviving grandchild after an unrecorded intermediate parent's PID is reused",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: peer + 10, startIdentity: "300" },
-    parents: [{ pid: peer + 10, parentPid: 0, startIdentity: "400" }],
-    unverified: true,
-  },
-  {
-    name: "surviving worker with an exited intermediate parent",
-    sid: "S-1-5-21-100",
-    facts: {
-      parentPid: peer + 10,
-      startIdentity: "300",
-      executable: "C:\\Windows\\DefenderSessionHelper.exe",
-    },
-    unverified: true,
-  },
-  {
-    name: "surviving worker whose parent PID now denies access",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: peer + 10, startIdentity: "300" },
-    parents: [{ pid: peer + 10, accessDenied: true }],
-    unverified: true,
-  },
-  {
-    name: "readable descendant",
-    sid: "S-1-5-21-100",
-    facts: {
-      parentPid: launcher,
-      startIdentity: "300",
-      commandLine: "node worker.js",
-      cwd: "C:\\app",
-    },
-    matching: true,
-  },
-  {
-    name: "positive artifact evidence on denied row",
-    sid: "S-1-5-21-100",
-    facts: { accessDenied: true, commandLine: "node --id=update-run-123" },
-    matching: true,
-  },
+type ProcessRow = ReturnType<
+  typeof import("./windows-process-census.js").readWindowsProcessCensus
+>[number];
+type HandoffOptions = {
+  sid?: string | null;
+  legacy?: boolean;
+  parents?: ProcessRow[];
+  familyExited?: boolean;
+};
+type HandoffCase = [
+  name: string,
+  facts: Omit<ProcessRow, "pid">,
+  result?: "matching" | "unverified",
+  options?: HandoffOptions,
+];
+const identity = (parentPid: number, startIdentity = "300") => ({ parentPid, startIdentity });
+const reusedParent = [{ pid: peer + 10, ...identity(0, "400") }];
+const opaqueWorker = {
+  ...identity(peer + 10),
+  executable: "C:\\Windows\\DefenderSessionHelper.exe",
+};
+const denied = { accessDenied: true } as const;
+const differentAccount = { sid: "S-1-5-21-200" };
+const exited = { familyExited: true };
+const reused = { parents: reusedParent };
+const runtimeHolder = { ...identity(peer + 10), cwd: "/tmp/retained runtime/tree" };
+const otherOpenClaw = { ...identity(0), commandLine: "openclaw-gateway" };
+const readable = { ...identity(launcher), commandLine: "node worker.js", cwd: "C:\\app" };
+const deniedParent = { parents: [{ pid: peer + 10, ...denied }] };
+const reusedDriver = { parents: [{ pid: launcher, ...identity(0, "400") }] };
+it.each<HandoffCase>([
+  ["denied unrelated process, same account", denied],
+  ["denied process, different account", denied, "unverified", differentAccount],
+  ["denied process, unknown caller", denied, "unverified", { sid: null }],
+  ["denied process, legacy record", denied, "unverified", { legacy: true }],
+  ["unexplained missing identity", {}, "unverified"],
+  ["protected unrelated process", identity(peer + 10, "100")],
+  ["pre-handoff process with reused parent PID", identity(launcher, "100")],
+  ["later-born process, reused parent", opaqueWorker, "unverified", reused],
+  ["unreadable after family exit", identity(peer + 10), undefined, exited],
+  ["runtime holder, reused parent", runtimeHolder, "matching", reused],
+  ["OpenClaw after family exit", otherOpenClaw, "matching", exited],
+  ["unrelated, different account", identity(peer + 10, "100"), undefined, differentAccount],
+  ["descendant born in the same millisecond", identity(launcher, "200"), "matching"],
+  ["unreadable descendant", identity(launcher), "matching"],
+  ["descendant, reused driver PID", identity(launcher), "matching", reusedDriver],
+  ["grandchild, reused intermediate PID", identity(peer + 10), "unverified", reused],
+  ["surviving worker with an exited intermediate parent", opaqueWorker, "unverified"],
+  ["worker, denied parent", identity(peer + 10), "unverified", deniedParent],
+  ["readable descendant", readable, "matching"],
+  [
+    "positive artifact evidence on denied row",
+    { accessDenied: true, commandLine: "node --id=update-run-123" },
+    "matching",
+  ],
 ])(
-  "Windows handoff repair census: $name",
-  ({ sid, facts, matching = false, unverified = false, legacy, parents, familyExited }) => {
-    mockProcessPlatform("win32");
-    windowsSid.mockReturnValue(sid);
+  "Windows handoff repair census: %s",
+  (
+    _name,
+    facts,
+    result,
+    { sid = "S-1-5-21-100", legacy, parents, familyExited }: HandoffOptions = {},
+  ) => {
+    const matching = result === "matching";
+    const unverified = result === "unverified";
+    windowsSid.mockReturnValue(sid ?? undefined);
     windows.mockReturnValue([
-      {
-        pid: self,
-        parentPid: 0,
-        startIdentity: "400",
-        commandLine: "openclaw update repair",
-        cwd: "C:\\app",
-      },
+      { ...processRow(self, "openclaw update repair"), startIdentity: "400" },
       { pid: peer, ...facts },
       ...(parents ?? []),
     ]);

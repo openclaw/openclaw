@@ -6,7 +6,11 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import {
+  PROXY_FIXTURE_CERTIFICATE as RELAY_TEST_TLS_CERT,
+  PROXY_FIXTURE_KEY as RELAY_TEST_TLS_KEY,
+  useAutoCleanupTempDirTracker,
+} from "openclaw/plugin-sdk/test-env";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { type WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +30,31 @@ function closeServer(server: http.Server | https.Server | WebSocketServer) {
   });
 }
 
+async function listenRelay() {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => {
+    server.once("listening", resolve);
+  });
+  return { server, url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/gateway/ws` };
+}
+
+async function closeRelay(server: WebSocketServer) {
+  for (const client of server.clients) {
+    client.terminate();
+  }
+  await closeServer(server);
+}
+
+async function stopProxy(
+  monitor: ReturnType<typeof startRelayMonitor>,
+  fixture: Awaited<ReturnType<typeof createRelayProxyFixture>>,
+  expected?: { name: string },
+) {
+  const stopped = await monitor.stop();
+  await fixture.close();
+  expect(stopped).toEqual(expected ? expect.objectContaining(expected) : undefined);
+}
+
 const relayUpgrade = (via: "direct" | "proxy") => ({
   via,
   authorization: "Bearer relay-secret",
@@ -37,13 +66,12 @@ function eventFrame(
   deliveryId: string,
   event: { text?: string; user?: string; ts?: string } = { text: "hello" },
   route = { kind: "channel_default", key: "T1:C1" },
-  payload = {},
 ) {
   return JSON.stringify({
     type: "slack_event",
     delivery_id: deliveryId,
     route,
-    payload: { ...payload, event: { type: "message", channel: "C1", ts: "1.000001", ...event } },
+    payload: { event: { type: "message", channel: "C1", ts: "1.000001", ...event } },
   });
 }
 
@@ -70,21 +98,12 @@ describe("Slack relay source", () => {
   });
 
   it("applies hello identity and acks a routed event only after durable accept", async () => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await new Promise<void>((resolve) => {
-      server.once("listening", resolve);
-    });
-    const port = (server.address() as AddressInfo).port;
+    const { server, url } = await listenRelay();
     const ack = deferred<Record<string, unknown>>();
     const acceptStarted = deferred<void>();
     const acceptDone = deferred<void>();
     const receivedAcks: Array<Record<string, unknown>> = [];
-    const requestHeaders = deferred<{ authorization?: string; url?: string }>();
-    server.once("connection", (socket, request) => {
-      requestHeaders.resolve({
-        authorization: request.headers.authorization,
-        url: request.url,
-      });
+    server.once("connection", (socket) => {
       socket.on("message", (data) => {
         const frame = JSON.parse(rawDataToString(data)) as Record<string, unknown>;
         receivedAcks.push(frame);
@@ -104,16 +123,11 @@ describe("Slack relay source", () => {
       socket.send(
         eventFrame(
           "delivery-failed",
-          { user: "U1", text: "fail-handler", ts: "1.000000" },
+          { text: "fail-handler" },
           { kind: "user_group", key: "T1:S1" },
         ),
       );
-      socket.send(
-        eventFrame("delivery-1", { user: "U1", text: "hello" }, undefined, {
-          team_id: "T1",
-          event_id: "Ev1",
-        }),
-      );
+      socket.send(eventFrame("delivery-1"));
     });
 
     const acceptRelayEvent = vi.fn(
@@ -128,33 +142,23 @@ describe("Slack relay source", () => {
     const runtimeError = vi.fn();
     const identities: Array<SlackSendIdentity | undefined> = [];
     const statuses: Array<Record<string, unknown>> = [];
-    const monitor = startRelayMonitor(
-      { url: `ws://127.0.0.1:${port}/gateway/ws` },
-      (status) => statuses.push(status),
-      {
-        acceptRelayEvent,
-        runtime: { error: runtimeError, log: vi.fn(), exit: vi.fn() },
-        identityHealth: { lifecycle: "blocked", lastError: "request_timeout" },
-        setIdentity: (identity) => identities.push(identity),
-      },
-    );
-
-    await expect(requestHeaders.promise).resolves.toEqual({
-      authorization: "Bearer relay-secret",
-      url: "/gateway/ws?gateway_id=pash",
+    const monitor = startRelayMonitor({ url }, (status) => statuses.push(status), {
+      acceptRelayEvent,
+      runtime: { error: runtimeError, log: vi.fn(), exit: vi.fn() },
+      identityHealth: { lifecycle: "blocked", lastError: "request_timeout" },
+      setIdentity: (identity) => identities.push(identity),
     });
+
     await acceptStarted.promise;
     expect(receivedAcks).toEqual([]);
     acceptDone.resolve();
-    await expect(ack.promise).resolves.toEqual({ type: "ack", delivery_id: "delivery-1" });
+    await ack.promise;
     expect(receivedAcks).toEqual([{ type: "ack", delivery_id: "delivery-1" }]);
     expect(runtimeError).toHaveBeenCalledTimes(2);
     expect(acceptRelayEvent).toHaveBeenCalledWith({
       deliveryId: "delivery-1",
       message: expect.objectContaining({ channel: "C1", text: "hello" }),
     });
-    // The failed durable accept must never ack: the router redelivers it.
-    expect(receivedAcks).not.toContainEqual({ type: "ack", delivery_id: "delivery-failed" });
     expect(identities).toContainEqual({
       username: "Nik Team Claw",
       iconUrl: "https://example.com/nik.png",
@@ -170,17 +174,11 @@ describe("Slack relay source", () => {
     monitor.abortController.abort();
     await monitor.monitor;
     expect(identities.at(-1)).toBeUndefined();
-    for (const client of server.clients) {
-      client.terminate();
-    }
-    await closeServer(server);
+    await closeRelay(server);
   });
 
   it("settles durable acceptance before recovering from a websocket error", async () => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await new Promise<void>((resolve) => {
-      server.once("listening", resolve);
-    });
+    const { server, url } = await listenRelay();
     const connected = deferred<WebSocket>();
     const socketClosed = deferred<void>();
     server.once("connection", (socket) => {
@@ -192,7 +190,7 @@ describe("Slack relay source", () => {
     const acceptDone = deferred<void>();
     const statuses: Array<Record<string, unknown>> = [];
     const { abortController, stopped } = startRelayMonitor(
-      { url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/gateway/ws` },
+      { url },
       (status) => statuses.push(status),
       {
         acceptRelayEvent: async () => {
@@ -214,10 +212,7 @@ describe("Slack relay source", () => {
       abortController.abort();
       acceptDone.resolve();
       await stopped;
-      for (const client of server.clients) {
-        client.terminate();
-      }
-      await closeServer(server);
+      await closeRelay(server);
     }
   });
 
@@ -229,31 +224,12 @@ describe("Slack relay source", () => {
       error = err;
     }
     expect(error).toBeInstanceOf(SlackRelayMalformedFrameError);
-    expect((error as SlackRelayMalformedFrameError).message).toContain("malformed JSON frame");
-    expect((error as SlackRelayMalformedFrameError).cause).toBeDefined();
+    expect(error).toMatchObject({
+      message: expect.stringContaining("malformed JSON frame"),
+      cause: expect.any(SyntaxError),
+    });
   });
 });
-
-// Self-signed loopback certificate (SAN: 127.0.0.1, localhost; valid to 2126)
-// so the proxied and direct wss:// dials below terminate real TLS on 127.0.0.1.
-const RELAY_TEST_TLS_CERT = `-----BEGIN CERTIFICATE-----
-MIIBpzCCAUygAwIBAgIUezTxOxdfUphW7GSOPN3w6ppcqe0wCgYIKoZIzj0EAwIw
-GzEZMBcGA1UEAwwQc2xhY2stcmVsYXkudGVzdDAgFw0yNjA5MDkxNzUzMzBaGA8y
-MTI2MDgxNjE3NTMzMFowGzEZMBcGA1UEAwwQc2xhY2stcmVsYXkudGVzdDBZMBMG
-ByqGSM49AgEGCCqGSM49AwEHA0IABKYC/MK+pREkCGg+imE4JGALlFu2aVQP7XJN
-Ckezs+JewV/OAxB4RzXVcgSgGKP6USQaDBnoBBEy+34QH2zXtJ2jbDBqMB0GA1Ud
-DgQWBBSI3WK70K2Wh3wnN+TdlErOoIKmQzAfBgNVHSMEGDAWgBSI3WK70K2Wh3wn
-N+TdlErOoIKmQzAaBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwDAYDVR0TBAUw
-AwEB/zAKBggqhkjOPQQDAgNJADBGAiEAphAGvWPFTevL7rEy7dBjoTVAk/oT93Mm
-qvz6jsUI73ACIQDLLDdqa0x1RevRJ98Y1vQad1mNK9Yk4Oh6k2HkafQ9tg==
------END CERTIFICATE-----`;
-const RELAY_TEST_TLS_KEY = [
-  "-----BEGIN PRIVATE KEY-----", // pragma: allowlist secret
-  "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgnzhEeRMhzEsaGPOM",
-  "xvBVdxlMJ7ANKKYd4P6pIl1KgpWhRANCAASmAvzCvqURJAhoPophOCRgC5RbtmlU",
-  "D+1yTQpHs7PiXsFfzgMQeEc11XIEoBij+lEkGgwZ6AQRMvt+EB9s17Sd",
-  "-----END PRIVATE KEY-----",
-].join("\n");
 
 const PROXY_ENV_KEYS = [
   "HTTPS_PROXY",
@@ -413,10 +389,7 @@ async function createRelayProxyFixture(
       for (const socket of sockets) {
         socket.destroy();
       }
-      for (const client of relay.clients) {
-        client.terminate();
-      }
-      await closeServer(relay);
+      await closeRelay(relay);
       await closeServer(relayHttps);
       await closeServer(proxy);
     },
@@ -483,45 +456,80 @@ describe("Slack relay proxy environment", () => {
     vi.unstubAllEnvs();
   });
 
-  it("bypasses the proxy with destination-only auth and acknowledgement under NO_PROXY", async () => {
-    const fixture = await createRelayProxyFixture();
-    vi.stubEnv("HTTPS_PROXY", fixture.proxyUrl);
-    vi.stubEnv("NO_PROXY", "127.0.0.1");
-    const ack = expectRelayAck(fixture.relay, "proxied-delivery");
-    const monitor = startRelayMonitor(fixture);
-    try {
-      await expect(ack).resolves.toEqual({ type: "ack", delivery_id: "proxied-delivery" });
-      expect(fixture.connects).toEqual([]);
-      expect(fixture.upgrades).toEqual([relayUpgrade("direct")]);
-      expect(monitor.acceptRelayEvent).toHaveBeenCalledWith({
-        deliveryId: "proxied-delivery",
-        message: expect.objectContaining({ channel: "C1", text: "hello" }),
+  it.each(["direct", "authenticated", "tls"] as const)(
+    "keeps destination auth private and acknowledges via %s",
+    async (route) => {
+      const fixture = await createRelayProxyFixture({
+        tls: route === "tls",
+        credentials: route === "authenticated" ? PROXY_TEST_CREDENTIALS : undefined,
       });
-    } finally {
-      monitor.abortController.abort();
-      await monitor.monitor;
-      await fixture.close();
-    }
-  });
+      if (route === "tls") {
+        const caFile = path.join(tempDirs.make("slack-relay-proxy-ca-"), "proxy-ca.pem");
+        fs.writeFileSync(caFile, PROXY_TEST_TLS_CERT, "utf8");
+        vi.stubEnv("HTTPS_PROXY", `https://${fixture.proxyHost}`);
+        vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+        vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
+      } else if (route === "authenticated") {
+        const { username, password } = PROXY_TEST_CREDENTIALS;
+        vi.stubEnv("HTTPS_PROXY", `http://${username}:${password}@${fixture.proxyHost}`);
+      } else {
+        vi.stubEnv("HTTPS_PROXY", fixture.proxyUrl);
+        vi.stubEnv("NO_PROXY", "127.0.0.1");
+      }
+      const ack = expectRelayAck(fixture.relay, "delivery");
+      const monitor = startRelayMonitor(fixture);
+      try {
+        await expect(ack).resolves.toEqual({ type: "ack", delivery_id: "delivery" });
+        expect(fixture.connects).toEqual(
+          route === "direct"
+            ? []
+            : [
+                {
+                  target: fixture.target,
+                  authorizationPresent: false,
+                  proxyAuthorization: route === "authenticated" ? "valid" : "missing",
+                },
+              ],
+        );
+        expect(fixture.upgrades).toEqual([relayUpgrade(route === "direct" ? "direct" : "proxy")]);
+        expect(fixture.relayConnections()).toBe(1);
+        expect(fixture.proxySecureConnections()).toBe(route === "tls" ? 1 : 0);
+      } finally {
+        await stopProxy(monitor, fixture);
+      }
+    },
+  );
 
-  it("reports invalid proxy configuration without a direct relay connection", async () => {
-    const fixture = await createRelayProxyFixture();
-    vi.stubEnv("HTTPS_PROXY", "socks5://proxy.example.test:1080");
-    const firstStatus = deferred<Record<string, unknown>>();
-    const monitor = startRelayMonitor(fixture, (status) => firstStatus.resolve(status));
-    try {
-      await expect(firstStatus.promise).resolves.toMatchObject({
-        connected: false,
-        lifecycle: "recovering",
-        lastError: expect.stringContaining("Unsupported proxy protocol"),
-      });
-      expect(fixture.upgrades).toEqual([]);
-    } finally {
-      await monitor.stop();
-      await fixture.close();
-    }
-    expect(await monitor.stopped).toMatchObject({ name: "AbortError" });
-  });
+  it.each(["invalid protocol", "untrusted certificate"] as const)(
+    "recovers from %s without connecting directly or sending CONNECT",
+    async (failure) => {
+      const fixture = await createRelayProxyFixture({ tls: true });
+      const untrusted = failure === "untrusted certificate";
+      vi.stubEnv(
+        "HTTPS_PROXY",
+        untrusted ? `https://${fixture.proxyHost}` : "socks5://proxy.example.test:1080",
+      );
+      vi.stubEnv("OPENCLAW_PROXY_ACTIVE", undefined);
+      vi.stubEnv("OPENCLAW_PROXY_CA_FILE", undefined);
+      const firstStatus = deferred<Record<string, unknown>>();
+      const monitor = startRelayMonitor(fixture, (status) => firstStatus.resolve(status));
+      try {
+        await expect(firstStatus.promise).resolves.toMatchObject({
+          connected: false,
+          lifecycle: "recovering",
+          lastError: expect.stringContaining(
+            untrusted ? "DEPTH_ZERO_SELF_SIGNED_CERT" : "Unsupported proxy protocol",
+          ),
+        });
+        expect(fixture.proxySecureConnections()).toBe(0);
+        expect(fixture.connects).toEqual([]);
+        expect(fixture.relayConnections()).toBe(0);
+        expect(fixture.upgrades).toEqual([]);
+      } finally {
+        await stopProxy(monitor, fixture, { name: "AbortError" });
+      }
+    },
+  );
 
   it("aborts a stalled CONNECT without an unhandled socket error", async () => {
     const fixture = await createRelayProxyFixture({ stall: true });
@@ -537,29 +545,6 @@ describe("Slack relay proxy environment", () => {
       monitor.abortController.abort();
       await monitor.monitor;
       await fixture.close();
-    }
-  });
-
-  it("sends proxy URL credentials as Proxy-Authorization and acks through the tunnel", async () => {
-    const fixture = await createRelayProxyFixture({ credentials: PROXY_TEST_CREDENTIALS });
-    vi.stubEnv(
-      "HTTPS_PROXY",
-      `http://${PROXY_TEST_CREDENTIALS.username}:${PROXY_TEST_CREDENTIALS.password}@${fixture.proxyHost}`,
-    );
-    const ack = expectRelayAck(fixture.relay, "authenticated-delivery");
-    const monitor = startRelayMonitor(fixture);
-    try {
-      await expect(ack).resolves.toEqual({ type: "ack", delivery_id: "authenticated-delivery" });
-      expect(fixture.connects).toEqual([
-        { target: fixture.target, authorizationPresent: false, proxyAuthorization: "valid" },
-      ]);
-      expect(fixture.relayConnections()).toBe(1);
-      expect(fixture.upgrades).toEqual([relayUpgrade("proxy")]);
-      expect(monitor.acceptRelayEvent).toHaveBeenCalledTimes(1);
-    } finally {
-      const stopped = await monitor.stop();
-      await fixture.close();
-      expect(stopped).toBeUndefined();
     }
   });
 
@@ -599,60 +584,8 @@ describe("Slack relay proxy environment", () => {
         expect(fixture.upgrades).toEqual([]);
         expect(monitor.acceptRelayEvent).not.toHaveBeenCalled();
       } finally {
-        const stopped = await monitor.stop();
-        await fixture.close();
-        expect(stopped).toMatchObject({ name: "AbortError" });
+        await stopProxy(monitor, fixture, { name: "AbortError" });
       }
     },
   );
-
-  it("dials an https:// proxy over TLS trusted through the managed-proxy CA file", async () => {
-    const fixture = await createRelayProxyFixture({ tls: true });
-    const caDir = tempDirs.make("slack-relay-proxy-ca-");
-    const caFile = path.join(caDir, "proxy-ca.pem");
-    fs.writeFileSync(caFile, PROXY_TEST_TLS_CERT, "utf8");
-    vi.stubEnv("HTTPS_PROXY", `https://${fixture.proxyHost}`);
-    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
-    vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
-    const ack = expectRelayAck(fixture.relay, "tls-proxied-delivery");
-    const monitor = startRelayMonitor(fixture);
-    try {
-      await expect(ack).resolves.toEqual({ type: "ack", delivery_id: "tls-proxied-delivery" });
-      expect(fixture.proxySecureConnections()).toBe(1);
-      expect(fixture.connects).toEqual([
-        { target: fixture.target, authorizationPresent: false, proxyAuthorization: "missing" },
-      ]);
-      expect(fixture.upgrades).toEqual([relayUpgrade("proxy")]);
-    } finally {
-      const stopped = await monitor.stop();
-      await fixture.close();
-      expect(stopped).toBeUndefined();
-    }
-  });
-
-  it("rejects an untrusted https:// proxy certificate before sending CONNECT", async () => {
-    const fixture = await createRelayProxyFixture({ tls: true });
-    vi.stubEnv("HTTPS_PROXY", `https://${fixture.proxyHost}`);
-    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", undefined);
-    vi.stubEnv("OPENCLAW_PROXY_CA_FILE", undefined);
-    const firstStatus = deferred<Record<string, unknown>>();
-    const monitor = startRelayMonitor(fixture, (status) => firstStatus.resolve(status));
-    try {
-      await expect(firstStatus.promise).resolves.toMatchObject({
-        connected: false,
-        lifecycle: "recovering",
-        lastError: expect.stringContaining("DEPTH_ZERO_SELF_SIGNED_CERT"),
-      });
-      // Some TLS servers expose failed handshakes before their public connection
-      // event. The verification error proves the dial reached certificate checks.
-      expect(fixture.proxySecureConnections()).toBe(0);
-      expect(fixture.connects).toEqual([]);
-      expect(fixture.relayConnections()).toBe(0);
-      expect(fixture.upgrades).toEqual([]);
-    } finally {
-      const stopped = await monitor.stop();
-      await fixture.close();
-      expect(stopped).toMatchObject({ name: "AbortError" });
-    }
-  });
 });

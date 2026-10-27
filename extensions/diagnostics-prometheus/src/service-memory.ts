@@ -123,6 +123,47 @@ export function recordMemorySample(
       message.unmeasuredMessages,
     );
   }
+  for (const selection of memory.sessionRowSelections?.selections ?? []) {
+    const labels = { kind: selection.kind, task: selection.task };
+    store.counterValue(
+      "openclaw_session_row_selections_total",
+      "Successful resident session-row selections by query shape and enclosing task.",
+      labels,
+      selection.calls,
+    );
+    store.counterValue(
+      "openclaw_session_row_selection_rows_total",
+      "Resident session rows returned by selections, before federation and visibility filtering.",
+      labels,
+      selection.rows,
+    );
+  }
+  if (memory.sessionRowSelections) {
+    for (const partition of memory.sessionRowSelections.partitions) {
+      for (const outcome of ["hits", "misses"] as const) {
+        store.counterValue(
+          "openclaw_session_row_partition_cache_total",
+          "Retained session-list partition lookups by outcome and enclosing selection task.",
+          { task: partition.task, outcome: outcome === "hits" ? "hit" : "miss" },
+          partition[outcome],
+        );
+      }
+    }
+    for (const revision of memory.sessionRowSelections.partitionRevisions) {
+      store.counterValue(
+        "openclaw_session_row_partition_revisions_total",
+        "Session-list partition revisions by synchronous internal change scope; excludes initial partitions.",
+        { reason: revision.reason },
+        revision.changes,
+      );
+    }
+    store.counterValue(
+      "openclaw_session_row_selection_resets_total",
+      "Broad session-row selection invalidations, including topology replacement and disposal.",
+      {},
+      memory.sessionRowSelections.resets,
+    );
+  }
   for (const worker of memory.workerLifecycle ?? []) {
     store.counterValue(
       "openclaw_worker_started_total",
@@ -136,6 +177,42 @@ export function recordMemorySample(
         "Worker isolates confirmed exited by owner retirement reason.",
         { script: worker.script, reason },
         count,
+      );
+    }
+  }
+  for (const worker of memory.workerTaskMetrics ?? []) {
+    const labels = { worker_class: worker.workerClass, script: worker.script };
+    store.counterValue(
+      "openclaw_worker_tasks_completed_total",
+      "Observed terminal task replies from pool workers, including handled failures.",
+      labels,
+      worker.tasksCompleted,
+    );
+    store.gauge(
+      "openclaw_worker_heap_used_high_water_bytes",
+      "Largest observed pool worker heap usage, retained across worker retirement.",
+      labels,
+      worker.heapUsedHighWaterBytes,
+    );
+    for (const gc of worker.gc) {
+      const gcLabels = { ...labels, kind: gc.kind };
+      store.counterValue(
+        "openclaw_worker_gc_duration_seconds_total",
+        "Observed pool worker garbage collection duration, retained across worker retirement.",
+        gcLabels,
+        gc.durationMs / 1000,
+      );
+      store.counterValue(
+        "openclaw_worker_gc_collections_total",
+        "Observed pool worker garbage collections, retained across worker retirement.",
+        gcLabels,
+        gc.count,
+      );
+      store.counterValue(
+        "openclaw_worker_gc_reclaimed_bytes_total",
+        "Sum of positive heap usage decreases across observed pool worker garbage collections.",
+        gcLabels,
+        gc.reclaimedBytes,
       );
     }
   }

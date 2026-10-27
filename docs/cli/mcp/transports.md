@@ -79,7 +79,6 @@ Connects to a remote MCP server over HTTP Server-Sent Events.
 | `connectionTimeoutMs`       | Per-server connection timeout in ms (optional)                   |
 | `requestTimeoutMs`          | Per-server MCP request timeout in milliseconds                   |
 | `auth: "oauth"`             | Use MCP OAuth credentials saved by `openclaw mcp login`          |
-| `auth: "enterprise"`        | Use Enterprise-Managed Authorization through an IdP              |
 | `sslVerify`                 | Set false only for explicitly trusted private HTTPS endpoints    |
 | `clientCert` / `clientKey`  | mTLS client certificate and key paths                            |
 | `supportsParallelToolCalls` | Hint that concurrent calls are safe for this server              |
@@ -195,6 +194,14 @@ The shared operator flow uses the following commands:
     openclaw mcp login docs --code abc123
     ```
 
+    If the callback URL also contains `iss`, pass its exact decoded value from
+    that same callback. OpenClaw validates it against the sign-in provider; do
+    not replace it with a different issuer or omit it when the provider requires it.
+
+    ```bash
+    openclaw mcp login docs --code abc123 --issuer https://accounts.example.com
+    ```
+
   </Step>
   <Step title="Check authorization">
     Use status or doctor to confirm that tokens are present and do not require additional authorization. If status reports `authorization-required` or doctor asks for additional authorization, run `openclaw mcp login <name>` again.
@@ -217,39 +224,6 @@ The shared operator flow uses the following commands:
 
 If the provider rotates tokens or the authorization state gets stuck, run `openclaw mcp logout <name>`, then repeat `login`. `logout` can clear credentials for a saved HTTP server even after `auth: "oauth"` has been removed from config, as long as the server name and URL still identify the credential store entry.
 
-## Enterprise-managed authorization
-
-For MCP servers that advertise the ID-JAG grant profile, set `auth: "enterprise"`. Register a confidential OIDC client with the enterprise IdP and a separate client with each MCP resource authorization server. The IdP client must allow the loopback redirect URI. The resource client must be allowed to exchange ID-JAG assertions. This flow uses the MCP TypeScript SDK's `CrossAppAccessProvider` with a pinned resource authorization-server issuer.
-
-```json5
-{
-  mcp: {
-    servers: {
-      enterpriseTools: {
-        url: "https://mcp.example.com/mcp",
-        transport: "streamable-http",
-        auth: "enterprise",
-        enterprise: {
-          identity: "shared",
-          idpIssuer: "https://idp.example.com",
-          idpClientId: "openclaw-idp-client",
-          idpClientSecret: "${MCP_IDP_CLIENT_SECRET}",
-          resourceIssuer: "https://auth.mcp.example.com",
-          resourceClientId: "openclaw-resource-client",
-          resourceClientSecret: "${MCP_RESOURCE_CLIENT_SECRET}",
-          scope: "mcp.read",
-          redirectUrl: "http://localhost:3097/callback",
-        },
-      },
-    },
-  },
-}
-```
-
-Run `openclaw mcp login enterpriseTools`, complete the browser sign-in, then run `openclaw mcp doctor enterpriseTools --probe`. The verified OIDC ID token is stored in the owner-only MCP OAuth SQLite store and refreshed through the IdP when possible. OpenClaw requests an ID-JAG for the MCP resource, redeems it at the resource authorization server, and sends the resulting access token only to that resource origin. Set `tokenEndpointAuthMethod: "client_secret_post"` when the resource authorization server requires it; the default is `client_secret_basic`. `openclaw mcp logout enterpriseTools` clears the IdP session for every MCP server using the same IdP client.
-
-`identity: "shared"` is required because this is an operator-managed connection. Every sender allowed to use the configured MCP server can use the operator's enterprise account. Use Gateway access controls and MCP tool policy accordingly. Per-requester enterprise SSO sign-in is not implemented by this flow.
-
 ## Streamable HTTP transport
 
 `streamable-http` is an additional transport option alongside `sse` and `stdio`. It uses HTTP streaming for bidirectional communication with remote MCP servers.
@@ -262,7 +236,6 @@ Run `openclaw mcp login enterpriseTools`, complete the browser sign-in, then run
 | `connectionTimeoutMs`       | Per-server connection timeout in ms (optional)                                         |
 | `requestTimeoutMs`          | Per-server MCP request timeout in milliseconds                                         |
 | `auth: "oauth"`             | Use MCP OAuth credentials saved by `openclaw mcp login`                                |
-| `auth: "enterprise"`        | Use an enterprise IdP assertion and resource authorization server                      |
 | `sslVerify`                 | Set false only for explicitly trusted private HTTPS endpoints                          |
 | `clientCert` / `clientKey`  | mTLS client certificate and key paths                                                  |
 | `supportsParallelToolCalls` | Hint that concurrent calls are safe for this server                                    |

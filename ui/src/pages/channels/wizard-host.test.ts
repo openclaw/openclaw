@@ -1,7 +1,6 @@
 import { createRoot } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { ApplicationContext } from "../../app/context.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
@@ -52,7 +51,7 @@ it.each([
   });
   const channels = createChannelCapability(gateway);
   const runtimeConfig = createRuntimeConfigCapability(gateway);
-  const context = { gateway, channels, runtimeConfig } as ApplicationContext;
+  const context = { gateway, runtimeConfig };
   let currentContext = context;
   const discardDraft = vi.spyOn(runtimeConfig, "discardDraft").mockResolvedValue();
   const refresh = vi.spyOn(channels, "refresh").mockResolvedValue();
@@ -66,7 +65,11 @@ it.each([
     dispose = stop;
     return createChannelSetup({
       getContext: () => currentContext,
+      channels,
       clearSelection: () => {},
+      presentWizard: async (pending) => await pending,
+      retire: () => {},
+      startWhatsApp: (force, accountId) => channels.startWhatsApp(force, accountId),
     });
   });
   try {

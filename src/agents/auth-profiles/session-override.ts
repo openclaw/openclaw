@@ -480,7 +480,7 @@ async function resolveSessionAuthProfileOverride(
           })
           .find(
             (profileId) =>
-              (store.usageStats?.[profileId]?.failureCounts?.rate_limit ?? 0) > 0 &&
+              store.usageStats?.[profileId]?.lastRateLimitAt !== undefined &&
               !isProfileUnavailableForSessionModel(profileId),
           )
       : undefined;

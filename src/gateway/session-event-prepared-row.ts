@@ -2,7 +2,9 @@ import { performance } from "node:perf_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
 import {
   type SessionRowPreparationOptions,
@@ -27,14 +29,7 @@ function createPublicationOwner(projection: SessionRowProjection) {
   let reset: ReturnType<typeof setImmediate> | undefined;
   let wake: ReturnType<typeof setImmediate> | undefined;
   const waiting = new Set<() => void>();
-  function track<T>(work: Promise<T>): Promise<T> {
-    pending.add(work);
-    void work.then(
-      () => pending.delete(work),
-      () => pending.delete(work),
-    );
-    return work;
-  }
+  const track = createPendingPromiseTracker(pending);
   function wakeNext() {
     wake ??= setImmediate(() => {
       wake = undefined;
@@ -148,28 +143,30 @@ export async function withPreparedEventRow(
     publish();
     return;
   }
-  await sessionEventPublicationRows(projection).withReadyRows(
-    () => [query],
-    (read) => {
-      const record = read.describe(query);
-      const ancestors = record ? projection.ancestorRows(record, read) : undefined;
-      const rows = record ? [record, ...(ancestors ?? [])] : [];
-      const children = new Set<string>();
-      for (const row of rows) {
-        for (const group of row.materialized.row.swarm?.groups ?? []) {
-          for (const child of group.children ?? []) {
-            children.add(child.sessionKey);
+  await runWithMainThreadTask("gateway:session-event", () =>
+    sessionEventPublicationRows(projection).withReadyRows(
+      () => [query],
+      (read) => {
+        const record = read.describe(query);
+        const ancestors = record ? projection.ancestorRows(record, read) : undefined;
+        const rows = record ? [record, ...(ancestors ?? [])] : [];
+        const children = new Set<string>();
+        for (const row of rows) {
+          for (const group of row.materialized.row.swarm?.groups ?? []) {
+            for (const child of group.children ?? []) {
+              children.add(child.sessionKey);
+            }
           }
         }
-      }
-      // Resolve child metadata before the transport catches serialization errors.
-      // Pending worker facts must reach the preparation owner's existing retry.
-      for (const key of children) {
-        read.selectEntries({ key });
-      }
-      publish(read, ancestors);
-    },
-    { includeAncestors: true },
+        // Resolve child metadata before the transport catches serialization errors.
+        // Pending worker facts must reach the preparation owner's existing retry.
+        for (const key of children) {
+          read.selectEntries({ key });
+        }
+        publish(read, ancestors);
+      },
+      { includeAncestors: true },
+    ),
   );
 }
 

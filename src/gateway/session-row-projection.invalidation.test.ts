@@ -130,8 +130,6 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
           id: "example",
           label: "Example",
           auth: [],
-          aliases: ["example-alias"],
-          hookAliases: ["example-hook"],
           resolveThinkingProfile: () => null,
         }),
       });
@@ -182,6 +180,21 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
       await projection.ensureMaterialized();
       expect(original.sessions.map((row) => row.model)).toEqual(Array(4).fill("original"));
       const materialized = sequences();
+      const thinkingFacts = projection.state.rowContext.thinkingFactsByModelRef;
+      expect(thinkingFacts.size).toBeGreaterThan(0);
+      const originalBytes = JSON.stringify(original.sessions);
+      for (let publication = 0; publication < 3; publication++) {
+        catalog = view("original");
+        notifyPreparedModelRuntimePublication({ phase: "published" });
+        await projection.ensureMaterialized();
+        // An ordinary exact refresh must reuse the retained catalog's prepared facts too.
+        sessionChanges.emit({ agentId: "main", sessionKey: keys[0]!, scope: "automation" });
+        await projection.ensureMaterialized();
+        expect(projection.state.rowContext.thinkingFactsByModelRef).toBe(thinkingFacts);
+        expect(sequences().slice(1)).toEqual(materialized.slice(1));
+        expect(JSON.stringify((await list()).sessions)).toBe(originalBytes);
+      }
+      const afterEquivalent = sequences();
       for (const entry of [
         { enabled: true, hooks: { allowPromptInjection: false } },
         { enabled: false },
@@ -197,15 +210,17 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
         expect(
           concurrent.every((result) => result.sessions.every((row) => row.model === "original")),
         ).toBe(true);
-        expect(sequences()).toEqual(materialized);
+        expect(sequences()).toEqual(afterEquivalent);
         expect(projection.dirtyRowCount).toBe(0);
       }
       // Captured code changes still invalidate policy even with the same registration shape.
+      const beforeCodeChange = projection.state.rowContext.thinkingFactsByModelRef;
       catalog = view("original", "changed-code");
       notifyPreparedModelRuntimePublication({ phase: "published" });
       await projection.ensureMaterialized();
       expect((await list()).sessions.map((row) => row.model)).toEqual(Array(4).fill("original"));
-      expect(sequences()).not.toEqual(materialized);
+      expect(sequences()).not.toEqual(afterEquivalent);
+      expect(projection.state.rowContext.thinkingFactsByModelRef).not.toBe(beforeCodeChange);
       const beforeNormalization = sequences();
       // A manifest policy edit still changes rows even when catalog entries stay identical.
       catalog = view("replacement", "changed-code");
@@ -302,13 +317,14 @@ it("reuses descendants after parent progress while keeping inherited models curr
             undefined,
             context.resolveGatewayContext,
           ),
-        ).snapshot({
-          agentId: "main",
-          key,
-        }).row!;
+        )
+          .getPresentation()
+          .snapshot({
+            agentId: "main",
+            key,
+          }).row!;
       const siblingSnapshot = snapshot(siblingKey);
       const parentSnapshot = snapshot(parentKey);
-      const siblingBytes = JSON.stringify(siblingSnapshot);
       expect(() => {
         siblingSnapshot.label = "Reader mutation";
       }).toThrow(TypeError);
@@ -323,7 +339,6 @@ it("reuses descendants after parent progress while keeping inherited models curr
         await list();
         expect(children.map(sequence)).toEqual(original);
         expect(snapshot(siblingKey)).toBe(siblingSnapshot);
-        expect(JSON.stringify(snapshot(siblingKey))).toBe(siblingBytes);
         if (change) {
           expect(snapshot(parentKey)).not.toBe(parentSnapshot);
           expect(snapshot(parentKey).label).toBe("Updated parent");
@@ -563,6 +578,10 @@ it("reuses row identities across lists until their entry, profile, or config cha
       expect(unassigned.owners).toEqual([]);
       expect(unassigned.sessions[0]?.owner).toBeUndefined();
       expect(unassigned.sessions[0]?.participants?.[0]?.label).toBe("Renamed agent");
+      expect((await list()).sessions[0]?.owner).toBeUndefined();
+      Object.assign(cfg.agents.entries, { missing: { identity: { name: "New agent" } } });
+      sessionChanges.emit({ all: true, scope: "config" });
+      expect((await list()).sessions[0]?.owner?.actor.label).toBe("New agent");
       assignSessionOwner(scope, {
         owner: { type: "agent", id: "main" },
         assignedBy: { type: "system", id: "test" },

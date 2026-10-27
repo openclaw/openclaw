@@ -162,6 +162,7 @@ openclaw gateway diagnostics export --json
 
 <ParamField path="--output <path>" type="string">
   Output zip path. Defaults to a support export under the state directory.
+  Existing directories receive an automatically named archive. Quoted non-home paths preserve surrounding whitespace; blank values use the default.
 </ParamField>
 <a id="param-log-lines"></a>
 
@@ -318,6 +319,11 @@ openclaw gateway probe
 openclaw gateway probe --json
 openclaw gateway probe --port 18789
 ```
+
+`--timeout <ms>` (default `3000`) is one shared budget for discovery, SSH setup,
+connections, and read checks. Known targets are checked while discovery runs.
+When the budget expires, unfinished checks report a timeout; connection and SSH
+process cleanup can briefly extend the elapsed command time.
 
 <a id="param-port-2"></a>
 

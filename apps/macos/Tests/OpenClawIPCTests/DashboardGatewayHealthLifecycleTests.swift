@@ -121,7 +121,8 @@ extension DashboardGatewayHealthTests {
                 window.webkit.messageHandlers.openclawGateways.postMessage({type: 'connection-state-changed'});
                 """,
                 arguments: ["gatewayUrl": server.websocketURL("/control/").absoluteString],
-                in: nil, contentWorld: .page)
+                in: nil,
+                contentWorld: .page)
             _ = try await controller.webView.evaluateJavaScript("document.readyState")
             #expect(controller.gatewayHealth == nil)
             #expect(self.health(target, in: manager) == .unknown)
@@ -148,6 +149,59 @@ extension DashboardGatewayHealthTests {
             #expect(controller.gatewayHealth == nil)
             #expect(manager.dashboardHealth(for: target) == nil)
             #expect(self.health(target, in: manager) == .unknown)
+        }
+    }
+
+    @Test func `content process termination after load shows a failure page that recovers`() async throws {
+        try await self.withFixture { manager, _ in
+            let target = DashboardGatewayTarget.profile("first")
+            let controller = try await self.open(target, in: manager)
+            let window = try #require(controller.window)
+            controller.webViewWebContentProcessDidTerminate(controller.webView)
+            try await TestWait.state("terminated dashboard failure page") {
+                guard controller.isShowingFailurePage, !controller.webView.isLoading else { return false }
+                let text = try? await controller.webView.evaluateJavaScript("document.body.innerText") as? String
+                return text?.contains("Dashboard unavailable") == true
+            }
+            manager.recoverDashboard(controller)
+            try await TestWait.state("replacement dashboard controller") {
+                (window.windowController as? DashboardWindowController).map { $0 !== controller } == true
+            }
+            let recovered = try #require(window.windowController as? DashboardWindowController)
+            try await DashboardTestWait.document(recovered, "recovered Gateway document")
+            #expect(!recovered.isShowingFailurePage)
+            #expect(try await recovered.webView.evaluateJavaScript("document.body.innerText") as? String ==
+                "Gateway fixture")
+        }
+    }
+
+    @Test func `content process termination on the signed out page keeps sign in recovery`() async throws {
+        try await self.withFixture { manager, _ in
+            let target = DashboardGatewayTarget.profile("first")
+            let controller = try await self.open(target, in: manager)
+            let page = DashboardFailurePage.SignedOut(
+                target: target, name: "first", host: "gateway.example", expiresAt: Date())
+            controller.showSignedOut(page, present: false, autoStart: false)
+            let pageText: @MainActor () async -> String? = {
+                try? await controller.webView.evaluateJavaScript("document.body.innerText") as? String
+            }
+            try await TestWait.state("signed out page") { await pageText()?.contains("Sign in again") == true }
+            // Invoking the delegate leaves the old document in place, so the marker shows it was replaced.
+            _ = try await controller.webView.evaluateJavaScript("window.fixtureMarker = true; true")
+            controller.webViewWebContentProcessDidTerminate(controller.webView)
+            try await TestWait.state("redrawn signed out page") {
+                let replaced = try? await controller.webView
+                    .evaluateJavaScript("window.fixtureMarker === undefined") as? Bool
+                guard controller.isShowingFailurePage, !controller.webView.isLoading, replaced == true else {
+                    return false
+                }
+                return await pageText()?.contains("Sign in again") == true
+            }
+            let redrawn = await pageText()
+            #expect(redrawn?.contains("Reload") == false)
+            manager.handleGatewayRequest(.reconnect(target), from: controller)
+            try await TestWait.state("sign in started") { await pageText() != redrawn }
+            controller.cancelGatewayReconnect(target)
         }
     }
 

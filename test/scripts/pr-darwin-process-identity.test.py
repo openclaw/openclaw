@@ -140,7 +140,7 @@ class LockTests(unittest.TestCase):
         self.repo = self.root/'repo'; self.repo.mkdir()
         self.git('init', '-q', '-b', 'main')
         self.sources = self.root/'source'/'pr-lib';self.sources.mkdir(parents=True)
-        for file in (LOCK, RUNNER, PROVIDER, LOCK.with_name('host-tools.sh'), LOCK.with_name('github.sh'), LOCK.with_name('github.mjs'), LOCK.with_name('gh-api-preflight.mjs')):
+        for file in (LOCK, RUNNER, RUNNER.with_name('materialized-anchor.mjs'), PROVIDER, LOCK.with_name('host-tools.sh'), LOCK.with_name('github.sh'), LOCK.with_name('github.mjs'), LOCK.with_name('gh-api-preflight.mjs')):
             shutil.copyfile(file,self.sources/file.name)
         library = self.sources.parent/'lib';library.mkdir()
         # Preserve the supervisor's eager script imports without copying an app graph.
@@ -249,11 +249,11 @@ class LockTests(unittest.TestCase):
         self.assertFalse(anchor.exists())
         self.assertTrue((outside/'preserved').exists())
 
-    def test_anchor_retained_after_drained_operation_failure(self):
+    def test_anchor_retired_after_drained_operation_failure(self):
         p, anchor, _ = self.supervise_anchor('acquire_pr_operation_lock 42\nexit 7')
         self.complete(p, 7)
         self.assertFalse(self.exists())
-        self.assertTrue(anchor.exists())
+        self.assertFalse(anchor.exists())
 
     def test_anchor_retained_without_creation_authority(self):
         for handoff in ('missing', 'closed', 'wrong-pid', 'foreign'):
@@ -279,7 +279,7 @@ class LockTests(unittest.TestCase):
         self.assertTrue(original.exists())
         self.assertEqual((anchor/'replacement').read_text(), 'foreign bytes\n')
 
-    def test_anchor_retained_after_interruption(self):
+    def test_anchor_retired_after_interruption(self):
         ready = self.root/'ready'
         p, anchor, _ = self.supervise_anchor('acquire_pr_operation_lock 42\n: > "'+str(ready)+'"\nsleep 30')
         deadline = time.monotonic()+5
@@ -287,7 +287,7 @@ class LockTests(unittest.TestCase):
             self.assertIsNone(p.poll()); self.assertLess(time.monotonic(), deadline); time.sleep(.02)
         p.send_signal(signal.SIGTERM)
         self.complete(p, 128+signal.SIGTERM)
-        self.assertTrue(anchor.exists())
+        self.assertFalse(anchor.exists())
         self.assertTrue(self.exists())
 
     @unittest.skipUnless(sys.platform == 'darwin', 'Darwin sandbox')

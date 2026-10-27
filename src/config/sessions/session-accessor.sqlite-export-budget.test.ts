@@ -29,13 +29,11 @@ it.each([
     const sessionKey = `agent:main:${sessionId}`;
     if (encoding !== "UTF-8") {
       storePath = path.join(tempDir, `${encoding}.sqlite`);
-      const seed = new DatabaseSync(storePath);
-      try {
+      {
+        using seed = new DatabaseSync(storePath);
         seed.exec(
           `PRAGMA encoding = '${encoding}'; CREATE TABLE encoding_seed (id INTEGER); DROP TABLE encoding_seed;`,
         );
-      } finally {
-        seed.close();
       }
       await replaceSessionEntry(
         { agentId: "main", sessionKey, storePath },
@@ -55,10 +53,7 @@ it.each([
     ];
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
     await replaceTranscriptEvents(scope, events);
-    const jsonlSize = Buffer.byteLength(
-      events.map((event) => JSON.stringify(event)).join("\n"),
-      "utf8",
-    );
+    const jsonlSize = Buffer.byteLength(events.map((event) => JSON.stringify(event)).join("\n"));
     const expectByteBoundary = () => {
       expect(loadTranscriptEventsSync({ ...scope, maxEventBytes: jsonlSize })).toEqual(events);
       expect(() => loadTranscriptEventsSync({ ...scope, maxEventBytes: jsonlSize - 1 })).toThrow(

@@ -1,5 +1,8 @@
 import type { TranslationMap } from "../lib/types.ts";
+import { registerNewSessionRuntimeEnglish } from "./en-new-session-runtime.ts";
 import { en } from "./en.ts";
+
+const runtime = registerNewSessionRuntimeEnglish.catalog.newSession;
 
 // Session setup messages load with their consumers instead of every UI startup.
 const enNewSessionSetup = {
@@ -20,10 +23,8 @@ const enNewSessionSetup = {
       "Existing device folders cannot receive attachments. Remove them, or choose another workspace.",
     requiredWorkerHint: "Say what you’d like to work on.",
     requiredWorker: "Worker",
-    requiredWorkerUnavailable:
-      "The required worker is unavailable. Ask an administrator to check the worker profile, then retry.",
-    requiredWorkerChanged:
-      "The required worker policy changed. Start a new session; this saved message has not been sent.",
+    requiredWorkerUnavailable: runtime.requiredWorkerUnavailable,
+    requiredWorkerChanged: runtime.requiredWorkerChanged,
     title: en.newSession.title,
     hint: en.newSession.hint,
     environments: "Environments",
@@ -35,20 +36,17 @@ const enNewSessionSetup = {
     cloudProfileRuntimeUnsupported:
       "The {runtime} runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
     deviceRuntimeUnsupported: "This runtime does not support paired devices",
-    placementStartFailed: "The session was created, but startup needs attention: {error}",
+    placementStartFailed: runtime.placementStartFailed,
     placementCreateFailed: "Couldn't prepare session recovery. Your draft has been kept.",
-    placementStillStarting:
-      "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent.",
-    placementCompletionUnconfirmed:
-      "Could not confirm whether worker setup finished. Retry to check again; your message has not been sent.",
+    placementStillStarting: runtime.placementStillStarting,
+    placementCompletionUnconfirmed: runtime.placementCompletionUnconfirmed,
     placementReloadBlocked: en.newSession.placementReloadBlocked,
-    placementCancelled:
-      "Session setup was interrupted and the temporary session was cleaned up. Your prompt is kept here.",
+    placementCancelled: runtime.placementCancelled,
     discardUnsavedAndReload: en.newSession.discardUnsavedAndReload,
     yourDevices: "Your devices",
     autoDeviceSub: "Least-busy device",
     autoDeviceSubEligible: "First eligible device",
-    cloud: "Cloud",
+    cloud: runtime.cloud,
     hosted: "Hosted workspaces",
     hostedWorkspace: "Hosted workspace",
     hostedHint:
@@ -62,7 +60,7 @@ const enNewSessionSetup = {
       "Requires the enabled Agents API plugin, a compatible API-key model, and a hosted environment. ChatGPT subscriptions are not supported.",
     machine: "Machine",
     operatingSystem: "Operating system",
-    runsOn: "Runs on {place}",
+    runsOn: runtime.runsOn,
     browse: "Browse folders",
     browseDevice: "Browse folders on {device}",
     worktree: "Worktree",
@@ -72,21 +70,16 @@ const enNewSessionSetup = {
     gitCheckAccessDenied:
       "You don't have permission to check Git for this folder. Ask the person who manages OpenClaw for access.",
     gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
-    starting: "Starting…",
+    starting: runtime.starting,
     followUps: "Follow-up messages",
-    followUpCommandsUnavailable: "Commands are available after the session is created.",
-    followUpReloadBlocked:
-      "Finish starting the session or remove its follow-up messages and draft before reloading.",
-    followUpsPaused:
-      "The first message was not sent. Review it before retrying these follow-up messages.",
-    followUpsAdmissionFailed:
-      "Your follow-up messages are held. Retry them after checking browser storage.",
-    createFailed: "Couldn't create the session.",
+    followUpCommandsUnavailable: runtime.followUpCommandsUnavailable,
+    followUpReloadBlocked: runtime.followUpReloadBlocked,
+    followUpsPaused: runtime.followUpsPaused,
+    followUpsAdmissionFailed: runtime.followUpsAdmissionFailed,
+    createFailed: runtime.createFailed,
     checkoutCurrentNote: "Works in the selected folder on its current branch.",
-    preferenceSaveUnconfirmed:
-      "Saving your new-session choices could not be confirmed. Check them before starting a session.",
-    worktreeNameClearUnconfirmed:
-      "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
+    preferenceSaveUnconfirmed: runtime.preferenceSaveUnconfirmed,
+    worktreeNameClearUnconfirmed: runtime.worktreeNameClearUnconfirmed,
     agent: "Agent",
     agents: "Agents",
     where: "Where",

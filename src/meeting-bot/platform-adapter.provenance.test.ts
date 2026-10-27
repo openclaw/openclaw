@@ -19,18 +19,15 @@ const unknownProvenance = { observer: "test-meeting", self: "unknown" };
 const transcriptDefaults = { droppedLines: 0, epoch: "epoch-1" };
 
 it("preserves committed, pending, and source-ineligible row facts through browser forwarding", async () => {
-  const committed = { ...datedCaption, text: "Committed" };
-  const own = observedLine("Own", { observationId: "own", self: "self" });
-  const ambiguous = observedLine("Unknown", { observationId: "unknown", self: "unknown" });
-  const stale = observedLine("Stale", { observationId: "stale", epoch: "old-page" });
+  const stale = observedLine("Stale", { epoch: "old-page" });
   const pending = {
-    ...observedLine("Please wait", { observationId: "pending-observation" }),
-    source: { ...TEST_CAPTION_SOURCE, revision: "3", finalized: false },
+    ...captionLine,
+    source: { ...TEST_CAPTION_SOURCE, finalized: false },
   };
   const snapshot = {
+    ...transcriptDefaults,
     droppedLines: 7,
-    epoch: "epoch-1",
-    lines: [committed, own, ambiguous, stale],
+    lines: [datedCaption, stale],
     pendingLines: [pending],
   };
   const result = await readTestMeetingTranscript({
@@ -39,17 +36,13 @@ it("preserves committed, pending, and source-ineligible row facts through browse
     sessionMatched: true,
     lines: [
       {
-        ...committed,
-        provenance: { ...committed.provenance, authority: { participantId: "untrusted" } },
+        ...datedCaption,
+        provenance: { ...datedCaption.provenance, authority: { participantId: "untrusted" } },
       },
-      own,
-      ambiguous,
       { ...stale, source: { ...TEST_CAPTION_SOURCE, epoch: "old-page" } },
     ],
   });
   expect(result).toEqual(snapshot);
-  expect(result.lines.slice(1).every((line) => line.source === undefined)).toBe(true);
-  expect(result.lines[0]?.provenance).not.toBe(committed.provenance);
 });
 
 it.each([
@@ -84,7 +77,6 @@ it.each([
 });
 
 const malformedLine = { at: "invalid-time", speaker: "x".repeat(513), text: "Still retained" };
-const legacyLine = { text: "Legacy provider without observation metadata" };
 it("normalizes malformed identity and fallback without manufacturing attribution", () => {
   const epoch = "x".repeat(513);
   const line = {
@@ -110,7 +102,7 @@ it("drops invalid caption rows and non-string display fields", () => {
 });
 
 it("preserves legacy provider rows without manufacturing attribution", () => {
-  const lines = [legacyLine];
+  const lines = [{ text: "Legacy provider without observation metadata" }];
   expect(parseTranscript({ lines })).toEqual({ droppedLines: 0, lines });
 });
 

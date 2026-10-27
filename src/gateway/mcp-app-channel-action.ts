@@ -9,7 +9,6 @@ import { getTailscalePublishedOrigin } from "./tailscale-published-origin.js";
 export function materializeMcpAppChannelPresentation(params: {
   sessionKey: string;
   view: McpAppChannelView;
-  nowMs?: number;
 }): MessagePresentation | undefined {
   const origin = getTailscalePublishedOrigin();
   if (!origin) {
@@ -19,7 +18,7 @@ export function materializeMcpAppChannelPresentation(params: {
   if (!runtime || runtime.mcpAppsEnabled !== true) {
     return undefined;
   }
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = Date.now();
   const view = getMcpAppViewLease(params.view.viewId, runtime);
   if (!view || view.expiresAtMs <= nowMs) {
     return undefined;

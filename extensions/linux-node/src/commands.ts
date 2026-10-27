@@ -56,18 +56,7 @@ function isLocationDisabledOutput(output: string): boolean {
   return /Geolocation disabled|disallowed, no agent|AccessDenied|not authorized/iu.test(output);
 }
 
-function parseLocationOutput(
-  output: string,
-  maxAgeMs?: number,
-): {
-  lat: number;
-  lon: number;
-  accuracyMeters: number;
-  altitudeMeters?: number;
-  speedMps?: number;
-  headingDeg?: number;
-  timestamp: string;
-} | null {
+function parseLocationOutput(output: string, maxAgeMs?: number) {
   const blocks = output.split(/\nNew location:\s*\n/gu);
   for (const block of blocks.toReversed()) {
     const latitude = /Latitude:\s*([-+\d.]+)/u.exec(block)?.[1];
@@ -452,14 +441,7 @@ export function createLinuxNodeCommands(
         isCapabilityEnabledForHost(context, "location") &&
         findWhereAmI(context.env) !== null,
       handle: async (paramsJSON) => {
-        if (platform !== "linux") {
-          throw new Error("LOCATION_DISABLED: Linux node host required");
-        }
-        if (!config.location.enabled) {
-          throw new Error(
-            "LOCATION_DISABLED: enable plugins.entries.linux-node.config.location.enabled and restart the node service",
-          );
-        }
+        assertLinuxCapability("location", "LOCATION_DISABLED");
         const whereAmI = findWhereAmI();
         if (!whereAmI) {
           throw new Error("LOCATION_UNAVAILABLE: where-am-i not found");

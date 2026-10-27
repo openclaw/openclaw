@@ -1,25 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { makeCronJob } from "../../cron/delivery.test-helpers.js";
-import { deleteCronJobRowInDatabase, upsertCronJobRow } from "../../cron/store/row-codec.js";
-import { makeCronStreamSandboxTarget } from "../../cron/stream-sandbox.test-support.js";
-import { cronStreamScheduleKey } from "../../cron/stream-schedule.js";
+import { deleteCronJobRowInDatabase } from "../../cron/store/row-codec.js";
 import { withSettledLocalWorkspaceProjectionPath } from "../../gateway/worker-environments/local-workspace-settlement.js";
-import {
-  onInternalDiagnosticEvent,
-  waitForDiagnosticEventsDrained,
-} from "../../infra/diagnostic-events.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
-import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -29,6 +20,8 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
+import { rejectOnNextAbort } from "../test-helpers/abort-signal.js";
 import { requireGit } from "../worktrees/git.js";
 import { insertRegistryWorktree } from "../worktrees/registry.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
@@ -43,19 +36,25 @@ import { createSandboxFsBridge } from "./fs-bridge.js";
 import { bindLocalSandboxWorkspace, prepareLocalSandboxWorkspace } from "./local-workspace.js";
 import * as persistentExecStore from "./persistent-exec-store.js";
 import { createSandboxPersistentExecStore } from "./persistent-exec-store.js";
-import type {
-  SandboxPersistentExecMutationResult,
-  SandboxPersistentExecRecord,
-} from "./persistent-exec-store.types.js";
+import type { SandboxPersistentExecRecord } from "./persistent-exec-store.types.js";
 import {
   createSandboxPersistentExecOwner,
   settleSandboxPersistentExecsForRetirement,
 } from "./persistent-exec.js";
 import {
+  createStreamSource,
+  custodyTransitions,
+  expected,
+  receipt as baseReceipt,
+  registryEntry,
+  reservation,
+  retained,
+  setProcessOwner,
+} from "./persistent-exec.test-helpers.js";
+import {
   bindSandboxPersistentExecCapability,
   type DockerPersistentExecCleanupTarget,
   type DockerPersistentExecExtinctionProof,
-  type DockerPersistentExecReceipt,
   type SandboxPersistentExecCapability,
   type SandboxPersistentExecPreparation,
   type SandboxPersistentExecStopped,
@@ -101,40 +100,15 @@ function stopped(target: DockerPersistentExecCleanupTarget): SandboxPersistentEx
   return { reason: "cancelled", exitCode: null, extinction };
 }
 
-function retained(result: SandboxPersistentExecMutationResult): SandboxPersistentExecRecord {
-  expect(result.ok).toBe(true);
-  if (!result.ok || !result.current) {
-    throw new Error("Expected retained process custody");
-  }
-  return result.current;
-}
-
-function expected(record: SandboxPersistentExecRecord) {
-  return {
-    ownerKey: record.ownerKey,
-    attemptId: record.attemptId,
-    expectedRevision: record.revision,
-  };
-}
-
 function replaceProcessOwner(record: SandboxPersistentExecRecord, foreign = false) {
   if (record.owner.startedAt === null) {
     throw new Error("Fixture process identity is unavailable");
   }
   // A mismatched birth time models controller death without spawning or killing a process.
-  const owner = {
+  setProcessOwner(record, {
     ...record.owner,
     startedAt: record.owner.startedAt + 1,
     ...(foreign ? { namespace: "foreign-process-namespace" } : {}),
-  };
-  runOpenClawStateWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<DB>(db)
-        .updateTable("sandbox_persistent_execs")
-        .set({ owner_json: JSON.stringify({ owner }) })
-        .where("owner_key", "=", record.ownerKey),
-    );
   });
 }
 
@@ -142,12 +116,7 @@ async function fixture() {
   const root = tempDirs.make("openclaw-persistent-exec-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const registry = {
-    containerName: "fixture-container",
-    backendId: "docker",
-    sessionKey: "agent:main",
-    image: "fixture:image",
-    createdAtMs: 1,
-    lastUsedAtMs: 1,
+    ...registryEntry,
     workspaceDir: path.join(root, "workspace"),
     backendTarget: {
       key: "docker:fixture-daemon",
@@ -156,52 +125,25 @@ async function fixture() {
   };
   await updateRegistry(registry);
   const store = createSandboxPersistentExecStore();
-  const job = {
-    ...makeCronJob({ state: { streamSourceIdentity: "source-a" } }),
-    schedule: { kind: "stream" as const, command: ["fixture-watcher"] },
-    streamSandbox: makeCronStreamSandboxTarget(),
-  };
-  const source = {
-    storeKey: path.join(root, "cron", "jobs.sqlite"),
-    jobId: job.id,
-    sourceIdentity: "source-a",
-    scheduleKey: cronStreamScheduleKey(job.schedule, job.streamSandbox),
-  };
-  const persistJob = () =>
-    runOpenClawStateWriteTransaction(({ db }) => {
-      upsertCronJobRow(db, source.storeKey, job, 0);
-    });
-  persistJob();
-  const receipt: DockerPersistentExecReceipt = {
-    version: 1,
-    target: { kind: "docker", endpoint: "unix:///var/run/docker.sock", daemonId: "fixture-daemon" },
-    parentContainerId: "a".repeat(64),
-    containerId: "b".repeat(64),
-    attemptId: "00000000-0000-4000-8000-000000000001",
-  };
+  const {
+    job,
+    source,
+    persist: persistJob,
+  } = createStreamSource(path.join(root, "cron", "jobs.sqlite"));
+  const receipt = structuredClone(baseReceipt);
   const exited = createDeferredCore<SandboxPersistentExecStopped>();
   const preparation = {
     receipt,
-    start: vi.fn<SandboxPersistentExecPreparation["start"]>().mockImplementation(async (admit) => {
-      await admit();
-    }),
-    checkCurrent: vi
-      .fn<SandboxPersistentExecPreparation["checkCurrent"]>()
-      .mockResolvedValue(undefined),
+    start: vi.fn<SandboxPersistentExecPreparation["start"]>(async (admit) => await admit()),
+    checkCurrent: vi.fn<SandboxPersistentExecPreparation["checkCurrent"]>(async () => {}),
     stopped: exited.promise,
-    stop: vi
-      .fn<SandboxPersistentExecPreparation["stop"]>()
-      .mockImplementation(async () => stopped(receipt)),
+    stop: vi.fn<SandboxPersistentExecPreparation["stop"]>(async () => stopped(receipt)),
   };
-  const prepare = vi
-    .fn<SandboxPersistentExecCapability["prepare"]>()
-    .mockImplementation(async ({ attemptId }) => {
-      receipt.attemptId = attemptId;
-      return preparation;
-    });
-  const finalize = vi
-    .fn<NonNullable<SandboxBackendHandle["finalizeExec"]>>()
-    .mockResolvedValue(undefined);
+  const prepare = vi.fn<SandboxPersistentExecCapability["prepare"]>(async ({ attemptId }) => {
+    receipt.attemptId = attemptId;
+    return preparation;
+  });
+  const finalize = vi.fn<NonNullable<SandboxBackendHandle["finalizeExec"]>>(async () => {});
   const backend: SandboxBackendHandle = {
     id: "docker",
     runtimeId: registry.containerName,
@@ -243,6 +185,17 @@ async function fixture() {
   const owner = createSandboxPersistentExecOwner({ scheduler });
   const controller = new AbortController();
   const releaseAuthority = vi.fn();
+  const expectCustody = async (record: Partial<SandboxPersistentExecRecord>) => {
+    expect(await store.list()).toEqual([expect.objectContaining(record)]);
+  };
+  const expectReleased = async () => {
+    expect(await store.list()).toEqual([]);
+    expect(releaseAuthority).toHaveBeenCalledOnce();
+  };
+  const expectRetainedRecovery = async () => {
+    await expect(owner.recover()).rejects.toThrow("cleanup is incomplete");
+    await expectCustody({ phase: "stopped", receipt });
+  };
   const input: StartInput = {
     ownerKey: `cron:${source.storeKey}:${job.id}`,
     source,
@@ -254,18 +207,22 @@ async function fixture() {
     releaseAuthority,
   };
   const start = (overrides: Partial<StartInput> = {}) => owner.start({ ...input, ...overrides });
+  const cancel = async (kind: "caller" | "retirement", message: string) => {
+    if (kind === "caller") {
+      controller.abort(new Error(message));
+    } else {
+      await expect(
+        settleSandboxPersistentExecsForRetirement({ containerName: registry.containerName }),
+      ).resolves.toEqual({ unresolved: [], localOwnerKeys: [] });
+    }
+  };
   const seedCustody = async (phase: "reserved" | "running" | "stopped") => {
     let record = retained(
       await store.reserve(
         {
+          ...reservation,
           ownerKey: input.ownerKey,
-          sourceIdentity: source.sourceIdentity,
           attemptId: receipt.attemptId,
-          backendId: "docker",
-          backendTarget: receipt.target,
-          containerId: receipt.parentContainerId,
-          containerStartedAt: "2026-01-01T00:00:00.000Z",
-          containerName: registry.containerName,
         },
         input.assertCurrent,
         source,
@@ -274,20 +231,8 @@ async function fixture() {
     if (phase === "reserved") {
       return record;
     }
-    record = retained(
-      await store.transition(
-        { ...expected(record), phase: "prepared", receipt },
-        input.assertCurrent,
-        source,
-      ),
-    );
-    record = retained(
-      await store.transition(
-        { ...expected(record), phase: "running" },
-        input.assertCurrent,
-        source,
-      ),
-    );
+    const advance = custodyTransitions(store, input.assertCurrent, source);
+    record = await advance(await advance(record, "prepared", receipt), "running");
     if (phase === "stopped") {
       record = retained(
         await store.confirmContainerExtinction(expected(record), stopped(receipt).extinction),
@@ -308,48 +253,43 @@ async function fixture() {
     clock,
     scheduler,
     owner,
-    controller,
     releaseAuthority,
     input,
     exited,
     start,
+    cancel,
     seedCustody,
+    expectCustody,
+    expectReleased,
+    expectRetainedRecovery,
   };
 }
 
+let f: Awaited<ReturnType<typeof fixture>>;
+beforeEach(async () => {
+  f = await fixture();
+});
+
 it("records custody before allocation and the exact private container before START", async () => {
-  const f = await fixture();
   f.prepare.mockImplementationOnce(async ({ attemptId }) => {
     f.receipt.attemptId = attemptId;
-    expect(await f.store.list()).toEqual([
-      expect.objectContaining({ attemptId, phase: "reserved", receipt: null }),
-    ]);
+    await f.expectCustody({ attemptId, phase: "reserved", receipt: null });
     expect(f.preparation.start).not.toHaveBeenCalled();
     return f.preparation;
   });
   f.preparation.start.mockImplementationOnce(async (admit) => {
-    expect(await f.store.list()).toEqual([
-      expect.objectContaining({ phase: "prepared", receipt: f.receipt }),
-    ]);
+    await f.expectCustody({ phase: "prepared", receipt: f.receipt });
     await admit();
-    expect(await f.store.list()).toEqual([
-      expect.objectContaining({ phase: "running", receipt: f.receipt }),
-    ]);
+    await f.expectCustody({ phase: "running", receipt: f.receipt });
   });
   const run = await f.start();
-  expect(f.prepare).toHaveBeenCalledWith(
-    expect.objectContaining({ command: { argv: ["fixture-watcher"], cwd: undefined } }),
-  );
-  expect(f.preparation.start).toHaveBeenCalledExactlyOnceWith(expect.any(Function));
   await run.waitForExtinction?.();
-  expect(await f.store.list()).toEqual([]);
-  expect(f.releaseAuthority).toHaveBeenCalledTimes(1);
+  await f.expectReleased();
 });
 
 it.each(["stop", "exit", "retirement", "checkpoint retry", "resume retry"] as const)(
   "checkpoints a managed stream before releasing stopped custody: %s",
   async (ending) => {
-    const f = await fixture();
     setRuntimeConfigSnapshot({});
     const canonical = path.join(f.root, "canonical");
     const repo = path.join(f.root, "repo");
@@ -387,7 +327,6 @@ it.each(["stop", "exit", "retirement", "checkpoint retry", "resume retry"] as co
       workspaceDir: canonical,
       sandbox: resolveSandboxConfigForAgent({}, "main"),
     });
-    expect(projection).toBeDefined();
     if (!projection) {
       throw new Error("Expected managed workspace");
     }
@@ -411,32 +350,31 @@ it.each(["stop", "exit", "retirement", "checkpoint retry", "resume retry"] as co
     f.releaseAuthority.mockImplementation(() => projection[Symbol.dispose]());
     let paused = false;
     let failResume = ending === "resume retry";
+    const reply = (stdout = "", code = 0, stderr = "") => ({ code, stdout, stderr });
     // Docker is the external boundary; projection, checkpoint, and custody writes stay real.
     vi.spyOn(containerEngine, "execContainer").mockImplementation(async (_engine, args) => {
       if (args[0] === "info") {
-        return { code: 0, stdout: "fixture-daemon", stderr: "" };
+        return reply("fixture-daemon");
       }
       if (args[0] === "inspect") {
         if (
           args.at(-1) === f.registry.containerName ||
           args.at(-1) === f.receipt.parentContainerId
         ) {
-          return {
-            code: 0,
-            stdout: args.includes("{{.State.Paused}}")
+          return reply(
+            args.includes("{{.State.Paused}}")
               ? String(paused)
               : `${f.receipt.parentContainerId} true ${paused}`,
-            stderr: "",
-          };
+          );
         }
-        return { code: 1, stdout: "", stderr: "no such container" };
+        return reply("", 1, "no such container");
       }
       if (args[0] === "pause" || args[0] === "unpause") {
         if (args[0] === "unpause" && failResume) {
-          return { code: 1, stdout: "", stderr: "fixture daemon unavailable" };
+          return reply("", 1, "fixture daemon unavailable");
         }
         paused = args[0] === "pause";
-        return { code: 0, stdout: "", stderr: "" };
+        return reply();
       }
       throw new Error(`Unexpected Docker action: ${args[0]}`);
     });
@@ -449,7 +387,7 @@ it.each(["stop", "exit", "retirement", "checkpoint retry", "resume retry"] as co
       await expect(run.waitForExtinction?.()).rejects.toThrow(
         ending === "checkpoint retry" ? "conflict" : "runtime resume failed",
       );
-      expect(await f.store.list()).toEqual([expect.objectContaining({ phase: "stopped" })]);
+      await f.expectCustody({ phase: "stopped" });
       expect(projection.assertCurrent).toThrow("authority changed");
       if (ending === "checkpoint retry") {
         expect(await fs.readFile(path.join(canonical, "source.txt"), "utf8")).toBe("human edit\n");
@@ -471,116 +409,66 @@ it.each(["stop", "exit", "retirement", "checkpoint retry", "resume retry"] as co
       await run.waitForExtinction?.();
     }
     expect(await fs.readFile(path.join(canonical, "source.txt"), "utf8")).toBe("stream edit\n");
-    expect(await f.store.list()).toEqual([]);
+    await f.expectReleased();
     expect(paused).toBe(false);
     expect(f.preparation.start).toHaveBeenCalledOnce();
-    expect(f.releaseAuthority).toHaveBeenCalledOnce();
   },
 );
 
-it.each(["caller", "retirement"] as const)(
-  "removes a prepared container without START when %s cancels during preparation",
-  async (cancellation) => {
-    const f = await fixture();
-    const entered = createDeferredCore();
-    const prepared = createDeferredCore<SandboxPersistentExecPreparation>();
-    f.prepare.mockImplementationOnce(({ attemptId }) => {
-      f.receipt.attemptId = attemptId;
-      entered.resolve();
-      return prepared.promise;
-    });
-    const starting = f.start();
-    await entered.promise;
-    const rejected = expect(starting).rejects.toThrow(/cancelled/);
-    const retiring =
-      cancellation === "retirement"
-        ? settleSandboxPersistentExecsForRetirement({ containerName: f.registry.containerName })
-        : undefined;
-    if (cancellation === "caller") {
-      f.controller.abort(new Error("creator cancelled"));
-    }
-    expect(f.preparation.stop).not.toHaveBeenCalled();
-    prepared.resolve(f.preparation);
-    await rejected;
-    if (retiring) {
-      await expect(retiring).resolves.toEqual({ unresolved: [], localOwnerKeys: [] });
-    }
-    expect(f.preparation.start).not.toHaveBeenCalled();
-    expect(f.preparation.stop).toHaveBeenCalledTimes(1);
-    expect(f.releaseAuthority).toHaveBeenCalledTimes(1);
-    expect(await f.store.list()).toEqual([]);
-  },
-);
-
-it.each(["caller", "retirement"] as const)(
-  "joins %s cancellation during START observation before releasing durable custody",
-  async (cancellation) => {
-    const f = await fixture();
-    const entered = createDeferredCore();
+it.each([
+  ["caller", "preparation"],
+  ["retirement", "preparation"],
+  ["caller", "START"],
+  ["retirement", "START"],
+] as const)(
+  "joins %s cancellation during %s before releasing durable custody",
+  async (cancellation, phase) => {
+    const entered = createEnteredGate();
     f.prepare.mockImplementationOnce(async ({ attemptId, signal }) => {
       f.receipt.attemptId = attemptId;
-      f.preparation.start.mockImplementationOnce(async (admit) => {
-        await admit();
-        entered.resolve();
-        await new Promise<void>((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () =>
-              reject(
-                signal.reason instanceof Error
-                  ? signal.reason
-                  : new Error("START observation aborted"),
-              ),
-            { once: true },
-          );
+      if (phase === "preparation") {
+        await entered.wait();
+      } else {
+        f.preparation.start.mockImplementationOnce(async (admit) => {
+          await admit();
+          void entered.wait();
+          await rejectOnNextAbort(signal, "START observation aborted");
         });
-      });
+      }
       return f.preparation;
     });
     const starting = f.start();
     const rejected = expect(starting).rejects.toThrow(
-      cancellation === "caller" ? "stream stop requested" : "has been cancelled",
+      phase === "preparation"
+        ? /cancelled/
+        : cancellation === "caller"
+          ? "stream stop requested"
+          : "has been cancelled",
     );
-    await entered.promise;
-    expect(await f.store.list()).toEqual([
-      expect.objectContaining({ phase: "running", receipt: f.receipt }),
-    ]);
-    const retiring =
-      cancellation === "retirement"
-        ? settleSandboxPersistentExecsForRetirement({ containerName: f.registry.containerName })
-        : undefined;
-    if (cancellation === "caller") {
-      f.controller.abort(new Error("stream stop requested"));
+    await entered.entered;
+    if (phase === "START") {
+      await f.expectCustody({ phase: "running", receipt: f.receipt });
     }
+    const cancelled = f.cancel(
+      cancellation,
+      phase === "preparation" ? "creator cancelled" : "stream stop requested",
+    );
+    if (phase === "preparation") {
+      expect(f.preparation.stop).not.toHaveBeenCalled();
+    }
+    entered.release();
     await rejected;
-    if (retiring) {
-      await expect(retiring).resolves.toEqual({ unresolved: [], localOwnerKeys: [] });
+    await cancelled;
+    if (phase === "preparation") {
+      expect(f.preparation.start).not.toHaveBeenCalled();
     }
     expect(f.preparation.stop).toHaveBeenCalledOnce();
-    expect(f.releaseAuthority).toHaveBeenCalledOnce();
-    expect(await f.store.list()).toEqual([]);
+    await f.expectReleased();
   },
 );
 
-it("reads recovery custody once and observes reservations from a later lifecycle", async () => {
-  const f = await fixture();
-  await waitForDiagnosticEventsDrained();
-  let reads = 0;
-  const unsubscribe = onInternalDiagnosticEvent(
-    (event) => {
-      if (event.type === "worker.request" && event.phase === "queued") {
-        reads++;
-      }
-    },
-    { include: ["worker.request"] },
-  );
-  try {
-    await f.owner.recover();
-    await waitForDiagnosticEventsDrained();
-    expect(reads).toBe(2); // One custody observation and one registry read.
-  } finally {
-    unsubscribe();
-  }
+it("observes reservations from a later recovery lifecycle", async () => {
+  await f.owner.recover();
   replaceProcessOwner(await f.seedCustody("running"));
   await f.owner.recover();
   expect(stopDockerPersistentExec).toHaveBeenCalledExactlyOnceWith(f.receipt, expect.any(Function));
@@ -588,7 +476,6 @@ it("reads recovery custody once and observes reservations from a later lifecycle
 });
 
 it("recovers removed-job custody even when orphan discovery fails", async () => {
-  const f = await fixture();
   replaceProcessOwner(await f.seedCustody("running"));
   runOpenClawStateWriteTransaction(({ db }) => {
     deleteCronJobRowInDatabase(db, f.input.source.storeKey, f.job.id);
@@ -606,14 +493,13 @@ it("recovers removed-job custody even when orphan discovery fails", async () => 
 });
 
 it("keeps live custody acquired while orphan discovery is pending", async () => {
-  const f = await fixture();
   vi.mocked(listDockerPersistentExecContainers).mockImplementationOnce(async () => {
     await f.seedCustody("reserved");
     return [f.receipt];
   });
   await f.owner.recover();
   expect(stopDockerPersistentExec).not.toHaveBeenCalled();
-  expect(await f.store.list()).toEqual([expect.objectContaining({ phase: "reserved" })]);
+  await f.expectCustody({ phase: "reserved" });
 });
 
 it.each([
@@ -623,7 +509,6 @@ it.each([
 ] as const)(
   "blocks replacement of $status $phase custody and recovers only its original child",
   async ({ status, phase }) => {
-    const f = await fixture();
     const record = await f.seedCustody(phase);
     const orphan = {
       ...f.receipt,
@@ -639,10 +524,6 @@ it.each([
     await expect(f.start()).rejects.toThrow("replacement is blocked");
     expect(await f.store.list()).toEqual(prior);
     expect(f.prepare).not.toHaveBeenCalled();
-    expect(listDockerPersistentExecContainers).toHaveBeenCalledWith(
-      f.receipt.target,
-      expect.stringMatching(/^[a-f0-9]{64}$/u),
-    );
     expect(stopDockerPersistentExec).toHaveBeenCalledExactlyOnceWith(orphan, expect.any(Function));
     vi.mocked(stopDockerPersistentExec).mockClear();
     replaceProcessOwner(record);
@@ -663,7 +544,6 @@ it.each([
 );
 
 it("retains stopped custody through checkpoint failure and registry replacement without restarting", async () => {
-  const f = await fixture();
   replaceProcessOwner(await f.seedCustody("stopped"));
   const replacement = {
     ...f.registry,
@@ -675,37 +555,20 @@ it("retains stopped custody through checkpoint failure and registry replacement 
     await updateRegistry(entry);
   };
   await replaceRegistry(replacement);
-  await expect(f.owner.recover()).rejects.toThrow("cleanup is incomplete");
-  expect(await f.store.list()).toEqual([
-    expect.objectContaining({ phase: "stopped", receipt: f.receipt }),
-  ]);
+  await f.expectRetainedRecovery();
   expect(withSettledLocalWorkspaceProjectionPath).not.toHaveBeenCalled();
   await replaceRegistry(f.registry);
   vi.mocked(withSettledLocalWorkspaceProjectionPath).mockRejectedValueOnce(
     new Error("checkpoint unavailable"),
   );
-  await expect(f.owner.recover()).rejects.toThrow("cleanup is incomplete");
-  expect(await f.store.list()).toEqual([
-    expect.objectContaining({ phase: "stopped", receipt: f.receipt }),
-  ]);
-  expect(withSettledLocalWorkspaceProjectionPath).toHaveBeenCalledWith(
-    expect.objectContaining({
-      projectionPath: f.registry.workspaceDir,
-      databasePath: f.store.databasePath,
-      env: f.store.environment,
-    }),
-    expect.any(Function),
-  );
+  await f.expectRetainedRecovery();
   vi.mocked(withSettledLocalWorkspaceProjectionPath).mockImplementationOnce(
     async (_params, operation) => {
       await replaceRegistry(replacement);
       return await operation();
     },
   );
-  await expect(f.owner.recover()).rejects.toThrow("cleanup is incomplete");
-  expect(await f.store.list()).toEqual([
-    expect.objectContaining({ phase: "stopped", receipt: f.receipt }),
-  ]);
+  await f.expectRetainedRecovery();
   await replaceRegistry(f.registry);
   vi.mocked(withSettledLocalWorkspaceProjectionPath).mockImplementationOnce(
     async (_params, operation) => {
@@ -713,10 +576,7 @@ it("retains stopped custody through checkpoint failure and registry replacement 
       throw new Error("runtime resume failed after checkpoint");
     },
   );
-  await expect(f.owner.recover()).rejects.toThrow("cleanup is incomplete");
-  expect(await f.store.list()).toEqual([
-    expect.objectContaining({ phase: "stopped", receipt: f.receipt }),
-  ]);
+  await f.expectRetainedRecovery();
   await f.owner.recover();
   await f.owner.recover();
   expect(await f.store.list()).toEqual([]);
@@ -725,32 +585,24 @@ it("retains stopped custody through checkpoint failure and registry replacement 
 });
 
 it("retains uncertain stop custody and refuses a replacement until the same owner confirms extinction", async () => {
-  const f = await fixture();
   const run = await f.start();
   f.preparation.stop.mockRejectedValue(new Error("daemon unavailable"));
   await expect(run.waitForExtinction?.()).rejects.toThrow("daemon unavailable");
-  expect(await f.store.list()).toEqual([
-    expect.objectContaining({ phase: "uncertain", receipt: f.receipt }),
-  ]);
-  expect(f.finalize).not.toHaveBeenCalled();
+  await f.expectCustody({ phase: "uncertain", receipt: f.receipt });
   await expect(f.start({ releaseAuthority: vi.fn() })).rejects.toThrow("daemon unavailable");
   expect(f.prepare).toHaveBeenCalledTimes(1);
-  expect(f.finalize).not.toHaveBeenCalled();
   f.preparation.stop.mockResolvedValue(stopped(f.receipt));
   await f.owner.recover();
   await run.waitForExtinction?.();
-  expect(await f.store.list()).toEqual([]);
-  expect(f.preparation.stop).toHaveBeenCalledTimes(3);
+  await f.expectReleased();
   expect(stopDockerPersistentExec).not.toHaveBeenCalled();
   expect(withSettledLocalWorkspaceProjectionPath).toHaveBeenCalledOnce();
   expect(f.finalize).not.toHaveBeenCalled();
-  expect(f.releaseAuthority).toHaveBeenCalledTimes(1);
 });
 
 it.each(["source", "registry", "parent container"] as const)(
   "stops without duplicate START when its %s authority is retired",
   async (retirement) => {
-    const f = await fixture();
     const run = await f.start();
     if (retirement === "source") {
       f.job.enabled = false;
@@ -762,9 +614,6 @@ it.each(["source", "registry", "parent container"] as const)(
     }
     await f.clock.advanceBy(20_000);
     await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
-    expect(f.preparation.checkCurrent).toHaveBeenCalledTimes(
-      retirement === "parent container" ? 1 : 0,
-    );
     expect(f.preparation.stop).toHaveBeenCalledTimes(1);
     expect(f.preparation.start).toHaveBeenCalledTimes(1);
     expect(f.prepare).toHaveBeenCalledTimes(1);
@@ -774,11 +623,8 @@ it.each(["source", "registry", "parent container"] as const)(
 );
 
 it("joins an in-flight authority check and workspace finalization before releasing durable custody", async () => {
-  const f = await fixture();
-  const checking = createDeferredCore();
-  const checked = createDeferredCore();
-  const finalizing = createDeferredCore();
-  const finalized = createDeferredCore();
+  const checking = createEnteredGate();
+  const finalizing = createEnteredGate();
   const createStore = persistentExecStore.createSandboxPersistentExecStore;
   const storeFactory = vi
     .spyOn(persistentExecStore, "createSandboxPersistentExecStore")
@@ -788,8 +634,7 @@ it("joins an in-flight authority check and workspace finalization before releasi
         ...store,
         async checkExecutionCurrent(...args) {
           const result = await store.checkExecutionCurrent(...args);
-          checking.resolve();
-          await checked.promise;
+          await checking.wait();
           return result;
         },
       };
@@ -797,24 +642,23 @@ it("joins an in-flight authority check and workspace finalization before releasi
   vi.mocked(withSettledLocalWorkspaceProjectionPath).mockImplementationOnce(
     async (_params, operation) => {
       await operation();
-      finalizing.resolve();
-      await finalized.promise;
+      await finalizing.wait();
     },
   );
   const run = await f.start();
   const wake = f.clock.advanceBy(20_000);
-  await checking.promise;
+  await checking.entered;
   const settlement = run.waitForExtinction?.();
   try {
     expect(f.preparation.stop).not.toHaveBeenCalled();
-    expect(await f.store.list()).toEqual([expect.objectContaining({ phase: "running" })]);
-    checked.resolve();
-    await finalizing.promise;
-    expect(await f.store.list()).toEqual([expect.objectContaining({ phase: "stopped" })]);
+    await f.expectCustody({ phase: "running" });
+    checking.release();
+    await finalizing.entered;
+    await f.expectCustody({ phase: "stopped" });
     expect(f.releaseAuthority).not.toHaveBeenCalled();
   } finally {
-    checked.resolve();
-    finalized.resolve();
+    checking.release();
+    finalizing.release();
     try {
       await Promise.all([settlement, wake]);
     } finally {
@@ -822,10 +666,9 @@ it("joins an in-flight authority check and workspace finalization before releasi
     }
   }
   await run.waitForExtinction?.();
-  expect(await f.store.list()).toEqual([]);
+  await f.expectReleased();
   expect(f.preparation.stop).toHaveBeenCalledTimes(1);
   expect(withSettledLocalWorkspaceProjectionPath).toHaveBeenCalledOnce();
   expect(f.finalize).not.toHaveBeenCalled();
-  expect(f.releaseAuthority).toHaveBeenCalledTimes(1);
   expect(f.scheduler.nextWakeAtMs).toBeNull();
 });

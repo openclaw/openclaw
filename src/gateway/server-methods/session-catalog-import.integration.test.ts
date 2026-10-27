@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ErrorCodes,
@@ -26,6 +27,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { projectChatDisplayMessagesWithState } from "../chat-display-projection.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import {
   type PreparedGatewayModelCatalogSnapshot,
@@ -37,6 +39,7 @@ import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { listProjectedSessions } from "../session-utils-list.js";
 import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
+import { catalogHost, catalogSession } from "./session-catalog.fixtures.test-support.js";
 import { sessionCatalogHandlers } from "./session-catalog.js";
 import {
   createSessionMutationTestClient,
@@ -147,24 +150,18 @@ async function createCatalog(restricted: boolean) {
       throw new Error("Unrestricted import must not enumerate the catalog");
     }
     return [
-      {
+      catalogHost({
         hostId: "node:fixture",
         label: "Fixture node",
         kind: "node",
-        connected: true,
         sessions: [
-          {
-            threadId: `thread-${id}`,
+          catalogSession(`thread-${id}`, {
             sourceHomeId: "home-a",
             sessionKey: nativeKey,
             name: "Native source",
-            status: "stored",
-            archived: false,
-            canContinue: true,
-            canArchive: false,
-          },
+          }),
         ],
-      },
+      }),
     ];
   });
   const provider: SessionCatalogProvider = { id: "claude", label: "Claude", list, read };
@@ -305,6 +302,85 @@ async function createCatalog(restricted: boolean) {
 }
 
 describe("sessions.catalog.import with durable Gateway owners", () => {
+  it("reopens preserved tool records through the shared display conversion", () =>
+    withCatalog(async (fixture) => {
+      fixture.source.splice(
+        0,
+        fixture.source.length,
+        {
+          id: "failed",
+          activity: {
+            itemId: "tool:failed",
+            toolCallId: "failed",
+            name: "bash",
+            kind: "tool",
+            phase: "end",
+            title: "Run false",
+            status: "failed",
+            commandBearing: true,
+          },
+          type: "toolResult",
+          toolName: "bash",
+          toolCallId: "failed",
+          toolInput: { command: "false" },
+          text: "failure",
+          isError: true,
+          exitCode: 1,
+        },
+        {
+          id: "unknown",
+          type: "toolResult",
+          toolName: "custom",
+          toolCallId: "unknown",
+          text: "error-shaped text without a recorded outcome",
+        },
+      );
+      expectSuccess(await fixture.call(), { created: true, importedItems: 2 });
+      const stored = await fixture.transcript();
+      expect(stored[1]?.message).toMatchObject({
+        content: [{ type: "text", text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT") }],
+      });
+      const display = projectChatDisplayMessagesWithState(
+        stored.map(({ message, entryId }) =>
+          Object.assign({}, message, {
+            __openclaw: {
+              ...asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]),
+              id: entryId,
+            },
+          }),
+        ),
+      );
+      expect(display.activity).toMatchObject([
+        { items: [{ name: "bash", status: "failed", title: "Run false" }] },
+      ]);
+      expect(display.messages.slice(1)).toMatchObject([
+        {
+          content: [
+            { type: "toolCall", id: "failed", name: "bash", arguments: { command: "false" } },
+            {
+              type: "toolResult",
+              toolCallId: "failed",
+              name: "bash",
+              isError: true,
+              content: [{ type: "text", text: "failure" }],
+              details: { exitCode: 1 },
+            },
+          ],
+        },
+        {
+          content: [
+            {
+              type: "toolResult",
+              name: "custom",
+              toolCallId: "unknown",
+              content: [{ type: "text", text: "error-shaped text without a recorded outcome" }],
+              __openclaw: { toolOutput: { outcome: "unknown" } },
+            },
+          ],
+        },
+      ]);
+    }));
+
   it("imports and re-imports without waiting on model catalog publication", () =>
     withCatalog(async (fixture) => {
       const loadCatalog = vi
@@ -336,6 +412,7 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
           client,
           opts: { agentId: "main" },
         });
+      const listed = expect.arrayContaining([expect.objectContaining({ key: fixture.key })]);
       const canReadHistory = async (client: GatewayClient) => {
         const respond = vi.fn<RespondFn>();
         const read = await prepareChatHistorySessionRead({
@@ -348,12 +425,8 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
         read?.release();
         return { allowed: Boolean(read), respond };
       };
-      expect((await listFor(fixture.client)).sessions).toEqual(
-        expect.arrayContaining([expect.objectContaining({ key: fixture.key })]),
-      );
-      expect((await listFor(fixture.other)).sessions).not.toEqual(
-        expect.arrayContaining([expect.objectContaining({ key: fixture.key })]),
-      );
+      expect((await listFor(fixture.client)).sessions).toEqual(listed);
+      expect((await listFor(fixture.other)).sessions).not.toEqual(listed);
       expect((await canReadHistory(fixture.client)).allowed).toBe(true);
       const hiddenHistory = await canReadHistory(fixture.other);
       expect(hiddenHistory.allowed).toBe(false);
@@ -381,9 +454,7 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expectSuccess(await fixture.call(), { created: false, importedItems: 1 });
       expect(fixture.entry()?.visibility).toBe("shared");
       expect(await fixture.transcript()).toHaveLength(4);
-      expect((await listFor(fixture.other)).sessions).toEqual(
-        expect.arrayContaining([expect.objectContaining({ key: fixture.key })]),
-      );
+      expect((await listFor(fixture.other)).sessions).toEqual(listed);
       expect((await canReadHistory(fixture.other)).allowed).toBe(true);
     }, true));
 
@@ -501,9 +572,9 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey })).toMatchObject({
         displayName: "Copied catalog session",
       });
-      const transcript = await fixture.transcriptFor(sessionKey);
-      expect(JSON.stringify(transcript)).toContain("Synthetic imported question");
-      expect(JSON.stringify(transcript)).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+      const transcript = JSON.stringify(await fixture.transcriptFor(sessionKey));
+      expect(transcript).toContain("Synthetic imported question");
+      expect(transcript).toContain("EXTERNAL_UNTRUSTED_CONTENT");
       expect((await listSessionStateEventsSince(sessionKey, "main", 0)).events).toEqual(
         expect.arrayContaining([expect.objectContaining({ kind: "adopted" })]),
       );

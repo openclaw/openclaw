@@ -302,12 +302,6 @@ function renderInlineCode(body: string, delimiter: string): string | undefined {
   return marker + padding + body + padding + marker;
 }
 
-type InlineSpan = DiscordFrame & {
-  code: NonNullable<ReturnType<typeof findCodeRegions>[number]["source"]>;
-  base: number;
-  marker: string;
-  atomicTicks: boolean;
-};
 type FenceRange = DiscordFrame &
   OpenFence & {
     bodyStart: number;
@@ -315,7 +309,12 @@ type FenceRange = DiscordFrame &
   };
 // Inline spans are collected only between Discord fences, using the existing close grammar.
 function createDiscordRanges(source: string, maxChars: number, maxLines: number) {
-  const spans: InlineSpan[] = [];
+  const spans: (DiscordFrame & {
+    code: NonNullable<ReturnType<typeof findCodeRegions>[number]["source"]>;
+    base: number;
+    marker: string;
+    atomicTicks: boolean;
+  })[] = [];
   const fences: FenceRange[] = [];
   let offset = 0;
   let plainStart = 0;

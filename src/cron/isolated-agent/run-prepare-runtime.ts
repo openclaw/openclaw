@@ -6,6 +6,7 @@ import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
+import type { CronIdleAdmissionWait } from "../service/state.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -17,8 +18,14 @@ import { logWarn } from "./run.runtime.js";
 import type { CronLaneWaitCallback, RunCronAgentTurnResult } from "./run.types.js";
 
 export type RunCronAgentTurnParams = {
+  /** The occurrence admitted by the cron service, or by a hook or join-intro caller. */
+  occurrence: import("../scheduled-occurrence.js").ScheduledOccurrence;
+  waitForIdle?: CronIdleAdmissionWait;
+  assertCurrent?: () => void;
   admissionSource?: import("../../agents/admitted-run-context.js").AdmittedRunContext["admissionSource"];
   cfg: OpenClawConfig;
+  /** Gateway-selected cron partition; standalone callers resolve it from config. */
+  cronStorePath?: string;
   deps: CliDeps;
   job: CronStoredJob;
   /** Trusted caller classification; stored jobs default to cron, not their payload or audit ingress. */
@@ -53,10 +60,15 @@ async function loadSessionAccessorRuntime() {
 export function createCronSessionRowWriter(params: {
   agentId: string;
   agentSessionKey: string;
+  assertCurrent?: () => void;
 }): CronSessionRowWriter {
   const { agentId, agentSessionKey } = params;
   let baseSessionMaintenanceStarted = false;
   return async ({ storePath, sessionKey, operation, resetBoundary, assertCommitAllowed }) => {
+    const assertCurrent = () => {
+      params.assertCurrent?.();
+      assertCommitAllowed?.();
+    };
     if (resetBoundary) {
       const [{ applySessionEntryLifecycleMutation }, { projectCronSessionEntry }] =
         await Promise.all([
@@ -68,6 +80,7 @@ export function createCronSessionRowWriter(params: {
         activeSessionKey: sessionKey,
         agentId,
         storePath,
+        commitGuard: assertCurrent,
         upserts: [
           {
             sessionKey,
@@ -87,7 +100,7 @@ export function createCronSessionRowWriter(params: {
       replaceEntry: true,
       // The maintenance owner follows later writes through its receipt subscription.
       skipMaintenance: baseSessionMaintenanceStarted || sessionKey !== agentSessionKey,
-      workerGuard: { assertCurrent: assertCommitAllowed },
+      workerGuard: { assertCurrent },
     });
     if (sessionKey === agentSessionKey) {
       baseSessionMaintenanceStarted = true;

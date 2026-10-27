@@ -1,3 +1,11 @@
+import type { Virtualizer } from "@tanstack/virtual-core";
+import { CONTROL_UI_BUILD_INFO } from "../../../build-info.ts";
+import { i18n } from "../../../i18n/index.ts";
+import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
+import { getExpandedToolCards, getExpandedUserMessages } from "../chat-thread.ts";
+import type { ChatWidgetLayout } from "../session-message-cache.ts";
+import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+import { measureTranscriptRow } from "./chat-transcript-geometry.ts";
 import {
   publishTranscriptScroll,
   readTranscriptViewport,
@@ -27,6 +35,116 @@ export function unscaledBorderBox(element: HTMLElement, style = getComputedStyle
 
 /** The native scroll range changes only at these viewport and content writes. */
 export class TranscriptLayoutOwner {
+  ready = false;
+  rows: readonly { key: string; revision?: string }[] = [];
+  rowLayout?: ChatWidgetLayout;
+  private rowPresentation = "";
+  rowWidth = 0;
+  paneWidth = 0;
+  rowGutter = 0;
+  private recordingRows = false;
+
+  configureRows(props: ChatThreadProps, avatarPlacement: string, transient: boolean): void {
+    this.ready = !props.loading;
+    // Expanded and filtered rows are transient; the snapshot cannot restore them.
+    this.rowLayout = transient ? undefined : props.widgetLayout;
+    const theme = props.applicationContext?.theme;
+    const font = theme?.settings;
+    const presentation = JSON.stringify([
+      CONTROL_UI_BUILD_INFO.buildId,
+      avatarPlacement,
+      props.chatBubbleMode,
+      i18n.getLocale(),
+      font?.fontChat,
+      font?.fontUi,
+      font?.terminalFontFamily,
+      font?.textScale,
+      font?.chatMessageMaxWidth,
+      theme?.resolvedMode,
+      font?.theme,
+      font?.customTheme,
+      props.showThinking,
+      props.showToolCalls,
+      props.persistCommentary,
+      typeof window === "undefined" ? 1 : window.devicePixelRatio,
+      ...getExpandedToolCards(props.sessionKey),
+      ...getExpandedUserMessages(props.sessionKey),
+    ]);
+    this.rowPresentation = `${presentation.length}:${fnv1aUtf16(presentation)}`;
+  }
+
+  private rowLayoutKey(index: number, width = this.rowWidth): string | undefined {
+    const row = this.rows[index];
+    return width > 0 && this.paneWidth > 0 && row?.revision
+      ? `row:v1:${width}:${this.paneWidth}:${window.innerHeight}:${this.rowGutter}:${this.rowPresentation}:${row.revision}:${JSON.stringify(row.key)}`
+      : undefined;
+  }
+
+  readonly rowMinimum = (index: number): number => {
+    const key = this.rowLayoutKey(index);
+    return key ? (this.rowLayout?.read(key) ?? 0) : 0;
+  };
+
+  restoreRows(
+    instance: Virtualizer<HTMLDivElement, HTMLElement>,
+    width: number,
+    paneWidth: number,
+    gutter: number,
+  ): void {
+    this.rowWidth = width;
+    this.paneWidth = paneWidth;
+    this.rowGutter = gutter;
+    this.rows.forEach((row, index) => {
+      const minimum = this.rowMinimum(index);
+      if (minimum > (instance.itemSizeCache.get(row.key) ?? 0)) {
+        instance.resizeItem(index, minimum);
+      }
+    });
+  }
+
+  readonly measureRow: typeof measureTranscriptRow = (element, entry, instance) => {
+    const size = measureTranscriptRow(element, entry, instance);
+    return Math.max(size, this.rowMinimum(instance.indexFromElement(element)));
+  };
+
+  persistRows(instance: Virtualizer<HTMLDivElement, HTMLElement>): void {
+    if (this.recordingRows || !this.rowLayout) {
+      return;
+    }
+    this.recordingRows = true;
+    // The reveal owner admits this work; reuse measured sizes after paint.
+    requestAnimationFrame(() => {
+      (globalThis.requestIdleCallback ?? requestAnimationFrame).call(globalThis, () => {
+        this.recordingRows = false;
+        if (
+          !this.viewport?.isConnected ||
+          !this.ready ||
+          instance.scrollElement !== this.viewport
+        ) {
+          return;
+        }
+        this.rowLayout?.writeRows(
+          Object.fromEntries(
+            [...instance.elementsCache].flatMap(([id, element]) => {
+              // Local disclosure state is not restored on reload.
+              if (
+                !element.isConnected ||
+                element.matches(
+                  ":has(details[open], .chat-tool-card__raw-toggle[aria-expanded='true'], .code-block-wrapper:is(.is-expanded, .is-wrapped, .is-json-raw))",
+                )
+              ) {
+                return [];
+              }
+              const key = this.rowLayoutKey(instance.indexFromElement(element));
+              const size = instance.itemSizeCache.get(id) ?? 0;
+              return key && size > 0 && size <= 8000 ? [[key, size]] : [];
+            }),
+          ),
+        );
+      });
+    });
+  }
+
   private viewport: HTMLDivElement | null = null;
   private observers: ResizeObserver[] = [];
   private composerFloat: HTMLElement | null = null;
@@ -39,7 +157,7 @@ export class TranscriptLayoutOwner {
 
   private geometryTarget: HTMLElement | undefined;
 
-  constructor(private readonly onClamp: (before: number, after: number) => void) {}
+  constructor(private readonly onLayoutChange: (before: number, after: number) => void) {}
 
   get viewportResizePending(): boolean {
     const viewport = this.viewport;
@@ -245,9 +363,8 @@ export class TranscriptLayoutOwner {
     // Publish the native clamp before another measurement can move the anchor.
     const measuredViewport = readTranscriptViewport(viewport);
     const after = measuredViewport.scrollTop;
-    if (before !== after) {
-      this.onClamp(before, after);
-    }
+    // Padding can move the end without clamping the offset; its anchor still needs reconciliation.
+    this.onLayoutChange(before, after);
     publishTranscriptScroll(viewport, {
       type: "resize",
       viewport: measuredViewport,

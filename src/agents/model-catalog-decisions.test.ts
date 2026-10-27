@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { ProviderPluginCatalog } from "../plugins/provider-catalog.types.js";
+import { createEmptyPluginSetupRegistry } from "../plugins/setup-registry.test-support.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -13,7 +14,10 @@ import {
 } from "./auth-profiles/runtime-snapshots.js";
 import * as personalCatalogReads from "./auth-profiles/sqlite-read.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "./cli-backends.test-support.js";
 import {
   dualRoutes,
   platformRoute,
@@ -27,6 +31,16 @@ import {
   prepareModelCatalogDecisions,
   resolveCatalogDecisionRuntime,
 } from "./model-catalog-decisions.js";
+import {
+  apiKey,
+  authStore,
+  harnessRegistry,
+  oauth,
+  row as model,
+  runtimeConfig,
+  snapshot as catalogSnapshot,
+  token,
+} from "./model-catalog-fixtures.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import * as openaiRoutes from "./openai-model-routes.js";
 import { createPreparedAccountCatalogAccess } from "./prepared-model-runtime.catalog-auth.js";
@@ -39,33 +53,42 @@ const config: OpenClawConfig = {
 const metadata = createPluginMetadataSnapshotFixture({
   plugins: [{ id: "codex", providers: ["codex"], syntheticAuthRefs: ["codex"] }],
 });
-function harnessRegistry(id: string) {
-  const registry = createEmptyPluginRegistry();
-  registry.agentHarnesses.push({
-    pluginId: id,
+type DecisionParams = Parameters<typeof createModelCatalogDecisions>[0];
+type Evaluation = ReturnType<ReturnType<typeof createModelCatalogDecisions>["evaluateEntry"]>;
+function expectAvailable(evaluation: Evaluation, selectedProfileId: string) {
+  expect(evaluation).toMatchObject({ availability: true, selectedProfileId });
+}
+const emptyAuth = authStore();
+const tokenStore = (...ids: string[]) =>
+  authStore(Object.fromEntries(ids.map((id) => [id, token(`synthetic-${id}`)])));
+function decisions(overrides: Partial<DecisionParams>) {
+  return createModelCatalogDecisions({
+    cfg: {},
+    agentId: "main",
+    workspaceDir: "/tmp/catalog-workspace",
+    snapshot: catalogSnapshot([entry]),
+    metadataSnapshot: metadata,
+    preparedAuthStore: emptyAuth,
+    ...overrides,
+  });
+}
+function catalogRegistry(run: ProviderPluginCatalog["run"]) {
+  const registry = harnessRegistry("codex");
+  registry.providers.push({
+    pluginId: "openai",
     source: "fixture",
-    harness: {
-      id,
-      label: id,
-      supports: () => ({ supported: true }),
-      async runAttempt() {
-        throw new Error("Catalog reads must not execute a model");
-      },
-    },
+    provider: { id: "openai", label: "OpenAI", auth: [], catalog: { run } },
   });
   return registry;
 }
 
+const runtimeAvailable = { availability: true, evidence: "runtime" };
+
 function nativeOwner(complete: boolean, loggedIn: boolean, cfg = config) {
   mockRouteResolverFactory(routeResolverFactory(dualRoutes));
-  return createModelCatalogDecisions({
+  return decisions({
     cfg,
-    agentId: "main",
     agentDir: "/tmp/catalog-agent",
-    workspaceDir: "/tmp/catalog-workspace",
-    snapshot: { entries: [entry], routeVariants: [entry] },
-    metadataSnapshot: metadata,
-    preparedAuthStore: { version: 1, profiles: {} },
     preparedRuntimeAuthModes: loggedIn ? { codex: { source: "native", mode: "api_key" } } : {},
     preparedSyntheticAuthComplete: complete,
     pluginRegistry: harnessRegistry("codex"),
@@ -81,7 +104,7 @@ describe("captured model decisions", () => {
         credential: { type: "api_key", provider: "openai", key: "synthetic-private-key" },
         assertCurrent() {},
       });
-      const read = vi
+      using read = vi
         .spyOn(personalCatalogReads, "readPersonalCatalogProfiles")
         .mockRejectedValue(new Error("Private catalog read must not start"));
       const revoked = new Error("Catalog read authority revoked");
@@ -92,9 +115,9 @@ describe("captured model decisions", () => {
           agentId: "main",
           agentDir: state.agentDir(),
           workspaceDir: state.workspaceDir,
-          snapshot: { entries: [entry], routeVariants: [entry] },
+          snapshot: catalogSnapshot([entry]),
           metadataSnapshot: metadata,
-          preparedAuthStore: { version: 1, profiles: {} },
+          preparedAuthStore: emptyAuth,
           preferredProfileId: authProfileId,
         },
         {
@@ -107,12 +130,8 @@ describe("captured model decisions", () => {
         },
       );
       current = false;
-      try {
-        await expect(pending).rejects.toBe(revoked);
-        expect(read).not.toHaveBeenCalled();
-      } finally {
-        read.mockRestore();
-      }
+      await expect(pending).rejects.toBe(revoked);
+      expect(read).not.toHaveBeenCalled();
     });
   });
 
@@ -129,122 +148,96 @@ describe("captured model decisions", () => {
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it("prepares only the selected account through the existing catalog hook", async () => {
-    const pluginRegistry = harnessRegistry("codex");
-    const catalog = vi.fn(
-      async (ctx: import("../plugins/provider-catalog.types.js").ProviderCatalogContext) => {
-        const auth = ctx.resolveProviderAuth("openai");
-        expect(auth.profileId).toBe("openai:selected");
-        return {
-          provider: { baseUrl: subscriptionRoute.baseUrl, models: [] },
-          outcomes: [
-            {
-              provider: "openai",
-              profileId: auth.profileId,
-              status: "ready" as const,
-              modelServiceTiers: [
-                {
-                  modelId: entry.id,
-                  runtimeId: "codex",
-                  api: subscriptionRoute.api,
-                  baseUrl: subscriptionRoute.baseUrl,
-                  serviceTiers: ["ultrafast"],
-                },
-              ],
-            },
-          ],
-        };
-      },
-    );
-    pluginRegistry.providers.push({
-      pluginId: "openai",
-      source: "fixture",
-      provider: { id: "openai", label: "OpenAI", auth: [], catalog: { run: catalog } },
+  const accountSelections = ["session", "configured", "automatic"];
+  it.each(accountSelections)("prepares %s account discovery", async (selection) => {
+    const catalog = vi.fn<ProviderPluginCatalog["run"]>(async (ctx) => {
+      const auth = ctx.resolveProviderAuth("openai");
+      expect(["openai:selected", ...(selection === "automatic" ? ["openai:auto"] : [])]).toContain(
+        auth.profileId,
+      );
+      return {
+        provider: { baseUrl: subscriptionRoute.baseUrl, models: [] },
+        outcomes: [
+          {
+            provider: "openai",
+            profileId: auth.profileId,
+            status: "ready" as const,
+            modelServiceTiers: [
+              {
+                modelId: entry.id,
+                runtimeId: "codex",
+                api: subscriptionRoute.api,
+                baseUrl: subscriptionRoute.baseUrl,
+                serviceTiers: ["ultrafast"],
+              },
+            ],
+          },
+        ],
+      };
     });
-    const sharedSnapshot = { entries: [entry], routeVariants: [entry] };
+    const pluginRegistry = catalogRegistry(catalog);
+    const sharedSnapshot = catalogSnapshot([entry]);
+    const cfg: OpenClawConfig = {
+      ...config,
+      agents: {
+        defaults: {
+          ...config.agents?.defaults,
+          model: {
+            primary: `openai/${entry.id}@openai:${selection === "session" ? "shared" : "selected"}`,
+          },
+        },
+      },
+    };
     mockRouteResolverFactory(routeResolverFactory(dualRoutes));
-    const prepared = createModelCatalogDecisions({
-      cfg: config,
-      agentId: "main",
+    const prepared = decisions({
+      cfg,
       agentDir: "/tmp/selected-tier-agent",
       workspaceDir: "/tmp/selected-tier-workspace",
       snapshot: sharedSnapshot,
       accountCatalog: createPreparedAccountCatalogAccess(() => true),
-      metadataSnapshot: metadata,
       pluginRegistry,
-      preparedAuthStore: {
-        version: 1,
-        profiles: {
-          "openai:shared": { provider: "openai", type: "token", token: "synthetic-shared-token" },
-          "openai:selected": {
-            provider: "openai",
-            type: "token",
-            token: "synthetic-selected-token",
-          },
-        },
-      },
-      preferredProfileId: "openai:selected",
-      pinnedProfileId: "openai:selected",
+      preparedAuthStore: tokenStore("openai:shared", "openai:auto", "openai:selected"),
+      preferredProfileId:
+        selection === "automatic"
+          ? "openai:auto"
+          : selection === "session"
+            ? "openai:selected"
+            : undefined,
+      pinnedProfileId: selection === "session" ? "openai:selected" : undefined,
       isCurrent: () => true,
     });
     const assertCurrent = vi.fn();
     await prepared.prepareSelectedAccountCatalog(assertCurrent, { refresh: true });
     await prepared.prepareSelectedAccountCatalog(assertCurrent, {});
-    expect(catalog).toHaveBeenCalledOnce();
+    expect(catalog).toHaveBeenCalledTimes(selection === "automatic" ? 2 : 1);
     expect(assertCurrent).toHaveBeenCalled();
     expect(sharedSnapshot).not.toHaveProperty("providerOutcomes");
     expect(prepared.snapshot.providerOutcomes?.[0]?.modelServiceTiers?.[0]?.serviceTiers).toEqual([
       "ultrafast",
     ]);
-    expect(prepared.evaluateEntry(entry, undefined, "codex")).toMatchObject({
-      selectedProfileId: "openai:selected",
-      availability: true,
-    });
+    expectAvailable(prepared.evaluateEntry(entry, undefined, "codex"), "openai:selected");
   });
 
   it("does not publish a selected-account result after its generation expires", async () => {
     let current = true;
-    const pluginRegistry = harnessRegistry("codex");
-    pluginRegistry.providers.push({
-      pluginId: "openai",
-      source: "fixture",
-      provider: {
-        id: "openai",
-        label: "OpenAI",
-        auth: [],
-        catalog: {
-          run: async (ctx) => {
-            current = false;
-            return {
-              provider: { baseUrl: subscriptionRoute.baseUrl, models: [] },
-              outcomes: [
-                {
-                  provider: "openai",
-                  profileId: ctx.resolveProviderAuth("openai").profileId,
-                  status: "ready",
-                },
-              ],
-            };
-          },
-        },
-      },
-    });
-    const prepared = createModelCatalogDecisions({
-      cfg: config,
-      agentId: "main",
-      snapshot: { entries: [entry], routeVariants: [entry] },
-      metadataSnapshot: metadata,
-      pluginRegistry,
-      preparedAuthStore: {
-        version: 1,
-        profiles: {
-          "openai:selected": {
+    const pluginRegistry = catalogRegistry(async (ctx) => {
+      current = false;
+      return {
+        provider: { baseUrl: subscriptionRoute.baseUrl, models: [] },
+        outcomes: [
+          {
             provider: "openai",
-            type: "token",
-            token: "synthetic-selected-token",
+            profileId: ctx.resolveProviderAuth("openai").profileId,
+            status: "ready",
           },
-        },
-      },
+        ],
+      };
+    });
+    const prepared = decisions({
+      cfg: config,
+      workspaceDir: undefined,
+      pluginRegistry,
+      preparedAuthStore: tokenStore("openai:selected"),
       preferredProfileId: "openai:selected",
       accountCatalog: createPreparedAccountCatalogAccess(() => current),
       isCurrent: () => current,
@@ -260,35 +253,28 @@ describe("captured model decisions", () => {
   });
 
   it("preserves provider auth for an authenticated non-CLI harness", async () => {
-    const model = { provider: "github-copilot", id: "fixture-model", name: "Fixture model" };
-    const owner = createModelCatalogDecisions({
+    const copilotEntry = model("github-copilot", "fixture-model");
+    const owner = decisions({
       cfg: { plugins: { entries: { copilot: { enabled: true } } } },
-      agentId: "main",
       agentDir: "/tmp/copilot-agent",
       workspaceDir: "/tmp/copilot-workspace",
-      snapshot: { entries: [model], routeVariants: [model] },
+      snapshot: catalogSnapshot([copilotEntry]),
       metadataSnapshot: createPluginMetadataSnapshotFixture({
         plugins: [{ id: "github-copilot", providers: ["github-copilot"] }, { id: "copilot" }],
       }),
-      preparedAuthStore: {
-        version: 1,
-        profiles: {
-          "github-copilot:work": {
-            type: "token",
-            provider: "github-copilot",
-            token: "fixture-token",
-          },
+      preparedAuthStore: authStore({
+        "github-copilot:work": {
+          type: "token",
+          provider: "github-copilot",
+          token: "fixture-token",
         },
-      },
+      }),
       preparedSyntheticAuthComplete: true,
       pluginRegistry: harnessRegistry("copilot"),
       isCurrent: () => true,
     });
-    const choices = owner.runtimeChoices(model);
-    expect(owner.evaluateEntry(model, undefined, "copilot")).toMatchObject({
-      availability: true,
-      selectedProfileId: "github-copilot:work",
-    });
+    const choices = owner.runtimeChoices(copilotEntry);
+    expectAvailable(owner.evaluateEntry(copilotEntry, undefined, "copilot"), "github-copilot:work");
     expect(choices).toContain("copilot");
   });
 
@@ -299,9 +285,7 @@ describe("captured model decisions", () => {
     }));
     const cfg: OpenClawConfig = {
       plugins: config.plugins,
-      agents: {
-        defaults: { models: { "openai/gpt-5.4": { agentRuntime: { id: "auto" } } } },
-      },
+      ...runtimeConfig({ "openai/gpt-5.4": "auto" }),
     };
     const owner = nativeOwner(true, true, cfg);
     const evaluation = owner.evaluateEntry(entry);
@@ -361,22 +345,16 @@ describe("captured model decisions", () => {
         ? [subscriptionRoute]
         : [platformRoute],
     }));
-    const owner = createModelCatalogDecisions({
-      cfg: {},
-      agentId: "main",
-      workspaceDir: "/tmp/catalog-workspace",
-      snapshot: { entries: [], routeVariants: [] },
-      metadataSnapshot: metadata,
-      preparedAuthStore: {
-        version: 1,
-        profiles: {
-          "openai:platform": { type: "api_key", provider: "openai", key: "synthetic-key" },
-        },
-      },
+    const owner = decisions({
+      snapshot: catalogSnapshot([]),
+      preparedAuthStore: authStore({
+        "openai:platform": apiKey("openai"),
+      }),
     });
-    expect(
+    expectAvailable(
       owner.evaluateEntry({ provider: entry.provider, id: entry.id }, undefined, "openclaw"),
-    ).toMatchObject({ availability: true, selectedProfileId: "openai:platform" });
+      "openai:platform",
+    );
     expect(
       owner.evaluateEntry(
         { ...entry, api: subscriptionRoute.api, baseUrl: subscriptionRoute.baseUrl },
@@ -387,14 +365,8 @@ describe("captured model decisions", () => {
   });
 
   describe("with a ChatGPT account listing", () => {
-    const chatgpt = {
-      type: "oauth",
-      provider: "openai",
-      access: "synthetic-access",
-      refresh: "synthetic-refresh",
-      expires: Date.now() + 60 * 60_000,
-    } as const;
-    const platformKey = { type: "api_key", provider: "openai", key: "synthetic-key" } as const;
+    const chatgpt = oauth("openai", Date.now() + 60 * 60_000);
+    const platformKey = apiKey("openai");
     type Outcome =
       | { profileId: string; status: "ready"; listedModelIds: readonly string[] }
       | { profileId: string; status: "unavailable" };
@@ -414,26 +386,17 @@ describe("captured model decisions", () => {
           preferredAuthRequirement: "subscription",
         }),
       );
-      return createModelCatalogDecisions({
-        cfg: {},
-        agentId: "main",
-        workspaceDir: "/tmp/catalog-workspace",
+      return decisions({
         pinnedProfileId: options.pin,
-        snapshot: {
-          entries: [],
-          routeVariants: [],
+        snapshot: catalogSnapshot([], {
           providerOutcomes: outcomes.map((outcome) => ({ provider: "openai", ...outcome })),
-        },
-        metadataSnapshot: metadata,
-        preparedAuthStore: {
-          version: 1,
-          profiles: {
-            ...Object.fromEntries(
-              (options.profileIds ?? ["openai:chatgpt"]).map((profileId) => [profileId, chatgpt]),
-            ),
-            ...(options.withApiKey ? { "openai:platform": platformKey } : {}),
-          },
-        },
+        }),
+        preparedAuthStore: authStore({
+          ...Object.fromEntries(
+            (options.profileIds ?? ["openai:chatgpt"]).map((profileId) => [profileId, chatgpt]),
+          ),
+          ...(options.withApiKey ? { "openai:platform": platformKey } : {}),
+        }),
       }).evaluateEntry({ provider: "openai", id }, undefined, "codex");
     };
     // The listing returned gpt-5.5 as a hidden row and did not return gpt-5.4-pro.
@@ -444,10 +407,7 @@ describe("captured model decisions", () => {
       expect(unlisted).toMatchObject({ availability: false });
       // The account is signed in; a missing-auth reason would render sign-in guidance.
       expect(unlisted.unavailableReason).toBeUndefined();
-      expect(evaluate([ready], "gpt-5.5")).toMatchObject({
-        availability: true,
-        selectedProfileId: "openai:chatgpt",
-      });
+      expectAvailable(evaluate([ready], "gpt-5.5"), "openai:chatgpt");
     });
 
     it.each([
@@ -472,11 +432,6 @@ describe("captured model decisions", () => {
     };
     it.each([
       ["it has no observation", [], selectedB],
-      [
-        "its discovery is unavailable",
-        [{ profileId: "openai:b", status: "unavailable" } as const],
-        selectedB,
-      ],
       ["its listing returns the model", [listing("openai:b", "gpt-5.5-pro")], selectedB],
       // A third account listing the model does not entitle the selected one.
       [
@@ -499,27 +454,16 @@ describe("captured model decisions", () => {
 
   it("keeps a different provider's account pin out of the selected route", async () => {
     mockRouteResolverFactory(routeResolverFactory({ ...dualRoutes, routes: [platformRoute] }));
-    const owner = createModelCatalogDecisions({
-      cfg: {},
-      agentId: "main",
-      workspaceDir: "/tmp/catalog-workspace",
-      snapshot: { entries: [entry], routeVariants: [entry] },
-      metadataSnapshot: metadata,
+    const owner = decisions({
       preferredProfileId: "anthropic:chosen",
       pinnedProfileId: "anthropic:chosen",
       profileProvider: "anthropic",
-      preparedAuthStore: {
-        version: 1,
-        profiles: {
-          "anthropic:chosen": { type: "api_key", provider: "anthropic", key: "synthetic-a" },
-          "openai:chosen": { type: "api_key", provider: "openai", key: "synthetic-b" },
-        },
-      },
+      preparedAuthStore: authStore({
+        "anthropic:chosen": apiKey("anthropic"),
+        "openai:chosen": apiKey("openai"),
+      }),
     });
-    expect(owner.evaluateEntry(entry, [entry], "openclaw")).toMatchObject({
-      availability: true,
-      selectedProfileId: "openai:chosen",
-    });
+    expectAvailable(owner.evaluateEntry(entry, [entry], "openclaw"), "openai:chosen");
   });
 
   it("retains native provenance and mode without blessing a same-name bearer credential", () => {
@@ -543,21 +487,8 @@ describe("catalog decisions with prepared CLI auth directories", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
-      resolvePluginSetupRegistry: () => ({
-        providers: [],
-        cliBackends: [],
-        configMigrations: [],
-        autoEnableProbes: [],
-        diagnostics: [],
-      }),
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
-        },
-      ],
+      resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
+      resolveRuntimeCliBackends: createClaudeCliBackends,
     });
   });
 
@@ -588,31 +519,19 @@ describe("catalog decisions with prepared CLI auth directories", () => {
   });
 
   function storedChoice(cli: boolean): AuthProfileStore {
-    return {
-      version: 1,
-      profiles: {
-        selected: cli
-          ? {
-              type: "oauth",
-              provider: "claude-cli",
-              access: "synthetic-access",
-              refresh: "synthetic-refresh",
-              expires: Date.now() + 600_000,
-            }
-          : { type: "api_key", provider: "anthropic", key: "synthetic-key" },
-      },
-      order: { anthropic: ["selected"] },
-    };
+    return authStore(
+      { selected: cli ? oauth("claude-cli", Date.now() + 600_000) : apiKey("anthropic") },
+      { order: { anthropic: ["selected"] } },
+    );
   }
 
   function decisionOwner(cfg: OpenClawConfig, agentId: string, workspaceDir: string) {
-    return createModelCatalogDecisions({
+    return decisions({
       cfg,
       agentId,
       workspaceDir,
-      snapshot: { entries: [], routeVariants: [] },
+      snapshot: catalogSnapshot([]),
       metadataSnapshot: cliMetadata,
-      preparedAuthStore: { version: 1, profiles: {} },
       preparedRuntimeAuthModes: { "claude-cli": "oauth" },
       preparedSyntheticAuthComplete: true,
     });
@@ -632,14 +551,13 @@ describe("catalog decisions with prepared CLI auth directories", () => {
         ...storedChoice(true),
         profiles: {
           ...storedChoice(true).profiles,
-          direct: { type: "api_key", provider: "anthropic", key: "synthetic-direct-key" },
+          direct: apiKey("anthropic"),
         },
       };
       setRuntimeAuthProfileStoreSnapshot(orderStore, state.path("custom-worker"));
       const owner = decisionOwner(cfg, "worker", state.workspaceDir);
       expect(readRow(owner, "before-order-change")).toMatchObject({
-        availability: true,
-        evidence: "runtime",
+        ...runtimeAvailable,
         selectedAuthMode: "oauth",
       });
 
@@ -650,10 +568,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
       // New keys bypass the intentional completed-row decision memoization.
       expect(readRow(owner, "after-order-change").evidence).not.toBe("runtime");
       setRuntimeAuthProfileStoreSnapshot(orderStore, state.path("custom-worker"));
-      expect(readRow(owner, "after-order-restored")).toMatchObject({
-        availability: true,
-        evidence: "runtime",
-      });
+      expect(readRow(owner, "after-order-restored")).toMatchObject(runtimeAvailable);
     });
   });
 
@@ -674,8 +589,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
       noteCommittedSharedAuthStoreOwnership({ location: "state-db" });
       setRuntimeAuthProfileStoreSnapshot(storedChoice(true));
       expect(readRow(owner, "after-relocation")).toMatchObject({
-        availability: true,
-        evidence: "runtime",
+        ...runtimeAvailable,
         selectedAuthMode: "oauth",
       });
     });
@@ -700,10 +614,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
       setRuntimeAuthProfileStoreSnapshot(storedChoice(false), replacementDir);
       const first = decisionOwner(cfg, "first", state.workspaceDir);
       const second = decisionOwner(cfg, "second", state.workspaceDir);
-      expect(readRow(first, "same-row")).toMatchObject({
-        availability: true,
-        evidence: "runtime",
-      });
+      expect(readRow(first, "same-row")).toMatchObject(runtimeAvailable);
       expect(readRow(second, "same-row").evidence).not.toBe("runtime");
       const replacement = decisionOwner(
         {
@@ -717,24 +628,16 @@ describe("catalog decisions with prepared CLI auth directories", () => {
         state.workspaceDir,
       );
       expect(readRow(replacement, "same-row").evidence).not.toBe("runtime");
-      expect(readRow(first, "old-owner-new-row")).toMatchObject({
-        availability: true,
-        evidence: "runtime",
-      });
+      expect(readRow(first, "old-owner-new-row")).toMatchObject(runtimeAvailable);
     });
   });
 
-  it.each(["ready", "unavailable"] as const)("keeps CLI menu on %s", async (status) => {
+  it("keeps CLI menu restricted to listed and explicitly configured models", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,
         resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            modelProvider: "anthropic",
-            pluginId: "anthropic",
-            config: { command: "claude" },
-          },
+          ...createClaudeCliBackends(),
           {
             id: "google-gemini-cli",
             modelProvider: "google",
@@ -743,51 +646,41 @@ describe("catalog decisions with prepared CLI auth directories", () => {
           },
         ],
       });
-      const decisions = (pinned: boolean) =>
+      const menu = (pinned: boolean) =>
         createModelCatalogDecisions({
-          cfg: {
-            agents: {
-              defaults: {
-                models: {
-                  "anthropic/*": { agentRuntime: { id: "claude-cli" } },
-                  "anthropic/claude-pinned": { agentRuntime: { id: "claude-cli" } },
-                  "anthropic/claude-http": { agentRuntime: { id: "openclaw" } },
-                  "anthropic/claude-typed": {},
-                  "google/*": { agentRuntime: { id: "google-gemini-cli" } },
-                },
-              },
-            },
-          },
+          cfg: runtimeConfig({
+            "anthropic/*": "claude-cli",
+            "anthropic/claude-pinned": "claude-cli",
+            "anthropic/claude-http": "openclaw",
+            "anthropic/claude-typed": undefined,
+            "google/*": "google-gemini-cli",
+          }),
           agentId: "main",
           workspaceDir: state.workspaceDir,
-          snapshot: {
-            entries: [
-              { provider: "claude-cli", id: "claude-stale", name: "Stale static row" },
-              { provider: "google-gemini-cli", id: "gemini-listed", name: "Listed" },
-            ],
-            routeVariants: [],
-            providerOutcomes: [
-              {
-                provider: "claude-cli",
-                status,
-                listedModelIds: ["claude-listed"],
-              },
-            ],
-          },
+          snapshot: catalogSnapshot(
+            [model("claude-cli", "claude-stale"), model("google-gemini-cli", "gemini-listed")],
+            {
+              routeVariants: [],
+              providerOutcomes: [
+                {
+                  provider: "claude-cli",
+                  status: "ready",
+                  listedModelIds: ["claude-listed"],
+                },
+              ],
+            },
+          ),
           metadataSnapshot: cliMetadata,
-          preparedAuthStore: {
-            version: 1,
-            profiles: pinned
-              ? { "anthropic:work": { type: "api_key", provider: "anthropic", key: "synthetic" } }
-              : {},
-          },
+          preparedAuthStore: pinned
+            ? authStore({ "anthropic:work": apiKey("anthropic") })
+            : emptyAuth,
           preparedRuntimeAuthModes: { "claude-cli": "oauth", "google-gemini-cli": "oauth" },
           preparedSyntheticAuthComplete: true,
           ...(pinned
             ? { preferredProfileId: "anthropic:work", pinnedProfileId: "anthropic:work" }
             : {}),
         });
-      const owner = decisions(false);
+      const owner = menu(false);
       const availability = (provider: string, id: string) =>
         owner.evaluateEntry({ provider, id }).availability;
 
@@ -806,10 +699,10 @@ describe("catalog decisions with prepared CLI auth directories", () => {
       // User-authored wildcards to other CLI backends are unchanged.
       expect(availability("google", "gemini-unlisted")).toBe(true);
       // A pinned API-key account, not the Claude CLI login, answers for its own models.
-      const account = decisions(true);
+      const account = menu(true);
       const mythos = { provider: "anthropic", id: "claude-mythos-5" };
       const host = account.evaluateEntry(mythos);
-      expect(host).toMatchObject({ availability: true, selectedProfileId: "anthropic:work" });
+      expectAvailable(host, "anthropic:work");
       expect(
         account.evaluateNative({ ...mythos, name: "Claude Mythos 5" }, host).availability,
       ).toBe(true);
@@ -821,28 +714,19 @@ describe("catalog decisions with prepared CLI auth directories", () => {
 });
 
 it("projects exact native IDs and effort levels without expanding a restricted menu", () => {
-  const native: ModelCatalogEntry = {
-    provider: "claude-cli",
-    id: "claude-future",
+  const native = model("claude-cli", "claude-future", {
     name: "Future",
     reasoning: true,
     thinkingLevelMap: { low: "low", max: "max" },
-  };
-  const donor: ModelCatalogEntry = {
-    provider: "anthropic",
-    id: "claude-future",
+  });
+  const donor = model("anthropic", "claude-future", {
     name: "Hosted metadata",
     contextWindow: 456_000,
     thinkingLevelMap: { high: "high" },
-  };
-  const hostedOnly = { provider: "anthropic", id: "claude-hosted-only", name: "Hosted only" };
+  });
+  const hostedOnly = model("anthropic", "claude-hosted-only");
   const snapshot = {
-    entries: [
-      native,
-      donor,
-      hostedOnly,
-      { provider: "claude-cli", id: "claude-stale", name: "Stale" },
-    ],
+    entries: [native, donor, hostedOnly, model("claude-cli", "claude-stale")],
     routeVariants: [],
     staticEntries: [donor, hostedOnly],
     providerOutcomes: [
@@ -854,15 +738,17 @@ it("projects exact native IDs and effort levels without expanding a restricted m
     ],
   };
   const projected = projectClaudeCliNativeCatalog(snapshot, true);
-  expect(projected.entries.find((row) => row.provider === "anthropic")).toMatchObject({
-    id: native.id,
-    contextWindow: 456_000,
-    thinkingLevelMap: native.thinkingLevelMap,
+  expect(projected).toMatchObject({
+    entries: [
+      {
+        provider: "anthropic",
+        id: native.id,
+        contextWindow: 456_000,
+        thinkingLevelMap: native.thinkingLevelMap,
+      },
+    ],
+    staticEntries: [],
   });
-  expect(projected.entries).toHaveLength(1);
-  expect(projected.entries.every((row) => row.provider === "anthropic")).toBe(true);
-  expect(projected.staticEntries).toEqual([]);
-  expect(projected.entries.some((row) => row.id === "claude-stale")).toBe(false);
   expect(projectClaudeCliNativeCatalog(snapshot, false).entries).toContain(donor);
   expect(
     projectClaudeCliNativeCatalog({ ...snapshot, providerOutcomes: [] }, true).entries,

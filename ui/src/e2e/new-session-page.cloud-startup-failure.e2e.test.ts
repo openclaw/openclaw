@@ -1,6 +1,7 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
 import {
   controlUiSessionPath,
@@ -25,7 +26,7 @@ const startupResponses = (sessionKey: string) => ({
   "agents.list": createCloudAgentsListResponse(),
   "environments.list": { environments: [], profiles: [{ id: "aws", providerId: "crabbox" }] },
   "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
-  "sessions.create": { key: sessionKey },
+  "sessions.create": { key: sessionKey, sessionId: `session:${sessionKey}` },
   "sessions.list": createdSessionListResult(sessionKey),
 });
 async function sendOrdinaryTurn(pane: Locator) {
@@ -53,7 +54,7 @@ function chatState(pane: Locator) {
 }
 
 suite.define(() => {
-  it.each(["cancelled", "failed", "unconfirmed"] as const)(
+  it.each(["cancelled", "failed", "pending"] as const)(
     "keeps a deleted Incognito first prompt readable through %s settlement",
     async (outcome) => {
       const page = await openPage();
@@ -63,10 +64,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         defaultAgentId: "cloud",
         workspaceGit: true,
-        deferredMethods: [
-          "sessions.dispatch",
-          ...(outcome === "unconfirmed" ? ["sessions.send", "chat.history"] : []),
-        ],
+        deferredMethods: ["sessions.dispatch", ...(outcome === "pending" ? ["chat.send"] : [])],
         methodResponses: {
           ...startupResponses(sessionKey),
           "sessions.create": { key: sessionKey, sessionId: "incognito-startup" },
@@ -87,11 +85,12 @@ suite.define(() => {
       await waitForCommittedChatRoute(page);
       const route = page.url();
       await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
-      if (outcome === "unconfirmed") {
+      if (outcome === "pending") {
         await gateway.resolveDeferred("sessions.dispatch", {
+          sessionId: "incognito-startup",
           placement: { state: "active", environmentId: "uncertain-worker" },
         });
-        await gateway.waitForRequest("sessions.send");
+        await gateway.waitForRequest("chat.send");
       }
       await gateway.setSessionsListResponse({
         ...createdSessionListResult(sessionKey),
@@ -108,7 +107,7 @@ suite.define(() => {
       await pollLocatorText(retained).toContain(message);
       const working = retained.locator(".chat-working-indicator");
       await pollLocatorText(working).toContain(
-        outcome === "unconfirmed" ? "Sending message" : "Provisioning environment",
+        outcome === "pending" ? "Sending message" : "Provisioning environment",
       );
       expect(await retained.textContent()).not.toContain("temporary session was cleaned up");
       expect(page.url()).toBe(route);
@@ -121,34 +120,24 @@ suite.define(() => {
         expect(
           await retained.locator(".agent-chat__composer-shell button:enabled:visible").count(),
         ).toBe(0);
-        expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       } else {
-        await gateway.rejectDeferred(
-          outcome === "unconfirmed" ? "sessions.send" : "sessions.dispatch",
-          {
-            code: outcome === "unconfirmed" ? "UNAVAILABLE" : "INVALID_REQUEST",
-            message: diagnostic,
-          },
-        );
-        await pollLocatorText(retained.getByRole("alert")).toContain(diagnostic);
-        await pollCount(working).toBe(0);
-        expect(await retained.textContent()).not.toContain("temporary session was cleaned up");
-        const action = retained.getByRole("button", {
-          name: outcome === "unconfirmed" ? "Check delivery" : "Retry",
-          exact: true,
+        await gateway.rejectDeferred(outcome === "pending" ? "chat.send" : "sessions.dispatch", {
+          code: outcome === "pending" ? "UNAVAILABLE" : "INVALID_REQUEST",
+          message: diagnostic,
         });
-        await action.waitFor({ state: "visible" });
-
-        if (outcome === "failed") {
-          await gateway.deferNext("sessions.dispatch");
-        }
-        await action.click();
-        if (outcome === "unconfirmed") {
-          await gateway.waitForRequest("chat.history");
-          await gateway.resolveDeferred("chat.history", { messages: [] });
-          await pollLocatorText(retained.getByRole("alert")).toContain("No matching user message");
-          expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
+        expect(await retained.textContent()).not.toContain("temporary session was cleaned up");
+        if (outcome === "pending") {
+          await pollLocatorText(working).toContain("Reconnecting");
+          expect(await retained.getByRole("alert").count()).toBe(0);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(1);
         } else {
+          await pollLocatorText(retained.getByRole("alert")).toContain(diagnostic);
+          await pollCount(working).toBe(0);
+          const action = retained.getByRole("button", { name: "Retry", exact: true });
+          await action.waitFor({ state: "visible" });
+          await gateway.deferNext("sessions.dispatch");
+          await action.click();
           await expect
             .poll(async () => (await gateway.getRequests("sessions.dispatch")).length)
             .toBe(2);
@@ -158,12 +147,12 @@ suite.define(() => {
             message: diagnostic,
           });
           await pollLocatorText(retained.getByRole("alert")).toContain(diagnostic);
-          expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         }
       }
       await pollLocatorText(retained).toContain(message);
       expect(await retained.locator("textarea").isDisabled()).toBe(true);
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(outcome === "pending" ? 1 : 0);
       expect(page.url()).toBe(route);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
     },
@@ -188,6 +177,7 @@ suite.define(() => {
       const diagnostic = `cloud profile was removed\n${"Enrollment detail. ".repeat(80)}\nFinal startup diagnostic.`;
       const gateway = await installMockGateway(page, {
         defaultAgentId: "cloud",
+        subscriptionInitialHistory: !historyFails,
         deferredMethods: ["sessions.dispatch", ...(historyFails ? ["chat.startup"] : [])],
         featureMethods: ["sessions.create", "sessions.dispatch", "chat.startup"],
         workspaceGit: true,
@@ -252,7 +242,7 @@ suite.define(() => {
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
         .toBe(await text.textContent());
       expect(page.url()).toContain(controlUiSessionPath(sessionKey));
-      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);
       const failedGroup = page.locator(".chat-group.user", { hasText: message });
       await expectFailedGroup(failedGroup);
@@ -332,7 +322,7 @@ suite.define(() => {
       }
       await expectFailedGroup(failedGroup);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(disconnect ? 1 : 0);
-      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       if (disconnect) {
         await gateway.deferNext("sessions.dispatch");
       }
@@ -342,13 +332,17 @@ suite.define(() => {
         .toBe(disconnect ? 2 : 1);
       const retry = (await gateway.getRequests("sessions.dispatch")).at(-1)!;
       expect(retry.params).toMatchObject({ key: sessionKey, profileId: "aws" });
-      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await gateway.resolveDeferred("sessions.dispatch", {
+        sessionId: `session:${sessionKey}`,
         placement: { state: "active", environmentId: "worker-retry" },
       });
-      expect(await gateway.waitForRequest("sessions.send")).toMatchObject({
+      const initial = await gateway.waitForRequest("chat.send");
+      expect(initial).toMatchObject({
         params: {
-          key: sessionKey,
+          sessionKey,
+          sessionId: `session:${sessionKey}`,
+          expectedLeafEntryId: null,
           message,
           attachments: [{ content: ONE_PIXEL_PNG_B64, fileName: "pixel.png" }],
         },
@@ -357,10 +351,17 @@ suite.define(() => {
       if (disconnect || coldScope) {
         expect(await chatComposer.inputValue()).toBe(disconnect ? "" : "later ordinary turn");
         if (disconnect) {
-          const follower = await gateway.waitForRequest("chat.send");
+          expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+          await gateway.emitChatFinal({
+            sessionKey,
+            runId: requireString(requireRecord(initial.params).idempotencyKey, "initial run id"),
+            text: "Initial turn finished.",
+          });
+          const follower = await gateway.waitForRequest("chat.send", { after: 1 });
           expect(follower.params).toMatchObject({ sessionKey, message: "later ordinary turn" });
+          expect(await gateway.getRequests("chat.send")).toHaveLength(2);
         } else {
-          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(1);
         }
       }
     },

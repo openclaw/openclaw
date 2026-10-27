@@ -10,11 +10,7 @@ import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/au
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { isTrustedToolExecutionPreflightError } from "../agents/tool-result-error.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
-import {
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-  selectApplicableRuntimeConfig,
-} from "../config/runtime-snapshot.js";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
@@ -54,11 +50,7 @@ function resolveWebSearchRuntimeConfig(params?: {
   if (params?.preferInputConfig && params.config) {
     return params.config;
   }
-  return selectApplicableRuntimeConfig({
-    inputConfig: params?.config,
-    runtimeConfig: getRuntimeConfigSnapshot(),
-    runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
-  });
+  return selectLiveRuntimeConfig(params?.config);
 }
 
 function hasEntryCredential(
@@ -192,53 +184,6 @@ export function resolveWebSearchProviderId(params: {
   return "";
 }
 
-function resolveRuntimePreferredWebSearchProviderId(params: {
-  config?: OpenClawConfig;
-  search?: WebSearchConfig;
-  runtimeWebSearch?: RuntimeWebSearchMetadata;
-  providers?: PluginWebSearchProviderEntry[];
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  resolveAuthProfileStoreSource?: () => boolean;
-}): string | undefined {
-  const runtimeProviderId = normalizeOptionalLowercaseString(
-    params.runtimeWebSearch?.selectedProvider ?? params.runtimeWebSearch?.providerConfigured,
-  );
-  if (!runtimeProviderId) {
-    return undefined;
-  }
-  const configuredProviderId =
-    params.search && "provider" in params.search
-      ? normalizeOptionalLowercaseString(params.search.provider)
-      : undefined;
-  if (configuredProviderId) {
-    const configuredProvider = params.providers?.find((entry) => entry.id === configuredProviderId);
-    return configuredProvider?.id === runtimeProviderId ? runtimeProviderId : undefined;
-  }
-  if (params.runtimeWebSearch?.providerSource === "configured") {
-    return runtimeProviderId;
-  }
-  const provider = params.providers?.find((entry) => entry.id === runtimeProviderId);
-  if (
-    !provider ||
-    !hasImplicitProviderSelectionSignal(
-      provider,
-      params.config,
-      params.agentDir,
-      params.authStore,
-      params.resolveAuthProfileStoreSource,
-    )
-  ) {
-    return undefined;
-  }
-  // The secrets snapshot cannot see OAuth profiles. Let the credential-aware
-  // order choose ahead of its env-keyed winner, which remains eligible for fallback.
-  if (params.runtimeWebSearch?.selectedProviderKeySource === "env") {
-    return undefined;
-  }
-  return provider.id;
-}
-
 type WebSearchRequestContext = {
   config?: OpenClawConfig;
   search?: WebSearchConfig;
@@ -367,18 +312,49 @@ function selectWebSearchCandidates(
 ): PluginWebSearchProviderEntry[] {
   const { config, search, runtimeWebSearch } = context;
 
+  function resolveRuntimePreferredWebSearchProviderId(): string | undefined {
+    const runtimeProviderId = normalizeOptionalLowercaseString(
+      runtimeWebSearch?.selectedProvider ?? runtimeWebSearch?.providerConfigured,
+    );
+    if (!runtimeProviderId) {
+      return undefined;
+    }
+    const configuredProviderId =
+      search && "provider" in search
+        ? normalizeOptionalLowercaseString(search.provider)
+        : undefined;
+    if (configuredProviderId) {
+      const configuredProvider = providers.find((entry) => entry.id === configuredProviderId);
+      return configuredProvider?.id === runtimeProviderId ? runtimeProviderId : undefined;
+    }
+    if (runtimeWebSearch?.providerSource === "configured") {
+      return runtimeProviderId;
+    }
+    const provider = providers.find((entry) => entry.id === runtimeProviderId);
+    if (
+      !provider ||
+      !hasImplicitProviderSelectionSignal(
+        provider,
+        config,
+        agentDir,
+        options?.authStore,
+        resolveAuthProfileStoreSource,
+      )
+    ) {
+      return undefined;
+    }
+    // The secrets snapshot cannot see OAuth profiles. Let the credential-aware
+    // order choose ahead of its env-keyed winner, which remains eligible for fallback.
+    if (runtimeWebSearch?.selectedProviderKeySource === "env") {
+      return undefined;
+    }
+    return provider.id;
+  }
+
   const preferredIds = uniqueStrings(
     [
       options?.providerId,
-      resolveRuntimePreferredWebSearchProviderId({
-        config,
-        search,
-        runtimeWebSearch,
-        providers,
-        agentDir,
-        authStore: options?.authStore,
-        resolveAuthProfileStoreSource,
-      }),
+      resolveRuntimePreferredWebSearchProviderId(),
       resolveWebSearchProviderId({
         config,
         agentDir,

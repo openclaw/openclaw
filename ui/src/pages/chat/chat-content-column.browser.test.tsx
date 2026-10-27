@@ -1,12 +1,13 @@
 import { createSignal, For } from "solid-js";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
 import type { MessageGroup as MessageGroupData } from "../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import { MessageGroup } from "./components/chat-message-group-view.tsx";
-import { StreamGroup, WorkGroupSummary } from "./components/chat-message-stream-view.tsx";
+import { StreamGroup } from "./components/chat-message-stream-view.tsx";
+import { WorkGroupSummary } from "./components/chat-work-group-summary.tsx";
 import "../../styles/base.css";
 import "../../styles/components.css";
 import "../../styles/chat.ts";
@@ -225,6 +226,14 @@ it.each([1440, 1024, 390].flatMap((width) => ["light", "dark"].map((theme) => ({
       ),
       { container: root },
     );
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => {
+      for (const [key, selector] of visibleBlocks) {
+        expect(
+          root.querySelector(`[data-chat-row-key="${key}"]`)?.querySelector(selector),
+        ).toBeInstanceOf(HTMLElement);
+      }
+    });
     for (const direct of [false, true]) {
       for (const direction of ["ltr", "rtl"]) {
         for (const mode of ["saved", "narrow", "default"]) {

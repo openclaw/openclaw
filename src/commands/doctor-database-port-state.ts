@@ -106,7 +106,7 @@ export async function prepareSharedStatePortSource(
 ) {
   const shared = path.join(ctx.stateDir, "state", "openclaw.sqlite");
   if (dryRun || from !== "sqlite" || to !== "postgres" || fs.existsSync(shared)) {
-    return;
+    return undefined;
   }
   const { captureOpenClawStateWorkerContext } =
     await import("../state/openclaw-state-worker-context.js");
@@ -119,4 +119,5 @@ export async function prepareSharedStatePortSource(
     { assertCurrent: ctx.assertCurrent },
   );
   await closeDatabasePortState(ctx);
+  return shared;
 }

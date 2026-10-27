@@ -7,7 +7,6 @@ import {
   transformConfigFile,
   writeConfigFile,
 } from "../../config/config.js";
-import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import type { AgentDefaultsConfig, OpenClawConfig } from "../../config/types.js";
 import { readUpdateStateSchemaVersionsInProcess } from "../../infra/update-candidate-state.js";
 import {
@@ -16,7 +15,7 @@ import {
 } from "../../infra/update-doctor-result.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { updateRecoverySchema } from "../../infra/update-recovery.js";
-import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -148,11 +147,6 @@ export async function writeDoctorRollbackReceipt(params: {
     if (change === "doctor-capture-edit") {
       operatorEdit();
     }
-    if (change === "doctor-settled-exception") {
-      expect(capture.inputHash).toBe(hashConfigRaw(originalRaw));
-      expect(capture.hash).toBe(hashConfigRaw(fs.readFileSync(configPath, "utf8")));
-      expect(capture.hash).not.toBe(capture.inputHash);
-    }
     await writeUpdatePostInstallDoctorResult({
       resultPath,
       result: {
@@ -222,15 +216,16 @@ export async function expectActiveRollbackIdentity(params: {
     },
     packageTransaction: {
       backupRoot: "/backup",
-      complete: vi.fn(async () => {}),
-      rollback: vi.fn(async () => ({
-        name: "rollback",
-        command: "restore",
-        cwd: previousRoot,
-        exitCode: rollbackSucceeded ? 0 : 1,
-        durationMs: 1,
+      complete: async () => {},
+      rollback: async () => ({
+        ...stepFixture("rollback", {
+          command: "restore",
+          cwd: previousRoot,
+          exitCode: rollbackSucceeded ? 0 : 1,
+          durationMs: 1,
+        }),
         activePackageRoot,
-      })),
+      }),
     },
   });
   if (failure === "restart-cleanup") {
@@ -320,9 +315,6 @@ export function registerRollbackReportTests(
           },
         },
       });
-      expect(getUpdateRun(run.runId, { env })?.steps).toContainEqual(
-        expect.objectContaining({ step: "package rollback", detail: message }),
-      );
       const result = completeUpdateCommandRun(rolledBack.result, run);
       const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});

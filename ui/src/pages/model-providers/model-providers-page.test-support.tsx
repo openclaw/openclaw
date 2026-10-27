@@ -1,4 +1,5 @@
 import { setImmediate } from "node:timers/promises";
+import { createRouter } from "@openclaw/uirouter";
 import { createSignal } from "solid-js";
 import { afterEach, expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
@@ -7,9 +8,11 @@ import type {
   ModelAuthStatusResult,
   ModelCatalogResult,
 } from "../../api/types.ts";
+import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
+import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import type {
   RuntimeConfigExternalMutationOptions,
@@ -26,6 +29,7 @@ import {
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
 import { beginModelCatalogRead, publishModelCatalogResult } from "../../lib/model-catalog-cache.ts";
 import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
@@ -172,6 +176,26 @@ export function createApiKeyProviderData(): ModelProvidersData {
   };
 }
 
+/** Opens a connected provider row so its accounts, messages and actions render. */
+export async function expandProvider(
+  page: ModelProvidersPageTestElement,
+  providerId: string,
+): Promise<HTMLElement> {
+  const selector = `li.provider-row[data-provider-id="${providerId}"]`;
+  await waitForSolid(() =>
+    expect(page.querySelector(selector), `${providerId} provider row`).not.toBeNull(),
+  );
+  const row = page.querySelector<HTMLElement>(selector);
+  const summary = row!.querySelector<HTMLButtonElement>(":scope > button.provider-row__summary");
+  expect(summary, `${providerId} provider summary`).not.toBeNull();
+  if (summary!.getAttribute("aria-expanded") !== "true") {
+    summary!.click();
+    await page.updateComplete;
+  }
+  expect(summary!.getAttribute("aria-expanded")).toBe("true");
+  return row!;
+}
+
 export async function saveKey(page: ModelProvidersPageTestElement, value: string) {
   publishRouteData(page, createApiKeyProviderData());
   page.view.props.onOpenKeyEditor("openai");
@@ -233,17 +257,13 @@ export function createHarness(initialScopeId: string) {
           throw new Error("usage.status unavailable");
         }
         return usageStatus;
-      case "sessions.usage":
-        return { aggregates: { byProvider: [] } };
       default:
         return {};
     }
   });
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client: { request } as unknown as GatewayBrowserClient,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: {
       type: "hello-ok",
       protocol: 3,
@@ -272,9 +292,7 @@ export function createHarness(initialScopeId: string) {
     },
     assistantAgentId: "main",
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const gatewaySource = createApplicationGateway(snapshot);
   const metadata = createGatewayMetadataObserver(
     (current) => current === gatewaySource.gateway.snapshot,
@@ -334,18 +352,13 @@ export function createHarness(initialScopeId: string) {
     },
   });
   const context = {
+    router: createRouter<RouteId, ApplicationContext>({
+      routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
+    }),
     gateway: gatewaySource.gateway,
     agents: {
       state: {
-        agentsList: {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "project",
-          agents: [
-            { id: "main", name: "Main" },
-            { id: "writer", name: "Writer" },
-          ],
-        },
+        agentsList: agentRoster({ main: "Main", writer: "Writer" }, "main", "project"),
         agentsLoading: false,
         agentsError: null as string | null,
       },

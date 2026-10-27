@@ -23,7 +23,7 @@ class ClawWorkspaceWriteError extends Error {
   }
 }
 
-async function readClawWorkspaceActionSource(params: {
+export async function readClawWorkspaceActionSource(params: {
   action: ClawAddPlanAction;
   packageRoot: string;
   sourceRoot: Root;
@@ -120,6 +120,8 @@ export async function createClawWorkspaceFiles(
       if (await workspace.exists(targetRelative)) {
         throw new ClawWorkspaceWriteError();
       }
+      await options.prepareEffect?.();
+      assertForwardCurrent();
       await workspace.write(targetRelative, resolvedSource.content, {
         mkdir: true,
         overwrite: false,

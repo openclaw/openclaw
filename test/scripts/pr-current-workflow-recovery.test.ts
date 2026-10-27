@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import {
   configureMerge,
   expectAncestors,
@@ -9,6 +10,7 @@ import {
   expectExit,
 } from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
+import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 import {
   copyPrWrapperSources,
   createIndependentPrFixtureEnv,
@@ -47,7 +49,8 @@ function sourceCommit(
     return result.stdout.trim();
   };
   run(["read-tree", parent]);
-  const paths = readdirSync(directory, { recursive: true, withFileTypes: true })
+  const paths = listDirectoryTreeStrictSync(directory)
+    .map((walkEntry) => walkEntry.dirent)
     .filter((entry) => entry.isFile())
     .map((entry) => join(entry.parentPath, entry.name).slice(directory.length + 1));
   const blobs = run(
@@ -117,7 +120,167 @@ function selection(
   });
 }
 
+const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
+const rejectedAdmin = reuseCompletedSetup(() => {
+  const f = preExistingCandidate();
+  const retainedDirectory = join(f.root, "retained-source");
+  const source = sourceCommit(f, f.base, retainedDirectory, false);
+  f.git(["push", "-q", "origin", `${source}:refs/heads/main`]);
+  f.workflowSource(source, retainedDirectory);
+  f.bindWorkflow();
+  const refusal = readFileSync("test/fixtures/pr-admin-base-modified-405.txt", "utf8");
+  configureMerge(f, { restMergeRefusal: refusal });
+  expectExit(f.adminPriorCi(f.path), 1);
+  const outcome = f.git(["rev-parse", outcomeRef]);
+  expect(f.record()).toMatchObject({ route: "admin", accepted: false, phase: "intent" });
+  f.recover();
+  const binding = f.git(["rev-parse", bindingRef]);
+  const directory = join(f.root, "selected-source");
+  const current = sourceCommit(f, source, directory, true);
+  f.git(["push", "-q", "origin", `${current}:refs/heads/main`]);
+  f.git(["fetch", "-q", "origin", "main"]);
+  f.workflowSource(source, directory);
+  f.useScripts(join(directory, "scripts"));
+  f.git([
+    "config",
+    "--add",
+    `url.file://${f.remote}.insteadOf`,
+    "https://github.com/openclaw/openclaw",
+  ]);
+  f.git(["remote", "set-url", "origin", "https://github.com/openclaw/openclaw"]);
+  configureMerge(f, { restMergeRefusal: "", comment: "lost" });
+  return { f, outcome, binding, source, current };
+});
+
+function recoverAdmin(setup: ReturnType<typeof rejectedAdmin>) {
+  const { f, outcome } = setup;
+  return f.run(
+    false,
+    f.repo,
+    "squash",
+    outcome,
+    "",
+    "",
+    "",
+    "",
+    false,
+    "",
+    false,
+    f.path,
+    true,
+    "",
+    "",
+    true,
+  );
+}
+
 describePosix("current-main recovery of a retained workflow", () => {
+  it("native entrypoint admits only the explicit admin shape and refuses a stale outcome before execution", () => {
+    const { f, outcome, binding } = rejectedAdmin();
+    mkdirSync(join(f.repo, "scripts"), { recursive: true });
+    writeFileSync(join(f.repo, "scripts/pr"), wrapper);
+    const args = [
+      "merge-recover",
+      "123",
+      "a".repeat(40),
+      "--confirmed-operator-recovery",
+      "--admin-evidence",
+      f.path,
+      "--confirmed-operator-admin",
+      "--current-workflow",
+    ];
+    const invoke = (argv: string[]) =>
+      spawnSync("bash", [join(f.repo, "scripts/pr"), ...argv], {
+        cwd: f.repo,
+        env: {
+          PATH: process.env.PATH,
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_ALLOW_PROTOCOL: "file",
+        },
+        encoding: "utf8",
+      });
+    const selected = invoke(args);
+    expect(selected.status, selected.stderr).toBe(1);
+    expect(selected.stderr).toContain("Current workflow recovery outcome changed");
+    const replacement = invoke([
+      ...args.slice(0, 2),
+      outcome,
+      ...args.slice(3),
+      "--replacement-head",
+      f.head,
+    ]);
+    expect(replacement.status).toBe(1);
+    expect(replacement.stderr).toContain(
+      "Current workflow recovery requires a confirmed cancelled nonqueue auto outcome",
+    );
+    const unconfirmed = invoke(args.filter((arg) => arg !== "--confirmed-operator-admin"));
+    expect(unconfirmed.status).toBe(2);
+    expect(unconfirmed.stderr).toContain("--current-workflow requires confirmed merge-recover");
+    expect(f.git(["rev-parse", outcomeRef])).toBe(outcome);
+    expect(f.git(["rev-parse", bindingRef])).toBe(binding);
+  });
+
+  it("explicitly selects current workflow for qualified same-head admin rejection recovery", () => {
+    const setup = rejectedAdmin();
+    const { f, outcome, binding, source, current } = setup;
+    const captures = f.captures();
+    const recovered = recoverAdmin(setup);
+    expectExit(recovered, 1);
+    expect(f.record(), recovered.output).toMatchObject({
+      phase: "commenting",
+      head: f.head,
+      accepted: true,
+      workflowRecovery: { binding, from: source, to: current },
+      recovery: { outcome, providerRejection: { kind: "github-base-modified-405" } },
+    });
+    expect(f.record().recovery).not.toHaveProperty("replacementHead");
+    expect(f.git(["rev-parse", bindingRef])).toBe(binding);
+    expectAncestors(f, [outcome, binding, source, current], outcomeRef);
+    expectCapturedFiles(f, captures, outcomeRef);
+  });
+
+  it.each(["capture", "head", "admin", "security"])(
+    "current workflow cannot bypass same-head admin recovery %s validation",
+    (fault) => {
+      const setup = rejectedAdmin();
+      const { f, outcome, binding } = setup;
+      if (fault === "capture") {
+        writeFileSync(
+          join(f.worktree, ".local", `merge-output.${f.record().attempt}.log`),
+          "HTTP 405\n",
+        );
+      } else {
+        const state = f.state();
+        if (fault === "head") {
+          state.pr.headRefOid = f.base;
+        }
+        if (fault === "admin") {
+          state.priorCi.membership = "member";
+        }
+        if (fault === "security") {
+          state.priorCi.security.fault = "failed-guard";
+        }
+        f.save(state);
+      }
+      const result = recoverAdmin(setup);
+      expectExit(result, 1);
+      expect(result.output).not.toMatch(/current workflow recovery requires/i);
+      expect(result.output).toMatch(
+        fault === "capture"
+          ? /complete exact GitHub base-modified HTTP 405 rejection/
+          : fault === "head"
+            ? /head|prepared/i
+            : fault === "admin"
+              ? /writer must be an active organization admin/
+              : /security|guard/i,
+      );
+      expect(f.git(["rev-parse", outcomeRef])).toBe(outcome);
+      expect(f.git(["rev-parse", bindingRef])).toBe(binding);
+      expect(f.state().pr.mergeCommit).toBeNull();
+    },
+  );
+
   it("retains the binding and cancelled history through real recovery and ordinary reconciliation", () => {
     const setup = cancelled();
     const { f, outcome, binding, replacement, original, source, directory } = setup;

@@ -11,6 +11,7 @@ import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/se
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./memory/index.js";
+import * as memorySources from "./memory/manager-source-state.js";
 import { postgresProductScope } from "./postgres-product.test-support.js";
 import {
   configureMemoryCoreDreamingStateForTests,
@@ -205,8 +206,11 @@ describe.skipIf(!database.connection)("PostgreSQL memory_search product flows", 
       });
     });
 
-  const paths = async (query: string, options?: Parameters<typeof search>[1]) =>
-    (await search(query, options)).results.map((hit) => hit.path);
+  const paths = async (query: string, options?: Parameters<typeof search>[1]) => {
+    const result = await search(query, options);
+    expect(result).not.toMatchObject({ unavailable: true });
+    return result.results.map((hit) => hit.path);
+  };
   const semantic = async (corpus: "memory" | "sessions" = "memory") =>
     (await search("semantic-only", { agentId: "semantic", corpus, maxResults: 1 })).results;
 
@@ -334,18 +338,75 @@ describe.skipIf(!database.connection)("PostgreSQL memory_search product flows", 
   });
 
   it("caps the combined body and exact-path streams at 200 public results", async () => {
-    await write("main", "capmarker.md", "An exact filename result without a matching body.");
-    await write(
-      "main",
-      "cap-population.md",
-      Array.from(
-        { length: 205 },
-        (_, index) => `capmarker ${index} ${"padding ".repeat(192)}`,
-      ).join("\n"),
-    );
     await sync();
-    const result = await search("capmarker", { maxResults: 1_000_000 });
-    expect(result.results).toHaveLength(200);
-    expect(result.results[0]!.path).toBe("memory/capmarker.md");
+    await write("main", "before-cap.md", "An earlier indexing generation.");
+    const planned = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const replanned = Promise.withResolvers<void>();
+    const publish = Promise.withResolvers<void>();
+    const resolveEntries = memorySources.resolveMemorySourceFileEntries;
+    // Hold an older, real file listing while the next generation's files arrive.
+    const planning = vi
+      .spyOn(memorySources, "resolveMemorySourceFileEntries")
+      .mockImplementationOnce(async (params) => {
+        const entries = await resolveEntries(params);
+        planned.resolve();
+        await resume.promise;
+        return entries;
+      })
+      .mockImplementationOnce(async (params) => {
+        const entries = await resolveEntries(params);
+        replanned.resolve();
+        await publish.promise;
+        return entries;
+      });
+    const active = sync();
+    void active.catch(() => undefined);
+    try {
+      await Promise.race([
+        planned.promise,
+        active.then(() => {
+          throw new Error("Expected the active sync to reach file planning");
+        }),
+      ]);
+      await write("main", "capmarker.md", "An exact filename result without a matching body.");
+      await write(
+        "main",
+        "cap-population.md",
+        Array.from(
+          { length: 205 },
+          (_, index) => `capmarker ${index} ${"padding ".repeat(192)}`,
+        ).join("\n"),
+      );
+      const joined = [sync(), sync()];
+      resume.resolve();
+      // Every caller must join the newer pass, including callers resumed after
+      // another waiter has already claimed that pass's sync slot.
+      try {
+        expect(
+          await Promise.race([
+            replanned.promise.then(() => "planned"),
+            ...joined.map((pending) => pending.then(() => "completed")),
+          ]),
+        ).toBe("planned");
+      } finally {
+        publish.resolve();
+        await Promise.all(joined);
+      }
+      const result = await search("capmarker", { maxResults: 1_000_000 });
+      expect(
+        result.results,
+        JSON.stringify({ ...result, results: result.results.length }),
+      ).toHaveLength(200);
+      expect(result.results[0]!.path).toBe("memory/capmarker.md");
+    } finally {
+      resume.resolve();
+      publish.resolve();
+      try {
+        await active;
+      } finally {
+        planning.mockRestore();
+      }
+    }
   });
 });

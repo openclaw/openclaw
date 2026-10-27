@@ -102,6 +102,8 @@ export type SessionRestartRecoveryState = {
   restartRecoveryRequesterSenderId?: string;
   restartRecoverySameChannelThreadRequired?: true;
   restartRecoverySourceIngress?: "channel" | "control-ui" | "internal";
+  /** Original runtime channel; null records an explicitly channel-less turn. */
+  restartRecoverySourceMessageChannel?: string | null;
   restartRecoverySourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
   restartRecoveryTerminalRunIds?: string[];

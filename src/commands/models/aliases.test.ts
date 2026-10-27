@@ -92,72 +92,45 @@ beforeEach(() => {
   mocks.loadModelsConfig.mockReset();
 });
 
-it.each([
-  {
-    label: "plain",
-    opts: { plain: true },
-    lines: ["alpha anthropic/claude-sonnet-4-6", "zeta openai/gpt-5.6-sol"],
+it.each(["json", "plain", "text"] as const)(
+  "sorts aliases and preserves raw values only in %s output",
+  async (format) => {
+    const alias = "café\u001b[2J\nforged";
+    const target = "openai/model\u001b]0;hidden\u0007\tnext";
+    configureModels({
+      "openai/z": { alias: "zeta" },
+      [target]: { alias },
+      "google/g": { alias: "__proto__" },
+    });
+    await modelsAliasesListCommand({ json: format === "json", plain: format === "plain" }, runtime);
+    if (format === "json") {
+      expect(runtime.logs).toHaveLength(1);
+      const { aliases } = JSON.parse(runtime.logs[0] ?? "");
+      expect(Object.keys(aliases)).toEqual(["__proto__", alias, "zeta"]);
+      expect(Object.hasOwn(aliases, "__proto__")).toBe(true);
+      expect(aliases).toEqual({ ["__proto__"]: "google/g", [alias]: target, zeta: "openai/z" });
+    } else {
+      const entries = [
+        ["__proto__", "google/g"],
+        ["café\\nforged", "openai/model\\tnext"],
+        ["zeta", "openai/z"],
+      ];
+      expect(runtime.logs).toEqual(
+        format === "plain"
+          ? entries.map(([name, model]) => `${name} ${model}`)
+          : ["Aliases (3):", ...entries.map(([name, model]) => `- ${name} -> ${model}`)],
+      );
+    }
   },
-  {
-    label: "human-readable",
-    opts: {},
-    lines: [
-      "Aliases (2):",
-      "- alpha -> anthropic/claude-sonnet-4-6",
-      "- zeta -> openai/gpt-5.6-sol",
-    ],
-  },
-])("sorts $label aliases independently of model insertion order", async ({ opts, lines }) => {
-  configureModels({
-    "openai/gpt-5.6-sol": { alias: "zeta" },
-    "anthropic/claude-sonnet-4-6": { alias: "alpha" },
-  });
-  await modelsAliasesListCommand(opts, runtime);
-  expect(runtime.logs).toEqual(lines);
-});
+);
 
-it("preserves safely named prototype aliases in deterministic JSON output", async () => {
+it("removes every case-colliding user alias even when it shadows a built-in", async () => {
   configureModels({
-    "openai/gpt-5.6-sol": { alias: "zeta" },
-    "google/gemini-3.1-pro-preview": { alias: "__proto__" },
-    "anthropic/claude-sonnet-4-6": { alias: "alpha" },
-  });
-  await modelsAliasesListCommand({ json: true }, runtime);
-  expect(runtime.logs).toHaveLength(1);
-  const payload = JSON.parse(runtime.logs[0] ?? "") as { aliases: Record<string, string> };
-  expect(Object.keys(payload.aliases)).toEqual(
-    ["zeta", "__proto__", "alpha"].toSorted((left, right) => left.localeCompare(right)),
-  );
-  expect(Object.hasOwn(payload.aliases, "__proto__")).toBe(true);
-  expect(payload.aliases).toEqual({
-    ["__proto__"]: "google/gemini-3.1-pro-preview",
-    alpha: "anthropic/claude-sonnet-4-6",
-    zeta: "openai/gpt-5.6-sol",
-  });
-});
-
-it.each([{}, { plain: true }])("keeps alias reports on one terminal line (%j)", async (opts) => {
-  const alias = "café\u001b[2J\nforged";
-  const target = "openai/model\u001b]0;hidden\u0007\tnext";
-  configureModels({ [target]: { alias } });
-  await modelsAliasesListCommand(opts, runtime);
-  expect(runtime.logs.join("\n")).toContain("café\\nforged");
-  expect(runtime.logs.join("\n")).toContain("openai/model\\tnext");
-  for (const control of ["\u001b", "\u0007", "\t"]) {
-    expect(runtime.logs.join("\n")).not.toContain(control);
-  }
-  runtime.logs.length = 0;
-  await modelsAliasesListCommand({ json: true }, runtime);
-  expect(JSON.parse(runtime.logs[0] ?? "").aliases).toEqual({ [alias]: target });
-});
-
-it("removes every case-colliding alias from an existing config", async () => {
-  configureModels({
-    "openai/gpt-5.4-mini": { alias: "Fast" },
-    "openai/gpt-5.6-sol": { alias: "fast" },
+    "openai/gpt-5.4-mini": { alias: "Gpt-Mini" },
+    "openai/gpt-5.6-sol": { alias: "gpt-mini" },
     "anthropic/claude-sonnet-4-6": { alias: "steady" },
   });
-  await modelsAliasesRemoveCommand("FAST", runtime);
+  await modelsAliasesRemoveCommand("GPT-MINI", runtime);
   expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
   expect(writtenConfig().agents?.defaults?.models).toEqual({
     "openai/gpt-5.4-mini": { alias: undefined },
@@ -183,13 +156,6 @@ it.each([
   expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
 });
 
-it("removes a user alias that shadows a built-in name (user-set wins)", async () => {
-  configureModels({ "openai/gpt-5.4-nano": { alias: "gpt-mini" } });
-  await modelsAliasesRemoveCommand("gpt-mini", runtime);
-  expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-  const written = writtenConfig();
-  expect(written.agents?.defaults?.models?.["openai/gpt-5.4-nano"]?.alias).toBeUndefined();
-});
 it("does not make an unlisted model override invalid on a fresh config", async () => {
   const cfg: OpenClawConfig = {};
   configure(cfg);

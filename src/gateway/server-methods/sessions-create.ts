@@ -44,6 +44,7 @@ import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js"
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
+import { respondError } from "./response.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged, emitSessionTitleChanged } from "./session-change-event.js";
 import { registerCommittedSessionCategory } from "./session-create-category.js";
@@ -250,13 +251,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const initialTurn = resolveSessionCreateInitialTurn(p);
     if (!initialTurn) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "sessions.create attachments require usable content",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "sessions.create attachments require usable content",
       );
       return;
     }
@@ -271,13 +269,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const initialRunId = randomUUID();
     if (p.mentions?.length) {
       if (catalogId || p.incognito) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Human mentions are unavailable for this session mode. Remove the selected mentions to continue.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Human mentions are unavailable for this session mode. Remove the selected mentions to continue.",
         );
         return;
       }
@@ -383,14 +378,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
     let prepareLifecycle: Parameters<typeof createGatewaySession>[0]["prepareLifecycle"];
+    // Worktree creation validates its own source; the default may exist only on a worker.
     const preparedRoot =
-      repository || emptyWorkspace || deviceFolder
+      repository || emptyWorkspace || deviceFolder || p.worktree === true
         ? undefined
         : prepareSessionCreateFilesystemRoot({
             cfg,
-            enforceSandboxContainment: Boolean(
-              sessionCwd && !requestedExecNode && p.worktree !== true,
-            ),
+            enforceSandboxContainment: Boolean(sessionCwd && !requestedExecNode),
             requestedExecNode,
             requestedProjectId,
             sessionCwd,
@@ -489,10 +483,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let sessionSourceAccepted = false;
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
-    const allowExistingModelSelection = authorizeOperatorScopesForRequiredScope(
-      ADMIN_SCOPE,
-      clientScopes,
-    ).allowed;
     const catalogWait = createSessionModelCatalogWait([signal, client?.connectionSignal]);
     const waitForModelCatalog = async <T>(operation: () => Promise<T>) =>
       catalogWait.run(operation, (await operatorCapture.preparation)?.authority.signal);
@@ -513,6 +503,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       personalAccountDefaults,
       contextWindow: p.contextWindow,
       thinkingLevel: p.thinkingLevel,
+      cyberAccessProgram: p.cyberAccessProgram,
       fastMode: p.fastMode,
       projectId: requestedProjectId,
       deviceFolder,
@@ -522,7 +513,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ...(requestingOperatorProfileId ? { requestingOperatorProfileId } : {}),
       ...(operatorRoleActor ? { operatorRoleActor } : {}),
       visibility: p.visibility,
-      allowExistingModelSelection,
+      allowExistingModelSelection: authorizeOperatorScopesForRequiredScope(
+        ADMIN_SCOPE,
+        clientScopes,
+      ).allowed,
       parentSessionKey,
       spawnDepth: p.spawnDepth,
       ...resolveSessionCreateRootParameters(p, preparedRoot?.value),

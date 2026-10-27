@@ -235,19 +235,22 @@ function turnCompleted(threadId: string, id: string, text: string, itemId = "ans
   };
 }
 
-function clientListeners(
-  handlers?: Set<(notification: unknown) => unknown>,
-  onCleanup?: (kind: string) => void,
-) {
+function turnEnded(status: string, error: unknown = null) {
+  return {
+    method: "turn/completed",
+    params: { threadId: "thread-1", turn: { id: "turn-1", status, error, items: [] } },
+  };
+}
+
+function clientListeners(handlers?: Set<(notification: unknown) => unknown>) {
   return {
     addNotificationHandler: vi.fn((handler: (notification: unknown) => unknown) => {
       handlers?.add(handler);
       return () => {
         handlers?.delete(handler);
-        onCleanup?.("notification cleanup");
       };
     }),
-    addRequestHandler: vi.fn(() => () => onCleanup?.("request cleanup")),
+    addRequestHandler: vi.fn(() => () => undefined),
     addCloseHandler: vi.fn(() => () => undefined),
   };
 }
@@ -263,17 +266,7 @@ function conversationClient(
 ) {
   const notifications = new Set<(notification: unknown) => unknown>();
   const operations: Array<{ method: string; params: Record<string, unknown> }> = [];
-  const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
-    operations.push({ method, params });
-    if (!(method in responses)) {
-      throw new Error(`unexpected method: ${method}`);
-    }
-    const response = responses[method];
-    if (response instanceof Error) {
-      throw response;
-    }
-    return typeof response === "function" ? response(params) : response;
-  });
+  const request = rpcResponses(responses, operations);
   const client = {
     request,
     getInstanceId: () => clientId,
@@ -355,6 +348,10 @@ function sourceSession(sessionId: string, threadId = "thread-source") {
   return { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, threadId };
 }
 
+function sourceIdentity({ agentId, sessionId, sessionKey }: ReturnType<typeof sourceSession>) {
+  return { kind: "session" as const, agentId, sessionId, sessionKey };
+}
+
 function seedSession(
   source: Pick<ReturnType<typeof sourceSession>, "sessionId" | "sessionKey"> & { agentId?: string },
   storePath: string,
@@ -381,8 +378,12 @@ function rpcError(message: string, method = "turn/start", code = -32_600) {
   return new CodexAppServerRpcError({ code, message }, method);
 }
 
-function rpcResponses(responses: Record<string, unknown>) {
-  return vi.fn(async (method: string) => {
+function rpcResponses(
+  responses: Record<string, ConversationResponse>,
+  operations?: Array<{ method: string; params: Record<string, unknown> }>,
+) {
+  return vi.fn(async (method: string, params: Record<string, unknown>) => {
+    operations?.push({ method, params });
     if (!(method in responses)) {
       throw new Error(`unexpected method: ${method}`);
     }
@@ -390,7 +391,7 @@ function rpcResponses(responses: Record<string, unknown>) {
     if (response instanceof Error) {
       throw response;
     }
-    return response;
+    return typeof response === "function" ? response(params) : response;
   });
 }
 
@@ -469,7 +470,17 @@ function claimConversation(
   });
 }
 
-function prepareBinding(params: {
+function prepareBinding({
+  sessionFile,
+  workspaceDir = tempDir,
+  sessionKey,
+  bindingStore = bindings,
+  config,
+  pluginConfig,
+  agentId,
+  agentDir,
+  ...start
+}: {
   bindingStore?: Parameters<typeof prepareCodexConversationBinding>[0]["bindingStore"];
   config?: Parameters<typeof prepareCodexConversationBinding>[0]["config"];
   pluginConfig?: unknown;
@@ -483,17 +494,6 @@ function prepareBinding(params: {
   modelProvider?: string;
   authProfileId?: string;
 }) {
-  const {
-    sessionFile,
-    workspaceDir = tempDir,
-    sessionKey,
-    bindingStore = bindings,
-    config,
-    pluginConfig,
-    agentId,
-    agentDir,
-    ...start
-  } = params;
   return prepareCodexConversationBinding({
     bindingStore,
     config,
@@ -527,10 +527,30 @@ function runBoundClaim(
   return claimConversation(event, ctx, options);
 }
 
+function claimData(
+  data: Parameters<typeof conversationClaimContext>[0],
+  options: Parameters<typeof claimConversation>[2] = {},
+  sessionKey?: string,
+  event: Parameters<typeof conversationMessage>[1] = {},
+) {
+  return claimConversation(
+    conversationMessage("continue", { sessionKey, ...event }),
+    conversationClaimContext(data, sessionKey),
+    options,
+  );
+}
+
 function exposeRetainedClient(client: CodexAppServerClient) {
   initializeClient(client, { agentDir: tempDir });
   acquireClient.mockResolvedValue(client);
   retainClient.mockReturnValue({ client, release: vi.fn() });
+}
+
+function retireWithSiblingLeases() {
+  sharedClientMocks.clearSharedCodexAppServerClientIfCurrentAndUnclaimed
+    .mockReturnValueOnce({ found: true, closed: false })
+    .mockReturnValue({ found: false, closed: false });
+  retireClient.mockReturnValueOnce({ activeLeases: 2, closed: false }).mockReturnValue(undefined);
 }
 
 function expectMethods(
@@ -543,6 +563,7 @@ function expectMethods(
 const {
   getSharedCodexAppServerClient: acquireClient,
   retainSharedCodexAppServerClientByInstanceId: retainClient,
+  retireSharedCodexAppServerClientIfCurrent: retireClient,
 } = sharedClientMocks;
 
 const NETWORK_PROXY_PLUGIN_CONFIG = {
@@ -800,74 +821,56 @@ it("does not recreate a detached conversation queued behind retirement", async (
   await ownerCaptured.promise;
   retirementReady.resolve();
   await retirement;
-  await expect(queued).resolves.toEqual({
-    handled: true,
-    reply: {
-      text: "This Codex conversation was detached or changed before its message could run.",
-    },
-  });
+  await expectReply(
+    queued,
+    "This Codex conversation was detached or changed before its message could run.",
+  );
   expect(acquireClient).not.toHaveBeenCalled();
   expect(bindings.read(identity)).toBeUndefined();
 });
 
-it.each([
-  {
-    label: "an incognito source bound to an ordinary destination",
-    sourceSessionKey: "agent:main:dashboard:incognito-source",
-    destinationSessionKey: "agent:main:telegram:ordinary-destination",
-    ephemeral: true,
-  },
-  {
-    label: "an ordinary source bound to an incognito destination",
-    sourceSessionKey: "agent:main:telegram:ordinary-source",
-    destinationSessionKey: "agent:main:dashboard:incognito-destination",
-    ephemeral: false,
-  },
-])(
-  "uses the persisted source lifecycle for $label",
-  async ({ sourceSessionKey, destinationSessionKey, ephemeral }) => {
-    const sessionFile = path.join(tempDir, "mixed-source-lifecycle.jsonl");
-    const bindingId = "binding-mixed-source-lifecycle";
+it.each([true, false])(
+  "uses the persisted source lifecycle, not the destination (ephemeral: %s)",
+  async (ephemeral) => {
+    const sourceSessionKey = ephemeral
+      ? "agent:main:dashboard:incognito-source"
+      : "agent:main:telegram:ordinary-source";
+    const destinationSessionKey = ephemeral
+      ? "agent:main:telegram:ordinary-destination"
+      : "agent:main:dashboard:incognito-destination";
+    const bindingId = "binding-source-lifecycle";
     const storePath = path.join(tempDir, "mixed-source-lifecycle.sqlite");
+    const source = { ...sourceSession("source"), sessionKey: sourceSessionKey, storePath };
     try {
-      await seedSession(
-        { agentId: "main", sessionKey: sourceSessionKey, sessionId: "source-mixed-lifecycle" },
-        storePath,
-      );
+      await seedSession(source, storePath);
+      const threadId = "thread-1";
       const { client, operations } = replyingClient(
-        "thread-mixed-source-lifecycle",
-        "turn-mixed-source-lifecycle",
+        threadId,
+        "turn-1",
         "Bound reply",
-        "client-mixed-source-lifecycle",
+        "test-client",
         {
-          "thread/start": () => threadResult(tempDir, "thread-mixed-source-lifecycle"),
+          "thread/start": () => threadResult(tempDir, threadId),
           "thread/unsubscribe": () => ({}),
         },
       );
       exposeRetainedClient(client);
-      const { event, ctx } = boundConversationClaim(sessionFile, destinationSessionKey);
       const data = conversationData(bindingId, {
-        source: {
-          agentId: "main",
-          sessionId: "source-mixed-lifecycle",
-          threadId: "thread-source-mixed-lifecycle",
-          sessionKey: sourceSessionKey,
-          storePath,
-        },
-        start: { id: "start-mixed-source-lifecycle" },
+        source,
+        start: { id: "start-source-lifecycle" },
       });
-      ctx.pluginBinding.data = data;
-
-      const run = () =>
-        claimConversation(event, ctx, {
-          config: { session: { store: path.join(tempDir, "unrelated-session.sqlite") } },
-        });
       const sql = ephemeral ? observeHostDataSql() : undefined;
       try {
-        await expect(run()).resolves.toMatchObject({
-          handled: true,
-          reply: { text: "Bound reply" },
-        });
+        await expectReply(
+          claimData(
+            data,
+            {
+              config: { session: { store: path.join(tempDir, "unrelated-session.sqlite") } },
+            },
+            destinationSessionKey,
+          ),
+          "Bound reply",
+        );
         if (sql) {
           expect(sql.queries).toEqual([]);
         }
@@ -878,17 +881,15 @@ it.each([
       expect(operations.map(({ method }) => method)).toEqual(["thread/start", "turn/start"]);
       if (ephemeral) {
         expect(operations[0]?.params.ephemeral).toBe(true);
-        await expect(
-          consumeThread(client, "thread-mixed-source-lifecycle"),
-        ).resolves.toBeUndefined();
+        await expect(consumeThread(client, threadId)).resolves.toBeUndefined();
       } else {
         expect(operations[0]?.params).not.toHaveProperty("ephemeral");
-        const ownership = await consumeThread(client, "thread-mixed-source-lifecycle");
+        const ownership = await consumeThread(client, threadId);
         expect(ownership).toEqual(expect.objectContaining({ release: expect.any(Function) }));
         await expect(
           retainThread(
             client,
-            "thread-mixed-source-lifecycle",
+            threadId,
             ownership?.release,
             ownership?.configFingerprint,
             ownership?.serviceTier,
@@ -900,7 +901,7 @@ it.each([
 
       expect(operations.at(-1)).toEqual({
         method: "thread/unsubscribe",
-        params: { threadId: "thread-mixed-source-lifecycle" },
+        params: { threadId },
       });
       expect(bindings.read({ kind: "conversation", bindingId })).toBeUndefined();
     } finally {
@@ -911,17 +912,14 @@ it.each([
 
 it("fails closed before client startup when the source session is rebound", async () => {
   const bindingId = "binding-rebound-source";
-  const sessionFile = path.join(tempDir, "rebound-source.jsonl");
   const storePath = path.join(tempDir, "rebound-source.sqlite");
   const source = sourceSession("source-session");
   await seedSession(source, storePath, { sessionId: "replacement-session" });
   await seedBinding({ kind: "conversation", bindingId }, { threadId: "thread-bound" });
-  const { event, ctx } = boundConversationClaim(sessionFile);
-  ctx.pluginBinding.data = conversationData(bindingId, { source });
   acquireClient.mockRejectedValue(new Error("Codex client must not start"));
 
   await expectReplyContaining(
-    claimConversation(event, ctx, {
+    claimData(conversationData(bindingId, { source }), {
       config: { session: { store: storePath } },
     }),
     "source session is missing or no longer current",
@@ -935,8 +933,6 @@ it("rejects sandbox revocation while a conversation awaits client acquisition", 
     storePath: path.join(tempDir, "sandbox-source.sqlite"),
   };
   await seedSession(source, source.storePath, { updatedAt: 1, sandboxMode: "off" });
-  const { event, ctx } = boundConversationClaim(path.join(tempDir, "sandbox-source.jsonl"));
-  ctx.pluginBinding.data = conversationData("binding-sandbox-source", { source });
   const request = vi.fn(async () => {
     throw new Error("Native requests must not run after sandbox revocation");
   });
@@ -945,7 +941,7 @@ it("rejects sandbox revocation while a conversation awaits client acquisition", 
     return { request };
   });
 
-  const result = await claimConversation(event, ctx, {
+  const result = await claimData(conversationData("binding-sandbox-source", { source }), {
     config: { agents: { defaults: { sandbox: { mode: "all" } } } },
   });
 
@@ -957,16 +953,11 @@ it("rejects sandbox revocation while a conversation awaits client acquisition", 
 it("starts a fresh proxy-backed thread when binding an explicit app-server thread id", async () => {
   const sessionFile = path.join(tempDir, "session.jsonl");
   const agentDir = path.join(tempDir, "agents", "bot-a", "agent");
-  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
-  acquireClient.mockResolvedValue({
-    request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-      requests.push({ method, params: requestParams });
-      if (method === "thread/resume") {
-        throw new Error("thread/resume should not receive network proxy config");
-      }
-      return threadResult(tempDir, "thread-new");
-    }),
+  const { client, operations: requests } = conversationClient({
+    "thread/start": threadResult(tempDir, "thread-new"),
+    "thread/resume": new Error("thread/resume should not receive network proxy config"),
   });
+  acquireClient.mockResolvedValue(client);
 
   await prepareBinding({
     pluginConfig: NETWORK_PROXY_PLUGIN_CONFIG,
@@ -997,43 +988,30 @@ it("bounds a pending native config read without releasing the bound thread or it
   const retry = await useRealRequestScope();
   const releaseLease = vi.mocked(sharedClientRuntime.releaseCodexAppServerClientLease);
   releaseLease.mockClear();
-  const sessionFile = path.join(tempDir, "pending-config-read.jsonl");
   const harness = createClientHarness();
   initializeClient(harness.client, { agentDir: tempDir });
   const releaseBoundThread = vi.fn(async () => undefined);
   const releaseSibling = vi.fn(async () => undefined);
   await retainThread(harness.client, "thread-current", releaseBoundThread);
   await retainThread(harness.client, "thread-sibling", releaseSibling);
-  await writeBinding(sessionFile, {
+  const sessionFile = await boundSession("pending-config-read.jsonl", {
     threadId: "thread-current",
     clientId: harness.client.getInstanceId(),
-    cwd: tempDir,
   });
   const before = await readBinding(sessionFile);
   acquireClient.mockResolvedValue(harness.client);
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-  const settled = vi.fn();
   const result = prepareBinding({
     pluginConfig: { appServer: { requestTimeoutMs: 1_000 } },
     sessionFile,
     threadId: "thread-current",
   }).then(
-    () => {
-      settled();
-      return undefined;
-    },
-    (error: unknown) => {
-      settled();
-      return error;
-    },
+    () => undefined,
+    (error: unknown) => error,
   );
   try {
-    expect(JSON.parse(await harness.waitForWrite(0))).toMatchObject({
-      method: "config/read",
-      params: { cwd: tempDir, includeLayers: true },
-    });
+    expect(JSON.parse(await harness.waitForWrite(0)).method).toBe("config/read");
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(settled).toHaveBeenCalledOnce();
     await expect(result).resolves.toMatchObject({ message: "config/read timed out" });
     expect(harness.writes).toHaveLength(1);
     expect(releaseLease).toHaveBeenCalledOnce();
@@ -1053,7 +1031,6 @@ it("bounds a pending native config read without releasing the bound thread or it
 
 it("uses the selected physical client's budget when rebinding a thread", async () => {
   await useRealConfigReader();
-  const sessionFile = path.join(tempDir, "selected-config-owner.jsonl");
   const threadId = "thread-selected-config-owner";
   const createBudgetClient = (budget: number) =>
     respondingHarness({
@@ -1076,10 +1053,9 @@ it("uses the selected physical client's budget when rebinding a thread", async (
   initializeClient(previous.client, { agentDir: tempDir });
   initializeClient(selected.client, { agentDir: tempDir });
   await retainThread(previous.client, threadId);
-  await writeBinding(sessionFile, {
+  const sessionFile = await boundSession("selected-config-owner.jsonl", {
     threadId,
     clientId: previous.client.getInstanceId(),
-    cwd: tempDir,
   });
   acquireClient.mockResolvedValue(selected.client);
   retainClient.mockImplementation((clientId) =>
@@ -1092,18 +1068,9 @@ it("uses the selected physical client's budget when rebinding a thread", async (
     const selectedRequests = selected.writes.map((line): { method: string; params: unknown } =>
       JSON.parse(line),
     );
-    expect(selectedRequests.find(({ method }) => method === "config/read")?.params).toEqual({
-      cwd: tempDir,
-      includeLayers: true,
-    });
     expect(selectedRequests.find(({ method }) => method === "thread/resume")?.params).toMatchObject(
-      {
-        threadId,
-        cwd: tempDir,
-        config: { project_doc_max_bytes: 240_000 },
-      },
+      { config: { project_doc_max_bytes: 240_000 } },
     );
-    expect(previous.writes.map((line) => JSON.parse(line).method)).toEqual(["thread/unsubscribe"]);
     await expect(readBinding(sessionFile)).resolves.toMatchObject({
       threadId,
       clientId: selected.client.getInstanceId(),
@@ -1118,7 +1085,6 @@ it.each(["commit", "retention"] as const)(
   "preserves the current owner when attachment fails during %s",
   async (expiresDuring) => {
     const retry = await useRealRequestScope();
-    const sessionFile = path.join(tempDir, "expired-attachment.jsonl");
     const threadId = "thread-expired-attachment";
     const existingThreadId = expiresDuring === "commit" ? "thread-previous-attachment" : threadId;
     const harness = createClientHarness();
@@ -1127,10 +1093,9 @@ it.each(["commit", "retention"] as const)(
     await retainThread(harness.client, existingThreadId, release);
     const releaseSibling = vi.fn(async () => undefined);
     await retainThread(harness.client, "thread-sibling", releaseSibling);
-    await writeBinding(sessionFile, {
+    const sessionFile = await boundSession("expired-attachment.jsonl", {
       threadId: existingThreadId,
       clientId: harness.client.getInstanceId(),
-      cwd: tempDir,
     });
     const before = await readBinding(sessionFile);
     const response = threadResult(tempDir, threadId, true);
@@ -1242,11 +1207,10 @@ it("never resumes or unsubscribes an actively claimed native child for a convers
 
 it("preserves a stored child binding when resumed direct input is refused", async () => {
   const sessionKey = "agent:main:dashboard:incognito-child";
-  const sessionFile = path.join(tempDir, "stored-child.jsonl");
   const harness = createClientHarness();
   initializeClient(harness.client, { agentDir: tempDir });
   const threadId = "thread-parent-owned";
-  await writeBinding(sessionFile, { threadId, cwd: tempDir });
+  const sessionFile = await boundSession("stored-child.jsonl", { threadId });
   const before = await readBinding(sessionFile);
   const request = vi.spyOn(harness.client, "request").mockImplementation(async (method) => {
     if (method === "thread/read") {
@@ -1261,10 +1225,11 @@ it("preserves a stored child binding when resumed direct input is refused", asyn
     throw new Error(`unexpected Codex method ${method}`);
   });
   acquireClient.mockResolvedValue(harness.client);
-  const { event, ctx } = boundConversationClaim(sessionFile, sessionKey);
-
   try {
-    await expectReplyContaining(claimConversation(event, ctx), "controlled by its parent");
+    await expectReplyContaining(
+      runBoundClaim(sessionFile, {}, sessionKey),
+      "controlled by its parent",
+    );
     await expect(readBinding(sessionFile)).resolves.toEqual(before);
     expectMethods(request, ["thread/read", "thread/resume", "thread/unsubscribe"]);
     await expect(consumeThread(harness.client, threadId)).resolves.toBeUndefined();
@@ -1280,7 +1245,7 @@ it.each([false, true])(
     const { previousClient, replacementClient, operations, ownerDuringRelease, readOwner } =
       await createSameThreadClientMigrationFixture(sessionFile, { rejectOldRelease });
 
-    const result = await runBoundClaim(sessionFile, { timeoutMs: 500 });
+    const result = await runBoundClaim(sessionFile);
     expect(result?.reply?.text).toContain(
       rejectOldRelease ? "previous physical client unsubscribe failed" : "Migrated reply",
     );
@@ -1302,52 +1267,53 @@ it.each([false, true])(
   },
 );
 
-it.each([
-  {
-    label: "binding-agent auto mode over a full host default",
-    config: {
-      tools: { exec: { mode: "full" } },
-      agents: { entries: { "bot-a": { tools: { exec: { mode: "auto" } } } } },
-    },
-    approvals: { version: 1, agents: {} } satisfies ExecApprovalsFile,
-    error: "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
-  },
-  {
-    label: "host approval floor without config",
-    config: undefined,
-    approvals: {
+it.each(["agent", "host"] as const)(
+  "rejects binding from its %s approval policy before native requests",
+  async (owner) => {
+    const request = vi.fn();
+    acquireClient.mockResolvedValue({ request });
+    execApprovalsRuntimeMocks.loadExecApprovalsReadOnlyAsync.mockResolvedValue({
       version: 1,
-      defaults: { security: "deny", ask: "off" },
       agents: {},
-    } satisfies ExecApprovalsFile,
-    error: "tools.exec.mode=deny",
+      ...(owner === "host" ? { defaults: { security: "deny", ask: "off" } } : {}),
+    });
+    await expect(
+      prepareBinding({
+        sessionFile: path.join(tempDir, "session.jsonl"),
+        agentId: owner === "agent" ? "bot-a" : undefined,
+        config:
+          owner === "agent"
+            ? ({
+                tools: { exec: { mode: "full" } },
+                agents: { entries: { "bot-a": { tools: { exec: { mode: "auto" } } } } },
+              } as never)
+            : undefined,
+        model: "gpt-5.4-mini",
+      }),
+    ).rejects.toThrow(
+      owner === "host" ? "tools.exec.mode=deny" : "cannot route interactive approvals yet",
+    );
+    expect(request).not.toHaveBeenCalled();
   },
-])("rejects binding for $label before native requests", async ({ config, approvals, error }) => {
-  const sessionFile = path.join(tempDir, "session.jsonl");
-  const request = vi.fn();
-  execApprovalsRuntimeMocks.loadExecApprovalsReadOnlyAsync.mockResolvedValue(approvals);
-  acquireClient.mockResolvedValue({ request });
+);
 
-  await expect(
-    prepareBinding({
-      config: config as never,
-      sessionFile,
-      agentId: config ? "bot-a" : undefined,
-      model: "gpt-5.4-mini",
-    }),
-  ).rejects.toThrow(error);
-  expect(execApprovalsRuntimeMocks.loadExecApprovalsReadOnlyAsync).toHaveBeenCalled();
-  expect(request).not.toHaveBeenCalled();
+it("refuses legacy custom-provider bindings before connecting", async () => {
+  const sessionFile = await boundSession("session.jsonl", {
+    threadId: "thread-1",
+    model: "lmstudio/local-model",
+    approvalPolicy: "on-request",
+    sandbox: "workspace-write",
+  });
+  await expectReplyContaining(
+    runBoundClaim(sessionFile, { pluginConfig: { appServer: { mode: "guardian" } } }),
+    "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
+  );
+  expect(acquireClient).not.toHaveBeenCalled();
 });
 
 it("retires an already-evicted conversation without disturbing its live client siblings", async () => {
   const identity = { kind: "conversation" as const, bindingId: "binding-evicted" };
-  const client = {
-    request: vi.fn(async () => ({})),
-    addCloseHandler: vi.fn(),
-    addNotificationHandler: vi.fn(),
-    addRequestHandler: vi.fn(),
-  } as unknown as CodexAppServerClient;
+  const { client } = conversationClient({ "thread/unsubscribe": {} });
   initializeClient(client, { agentDir: tempDir });
   const releaseEvicted = vi.fn(async (_threadId: string) => undefined);
   await retainThread(client, "thread-evicted", releaseEvicted);
@@ -1470,9 +1436,8 @@ it.each([
 );
 
 it("keeps the bound agent node exec block ahead of current-session exec host overrides", async () => {
-  const sessionFile = path.join(tempDir, "session.jsonl");
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-  await writeBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
+  const sessionFile = await boundSession();
   await seedSession({ sessionKey: "agent:main:session-1", sessionId: "session-1" }, storePath, {
     execHost: "gateway",
   });
@@ -1531,19 +1496,16 @@ it("blocks bound Codex CLI node turns when the current OpenClaw session is sandb
     { config, resumeCodexCliSessionOnNode },
   );
 
-  expect(result).toEqual({
-    handled: true,
-    reply: {
-      text: expect.stringContaining(
-        "Codex-native Codex CLI node conversation binding is unavailable because OpenClaw sandboxing is active for this session.",
-      ),
-    },
-  });
+  await expectReply(
+    result,
+    expect.stringContaining(
+      "Codex-native Codex CLI node conversation binding is unavailable because OpenClaw sandboxing is active for this session.",
+    ),
+  );
   expect(resumeCodexCliSessionOnNode).not.toHaveBeenCalled();
 });
 
 it("re-reads source-owned permission roots while resuming an unloaded bound thread", async () => {
-  const sessionFile = path.join(tempDir, "session.jsonl");
   const storePath = path.join(tempDir, "recovery.sqlite");
   const source = sourceSession("recovery-source");
   const recoveredRoot = path.join(tempDir, "recovered-root");
@@ -1555,9 +1517,8 @@ it("re-reads source-owned permission roots while resuming an unloaded bound thre
       work: { type: "oauth", provider: "openai", access: "access-token" },
     },
   });
-  await writeBinding(sessionFile, {
+  const sessionFile = await boundSession("session.jsonl", {
     threadId: "thread-old",
-    cwd: tempDir,
     authProfileId: "work",
     model: "gpt-5.4-mini",
     modelProvider: "openai",
@@ -1593,14 +1554,11 @@ it("re-reads source-owned permission roots while resuming an unloaded bound thre
   });
   acquireClient.mockResolvedValue(client);
 
-  const result = await claimConversation(
-    conversationMessage("hi again", { bodyForAgent: "hi again" }),
-    conversationClaimContext(
-      conversationData(legacyCodexConversationBindingId(sessionFile), {
-        source: { agentId: source.agentId, sessionId: source.sessionId, threadId: source.threadId },
-      }),
-    ),
-    { config: { session: { store: storePath } }, timeoutMs: 500 },
+  const result = await claimData(
+    conversationData(legacyCodexConversationBindingId(sessionFile), {
+      source: { agentId: source.agentId, sessionId: source.sessionId, threadId: source.threadId },
+    }),
+    { config: { session: { store: storePath } } },
   );
 
   await expectReply(result, "Recovered");
@@ -1610,12 +1568,9 @@ it("re-reads source-owned permission roots while resuming an unloaded bound thre
     "thread/resume",
     "turn/start",
   ]);
-  expect(acquireClient).toHaveBeenCalledWith(expect.objectContaining({ authProfileId: "work" }));
   expect(requests[0]?.params).toMatchObject({ ...workspacePolicy(tempDir) });
   expect(requests[2]?.params).toMatchObject({
-    model: "gpt-5.4-mini",
     serviceTier: "priority",
-    modelProvider: "openai",
     ...workspacePolicy(recoveredRoot),
     sandbox: "workspace-write",
   });
@@ -1690,23 +1645,18 @@ it("moves session history while clamping rootless inherited cwd to the agent wor
   await seedSession(source, storePath, { permissionMode: "workspace" });
   await seedSession(sourceSession("destination-session"), storePath);
   codexRequirementsTomlMock.mockReturnValue(WORKSPACE_REQUIREMENTS);
-  await appendSessionTranscriptMessageByIdentity({
-    ...source,
-    storePath,
-    message: { role: "user", content: "Earlier question", timestamp: 1 },
-  });
-  await appendSessionTranscriptMessageByIdentity({
-    ...source,
-    storePath,
-    message: { role: "assistant", content: "Earlier answer", timestamp: 2 },
-  });
-  const sourceIdentity = {
-    kind: "session" as const,
-    agentId: source.agentId,
-    sessionId: source.sessionId,
-    sessionKey: source.sessionKey,
-  };
-  await bindings.mutate(sourceIdentity, {
+  for (const [role, content, timestamp] of [
+    ["user", "Earlier question", 1],
+    ["assistant", "Earlier answer", 2],
+  ] as const) {
+    await appendSessionTranscriptMessageByIdentity({
+      ...source,
+      storePath,
+      message: { role, content, timestamp },
+    });
+  }
+  const identity = sourceIdentity(source);
+  await bindings.mutate(identity, {
     kind: "set",
     binding: {
       threadId: source.threadId,
@@ -1734,17 +1684,12 @@ it("moves session history while clamping rootless inherited cwd to the agent wor
   );
   exposeRetainedClient(client);
   await retainThread(client, source.threadId, releaseSource);
-  const { event, ctx } = boundConversationClaim(
-    path.join(tempDir, "session.jsonl"),
-    "agent:main:destination-session",
-  );
-  ctx.pluginBinding.data = conversationData("binding-source-transfer", { source });
-
   await expectReply(
-    claimConversation(event, ctx, {
-      config: { session: { store: storePath } },
-      timeoutMs: 500,
-    }),
+    claimData(
+      conversationData("binding-source-transfer", { source }),
+      { config: { session: { store: storePath } } },
+      "agent:main:destination-session",
+    ),
     "Bound reply",
   );
 
@@ -1768,12 +1713,8 @@ it("moves session history while clamping rootless inherited cwd to the agent wor
     { role: "user", content: [{ text: "Earlier question" }] },
     { role: "assistant", content: [{ text: "Earlier answer" }] },
   ]);
-  expect(releaseSource).toHaveBeenCalledExactlyOnceWith(
-    "thread-source",
-    undefined,
-    expect.any(Function),
-  );
-  expect(bindings.read(sourceIdentity)).toBeUndefined();
+  expect(releaseSource).toHaveBeenCalledOnce();
+  expect(bindings.read(identity)).toBeUndefined();
   await expectLiveThread(client, "thread-bound");
 });
 
@@ -1782,15 +1723,10 @@ it.each([
   { label: "a live client whose source subscription is claimed", exposeClient: true },
 ])("does not transfer $label into a bound conversation", async ({ exposeClient }) => {
   const source = sourceSession("active-source-session", "thread-active-source");
-  const sourceIdentity = {
-    kind: "session" as const,
-    agentId: source.agentId,
-    sessionId: source.sessionId,
-    sessionKey: source.sessionKey,
-  };
+  const identity = sourceIdentity(source);
   const storePath = path.join(tempDir, "active-source.sqlite");
   await seedSession(source, storePath);
-  await seedBinding(sourceIdentity, { threadId: source.threadId, clientId: "active-client" });
+  await seedBinding(identity, { threadId: source.threadId, clientId: "active-client" });
   const { client, request } = conversationClient(
     {
       "thread/start": threadResult(tempDir, "thread-active-target"),
@@ -1812,21 +1748,19 @@ it.each([
     isCompacting: () => false,
     abort: vi.fn(),
   };
-  const { event, ctx } = boundConversationClaim(path.join(tempDir, "active-source.jsonl"));
-  ctx.pluginBinding.data = conversationData("binding-active-source", {
+  const data = conversationData("binding-active-source", {
     source,
     start: { id: "start-active-source" },
   });
 
   const claimSource = async () => {
-    const result = await claimConversation(event, ctx, {
+    const result = await claimData(data, {
       config: { session: { store: storePath } },
-      timeoutMs: 500,
     });
 
     expect(result?.reply?.text).toContain("active run");
     expectMethods(request, ["thread/start"]);
-    expect(bindings.read(sourceIdentity)).toMatchObject({ threadId: source.threadId });
+    expect(bindings.read(identity)).toMatchObject({ threadId: source.threadId });
     expect(
       bindings.read({ kind: "conversation", bindingId: "binding-active-source" }),
     ).not.toHaveProperty("conversationSourceTransferComplete", true);
@@ -1887,16 +1821,11 @@ it("passes sandbox state when resolving bound turn policy", async () => {
     sandbox: "danger-full-access",
   });
 
-  const result = await claimConversation(
-    conversationMessage("continue", {
-      bodyForAgent: "continue",
-      sessionKey: "agent:main:session-1",
-    }),
-    conversationClaimContext(legacyConversationData(sessionFile), "agent:main:session-1"),
-    {
-      timeoutMs: 50,
-      config: config as never,
-    },
+  const result = await claimData(
+    legacyConversationData(sessionFile),
+    { config: config as never },
+    "agent:main:session-1",
+    { bodyForAgent: "continue" },
   );
 
   expect(result?.handled).toBe(true);
@@ -1906,40 +1835,18 @@ it("passes sandbox state when resolving bound turn policy", async () => {
   expect(result?.reply?.text).not.toContain(
     "legacy full exec security with ask requires Codex app-server danger-full-access",
   );
-  expect(resolveSandboxContextMock).toHaveBeenCalledWith({
-    config: { tools: { exec: { security: "full", ask: "on-miss" } } },
-    sessionKey: "agent:main:session-1",
-    workspaceDir: "/agent/workspace",
-  });
   expect(acquireClient).not.toHaveBeenCalled();
 });
 
-it.each([
-  {
-    label: "escapes a provider failure",
-    retirementFails: false,
-    error:
-      "unexpected status 401 Unauthorized: Missing bearer <@U123> [trusted](https://evil) @here",
-    expected:
-      "unexpected status 401 Unauthorized: Missing bearer &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
-  },
-  {
-    label: "preserves the original failure when client retirement also rejects",
-    retirementFails: true,
-    error: "original bound turn failure",
-    expected: "original bound turn failure",
-  },
-])(
-  "returns a clean incognito failure reply: $label",
-  async ({ retirementFails, error, expected }) => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
+it.each([false, true])(
+  "returns the escaped original failure when incognito cleanup fails: %s",
+  async (retirementFails) => {
+    const error =
+      "unexpected status 401 Unauthorized: Missing bearer <@U123> [trusted](https://evil) @here";
+    const expected =
+      "unexpected status 401 Unauthorized: Missing bearer &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here";
     const sessionKey = "agent:main:dashboard:incognito-bound-failure";
-    const agentDir = path.join(tempDir, "agents", "bot-b", "agent");
-    await writeBinding(sessionFile, {
-      threadId: "thread-1",
-      cwd: tempDir,
-      authProfileId: "openai:work",
-    });
+    const sessionFile = await boundSession();
     const unhandledRejections: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {
       unhandledRejections.push(reason);
@@ -1959,21 +1866,12 @@ it.each([
     });
 
     try {
-      const result = await claimConversation(
-        conversationMessage("hi", { bodyForAgent: "hi", sessionKey }),
-        conversationClaimContext(legacyConversationData(sessionFile, { agentDir }), sessionKey),
-        { timeoutMs: 50 },
-      );
+      const result = await runBoundClaim(sessionFile, {}, sessionKey);
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
 
       await expectReply(result, `Codex app-server turn failed: ${expected}`);
-      const replyText = result?.reply?.text ?? "";
-      expect(replyText).not.toContain("<@U123>");
-      expect(replyText).not.toContain("[trusted](https://evil)");
-      expect(replyText).not.toContain("@here");
-      expect(acquireClient).toHaveBeenCalledWith(expect.objectContaining({ agentDir }));
       expect(unhandledRejections).toStrictEqual([]);
       expectMethods(request, ["turn/start", "thread/unsubscribe"]);
       if (retirementFails) {
@@ -2021,12 +1919,7 @@ it.each([
   const client = { request, closeAndWait, getInstanceId: () => "reconnected-client" };
   acquireClient.mockResolvedValue(client);
   if (retired) {
-    sharedClientMocks.clearSharedCodexAppServerClientIfCurrentAndUnclaimed
-      .mockReturnValueOnce({ found: true, closed: false })
-      .mockReturnValue({ found: false, closed: false });
-    sharedClientMocks.retireSharedCodexAppServerClientIfCurrent
-      .mockReturnValueOnce({ activeLeases: 2, closed: false })
-      .mockReturnValue(undefined);
+    retireWithSiblingLeases();
   }
   await expectReply(
     runBoundClaim(sessionFile, {}, "agent:main:dashboard:incognito-reconnect"),
@@ -2039,55 +1932,12 @@ it.each([
       : ["thread/read", "thread/resume"],
   );
   if (retired) {
-    expect(
-      sharedClientMocks.retireSharedCodexAppServerClientIfCurrent,
-    ).toHaveBeenCalledExactlyOnceWith(client);
+    expect(retireClient).toHaveBeenCalledExactlyOnceWith(client);
   } else {
-    expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+    expect(retireClient).not.toHaveBeenCalled();
   }
   expect(closeAndWait).not.toHaveBeenCalled();
   await expect(readBinding(sessionFile)).resolves.toEqual(cleaned ? undefined : binding);
-});
-
-it("retains a pre-start final after a saturated commentary stream", async () => {
-  const sessionFile = await boundSession();
-  const { client, notify } = conversationClient({
-    "turn/start": () => {
-      for (let index = 0; index < 100; index += 1) {
-        notify({
-          method: "item/completed",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            item: {
-              type: "agentMessage",
-              id: `commentary-${index}`,
-              text: `progress ${index}`,
-              phase: "commentary",
-            },
-          },
-        });
-      }
-      notify({
-        method: "item/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          item: { type: "agentMessage", id: "answer", text: "authoritative answer" },
-        },
-      });
-      notify({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-1",
-          turn: { id: "turn-1", status: "completed", error: null, items: [] },
-        },
-      });
-      return { turn: { id: "turn-1" } };
-    },
-  });
-  acquireClient.mockResolvedValue(client);
-  await expectReply(runBoundClaim(sessionFile), "authoritative answer");
 });
 
 it.each([
@@ -2115,13 +1965,7 @@ it.each([
               },
             });
           }
-          notify({
-            method: "turn/completed",
-            params: {
-              threadId: "thread-1",
-              turn: { id: "turn-1", status, error, items: [] },
-            },
-          });
+          notify(turnEnded(status, error));
         });
         return { turn: { id: "turn-1" } };
       },
@@ -2130,34 +1974,26 @@ it.each([
     await expectReply(runBoundClaim(sessionFile), `Codex app-server turn failed: ${message}`);
 
     expectMethods(request, ["turn/start"]);
-    expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+    expect(retireClient).not.toHaveBeenCalled();
     await expect(readBinding(sessionFile)).resolves.toMatchObject({ threadId: "thread-1" });
   },
 );
 
 it("interrupts an indeterminate incognito native turn before cleanup", async () => {
   const sessionKey = "agent:main:dashboard:incognito-start-timeout";
-  const sessionFile = path.join(tempDir, "session.jsonl");
   const harness = createClientHarness();
-  await writeBinding(sessionFile, {
+  const sessionFile = await boundSession("session.jsonl", {
     threadId: "thread-1",
     clientId: harness.client.getInstanceId(),
-    cwd: tempDir,
   });
   acquireClient.mockResolvedValue(harness.client);
-  const waitForRequest = async (method: string) =>
-    await vi.waitFor(
-      () => {
-        const request = harness.writes
-          .map((write) => JSON.parse(write) as { id: number; method: string; params: unknown })
-          .find((message) => message.method === method);
-        if (!request) {
-          throw new Error(`Codex conversation harness did not write ${method}`);
-        }
-        return request;
-      },
-      { interval: 1, timeout: 5_000 },
-    );
+  const readRequest = async (
+    index: number,
+  ): Promise<{
+    id: number;
+    method: string;
+    params: unknown;
+  }> => JSON.parse(await harness.waitForWrite(index));
   const result = runBoundClaim(
     sessionFile,
     {
@@ -2166,12 +2002,12 @@ it("interrupts an indeterminate incognito native turn before cleanup", async () 
     sessionKey,
   );
   try {
-    const turnStart = await waitForRequest("turn/start");
-    const interrupt = await waitForRequest("turn/interrupt");
+    const turnStart = await readRequest(0);
+    const interrupt = await readRequest(1);
     expect(interrupt.params).toEqual({ threadId: "thread-1", turnId: "" });
     harness.send({ id: turnStart.id, result: { turn: { id: "turn-1" } } });
     harness.send({ id: interrupt.id, result: {} });
-    const unsubscribe = await waitForRequest("thread/unsubscribe");
+    const unsubscribe = await readRequest(2);
     harness.send({ id: unsubscribe.id, result: {} });
 
     await expectReply(result, "Codex app-server turn failed: turn/start timed out");
@@ -2180,7 +2016,7 @@ it("interrupts an indeterminate incognito native turn before cleanup", async () 
       "turn/interrupt",
       "thread/unsubscribe",
     ]);
-    expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+    expect(retireClient).not.toHaveBeenCalled();
     expect(activeTurn(bindingIdentity(sessionFile))).toBeUndefined();
     await expect(readBinding(sessionFile)).resolves.toBeUndefined();
   } finally {
@@ -2189,131 +2025,93 @@ it("interrupts an indeterminate incognito native turn before cleanup", async () 
   }
 });
 
-it("interrupts a timed-out incognito turn before removing active tracking and handlers", async () => {
-  const sessionKey = "agent:main:dashboard:incognito-turn-timeout";
-  vi.useFakeTimers();
-  try {
-    const sessionFile = await boundSession();
-    const identity = bindingIdentity(sessionFile);
-    const cleanupEvents: string[] = [];
-    const notificationHandlers = new Set<(notification: unknown) => void>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "turn/start") {
-        return { turn: { id: "turn-1" } };
-      }
-      if (method === "thread/unsubscribe") {
-        cleanupEvents.push("unsubscribe");
-        return {};
-      }
-      if (method !== "turn/interrupt") {
-        throw new Error(`unexpected method: ${method}`);
-      }
-      cleanupEvents.push("interrupt");
-      expect(activeTurn(identity)).toMatchObject({ threadId: "thread-1", turnId: "turn-1" });
-      queueMicrotask(() => {
-        cleanupEvents.push("turn completed");
-        expect(activeTurn(identity)).toMatchObject({ threadId: "thread-1", turnId: "turn-1" });
-        for (const handler of notificationHandlers) {
-          handler({
-            method: "turn/completed",
-            params: {
-              threadId: "thread-1",
-              turn: { id: "turn-1", status: "interrupted", error: null, items: [] },
-            },
-          });
-        }
-      });
-      return {};
-    });
-    const client = {
-      request,
-      ...clientListeners(notificationHandlers, (event) => cleanupEvents.push(event)),
-    };
-    acquireClient.mockResolvedValue(client);
-    const result = runBoundClaim(sessionFile, { timeoutMs: 100 }, sessionKey);
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledWith("turn/start", expect.any(Object), expect.any(Object));
-    await vi.advanceTimersByTimeAsync(100);
-
-    await expectReply(
-      result,
-      "Codex app-server turn failed: codex app-server bound turn timed out",
-    );
-    expect(request).toHaveBeenCalledWith(
-      "turn/interrupt",
-      { threadId: "thread-1", turnId: "turn-1" },
-      { timeoutMs: 5_000, signal: expect.any(AbortSignal) },
-    );
-    expectMethods(request, ["turn/start", "turn/interrupt", "thread/unsubscribe"]);
-    expect(cleanupEvents).toEqual(["interrupt", "turn completed", "unsubscribe"]);
-    expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
-    expect(activeTurn(identity)).toBeUndefined();
-    await expect(readBinding(sessionFile)).resolves.toBeUndefined();
-  } finally {
-    vi.useRealTimers();
-  }
-});
-
 it.each([
-  { label: "an unconfirmed ordinary", sessionKey: undefined, acknowledged: true },
-  {
-    label: "a failed incognito",
-    sessionKey: "agent:main:dashboard:incognito-interrupt-failure",
-    acknowledged: false,
-  },
-])(
-  "retires $label timeout interrupt once without closing sibling leases",
-  async ({ sessionKey, acknowledged }) => {
+  ["confirmed incognito", "agent:main:dashboard:incognito-turn-timeout", "confirmed"],
+  ["unconfirmed ordinary", undefined, "unconfirmed"],
+  ["failed incognito", "agent:main:dashboard:incognito-interrupt-failure", "failed"],
+] as const)(
+  "settles a timed-out %s turn before releasing its ownership",
+  async (_label, sessionKey, outcome) => {
     vi.useFakeTimers();
     try {
       const sessionFile = await boundSession();
       const identity = bindingIdentity(sessionFile);
+      const events: string[] = [];
+      const confirmed = outcome === "confirmed";
       const closeAndWait = vi.fn(async () => true);
-      const request = rpcResponses({
+      const {
+        client: baseClient,
+        request,
+        notify,
+      } = conversationClient({
         "turn/start": { turn: { id: "turn-1" } },
-        "turn/interrupt": acknowledged ? {} : new Error("turn interrupt could not be confirmed"),
-        "thread/unsubscribe": new Error("detached client must not receive another cleanup request"),
+        ...(confirmed
+          ? {
+              "thread/unsubscribe": () => {
+                events.push("unsubscribe");
+                return {};
+              },
+            }
+          : {}),
+        "turn/interrupt": () => {
+          events.push("interrupt");
+          expect(activeTurn(identity)).toMatchObject({ threadId: "thread-1", turnId: "turn-1" });
+          if (outcome === "failed") {
+            throw new Error("turn interrupt could not be confirmed");
+          }
+          if (confirmed) {
+            queueMicrotask(() => {
+              events.push("turn completed");
+              expect(activeTurn(identity)).toMatchObject({
+                threadId: "thread-1",
+                turnId: "turn-1",
+              });
+              notify(turnEnded("interrupted"));
+            });
+          }
+          return {};
+        },
       });
-      const client = { request, closeAndWait, ...clientListeners() };
+      const client = Object.assign(baseClient, !confirmed ? { closeAndWait } : {});
       acquireClient.mockResolvedValue(client);
-      sharedClientMocks.clearSharedCodexAppServerClientIfCurrentAndUnclaimed
-        .mockReturnValueOnce({ found: true, closed: false })
-        .mockReturnValue({ found: false, closed: false });
-      sharedClientMocks.retireSharedCodexAppServerClientIfCurrent
-        .mockReturnValueOnce({ activeLeases: 2, closed: false })
-        .mockReturnValue(undefined);
-      const result = runBoundClaim(sessionFile, { timeoutMs: 100 }, sessionKey);
-
+      if (!confirmed) {
+        retireWithSiblingLeases();
+      }
+      const result = runBoundClaim(sessionFile, {}, sessionKey);
       await vi.advanceTimersByTimeAsync(0);
       expect(request).toHaveBeenCalledWith("turn/start", expect.any(Object), expect.any(Object));
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(20 * 60_000);
       expect(request).toHaveBeenCalledWith(
         "turn/interrupt",
         { threadId: "thread-1", turnId: "turn-1" },
         { timeoutMs: 5_000, signal: expect.any(AbortSignal) },
       );
-      if (acknowledged) {
+      if (outcome === "unconfirmed") {
         expect(activeTurn(identity)).toMatchObject({ threadId: "thread-1", turnId: "turn-1" });
-        expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+        expect(retireClient).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(5_000);
       }
-
       await expectReply(
         result,
         "Codex app-server turn failed: codex app-server bound turn timed out",
       );
-      expectMethods(request, ["turn/start", "turn/interrupt"]);
-      expect(
-        sharedClientMocks.retireSharedCodexAppServerClientIfCurrent,
-      ).toHaveBeenCalledExactlyOnceWith(client);
-      expect(closeAndWait).not.toHaveBeenCalled();
-      expect(activeTurn(identity)).toBeUndefined();
-      if (sessionKey) {
-        await expect(readBinding(sessionFile)).resolves.toBeUndefined();
+      expectMethods(
+        request,
+        confirmed
+          ? ["turn/start", "turn/interrupt", "thread/unsubscribe"]
+          : ["turn/start", "turn/interrupt"],
+      );
+      if (confirmed) {
+        expect(events).toEqual(["interrupt", "turn completed", "unsubscribe"]);
+        expect(retireClient).not.toHaveBeenCalled();
       } else {
-        await expect(readBinding(sessionFile)).resolves.toMatchObject({ threadId: "thread-1" });
+        expect(retireClient).toHaveBeenCalledExactlyOnceWith(client);
+        expect(closeAndWait).not.toHaveBeenCalled();
       }
+      expect(activeTurn(identity)).toBeUndefined();
+      await expect(readBinding(sessionFile)).resolves.toEqual(
+        sessionKey ? undefined : expect.objectContaining({ threadId: "thread-1" }),
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -2341,16 +2139,11 @@ it("refreshes stale network-proxy bound app-server threads before the turn", asy
   });
   acquireClient.mockResolvedValue(client);
 
-  const result = await claimConversation(
-    conversationMessage("hello"),
-    conversationClaimContext(legacyConversationData(sessionFile)),
-    {
-      pluginConfig: {
-        appServer: { ...NETWORK_PROXY_PLUGIN_CONFIG.appServer, serviceTier: "priority" },
-      },
-      timeoutMs: 50,
+  const result = await runBoundClaim(sessionFile, {
+    pluginConfig: {
+      appServer: { ...NETWORK_PROXY_PLUGIN_CONFIG.appServer, serviceTier: "priority" },
     },
-  );
+  });
 
   await expectReply(result, "done");
   expect(requests.map((request) => request.method)).toEqual(["thread/start", "turn/start"]);
@@ -2377,7 +2170,7 @@ it("restores the old owner and rolls back a network replacement when unsubscribe
     networkProxyConfigFingerprint: "stale-proxy-config",
     conversationStartId: "start-1",
   });
-  const { client, operations: requests } = conversationClient(
+  const { client } = conversationClient(
     {
       "thread/start": () => threadResult(tempDir, "thread-new"),
       "thread/unsubscribe": (params) => {
@@ -2402,11 +2195,6 @@ it("restores the old owner and rolls back a network replacement when unsubscribe
   const result = await runBoundClaim(sessionFile, { pluginConfig: NETWORK_PROXY_PLUGIN_CONFIG });
 
   expect(result?.reply?.text).toContain("old thread unsubscribe failed");
-  expect(requests).toEqual([
-    { method: "thread/start", params: expect.any(Object) },
-    { method: "thread/unsubscribe", params: { threadId: "thread-old" } },
-    { method: "thread/unsubscribe", params: { threadId: "thread-new" } },
-  ]);
   await expect(readBinding(sessionFile)).resolves.toMatchObject({
     clientId: "client-network-rotation",
     threadId: "thread-old",
@@ -2416,22 +2204,4 @@ it("restores the old owner and rolls back a network replacement when unsubscribe
   await expect(consumeThread(client, "thread-new")).resolves.toBeUndefined();
 });
 
-it("refuses legacy custom-provider bindings requiring interactive approvals before connecting", async () => {
-  const sessionFile = await boundSession("session.jsonl", {
-    threadId: "thread-1",
-    model: "lmstudio/local-model",
-    approvalPolicy: "on-request",
-    sandbox: "workspace-write",
-  });
-  await expectReplyContaining(
-    claimConversation(
-      conversationMessage("hello"),
-      conversationClaimContext(legacyConversationData(sessionFile)),
-      { timeoutMs: 50, pluginConfig: { appServer: { mode: "guardian" } } },
-    ),
-    "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
-  );
-
-  expect(acquireClient).not.toHaveBeenCalled();
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

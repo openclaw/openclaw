@@ -14,7 +14,6 @@ import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/se
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { heartbeatNotifications } from "../infra/heartbeat-events.js";
-import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { GatewayPluginMetadataOwner } from "../plugins/plugin-metadata-lifecycle.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
@@ -174,7 +173,7 @@ export type GatewayCloseParams = {
   closeProviderTransportDispatcherPool: () => Promise<void>;
   cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
   stopCronMaintenance?: () => Promise<void>;
-  heartbeatRunner: HeartbeatRunner;
+  stopScheduledServices: () => Promise<void>;
   maintenance: GatewayMaintenanceHandles | null;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   agentUnsub: (() => Promise<void> | void) | null;
@@ -206,18 +205,10 @@ export type GatewayClosePrepareParams = GatewayRunShutdownParams & {
   getPendingReplyCount: () => number;
 };
 
-export type GatewayClosePreparation = {
-  start: number;
-  notice: ReturnType<typeof resolveGatewayShutdownNotice>;
-  restart: boolean;
-  warnings: string[];
-  cleanupWork: AsyncWorkScope;
-};
-
 export async function prepareGatewayClose(
   params: GatewayClosePrepareParams,
   opts?: GatewayCloseOptions,
-): Promise<GatewayClosePreparation> {
+) {
   const start = Date.now();
   const warnings: string[] = [];
   const notice = resolveGatewayShutdownNotice(opts);
@@ -310,7 +301,7 @@ export async function prepareGatewayClose(
 
 export function completeGatewayClose(
   params: GatewayCloseParams,
-  preparation: GatewayClosePreparation,
+  preparation: Awaited<ReturnType<typeof prepareGatewayClose>>,
 ): Promise<ShutdownResult> {
   // Cleanup belongs to shutdown, not the initiating RPC's drained connection scope.
   return preparation.cleanupWork.run(async () => {
@@ -324,7 +315,7 @@ export function completeGatewayClose(
 
 async function closeGatewayResources(
   params: GatewayCloseParams,
-  preparation: GatewayClosePreparation,
+  preparation: Awaited<ReturnType<typeof prepareGatewayClose>>,
 ): Promise<ShutdownResult> {
   await measureGatewayCloseStep("restart.close.metadata-begin", () =>
     params.pluginMetadata.beginClose(),
@@ -407,9 +398,6 @@ async function closeGatewayResources(
     await disposeRuntime("cli-live-sessions", disposeAllCliLiveSessions);
     await disposeRuntime("agent-harnesses", disposeRegisteredAgentHarnesses);
     await shutdownStep("ai-session-resources", () => cleanupSessionResources());
-    await shutdownStep("provider-transport-dispatchers", () =>
-      params.closeProviderTransportDispatcherPool(),
-    );
     await measureCloseStep("bundle-runtimes", async () => {
       await Promise.all([
         disposeRuntime("bundle-mcp", disposeAllSessionMcpRuntimes),
@@ -433,9 +421,7 @@ async function closeGatewayResources(
       recordShutdownWarning(warnings, "media-cleanup");
     }
     await shutdownStep("gmail-watcher", () => params.stopGmailWatcher());
-    // Cron heartbeat runs await this owner's queued wakes after handing off cancellation.
-    // Settle those waiters before joining cron so shutdown cannot wait on its own next step.
-    await shutdownStep("heartbeat-runner", () => params.heartbeatRunner.stop());
+    await shutdownStep("scheduled-services", params.stopScheduledServices);
     await shutdownStep("cron", () =>
       params.cron.stopAndDrain ? params.cron.stopAndDrain() : params.cron.stop(),
     );
@@ -541,6 +527,10 @@ async function closeGatewayResources(
     // Grace lets independent teardown advance; raw cleanup and its descendants
     // still join before registry and shared-state retirement.
     await measureCloseStep("cleanup-work", () => cleanupWork.runWhenIdle(() => {}));
+    // MCP termination can send HTTP even after its runtime's close grace expires.
+    await shutdownStep("provider-transport-dispatchers", () =>
+      params.closeProviderTransportDispatcherPool(),
+    );
     await pluginServicesCleanup;
     await measureCloseStep("request-entries", () => params.finishRequestEntries?.());
     await measureCloseStep("media-cleanup-drains", waitForMediaCleanupDrainsToSettle);

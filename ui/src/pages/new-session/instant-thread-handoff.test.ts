@@ -3,6 +3,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { InstantThreadHandoff } from "./instant-thread-handoff.ts";
 import { restoredInstantThreadPage, takeInstantThreadRestore } from "./instant-thread-restore.ts";
+import { createNewSessionRouteData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 
 describe("retained page render ownership", () => {
@@ -13,13 +14,7 @@ describe("retained page render ownership", () => {
     vi.mocked(context.agentSelection.set).mockImplementation((agentId) => {
       context.agentSelection.state.selectedId = agentId;
     });
-    const data: NewSessionRouteData = {
-      agentId: "main",
-      requestedAgentId: "main",
-      catalogId: "",
-      catalogLabel: "",
-      startTerminal: false,
-    };
+    const data: NewSessionRouteData = createNewSessionRouteData();
     const page = document.createElement("div");
     page.textContent = "private incognito draft";
     let consumed: NewSessionRouteData | undefined;

@@ -11,11 +11,14 @@ import {
   resolveCronSessionWorkspaceOwnershipError,
 } from "../run-authority.js";
 import { prepareCronSessionWorktree, type CronWorkspaceLease } from "../run-workspace.js";
+import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import { ensureAgentWorkspace } from "./run.runtime.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
+
+type CronParentWorkspaceBinding = Readonly<{ sessionKey: string; entry: SessionEntry }>;
 
 /** Keep workspace selection, provisioning, and failed-preparation lease cleanup together. */
 export async function prepareCronSessionWorkspace(params: {
@@ -28,6 +31,8 @@ export async function prepareCronSessionWorkspace(params: {
   defaultWorkspaceDir: string;
   sessionPreparationEffect: SessionEffectRef;
   isFastTestEnv: boolean;
+  /** A child run's parent; its persisted binding replaces the run session's. */
+  childParent?: ScheduledOccurrence["childParent"];
 }) {
   const { sessionKey } = params;
   const abortSignal = params.input.abortSignal ?? params.input.signal;
@@ -35,6 +40,10 @@ export async function prepareCronSessionWorkspace(params: {
     abortSignal?.throwIfAborted();
     if (!params.sessionPreparationEffect.isActive()) {
       throw new CronSessionLifecycleClaimError(sessionKey);
+    }
+    // Workspace access inherited from the parent ends when the parent resets.
+    if (params.childParent?.binding) {
+      params.childParent.assertCurrent();
     }
   };
   const selected = await resolveCronSessionWorkspace({
@@ -46,6 +55,7 @@ export async function prepareCronSessionWorkspace(params: {
     sessionKey: params.sessionKey,
     entry: params.cronSession.initialSessionEntry,
     defaultWorkspaceDir: params.defaultWorkspaceDir,
+    parentBinding: params.childParent?.binding,
     assertCurrent,
   });
   try {
@@ -85,25 +95,14 @@ async function resolveCronSessionWorkspace(params: {
   sessionKey: string;
   entry?: SessionEntry;
   defaultWorkspaceDir: string;
+  parentBinding?: CronParentWorkspaceBinding;
   assertCurrent: () => void;
 }): Promise<{ workspaceDir: string; cwd?: string; lease?: CronWorkspaceLease }> {
-  const target = resolveCronSessionTargetSessionKey(params.sessionTarget);
-  if (!target) {
+  const bound = params.parentBinding ?? resolveTargetBinding(params);
+  if (!bound) {
     return { workspaceDir: params.defaultWorkspaceDir };
   }
-  const expectedKey = resolveCronAgentSessionKey({
-    sessionKey: target,
-    agentId: params.agentId,
-    cfg: params.cfg,
-    mainKey: params.cfg.session?.mainKey,
-  });
-  if (expectedKey !== params.sessionKey) {
-    throw new CronSessionLifecycleClaimError(
-      params.sessionKey,
-      "Bound automation session is mismatched.",
-    );
-  }
-  const entry = params.entry;
+  const { sessionKey: bindingKey, entry } = bound;
   // A new custom session still starts in the configured agent workspace. Only
   // existing persisted bindings can select another root.
   if (!entry) {
@@ -117,6 +116,7 @@ async function resolveCronSessionWorkspace(params: {
   const requestedCwd = normalizeOptionalString(entry.spawnedCwd);
   const ownershipError = resolveCronSessionWorkspaceOwnershipError({
     ...params,
+    sessionKey: bindingKey,
     ownerSessionKey: params.ownerSessionKey,
     hasWorkspaceBinding: Boolean(override || requestedCwd || entry.worktree),
   });
@@ -128,5 +128,38 @@ async function resolveCronSessionWorkspace(params: {
     : params.defaultWorkspaceDir;
   const cwd = requestedCwd ? await fs.realpath(resolveUserPath(requestedCwd)) : undefined;
   params.assertCurrent();
-  return await prepareCronSessionWorktree({ ...params, workspaceDir, cwd });
+  return await prepareCronSessionWorktree({
+    sessionKey: bindingKey,
+    entry,
+    workspaceDir,
+    cwd,
+    assertCurrent: params.assertCurrent,
+  });
+}
+
+/** The in-session target's own row; it must be the session this run executes in. */
+function resolveTargetBinding(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionTarget: string;
+  sessionKey: string;
+  entry?: SessionEntry;
+}): { sessionKey: string; entry?: SessionEntry } | undefined {
+  const target = resolveCronSessionTargetSessionKey(params.sessionTarget);
+  if (!target) {
+    return undefined;
+  }
+  const expectedKey = resolveCronAgentSessionKey({
+    sessionKey: target,
+    agentId: params.agentId,
+    cfg: params.cfg,
+    mainKey: params.cfg.session?.mainKey,
+  });
+  if (expectedKey !== params.sessionKey) {
+    throw new CronSessionLifecycleClaimError(
+      params.sessionKey,
+      "Bound automation session is mismatched.",
+    );
+  }
+  return { sessionKey: params.sessionKey, entry: params.entry };
 }

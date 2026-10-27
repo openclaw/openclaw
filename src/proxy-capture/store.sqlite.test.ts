@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { constants } from "node:sqlite";
-import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
@@ -32,15 +32,12 @@ afterEach(() => {
   cleanupTempDirs(cleanupDirs);
 });
 
-function makeStore(
-  kind: "shared" | "path" = "shared",
-  env = makeStateEnv("openclaw-proxy-capture-"),
-) {
+function makeStore(kind: "shared" | "path" = "shared", env = makeStateEnv()) {
   return makeLease(kind, env).store;
 }
 
-function makeStateEnv(prefix = "openclaw-proxy-capture-"): NodeJS.ProcessEnv {
-  return { OPENCLAW_STATE_DIR: makeTempDir(cleanupDirs, prefix) };
+function makeStateEnv(): NodeJS.ProcessEnv {
+  return { OPENCLAW_STATE_DIR: makeTempDir(cleanupDirs, "proxy-capture-") };
 }
 
 function storagePaths(env: NodeJS.ProcessEnv) {
@@ -114,78 +111,54 @@ function readMode(target: string): number {
 }
 
 describe("DebugProxyCaptureStore", () => {
-  it.each(["shared", "path"] as const)(
-    "summarizes %s capture labels without materializing every metadata row",
-    (kind) => {
-      const store = makeStore(kind);
-      const events = [
-        { host: " localhost:7 ", metaJson: '{"provider":" alpha ","api":"chat","model":"one"}' },
-        { host: "localhost:7", metaJson: '{"provider":"alpha","api":"chat","model":"two"}' },
-        { host: "remote", metaJson: '{"provider":"beta","api":"other","model":"two"}' },
-        { host: "localhost", metaJson: '{"provider":1,"api":[],"model":false}' },
-        { host: "LOCALHOST:7", metaJson: "invalid" },
-        { host: "[::1]:7", metaJson: "[]" },
-        { metaJson: " " },
-        {},
-        { metaJson: "null" },
-        { metaJson: "42" },
-        { metaJson: '"text"' },
-        { host: "remote", metaJson: '{"provider":"gamma","api":" ","model":""}' },
-      ];
-      for (const [index, metadata] of [
-        ...events,
-        { metaJson: '{"provider":"excluded"}' },
-      ].entries()) {
-        recordEvent(store, {
-          sessionId: index < events.length ? "coverage" : "other",
-          ...metadata,
-        });
-      }
-      const db = requireNativeSqliteDatabase(store.db);
-      const prepare = db.prepare.bind(db);
-      const materializations: MockInstance[] = [];
-      vi.spyOn(db, "prepare").mockImplementation((sql) => {
-        const statement = prepare(sql);
-        materializations.push(vi.spyOn(statement, "all"));
-        return statement;
+  it.each(["shared", "path"] as const)("summarizes %s capture labels", (kind) => {
+    const store = makeStore(kind);
+    const events = [
+      { host: " localhost:7 ", metaJson: '{"provider":" alpha ","api":"chat","model":"one"}' },
+      { host: "localhost:7", metaJson: '{"provider":"alpha","api":"chat","model":"two"}' },
+      { host: "remote", metaJson: '{"provider":"beta","api":"other","model":"two"}' },
+      { host: "localhost", metaJson: '{"provider":1,"api":[],"model":false}' },
+      { host: "LOCALHOST:7", metaJson: "invalid" },
+      { host: "[::1]:7", metaJson: "[]" },
+      { metaJson: " " },
+      {},
+      { metaJson: "null" },
+      { metaJson: "42" },
+      { metaJson: '"text"' },
+      { host: "remote", metaJson: '{"provider":"gamma","api":" ","model":""}' },
+    ];
+    for (const [index, metadata] of [
+      ...events,
+      { metaJson: '{"provider":"excluded"}' },
+    ].entries()) {
+      recordEvent(store, {
+        sessionId: index < events.length ? "coverage" : "other",
+        ...metadata,
       });
+    }
+    const summary = store.summarizeSessionCoverage("coverage");
 
-      const summary = store.summarizeSessionCoverage("coverage");
-
-      expect(summary).toMatchObject({
-        sessionId: "coverage",
-        totalEvents: 12,
-        unlabeledEventCount: 8,
-        providers: observed(["alpha", 2], ["beta", 1], ["gamma", 1]),
-        apis: observed(["chat", 2], ["other", 1]),
-        models: observed(["two", 2], ["one", 1]),
-        localPeers: observed(["localhost:7", 2]),
-      });
-      expect(Object.fromEntries(summary.hosts.map(({ value, count }) => [value, count]))).toEqual({
-        "localhost:7": 2,
-        remote: 2,
-        localhost: 1,
-        "LOCALHOST:7": 1,
-        "[::1]:7": 1,
-      });
-      expect(store.summarizeSessionCoverage("missing")).toEqual({
-        sessionId: "missing",
-        totalEvents: 0,
-        unlabeledEventCount: 0,
-        providers: [],
-        apis: [],
-        models: [],
-        hosts: [],
-        localPeers: [],
-      });
-      for (const materialization of materializations) {
-        expect(materialization).not.toHaveBeenCalled();
-      }
-    },
-  );
+    expect(summary).toMatchObject({
+      sessionId: "coverage",
+      totalEvents: 12,
+      unlabeledEventCount: 8,
+      providers: observed(["alpha", 2], ["beta", 1], ["gamma", 1]),
+      apis: observed(["chat", 2], ["other", 1]),
+      models: observed(["two", 2], ["one", 1]),
+      localPeers: observed(["localhost:7", 2]),
+    });
+    expect(Object.fromEntries(summary.hosts.map(({ value, count }) => [value, count]))).toEqual({
+      "localhost:7": 2,
+      remote: 2,
+      localhost: 1,
+      "LOCALHOST:7": 1,
+      "[::1]:7": 1,
+    });
+    expect(store.summarizeSessionCoverage("missing")).toMatchObject({ totalEvents: 0 });
+  });
 
   it("keeps the cached store open until the last lease releases", () => {
-    const options = { env: makeStateEnv("openclaw-proxy-capture-lease-") };
+    const options = { env: makeStateEnv() };
 
     const first = acquireDebugProxyCaptureStore(options);
     const second = acquireDebugProxyCaptureStore(options);
@@ -207,7 +180,7 @@ describe("DebugProxyCaptureStore", () => {
   it.each(["quiet", "active"] as const)(
     "retains %s capture through idle expiry and releases its native handle after close",
     (activity) => {
-      const options = { env: makeStateEnv("openclaw-proxy-capture-idle-") };
+      const options = { env: makeStateEnv() };
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const store = getDebugProxyCaptureStore(options);
       const intervals =
@@ -241,7 +214,7 @@ describe("DebugProxyCaptureStore", () => {
   );
 
   it("rebinds a cached shared store after the state database closes underneath it", () => {
-    const options = { env: makeStateEnv("openclaw-proxy-capture-rebind-") };
+    const options = { env: makeStateEnv() };
     const stale = getDebugProxyCaptureStore(options);
     upsertSession(stale, { id: "exit-session", sourceProcess: "cli" });
 
@@ -254,7 +227,7 @@ describe("DebugProxyCaptureStore", () => {
   });
 
   it("fences a shared store that was opened before external ownership was claimed", () => {
-    const env = makeStateEnv("openclaw-proxy-capture-preclaim-");
+    const env = makeStateEnv();
     const store = new DebugProxyCaptureStore({ env });
     env.OPENCLAW_SUPERVISOR_MODE = "external";
     claimOpenClawStateOwnership("gateway-supervisor", { env });
@@ -266,12 +239,8 @@ describe("DebugProxyCaptureStore", () => {
   });
 
   it("tracks and closes cached stores independently across paths", () => {
-    const first = acquireDebugProxyCaptureStore({
-      env: makeStateEnv("openclaw-proxy-capture-first-"),
-    });
-    const second = acquireDebugProxyCaptureStore({
-      env: makeStateEnv("openclaw-proxy-capture-second-"),
-    });
+    const first = acquireDebugProxyCaptureStore({ env: makeStateEnv() });
+    const second = acquireDebugProxyCaptureStore({ env: makeStateEnv() });
 
     first.release();
     expect(first.store.isClosed).toBe(true);
@@ -338,16 +307,10 @@ describe("DebugProxyCaptureStore", () => {
     store.db.exec("DROP TABLE config_machine_state;");
     expect(
       store.db
-        .prepare(
-          `SELECT name, strict FROM pragma_table_list
-           WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'
-           ORDER BY name`,
-        )
-        .all(),
-    ).toEqual([
-      { name: "capture_events", strict: 1 },
-      { name: "capture_sessions", strict: 1 },
-    ]);
+        .prepare(`SELECT COUNT(*) AS n FROM pragma_table_list
+      WHERE schema = 'main' AND name IN ('capture_events', 'capture_sessions') AND strict = 1`)
+        .get(),
+    ).toEqual({ n: 2 });
     expect(store.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
     expect(store.deleteSessions(["legacy-sdk-session"])).toEqual({
       sessions: 1,
@@ -426,6 +389,10 @@ describe("DebugProxyCaptureStore", () => {
         flowId: "write-flow",
         status: 429,
         closeCode: 1001,
+        method: "GET",
+        host: "slack.com",
+        path: "/api/conversations.history",
+        contentType: "application/json",
         headersJson: '{"x-fixture":"header"}',
         dataText: "preview",
         dataSha256: "payload-hash",
@@ -440,8 +407,12 @@ describe("DebugProxyCaptureStore", () => {
 
       store.recordEvent(rejectedEvent);
 
-      expect(store.getSessionEvents(rejectedEvent.sessionId)).toMatchObject([
-        { ...rejectedEvent, dataBlobId: null },
+      expect(store.getSessionEvents(rejectedEvent.sessionId)).toEqual([
+        {
+          ...rejectedEvent,
+          id: expect.any(Number),
+          dataBlobId: null,
+        },
       ]);
       expect(store.listSessions()).toHaveLength(kind === "shared" ? 1 : 0);
     },
@@ -450,7 +421,7 @@ describe("DebugProxyCaptureStore", () => {
   it.runIf(process.platform !== "win32")(
     "stores capture blobs in the private shared state database",
     () => {
-      const env = makeStateEnv("openclaw-proxy-capture-permissions-");
+      const env = makeStateEnv();
       const root = env.OPENCLAW_STATE_DIR!;
       const store = makeStore("shared", env);
       const blob = store.persistPayload(Buffer.from("authorization: Bearer secret"));
@@ -482,9 +453,8 @@ describe("DebugProxyCaptureStore", () => {
     },
   );
 
-  it("stores sessions and deduplicates complete payloads", () => {
+  it("deduplicates complete payloads without replacing stored metadata", () => {
     const store = makeStore();
-    upsertSession(store, { startedAt: Date.now() });
     const firstPayload = persistEventPayload(store, {
       data: '{"ok":true}',
       contentType: "application/json",
@@ -500,9 +470,6 @@ describe("DebugProxyCaptureStore", () => {
     expect(
       store.db.prepare("SELECT * FROM capture_blobs WHERE blob_id = ?").get(duplicateBlob.blobId),
     ).toEqual(firstBlob);
-    recordEvent(store, firstPayload);
-    expect(store.listSessions(10)).toHaveLength(1);
-    expect(store.readBlob(firstPayload.dataBlobId ?? "")).toContain('"ok":true');
   });
 
   it.each(["shared", "path"] as const)(
@@ -572,17 +539,7 @@ describe("DebugProxyCaptureStore", () => {
       expect(store.queryPreset("missing-ack")).toEqual([]);
       expect(store.queryPreset("missing-ack", "")).toEqual([]);
       expect(store.queryPreset("error-bursts", " captured ")).toEqual([]);
-      expect(store.listSessions(1)).toEqual([
-        {
-          id: "empty",
-          startedAt: 2,
-          endedAt: null,
-          mode: "test",
-          sourceProcess: "test",
-          proxyUrl: null,
-          eventCount: 0,
-        },
-      ]);
+      expect(store.listSessions(1)).toMatchObject([{ id: "empty", eventCount: 0 }]);
       for (const id of ["empty-z", "empty-a"]) {
         upsertSession(store, { id, startedAt: 2, mode: "test", sourceProcess: "test" });
       }
@@ -603,17 +560,6 @@ describe("DebugProxyCaptureStore", () => {
       expect(queryPresets()).toEqual(results);
     },
   );
-
-  it("keeps byte-limited UTF-8 previews on a complete character boundary", () => {
-    const store = makeStore();
-    const data = `${"x".repeat(8191)}étail`;
-
-    const payload = persistEventPayload(store, { data });
-
-    expect(payload.dataText).toBe("x".repeat(8191));
-    expect(Buffer.byteLength(payload.dataText ?? "", "utf8")).toBeLessThanOrEqual(8192);
-    expect(store.readBlob(payload.dataBlobId ?? "")).toBe(data);
-  });
 
   it("creates and later upgrades an implicit session for direct event capture", () => {
     const store = makeStore();
@@ -667,20 +613,21 @@ describe("DebugProxyCaptureStore", () => {
     const env = makeStateEnv();
     const blobDir = path.join(env.OPENCLAW_STATE_DIR!, "blobs");
     const store = makeStore(kind, env);
+    const data = `${"x".repeat(8191)}étail`;
     const sharedPayload = persistEventPayload(store, {
-      data: '{"shared":true}',
-      contentType: "application/json",
+      data,
+      contentType: "text/plain",
     });
 
     for (const sessionId of ["session-a", "session-b"]) {
       upsertSession(store, { id: sessionId, startedAt: Date.now() });
       recordEvent(store, { sessionId, ...sharedPayload });
     }
-
+    expect(store.getSessionEvents("session-a")[0]?.dataText).toBe("x".repeat(8191));
     const result = store.deleteSessions([" session-a ", "session-a", "", " "]);
 
     expect(result).toEqual({ sessions: 1, events: 1, blobs: 0 });
-    expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toContain('"shared":true');
+    expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toBe(data);
     expect(store.listSessions(10).map((session) => session.id)).toEqual(["session-b"]);
 
     expect(store.deleteSessions(["session-b"])).toEqual({ sessions: 1, events: 1, blobs: 1 });

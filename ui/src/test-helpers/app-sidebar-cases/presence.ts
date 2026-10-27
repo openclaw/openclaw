@@ -14,18 +14,20 @@ import { settleLitElement } from "../lit-settle.ts";
 import { flush } from "../solid-settle.ts";
 import "../../components/app-sidebar.tsx";
 
-await import("../../components/viewer-facepile.ts");
+await import("../../components/solid/viewer-facepile.tsx");
 
 async function mountOnlineSidebar(...args: Parameters<typeof mountSidebar>) {
   const mounted = await mountSidebar(...args);
   await selectSidebarView(mounted.sidebar, "online");
+  await vi.dynamicImportSettled();
+  await mounted.sidebar.updateComplete;
   return mounted;
 }
 
 describe("AppSidebar viewer presence", () => {
   it.each([
     ["profile-bob", "bob"],
-    ["gateway-owner", "Shared owner"],
+    ["gateway-owner", "bob · Shared owner"],
   ])("shows presence and offline owner %s while excluding self", async (ownerId, ownerName) => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gateway = createGatewayHarness(client);
@@ -262,7 +264,7 @@ describe("AppSidebar viewer presence", () => {
     expect(aliceRow.getAttribute("href")).toBe("/activity/alice");
     expect(aliceRow.closest(".sidebar-online__row")?.querySelectorAll("a")).toHaveLength(1);
     expect(
-      aliceRow.closest(".sidebar-online__row")?.querySelector('button[aria-label="Pin"]'),
+      aliceRow.closest(".sidebar-online__row")?.querySelector('button[aria-haspopup="menu"]'),
     ).not.toBeNull();
     expect(document.querySelector(".person-activity-hovercard")).toBeNull();
 

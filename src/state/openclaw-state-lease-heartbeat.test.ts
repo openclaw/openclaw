@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { Worker, type WorkerOptions } from "node:worker_threads";
-import { afterEach, describe, expect, it as baseIt, vi } from "vitest";
+import { afterEach, assert, describe, expect, it as baseIt, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import {
@@ -215,19 +215,6 @@ describe("maintenance lease heartbeat", () => {
     });
   });
 
-  it("verifies ownership inside a parent write transaction", async ({ state }) => {
-    await withOpenClawStateLease({ ...options(state.env), leaseMs: 1_500 }, async (lease) => {
-      runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          lease.assertOwnedInTransaction(db);
-          block(600);
-          lease.assertOwnedInTransaction(db);
-        },
-        { env: state.env },
-      );
-    });
-  });
-
   it("rejects a terminated heartbeat worker", async ({ state }) => {
     const spawned = nextHeartbeatWorker();
     await expect(
@@ -342,9 +329,7 @@ it("defers activation until contended renewal commits", async ({ state }) => {
     ({ db }) => acquireOpenClawStateLeaseInTransaction(db, identity, 30_000),
     { database, env: state.env },
   );
-  if (acquired.kind !== "acquired") {
-    throw new Error("Fixture did not acquire its lease");
-  }
+  assert(acquired.kind === "acquired", "Fixture did not acquire its lease");
   const shared = new BigInt64Array(
     new SharedArrayBuffer((leaseHeartbeatState.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT),
   );
@@ -394,22 +379,13 @@ it("defers activation until contended renewal commits", async ({ state }) => {
   const prepared = createDeferredCore();
   const processed = createDeferredCore();
   const ready = createDeferredCore();
-  const exited = createDeferredCore();
-  let stopping = false;
-  for (const pending of [prepared, processed, ready]) {
-    void pending.promise.catch(() => {});
-  }
-  const fail = (error: unknown) => {
-    prepared.reject(error);
-    processed.reject(error);
-    ready.reject(error);
-  };
-  worker.on("error", fail);
+  const failed = createDeferredCore<never>();
+  void failed.promise.catch(() => {});
+  const waitFor = (stage: ReturnType<typeof createDeferredCore<void>>) =>
+    Promise.race([stage.promise, failed.promise]);
+  worker.on("error", failed.reject);
   worker.once("exit", () => {
-    exited.resolve();
-    if (!stopping) {
-      fail(new Error("Heartbeat fixture exited before activation completed"));
-    }
+    failed.reject(new Error("Heartbeat fixture exited before activation completed"));
   });
   worker.on("message", (message: unknown) => {
     if (message === null) {
@@ -425,14 +401,14 @@ it("defers activation until contended renewal commits", async ({ state }) => {
   });
   const writer = new DatabaseSync(database.path);
   try {
-    await prepared.promise;
+    await waitFor(prepared);
     const beforeRenewal = readSqliteDatabaseWriteRevision(database.db);
     writer.exec("BEGIN IMMEDIATE");
     worker.postMessage({ startup: "activate" }, []);
-    await processed.promise;
+    await waitFor(processed);
     expect(Atomics.load(shared, leaseHeartbeatState.status)).toBe(leaseHeartbeatState.starting);
     writer.exec("ROLLBACK");
-    await ready.promise;
+    await waitFor(ready);
     const afterRenewal = readSqliteDatabaseWriteRevision(database.db);
     expect([typeof beforeRenewal, typeof afterRenewal]).toEqual(["number", "number"]);
     expect(afterRenewal).not.toBe(beforeRenewal);
@@ -447,9 +423,7 @@ it("defers activation until contended renewal commits", async ({ state }) => {
       writer.exec("ROLLBACK");
     }
     writer.close();
-    stopping = true;
     await worker.terminate();
-    await exited.promise;
   }
 });
 

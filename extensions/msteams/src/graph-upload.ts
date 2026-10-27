@@ -91,41 +91,6 @@ async function requestSharePointJson<T>(
   });
 }
 
-async function uploadToSharePoint(
-  params: {
-    buffer: Buffer;
-    filename: string;
-    contentType?: string;
-    tokenProvider: MSTeamsAccessTokenProvider;
-    siteId: string;
-  } & MSTeamsSendHandoff,
-): Promise<string> {
-  const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
-  // Graph's default conflictBehavior=replace overwrites a same-named file in place. Bot assets
-  // reuse names (image-1.png each generation) and Teams caches file cards by driveItem URL, so
-  // replace clobbers history and shows stale images; "rename" mints a unique driveItem instead.
-  const uploadUrl = `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content?@microsoft.graph.conflictBehavior=rename`;
-  const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length);
-
-  const data = await requestSharePointJson<{ id?: string }>(params, {
-    url: uploadUrl,
-    timeoutMs,
-    init: () => ({
-      method: "PUT",
-      headers: { "Content-Type": params.contentType ?? "application/octet-stream" },
-      body: new Blob([bufferToBlobPart(params.buffer)]),
-    }),
-    error: "SharePoint upload failed",
-    label: "msteams.graph-upload.uploadSharePointFile",
-  });
-
-  if (!data.id) {
-    throw new Error("SharePoint upload response missing required fields");
-  }
-
-  return data.id;
-}
-
 /**
  * Properties needed for native Teams file card attachments.
  * The eTag is used as the attachment ID and webDavUrl as the contentUrl.
@@ -160,62 +125,6 @@ export async function getDriveItemProperties(
   };
 }
 
-async function getChatMemberIds(
-  params: {
-    chatId: string;
-    tokenProvider: MSTeamsAccessTokenProvider;
-  } & MSTeamsSendHandoff,
-): Promise<string[]> {
-  const data = await requestSharePointJson<{ value?: Array<{ userId?: string }> }>(params, {
-    url: `${GRAPH_ROOT}/chats/${params.chatId}/members`,
-    // Graph 403 covers permissions, licensing, and conditional access. RSC
-    // grants are not token roles, so no local signal can safely widen access.
-    error: (res) =>
-      res.status === 403
-        ? "Get chat members failed; verify Graph chat-member permissions and tenant access policies"
-        : "Get chat members failed",
-    label: "msteams.graph-upload.getChatMembers",
-  });
-  return (data.value ?? []).flatMap((member) => (member.userId ? [member.userId] : []));
-}
-
-/**
- * Create a sharing link for a SharePoint drive item.
- * For organization scope (default), uses v1.0 API.
- * For per-user scope, uses beta API with recipients.
- */
-async function createSharePointSharingLink(
-  params: {
-    siteId: string;
-    itemId: string;
-    tokenProvider: MSTeamsAccessTokenProvider;
-    /** AAD object IDs for a per-user link; omitted for an organization link. */
-    recipientObjectIds?: string[];
-  } & MSTeamsSendHandoff,
-): Promise<void> {
-  const apiRoot = params.recipientObjectIds ? GRAPH_BETA : GRAPH_ROOT;
-
-  const body: Record<string, unknown> = {
-    type: "view",
-    scope: params.recipientObjectIds ? "users" : "organization",
-  };
-
-  if (params.recipientObjectIds) {
-    body.recipients = params.recipientObjectIds.map((id) => ({ objectId: id }));
-  }
-
-  await requestSharePointJson<unknown>(params, {
-    url: `${apiRoot}/sites/${params.siteId}/drive/items/${params.itemId}/createLink`,
-    init: () => ({
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-    error: "Create SharePoint sharing link failed",
-    label: "msteams.graph-upload.createSharePointSharingLink",
-  });
-}
-
 /**
  * Upload a file to SharePoint and create a sharing link.
  *
@@ -233,27 +142,67 @@ export async function uploadAndShareSharePoint(
     usePerUserSharing?: boolean;
   } & MSTeamsSendHandoff,
 ) {
-  const itemId = await uploadToSharePoint(params);
+  const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
+  // Graph's default conflictBehavior=replace overwrites a same-named file in place. Bot assets
+  // reuse names (image-1.png each generation) and Teams caches file cards by driveItem URL, so
+  // replace clobbers history and shows stale images; "rename" mints a unique driveItem instead.
+  const uploadUrl = `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content?@microsoft.graph.conflictBehavior=rename`;
+  const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length);
+  const data = await requestSharePointJson<{ id?: string }>(params, {
+    url: uploadUrl,
+    timeoutMs,
+    init: () => ({
+      method: "PUT",
+      headers: { "Content-Type": params.contentType ?? "application/octet-stream" },
+      body: new Blob([bufferToBlobPart(params.buffer)]),
+    }),
+    error: "SharePoint upload failed",
+    label: "msteams.graph-upload.uploadSharePointFile",
+  });
+  if (!data.id) {
+    throw new Error("SharePoint upload response missing required fields");
+  }
+  const itemId = data.id;
 
   let recipientObjectIds: string[] | undefined;
 
   if (params.usePerUserSharing && params.chatId) {
-    recipientObjectIds = await getChatMemberIds({
-      chatId: params.chatId,
-      tokenProvider: params.tokenProvider,
-      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+    const members = await requestSharePointJson<{ value?: Array<{ userId?: string }> }>(params, {
+      url: `${GRAPH_ROOT}/chats/${params.chatId}/members`,
+      // Graph 403 covers permissions, licensing, and conditional access. RSC
+      // grants are not token roles, so no local signal can safely widen access.
+      error: (res) =>
+        res.status === 403
+          ? "Get chat members failed; verify Graph chat-member permissions and tenant access policies"
+          : "Get chat members failed",
+      label: "msteams.graph-upload.getChatMembers",
     });
+    recipientObjectIds = (members.value ?? []).flatMap((member) =>
+      member.userId ? [member.userId] : [],
+    );
     if (recipientObjectIds.length === 0) {
       throw new Error("MS Teams chat member lookup returned no recipients");
     }
   }
 
-  await createSharePointSharingLink({
-    siteId: params.siteId,
-    itemId,
-    tokenProvider: params.tokenProvider,
-    recipientObjectIds,
-    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+  // Per-user links use the beta API with AAD recipients; organization links use v1.0.
+  const apiRoot = recipientObjectIds ? GRAPH_BETA : GRAPH_ROOT;
+  const body: Record<string, unknown> = {
+    type: "view",
+    scope: recipientObjectIds ? "users" : "organization",
+  };
+  if (recipientObjectIds) {
+    body.recipients = recipientObjectIds.map((id) => ({ objectId: id }));
+  }
+  await requestSharePointJson<unknown>(params, {
+    url: `${apiRoot}/sites/${params.siteId}/drive/items/${itemId}/createLink`,
+    init: () => ({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    error: "Create SharePoint sharing link failed",
+    label: "msteams.graph-upload.createSharePointSharingLink",
   });
 
   return { itemId };

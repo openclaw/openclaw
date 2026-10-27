@@ -1,14 +1,19 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { buildBrowserGatewayConnectPlan } from "../api/gateway-connect-plan.ts";
 import { loadCommandPaletteCatalogItems } from "../components/command-palette-catalog-search.ts";
+import { usesCronInventoryEvents } from "../lib/cron/inventory-connection.ts";
+import { readCronInventory } from "../lib/cron/inventory.ts";
 import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { invalidateModelCatalogCache } from "../lib/model-catalog-cache.ts";
 import { loadModelCatalog } from "../lib/model-catalog-store.ts";
 import { requestSessionList } from "../lib/sessions/session-requests.ts";
+import { cronJobsListResponse } from "../test-helpers/cron.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore as createStore,
@@ -64,6 +69,105 @@ describe("createApplicationGateway connection ownership", () => {
     gateway.start();
     current().testOptions.onHello?.(HELLO);
   }
+
+  it("keeps shared cron inventory capabilities when the current identity hydrates", async () => {
+    const profile = createDeferred<unknown>();
+    gateway.start();
+    const client = current();
+    client.request.mockImplementation((method) =>
+      method === "users.self" ? profile.promise : Promise.resolve(cronJobsListResponse()),
+    );
+    client.testOptions.onHello?.({
+      ...HELLO,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { events: ["cron.inventory.changed"] },
+    });
+    await readCronInventory(client, { compact: true });
+    await readCronInventory(client, { compact: true });
+    expect(client.request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
+    profile.resolve({ profile: { id: "hydrated-reader", emails: [] } });
+    await profile.promise;
+    expect(gateway.snapshot.selfUser?.id).toBe("hydrated-reader");
+    expect(usesCronInventoryEvents(client)).toBe(true);
+    await readCronInventory(client, { compact: true });
+    await readCronInventory(client, { compact: true });
+    expect(client.request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
+  });
+
+  it.each([false, true])(
+    "waits for a connect catalog only when the peer advertises it: %s",
+    async (advertised) => {
+      vi.useFakeTimers();
+      const scope = { agentId: "main", sessionKey: "agent:main:catalog" };
+      const catalog = { models: [{ id: "current", provider: "fixture", name: "Current" }] };
+      ({ gateway, current } = createStore({ getModelCatalogTarget: () => scope }));
+      gateway.start();
+      // Authentication is unrelated to whether this peer negotiated catalog publication.
+      vi.stubGlobal("crypto", undefined);
+      const plan = await buildBrowserGatewayConnectPlan({
+        opts: current().testOptions,
+        connectNonce: "catalog-challenge",
+        connectChallengeTs: 1_800_000_000_000,
+        generation: 1,
+        serverCapabilities: advertised ? [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT] : [],
+        nativeSignal: new AbortController().signal,
+        selectAuth: () => ({}),
+      });
+      expect(plan.params.modelCatalog).toEqual(advertised ? scope : undefined);
+      current().testOptions.onHello?.(HELLO);
+      current().request.mockResolvedValue(catalog);
+      const read = loadModelCatalog(gateway.snapshot.client!, scope).catch(
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current().request.mock.calls.filter(([method]) => method === "models.list")).toEqual(
+        advertised ? [] : [["models.list", { ...scope, view: "configured" }]],
+      );
+      if (advertised) {
+        current().testOptions.onEvent?.(
+          createGatewayEvent("models.snapshot", { target: scope, scope, catalog }),
+        );
+      }
+      expect(await read).toEqual(catalog);
+    },
+  );
+
+  it("retires a negotiated catalog target before reconnecting to a peer without snapshots", async () => {
+    vi.useFakeTimers();
+    const scope = { agentId: "main", sessionKey: "agent:main:catalog" };
+    const catalog = { models: [{ id: "current", provider: "fixture", name: "Current" }] };
+    ({ gateway, current } = createStore({ getModelCatalogTarget: () => scope }));
+    gateway.start();
+    vi.stubGlobal("crypto", undefined);
+    const plan = (serverCapabilities: string[]) =>
+      buildBrowserGatewayConnectPlan({
+        opts: current().testOptions,
+        connectNonce: "catalog-challenge",
+        connectChallengeTs: 1_800_000_000_000,
+        generation: 1,
+        serverCapabilities,
+        nativeSignal: new AbortController().signal,
+        selectAuth: () => ({}),
+      });
+    await plan([GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT]);
+    current().testOptions.onHello?.(HELLO);
+    current().testOptions.onEvent?.(
+      createGatewayEvent("models.snapshot", { target: scope, scope, catalog }),
+    );
+    expect(await loadModelCatalog(gateway.snapshot.client!, scope)).toEqual(catalog);
+
+    current().testOptions.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
+    expect((await plan([])).params.modelCatalog).toBeUndefined();
+    current().testOptions.onHello?.(HELLO);
+    current().request.mockResolvedValue(catalog);
+    const read = loadModelCatalog(gateway.snapshot.client!, scope).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(current().request).toHaveBeenCalledExactlyOnceWith("models.list", {
+      ...scope,
+      view: "configured",
+    });
+    expect(await read).toEqual(catalog);
+  });
 
   it("keeps interleaved native clients scoped to their Gateway store", () => {
     const other = createStore();

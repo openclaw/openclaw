@@ -258,10 +258,8 @@ function cacheCodec(databasePath: string, identity: DeviceIdentity): PublicSessi
 
 function resolveProcessCodec(params: {
   create: boolean;
-  env?: NodeJS.ProcessEnv;
 }): PublicSessionTokenCodec | null | Promise<PublicSessionTokenCodec | null> {
-  const options = params.env ? { env: params.env } : {};
-  const { databasePath } = resolveDeviceIdentityStore(options);
+  const { databasePath } = resolveDeviceIdentityStore();
   const cached = codecsByDatabasePath.get(databasePath);
   if (cached) {
     return cached;
@@ -270,8 +268,8 @@ function resolveProcessCodec(params: {
     return null;
   }
   const identity = params.create
-    ? loadOrCreateProcessDeviceIdentityAsync({ ...options, path: databasePath })
-    : loadDeviceIdentityIfPresentAsync({ ...options, path: databasePath });
+    ? loadOrCreateProcessDeviceIdentityAsync({ path: databasePath })
+    : loadDeviceIdentityIfPresentAsync({ path: databasePath });
   return identity.then((loaded) => {
     if (!loaded) {
       // Creation can finish while the read-only identity lookup is pending.
@@ -297,13 +295,10 @@ function requirePublicSessionShareTokenCodec(
 }
 
 /** Warm codecs remain synchronous so a prepared session row needs no new read phase. */
-export function loadPublicSessionShareTokenCodec(
-  options: { env?: NodeJS.ProcessEnv } = {},
-): PublicSessionShareTokenCodec | Promise<PublicSessionShareTokenCodec> {
-  const codec = resolveProcessCodec({
-    create: true,
-    ...(options.env ? { env: options.env } : {}),
-  });
+export function loadPublicSessionShareTokenCodec():
+  | PublicSessionShareTokenCodec
+  | Promise<PublicSessionShareTokenCodec> {
+  const codec = resolveProcessCodec({ create: true });
   return codec instanceof Promise
     ? codec.then(requirePublicSessionShareTokenCodec)
     : requirePublicSessionShareTokenCodec(codec);
@@ -312,16 +307,8 @@ export function loadPublicSessionShareTokenCodec(
 /** Resolves an opaque locator without letting anonymous traffic create durable identity state. */
 export async function resolvePublicSessionShareToken(
   token: string,
-  options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<PublicSessionShareLocator | null> {
-  return (
-    (
-      await resolveProcessCodec({
-        create: false,
-        ...(options.env ? { env: options.env } : {}),
-      })
-    )?.resolve(token) ?? null
-  );
+  return (await resolveProcessCodec({ create: false }))?.resolve(token) ?? null;
 }
 
 /** Public readers may reuse the installation identity but must never create it. */

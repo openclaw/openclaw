@@ -1,16 +1,13 @@
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import { isStaleLifecycleEventForSession } from "../config/sessions/session-run-lifecycle-projection.js";
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
-import {
-  deriveGatewaySessionLifecycleProjectionPatch,
-  isStaleLifecycleEventForSession,
-} from "./session-lifecycle-state.js";
+import { deriveGatewaySessionLifecycleProjectionPatch } from "./session-lifecycle-projection.js";
 import type { GatewaySessionRow } from "./session-utils.js";
 
 export function buildGatewaySessionSnapshot(params: {
   sessionRow: GatewaySessionRow | null | undefined;
   agentId?: string;
-  includeSession?: boolean;
   lifecycle?: boolean;
   event?: AgentEventRuntimePayload;
   lifecycleRunId?: string;
@@ -65,6 +62,8 @@ export function buildGatewaySessionSnapshot(params: {
   const omitUnscopedSwarm =
     (sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId;
   const eventFields: Record<string, unknown> = {
+    // Reserve wire order; attach the row after copying defined event fields into it.
+    session: undefined,
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
     createdActor: sessionRow.createdActor ?? null,
@@ -140,6 +139,7 @@ export function buildGatewaySessionSnapshot(params: {
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
     childSessions: sessionRow.childSessions,
     thinkingLevel: sessionRow.thinkingLevel ?? null,
+    cyberAccessProgram: sessionRow.cyberAccessProgram ?? null,
     fastMode: sessionRow.fastMode,
     effectiveFastMode: sessionRow.effectiveFastMode,
     effectiveFastModeSource: sessionRow.effectiveFastModeSource,
@@ -210,27 +210,21 @@ export function buildGatewaySessionSnapshot(params: {
       delete eventFields[field];
     }
   }
-  const session: Record<string, unknown> | undefined = params.includeSession
-    ? sessionRow
-    : undefined;
-  if (session) {
-    for (const key in eventFields) {
-      const value = eventFields[key];
-      if (value !== undefined) {
-        session[key] = value;
-      }
+  const session: Record<string, unknown> = sessionRow;
+  for (const key in eventFields) {
+    const value = eventFields[key];
+    if (value !== undefined) {
+      session[key] = value;
     }
   }
-  if (session && sessionRow.key === "global" && !params.agentId) {
+  if (sessionRow.key === "global" && !params.agentId) {
     delete session.goal;
   }
-  if (session && (sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId) {
+  if ((sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId) {
     delete session.swarm;
   }
-  return {
-    ...(session ? { session } : {}),
-    ...eventFields,
-    subagentRunState: sessionRow.subagentRunState,
-    hasActiveSubagentRun: sessionRow.hasActiveSubagentRun,
-  };
+  eventFields.session = session;
+  eventFields.subagentRunState = sessionRow.subagentRunState;
+  eventFields.hasActiveSubagentRun = sessionRow.hasActiveSubagentRun;
+  return eventFields;
 }

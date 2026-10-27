@@ -60,7 +60,7 @@ it("AppSidebar ignores a stale agent-menu hide after opening its replacement", a
   await click(trigger);
   const firstMenu = q(".sidebar-agent-menu");
   const settingsItem = firstMenu?.querySelector<HTMLElement>(
-    '[data-value="command:agent-settings"]',
+    '[data-value="agent:main"] .sidebar-agent-menu__settings',
   );
   expect(firstMenu).not.toBeNull();
   expect(firstMenu?.closest("openclaw-menu-surface")).toBeNull();

@@ -200,7 +200,7 @@ export function createMatrixReplyDispatcher(config: {
     // Each block owns a new draft generation; prior retained/consumed state must not
     // suppress settlement or cleanup for the next provider-visible event.
     draftController.beginDraftGeneration();
-    draftController.advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
+    draftController.advanceDraftBlockBoundary();
     draftStream?.reset();
     draftController.resetReplyToIdForNextBlock();
     draftController.updateDraftFromLatestFullText();
@@ -310,7 +310,6 @@ export function createMatrixReplyDispatcher(config: {
                     prepareMatrixSingleText(edit.text, {
                       cfg,
                       accountId,
-                      preserveWhitespace: true,
                     }).convertedText,
                   );
                 },

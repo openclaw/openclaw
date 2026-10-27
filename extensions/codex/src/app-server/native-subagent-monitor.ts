@@ -17,6 +17,10 @@ import {
   readCodexNativeSubagentRunId,
   type NativeSubagentAssignment,
 } from "./native-subagent-assignment.js";
+import {
+  captureNativeCancellationChildren,
+  captureNativeCancellationSelection,
+} from "./native-subagent-cancellation-selection.js";
 import { waitForNativeCancellationWork } from "./native-subagent-cancellation-wait.js";
 import {
   CodexNativeSubagentCloseOwner,
@@ -65,10 +69,10 @@ import type {
   MonitorOptions,
   NativeDescendantCancellation,
   NativeDescendantCancellationResult,
+  NativeSubagentsReadRequest,
   NativeModelToolInputRequest,
   NativeModelSourceCapture,
   NativeModelSourceRequest,
-  NativePendingChild,
   NativeSubagentMonitorClient,
   NativeSubagentMonitorRuntime,
   NativeTurnObservation,
@@ -87,6 +91,9 @@ import {
 } from "./native-subagent-notification.js";
 import {
   canNativeParentConsumeCompletion,
+  readNativeSubagentObservations,
+  listNativePendingChildren,
+  listNativeRequesterParents,
   observeNativeParentTurn,
   registerNativeSubagentParent,
   type NativeParentRegistration,
@@ -215,7 +222,6 @@ class Monitor {
       reconcileChildState: (child) => this.reconcileChildState(child),
       processCompletion: (state, child, completion, eventAt) =>
         this.processCompletion(state, child, completion, eventAt),
-      recoveryPollDelaysMs: options.recoveryPollDelaysMs,
     });
     this.removeNotificationHandler = client.addNotificationHandler(async (notification) => {
       if (!NATIVE_SUBAGENT_NOTIFICATION_METHODS.has(notification.method)) {
@@ -292,7 +298,6 @@ class Monitor {
       recordPendingAssignment: (state, receipt, nativeParentThreadId) =>
         this.assignments.recordSubmission(state, receipt, nativeParentThreadId),
       onSettled: (state) => this.pruneParentIfUnused(state),
-      recoveryPollDelaysMs: options.recoveryPollDelaysMs,
     });
     this.assignments = new CodexNativeSubagentAssignmentInventory({
       assertCurrent: (state) => {
@@ -518,7 +523,12 @@ class Monitor {
         this.drainPendingChildAdmissionEvidence(state, owner, turnId, true),
       clearAdmissions: () => this.clearUnconsumablePendingChildAdmissionEvidence(),
       prune: (state) => this.pruneParentIfUnused(state),
-      pendingChildren: (state) => this.listPendingChildren(state),
+      pendingChildren: (state) =>
+        listNativePendingChildren(
+          listNativeRequesterParents(this.parentStates, state),
+          this.childStates,
+          this.knownChildren,
+        ),
       interruptModelExecution: this.interruptModelExecution,
     });
   }
@@ -529,46 +539,12 @@ class Monitor {
   ): Promise<T> {
     params.assertCurrent();
     params.assertBindingCurrent?.();
-    const parent = this.parentStates.get(params.parentThreadId);
-    if (!parent) {
-      return run(async () => ({ killed: 0, cancelledRequesters: [] }));
-    }
-    const matchesOwner = (owner: ParentOwner) =>
-      owner.requesterAgentId === params.agentId &&
-      owner.requesterSessionKey === params.sessionKey &&
-      owner.requesterSessionId === params.sessionId &&
-      owner.requesterLifecycleRevision === params.lifecycleRevision &&
-      params.acceptsRequest(owner.requestCustody);
-    const preparingOwners = new Map<ParentState, ParentOwner>();
-    for (const state of this.parentStates.values()) {
-      if (state.preparing && !state.agentId && !state.historyOwner) {
-        const owner = [...(state.pendingRegistrations ?? [])].find(matchesOwner);
-        if (owner) {
-          preparingOwners.set(state, owner);
-        }
-      }
-    }
-    const matches = (state: ParentState) => {
-      if (state.agentId || state.historyOwner) {
-        return (
-          state.agentId === params.agentId &&
-          state.requesterSessionKey === params.sessionKey &&
-          state.historyOwner?.sessionId === params.sessionId &&
-          state.historyOwner?.lifecycleRevision === params.lifecycleRevision
-        );
-      }
-      const owner = preparingOwners.get(state);
-      return Boolean(
-        state.preparing &&
-        owner &&
-        matchesOwner(owner) &&
-        (state.pendingRegistrations?.has(owner) || owner.descendantsCancelled),
-      );
-    };
-    if (!matches(parent)) {
-      throw new Error("Codex descendant cancellation requester generation changed");
-    }
-    const states = [...this.parentStates.values()].filter(matches);
+    const { matchesOwner, matches, states } = captureNativeCancellationSelection(
+      this.parentStates.get(params.parentThreadId),
+      this.parentStates.values(),
+      this.childStates.values(),
+      params,
+    );
     const assertCustodyCurrent = () => {
       params.assertCurrent();
       if (
@@ -620,12 +596,11 @@ class Monitor {
             ),
           ),
         );
-        const selected = [...this.childStates.values()].filter(
-          (child) =>
-            child.historyOwner?.sessionId === params.sessionId &&
-            child.historyOwner?.lifecycleRevision === params.lifecycleRevision &&
-            states.some((state) => state.parentThreadId === child.parentThreadId) &&
-            params.acceptsRequest(child.requestCustody),
+        const { matches: matchesChild, selected } = captureNativeCancellationChildren(
+          this.childStates.values(),
+          states,
+          params,
+          matchesOwner,
         );
         const owners = new Set(
           states.flatMap((state) => [
@@ -633,15 +608,16 @@ class Monitor {
             ...(state.pendingRegistrations ?? []),
           ]),
         );
+        const addOwner = (owner: ParentOwner | undefined) => {
+          if (owner) {
+            owners.add(owner);
+          }
+        };
         for (const known of this.knownChildren.values()) {
           if (states.includes(known.parent)) {
             for (const pending of known.pendingTurns) {
-              if (pending.admittedOwner) {
-                owners.add(pending.admittedOwner);
-              }
-              if (pending.modelSource) {
-                owners.add(pending.modelSource.owner);
-              }
+              addOwner(pending.admittedOwner);
+              addOwner(pending.modelSource?.owner);
             }
           }
         }
@@ -651,25 +627,15 @@ class Monitor {
               evidence.kind === "interaction" &&
               states.some((state) => state.parentThreadId === evidence.parentThreadId)
             ) {
-              if (evidence.owner) {
-                owners.add(evidence.owner);
-              }
-              if (evidence.modelOwner) {
-                owners.add(evidence.modelOwner);
-              }
-              if (evidence.modelSource) {
-                owners.add(evidence.modelSource.owner);
-              }
+              addOwner(evidence.owner);
+              addOwner(evidence.modelOwner);
+              addOwner(evidence.modelSource?.owner);
             }
           }
         }
         for (const child of selected) {
-          if (child.modelExecution) {
-            owners.add(child.modelExecution.owner);
-          }
-          if (child.directOwner) {
-            owners.add(child.directOwner);
-          }
+          addOwner(child.modelExecution?.owner);
+          addOwner(child.directOwner);
         }
         for (const owner of owners) {
           if (matchesOwner(owner)) {
@@ -696,8 +662,7 @@ class Monitor {
                 child.requesterTurnRunId !== requesterTurnRunId ||
                 child.requestCustody !== requestCustody ||
                 !params.acceptsRequest(requestCustody) ||
-                child.historyOwner?.sessionId !== params.sessionId ||
-                child.historyOwner?.lifecycleRevision !== params.lifecycleRevision ||
+                !matchesChild(child) ||
                 (child.completionCustody && !child.completionCustody.isCurrent())
               ) {
                 throw new Error("Codex descendant assignment changed before cancellation");
@@ -782,8 +747,7 @@ class Monitor {
             if (
               child.requesterTurnRunId !== requesterTurnRunId ||
               child.requestCustody !== requestCustody ||
-              child.historyOwner?.sessionId !== params.sessionId ||
-              child.historyOwner?.lifecycleRevision !== params.lifecycleRevision
+              !matchesChild(child)
             ) {
               throw new Error("Codex descendant requester changed during settlement");
             }
@@ -883,6 +847,11 @@ class Monitor {
       return undefined;
     }
     try {
+      const known = this.knownChildren.get(request.threadId);
+      const child = known ? this.admitFollowupChild(known) : undefined;
+      if (child?.nativeTurnId === request.turnId && child.settledWithoutCompletion) {
+        this.resumeChild(child);
+      }
       await this.persistModelAssignment(request, capture);
       request.signal?.throwIfAborted();
       capture.assertCurrent();
@@ -988,7 +957,7 @@ class Monitor {
 
   retireParent(parentThreadIdInput: string): Promise<void> {
     const current = this.parentStates.get(parentThreadIdInput.trim());
-    const states = current ? this.requesterParents(current) : [];
+    const states = current ? listNativeRequesterParents(this.parentStates, current) : [];
     // Revoke the whole captured lineage before cleanup can admit another completion.
     for (const state of states) {
       this.retiredParentStates.add(state);
@@ -1088,6 +1057,10 @@ class Monitor {
       const pending = known?.pendingTurns.find((candidate) => candidate.turnId === turnId);
       if (pending) {
         pending.state = readNativeTurnEnd(turn);
+      }
+      const observed = turnId ? known?.observedTurns.get(turnId) : undefined;
+      if (observed) {
+        observed.state = readNativeTurnEnd(turn);
       }
     }
     if (
@@ -1215,6 +1188,7 @@ class Monitor {
     childState.settledWithoutCompletion = false;
     childState.fallbackCompletion = undefined;
     this.releaseClientRetention ??= this.retainClient?.();
+    this.retainParentThreadForChild(childState.parentThreadId);
   }
 
   private settleResumableChild(childState: ChildState): void {
@@ -1228,6 +1202,7 @@ class Monitor {
     releaseNativeDirectChild(childState);
     releaseNativeModelExecution(childState);
     this.recovery.clearRecoveryTimers(childState);
+    this.releaseParentThreadIfChildrenSettled(childState.parentThreadId);
     this.releaseClientRetentionIfIdle();
   }
 
@@ -1321,6 +1296,15 @@ class Monitor {
       status: "cancelled",
       statusLabel: "interrupted",
       result: "Cancelled by the requester.",
+    });
+  }
+
+  readNativeSubagents(request: NativeSubagentsReadRequest) {
+    return readNativeSubagentObservations(request, {
+      states: this.parentStates,
+      children: this.childStates,
+      knownChildren: this.knownChildren,
+      isCurrent: (state) => this.isCurrentParent(state),
     });
   }
 
@@ -1502,6 +1486,10 @@ class Monitor {
         observedTurn ? { awaitingInteraction: true } : {},
       );
     }
+    const observed = known.observedTurns.get(child.nativeTurnId);
+    if (observed) {
+      observed.state = child.nativeTurnState;
+    }
     if (observedTurn && known.pendingTurns.length === 0) {
       this.associatePendingChildInteraction(known, child.nativeTurnId);
     }
@@ -1540,7 +1528,7 @@ class Monitor {
     this.recovery.markTerminalThread(childState.childThreadId, state.parentThreadId);
     releaseNativeDirectChild(childState);
     this.recovery.clearRecoveryTimers(childState);
-    this.releaseParentThreadIfChildrenTerminal(state.parentThreadId);
+    this.releaseParentThreadIfChildrenSettled(state.parentThreadId);
     this.completionDelivery.applyReceipts(
       state,
       childState.deliveryReceipts.record(
@@ -1704,14 +1692,7 @@ class Monitor {
     if (!childState) {
       this.updateChildThreadOwnership("claim", childThreadId, this.claimChildThread);
       this.releaseClientRetention ??= this.retainClient?.();
-      if (!this.parentThreadRetentions.has(parentThreadId)) {
-        const releaseParentThread = this.retainParentThread?.(parentThreadId);
-        if (releaseParentThread) {
-          // Child completion can be announced on its parent's subscription
-          // after the foreground parent turn has already released ownership.
-          this.parentThreadRetentions.set(parentThreadId, releaseParentThread);
-        }
-      }
+      this.retainParentThreadForChild(parentThreadId);
       childState = {
         runId,
         requestCustody: options.directOwner?.requestCustody,
@@ -1887,7 +1868,10 @@ class Monitor {
         previous.nativeTurnState === "failed" ||
         (previous.nativeTurnId && previous.nativeTurnId !== turnId));
     if (observedTurn) {
-      known.observedTurns.set(turnId, startsPendingTurn ? { awaitingInteraction: true } : {});
+      known.observedTurns.set(
+        turnId,
+        startsPendingTurn ? { awaitingInteraction: true, state: "active" } : { state: "active" },
+      );
     }
     if (startsPendingTurn) {
       const previousPending = known.pendingTurns.at(-1);
@@ -2150,6 +2134,7 @@ class Monitor {
         claimOwner.onDirectChildAccepted?.();
       }
     }
+    this.observeActiveChild(child);
     this.admissionCustody.bindEventSink(child);
     return child;
   }
@@ -2249,7 +2234,7 @@ class Monitor {
     if (this.childStates.get(childState.runId) === childState) {
       this.childStates.delete(childState.runId);
     }
-    this.releaseParentThreadIfChildrenTerminal(childState.parentThreadId);
+    this.releaseParentThreadIfChildrenSettled(childState.parentThreadId);
     this.releaseClientRetentionIfIdle();
     const state = this.parentStates.get(childState.parentThreadId);
     if (state) {
@@ -2319,56 +2304,6 @@ class Monitor {
     release?.();
   }
 
-  private requesterParents(source: ParentState): ParentState[] {
-    return [...this.parentStates.values()].filter(
-      (state) =>
-        state === source ||
-        Boolean(
-          source.requesterSessionKey &&
-          state.requesterSessionKey === source.requesterSessionKey &&
-          state.agentId === source.agentId &&
-          source.historyOwner &&
-          state.historyOwner &&
-          matchesNativeAssignmentLifecycle(source.historyOwner, state.historyOwner),
-        ),
-    );
-  }
-
-  // Children whose completion is still owed to this requester: running, or
-  // terminal with an undelivered result. Rotated parent threads of the same
-  // requester lifecycle count, so earlier turns' children stay visible. Only a
-  // parent with a requester and completion scope delivers a detached result.
-  private listPendingChildren(source: ParentState): NativePendingChild[] {
-    const parentThreadIds = new Set(
-      this.requesterParents(source)
-        .filter((state) => state.requesterSessionKey && state.completionScope)
-        .map((state) => state.parentThreadId),
-    );
-    const pending: NativePendingChild[] = [];
-    for (const child of this.childStates.values()) {
-      if (
-        !parentThreadIds.has(child.parentThreadId) ||
-        child.settledWithoutCompletion ||
-        child.nativeCompletionDelivered ||
-        (child.terminal && !child.pendingCompletion)
-      ) {
-        continue;
-      }
-      // Codex V2 names a child by its agent path; V1 by the thread id in the run id.
-      const label = [...(this.knownChildren.get(child.childThreadId)?.agentPaths ?? [])].find(
-        (path) => path !== child.childThreadId,
-      );
-      pending.push({
-        runId: child.runId,
-        childSessionKey: child.runId,
-        ...(label ? { label } : {}),
-        state: child.terminal ? "completing" : "running",
-        wakeArmed: false,
-      });
-    }
-    return pending;
-  }
-
   private hasParentWork(state: ParentState): boolean {
     if (this.cancellationReservations.has(state)) {
       return true;
@@ -2394,9 +2329,23 @@ class Monitor {
     return false;
   }
 
-  private releaseParentThreadIfChildrenTerminal(parentThreadId: string): void {
+  private retainParentThreadForChild(parentThreadId: string): void {
+    if (this.parentThreadRetentions.has(parentThreadId)) {
+      return;
+    }
+    const releaseParentThread = this.retainParentThread?.(parentThreadId);
+    if (releaseParentThread) {
+      this.parentThreadRetentions.set(parentThreadId, releaseParentThread);
+    }
+  }
+
+  private releaseParentThreadIfChildrenSettled(parentThreadId: string): void {
     for (const childState of this.childStates.values()) {
-      if (childState.parentThreadId === parentThreadId && !childState.terminal) {
+      if (
+        childState.parentThreadId === parentThreadId &&
+        !childState.terminal &&
+        !childState.settledWithoutCompletion
+      ) {
         return;
       }
     }
@@ -2420,7 +2369,7 @@ class Monitor {
     if (this.parentStates.get(source.parentThreadId) !== source) {
       return;
     }
-    const states = this.requesterParents(source);
+    const states = listNativeRequesterParents(this.parentStates, source);
     // Keep idle rotated registrations as retirement locators until their
     // requester's retained child, model, or accepted write owners settle.
     if (states.some((state) => this.hasParentWork(state))) {
@@ -2499,7 +2448,12 @@ class Monitor {
           ),
         ].map((turnId) => [
           turnId,
-          pendingTurns.some((turn) => turn.turnId === turnId) ? { awaitingInteraction: true } : {},
+          {
+            ...(pendingTurns.some((turn) => turn.turnId === turnId)
+              ? { awaitingInteraction: true as const }
+              : {}),
+            state: observedTurns.find((turn) => turn.turnId === turnId)?.state,
+          },
         ]),
       ),
       pendingTurns,

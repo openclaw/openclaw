@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
+import { runWithAsyncStore } from "../../shared/async-store.js";
 import type { SessionAdmissionTransition } from "./session-admission-transition.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
@@ -233,7 +234,7 @@ export async function runWithSessionSourceScope<T>(
   scopes.set(assertion, prepared);
   const errors: unknown[] = [];
   try {
-    return await sessionSourceScopes.run(scopes, async () => {
+    return await runWithAsyncStore(sessionSourceScopes, scopes, async () => {
       (prepared.assertPreparedCurrent ?? prepared.assertCurrent)();
       const result = await run();
       if (options.checkAfter !== false) {
@@ -298,7 +299,9 @@ export function composeSessionSourceAssertion(
   function prepare(scoped?: false): Promise<PreparedSessionSourceAuthority>;
   async function prepare(scoped = false): Promise<PreparedSessionSourceAuthority | undefined> {
     const prepared: PreparedSessionSourceAuthority[] = [];
-    const scopedSources = new Map<SessionSourceAssertion, PreparedSessionSourceAuthority>();
+    const scopedSources = scoped
+      ? new Map<SessionSourceAssertion, PreparedSessionSourceAuthority>()
+      : undefined;
     const release = () => releaseSessionSourceAuthorities(prepared);
     const assertCurrentSources = () => {
       for (const source of prepared) {
@@ -315,7 +318,7 @@ export function composeSessionSourceAssertion(
         const value = scoped
           ? await prepareSessionSourceScope(source)
           : await prepareSessionSourceAuthority(source);
-        if (scoped && value && source) {
+        if (scopedSources && value && source) {
           for (const [assertion, nested] of value.scopedSources ?? []) {
             scopedSources.set(assertion, nested);
           }
@@ -331,7 +334,7 @@ export function composeSessionSourceAssertion(
           },
         );
       }
-      if (scoped && scopedSources.size === 0) {
+      if (scopedSources?.size === 0) {
         return undefined;
       }
       return {
@@ -342,16 +345,18 @@ export function composeSessionSourceAssertion(
         assertPreparedCurrent: () => (options?.preparedCheck ?? check)(assertPreparedSources),
         ...(scoped ? { scopedSources } : {}),
         checks: prepared.flatMap((source, index) =>
-          source.checks.map(({ refuse, ...preparedCheck }) => ({
-            ...preparedCheck,
-            refuse: (facts) => {
-              check(() => {
-                prepared.slice(0, index).forEach((previous) => previous.assertCurrent());
-                refuse(facts);
-              });
-              throw new Error("Source authority refusal was suppressed");
-            },
-          })),
+          source.checks.length === 0
+            ? source.checks
+            : source.checks.map(({ refuse, ...preparedCheck }) => ({
+                ...preparedCheck,
+                refuse: (facts) => {
+                  check(() => {
+                    prepared.slice(0, index).forEach((previous) => previous.assertCurrent());
+                    refuse(facts);
+                  });
+                  throw new Error("Source authority refusal was suppressed");
+                },
+              })),
         ),
         release,
       };

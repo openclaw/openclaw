@@ -1,14 +1,11 @@
-import { on, once } from "node:events";
+import { once } from "node:events";
 import fs from "node:fs/promises";
-import http from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { rawDataToString } from "../../../packages/gateway-client/src/websocket-data.js";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { NODE_WORKER_DESKTOP_STREAM_COMMAND } from "../../infra/node-commands.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import {
   invokeNodeDesktopStream,
   invokeNodeWorkerDesktopStream,
@@ -21,34 +18,26 @@ import type {
 import type { NodeRegistry } from "../node-registry.js";
 import { environmentsHandlers } from "../server-methods/environments.js";
 import { createWorkerNodeDesktopCarrier } from "../worker-environments/node-desktop-carrier.js";
+import { createNodeWorkerBundleTestNode } from "../worker-environments/node-worker-bundle.test-support.js";
 import * as workerSupport from "../worker-environments/service.test-support.js";
 import {
   handlePeerTeardownError,
-  closeServer,
   createSocketServer,
   listenLoopback,
 } from "./desktop.test-support.js";
 import { createNodeDesktopService } from "./node-source.js";
 import { createNodeDesktopStreamBroker } from "./node-stream-broker.js";
-import { handleDesktopObserveUpgrade } from "./observe-bridge.js";
+import {
+  connectRfbObserver,
+  RFB_VERSION as VERSION,
+  startObserveGateway,
+} from "./observe.test-support.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
 import { SocketReader } from "./socket-reader.test-support.js";
 
-const VERSION = Buffer.from("RFB 003.008\n", "ascii");
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(() => Promise.all(cleanups.splice(0).map((cleanup) => cleanup())));
-
-function readFrames(ws: WebSocket) {
-  const messages = on(ws, "message", { close: ["close"] });
-  return async () => {
-    const frame: unknown = (await messages.next()).value?.[0];
-    if (!Buffer.isBuffer(frame)) {
-      throw new Error("expected a binary RFB frame");
-    }
-    return frame;
-  };
-}
 
 async function startRfbHarness(expectedStreams: number, endAfterRequest?: Promise<void>) {
   let connectionCount = 0;
@@ -90,31 +79,8 @@ async function startRfbHarness(expectedStreams: number, endAfterRequest?: Promis
   return { completion: done.promise, connectionCount: () => connectionCount, peers, port };
 }
 
-async function startDesktopGateway(
-  params: Omit<Parameters<typeof createNodeDesktopService>[0], "getConfig">,
-): Promise<string> {
-  const server = http.createServer();
-  server.on("upgrade", (req, socket, head) => {
-    void (async () => {
-      if (await params.streamBroker.handleUpgrade(req, socket, head, params.nodeRegistry)) {
-        return;
-      }
-      handleDesktopObserveUpgrade(req, socket, head, { registry: params.desktopRegistry });
-    })();
-  });
-  const port = await listenLoopback(server);
-  cleanups.push(async () => closeServer(server));
-  return `ws://127.0.0.1:${port}`;
-}
-
 async function openViewOnlyObserver(gatewayUrl: string, wsPath: string): Promise<WebSocket> {
-  const ws = new WebSocket(`${gatewayUrl}${wsPath}`);
-  const nextFrame = readFrames(ws);
-  cleanups.push(async () => ws.terminate());
-  await once(ws, "open");
-  expect(await nextFrame()).toEqual(VERSION);
-  ws.send(Buffer.concat([VERSION, Buffer.from([1, 0])]));
-  expect(await nextFrame()).toEqual(Buffer.from([1, 1]));
+  const { ws, nextFrame } = await connectRfbObserver(cleanups, `${gatewayUrl}${wsPath}`);
   expect(await nextFrame()).toEqual(Buffer.alloc(4));
   expect(await nextFrame()).toEqual(Buffer.from("pixel-update", "ascii"));
 
@@ -139,17 +105,13 @@ async function trackInvocation<T>(results: boolean[], invoke: () => Promise<T>) 
 }
 
 function workerNodeProof(nodeId: string): NodeWorkerSupervisorNodeProof {
-  return {
+  return createNodeWorkerBundleTestNode({
     nodeId,
     connId: "worker-conn-1",
     pairingIdentity: "worker-identity-1",
     pairingGeneration: "worker-generation-1",
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-    clientMode: "node",
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: { enabled: true, capacity: { total: 1, available: 0 } },
-    commands: [],
-  };
+  });
 }
 
 async function observeEnvironmentDesktop(
@@ -187,7 +149,7 @@ describe.each(["node", "worker"] as const)("%s desktop observe integration", (ki
       let nodeRegistry: NodeRegistry;
       let observe: () => Promise<{ wsPath: string }>;
       let stop: () => Promise<unknown>;
-      let verify: { dispatch: () => void; stopped: () => void } | undefined;
+      let verifyStopped: (() => void) | undefined;
       if (kind === "node") {
         const nodeSession = {
           nodeId: "node-1",
@@ -252,6 +214,7 @@ describe.each(["node", "worker"] as const)("%s desktop observe integration", (ki
           isConnectionCurrentPairingState: async (connId: string) => connId === proof.connId,
         } as unknown as NodeRegistry;
         const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+          expect(request.command).toBe(NODE_WORKER_DESKTOP_STREAM_COMMAND);
           if (!request.isDispatchAuthorized()) {
             return { ok: false, error: { code: "STALE", message: "desktop owner is stale" } };
           }
@@ -286,31 +249,14 @@ describe.each(["node", "worker"] as const)("%s desktop observe integration", (ki
 
         observe = () => observeEnvironmentDesktop(workerService, record.environmentId);
         stop = () => workerService.destroy(record.environmentId);
-        verify = {
-          dispatch: () => {
-            expect(invoke).toHaveBeenCalledWith(
-              expect.objectContaining({
-                command: NODE_WORKER_DESKTOP_STREAM_COMMAND,
-                params: {
-                  ticket: expect.stringMatching(/^[a-f0-9]{48}$/u),
-                  attachPath: expect.stringMatching(
-                    /^\/node-desktop\/attach\?ticket=[a-f0-9]{48}$/u,
-                  ),
-                  port: rfb.port,
-                  passwordFilePath,
-                },
-              }),
-            );
-          },
-          stopped: () => {
-            expect(workerSupport.testState.store.get(record.environmentId)?.state).toBe(
-              "destroyed",
-            );
-            expect(invoke.mock.calls[0]?.[0].signal?.aborted).toBe(true);
-          },
+        verifyStopped = () => {
+          expect(workerSupport.testState.store.get(record.environmentId)?.state).toBe("destroyed");
+          expect(invoke.mock.calls[0]?.[0].signal?.aborted).toBe(true);
         };
       }
-      gatewayUrl = await startDesktopGateway({ desktopRegistry, nodeRegistry, streamBroker });
+      gatewayUrl = await startObserveGateway(cleanups, desktopRegistry, (req, socket, head) =>
+        streamBroker.handleUpgrade(req, socket, head, nodeRegistry),
+      );
       const observers = await Promise.all(
         Array.from({ length: 3 }, async () => {
           const observed = await observe();
@@ -323,7 +269,6 @@ describe.each(["node", "worker"] as const)("%s desktop observe integration", (ki
       expect(observers.every((ws) => ws.readyState === WebSocket.OPEN)).toBe(true);
       await expect(rfb.completion).resolves.toBeUndefined();
       await vi.waitFor(() => expect(rfb.connectionCount()).toBe(3));
-      verify?.dispatch();
       if (closeMode === "peer-eof") {
         const terminalFrames = observers.map((ws) => {
           const received: string[] = [];
@@ -347,7 +292,7 @@ describe.each(["node", "worker"] as const)("%s desktop observe integration", (ki
         await Promise.all(closed);
         await vi.waitFor(() => expect(rfb.peers.size).toBe(0));
       }
-      verify?.stopped();
+      verifyStopped?.();
     },
   );
 });

@@ -19,10 +19,8 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isPendingAssistantError } from "./chat-display-projection.core.js";
-import {
-  prepareForwardedMessageCronJobNameResolver,
-  readPluginSteeringId,
-} from "./chat-display-projection.history.js";
+import { prepareForwardedMessageCronJobNameResolver } from "./chat-display-projection.cron.js";
+import { readPluginSteeringId } from "./chat-display-projection.history.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
@@ -550,7 +548,6 @@ async function handleTranscriptUpdateBroadcast(
       const sessionSnapshot = buildGatewaySessionSnapshot({
         sessionRow,
         agentId: eventAgentId,
-        includeSession: true,
         activeRunState,
       });
       // Read live connection preferences and every exact observer at delivery time.
@@ -570,6 +567,7 @@ async function handleTranscriptUpdateBroadcast(
             ? prepareSessionEventProjection(projection, read, {
                 ancestors,
                 encodeMessage: true,
+                reuseEnvelope: true,
                 omitMessage,
               })
             : undefined,
@@ -618,6 +616,7 @@ async function handleTranscriptUpdateBroadcast(
             prepareSessionProjection: prepareSessionEventProjection(projection, read, {
               ancestors,
               encodeMessage: true,
+              reuseEnvelope: true,
               omitMessage,
               controlUiOnly: true,
             }),

@@ -14,9 +14,12 @@ OpenClaw iOS is the officially released iPhone app. It connects to an OpenClaw G
 - Upgrade migrations support data written by releases shipped on or after July 1, 2026. Earlier UserDefaults gateway locations are no longer imported; reconnect from Gateway settings if needed. Push registrations without a relay profile are refreshed through normal registration.
 - Connections use the current `openclaw-ios` client identity without pre-rename retries or undocumented legacy client-ID overrides. Talk credentials come from the Gateway's configuration; local provider keys whose writer retired before July are no longer read.
 - Some node commands require foreground access because of iOS platform limits.
+- Embedded Settings can answer HTTP Basic authentication challenges using the Gateway's configured `Authorization: Basic ...` custom header. Credentials stay in native code and are supplied only to the same HTTPS origin, including its resource and WebSocket requests. Other custom header schemes and the Desktop/Terminal browser SSO flows are unchanged.
 - Permissions, background behavior, and push delivery are documented below so release and support checks stay explicit.
 
 ## Adaptive Navigation
+
+Onboarding names the device from its iOS device idiom, so an iPad keeps iPad wording even in a narrow window.
 
 - Navigation uses available window width, not orientation: iPhone and accessibility text sizes use a drawer. On iPad, below 800pt it is a drawer; at 800pt and above it defaults to a persistent sidebar (300pt sidebar plus at least 500pt detail). The sidebar grows only to 320pt.
 - Hiding the persistent sidebar is remembered while the window narrows and widens. Entering a compact window closes the drawer; keyboard appearance does not change navigation mode.
@@ -108,7 +111,7 @@ Prereqs:
 - `pnpm`
 - `xcodegen`
 - The pinned [Watch Rust toolchain](#watch-companion-build-requirements)
-- Ruby 4.0.7 and Bundler 4.0.22 (`fastlane` is installed from `apps/ios/Gemfile.lock`)
+- Ruby 4.0.7 and Bundler 4.0.23 (`fastlane` is installed from `apps/ios/Gemfile.lock`)
 - Apple account signed into Xcode for the official OpenClaw team (`FWJYW4S8P8`)
 - Fastlane Apple Developer Portal session for the official OpenClaw team when creating bundle IDs or enabling services
 - Release-owner access to the encrypted signing repo password (`MATCH_PASSWORD`)
@@ -213,7 +216,7 @@ Use this when a clone is missing local iOS release setup and you want the shorte
 
 ```bash
 cd apps/ios
-BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane ios auth_check
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.23_ exec fastlane ios auth_check
 ```
 
 2. If auth is missing, bootstrap it once on this Mac:

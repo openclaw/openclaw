@@ -91,6 +91,18 @@ describe("operator browser chat document navigation", () => {
     },
   );
 
+  it("keeps an agent-selector reload on the protected session entry", async () => {
+    const worker = navigationWorker();
+    const path = "/chat/new-bot?__openclawSessionFacePreference=1";
+    const app = new Response("app", { headers: { "X-OpenClaw-Session-Entry": "1" } });
+    worker.fetch.mockResolvedValueOnce(app);
+    expect(await worker.navigate(path)).toBe(app);
+    expect(worker.fetch).toHaveBeenCalledExactlyOnceWith(
+      `https://gateway.test/__openclaw__/session-entry?${new URLSearchParams({ path })}`,
+      expect.objectContaining({ credentials: "same-origin", redirect: "manual" }),
+    );
+  });
+
   it("leaves the browser a native navigation when the public route also challenges", async () => {
     const worker = navigationWorker();
     worker.fetch.mockResolvedValue(

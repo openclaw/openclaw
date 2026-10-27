@@ -8,13 +8,13 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../gateway/agent-runtime-approval-authority.js";
 import { createPreparedTestApprovalManager } from "../gateway/exec-approval-manager.test-support.js";
 import { createChatRunState } from "../gateway/server-chat-state.js";
+import { waitForApprovalAccepted } from "../gateway/server-methods/approval-request.test-support.js";
 import { createExecApprovalHandlers } from "../gateway/server-methods/exec-approval.js";
 import {
   createApprovalRuntimeClient,
   requestExecApproval,
   resolveExecApproval,
 } from "../gateway/server-methods/exec-approval.test-support.js";
-import type { RespondFn } from "../gateway/server-methods/response-types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -23,6 +23,7 @@ import {
 import { applyAllowAlwaysDecision } from "../infra/exec-approvals-allow-always.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
 import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import { buildCwdBoundHashedArgPattern } from "../infra/exec-command-resolution.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
@@ -175,17 +176,24 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-function executeWithApproval(overrides: Partial<ExecuteNodeHostCommandParams> = {}) {
-  return executeNodeHostCommand({
-    ...request,
-    security: "allowlist",
-    ask: "on-miss",
-    ...overrides,
-  });
+function execute(overrides: Partial<ExecuteNodeHostCommandParams> = {}) {
+  return executeNodeHostCommand({ ...request, ...overrides });
 }
 
-function savePolicy(defaults: NonNullable<Parameters<typeof saveExecApprovals>[0]["defaults"]>) {
+function executeWithApproval(overrides: Partial<ExecuteNodeHostCommandParams> = {}) {
+  return execute({ security: "allowlist", ask: "on-miss", ...overrides });
+}
+
+type PolicyDefaults = NonNullable<Parameters<typeof saveExecApprovals>[0]["defaults"]>;
+function savePolicy(defaults: PolicyDefaults) {
   saveExecApprovals({ version: 1, defaults });
+}
+
+function saveRules(
+  allowlist: ExecAllowlistEntry[],
+  defaults: PolicyDefaults = { security: "allowlist", ask: "on-miss" },
+) {
+  saveExecApprovals({ version: 1, defaults, agents: { main: { allowlist } } });
 }
 
 function calledRpc(method: string) {
@@ -281,8 +289,7 @@ it("prepares managed GitHub exec with the node's own sanitized environment", asy
       GATEWAY_ONLY: undefined,
     },
     async () => {
-      const result = await executeNodeHostCommand({
-        ...request,
+      const result = await execute({
         ...environment,
         command: `${JSON.stringify(process.execPath)} -e 'process.stdout.write(JSON.stringify([process.env.GH_TOKEN, process.env.GITHUB_TOKEN, process.env.GH_CONFIG_DIR, process.env.GIT_AUTHOR_NAME, process.env.GATEWAY_ONLY]))'`,
       });
@@ -338,14 +345,13 @@ it.each(["GH_TOKEN", "GITHUB_TOKEN"])(
 
 it("auto-reviews an absolute direct command through real node preparation and execution", async () => {
   resolveDecision({ decision: "deny" });
-  saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "on-miss" } });
+  savePolicy({ security: "allowlist", ask: "on-miss" });
   const autoReviewer = vi.fn(async () => ({
     decision: "allow-once" as const,
     risk: "low" as const,
     rationale: "prints fixture output",
   }));
-  const result = await executeNodeHostCommand({
-    ...request,
+  const result = await execute({
     security: "allowlist",
     ask: "on-miss",
     autoReview: true,
@@ -376,8 +382,7 @@ it("honors a retained policy-owner deny when another agent is permissive", async
   const autoReviewer = makeAutoReviewer();
 
   await expect(
-    executeNodeHostCommand({
-      ...request,
+    execute({
       agentId: "main",
       sessionKey: "agent:main:node-proof",
       security: "full",
@@ -436,28 +441,18 @@ for (const { policyState, shouldExecute } of [
         rpc.mockImplementation(async (method, options, params) => {
           if (method === "exec.approval.request") {
             approvalId = params.id;
-            const firstResponse = createDeferred<Parameters<RespondFn>>();
-            const pending = approvalFixture.track(
-              requestExecApproval({
-                handlers: approvalHandlers,
-                respond: (...response) => {
-                  firstResponse.resolve(response);
-                },
-                context: approvalContext,
-                params,
-                client: runtimeClient,
-              }),
+            const { response } = await waitForApprovalAccepted(vi.fn(), (respond) =>
+              approvalFixture.track(
+                requestExecApproval({
+                  handlers: approvalHandlers,
+                  respond,
+                  context: approvalContext,
+                  params,
+                  client: runtimeClient,
+                }),
+              ),
             );
-            const [ok, payload, error] = await Promise.race([
-              firstResponse.promise,
-              pending.then(() => {
-                throw new Error("Exec approval request ended before acceptance");
-              }),
-            ]);
-            if (!ok) {
-              throw new Error(error?.message ?? "Exec approval registration failed");
-            }
-            return payload;
+            return response[1];
           }
           if (method === "exec.approval.resolve") {
             const respond = vi.fn();
@@ -630,9 +625,7 @@ it("collects live conversation context only when the node exec tool reaches revi
 });
 
 it("denies caller allowlist/off misses before dispatch to a permissive node", async () => {
-  await expect(executeNodeHostCommand({ ...request, security: "allowlist" })).rejects.toThrow(
-    "allowlist",
-  );
+  await expect(execute({ security: "allowlist" })).rejects.toThrow("allowlist");
   expect(invokeCount).toBe(0);
 });
 
@@ -659,7 +652,7 @@ it.each([
 
 it("prompts for target ask=always even when the caller is full/off", async () => {
   setRuntimeConfigSnapshot({ tools: { exec: { security: "full", ask: "always" } } });
-  const result = executeNodeHostCommand(request);
+  const result = execute();
   await Promise.race([decisionEntered.promise, result]);
   expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
   expect(invokeCount).toBe(0);
@@ -713,8 +706,7 @@ it("executes full/off through a symlink cwd using the prepared canonical directo
     await fs.unlink(link);
     await fs.symlink(otherDir, link, "dir");
   };
-  const result = await executeNodeHostCommand({
-    ...request,
+  const result = await execute({
     command: "/bin/pwd -P",
     workdir: link,
   });
@@ -728,8 +720,7 @@ it("does not bind a full/off script to approval-time contents", async () => {
   afterPrepare = async () => {
     await fs.writeFile(script, 'process.stdout.write("after")');
   };
-  const result = await executeNodeHostCommand({
-    ...request,
+  const result = await execute({
     command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`,
   });
   expect(result.details).toMatchObject({ status: "completed", aggregated: "after" });
@@ -760,8 +751,7 @@ it.each(["caller", "node", "approvals"] as const)(
       savePolicy({ security: "full", ask: "always" });
     }
     await expect(
-      executeNodeHostCommand({
-        ...request,
+      execute({
         workdir: link,
         ...(owner === "caller" ? { ask: "always" as const } : {}),
       }),
@@ -783,7 +773,7 @@ it.each(["deny", "ask"] as const)(
         },
       });
     };
-    const result = await executeNodeHostCommand(request);
+    const result = await execute();
     expect(result.details).toMatchObject({ status: "failed", failureKind: "policy-denied" });
   },
 );
@@ -792,7 +782,7 @@ it("refuses a cwd replaced by a symlink after approval preparation", async () =>
   const approved = path.join(request.workdir, "approved");
   const moved = path.join(request.workdir, "moved");
   await fs.mkdir(approved);
-  const execution = executeNodeHostCommand({ ...request, workdir: approved, ask: "always" });
+  const execution = execute({ workdir: approved, ask: "always" });
   await waitForDecision(execution);
   await fs.rename(approved, moved);
   await fs.symlink(moved, approved, "dir");
@@ -809,16 +799,13 @@ it("refuses a cwd replaced by a symlink after approval preparation", async () =>
 it("uses prepared node policy without administrator access", async () => {
   rawPolicyReadable = false;
   resolveDecision({ decision: "deny" });
-  saveExecApprovals({
-    version: 1,
-    defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
-    agents: {
-      main: { allowlist: [{ pattern: "/usr/bin/printf", argPattern: "^node-policy-proof$" }] },
-    },
+  saveRules([{ pattern: "/usr/bin/printf", argPattern: "^node-policy-proof$" }], {
+    security: "allowlist",
+    ask: "on-miss",
+    askFallback: "deny",
   });
 
-  const result = await executeNodeHostCommand({
-    ...request,
+  const result = await execute({
     security: "allowlist",
     ask: "on-miss",
   });
@@ -834,13 +821,9 @@ it.each(["empty", "always", "deny"] as const)(
   async (mode) => {
     rawPolicyReadable = false;
     resolveDecision({ decision: "deny" });
-    saveExecApprovals({
-      version: 1,
-      defaults: {
-        security: mode === "deny" ? "deny" : "allowlist",
-        ask: mode === "always" ? "always" : "on-miss",
-      },
-      agents: { main: { allowlist: mode === "empty" ? [] : [{ pattern: "/usr/bin/printf" }] } },
+    saveRules(mode === "empty" ? [] : [{ pattern: "/usr/bin/printf" }], {
+      security: mode === "deny" ? "deny" : "allowlist",
+      ask: mode === "always" ? "always" : "on-miss",
     });
     await expect(executeWithApproval()).rejects.toThrow(/exec denied/);
     expect(invokeCount).toBe(0);
@@ -854,24 +837,16 @@ it.each(["hit", "argv-miss", "cwd-miss"] as const)(
   async (match) => {
     rawPolicyReadable = false;
     resolveDecision({ decision: "deny" });
-    saveExecApprovals({
-      version: 1,
-      defaults: { security: "allowlist", ask: "on-miss" },
-      agents: {
-        main: {
-          allowlist: [
-            {
-              pattern: "/usr/bin/printf",
-              source: "allow-always",
-              argPattern: buildCwdBoundHashedArgPattern(
-                ["/usr/bin/printf", "node-policy-proof"],
-                request.workdir,
-              ),
-            },
-          ],
-        },
+    saveRules([
+      {
+        pattern: "/usr/bin/printf",
+        source: "allow-always",
+        argPattern: buildCwdBoundHashedArgPattern(
+          ["/usr/bin/printf", "node-policy-proof"],
+          request.workdir,
+        ),
       },
-    });
+    ]);
     const other = path.join(request.workdir, "other-cwd");
     await fs.mkdir(other);
     const execution = executeWithApproval({
@@ -936,12 +911,8 @@ it.each([true, false])("preserves snapshot-absent legacy policy access=%s", asyn
   legacyPrepare = true;
   rawPolicyReadable = readable;
   resolveDecision({ decision: "deny" });
-  saveExecApprovals({
-    version: 1,
-    defaults: { security: "allowlist", ask: "on-miss" },
-    agents: { main: { allowlist: [{ pattern: "/usr/bin/printf" }] } },
-  });
-  const execution = executeNodeHostCommand({ ...request, security: "allowlist", ask: "on-miss" });
+  saveRules([{ pattern: "/usr/bin/printf" }]);
+  const execution = execute({ security: "allowlist", ask: "on-miss" });
   if (readable) {
     expect((await execution).details.status).toBe("completed");
     expect(invokeCount).toBe(1);
@@ -954,11 +925,7 @@ it.each([true, false])("preserves snapshot-absent legacy policy access=%s", asyn
 
 it("does not let prepared allowlist facts survive policy revocation", async () => {
   rawPolicyReadable = false;
-  saveExecApprovals({
-    version: 1,
-    defaults: { security: "allowlist", ask: "on-miss" },
-    agents: { main: { allowlist: [{ pattern: "/usr/bin/printf" }] } },
-  });
+  saveRules([{ pattern: "/usr/bin/printf" }]);
   afterPrepare = async () => {
     savePolicy({ security: "deny", ask: "off" });
   };

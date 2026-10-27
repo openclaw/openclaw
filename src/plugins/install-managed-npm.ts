@@ -174,7 +174,6 @@ export async function installPluginFromManagedNpmRoot(
           requestedSpecifier: params.installPolicyRequest.requestedSpecifier ?? params.displaySpec,
           source: params.installPolicyRequest.source,
           sourcePath: policyPreflightSourcePath,
-          sourcePathKind: "file",
         }),
     });
     if (preflightPolicyResult) {
@@ -624,6 +623,7 @@ export async function installPluginFromManagedNpmRoot(
         },
       },
       transactionRequest?.assertOwned,
+      transactionRequest?.prepareSettlement,
     ),
   );
   if (staged.failure) {

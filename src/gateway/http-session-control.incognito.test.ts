@@ -2,6 +2,10 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -15,7 +19,6 @@ import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lif
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
 import { handleChannelAvatarHttpRequest } from "./channel-avatar-http.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
@@ -118,7 +121,6 @@ const lifetime = { assertCurrent() {}, assertReadable() {} };
 let location: { agentId: string; path: string };
 let env: NodeJS.ProcessEnv;
 let baseUrl: string;
-let portClaim: TestPortClaim;
 let sequence = 0;
 let lastHandled = Promise.resolve();
 const server = createServer((req, res) => {
@@ -151,11 +153,7 @@ beforeAll(async () => {
     agentId: "main",
     path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
   };
-  portClaim = await acquireTestPortBlock({ offsets: [0] });
-  await new Promise<void>((resolve) => {
-    server.listen(portClaim.port, "127.0.0.1", resolve);
-  });
-  baseUrl = `http://127.0.0.1:${portClaim.port}`;
+  baseUrl = await listenLoopback(server);
 });
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
@@ -169,12 +167,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 afterAll(async () => {
-  server.closeAllConnections();
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
+  await closeHttpServer(server);
   await lastHandled;
-  await portClaim?.release();
   memorySessionActorOwners.closeDatabase(location);
   await closeOpenClawAgentDatabasesAsync();
   vi.unstubAllEnvs();

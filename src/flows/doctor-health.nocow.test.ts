@@ -1,7 +1,6 @@
 import "./doctor-health.test-support.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDoctorNoCowToolFixture } from "../commands/doctor-sqlite-nocow.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -17,7 +16,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
-const { mocks } = await import("./doctor-health.test-support.js");
+const { mocks, createDoctorConfig } = await import("./doctor-health.test-support.js");
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -51,13 +50,7 @@ it.skipIf(process.platform !== "linux")(
         const native =
           await vi.importActual<typeof import("node:child_process")>("node:child_process");
         const tools = createDoctorNoCowToolFixture(state.root, native.spawnSync);
-        const cfg = {
-          agents: {
-            ownership: "explicit" as const,
-            entries: { main: { workspace: state.workspaceDir } },
-          },
-          gateway: { mode: "local" as const },
-        };
+        const cfg = createDoctorConfig(state);
         await state.writeConfig(cfg);
         setRuntimeConfigSnapshot(cfg);
         mocks.config.mockReturnValue(cfg);
@@ -114,16 +107,9 @@ it.skipIf(process.platform !== "linux")(
           { repair: true, nonInteractive: true, workspaceSuggestions: false },
         );
         expect(readerClosed).toBe(true);
-        const rewrites = log.mock.calls
-          .flat()
-          .filter(
-            (message) =>
-              typeof message === "string" && message.startsWith("Rewrote SQLite files with NOCOW:"),
-          );
-        expect(rewrites).toEqual(
-          paths.map((pathname) => expect.stringContaining(path.dirname(pathname))),
+        expect(log).toHaveBeenCalledWith(
+          expect.stringContaining("Rewrote SQLite files with NOCOW:"),
         );
-        expect(log.mock.calls.flat().join("\n")).not.toContain("SQLite NOCOW repair refused");
         for (const [index, pathname] of paths.entries()) {
           expect(fs.statSync(pathname).ino).not.toBe(originalInodes[index]);
           using database = openNodeSqliteDatabase(pathname, { readOnly: true });

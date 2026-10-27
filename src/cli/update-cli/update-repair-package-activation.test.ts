@@ -7,21 +7,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
 import * as directoryDurability from "../../infra/directory-durability.js";
 import {
-  encodePackageActivationLauncher,
   openPackageActivationJournal,
   packageActivationIdentity,
   resolvePackageActivationHelper,
   resolvePackageActivationJournalPath,
 } from "../../infra/package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "../../infra/package-update-activation-lifetime.test-support.js";
-import { preparePackageActivationJournal } from "../../infra/package-update-activation-prepare.js";
 import { prepareRemountedPublication } from "../../infra/package-update-activation-remount.test-support.js";
-import { packageActivationRuntimeForTest } from "../../infra/package-update-activation-runtime.test-support.js";
 import {
   assertNoPendingPackageActivation,
   readPackageActivationReceipt,
 } from "../../infra/package-update-activation.js";
 import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
+import {
+  publicationActivation,
+  withPublicationFence,
+} from "../../infra/package-update-publication.test-support.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -30,8 +31,12 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import { createInterruptedPackagePublication } from "./update-package-publication.test-support.js";
+import {
+  createInterruptedPackagePublication,
+  preparePackagePublication,
+} from "./update-package-publication.test-support.js";
 import { updateRepairCommand } from "./update-repair-command.js";
 
 const mocks = vi.hoisted(() => ({ root: vi.fn(), finalize: vi.fn() }));
@@ -161,27 +166,9 @@ async function prepareNextPackage(
   await writePackageRoot(f.params.stage.packageRoot, version);
   await fsp.mkdir(f.params.stage.layout.binDir, { recursive: true });
   await fsp.writeFile(path.join(f.params.stage.layout.binDir, "openclaw"), "new launcher\n");
-  await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-    const reader = createPackageIntegrityReader();
-    await preparePackageActivationJournal({
-      options: {
-        fence: await executor.enter(f.packageRoot),
-        runtime: packageActivationRuntimeForTest(),
-        onPrepared: () => {},
-      },
-      liveRoot: f.packageRoot,
-      stageRoot: f.params.stage.packageRoot,
-      launcherRoot: f.params.stage.layout.binDir,
-      binDir: path.dirname(f.launcher),
-      previous: await reader.tree(f.packageRoot),
-      launchers: [
-        {
-          name: "openclaw",
-          previous: encodePackageActivationLauncher(await reader.launcher(f.launcher)),
-        },
-      ],
-    });
-  });
+  await withPublicationFence(f.packageRoot, (fence) =>
+    preparePackagePublication(f, publicationActivation(fence)),
+  );
 }
 
 async function interruptedPublication(
@@ -207,15 +194,12 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
         }
         fs.renameSync(f.packageRoot, `${f.packageRoot}.manual-backup`);
         fs.mkdirSync(f.packageRoot);
-        fs.writeFileSync(
-          path.join(f.packageRoot, "package.json"),
-          JSON.stringify({
-            name: "openclaw",
-            version: "2026.10.1",
-            type: "module",
-            bin: { openclaw: "./openclaw.mjs" },
-          }),
-        );
+        writeFixtureJsonSync(path.join(f.packageRoot, "package.json"), {
+          name: "openclaw",
+          version: "2026.10.1",
+          type: "module",
+          bin: { openclaw: "./openclaw.mjs" },
+        });
         fs.writeFileSync(path.join(f.packageRoot, "openclaw.mjs"), "// newer installed launcher\n");
         fs.mkdirSync(path.join(f.packageRoot, "dist"));
         fs.writeFileSync(
@@ -363,7 +347,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       const f = await interruptedPublication();
       const manifestPath = path.join(f.packageRoot, "package.json");
       const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, [field]: value }));
+      writeFixtureJsonSync(manifestPath, { ...manifest, [field]: value });
       const journal = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
       await expect(repair()).rejects.toThrow("package.json");
       expect(fs.readFileSync(resolvePackageActivationJournalPath(f.anchor))).toEqual(journal);
@@ -440,10 +424,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       );
     }
     if (failure === "wrong version") {
-      fs.writeFileSync(
-        path.join(f.packageRoot, "dist/build-info.json"),
-        JSON.stringify({ version: "1.0.0" }),
-      );
+      writeFixtureJsonSync(path.join(f.packageRoot, "dist/build-info.json"), { version: "1.0.0" });
       await writePackageDistInventory(f.packageRoot);
     }
     const journal = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
@@ -565,10 +546,10 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       if (source === f.anchor) {
         fs.renameSync(f.packageRoot, `${f.packageRoot}.replaced-again`);
         fs.cpSync(`${f.packageRoot}.replaced-again`, f.packageRoot, { recursive: true });
-        fs.writeFileSync(
-          path.join(f.packageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "4.0.0" }),
-        );
+        writeFixtureJsonSync(path.join(f.packageRoot, "package.json"), {
+          name: "openclaw",
+          version: "4.0.0",
+        });
       }
     });
 

@@ -1,6 +1,6 @@
-import { vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import type { maybeRepairGatewayServiceConfig } from "../commands/doctor-gateway-services.js";
-import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig, OpenClawConfigInput } from "../config/config.js";
 import type {
   DoctorHealthContribution,
@@ -8,15 +8,15 @@ import type {
 } from "./doctor-health-contribution-types.js";
 import "./doctor-health-contributions.js";
 import type { runDoctorLintChecks } from "./doctor-lint-flow.js";
+export {
+  createDoctorHealthFlowContext,
+  createDoctorPrompterFixture,
+} from "./doctor-health-context.test-support.js";
 
 type RunContributions = (ctx: Context, list: readonly DoctorHealthContribution[]) => Promise<void>;
 type TestApi = {
   resolveDoctorHealthContributions(): DoctorHealthContribution[];
   runDoctorHealthContributionList: RunContributions;
-};
-
-type ContextFixture = Partial<Omit<Context, "configResult">> & {
-  configResult?: Partial<Context["configResult"]>;
 };
 
 type DoctorLintContext = Parameters<typeof runDoctorLintChecks>[0];
@@ -29,46 +29,6 @@ export function createDoctorLintContext(
   fixture: Pick<DoctorLintContext, "cfg"> & Partial<Omit<DoctorLintContext, "cfg">>,
 ): DoctorLintContext {
   return fixture as DoctorLintContext;
-}
-
-export function createDoctorPrompterFixture(shouldRepair = false): DoctorPrompter {
-  return {
-    confirm: vi.fn(async () => shouldRepair),
-    confirmAutoFix: vi.fn(async () => shouldRepair),
-    confirmAggressiveAutoFix: vi.fn(async () => shouldRepair),
-    confirmRuntimeRepair: vi.fn(async () => shouldRepair),
-    select: vi.fn(async (_params, fallback) => fallback),
-    shouldRepair,
-    shouldForce: false,
-    repairMode: {
-      shouldRepair,
-      shouldForce: false,
-      nonInteractive: true,
-      canPrompt: false,
-      updateInProgress: false,
-    },
-  };
-}
-
-export function createDoctorHealthFlowContext(overrides: ContextFixture = {}): Context {
-  const { configResult, ...contextOverrides } = overrides;
-  const cfg = overrides.cfg ?? {};
-  const configPath = overrides.configPath ?? "/tmp/openclaw.json";
-  return {
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    options: {},
-    prompter: createDoctorPrompterFixture(),
-    configResult: {
-      confirmedConfigSource: { path: configPath, hash: "planning-revision" },
-      ...configResult,
-      cfg: configResult?.cfg ?? cfg,
-    },
-    cfg,
-    cfgForPersistence: cfg,
-    sourceConfigValid: true,
-    configPath,
-    ...contextOverrides,
-  };
 }
 
 function getTestApi(): TestApi {
@@ -95,4 +55,22 @@ export function createGatewayWriterFixture(token: string) {
   const repair: typeof maybeRepairGatewayServiceConfig = async (...args) =>
     args[4].writeConfig(config);
   return { config, repair };
+}
+
+export function doctorRuntimeProjectedPath(directory: string, source: string): string {
+  const base = path.parse(source).root;
+  return path.join(
+    directory,
+    "tree",
+    Buffer.from(base).toString("hex"),
+    path.relative(base, source),
+  );
+}
+
+export function createDoctorRuntimeProjection(root: string, packageRoot: string, suffix: string) {
+  const directory = path.join(root, `openclaw-update-runtime-${suffix}`);
+  const projectedRoot = doctorRuntimeProjectedPath(directory, packageRoot);
+  fs.mkdirSync(projectedRoot, { recursive: true });
+  fs.copyFileSync(path.join(packageRoot, "package.json"), path.join(projectedRoot, "package.json"));
+  return directory;
 }

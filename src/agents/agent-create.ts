@@ -23,7 +23,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { runWithAgentCreationClaim } from "../state/agent-creation-claim.js";
-import { assertAgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
 import {
   readAgentDeletionJournalForCreation,
   readAgentDeletionRecoveryHoldsInWorker,
@@ -33,7 +32,6 @@ import { resolveAgentDeletionRecoveryHoldsInWorker } from "../state/agent-deleti
 import { recordAgentProvenance, type AgentCreatedVia } from "../state/agent-provenance.js";
 import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
 import { prepareOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
-import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
 import { DuplicateAgentError } from "./agent-create-error.js";
@@ -49,7 +47,10 @@ import {
   mergeIdentityMarkdownContent,
   sanitizeAgentIdentityLine,
 } from "./identity-file.js";
-import { createWorkspaceFileMutationGuard } from "./workspace-file-mutation-guard.js";
+import {
+  assertCurrentAgentDeletionRecoveryHolds,
+  createWorkspaceFileMutationGuard,
+} from "./workspace-file-mutation-guard.js";
 import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
 import {
   DEFAULT_IDENTITY_FILENAME,
@@ -129,6 +130,8 @@ type CreateAgentParams = {
   prepareConfigCommit?: () => Promise<ConfigCommitReceipt | void>;
   /** Observe published config before post-commit bookkeeping that may still fail. */
   onCommitted?: (result: CreateAgentSuccess & { config: OpenClawConfig }) => void;
+  /** Provider cadence resolved from staged onboarding before config publication. */
+  proactiveCadenceMs?: number;
   provenance?: { createdVia: AgentCreatedVia; creatorAgentId?: string };
 };
 
@@ -360,10 +363,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     assertRecoveryPathCurrent();
     const predicate = recoveryHoldPredicate();
     if (predicate.applies) {
-      withExistingOpenClawStateDatabaseCurrentReadOnly(
-        (database) => assertAgentDeletionRecoveryHoldPredicate(database, predicate),
-        { allowNativeRead: true },
-      );
+      assertCurrentAgentDeletionRecoveryHolds(predicate);
     }
   };
   const hasBootstrapHold = async () =>
@@ -677,6 +677,12 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       }
       if (result.status === "created") {
         await recordAgentProvenance(agentId, params.provenance ?? { createdVia: "operator" });
+        const { provisionDefaultProactiveJob } = await import("../cron/default-proactive-job.js");
+        await provisionDefaultProactiveJob(result.config, agentId, {
+          cadenceMs: params.proactiveCadenceMs,
+          commitGuard: assertHost,
+          recoveryHoldPredicate: recoveryHoldPredicate(),
+        });
       }
       if (recoveryPaths.length > 0) {
         assertRecoveryCurrent();
