@@ -272,7 +272,10 @@ it.each([
   "handles provider retry floors: %s",
   async (_name, failoverEligible, maxRetryDelayMs, reason, retryAfterMs, expected) => {
     vi.spyOn(Math, "random").mockReturnValue(0.5);
-    controller = createRetryController({ fallbackConfigured: true });
+    controller = createRetryController({
+      fallbackConfigured: true,
+      runParams: { timeoutMs: 2_147_483_647 },
+    });
     await checkRetry(
       {
         reason,
@@ -333,6 +336,47 @@ it("does not truncate a provider wait to fit the remaining outage window", async
   advanceTime(89_000);
   await checkRetry({ reason: "timeout", retryAfterMs: 2000 }, false);
   expect(sleep).toHaveBeenCalledOnce();
+});
+
+it.each([
+  ["default", true, {}, {}, {}, false],
+  ["larger budget", true, { timeoutMs: 360_000 }, {}, {}, true],
+  ["explicit retries", true, {}, { providerRetryMaxRetries: 8 }, {}, true],
+  ["explicit request timeout", true, {}, { providerRequestTimeoutExplicit: true }, {}, true],
+  ["no fallback", false, {}, {}, {}, true],
+  ["final fallback", true, { isFinalFallbackAttempt: true }, {}, {}, true],
+  ["unlimited", true, { timeoutMs: 2_147_483_647 }, {}, {}, true],
+  ["replay unsafe", true, {}, {}, { failoverEligible: false }, true],
+] as const)(
+  "reserves bounded recovery time for fallback: %s",
+  async (_name, fallbackConfigured, runParams, settings, retryOptions, retriesAgain) => {
+    const advanceTime = clock();
+    controller = createRetryController({
+      fallbackConfigured,
+      runParams: { timeoutMs: 180_000, ...runParams },
+    });
+    controller.observeAttempt(settings);
+    advanceTime(60_000);
+    await checkRetry({ reason: "timeout", ...retryOptions });
+    advanceTime(61_000);
+    await checkRetry({ reason: "timeout", ...retryOptions }, retriesAgain);
+    expect(sleep).toHaveBeenCalledTimes(retriesAgain ? 2 : 1);
+  },
+);
+
+it("keeps output-limit continuation and native recovery outside fallback allocation", async () => {
+  const advanceTime = clock();
+  controller = createRetryController({ fallbackConfigured: true });
+  const native = createRetryController({
+    fallbackConfigured: true,
+    runtime: {
+      snapshot: () => ({ pluginHarnessOwnsTransport: true, agentHarness: { id: "native" } }),
+    },
+  });
+  advanceTime(60_000);
+  await checkRetry({ reason: "output_limit" });
+  await expect(native.maybeRetryTransient({ reason: "timeout" })).resolves.toBe(true);
+  expect(sleep).toHaveBeenCalledTimes(2);
 });
 
 it("bounds transient retries across reasons and honors Retry-After", async () => {
