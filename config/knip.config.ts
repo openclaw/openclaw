@@ -223,6 +223,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-catalog-pairing-measure.ts!",
   "scripts/perf/session-involvement-measure.ts!",
   "scripts/perf/sqlite-native-lease-measure.mjs!",
+  "scripts/perf/agent-db-close-receipt-measure.mjs!",
   "scripts/perf/sqlite-owner-dispatch-measure.mjs!",
   "scripts/perf/sqlite-wal-scan-measure.mjs!",
   "scripts/perf/state-engine-schema-bench.ts!",
