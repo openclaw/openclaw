@@ -7,11 +7,14 @@
 // use --agent-database-mib 8 for an inexpensive controlled startup-recovery probe.
 // Every agent starts unsealed; ready-agent scans wait at most 6s, exceeding the
 // 5s foreground admission budget, so their migrations overlap the slow inspection.
+// --publication-api-delay-ms 500 seeds four historical publications; a private gh/fetch
+// fixture delays read-only GitHub observations and never uses real credentials or GitHub.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv } from "node:crypto";
 import { once } from "node:events";
 import {
+  appendFileSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -89,11 +92,16 @@ type GatewayBenchCase = {
   providerStaticCatalogModelCount?: number;
   providerStaticCatalogStallMs?: number;
   publicationGitDelayMs?: number;
+  publicationApiDelayMs?: number;
   runByDefault?: boolean;
 };
 
 type GatewaySample = {
   publicationRecovery?: { startedAtMs: number; releasedAtMs: number; delayMs: number };
+  publicationApi?: {
+    calls: { endpoint: string; startedAtMs: number; releasedAtMs: number }[];
+    receipts: { request_id: string; status: string; pull_request_url: string | null }[];
+  };
   agentRecoveryMs?: Record<string, number>;
   registryRecovery?: {
     events: Record<string, number>;
@@ -194,6 +202,7 @@ const VALUE_FLAGS = new Set([
   "--start-at",
   "--bundled-plugin-fixture",
   "--publication-git-delay-ms",
+  "--publication-api-delay-ms",
 ]);
 
 const BASE_CONFIG = BASE_GATEWAY_BENCH_CONFIG;
@@ -482,6 +491,27 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     }
     cases = [{ ...cases[0], publicationGitDelayMs }];
   }
+  if (flags.has("--publication-api-delay-ms")) {
+    if (
+      cases.length !== 1 ||
+      cases[0]?.id !== "teamBoot" ||
+      process.platform === "win32" ||
+      flags.has("--publication-git-delay-ms")
+    ) {
+      throw new CliArgumentError(
+        "--publication-api-delay-ms requires --case teamBoot on POSIX without --publication-git-delay-ms",
+      );
+    }
+    const publicationApiDelayMs = parsePositiveInt(
+      flags.get("--publication-api-delay-ms")?.[0],
+      500,
+      "--publication-api-delay-ms",
+    );
+    if (publicationApiDelayMs < 200 || publicationApiDelayMs > 800) {
+      throw new CliArgumentError("--publication-api-delay-ms must be between 200 and 800");
+    }
+    cases = [{ ...cases[0], publicationApiDelayMs }];
+  }
   const bundledPluginFixturePath = flags.get("--bundled-plugin-fixture")?.[0];
   if (bundledPluginFixturePath !== undefined) {
     if (cases.length !== 1 || cases[0]?.id !== "teamBoot") {
@@ -575,6 +605,7 @@ Options:
   --seed-only         Create a new --fixture-root without launching a Gateway
   --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels config for teamBoot
   --publication-git-delay-ms <n> Seed one pending teamBoot publication with a slow local Git read (1–30000)
+  --publication-api-delay-ms <n> Recover four historical publications through delayed mock GitHub reads (200–800)
   --agent-database-mib <n> Synthetic slow-agent cache payload (default: 512)
   --agent-gate-delay-ms <n> Benchmark-only delay before the real integrity scan (default: 10000)
   --start-at <epoch-ms> Synchronize prepared fixture startup with a concurrent comparison
@@ -598,6 +629,7 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
           expectedPluginCount: benchCase.pluginCount ?? 44,
           bundledPluginIds: benchCase.bundledPluginFixture?.plugins?.allow ?? [],
           publicationGitDelayMs: benchCase.publicationGitDelayMs,
+          publicationApiDelayMs: benchCase.publicationApiDelayMs,
         }
       : {}),
     samples,
@@ -650,6 +682,19 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
             result.publicationGitDelayMs)
       ) {
         missing.push("pending publication reached and completed its delayed Git read");
+      }
+      if (
+        result.publicationApiDelayMs !== undefined &&
+        (sample.publicationApi?.receipts.length !== 4 ||
+          sample.publicationApi.receipts.some(
+            (row) => row.status !== "published" || !row.pull_request_url,
+          ) ||
+          sample.publicationApi.calls.filter((call) => call.endpoint.endsWith("/pulls")).length !==
+            4)
+      ) {
+        missing.push(
+          "four historical publications confirmed through mock GitHub and durable receipts",
+        );
       }
       if (result.id === "slowAgentDatabase") {
         if (
@@ -1297,7 +1342,13 @@ async function inspectInterruptedRegistryRecovery(root: string, events: Record<s
   }
 }
 
-async function seedTeamBootPublication(root: string, delayMs: number, agentId: string) {
+async function seedTeamBootPublication(
+  root: string,
+  delayMs: number,
+  agentId: string,
+  api = false,
+  index = 0,
+) {
   const [
     { resolveExecutablePath },
     { insertRegistryWorktreeInDatabase },
@@ -1305,7 +1356,11 @@ async function seedTeamBootPublication(root: string, delayMs: number, agentId: s
     stateDb,
     agentDb,
     { writeSessionEntry },
-    { insertGitHubPublicationRequest },
+    {
+      insertGitHubPublicationRequest,
+      claimGitHubPublicationExecutionInDatabase,
+      createGitHubPublicationExecutionStoreInDatabase,
+    },
     { digestGitHubPublicationRequest },
   ] = await Promise.all([
     import("../src/infra/executable-path.js"),
@@ -1321,9 +1376,10 @@ async function seedTeamBootPublication(root: string, delayMs: number, agentId: s
   if (!gitPath) {
     throw new Error("The pending-publication fixture requires Git");
   }
-  const repoRoot = path.join(root, "publication-repository");
-  const worktreePath = path.join(root, "publication-worktree");
-  const branch = "bench-publication";
+  const suffix = api ? `-${index}` : "";
+  const repoRoot = path.join(root, `publication-repository${suffix}`);
+  const worktreePath = path.join(root, `publication-worktree${suffix}`);
+  const branch = `bench-publication${suffix}`;
   const git = (...args: string[]) => execFileSync(gitPath, args, { stdio: "pipe" });
   git("init", "--initial-branch=main", repoRoot);
   git(
@@ -1341,13 +1397,35 @@ async function seedTeamBootPublication(root: string, delayMs: number, agentId: s
     "test: seed synthetic publication workspace",
   );
   git("-C", repoRoot, "worktree", "add", "-b", branch, worktreePath);
+  if (api) {
+    git("-C", repoRoot, "remote", "add", "origin", "https://github.com/synthetic/startup.git");
+  }
   const repository = await resolveRepositoryIdentity(repoRoot);
-  const sessionKey = `agent:${agentId}:bench-0`;
-  const sessionId = `team-boot-${agentId}-0`;
-  const requestId = "startup-publication";
-  const now = Date.parse("2026-10-19T00:00:00Z");
+  const sessionKey = `agent:${agentId}:bench-${index}`;
+  const sessionId = `team-boot-${agentId}-${index}`;
+  const requestId = `startup-publication${suffix}`;
+  const sourceHeadCommit = git("-C", worktreePath, "rev-parse", "HEAD").toString().trim();
+  const workspaceTree = git("-C", worktreePath, "rev-parse", "HEAD^{tree}").toString().trim();
+  if (api) {
+    git(
+      "-C",
+      worktreePath,
+      "-c",
+      "user.name=Startup Benchmark",
+      "-c",
+      "user.email=startup-benchmark@example.invalid",
+      "-c",
+      "commit.gpgSign=false",
+      "commit",
+      "--allow-empty",
+      "--message",
+      `test: synthetic published commit\n\nOpenClaw-Publication: ${requestId}`,
+    );
+  }
+  const headCommit = git("-C", worktreePath, "rev-parse", "HEAD").toString().trim();
+  const now = api ? Date.now() : Date.parse("2026-10-19T00:00:00Z");
   const worktree = {
-    id: "startup-publication-worktree",
+    id: `startup-publication-worktree${suffix}`,
     name: "Synthetic publication workspace",
     path: worktreePath,
     repoRoot: repository.repoRoot,
@@ -1364,7 +1442,7 @@ async function seedTeamBootPublication(root: string, delayMs: number, agentId: s
       writeSessionEntry(database, sessionKey, {
         sessionId,
         updatedAt: now,
-        label: "Synthetic startup session 0",
+        label: `Synthetic startup session ${index}`,
         visibility: "shared",
         worktree: { id: worktree.id, branch, repoRoot: worktree.repoRoot },
         spawnedCwd: worktreePath,
@@ -1372,7 +1450,8 @@ async function seedTeamBootPublication(root: string, delayMs: number, agentId: s
     },
     { agentId },
   );
-  stateDb.runOpenClawStateWriteTransaction(({ db }) => {
+  stateDb.runOpenClawStateWriteTransaction((database) => {
+    const { db } = database;
     insertRegistryWorktreeInDatabase(db, { record: worktree, provisionedPaths: [] });
     const request = { sessionKey, agentId, idempotencyKey: requestId, draft: false };
     insertGitHubPublicationRequest(db, {
@@ -1385,20 +1464,40 @@ async function seedTeamBootPublication(root: string, delayMs: number, agentId: s
       now,
       worktree,
       identity: {
-        source: "system-configured",
-        profileId: "startup-fixture",
+        source: api ? "system-detected" : "system-configured",
+        ...(api ? {} : { profileId: "startup-fixture" }),
         account: { accountId: 1, login: "startup-fixture", avatarUrl: null },
       },
+      ...(api
+        ? { snapshot: { sourceHeadCommit, sourceIndexTree: workspaceTree, workspaceTree } }
+        : {}),
       assertCurrent() {},
     });
-    // Offline historical receipt: recovery inspects its workspace, then refuses absent
-    // requester authority before credential preparation or any GitHub operation.
+    if (api) {
+      const instance = "synthetic-retired-gateway";
+      const row = claimGitHubPublicationExecutionInDatabase(database, requestId, instance);
+      createGitHubPublicationExecutionStoreInDatabase(database, instance).updatePublishingFacts({
+        row,
+        repository: "synthetic/startup",
+        branch,
+        baseBranch: "main",
+        sourceHeadCommit,
+        workspaceTree,
+        headCommit,
+      });
+    }
+    // Historical custody permits observation of recorded effects, never a new publication.
+    // The Git-only fixture has no effects and refuses before any GitHub operation.
     db.prepare(
-      "UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id = 'startup-publication'",
+      "UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id IN ('startup-publication', 'startup-publication-0', 'startup-publication-1', 'startup-publication-2', 'startup-publication-3')",
     ).run();
   });
+  if (api) {
+    return { requestId, branch, sourceHeadCommit, workspaceTree, headCommit };
+  }
   const bin = path.join(root, "publication-bin");
   mkdirSync(bin);
+  writeFileSync(path.join(bin, "package.json"), '{"type":"commonjs"}\n');
   writeFileSync(
     path.join(bin, "git"),
     `#!${process.execPath}
@@ -1426,6 +1525,94 @@ const { setTimeout } = require("node:timers/promises");
 `,
     { mode: 0o755 },
   );
+  return undefined;
+}
+
+function writePublicationApiFixture(
+  root: string,
+  delayMs: number,
+  receipts: Awaited<ReturnType<typeof seedTeamBootPublication>>[],
+) {
+  const bin = path.join(root, "publication-bin");
+  mkdirSync(bin);
+  writeFileSync(path.join(bin, "package.json"), '{"type":"commonjs"}\n');
+  const calls = path.join(root, "publication-api-calls.jsonl");
+  writeFileSync(
+    path.join(root, "publication-api-preload.mjs"),
+    `import { appendFileSync } from "node:fs";
+import { setTimeout } from "node:timers/promises";
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const url = new URL(input instanceof Request ? input.url : input);
+  if (url.hostname !== "api.github.com") return originalFetch(input, init);
+  if (url.href !== "https://api.github.com/user" || init?.method !== "GET" || init?.headers?.Authorization !== "Bearer synthetic-startup-publication-token") throw new Error("Unexpected mock GitHub fetch");
+  const startedAtMs = Date.now();
+  await setTimeout(${delayMs});
+  appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ endpoint: "/user", startedAtMs, releasedAtMs: Date.now() }) + "\\n");
+  return new Response(JSON.stringify({ id: 1, login: "startup-fixture", avatar_url: null }), { status: 200, headers: { "x-oauth-scopes": "repo" } });
+};
+`,
+  );
+  writeFileSync(
+    path.join(bin, "gh"),
+    `#!${process.execPath}
+const { appendFileSync } = require("node:fs");
+const { setTimeout } = require("node:timers/promises");
+const receipts = ${JSON.stringify(receipts)};
+(async () => {
+  const args = process.argv.slice(2);
+  const methodIndex = args.indexOf("--method");
+  if (args[0] !== "api" || args[1] !== "--hostname" || args[2] !== "github.com" || args.includes("--input") || (methodIndex !== -1 && args[methodIndex + 1] !== "GET")) throw new Error("Unexpected mock GitHub command");
+  const endpoint = args.find((arg) => arg.startsWith("repos/"));
+  let result;
+  if (endpoint === "repos/synthetic/startup") {
+    result = { fork: false, default_branch: "main", parent: { name: null, default_branch: null, owner: { login: null } } };
+  } else if (endpoint?.startsWith("repos/synthetic/startup/git/commits/")) {
+    const receipt = receipts.find((row) => endpoint.endsWith("/" + row.headCommit));
+    if (!receipt) throw new Error("Unknown mock GitHub commit");
+    result = { sha: receipt.headCommit, tree: { sha: receipt.workspaceTree }, parents: [{ sha: receipt.sourceHeadCommit }], message: "test: synthetic published commit\\n\\nOpenClaw-Publication: " + receipt.requestId };
+  } else if (endpoint === "repos/synthetic/startup/pulls") {
+    const receipt = receipts.find((row) => args.includes("head=synthetic:" + row.branch));
+    if (!receipt) throw new Error("Unknown mock GitHub branch");
+    result = [{ url: "https://github.com/synthetic/startup/pull/" + (receipts.indexOf(receipt) + 1), userId: 1, state: "open", body: "<!-- openclaw-publication:" + receipt.requestId + " -->", headSha: receipt.headCommit, headRef: receipt.branch, baseRef: "main" }];
+  } else throw new Error("Unexpected mock GitHub endpoint: " + endpoint);
+  const startedAtMs = Date.now();
+  await setTimeout(${delayMs});
+  appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ endpoint, startedAtMs, releasedAtMs: Date.now() }) + "\\n");
+  process.stdout.write(JSON.stringify(result));
+})().catch((error) => { console.error(error.message); process.exitCode = 1; });
+`,
+    { mode: 0o755 },
+  );
+}
+
+async function inspectPublicationApiFixture(
+  root: string,
+): Promise<NonNullable<GatewaySample["publicationApi"]>> {
+  const env = createGatewayBenchEnv(root, path.join(root, "openclaw.json"), {});
+  const stateDb = await import("../src/state/openclaw-state-db.js");
+  const previousEnv = process.env;
+  process.env = env;
+  try {
+    const database = stateDb.openOpenClawStateDatabase({ env });
+    const { listSharedGitHubPublicationsInDatabase } =
+      await import("../src/gateway/github-publication-store.worker.js");
+    const receipts = listSharedGitHubPublicationsInDatabase(database.db, {}).map(
+      ({ request_id, status, pull_request_url }) => ({ request_id, status, pull_request_url }),
+    );
+    const callsPath = path.join(root, "publication-api-calls.jsonl");
+    const calls = existsSync(callsPath)
+      ? readFileSync(callsPath, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+      : [];
+    return { calls, receipts };
+  } finally {
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    process.env = previousEnv;
+  }
 }
 
 async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): Promise<void> {
@@ -1471,6 +1658,21 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
       if (benchCase.publicationGitDelayMs !== undefined) {
         await seedTeamBootPublication(root, benchCase.publicationGitDelayMs, agents[0]!.id);
       }
+      if (benchCase.publicationApiDelayMs !== undefined) {
+        const receipts = [];
+        for (let index = 0; index < 4; index++) {
+          receipts.push(
+            await seedTeamBootPublication(
+              root,
+              benchCase.publicationApiDelayMs,
+              agents[0]!.id,
+              true,
+              index,
+            ),
+          );
+        }
+        writePublicationApiFixture(root, benchCase.publicationApiDelayMs, receipts);
+      }
       // An inert machine-state namespace adds real, incompressible pages without
       // making startup parse 128 MiB of synthetic records or changing the schema.
       const cipher = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16));
@@ -1501,6 +1703,7 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
         pluginCount: 44,
         bundledPluginFixture: benchCase.bundledPluginFixture ?? {},
         publicationGitDelayMs: benchCase.publicationGitDelayMs,
+        publicationApiDelayMs: benchCase.publicationApiDelayMs,
         externalPluginCount: 44 - (benchCase.bundledPluginFixture?.plugins?.allow?.length ?? 0),
         agentCount: agents.length,
         sessionCount: agents.length * 1250,
@@ -1883,8 +2086,17 @@ async function runGatewaySample(
       // Keep startup PATH hardening from moving the real Git ahead of the fixture wrapper.
       env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
     }
+    if (options.benchCase.publicationApiDelayMs !== undefined) {
+      if (existsSync(path.join(root, "publication-api-calls.jsonl"))) {
+        throw new CliArgumentError("The publication API fixture has already run; seed a new root");
+      }
+      env.PATH = `${path.join(root, "publication-bin")}${path.delimiter}${env.PATH ?? ""}`;
+      env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
+      env.GH_TOKEN = "synthetic-startup-publication-token";
+      env.NODE_OPTIONS = `--import=${path.join(root, "publication-api-preload.mjs")}`;
+    }
     if (preload) {
-      env.NODE_OPTIONS = `--import=${preload}`;
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${preload}`.trim();
     }
     const agentRecoveryMs: Record<string, number> = {};
     const registryRecoveryEvents: Record<string, number> = {};
@@ -1960,6 +2172,9 @@ async function runGatewaySample(
       });
 
       const onLine = (line: string, nowMs: number) => {
+        if (options.benchCase.publicationApiDelayMs !== undefined) {
+          appendFileSync(path.join(root, "publication-gateway.log"), `${line}\n`);
+        }
         if (line.includes("AgentDatabaseAdmissionError")) {
           agentDatabaseAdmissionErrors++;
         }
@@ -2066,20 +2281,29 @@ async function runGatewaySample(
           await delay(25);
         }
       }
+      if (options.benchCase.publicationApiDelayMs !== undefined) {
+        await waitForStartupTracePhase({
+          deadlineAt,
+          isDone: () => childExited,
+          phase: "sidecars.worker-environments.publications",
+          startupTrace,
+        });
+      }
       // Compare CPU/RSS after the same optional startup work, even when publication
       // recovery overlaps that work on only one side of the comparison.
-      const postReadyCompletion = publicationMarker
-        ? await Promise.all(
-            ["post-ready.startup-maintenance", "post-ready.gateway-data.plugins"].map((phase) =>
-              waitForStartupTracePhase({
-                deadlineAt,
-                isDone: () => childExited,
-                phase,
-                startupTrace,
-              }),
-            ),
-          )
-        : [];
+      const postReadyCompletion =
+        publicationMarker || options.benchCase.publicationApiDelayMs !== undefined
+          ? await Promise.all(
+              ["post-ready.startup-maintenance", "post-ready.gateway-data.plugins"].map((phase) =>
+                waitForStartupTracePhase({
+                  deadlineAt,
+                  isDone: () => childExited,
+                  phase,
+                  startupTrace,
+                }),
+              ),
+            )
+          : [];
       const completionMs = postReadyCompletion.includes(null)
         ? null
         : options.benchCase.completionTracePhase
@@ -2115,6 +2339,9 @@ async function runGatewaySample(
                 readFileSync(publicationMarker, "utf8"),
               ) as NonNullable<GatewaySample["publicationRecovery"]>,
             }
+          : {}),
+        ...(options.benchCase.publicationApiDelayMs !== undefined
+          ? { publicationApi: await inspectPublicationApiFixture(root) }
           : {}),
         ...(slowAgent ? { agentRecoveryMs, integrityGateMs, agentDatabaseAdmissionErrors } : {}),
         ...(interruptedRegistry
@@ -2289,12 +2516,19 @@ async function main() {
     if (teamBoot) {
       const fixture = JSON.parse(
         readFileSync(path.join(options.fixtureRoot, "team-boot-fixture.json"), "utf8"),
-      ) as { bundledPluginFixture?: OpenClawConfig; publicationGitDelayMs?: number };
+      ) as {
+        bundledPluginFixture?: OpenClawConfig;
+        publicationGitDelayMs?: number;
+        publicationApiDelayMs?: number;
+      };
       if (
         JSON.stringify(fixture.bundledPluginFixture ?? {}) !==
         JSON.stringify(options.cases[0]?.bundledPluginFixture ?? {})
       ) {
         throw new CliArgumentError("--bundled-plugin-fixture must match the prepared fixture");
+      }
+      if (fixture.publicationApiDelayMs !== options.cases[0]?.publicationApiDelayMs) {
+        throw new CliArgumentError("--publication-api-delay-ms must match the prepared fixture");
       }
       if (fixture.publicationGitDelayMs !== options.cases[0]?.publicationGitDelayMs) {
         throw new CliArgumentError("--publication-git-delay-ms must match the prepared fixture");

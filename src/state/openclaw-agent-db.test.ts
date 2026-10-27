@@ -1519,13 +1519,13 @@ it("retains its durable lease when closing the handle fails", () => {
   expect(() => assertNoAgentLeases("worker-1", { env })).not.toThrow();
 });
 
-it("settles a Worker lease after a recoverable handle-close failure", () => {
+it("settles a Worker lease after a recoverable handle-close failure", async () => {
   const { env, options } = createState();
   const database = openAgentDb(options);
   vi.spyOn(database.walMaintenance, "close").mockImplementationOnce(() => {
     throw new Error("wal close failed");
   });
-  const settled = settleWorkerClose(database.path);
+  const settled = await settleWorkerClose(database.path);
   expect(settled).toMatchObject({ settled: true });
   expect(settled.errors.map((error) => error.message)).toEqual(["wal close failed"]);
   expect(database.db.isOpen).toBe(false);

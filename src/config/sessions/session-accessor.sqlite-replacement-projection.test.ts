@@ -108,6 +108,70 @@ describe("session entry replacement compare-and-swap", () => {
     expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toBeUndefined();
   });
 
+  it("copies saved snapshots only for persisted publication and detached output", () => {
+    const options = { agentId: "main", path: storePath };
+    const prompt = "synthetic saved context ".repeat(2048);
+    runOpenClawAgentWriteTransaction((database) => {
+      writeSessionEntry(database, scope.sessionKey, {
+        sessionId: "replacement-row",
+        updatedAt: 10,
+        skillsSnapshot: { prompt, skills: [] },
+        pluginExtensions: { synthetic: { value: "persisted" } },
+      });
+      const { expectedRows, entries } = readSessionEntryReplacementState(database, {
+        sessionKeys: [scope.sessionKey],
+      });
+      const entry = { ...entries[0]!.entry, updatedAt: 20 };
+      const original = structuredClone(entry);
+      const statements = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["entries", "nodes", "windows"],
+        (sql) =>
+          /\bfrom\s+"session_nodes"/iu.test(sql)
+            ? "entries"
+            : /\binsert into "session_nodes"/iu.test(sql)
+              ? "nodes"
+              : /\binsert into "session_windows"/iu.test(sql)
+                ? "windows"
+                : null,
+      );
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      try {
+        const result = commitSessionEntryReplacementsInDatabase(
+          database,
+          {
+            expectedRows,
+            validationKeys: [scope.sessionKey],
+            labelOwnerKeys: [],
+            replacements: [{ sessionKey: scope.sessionKey, entry }],
+          },
+          () => {},
+        );
+        expect(statements.counts).toEqual({ entries: 1, nodes: 1, windows: 1 });
+        expect(statements.rowCounts.entries).toBe(1);
+        const copiedPromptBytes = clone.mock.calls.reduce((bytes, [value]) => {
+          const copied = value as { skillsSnapshot?: { prompt?: string } };
+          return (
+            bytes + (copied?.skillsSnapshot?.prompt === prompt ? Buffer.byteLength(prompt) : 0)
+          );
+        }, 0);
+        expect(copiedPromptBytes).toBe(Buffer.byteLength(prompt) * 2);
+        expect(entry).toEqual(original);
+        expect(Object.isFrozen(entry.skillsSnapshot)).toBe(false);
+        entry.skillsSnapshot!.prompt = "caller mutation after commit";
+        expect(result.current.get(scope.sessionKey)?.skillsSnapshot?.prompt).toBe(prompt);
+      } finally {
+        clone.mockRestore();
+        statements.restore();
+      }
+    }, options);
+    expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject({
+      updatedAt: 20,
+      skillsSnapshot: { prompt },
+      pluginExtensions: { synthetic: { value: "persisted" } },
+    });
+  });
+
   it.each(["ordinary", "self-alias"] as const)(
     "reads one validation cohort without revisiting unrelated rows during %s replacements",
     (mode) => {
