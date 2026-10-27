@@ -414,12 +414,11 @@ export function filterSessionEntries(
           }
           if (modelMatch) return true;
         }
-        const runtime = source.thinkingProjection.agentRuntime;
-        const runtimeKey = JSON.stringify([runtime?.id, runtime?.fallback]);
-        let runtimeMatch = runtimeMatches?.get(runtimeKey);
+        const runtimeLabel = formatAgentRuntimeLabel(source.thinkingProjection.agentRuntime);
+        let runtimeMatch = runtimeMatches?.get(runtimeLabel);
         if (runtimeMatch === undefined) {
-          runtimeMatch = matchesSessionListSearch([formatAgentRuntimeLabel(runtime)], search);
-          (runtimeMatches ??= new Map()).set(runtimeKey, runtimeMatch);
+          runtimeMatch = matchesSessionListSearch([runtimeLabel], search);
+          (runtimeMatches ??= new Map()).set(runtimeLabel, runtimeMatch);
         }
         return runtimeMatch;
       }
