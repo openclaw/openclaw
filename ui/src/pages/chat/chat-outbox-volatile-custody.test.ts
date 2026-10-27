@@ -19,7 +19,6 @@ import { makeChatHost, requestCalls, requireRecord } from "./chat-host.test-supp
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { removeQueuedMessage, updateQueuedMessage } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes, retryQueuedChatMessage } from "./chat-send-actions.ts";
-import { settleQueuedChatSendFailure } from "./chat-send-queue-runtime.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { updateStoredChatComposerQueueItems } from "./composer-queue-persistence.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff-admission.ts";
@@ -71,69 +70,97 @@ function custodyHost(
   return { host, owner, select, stop };
 }
 
-function expectRestored(
-  host: ReturnType<typeof makeChatHost>,
-  original: (typeof host.chatQueue)[number],
-  sendState: typeof original.sendState,
-) {
-  const { id, text, sendRunId } = original;
-  expect(host.chatQueue).toMatchObject([{ id, text, sendRunId, sendState }]);
-}
-
-it.each([false, true])(
-  "replays a bound volatile send only after its account returns (subscribed/replacement: %s)",
-  async (replacement) => {
+it.each([
+  { mode: "replay", replacement: false },
+  { mode: "replay", replacement: true },
+  { mode: "held", replacement: false },
+  { mode: "retired", replacement: false },
+] as const)("preserves $mode custody ($replacement)", async ({ mode, replacement }) => {
+  if (mode !== "retired") {
     failStorageWrites(new DOMException("quota exceeded", "QuotaExceededError"));
-    let attempts = 0;
-    const {
-      host,
-      owner: originalOwner,
-      select: changeAccount,
-    } = custodyHost(
-      {
-        chatMessage: "Only unsaved copy",
-        currentSessionId: "volatile-original-session",
-        requestHandlers: {
-          "chat.send": (params: unknown) => {
-            const payload = requireRecord(params, "memory send");
-            attempts += 1;
-            if (attempts === 1) {
-              throw new Error("gateway closed (1006): connection lost");
-            }
+  }
+  const entered = createDeferred();
+  const reply = createDeferred<unknown>();
+  let attempts = 0;
+  const {
+    host,
+    owner,
+    select: changeAccount,
+  } = custodyHost(
+    {
+      chatMessage: "Only unsaved copy",
+      currentSessionId: mode === "replay" ? "volatile-original-session" : undefined,
+      requestHandlers: {
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "memory send");
+          attempts += 1;
+          entered.resolve();
+          if (attempts > 1) {
             return { runId: payload.idempotencyKey, status: "started" };
-          },
+          }
+          if (mode === "replay") {
+            throw new Error("gateway closed (1006): connection lost");
+          }
+          return reply.promise;
         },
       },
-      replacement,
-      replacement,
-    );
-    const select = (next: string) => changeAccount(next, true);
-    await handleSendChat(host);
-    expect(listStoredChatOutboxes(host)).toEqual([]);
-    const original = host.chatQueue[0]!;
-    expect(host).toMatchObject({
-      chatMessage: "",
-      chatQueue: [{ text: "Only unsaved copy", sendState: "waiting-reconnect", sendAttempts: 1 }],
-    });
-    expect(originalOwner.hasVolatile(host, original.id)).toBe(true);
-    select("owner-b");
-    expect(host.chatQueue).toEqual([]);
-    expect(chatOutboxOwner(host).allItems(host)).toEqual([]);
-    await retryQueuedChatMessage(host, original.id);
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
-    select("owner-a");
-    expectRestored(host, original, "waiting-reconnect");
-    await resumeStoredChatOutboxes(host);
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(2);
+    },
+    mode === "replay" ? replacement : true,
+    replacement,
+  );
+  const select = (next: string) => changeAccount(next, true);
+  const sending = handleSendChat(host);
+  await entered.promise;
+  if (mode === "replay") {
+    await sending;
+  }
+  const original = host.chatQueue[0]!;
+  try {
+    expect(original.sendState).toBe(mode === "replay" ? "waiting-reconnect" : "sending");
+    expect(original.sendAttempts).toBe(1);
+    if (mode === "retired") {
+      expect(owner.remove(host, original.id)?.id).toBe(original.id);
+    } else {
+      expect(listStoredChatOutboxes(host)).toEqual([]);
+      expect(owner.hasVolatile(host, original.id)).toBe(true);
+      select("owner-b");
+      expect(host.chatQueue).toEqual([]);
+      expect(chatOutboxOwner(host).allItems(host)).toEqual([]);
+      if (mode === "replay") {
+        await retryQueuedChatMessage(host, original.id);
+      }
+      expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
+      select("owner-a");
+      const { id, text, sendRunId } = original;
+      const sendState = mode === "held" ? "held" : "waiting-reconnect";
+      expect(host.chatQueue).toMatchObject([{ id, text, sendRunId, sendState }]);
+      expect(host.chatQueue[0]?.sendAttempts).toBe(1);
+      await resumeStoredChatOutboxes(host);
+    }
+  } finally {
+    if (mode !== "replay") {
+      reply.reject(
+        new GatewayRequestError({ code: "UNAVAILABLE", message: "closed", retryable: true }),
+      );
+      await sending;
+    }
+  }
+  expect(requestCalls(host.request, "chat.send")).toHaveLength(mode === "replay" ? 2 : 1);
+  if (mode === "held") {
+    expect(host.chatQueue[0]?.sendState).toBe("held");
+    expect(removeQueuedMessage(host, original.id, { discard: true })).toBe("removed");
+  } else if (mode === "replay") {
     expect(requestCalls(host.request, "chat.send")[1]?.[1]).toMatchObject({
       idempotencyKey: original.sendRunId,
     });
-    expect(host.chatQueue).toEqual([]);
-    select("owner-b");
-    select("owner-a");
-    expect(host.chatQueue).toEqual([]);
-  },
-);
+  }
+  expect(host.chatMessage).toBe("");
+  expect(host.chatError ?? null).toBeNull();
+  expect(host.lastError ?? null).toBeNull();
+  select("owner-b");
+  select("owner-a");
+  expect(host.chatQueue).toEqual([]);
+});
 
 it.each(["retry", "discard"])(
   "keeps rejected initial-turn attachment bytes until explicit %s",
@@ -224,39 +251,6 @@ it.each(["retry", "discard"])(
   },
 );
 
-it("parks an in-flight memory turn without resurrecting its retired sending operation", async () => {
-  failStorageWrites();
-  const entered = createDeferred();
-  const reply = createDeferred<unknown>();
-  const { host, select } = custodyHost({
-    chatMessage: "In flight unsaved input",
-    requestHandlers: {
-      "chat.send": () => {
-        entered.resolve();
-        return reply.promise;
-      },
-    },
-  });
-  const sending = handleSendChat(host);
-  await entered.promise;
-  const original = host.chatQueue[0]!;
-  expect(original.sendState).toBe("sending");
-  try {
-    select("owner-b", true);
-    expect(host.chatQueue).toEqual([]);
-    select("owner-a", true);
-    expectRestored(host, original, "held");
-    expect(host.chatQueue[0]?.sendAttempts).toBe(1);
-    await resumeStoredChatOutboxes(host);
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
-  } finally {
-    reply.reject(new Error("gateway closed (1006)"));
-    await sending;
-  }
-  expect(host.chatQueue[0]?.sendState).toBe("held");
-  expect(removeQueuedMessage(host, original.id, { discard: true })).toBe("removed");
-});
-
 it("does not revive submission authority or old presentation over a newer durable edit", async () => {
   const { host, owner, select } = custodyHost({
     connected: false,
@@ -298,42 +292,6 @@ it("does not revive submission authority or old presentation over a newer durabl
   expect(removeQueuedMessage(host, original.id, { discard: true })).toBe("removed");
   expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
 });
-
-it.each(["durable", "memory"] as const)(
-  "keeps a send row retired mid-flight pending without a delivery failure (%s)",
-  (storageMode) => {
-    const host = makeChatHost({ sessionKey: "agent:main:retired" });
-    const queued = {
-      id: "retired-send",
-      text: "Retired by a live receipt before this failure landed",
-      createdAt: 1,
-    };
-    host.chatQueue = [queued];
-    // A live custody receipt or peer pane removed the row while the request
-    // was still in flight; only its failure lands afterwards.
-    host.chatQueue = [];
-    const scheduleRetry = vi.fn();
-    const result = settleQueuedChatSendFailure(
-      host,
-      queued,
-      { ...queued, sendRunId: "retired-run" },
-      new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "gateway closed (1006)",
-        retryable: true,
-        retryAfterMs: 250,
-      }),
-      { storageMode },
-      { sessionKey: host.sessionKey },
-      scheduleRetry,
-    );
-    expect(result).toBe("pending");
-    expect(scheduleRetry).not.toHaveBeenCalled();
-    expect(host.chatQueue).toEqual([]);
-    expect(host.chatError ?? null).toBeNull();
-    expect(host.lastError ?? null).toBeNull();
-  },
-);
 
 it("moves peer panes together while retaining each volatile input under its original owner", async () => {
   failStorageWrites();
