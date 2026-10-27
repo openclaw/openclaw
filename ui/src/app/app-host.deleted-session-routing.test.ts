@@ -40,6 +40,12 @@ it.each([false, true])("recovers deleted Chat once (reconnect: %s)", async (reco
     },
   ];
   const router = createRouter({ routes });
+  const subscribe = router.subscribe.bind(router);
+  let notifyRoute = () => {};
+  vi.spyOn(router, "subscribe").mockImplementation((listener) => {
+    notifyRoute = () => listener(router.getState());
+    return subscribe(listener);
+  });
   let recovery: Promise<void> | undefined;
   const errors: unknown[] = [];
   const replace = vi.spyOn(context, "replace").mockImplementation((routeId, options) => {
@@ -66,6 +72,9 @@ it.each([false, true])("recovers deleted Chat once (reconnect: %s)", async (reco
       shell.connect();
     }
     expect(shell.lastWorkspaceLocation?.pathname).toBe("/chat/main/deleted-thread");
+    const invalidate = vi.spyOn(shell, "invalidate");
+    notifyRoute();
+    expect(invalidate).not.toHaveBeenCalled();
 
     deletion.mockImplementation((key) => (key === deletedKey ? "confirmed" : undefined));
     shell.shellNavigation.recoverDeletedActiveSession();
