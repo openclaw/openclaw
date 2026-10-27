@@ -150,6 +150,7 @@ export async function resolveSlackChannelType(params: {
   accountId?: string | null;
   channelId: string;
   teamId?: string;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<"channel" | "group" | "dm" | "unknown"> {
   return (await resolveSlackConversationInfo(params)).type;
 }

@@ -40,6 +40,11 @@ const mocks = vi.hoisted(() => ({
   writeClient: vi.fn(),
 }));
 
+// The transport-authority callback each mocked route-discovery client receives.
+const clientHandoff = vi.hoisted(() => ({
+  assert: undefined as (() => void) | undefined,
+}));
+
 vi.mock("./action-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./action-runtime.js")>("./action-runtime.js");
   return { ...actual, handleSlackAction: mocks.handleAction };
@@ -53,21 +58,50 @@ vi.mock("./send.js", () => ({
 
 vi.mock("./client.js", async () => {
   const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+  // mock-isolation: route-discovery clients assert the forwarded transport-authority
+  // callback before every request, mirroring fenceSlackReadFetch in client-options.ts.
   const createClient = () => ({
     apiCall: mocks.sessionCall,
-    conversations: { info: mocks.conversationInfo, open: mocks.conversationOpen },
-    users: { info: mocks.userInfo },
-    auth: { teams: { list: mocks.teamsList } },
+    conversations: {
+      info: (args: unknown) => {
+        clientHandoff.assert?.();
+        return mocks.conversationInfo(args);
+      },
+      open: mocks.conversationOpen,
+    },
+    users: {
+      info: (args: unknown) => {
+        clientHandoff.assert?.();
+        return mocks.userInfo(args);
+      },
+    },
+    auth: {
+      teams: {
+        list: (args: unknown) => {
+          clientHandoff.assert?.();
+          return mocks.teamsList(args);
+        },
+      },
+    },
   });
   return {
     ...actual,
-    createSlackReadClient: vi.fn(createClient),
-    createSlackLookupClient: vi.fn(createClient),
+    createSlackReadClient: vi.fn(
+      (_token: string, _options?: unknown, _dispatcher?: unknown, handoff?: () => void) => {
+        clientHandoff.assert = handoff;
+        return createClient();
+      },
+    ),
+    createSlackLookupClient: vi.fn((_token: string, _options?: unknown, handoff?: () => void) => {
+      clientHandoff.assert = handoff;
+      return createClient();
+    }),
     getSlackWriteClient: mocks.writeClient.mockImplementation(createClient),
   };
 });
 
 beforeEach(() => {
+  clientHandoff.assert = undefined;
   for (const [name, mock] of Object.entries(mocks)) {
     if (name !== "writeClient") {
       mock.mockReset();
@@ -412,6 +446,121 @@ describe("slackPlugin status", () => {
       expect(mocks.conversationOpen).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("route-discovery transport-authority handoff", () => {
+  function staleAuthority() {
+    return vi.fn(() => {
+      throw new Error("transport authority expired");
+    });
+  }
+
+  it("stops Enterprise workspace discovery when transport authority is stale", async () => {
+    const installation = registerSlackInstallationState("default", "enterprise");
+    const stale = staleAuthority();
+    mocks.userInfo.mockResolvedValue({
+      ok: true,
+      user: { id: "U12345678", enterprise_user: { teams: ["T11111111"] } },
+    });
+    mocks.teamsList.mockResolvedValue({ ok: true, teams: [{ id: "T11111111" }] });
+    try {
+      await expect(
+        route({
+          cfg: slackConfig({ botToken: "sending-fixture" }),
+          target: "user:u12345678",
+          deliveryPurpose: "heartbeat-owner",
+          assertDirectAdapterHandoff: stale,
+        }),
+      ).rejects.toThrow("transport authority expired");
+      expect(stale).toHaveBeenCalled();
+      expect(mocks.userInfo).not.toHaveBeenCalled();
+      expect(mocks.teamsList).not.toHaveBeenCalled();
+    } finally {
+      installation.release();
+    }
+  });
+
+  it("keeps Enterprise workspace discovery on a current transport authority", async () => {
+    const installation = registerSlackInstallationState("default", "enterprise");
+    mocks.userInfo.mockResolvedValue({
+      ok: true,
+      user: { id: "U12345678", enterprise_user: { teams: ["T11111111"] } },
+    });
+    mocks.teamsList.mockResolvedValue({ ok: true, teams: [{ id: "T11111111" }] });
+    try {
+      const resolved = await route({
+        cfg: slackConfig({ botToken: "sending-fixture" }),
+        target: "user:u12345678",
+        deliveryPurpose: "heartbeat-owner",
+        assertDirectAdapterHandoff: vi.fn(),
+      });
+      expect(resolved).toMatchObject({
+        baseSessionKey: "agent:main:main:account:default:team:t11111111",
+        to: "team:T11111111:user:U12345678",
+        recipientSessionExact: true,
+      });
+      expect(mocks.userInfo).toHaveBeenCalledExactlyOnceWith({ user: "U12345678" });
+    } finally {
+      installation.release();
+    }
+  });
+
+  it("stops D-channel conversation classification when transport authority is stale", async () => {
+    const stale = staleAuthority();
+    mocks.conversationInfo.mockResolvedValue({
+      channel: { id: "D0STALEAUTH1", is_im: true, user: "U09G2DJ0275" },
+    });
+
+    await expect(
+      route({
+        cfg: slackConfig({ botToken: "xoxb-test" }),
+        target: "d0staleauth1",
+        assertDirectAdapterHandoff: stale,
+      }),
+    ).rejects.toThrow("transport authority expired");
+    expect(stale).toHaveBeenCalled();
+    expect(mocks.conversationInfo).not.toHaveBeenCalled();
+  });
+
+  it("keeps D-channel conversation classification on a current transport authority", async () => {
+    mocks.conversationInfo.mockResolvedValue({
+      channel: { id: "D0FRESHAUTH1", is_im: true, user: "U09G2DJ0275" },
+    });
+
+    const resolved = await route({
+      cfg: {
+        ...slackConfig({ botToken: "xoxb-test" }),
+        session: { dmScope: "per-channel-peer" },
+      },
+      target: "d0freshauth1",
+      assertDirectAdapterHandoff: vi.fn(),
+    });
+
+    expect(resolved).toMatchObject({
+      baseSessionKey: "agent:main:slack:direct:u09g2dj0275",
+      to: "user:U09G2DJ0275",
+      peer: { kind: "direct", id: "U09G2DJ0275" },
+      recipientSessionExact: true,
+    });
+    expect(mocks.conversationInfo).toHaveBeenCalledExactlyOnceWith({ channel: "D0FRESHAUTH1" });
+  });
+
+  it("stops G-channel classification when transport authority is stale", async () => {
+    const stale = staleAuthority();
+    mocks.conversationInfo.mockResolvedValue({
+      channel: { id: "G0STALEAUTH1", is_mpim: true },
+    });
+
+    await expect(
+      route({
+        cfg: slackConfig({ botToken: "xoxb-test" }),
+        target: "g0staleauth1",
+        assertDirectAdapterHandoff: stale,
+      }),
+    ).rejects.toThrow("transport authority expired");
+    expect(stale).toHaveBeenCalled();
+    expect(mocks.conversationInfo).not.toHaveBeenCalled();
+  });
 });
 
 it("folds comparison, delivery, and session identities", () => {
