@@ -854,8 +854,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(calls.map(([, env]) => env.OPENCLAW_VITEST_MAX_WORKERS)).toEqual(["2", "8"]);
   });
 
-  it.each([undefined, "node"])(
-    "reuses isolated Node cache slots without cloning unused Bun seeds under policy %s",
+  it.each([undefined, "node", "bun-all", "dual-all"] as const)(
+    "reuses isolated cache slots for the selected runtime policy %s",
     async (policy) => {
       const scratchDir = makeScratchDir();
       const persistentRoot = path.join(makeScratchDir(), "persistent");
@@ -874,8 +874,9 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         resolveShardPlans({
           OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
             ["a", "b", "c", "d"].map((name) => ({
-              configs: [`${name}.config.ts`],
+              configs: [bunConfig],
               shard_name: name,
+              includePatterns: [nodeTarget, vitestBunTarget],
             })),
           ),
         }),
@@ -887,6 +888,9 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           },
           runChild: async (_args: string[], childEnv: Record<string, string | undefined>) => {
             const cache = childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT ?? "";
+            expect(readFileSync(path.join(cache, "transform"), "utf8")).toBe(
+              childEnv.OPENCLAW_VITEST_RUNTIME === "bun" ? "vitest-cache-bun" : "vitest-cache",
+            );
             if (activeCaches.has(cache)) {
               sharedWriter = true;
             }
@@ -902,18 +906,30 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
 
       expect(exitCode).toBe(0);
       expect(sharedWriter).toBe(false);
-      expect([...seenCaches].toSorted()).toEqual([
-        path.join(persistentRoot, "vitest-cache-0"),
-        path.join(persistentRoot, "vitest-cache-1"),
-      ]);
+      const prefixes =
+        policy === "bun-all" || policy === "dual-all"
+          ? ["vitest-cache", "vitest-cache-bun"]
+          : ["vitest-cache"];
+      expect([...seenCaches].toSorted()).toEqual(
+        prefixes
+          .flatMap((prefix) => [0, 1].map((slot) => path.join(persistentRoot, `${prefix}-${slot}`)))
+          .toSorted(),
+      );
       const nodeSlot = path.join(persistentRoot, "vitest-cache-1", "transform");
       expect(readFileSync(nodeSlot, "utf8")).toBe("vitest-cache");
       writeFileSync(nodeSlot, "changed", "utf8");
       expect(readFileSync(path.join(persistentRoot, "vitest-cache-0", "transform"), "utf8")).toBe(
         "vitest-cache",
       );
-      expect(readFileSync(path.join(unusedBunSlot, "untouched"), "utf8")).toBe("retain");
-      expect(existsSync(path.join(unusedBunSlot, "transform"))).toBe(false);
+      if (policy === "bun-all" || policy === "dual-all") {
+        expect(existsSync(path.join(unusedBunSlot, "untouched"))).toBe(false);
+        expect(readFileSync(path.join(unusedBunSlot, "transform"), "utf8")).toBe(
+          "vitest-cache-bun",
+        );
+      } else {
+        expect(readFileSync(path.join(unusedBunSlot, "untouched"), "utf8")).toBe("retain");
+        expect(existsSync(path.join(unusedBunSlot, "transform"))).toBe(false);
+      }
     },
   );
 
@@ -927,7 +943,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     mkdirSync(staleSlot, { recursive: true });
     writeFileSync(path.join(staleSlot, "stale"), "old", "utf8");
 
-    expect(clonePersistentCacheSlots(persistentRoot, 3)).toBe(2);
+    expect(clonePersistentCacheSlots(persistentRoot, 3, "node")).toBe(2);
     for (const cacheSlot of [1, 2]) {
       expect(
         readFileSync(path.join(persistentRoot, `${prefix}-${cacheSlot}`, "transform"), "utf8"),
@@ -939,6 +955,32 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       prefix,
     );
   });
+
+  it.each([
+    { concurrency: 1, seeded: true },
+    { concurrency: 2, seeded: false },
+  ])(
+    "leaves unused slots intact with $concurrency lanes and seeded=$seeded",
+    ({ concurrency, seeded }) => {
+      const persistentRoot = makeScratchDir();
+      for (const prefix of ["vitest-cache", "vitest-cache-bun"]) {
+        const slot = path.join(persistentRoot, `${prefix}-1`);
+        mkdirSync(slot);
+        writeFileSync(path.join(slot, "untouched"), "retain");
+        if (seeded) {
+          const seed = path.join(persistentRoot, `${prefix}-0`);
+          mkdirSync(seed);
+          writeFileSync(path.join(seed, "transform"), prefix);
+        }
+      }
+      expect(clonePersistentCacheSlots(persistentRoot, concurrency, "dual-all")).toBe(0);
+      for (const prefix of ["vitest-cache", "vitest-cache-bun"]) {
+        expect(readFileSync(path.join(persistentRoot, `${prefix}-1`, "untouched"), "utf8")).toBe(
+          "retain",
+        );
+      }
+    },
+  );
 
   it("prunes oldest transform entries while preserving Vitest metadata", () => {
     const persistentRoot = makeScratchDir();
