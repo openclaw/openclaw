@@ -209,7 +209,12 @@ export function subscribeBootRecordPersistence(
         scope: agentsList.scope,
       };
     }
-    if (agentsList && sessions.groupsStatus() === "ready") {
+    // Unknown identity must not replace a peer's resolved sidebar cache key.
+    if (
+      agentsList &&
+      sessions.groupsStatus() === "ready" &&
+      gateway.snapshot.selfUser !== undefined
+    ) {
       persistBootRecord({
         version: 2,
         recoveryScope: gateway.snapshot.client?.recoveryScopeReady

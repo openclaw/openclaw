@@ -13,6 +13,7 @@ import { createPageState, type RecentCursor } from "./page-state.js";
 import { captureReadingState } from "./reading-state.js";
 import { recent } from "./recent-view.js";
 import { showDetail } from "./record-view.js";
+import { scribes } from "./scribes-view.js";
 import { temporalFilterForm, type TemporalSelection } from "./search-date-filters.js";
 import { searchForm, searchResults } from "./search-view.js";
 import { registerSessionPanel } from "./session-panel.js";
@@ -80,8 +81,9 @@ export default defineControlUiPlugin({
         // These are text navigation tabs, not host .btn controls. Theme-specific
         // .btn rules otherwise reintroduce filled backgrounds in light mode.
         const recentTab = button("Recent", () => navigate("recent"), "knowledge-tab"),
-          browseTab = button("Browse", () => navigate("browse"), "knowledge-tab");
-        nav.append(recentTab, browseTab);
+          browseTab = button("Browse", () => navigate("browse"), "knowledge-tab"),
+          scribesTab = button("Scribes", () => navigate("scribes"), "knowledge-tab");
+        nav.append(recentTab, browseTab, scribesTab);
         const banner = el("p", "", "knowledge-notice"),
           toolbar = el("div", undefined, "knowledge-toolbar"),
           content = el("div", undefined, "knowledge-content");
@@ -143,6 +145,7 @@ export default defineControlUiPlugin({
             s.tab,
             s.settingsSection,
             s.selectedId,
+            s.scribe,
             s.kind,
             s.type,
             s.offset,
@@ -174,6 +177,7 @@ export default defineControlUiPlugin({
           vault: s.expectedVault,
           tab: s.tab,
           record: s.selectedId,
+          scribe: s.scribe,
           section: s.settingsSection,
           kind: s.kind,
           type: s.type,
@@ -217,6 +221,7 @@ export default defineControlUiPlugin({
             vault: s.expectedVault,
             tab: s.tab,
             record: s.selectedId,
+            scribe: s.scribe,
             section: s.settingsSection,
             kind: s.kind,
             type: s.type,
@@ -262,6 +267,7 @@ export default defineControlUiPlugin({
           s.pendingSnapshot = undefined;
           s.tab = next;
           s.selectedId = "";
+          s.scribe = "";
           s.offset = 0;
           s.browseBack = [];
           s.recentCursor = undefined;
@@ -300,6 +306,7 @@ export default defineControlUiPlugin({
           announcer,
           updates,
           browseTab,
+          scribesTab,
           recentBack,
           recentExpanded,
           evidenceLoaders,
@@ -372,8 +379,9 @@ export default defineControlUiPlugin({
             `Viewing ${displayName(agent)}’s knowledge${entry ? `: ${storeLabel(entry, displayName)}` : ""}.`,
           );
           renderStoreContext();
-          s.tab = s.tab === "settings" ? "settings" : "recent";
+          s.tab = s.tab === "settings" || s.tab === "scribes" ? s.tab : "recent";
           s.selectedId = "";
+          s.scribe = "";
           s.offset = 0;
           s.recentCursor = undefined;
           recentBack.length = 0;
@@ -383,7 +391,7 @@ export default defineControlUiPlugin({
           void refresh(false);
         }
         function open(id: string) {
-          if (s.tab === "settings") {
+          if (s.tab === "settings" || s.tab === "scribes") {
             s.tab = "browse";
           }
           updates.hidden = true;
@@ -395,6 +403,7 @@ export default defineControlUiPlugin({
         function renderToolbar() {
           recentTab.setAttribute("aria-pressed", String(!s.selectedId && s.tab === "recent"));
           browseTab.setAttribute("aria-pressed", String(!s.selectedId && s.tab === "browse"));
+          scribesTab.setAttribute("aria-pressed", String(s.tab === "scribes"));
           toolbar.replaceChildren();
           ++s.suggestGeneration;
           clearTimeout(s.timer);
@@ -402,6 +411,7 @@ export default defineControlUiPlugin({
           if (
             s.selectedId ||
             s.tab === "settings" ||
+            s.tab === "scribes" ||
             s.tab === "browse" ||
             s.storeState !== "ready"
           ) {
@@ -464,6 +474,10 @@ export default defineControlUiPlugin({
               }
               if (s.tab === "settings") {
                 return await settings(ui, n, target);
+              }
+              // Scribes are conversations and automations, readable before the store exists.
+              if (s.tab === "scribes") {
+                return await scribes(ui, n, target);
               }
               // A store that isn't ready has nothing to read; say why instead.
               if (s.storeState !== "ready") {

@@ -218,10 +218,12 @@ export async function withOrderedSessionEntriesInWorker<T>(
   {
     readStore,
     onReadAdmitted,
+    prepareConsume,
     signal,
   }: {
     readStore: ReadSessionStore;
     onReadAdmitted?: () => void;
+    prepareConsume?: () => Promise<void>;
     signal?: AbortSignal;
   },
 ): Promise<T> {
@@ -331,6 +333,10 @@ export async function withOrderedSessionEntriesInWorker<T>(
               retainSessionEntryReadFacts(database, request, result, before);
             }
             reads.push({ result, database, assertCurrent });
+          }
+          if (prepareConsume) {
+            await prepareConsume();
+            assertCurrent();
           }
           const result = consume(reads);
           if (isPromiseLike(result)) {

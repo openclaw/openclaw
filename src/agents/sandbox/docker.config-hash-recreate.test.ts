@@ -102,6 +102,76 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
     expect(calls("create")[0]?.args).toContain("--pull=never");
   });
 
+  it.each(["docker", "podman"] as const)(
+    "%s publishes allocation once through the backend entry point, including warm reuse",
+    async (backendId) => {
+      const target = await import("./docker-persistent-target.js");
+      const capture = vi
+        .spyOn(target, "captureDockerPersistentTarget")
+        .mockResolvedValue(undefined);
+      const { createSandboxBackend, registerSandboxBackend } = await import("./backend.js");
+      try {
+        const workspaceDir = tempDirs.make("openclaw-backend-publication-");
+        const cfg = { ...createSandboxConfig([], []), backend: backendId };
+        prepareCreation(true);
+        const params = { ...containerParams(cfg, workspaceDir), sessionKey: "shared" };
+        const first = await createSandboxBackend(params);
+        expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(1);
+        const published = registryMocks.updateRegistry.mock.calls[0]?.[0];
+        expect(published).toMatchObject({
+          containerName: first.runtimeId,
+          backendId,
+          sessionKey: "shared",
+          workspaceDir,
+          configHash: expect.any(String),
+          image: cfg.docker.image,
+        });
+        registryMocks.readRegistryEntry.mockResolvedValue(published);
+        const second = await createSandboxBackend(params);
+        expect(second.runtimeId).toBe(first.runtimeId);
+        expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(2);
+        expect(calls("create")).toHaveLength(1);
+        expect(calls("start")).toHaveLength(1);
+
+        // An override of a built-in ID still relies on the generic publisher.
+        const restore = registerSandboxBackend(backendId, async () => first);
+        try {
+          await createSandboxBackend(params);
+          expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(3);
+        } finally {
+          restore();
+        }
+      } finally {
+        capture.mockRestore();
+      }
+    },
+  );
+
+  it("retains managed allocation custody and stamps activity after provisioning", async () => {
+    const workspaceDir = tempDirs.make("openclaw-managed-publication-");
+    const cfg = createSandboxConfig([], []);
+    prepareCreation(true);
+    using now = vi.spyOn(Date, "now").mockReturnValue(1000);
+    const writes: Array<{ createdAtMs: number; lastUsedAtMs: number }> = [];
+    registryMocks.updateRegistry.mockImplementation(async (entry) => {
+      writes.push({ createdAtMs: entry.createdAtMs, lastUsedAtMs: entry.lastUsedAtMs });
+      if (writes.length === 1) {
+        expect(calls("create")).toHaveLength(0);
+        now.mockReturnValue(10_000);
+      } else {
+        expect(calls("start")).toHaveLength(1);
+      }
+    });
+    await harness.ensureSandboxContainer({
+      ...containerParams(cfg, workspaceDir),
+      workspaceSource: "managed-worktree",
+    });
+    expect(writes).toEqual([
+      { createdAtMs: 1000, lastUsedAtMs: 1000 },
+      { createdAtMs: 1000, lastUsedAtMs: 10_000 },
+    ]);
+  });
+
   it.each([
     [
       "No such image: example/custom:latest",

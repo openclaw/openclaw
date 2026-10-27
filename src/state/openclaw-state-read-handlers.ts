@@ -431,6 +431,7 @@ export function readOpenClawStateDatabaseCommand(
   }
   if (
     command.type === "userProfiles.catalogIdentity" ||
+    command.type === "userProfiles.identity" ||
     command.type === "userProfiles.githubIdentity.cached" ||
     command.type === "userProfiles.githubAttribution.resolve" ||
     command.type === "userProfiles.channelIdentity.list" ||

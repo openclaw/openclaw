@@ -29,6 +29,11 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
 import {
+  prepareLegacyArchiveRetention,
+  proveAcceptedDirectoryRetention,
+  proveLastFileDirectoryRetention,
+} from "./local-workspace-directory-retention.test-support.js";
+import {
   observeAcknowledgedUpdate,
   prepareLocalWorkspaceArchiveFixture,
   proveInterruptedWorkspaceCheckpoint,
@@ -479,23 +484,16 @@ it("keeps eligible nested project content and accepted empty directories across 
 });
 
 it("retains an accepted directory after deleting its last file across turns", async () => {
-  const projection = await prepare();
-  await fs.mkdir(path.join(projection, "retained/nested"), { recursive: true });
-  await writeText(projection, "retained/nested/old.txt", "old content\n");
-  await synchronize();
-
-  await fs.unlink(path.join(projection, "retained/nested/old.txt"));
-  await synchronize();
-  expect((await fs.stat(path.join(canonical, "retained/nested"))).isDirectory()).toBe(true);
-  await expectMissing(canonical, "retained/nested/old.txt");
-
-  await writeText(projection, "retained/nested/new.txt", "new content\n");
-  await synchronize();
-  await prepare();
-  await expectText(canonical, "retained/nested/new.txt", "new content\n");
-  await expectText(projection, "retained/nested/new.txt", "new content\n");
-  expect((await readProjection())?.pending_ref).toBeNull();
+  await proveLastFileDirectoryRetention(owner);
 });
+
+it.each(["archive", "interrupted eviction"] as const)(
+  "retains accepted directories with derived children through %s and restore",
+  async (mode) => {
+    const { service } = await archiveFixture();
+    await proveAcceptedDirectoryRetention(owner, service, mode);
+  },
+);
 
 it("retains both sides and a durable pending result when edits conflict", async () => {
   const projection = await prepare();
@@ -842,7 +840,7 @@ it("reports successful native eviction and restores accepted workspace contents"
   expect((await readProjection())?.pending_ref).toBeNull();
 });
 
-it.each(["legacy decoder", "failed restore retry", "retention"] as const)(
+it.each(["legacy decoder", "failed restore retry", "retention", "legacy retention"] as const)(
   "preserves accepted ignored files, symlinks and empty directories through archive: %s",
   async (mode) => {
     const { restoreProvisionedFiles } = await import("../../agents/worktrees/provisioned-files.js");
@@ -879,10 +877,13 @@ it.each(["legacy decoder", "failed restore retry", "retention"] as const)(
     ))!;
     expect(legacyState).toEqual([{ path: ".env.allowed", mode: expect.any(Number), chunks: 1 }]);
     await closeOpenClawStateDatabaseAsync();
-    if (mode === "retention") {
+    if (mode === "retention" || mode === "legacy retention") {
       await registry.updateRegistryWorktree(process.env, owner.worktree.id, {
         removedAt: Date.now() - retentionMs - 1,
       });
+      if (mode === "legacy retention") {
+        await prepareLegacyArchiveRetention({ owner, receipt, originalInput });
+      }
       await writeText(projection, "guest-ignored/data", "unaccepted newer bytes");
       expect((await service.gc()).snapshotsPruned).toBe(0);
       expect(await git(repo, "rev-parse", "--verify", removed.snapshotRef!)).toMatch(
