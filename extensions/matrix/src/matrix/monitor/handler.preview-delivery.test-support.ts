@@ -2,21 +2,23 @@ import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-i
 import type { LivePreviewDeliveryResult } from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { expect, it, type Mock } from "vitest";
+import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
+import type { MatrixReplyDispatchInfo } from "./handler-draft-controller.js";
 
 type PreviewDeliveryHarness = {
   createStreamingHarness: (options: {
-    streaming: "partial";
+    streaming: "partial" | "quiet";
     previewToolProgressEnabled?: boolean;
+    blockStreamingEnabled?: boolean;
   }) => {
     dispatch: () => Promise<{
-      deliver: (payload: ReplyPayload, info: { kind: string }) => Promise<unknown>;
+      deliver: (payload: ReplyPayload, info: MatrixReplyDispatchInfo) => Promise<unknown>;
       onError: (error: unknown, info: { kind: string }) => void;
       opts: Pick<
         GetReplyOptions,
         | "onPartialReply"
         | "onItemEvent"
         | "onObservedReplyDelivery"
-        | "onBlockReplyQueued"
         | "onQueuedFollowupAdmitted"
         | "onAssistantMessageStart"
       >;
@@ -180,6 +182,102 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
     ]);
   });
 
+  it.each([false, true])(
+    "does not replay a retained preview after block delivery fails (newer message: %s)",
+    async (newerMessage) => {
+      const { dispatch, redactEventMock } = createStreamingHarness({
+        streaming: "partial",
+        blockStreamingEnabled: true,
+      });
+      const { deliver, onError, opts, finish } = await dispatch();
+      await opts.onAssistantMessageStart?.();
+      if (newerMessage) {
+        await opts.onAssistantMessageStart?.();
+      }
+      const preview = newerMessage ? "Beta\n\nGamma" : "Alpha\n\nBeta\n\nGamma";
+      await opts.onPartialReply?.({ text: preview });
+      await waitForMatrixState(() => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      });
+      editMessageMatrixMock.mockRejectedValueOnce(new Error("final edit failed"));
+      sendMessageMatrixMock.mockRejectedValueOnce(new Error("replacement failed"));
+      const info = {
+        kind: "block",
+        assistantMessageIndex: 1,
+        blockSourceRange: [0, 7],
+      } satisfies MatrixReplyDispatchInfo;
+      await expect(deliver({ text: "Alpha" }, info)).rejects.toMatchObject({
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        deliveryResult: { visibleReplySent: true, content: preview },
+      });
+      onError(new Error("replacement failed"), info);
+      await deliver(
+        { text: "Beta" },
+        {
+          kind: "block",
+          assistantMessageIndex: newerMessage ? 2 : 1,
+          blockSourceRange: newerMessage ? [0, 6] : [7, 13],
+        },
+      );
+      await finish();
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      expect(redactEventMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("advances source boundaries in order while Matrix deliveries drain", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      streaming: "quiet",
+      blockStreamingEnabled: true,
+    });
+    const { deliver, opts, finish } = await dispatch();
+    await opts.onAssistantMessageStart?.();
+    await opts.onPartialReply?.({ text: "Alpha" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    await opts.onPartialReply?.({ text: "Alpha\n\nBeta\n\nGamma" });
+
+    sendSingleTextMessageMatrixMock.mockResolvedValueOnce({
+      messageId: "$draft2",
+      roomId: "!room",
+    });
+    await deliver(
+      { text: "Alpha" },
+      { kind: "block", assistantMessageIndex: 1, blockSourceRange: [0, 7] },
+    );
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock.mock.lastCall?.[1]).toBe("Beta\n\nGamma");
+    });
+    expect(editMessageMatrixMock).toHaveBeenCalledWith(
+      "!room:example.org",
+      "$draft1",
+      "Alpha",
+      expect.objectContaining({ extraContent: { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true } }),
+    );
+
+    sendSingleTextMessageMatrixMock.mockResolvedValueOnce({
+      messageId: "$draft3",
+      roomId: "!room",
+    });
+    await deliver(
+      { text: "Beta" },
+      { kind: "block", assistantMessageIndex: 1, blockSourceRange: [7, 13] },
+    );
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock.mock.lastCall?.[1]).toBe("Gamma");
+    });
+    expect(editMessageMatrixMock).toHaveBeenCalledWith(
+      "!room:example.org",
+      "$draft2",
+      "Beta",
+      expect.objectContaining({ extraContent: { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true } }),
+    );
+    expect(sendMessageMatrixMock).not.toHaveBeenCalled();
+    expect(redactEventMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
   it.each([
     { priorDisposition: "retained", boundary: "block", outcome: "unfinished" },
     { priorDisposition: "consumed", boundary: "followup", outcome: "complete" },
@@ -195,9 +293,6 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
       });
       if (priorDisposition === "retained") {
         sendMessageMatrixMock.mockRejectedValueOnce(new Error("replacement failed"));
-      }
-      if (boundary === "block") {
-        await opts.onBlockReplyQueued?.({ text: "First generation" });
       }
       const firstDelivery = deliver(
         { text: "First replacement", isError: true },

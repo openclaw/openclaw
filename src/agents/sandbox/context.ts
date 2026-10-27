@@ -37,6 +37,7 @@ import { createSandboxBackend, getSandboxBackendWorkdirResolver } from "./backen
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
+import { retainSandboxContainerUsage } from "./container-usage.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
@@ -346,6 +347,7 @@ async function resolveSandboxContextWithAuthority(
           operatorAuthority,
           persistentExecution,
         );
+        let releaseContainerUsage: (() => void) | undefined;
         try {
           phases.mark("attempt.setup.sandbox.github_identity");
           ownedParams.assertCurrent?.();
@@ -399,6 +401,9 @@ async function resolveSandboxContextWithAuthority(
             ensureSandboxWorkspaceLayout(ownedParams, selected, guard),
           );
           localWorkspace?.assertCurrent();
+          if (cfg.backend === "docker" || cfg.backend === "podman") {
+            releaseContainerUsage = retainSandboxContainerUsage(scopeKey);
+          }
 
           phases.mark("attempt.setup.sandbox.mounts");
           const docker = await resolveSandboxDockerUser({
@@ -533,7 +538,10 @@ async function resolveSandboxContextWithAuthority(
 
           phases.mark("attempt.setup.sandbox.finalize");
           const sandboxContext: SandboxContext & { backend: typeof backend } = {
-            ...(localWorkspace ? { [Symbol.dispose]: () => localWorkspace[Symbol.dispose]() } : {}),
+            [Symbol.dispose]: () => {
+              releaseContainerUsage?.();
+              localWorkspace?.[Symbol.dispose]();
+            },
             enabled: true,
             ...(runtime.sandboxRequired ? { required: true } : {}),
             ...(localWorkspace
@@ -585,6 +593,7 @@ async function resolveSandboxContextWithAuthority(
           });
           return sandboxContext;
         } catch (error) {
+          releaseContainerUsage?.();
           selected.localWorkspace?.[Symbol.dispose]();
           throw error;
         }

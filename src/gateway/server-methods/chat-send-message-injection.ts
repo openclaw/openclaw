@@ -28,6 +28,7 @@ import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-deliver
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { QueueConfig } from "../../config/types.messages.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
 import type { InboundDocumentContext } from "../../media-understanding/file-context.js";
@@ -327,21 +328,25 @@ export function createChatSendMessageInjectionStarter(params: {
 /** Keep a terminal injection decision through detached preparation and reply dispatch. */
 export function createChatSendInjectionDisposition(
   run: Parameters<typeof refuseCollaborativeSteering>[0],
+  queue: QueueConfig | undefined,
 ) {
-  let refused = false;
+  let collaborationBlocked = false;
   const runState: ReplyOperationRunState = {};
   const isRefused = () =>
-    refused ||
+    (collaborationBlocked && queue?.collaborativeSteeringFallback === "reject") ||
     (runState.admission?.status === "skipped" &&
       runState.admission.reason === "collaborative-steering-disabled");
   return {
     runState,
     isRefused,
+    isCollaborationBlocked: () => collaborationBlocked,
     async observe(attempt: ReplyMessageInjectionAttempt | undefined) {
       const outcome = await attempt?.outcome;
       if (outcome?.status === "rejected" && outcome.reason === "collaborative_steering_disabled") {
-        refused = true;
-        runState.admission = { status: "skipped", reason: "collaborative-steering-disabled" };
+        collaborationBlocked = true;
+        if (queue?.collaborativeSteeringFallback === "reject") {
+          runState.admission = { status: "skipped", reason: "collaborative-steering-disabled" };
+        }
         return undefined;
       }
       return attempt;

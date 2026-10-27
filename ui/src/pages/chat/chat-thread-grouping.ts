@@ -87,24 +87,17 @@ function groupChatItems(
         item.key,
         item.message,
         normalizeMessage(item.message),
-        item.duplicateCount,
         item.startsTurn,
         rowsAfterHiddenTurn?.has(item.key) === true,
       );
     }
     const cached = owner && groupedSegments.get(owner);
-    // Duplicate collapse annotates wrappers, never the retained cache inputs.
     const grouped =
       cached &&
       cached.inputs.length === inputs.length &&
       inputs.every((input, index) => input === cached.inputs[index])
         ? cached.items
-        : groupChatItemSegment(
-            source.map((item) => ({ ...item })),
-            visibleReasoning,
-            rowsAfterHiddenTurn,
-            showReasoning,
-          );
+        : groupChatItemSegment(source, visibleReasoning, rowsAfterHiddenTurn, showReasoning);
     if (grouped !== cached?.items) {
       const segment = { inputs, items: grouped };
       // Hidden or retained source objects must not keep overlapping old snapshots alive.
@@ -354,7 +347,6 @@ function groupChatItemSegment(
     const source = {
       message: item.message,
       key: item.key,
-      duplicateCount: item.duplicateCount,
       ...(normalized.replyTarget ? { replyTarget: normalized.replyTarget } : {}),
       hasVisibleContent:
         hasVisibleReasoning ||
