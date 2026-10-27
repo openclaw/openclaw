@@ -1604,7 +1604,6 @@
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../cache-trace.js","48c9abcdf9b108c233349b9d28924f00147a3eb5f9115e4e6f4d79c9a28b6e27",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../custom-api-registry.js","9ddf95e5a19befbf030cdc4f85a1c2808aef703da3d4b15f17421ca83664a42c",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../docs-path.js","2ab56d53f1a34428820fd9bfb3c4897a96ec759663d380cbd24f62177fc8b1a9",1]
-["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../model-selection.js","4ad96dfd4c8cc0c35466ae8713ccece49200a5591b0f0687f9ab67e92fa05cd7",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../provider-stream.js","f70f569e4ec8922b77cb58042284d32e1b904ce47287965b93d1997fdde49945",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../sandbox/runtime-status.js","1bcc336bbdb3fa4d0cb450901ab3c1a61acd93e8bf8766224c041f3d5564686d",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../sessions/resource-loader.js","da4055f847fdc983a5853c70a662b93103887f00211e953ccb6603f22383101f",1]
