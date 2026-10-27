@@ -83,7 +83,10 @@ describe("host-prepared embedded tool authority", () => {
           return readContinuation();
         },
       };
-      const params = Object.freeze({ ...attempt, abortSignal: undefined });
+      const params: Parameters<typeof withPreparedEmbeddedRunToolAuthority>[1] = Object.freeze({
+        ...attempt,
+        abortSignal: undefined,
+      });
       await withPreparedEmbeddedRunToolAuthority(internal, params, undefined, async (prepared) => {
         expect(prepared.replyOperation).toBe(operation);
         expect(prepared.abortSignal).toBe(operation.abortSignal);
