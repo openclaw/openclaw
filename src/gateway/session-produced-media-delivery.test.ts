@@ -3,6 +3,7 @@ import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as managedMedia from "./managed-image-attachments.js";
@@ -11,7 +12,7 @@ import { listManagedImageRecordEntries } from "./managed-image-record-store.js";
 import { deliverQueuedSessionDelivery } from "./server-restart-sentinel.js";
 import { createGeneratedMediaDeliveryEntry } from "./server-restart-sentinel.test-support.js";
 
-it("retains produced media in the owning transcript before delivery settles", async () => {
+it("promotes produced media before publishing its transcript message and settling delivery", async () => {
   await withOpenClawTestState({ label: "produced-media-delivery" }, async (state) => {
     const sessionKey = "agent:main:media-completion";
     const sessionId = "media-completion-session";
@@ -46,6 +47,12 @@ it("retains produced media in the owning transcript before delivery settles", as
         await release.promise;
         return attach(params);
       });
+    const updates: unknown[] = [];
+    const unsubscribe = onInternalSessionTranscriptUpdate((update) => {
+      if (update.target?.sessionId === sessionId) {
+        updates.push(update);
+      }
+    });
     let settled = false;
     const outcome = deliverQueuedSessionDelivery({
       deps: {},
@@ -66,17 +73,20 @@ it("retains produced media in the owning transcript before delivery settles", as
     try {
       await awaitGateBeforeSettlement(promoting.promise, outcome, "Media promotion never started");
       expect(settled).toBe(false);
+      expect(updates).toEqual([]);
       expect(await listManagedImageRecordEntries({ stateDir: state.stateDir })).toMatchObject([
         { record: { messageId: null, retentionClass: "transient" } },
       ]);
       release.resolve();
-      await outcome;
+      await expect(outcome).resolves.toBeUndefined();
+      expect(updates).toEqual([expect.objectContaining({ messageId: expect.any(String) })]);
       expect(await listManagedImageRecordEntries({ stateDir: state.stateDir })).toMatchObject([
         { record: { messageId: expect.any(String), retentionClass: "history" } },
       ]);
     } finally {
       release.resolve();
       await Promise.allSettled([outcome]);
+      unsubscribe();
       promotion.mockRestore();
     }
   });

@@ -35,6 +35,7 @@ import {
   records as requesterRecords,
   currentCompletionRun,
   armRequesterWake,
+  readCompletionSystemEvents,
   settleRequesterCompletionBatch,
   updateCompletionOwner,
 } from "./subagent-completion-admission.test-helpers.js";
@@ -42,6 +43,7 @@ import {
   admitCorrelatedSubagentSessionDelivery,
   settleCorrelatedSubagentDelivery,
 } from "./subagent-completion-delivery.js";
+import type { RequesterWakeCommittedWrite } from "./subagent-completion-mutation.types.js";
 
 function records() {
   const now = Date.now();
@@ -496,6 +498,40 @@ it("settles a requester cohort after concurrently admitted children complete", a
       release.resolve();
       await Promise.allSettled([...completions, settled]);
     }
+  });
+});
+
+it("retains a failed completion without creating another parent input after publication fails", async () => {
+  await withSubagentCompletionWorkerState(async (database) => {
+    const { subagent } = armRequesterWake(requesterRecords());
+    seedSubagentCompletionOwner({ subagent, databaseOptions: { database } });
+    let committed: RequesterWakeCommittedWrite | undefined;
+    const settle = (onPublished: () => void) =>
+      settleRequesterCompletionBatch({
+        entries: [subagent],
+        outcome: { delivered: false, path: "none", error: "Requester unavailable" },
+        databaseOptions: { database },
+        committed,
+        onCommitted: (receipt) => {
+          committed = receipt;
+        },
+        onPublished,
+      });
+    await expect(
+      settle(() => {
+        throw new Error("Synthetic publication observer failure");
+      }),
+    ).rejects.toMatchObject({ outcome: "committed", publication: "published" });
+    expect(readCompletionSystemEvents(database)).toEqual([]);
+    expect(subagentRuns.get(subagent.runId)?.delivery).toMatchObject({
+      status: "failed",
+      lastError: "Requester unavailable",
+    });
+    database.db.exec(
+      "CREATE TRIGGER reject_replay BEFORE UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'outcome replayed'); END",
+    );
+    await expect(settle(() => {})).resolves.toEqual({ applied: true, publication: "published" });
+    expect(readCompletionSystemEvents(database)).toEqual([]);
   });
 });
 
