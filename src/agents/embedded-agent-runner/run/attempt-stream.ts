@@ -387,9 +387,11 @@ export function installEmbeddedAttemptStreamGuards(
       streamWithIdleTimeout,
       idleTimeoutMs > 0 ? idleTimeoutMs : firstEventTimeoutMs,
       (error) => callbacks.onIdleTimeout(error),
-      idleTimeoutMs > 0
-        ? { runId: attempt.runId }
-        : { runId: attempt.runId, scope: "creation-only" },
+      {
+        runId: attempt.runId,
+        watchdogAttempt: callbacks.diagnosticOwner.watchdogAttempt,
+        scope: idleTimeoutMs > 0 ? "creation-and-gaps" : "creation-only",
+      },
     );
   }
   if (firstEventTimeoutMs > 0) {

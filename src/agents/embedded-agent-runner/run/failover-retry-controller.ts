@@ -299,6 +299,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         reason: TransientRetryReason;
       }) => void | Promise<void>;
     }): Promise<boolean> => {
+      params.abortSignal?.throwIfAborted();
       rateLimitRetriesExhausted = undefined;
       const recordDecision = (
         decision: "accepted" | "rejected",
@@ -424,6 +425,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
           log.warn(`profile failure mark failed: ${String(error)}`);
         }
       }
+      params.abortSignal?.throwIfAborted();
       const outputLimit = retry.reason === "output_limit";
       const attempt = (outputLimit ? outputLimitRetryCount : retryCount) + 1;
       const maxRetries = outputLimit
@@ -442,6 +444,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
       } catch {
         log.warn("transient retry status callback failed; continuing retry");
       }
+      params.abortSignal?.throwIfAborted();
       const closeRetryWait = params.onRetryWait?.(
         Date.now() + delayMs,
         params.abortSignal,

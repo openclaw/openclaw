@@ -75,6 +75,19 @@ beforeEach(() => {
   rotationContext.logFallbackDecision.mockClear();
 });
 
+it("does not announce or schedule a retry after the reply watchdog stops the operation", async () => {
+  const abort = new AbortController();
+  const error = Object.assign(new Error("Reply operation stalled"), {
+    name: "AbortError",
+    code: "OPENCLAW_SESSION_WATCHDOG",
+  });
+  controller = createRetryController({ runParams: { abortSignal: abort.signal } });
+  abort.abort(error);
+  await expect(controller.maybeRetryTransient({ reason: "timeout", onRetry })).rejects.toBe(error);
+  expectNoRetry();
+  expect(warn).not.toHaveBeenCalled();
+});
+
 it("reports the one output-limit continuation independently of transient attempts", async () => {
   await controller.maybeRetryTransient({ reason: "server_error" });
   expect(await controller.maybeRetryTransient({ reason: "output_limit", onRetry })).toBe(true);
