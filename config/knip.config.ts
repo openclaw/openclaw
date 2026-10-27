@@ -198,6 +198,14 @@ const repositoryScriptEntries = [
   "scripts/perf/subagent-sweep-measure.ts!",
   "scripts/perf/tool-schema-preparation-measure.ts!",
   "scripts/perf/terminal-assistant-snapshot-measure.ts!",
+  // Their source headers and retained guide document standalone Node commands.
+  "scripts/perf/cheaper-retry-logging.ts!",
+  "scripts/perf/hook-message-loader-retention.ts!",
+  "scripts/perf/jiti-stack-format.ts!",
+  "scripts/perf/pr-restore-memory.mjs!",
+  "scripts/perf/session-cold-restore-memory.ts!",
+  "scripts/perf/subagent-custody-abort-retention.ts!",
+  "scripts/perf/worker-lifecycle-message-measure.ts!",
   // Retained source commands and selectable preloads execute directly by exact path.
   "scripts/perf/after-turn-context-measure.ts!",
   "scripts/perf/agent-runtime-dispatch-measure.ts!",
