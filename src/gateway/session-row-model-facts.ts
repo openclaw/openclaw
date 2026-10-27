@@ -39,8 +39,13 @@ export function mayMatchSessionRowModelSearch(
         materialized?: {
           source: Pick<
             ReturnType<typeof readSessionRowModelFacts>,
-            "selectedModel" | "rowModelIdentity" | "thinkingProjection"
-          >;
+            "selectedModel" | "rowModelIdentity"
+          > & {
+            thinkingProjection: Pick<
+              ReturnType<typeof readSessionRowModelFacts>["thinkingProjection"],
+              "agentRuntime"
+            >;
+          };
         };
       }
     >;
