@@ -97,6 +97,7 @@ function publishOwner(
 ) {
   const registry = createEmptyPluginRegistry();
   registry.plugins.push(...records);
+  registry.controlUiDescriptors.push(...fixture.registry.controlUiDescriptors);
   setActivePluginRegistry(registry);
 }
 
@@ -174,6 +175,11 @@ function activateFixture(origin: PluginRecord["origin"] = "bundled") {
     );
   manifest(record.uiCapabilities, true);
   registry.plugins.push(record);
+  registry.controlUiDescriptors.push({
+    pluginId: record.id,
+    source: record.source,
+    descriptor: { id: "summary", surface: "widget", label: "Native summary" },
+  });
   setActivePluginRegistry(registry);
   return { rootDir, directory, registry, record, write, link, unlink, manifest };
 }

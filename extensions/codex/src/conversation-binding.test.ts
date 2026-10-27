@@ -2072,7 +2072,7 @@ it.each([
           return {};
         },
       });
-      const client = { ...baseClient, ...(!confirmed ? { closeAndWait } : {}) };
+      const client = Object.assign(baseClient, !confirmed ? { closeAndWait } : {});
       acquireClient.mockResolvedValue(client);
       if (!confirmed) {
         retireWithSiblingLeases();
