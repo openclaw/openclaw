@@ -135,7 +135,9 @@ async function sample(entry, input, warmSamples, fixture, graphOnly = false) {
     worker.once("error", reject);
     worker.once("exit", (code) => reject(new Error(`Worker exited before measurement: ${code}`)));
   });
-  const timeout = setTimeout(() => worker.terminate(), 120_000);
+  const timeout = setTimeout(() => {
+    void worker.terminate();
+  }, 120_000);
   const wait = (promise) => Promise.race([promise, failure]);
   const command = async (operation) => {
     const response = once(control.port1, "message");
