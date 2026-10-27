@@ -652,8 +652,9 @@ export function prepareProjectedSessionPresentation(
       opts: SessionsListParams,
       select: (retained?: WeakMap<object, SessionListFilteredEntries>) => SessionEntrySelection,
     ) {
-      // These queries consume clock or transient run facts independently of row publications.
-      if (opts.search || opts.spawnedBy || opts.activeOnly || opts.activityPulseBoundaries) {
+      // Membership, clocks, and transient runs are not owned by metadata partitions.
+      const live = opts.activeOnly || opts.activityPulseBoundaries;
+      if (sharing.sessionCap === "invited" || opts.search || opts.spawnedBy || live) {
         return select();
       }
       const view = listView(opts, true);
