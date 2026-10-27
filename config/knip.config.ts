@@ -705,6 +705,7 @@ const repositoryScriptEntries = [
   "scripts/perf/crabbox-state-polling.mts!",
   "scripts/perf/local-workspace-manifest-equivalence.ts!",
   "scripts/perf/local-workspace-manifest-measure.ts!",
+  "scripts/perf/local-workspace-lookup-measure.ts!",
   "scripts/perf/operator-model-policy-list-probe.mjs!",
   "scripts/perf/operator-model-policy-load.mjs!",
   "scripts/perf/operator-model-policy-measure.ts!",
