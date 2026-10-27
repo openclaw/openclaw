@@ -62,7 +62,10 @@ const cleanupWith = (...actions: Array<() => void>) => ({
   },
 });
 const nativeHandle = (overrides: Partial<Handle> = {}): Handle => ({
-  ...makeHandle(),
+  queueMessage: async () => {},
+  isStreaming: () => true,
+  isCompacting: () => false,
+  abort: () => {},
   ...overrides,
 });
 function nativeSink(
@@ -102,7 +105,7 @@ const question = (id: string, options: Partial<Question> = {}): Question => ({
 });
 const drained = { aborted: true, drained: true, forceCleared: false };
 const revoked = "Message injection authority is no longer current";
-const captureInjection = (sessionId: string) => {
+const captureInjection = () => {
   let retained: (() => void) | undefined;
   const handle = nativeHandle({
     messageInjectionV2: {
@@ -113,14 +116,7 @@ const captureInjection = (sessionId: string) => {
       },
     },
   });
-  const cleanup = expectDefined(register(sessionId, handle), "native registration");
-  const inject = (text: string) => {
-    expect(queue(sessionId, text)).toBe(true);
-    const authority = expectDefined(retained, "detached injection authority");
-    expect(authority).not.toThrow();
-    return authority;
-  };
-  return { handle, cleanup, inject };
+  return { handle, authority: () => expectDefined(retained, "detached injection authority") };
 };
 const cancellationModes = ["single", "all", "compacting", "drain"] as const;
 type CancelMode = (typeof cancellationModes)[number];
@@ -141,7 +137,15 @@ async function expectCancellation(
     expect(result).toBe(aborted);
   }
 }
-async function cancellingRun(id: string, scope?: string, overrides: Partial<Handle> = {}) {
+async function cancellingRun(
+  id: string,
+  scope?: string,
+  overrides: Partial<Handle> = {},
+  timers = false,
+) {
+  if (timers) {
+    vi.useFakeTimers();
+  }
   const effect = scope ? await aliasEffect(id, scope) : undefined;
   const abort = vi.fn();
   const cleanup = register(id, { ...makeHandle({ abort, isCompacting: true }), ...overrides });
@@ -159,6 +163,9 @@ async function cancellingRun(id: string, scope?: string, overrides: Partial<Hand
         successor?.();
       }
       effect?.release();
+      if (timers) {
+        vi.useRealTimers();
+      }
     },
   };
 }
@@ -188,7 +195,9 @@ describe("agent harness runtime SDK facade", () => {
     expectTypeOf<
       NonNullable<Attempt["replyOperation"]>["retainFailureUntilComplete"]
     >().toEqualTypeOf<() => void>();
-    expectTypeOf<EmbeddedAttemptV2["replyOperation"]>().toEqualTypeOf<Attempt["replyOperation"]>();
+    expectTypeOf<
+      NonNullable<EmbeddedAttemptV2["replyOperation"]>["retainFailureUntilComplete"]
+    >().toEqualTypeOf<() => void>();
   });
 
   it("exposes optional compaction progress without requiring it from legacy engines", () => {
@@ -198,6 +207,15 @@ describe("agent harness runtime SDK facade", () => {
   });
 
   it("keeps legacy harness implementations source-compatible while requiring capabilities in V2", () => {
+    expectTypeOf({
+      id: "legacy-test",
+      label: "Legacy test harness",
+      supports: () => ({ supported: true as const, priority: 1 }),
+      runAttempt: async (_params: Attempt) => {
+        throw new Error("type-only legacy harness");
+      },
+      runSideQuestion: async (_params: SideQuestion) => ({ text: "legacy" }),
+    } satisfies AgentHarness).toMatchTypeOf<AgentHarness>();
     expectTypeOf<AgentHarnessV2>().toMatchTypeOf<AgentHarness>();
     expectTypeOf<Omit<AttemptV2, "onSettledTurn">>().toMatchTypeOf<AttemptV2>();
     expectTypeOf<WithoutHost<Attempt>>().toMatchTypeOf<
@@ -221,6 +239,15 @@ describe("agent harness runtime SDK facade", () => {
       Omit<ForkV2, "assertCurrent"> extends ForkV2 ? true : false
     >().toEqualTypeOf<false>();
 
+    // V1 injection remains supported inside a host-admitted harness attempt.
+    const queueMessage = async (_text: string, _options?: QueueOptions) => {};
+    expectTypeOf({
+      queueMessage,
+      messageInjection: { isAvailable: () => true, queueMessage },
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: () => {},
+    } satisfies Handle).toMatchTypeOf<Handle>();
     expectTypeOf<Extract<keyof Handle, symbol>>().toEqualTypeOf<never>();
     expectTypeOf<Parameters<typeof register>["length"]>().toEqualTypeOf<2 | 3 | 4 | 5>();
     expectTypeOf<ReturnType<typeof register>>().toEqualTypeOf<
@@ -254,16 +281,15 @@ describe("agent harness runtime SDK facade", () => {
     expectTypeOf<Omit<Protected, "assertCurrent">>().not.toMatchTypeOf<Protected>();
   });
 
-  it("keeps the structured-input runtime surface immutable", () => {
+  it("exposes structured input through one frozen named runtime surface", () => {
+    const keys = ["compileForm", "compileQuestions", "compileUrl", "isRecord", "run", "snapshot"];
     expect(Object.isFrozen(agentHarnessStructuredInput)).toBe(true);
+    expect(Object.keys(agentHarnessStructuredInput).toSorted()).toEqual(keys);
   });
 });
 
 describe("agent harness active-run SDK controls", () => {
-  afterEach(() => {
-    embeddedRunsTesting.resetActiveEmbeddedRuns();
-    vi.useRealTimers();
-  });
+  afterEach(() => embeddedRunsTesting.resetActiveEmbeddedRuns());
 
   it("retires ownerless diagnostics without letting prior cleanup erase a successor", () => {
     const ref = { sessionId: "sdk-diagnostic-cleanup" };
@@ -277,6 +303,8 @@ describe("agent harness active-run SDK controls", () => {
       () => successorCleanup?.(),
       () => diagnosticActivity.resetDiagnosticRunActivityForTest(),
     );
+    expect(priorCleanup).toBeTypeOf("function");
+    expect(successorCleanup).toBeTypeOf("function");
     expect(snapshot()).toMatchObject(active);
 
     priorCleanup?.();
@@ -362,9 +390,8 @@ describe("agent harness active-run SDK controls", () => {
   });
 
   it.each(cancellationModes)("cancels detached %s work", async (mode) => {
-    vi.useFakeTimers();
     const sessionId = "sdk-detached-cancel";
-    using run = await cancellingRun(sessionId, "/tmp/sdk-detached-cancel-store");
+    using run = await cancellingRun(sessionId, "/tmp/sdk-detached-cancel-store", {}, true);
     const { abort, cleanup } = run;
     expect(isActive(sessionId)).toBe(false);
     if (mode === "drain") {
@@ -495,8 +522,15 @@ describe("agent harness active-run SDK controls", () => {
   });
 
   it("revokes sessionless V2 injection when its exact native registration is replaced", () => {
-    const { handle, cleanup: firstCleanup, inject } = captureInjection("sdk-replaced");
-    const firstAssertion = inject("first");
+    const { handle, authority } = captureInjection();
+    const firstCleanup = expectDefined(
+      register("sdk-replaced", handle),
+      "first native registration",
+    );
+    expect(queue("sdk-replaced", "first")).toBe(true);
+    const firstAssertion = authority();
+    expect(firstAssertion).not.toThrow();
+
     const secondCleanup = expectDefined(
       register("sdk-replaced", handle),
       "second native registration",
@@ -504,7 +538,9 @@ describe("agent harness active-run SDK controls", () => {
     clear("sdk-replaced", handle, undefined, undefined, "old_cleanup", firstCleanup);
     expect(firstAssertion).toThrow(revoked);
     expect(isActive("sdk-replaced")).toBe(true);
-    const secondAssertion = inject("second");
+    expect(queue("sdk-replaced", "second")).toBe(true);
+    const secondAssertion = authority();
+    expect(secondAssertion).not.toThrow();
     secondCleanup();
     expect(secondAssertion).toThrow(revoked);
     expect(isActive("sdk-replaced")).toBe(false);
@@ -555,8 +591,11 @@ describe("agent harness active-run SDK controls", () => {
   });
 
   it("revokes retained detached injection when a controller takes the same ID", () => {
-    const { inject } = captureInjection("sdk-controller-takeover");
-    const assertion = inject("first");
+    const { handle, authority } = captureInjection();
+    register("sdk-controller-takeover", handle);
+    expect(queue("sdk-controller-takeover", "first")).toBe(true);
+    const assertion = authority();
+    expect(assertion).not.toThrow();
     const operation = admittedRun("sdk-controller-takeover");
     using _ = cleanupWith(() => operation.complete());
     expect(assertion).toThrow(revoked);
@@ -589,12 +628,14 @@ Other: reply with your own answer.`,
   });
 
   it("keeps a comma-containing option label as one multi-select answer", () => {
-    const region = question("region", {
-      multiSelect: true,
-      isOther: true,
-      options: [{ label: "Frankfurt, Germany" }, { label: "Dublin, Ireland" }],
-    });
-    expect(buildAnswers([region], "Frankfurt, Germany")).toEqual({
+    const questions = [
+      question("region", {
+        multiSelect: true,
+        isOther: true,
+        options: [{ label: "Frankfurt, Germany" }, { label: "Dublin, Ireland" }],
+      }),
+    ];
+    expect(buildAnswers(questions, "Frankfurt, Germany")).toEqual({
       answers: { region: { answers: ["Frankfurt, Germany"] } },
     });
   });

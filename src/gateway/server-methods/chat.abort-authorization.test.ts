@@ -60,14 +60,9 @@ function createActiveRun(...[sessionKey, options]: Parameters<typeof createUnsco
   });
 }
 
-function abortAs(identity: string, scopes?: string[]) {
-  return (params: Omit<Parameters<typeof invokeAbort>[0], "connId" | "deviceId" | "scopes">) =>
-    invokeAbort({ ...params, connId: `conn-${identity}`, deviceId: `dev-${identity}`, scopes });
+function abortAsOwner(params: Omit<Parameters<typeof invokeAbort>[0], "connId" | "deviceId">) {
+  return invokeAbort({ ...params, connId: "conn-owner", deviceId: "dev-owner" });
 }
-
-const abortAsOwner = abortAs("owner");
-const abortAsOther = abortAs("other");
-const abortAsAdmin = abortAs("admin", ["operator.admin"]);
 
 function queuedTurn(owner?: string): RpcSourceRef {
   return createActiveRun("main", {
@@ -90,6 +85,21 @@ function workerContext(
     cancel,
   );
   return context;
+}
+
+function abortAsOther(params: Omit<Parameters<typeof invokeAbort>[0], "connId" | "deviceId">) {
+  return invokeAbort({ ...params, connId: "conn-other", deviceId: "dev-other" });
+}
+
+function abortAsAdmin(
+  params: Omit<Parameters<typeof invokeAbort>[0], "connId" | "deviceId" | "scopes">,
+) {
+  return invokeAbort({
+    ...params,
+    connId: "conn-admin",
+    deviceId: "dev-admin",
+    scopes: ["operator.admin"],
+  });
 }
 
 describe("chat.abort authorization", () => {
@@ -176,10 +186,20 @@ describe("chat.abort authorization", () => {
     }
   });
 
-  it("allows an administrator to stop another owner's exact run", async () => {
-    const respond = await abortAsAdmin({ context: singleContext(), runId: "run-1" });
-    expect(requireLastRespondCall(respond)[0]).toBe(true);
-    expectResult(respond, ["run-1"]);
+  it.each([
+    { requester: "other client", invoke: abortAsOther, allowed: false },
+    { requester: "operator.admin", invoke: abortAsAdmin, allowed: true },
+  ])("applies exact-run ownership to $requester", async ({ invoke, allowed }) => {
+    const respond = await invoke({ context: singleContext(), runId: "run-1" });
+    const [ok, payload, error] = requireLastRespondCall(respond);
+    expect(ok).toBe(allowed);
+    if (allowed) {
+      expectAbortPayload(payload, { aborted: true, runIds: ["run-1"] });
+    } else {
+      expect(payload).toBeUndefined();
+      expect(error).toMatchObject({ code: "INVALID_REQUEST", message: "unauthorized" });
+      expect(rpcSourceTesting.has("run-1")).toBe(true);
+    }
   });
 
   it("does not reveal a foreign hidden run to ordinary session aborts", async () => {
@@ -231,8 +251,9 @@ describe("chat.abort queued-turn contract", () => {
     const context = createChatAbortContext({ sources: [["queued-1", queued]] });
 
     const respond = await abortAsOwner({ context, runId: "queued-1" });
-    expect(requireLastRespondCall(respond)[0]).toBe(true);
-    expectResult(respond, ["queued-1"]);
+    const call = requireLastRespondCall(respond);
+    expect(call[0]).toBe(true);
+    expectAbortPayload(call[1], { aborted: true, runIds: ["queued-1"] });
     expect(queued.input.abortSignal.aborted).toBe(true);
     expect(rpcSourceTesting.has("queued-1")).toBe(false);
   });
@@ -248,9 +269,6 @@ describe("chat.abort queued-turn contract", () => {
     expect(call[0]).toBe(false);
     if (sessionKey) {
       expect(call[2]?.message).toBe("runId does not match sessionKey");
-    } else {
-      expect(call[1]).toBeUndefined();
-      expect(call[2]).toMatchObject({ code: "INVALID_REQUEST", message: "unauthorized" });
     }
     expect(queued.input.abortSignal.aborted).toBe(false);
     expect(rpcSourceTesting.has("queued-1")).toBe(true);
@@ -325,6 +343,26 @@ function createDeferredWorkerCancellation() {
     }),
   });
   return { cancelled, workerPersistence, service };
+}
+
+function setPendingRegistrations(
+  context: ReturnType<typeof createChatAbortContext>,
+  ts = 1,
+  attemptId?: string,
+) {
+  for (const prefix of ["agent", "pending-chat"]) {
+    context.dedupe.set(`${prefix}:pending`, {
+      ts,
+      ok: true,
+      payload: {
+        runId: "pending",
+        status: "accepted",
+        sessionKey: "main",
+        agentId: "main",
+        ...(attemptId ? { reservationId: attemptId, attemptId } : {}),
+      },
+    });
+  }
 }
 
 describe("chat.abort original authority and registration", () => {
@@ -430,6 +468,8 @@ describe("chat.abort original authority and registration", () => {
         },
         { once: true },
       );
+      setPendingRegistrations(context);
+      const pending = [...context.dedupe];
       using persist = vi.spyOn(persistence, "persistAbortedPartials").mockResolvedValue(undefined);
       await expect(
         invokeLifecycle(context, undefined, {
@@ -450,6 +490,7 @@ describe("chat.abort original authority and registration", () => {
       // A successor waits behind the active first turn, so Stop withdraws it
       // before the first turn revokes authority. Two pending inputs keep FIFO order.
       expect(second.input.abortSignal.aborted).toBe(firstEffect === "active");
+      expect([...context.dedupe]).toEqual(pending);
       expect(cancelInferenceForSession).not.toHaveBeenCalled();
       if (firstEffect === "active") {
         expect(persist).toHaveBeenCalledOnce();
@@ -465,18 +506,22 @@ describe("chat.abort original authority and registration", () => {
     },
   );
 
-  it("withdraws selected pending input without adopting a reentrant replacement source", async () => {
+  it("withdraws selected pending input without adopting reentrant replacement registrations", async () => {
     const context = createChatAbortContext();
     const first = createActiveRun("main");
     const stale = createActiveRun("main", { queued: true });
     let replacement: RpcSourceRef | undefined;
     rpcSourceTesting.set("first", first);
     rpcSourceTesting.set("reused", stale);
+    setPendingRegistrations(context, 1, "old");
+    let pending: Array<[string, unknown]> = [];
     first.input.abortSignal.addEventListener(
       "abort",
       () => {
         replacement = createActiveRun("main", { queued: true });
         rpcSourceTesting.set("reused", replacement);
+        setPendingRegistrations(context, 2, "new");
+        pending = [...context.dedupe];
       },
       { once: true },
     );
@@ -485,9 +530,10 @@ describe("chat.abort original authority and registration", () => {
     expect(replacement).toBeDefined();
     expect(replacement?.input.abortSignal.aborted).toBe(false);
     expect(rpcSourceTesting.get("reused")).toBe(replacement);
+    expect([...context.dedupe]).toEqual(pending);
   });
 
-  it.each(["active", "queued", "worker"] as const)(
+  it.each(["active", "queued", "pending-chat", "agent", "worker"] as const)(
     "retains the original source and target fence before explicit %s cancellation",
     async (kind) => {
       for (const changed of ["source", "target"] as const) {
@@ -502,7 +548,19 @@ describe("chat.abort original authority and registration", () => {
         );
         if (kind === "active" || kind === "queued") {
           rpcSourceTesting.set("run-1", run);
+        } else if (kind !== "worker") {
+          context.dedupe.set(`${kind}:run-1`, {
+            ts: Date.now(),
+            ok: true,
+            payload: {
+              runId: "run-1",
+              sessionKey: "agent:main:main",
+              agentId: "main",
+              status: "accepted",
+            },
+          });
         }
+        const before = [...context.dedupe];
         await expect(
           invokeChatAbortHandler({
             handler: (options) =>
@@ -525,6 +583,7 @@ describe("chat.abort original authority and registration", () => {
         ).rejects.toThrow(changed === "source" ? "requester authority changed" : "target changed");
         expect(run.input.abortSignal.aborted).toBe(false);
         expect(rpcSourceTesting.has("run-1")).toBe(kind === "active" || kind === "queued");
+        expect([...context.dedupe]).toEqual(before);
         expect(cancelInferenceForSession).not.toHaveBeenCalled();
       }
     },
