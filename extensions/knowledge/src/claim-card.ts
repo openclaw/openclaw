@@ -1,8 +1,8 @@
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Static } from "typebox";
 import type { ClaimCard } from "./inspection-contract.js";
 import type { LoadedRecord } from "./model.js";
 import { recordSummary, sourceCount } from "./record-summary.js";
-import { truncateWhole } from "./text-window.js";
 
 export function claimCard(
   record: LoadedRecord,
@@ -13,7 +13,7 @@ export function claimCard(
   const source = records.find((r) => r.id === m.source_page && r.kind === "page");
   return {
     hash: record.hash,
-    body: truncateWhole(record.body, 4000),
+    body: truncateUtf16Safe(record.body, 4000),
     truncated: record.body.length > 4000,
     evidenceTotal: m.evidence?.length ?? 0,
     evidenceSourceTotal: sourceCount(m.evidence),

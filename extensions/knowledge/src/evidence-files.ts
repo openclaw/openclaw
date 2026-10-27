@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Evidence } from "./model.js";
 import { PublicationFiles } from "./publication-files.js";
-import { truncateWhole } from "./text-window.js";
 
 /** Read originals with bounded memory, no UTF-8 or size assumption. Never follow
  * links or accept a file that changes while it is being read. */
@@ -76,6 +76,7 @@ export function inspectEvidence(root: string, e: Evidence, previewChars = 0) {
     let used = 0,
       line = 1,
       excerpt = "",
+      previewComplete = previewChars === 0,
       excerptChars = 0,
       tail = "",
       found = !e.quote,
@@ -86,8 +87,10 @@ export function inspectEvidence(root: string, e: Evidence, previewChars = 0) {
         return;
       }
       excerptChars += s.length;
-      if (excerpt.length < previewChars) {
-        excerpt += truncateWhole(s, previewChars - excerpt.length);
+      if (!previewComplete) {
+        const piece = truncateUtf16Safe(s, previewChars - excerpt.length);
+        excerpt += piece;
+        previewComplete = piece.length < s.length || excerpt.length === previewChars;
       }
       if (e.quote && !found) {
         const part = tail + s;
@@ -296,7 +299,7 @@ export class EvidenceInspector {
     if (e.quote && !cited.includes(e.quote)) {
       throw new Error("Evidence locator does not match");
     }
-    const excerpt = truncateWhole(cited, previewChars);
+    const excerpt = truncateUtf16Safe(cited, previewChars);
     return {
       size: file.size,
       sha256: file.sha256,

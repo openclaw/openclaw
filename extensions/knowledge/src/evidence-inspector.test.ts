@@ -9,40 +9,6 @@ import { childEvalArgs, sourceModule, useTestTempDirs } from "./test-support.js"
 
 const tempDirs = useTestTempDirs();
 
-// The excerpt cap must not split an astral character in two, on either inspector path.
-it("keeps an astral emoji whole at the excerpt cap", async () => {
-  const root = tempDirs.make("knowledge-inspector-emoji-");
-  await mkdir(path.join(root, "artifacts"));
-  const bytes = Buffer.from(`${"x".repeat(3999)}\u{1F600}tail`);
-  await writeFile(path.join(root, "artifacts/emoji.txt"), bytes);
-  const citation = {
-    path: "artifacts/emoji.txt",
-    sha256: createHash("sha256").update(bytes).digest("hex"),
-  };
-  for (const inspect of [
-    (preview: number) => inspectEvidence(root, citation, preview),
-    (preview: number) => new EvidenceInspector(root).inspect(citation, preview),
-  ]) {
-    const result = inspect(4000);
-    expect(result.excerpt).toBe("x".repeat(3999));
-    expect(result.excerptTruncated).toBe(true);
-  }
-  const whole = Buffer.from(`ok \u{1F600}`);
-  await writeFile(path.join(root, "artifacts/whole.txt"), whole);
-  const fits = {
-    path: "artifacts/whole.txt",
-    sha256: createHash("sha256").update(whole).digest("hex"),
-  };
-  for (const inspect of [
-    (preview: number) => inspectEvidence(root, fits, preview),
-    (preview: number) => new EvidenceInspector(root).inspect(fits, preview),
-  ]) {
-    const result = inspect(4000);
-    expect(result.excerpt).toBe("ok 😀");
-    expect(result.excerptTruncated).toBe(false);
-  }
-});
-
 it("cached evidence failures release their inspector and invalidate when the file changes", async () => {
   const root = tempDirs.make("knowledge-verdict-retention-");
   await mkdir(path.join(root, "artifacts"));
@@ -89,8 +55,11 @@ it("EvidenceInspector matches inspectEvidence for every citation shape", async (
   const root = tempDirs.make("knowledge-inspector-");
   await mkdir(path.join(root, "artifacts"));
   const files = {
-    "artifacts/crlf.txt": Buffer.from('﻿first line\r\nsecond "quoted" line\r\nthird\r\n'),
+    "artifacts/crlf.txt": Buffer.from(
+      `﻿${"x".repeat(3999)}😀tail\r\nnext "quoted" line\r\nthird\r\n`,
+    ),
     "artifacts/lone-cr.txt": Buffer.from("alpha\rbeta\ngamma"),
+    "artifacts/whole.txt": Buffer.from("ok 😀"),
     "artifacts/binary.bin": Buffer.from([0, 1, 2, 255, 254]),
     "artifacts/invalid.txt": Buffer.from([0x61, 0xff, 0x0a, 0x62]),
   };
@@ -110,6 +79,7 @@ it("EvidenceInspector matches inspectEvidence for every citation shape", async (
     cite("artifacts/crlf.txt", { size: 1 }),
     { path: "artifacts/crlf.txt", sha256: "0".repeat(64) },
     cite("artifacts/lone-cr.txt", { start_line: 1, end_line: 2 }),
+    cite("artifacts/whole.txt"),
     cite("artifacts/binary.bin"),
     cite("artifacts/binary.bin", { quote: "x" }),
     cite("artifacts/binary.bin", { mediaType: "text/plain" }),
@@ -129,11 +99,16 @@ it("EvidenceInspector matches inspectEvidence for every citation shape", async (
   };
   const inspector = new EvidenceInspector(root);
   for (const citation of citations) {
-    for (const preview of [0, 5, 20000]) {
+    for (const preview of [0, 5, 4000, 20000]) {
       expect(
         outcome(() => inspector.inspect(citation, preview)),
         JSON.stringify({ citation, preview }),
       ).toStrictEqual(outcome(() => inspectEvidence(root, citation, preview)));
     }
   }
+  expect(inspector.inspect(cite("artifacts/crlf.txt"), 4000)).toMatchObject({
+    excerpt: "x".repeat(3999),
+    excerptTruncated: true,
+  });
+  expect(inspector.inspect(cite("artifacts/whole.txt"), 4000).excerpt).toBe("ok 😀");
 });
