@@ -109,8 +109,8 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
         "canonical_fingerprints",
         "projection_fingerprints",
         "pending_ref",
-        "checkpoint_json",
       ])
+      .$if(input.action.kind === "repair", (builder) => builder.select("checkpoint_json"))
       .where("worktree_id", "=", input.id),
   );
   if (!row || row.revision !== input.revision) {
