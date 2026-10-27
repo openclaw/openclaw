@@ -503,7 +503,10 @@ keep-alives and intentionally ignored event types do not count toward this
 warning. It includes the event type and top-level keys, without post content.
 The next parseable mention event clears the warning.
 
-In `auto` mode, any subscription setup failure switches to polling. In `stream`
+Stopping or reloading an account cancels subscription setup and event reception
+cleanly, without reporting caller cancellation as a transport failure.
+
+In `auto` mode, subscription setup failures switch to polling. In `stream`
 mode, subscription HTTP `403` switches to polling; other setup errors stop the
 event source. A stream HTTP `401` or `403` switches either mode to polling. The
 channel status `message` includes the failed endpoint, HTTP status, and first X
