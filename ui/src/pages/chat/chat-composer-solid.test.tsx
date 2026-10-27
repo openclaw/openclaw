@@ -142,10 +142,12 @@ it("publishes attachment read progress through the composer owner without a draf
     [new File(["progress"], "progress.txt", { type: "text/plain" })],
     props,
   );
-  await waitForSolid(() => expect(view.query(".chat-attachment-loading > span")).not.toBeNull());
+  await waitForSolid(() =>
+    expect(view.query('.chat-attachment-thumb[aria-busy="true"]')).not.toBeNull(),
+  );
   reportProgress?.();
   flush();
-  expect(view.query<HTMLElement>(".chat-attachment-loading > span")?.style.transform).toBe(
+  expect(view.query<HTMLElement>(".chat-attachment-loading__line > span")?.style.transform).toBe(
     "scaleX(0.5)",
   );
   expect(view.textarea().value).toBe("");

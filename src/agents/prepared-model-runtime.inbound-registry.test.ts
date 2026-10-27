@@ -130,7 +130,7 @@ describe("prepared reply dispatch runtime", () => {
     const config = {};
     await publishGateway(config, { allowGatewaySubagentBinding: true });
     const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
-    const input = { ...runInput(published, undefined), allowGatewaySubagentBinding: true };
+    const input = { ...runInput(published, undefined), config, allowGatewaySubagentBinding: true };
     mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
     const loadSubagent = (overrides: Partial<typeof input> = {}) =>
       loadSubagentRegistryPluginRuntimeHandle({ ...input, ...overrides });

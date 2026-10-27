@@ -158,6 +158,7 @@
 
 /* Delivery recovery stays visible even when identity metadata is collapsed. */
 .chat-group-footer.chat-group-footer--send-status {
+  --chat-footer-detail-position: static;
   --chat-footer-disclosure-opacity: 1;
   --chat-footer-disclosure-pointer-events: auto;
   opacity: 1;
@@ -441,6 +442,12 @@
 .chat-sender-name.person-activity-link:focus-visible {
   color: color-mix(in srgb, var(--chat-sender-name-color, var(--muted)) 50%, var(--text));
   text-decoration: none;
+}
+
+:where(.chat-group.user) .chat-sender-name.person-activity-link,
+:where(.chat-group.user) .chat-sender-name.person-activity-link:hover,
+:where(.chat-group.user) .chat-sender-name.person-activity-link:focus-visible {
+  color: var(--chat-sender-name-color);
 }
 
 .chat-message-source {
@@ -1434,9 +1441,17 @@ button.chat-reply-attribution__target:disabled {
   box-shadow: none;
 }
 
+.chat-group:is(.user, .chat-group--forwarded) .chat-bubble:not(.chat-bubble--tool-shell) {
+  --chat-text-link: var(--chat-participant-link, var(--chat-canvas-link, var(--link)));
+  --chat-text-link-hover: var(
+    --chat-participant-link-hover,
+    var(--chat-canvas-link-hover, var(--link-hover))
+  );
+}
+
 /* User bubbles have different styling */
 .chat-group.user .chat-bubble {
-  --chat-bubble-background: var(--chat-user-surface);
+  --chat-bubble-background: var(--chat-participant-surface);
   background: var(--chat-bubble-background);
 
   :where(.shell[data-background-managed]) & {
@@ -1482,13 +1497,9 @@ button.chat-reply-attribution__target:disabled {
   box-shadow: none;
 }
 
-/* Sender bubble tint: --chat-sender-hue is the user or source session's stable
-   identity hue (same seed as avatar initials). Only hue varies; saturation/
-   lightness/alpha are fixed per theme mode so bubble text keeps contrast for
-   every hue. Order contract: stays below the light-mode reset above — the
-   dark rule outranks it by specificity, so light mode needs its own skin. */
+/* Participant colors are resolved by the shared theme presentation owner. */
 .chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint .chat-bubble {
-  --chat-bubble-background: hsl(var(--chat-sender-hue) 48% 42% / 0.16);
+  --chat-bubble-background: var(--chat-participant-surface);
   background: var(--chat-bubble-background);
 
   :where(.shell[data-background-managed]) & {
@@ -1502,22 +1513,9 @@ button.chat-reply-attribution__target:disabled {
   border-color: transparent;
 }
 
-.chat-group.user.chat-group--sender-tint .chat-sender-name {
-  --chat-sender-name-color: hsl(var(--chat-sender-hue) 45% 70%);
-}
-
-:where(:root[data-theme-mode="light"]) .chat-group.user.chat-group--sender-tint .chat-bubble {
-  --chat-bubble-background: hsl(var(--chat-sender-hue) 65% 94%);
-}
-
-/* Keep tinted user turns borderless when the generic light hover skin applies. */
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
   border-color: transparent;
   box-shadow: none;
-}
-
-:root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-sender-name {
-  --chat-sender-name-color: hsl(var(--chat-sender-hue) 60% 36%);
 }
 
 /* Ephemeral drafts share sent-turn geometry, typography, and identity tint. */

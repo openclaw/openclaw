@@ -102,7 +102,10 @@ export function createActivityPage(context: ApplicationContext, initial?: RouteL
 }
 
 export async function settleActivity() {
-  await new Promise(requestAnimationFrame);
+  // Wait behind the feed's queued presentation update.
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
   flush();
 }
 
