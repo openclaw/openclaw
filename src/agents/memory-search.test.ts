@@ -172,6 +172,24 @@ describe("memory search config", () => {
       { provider: "openai", model: "text-embedding-3-small" },
     ],
     [
+      "mixed-case auto provider",
+      { provider: "Auto" },
+      undefined,
+      { provider: "openai", model: "text-embedding-3-small" },
+    ],
+    [
+      "mixed-case none provider and fallback",
+      { provider: "None", fallback: "NoNe" },
+      undefined,
+      { provider: "none", fallback: "none" },
+    ],
+    [
+      "agent mixed-case none override",
+      { provider: "openai" },
+      { provider: "NoNe" },
+      { provider: "none" },
+    ],
+    [
       "input type overrides",
       { provider: "openai", inputType: "passage", queryInputType: "query" },
       { documentInputType: "document" },
@@ -225,14 +243,15 @@ describe("memory search config", () => {
 
   it("resolves providers from the generic embedding provider registry", () => {
     registerEmbeddingProvider({
-      id: "generic-local",
+      id: "Tenant",
       defaultModel: "local-gguf-default",
       transport: "local",
       create: async () => ({ provider: null }),
     });
 
-    expect(resolve({ provider: "generic-local" })).toMatchObject({
-      provider: "generic-local",
+    expect(resolve({ provider: "Tenant", fallback: "FallbackTenant" })).toMatchObject({
+      provider: "Tenant",
+      fallback: "FallbackTenant",
       model: "local-gguf-default",
       remote: undefined,
     });

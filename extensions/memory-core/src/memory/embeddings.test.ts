@@ -113,31 +113,31 @@ describe("createEmbeddingProvider", () => {
 
   it("uses the provider's canonical model for cold identity and creation without inventing a cache key", async () => {
     registerTestMemoryAdapter({
-      id: "dynamic",
-      normalizeModel: ({ model }) => model.replace(/^dynamic\//, ""),
+      id: "Tenant",
+      normalizeModel: ({ model }) => model.replace(/^Tenant\//, ""),
       create: async ({ model }) => ({
-        provider: createConstantEmbeddingProvider("dynamic", model, 1),
+        provider: createConstantEmbeddingProvider("Tenant", model, 1),
       }),
     });
-    const options = { ...createOptions("dynamic"), model: " dynamic/embed-v1 " };
+    const options = { ...createOptions("Tenant"), model: " Tenant/embed-v1 " };
     expect(resolveEmbeddingProviderIndexIdentity(options)).toEqual({
-      provider: { id: "dynamic", model: "embed-v1" },
+      provider: { id: "Tenant", model: "embed-v1" },
       cacheKeyData: undefined,
       aliases: undefined,
     });
     expect((await createEmbeddingProvider(options)).provider?.model).toBe("embed-v1");
     expect(resolveEmbeddingProviderIndexIdentity({ ...options, model: "" })?.provider).toEqual({
-      id: "dynamic",
+      id: "Tenant",
       model: "",
     });
   });
 
-  it("still throws missing credentials for an explicit provider request", async () => {
+  it.each(["none", "NoNe"])("preserves the primary error with fallback %s", async (fallback) => {
     registerTestMemoryAdapter(createMissingCredentialsAdapter());
 
-    await expect(createEmbeddingProvider(createOptions("bedrock"))).rejects.toThrow(
-      missingBedrockCredentialsError.message,
-    );
+    await expect(
+      createEmbeddingProvider({ ...createOptions("bedrock"), fallback }),
+    ).rejects.toThrow(missingBedrockCredentialsError.message);
   });
 
   it("drops the fallback remote config when it contains only primary-provider fields", () => {
@@ -281,21 +281,26 @@ describe("createEmbeddingProvider", () => {
     expect(result.provider?.model).toBe(expectedModel);
   });
 
-  it("does not run priority-based auto-selection after a skippable setup failure", async () => {
-    registerTestMemoryAdapter(createMissingCredentialsAdapter({ autoSelectPriority: 10 }));
-    registerTestMemoryAdapter({
-      id: "openai",
-      transport: "remote",
-      autoSelectPriority: 20,
-      create: async () => ({
-        provider: createConstantEmbeddingProvider("openai", "text-embedding-3-small", 1),
-      }),
-    });
+  it.each(["auto", "Auto"])(
+    "resolves %s to the default provider without auto-selection",
+    async (provider) => {
+      registerTestMemoryAdapter(createMissingCredentialsAdapter({ autoSelectPriority: 10 }));
+      registerTestMemoryAdapter({
+        id: "openai",
+        transport: "remote",
+        autoSelectPriority: 20,
+        create: async () => ({
+          provider: createConstantEmbeddingProvider("openai", "text-embedding-3-small", 1),
+        }),
+      });
 
-    const result = await createEmbeddingProvider(createOptions("auto"));
+      const options = createOptions(provider);
+      expect(resolveEmbeddingProviderIndexIdentity(options)?.provider.id).toBe("openai");
+      const result = await createEmbeddingProvider(options);
 
-    expect(result).toMatchObject({ provider: { id: "openai" }, requestedProvider: "openai" });
-  });
+      expect(result).toMatchObject({ provider: { id: "openai" }, requestedProvider: "openai" });
+    },
+  );
 
   it("uses a generic embedding provider when no memory-specific provider exists", async () => {
     const genericProvider = {
