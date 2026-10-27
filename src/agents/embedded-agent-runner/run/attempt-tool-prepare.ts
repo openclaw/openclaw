@@ -164,7 +164,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       runId: attempt.runId,
       modelProvider: attempt.provider,
       modelId: attempt.modelId,
-      modelCodeMode: attempt.model.compat?.codeMode ?? null,
+      modelCodeMode: extractModelCompat(attempt.model)?.codeMode ?? null,
       active: codeModeControlsEnabledForRun,
       toolsEnabled,
       rawRun: isRawModelRun,
