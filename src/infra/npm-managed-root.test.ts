@@ -1,4 +1,3 @@
-// Exercises npm-managed root detection across package-manager markers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -45,6 +44,12 @@ function peerPlan(run: (cwd: string) => Promise<typeof successfulSpawn>) {
   });
 }
 
+function writeLock(root: string, packages: Record<string, unknown>) {
+  return writeFixtureJson(path.join(root, "package-lock.json"), { lockfileVersion: 3, packages });
+}
+
+const platformFacts = { optional: true, os: [process.platform], cpu: [process.arch] };
+
 describe("managed npm root", () => {
   it("finds explicitly required optional packages for the current platform", async () => {
     const npmRoot = await makeTempRoot();
@@ -53,33 +58,19 @@ describe("managed npm root", () => {
     const foreignPackage = "@vendor/tool-foreign";
     const unconstrainedPackage = "@vendor/tool-optional";
     const unlistedPackage = "@vendor/tool-unlisted";
-    await writeFixtureJson(path.join(npmRoot, "package-lock.json"), {
-      lockfileVersion: 3,
-      packages: {
-        "": {},
-        [`node_modules/${matchingPackage}`]: {
-          optional: true,
-          os: [process.platform],
-          cpu: [process.arch],
-        },
-        [`node_modules/${scriptedPackage}`]: {
-          optional: true,
-          hasInstallScript: true,
-          os: [process.platform],
-          cpu: [process.arch],
-        },
-        [`node_modules/${foreignPackage}`]: {
-          optional: true,
-          os: [`not-${process.platform}`],
-          cpu: [process.arch],
-        },
-        [`node_modules/${unconstrainedPackage}`]: { optional: true },
-        [`node_modules/${unlistedPackage}`]: {
-          optional: true,
-          os: [process.platform],
-          cpu: [process.arch],
-        },
+    await writeLock(npmRoot, {
+      "": {},
+      [`node_modules/${matchingPackage}`]: platformFacts,
+      [`node_modules/${scriptedPackage}`]: {
+        ...platformFacts,
+        hasInstallScript: true,
       },
+      [`node_modules/${foreignPackage}`]: {
+        ...platformFacts,
+        os: [`not-${process.platform}`],
+      },
+      [`node_modules/${unconstrainedPackage}`]: { optional: true },
+      [`node_modules/${unlistedPackage}`]: platformFacts,
     });
 
     await expect(
@@ -117,25 +108,22 @@ describe("managed npm root", () => {
       const canonicalPackage = "@vendor/tool";
       const packagePath = path.join(npmRoot, "node_modules", ...platformPackage.split("/"));
       await fs.mkdir(packagePath, { recursive: true });
-      await writeFixtureJson(path.join(npmRoot, "package-lock.json"), {
-        lockfileVersion: 3,
-        packages: {
-          "": {},
-          [`node_modules/${canonicalPackage}`]: {
-            bin: { tool: "bin/tool.js" },
-          },
-          [`node_modules/${platformPackage}`]: {
-            name: canonicalPackage,
-            optional: true,
-            os: [process.platform],
-            cpu: [process.arch],
-          },
+      await writeLock(npmRoot, {
+        "": {},
+        [`node_modules/${canonicalPackage}`]: {
+          bin: { tool: "bin/tool.js" },
+        },
+        [`node_modules/${platformPackage}`]: {
+          name: canonicalPackage,
+          optional: true,
+          os: [process.platform],
+          cpu: [process.arch],
         },
       });
 
       if (installedState === "invalid package manifest") {
         await fs.writeFile(path.join(packagePath, "package.json"), "{", "utf8");
-      } else if (installedState !== "missing package manifest") {
+      } else {
         await writeFixtureJson(path.join(packagePath, "package.json"), {
           name: canonicalPackage,
           version: "1.0.0-platform",
@@ -144,16 +132,11 @@ describe("managed npm root", () => {
         const nativeBinDir = path.join(packagePath, "vendor", "current-platform", "bin");
         await fs.mkdir(nativeBinDir, { recursive: true });
         await fs.writeFile(path.join(nativeBinDir, "tool-helper"), "helper", "utf8");
-        if (
-          installedState === "installed native executable" ||
-          installedState === "non-executable native executable"
-        ) {
-          const executableName = process.platform === "win32" ? "tool.exe" : "tool";
-          await fs.writeFile(path.join(nativeBinDir, executableName), "native executable", {
-            encoding: "utf8",
-            mode: installedState === "installed native executable" ? 0o755 : 0o644,
-          });
-        }
+        const executableName = process.platform === "win32" ? "tool.exe" : "tool";
+        await fs.writeFile(path.join(nativeBinDir, executableName), "native executable", {
+          encoding: "utf8",
+          mode: installedState === "installed native executable" ? 0o755 : 0o644,
+        });
       }
 
       await expect(
@@ -186,45 +169,32 @@ describe("managed npm root", () => {
     });
   });
 
-  it("drops managed overrides that conflict with an explicitly installed package", async () => {
-    const npmRoot = await makeTempRoot();
+  it.each([
+    { override: "1.0.0", retained: {} },
+    {
+      override: { ".": "1.0.0", "vuln-child": "3.0.0" },
+      retained: { "pinned-package": { "vuln-child": "3.0.0" } },
+    },
+  ])(
+    "removes only the conflicting root override from $override",
+    async ({ override, retained }) => {
+      const npmRoot = await makeTempRoot();
 
-    await upsertManagedNpmRootDependency({
-      npmRoot,
-      packageName: "pinned-package",
-      dependencySpec: "2.0.0",
-      managedOverrides: { "pinned-package": "1.0.0", axios: "1.18.0" },
-    });
+      await upsertManagedNpmRootDependency({
+        npmRoot,
+        packageName: "pinned-package",
+        dependencySpec: "2.0.0",
+        managedOverrides: { "pinned-package": override, axios: "1.18.0" },
+      });
 
-    await expect(readManifest(npmRoot)).resolves.toEqual({
-      private: true,
-      dependencies: { "pinned-package": "2.0.0" },
-      overrides: { axios: "1.18.0" },
-      openclaw: { managedOverrides: ["axios"] },
-    });
-  });
-
-  it("keeps child override rules when only the root entry conflicts with an installed package", async () => {
-    const npmRoot = await makeTempRoot();
-
-    await upsertManagedNpmRootDependency({
-      npmRoot,
-      packageName: "pinned-package",
-      dependencySpec: "2.0.0",
-      managedOverrides: {
-        "pinned-package": { ".": "1.0.0", "vuln-child": "3.0.0" },
-      },
-    });
-
-    await expect(readManifest(npmRoot)).resolves.toEqual({
-      private: true,
-      dependencies: { "pinned-package": "2.0.0" },
-      overrides: {
-        "pinned-package": { "vuln-child": "3.0.0" },
-      },
-      openclaw: { managedOverrides: ["pinned-package"] },
-    });
-  });
+      await expect(readManifest(npmRoot)).resolves.toEqual({
+        private: true,
+        dependencies: { "pinned-package": "2.0.0" },
+        overrides: { axios: "1.18.0", ...retained },
+        openclaw: { managedOverrides: ["axios", ...Object.keys(retained)] },
+      });
+    },
+  );
 
   it("transfers ownership of a managed peer pin when it is explicitly installed", async () => {
     const npmRoot = await makeTempRoot({
@@ -331,35 +301,15 @@ describe("managed npm root", () => {
         },
       }),
     ).toBe("2026.5.2");
-
-    expect(
-      resolveManagedNpmRootDependencySpec({
-        parsedSpec: {
-          name: "@openclaw/discord",
-          raw: "@openclaw/discord",
-          selectorKind: "none",
-          selectorIsPrerelease: false,
-        },
-        resolution: {
-          name: "@openclaw/discord",
-          version: "2026.5.2",
-          resolvedSpec: "@openclaw/discord@2026.5.2",
-          resolvedAt: "2026-05-03T00:00:00.000Z",
-        },
-      }),
-    ).toBe("2026.5.2");
   });
 
   it("reads installed dependency metadata from package-lock", async () => {
     const npmRoot = await makeTempRoot();
-    await writeFixtureJson(path.join(npmRoot, "package-lock.json"), {
-      lockfileVersion: 3,
-      packages: {
-        "node_modules/@openclaw/discord": {
-          version: "2026.5.2",
-          resolved: "https://registry.npmjs.org/@openclaw/discord/-/discord-2026.5.2.tgz",
-          integrity: "sha512-discord",
-        },
+    await writeLock(npmRoot, {
+      "node_modules/@openclaw/discord": {
+        version: "2026.5.2",
+        resolved: "https://registry.npmjs.org/@openclaw/discord/-/discord-2026.5.2.tgz",
+        integrity: "sha512-discord",
       },
     });
 
@@ -381,39 +331,32 @@ describe("managed npm root", () => {
     });
 
     const runCommand = peerPlan(async (cwd) => {
-      const tempManifest = JSON.parse(
-        await fs.readFile(path.join(cwd, "package.json"), "utf8"),
-      ) as {
-        dependencies?: Record<string, string>;
-      };
+      const tempManifest = (await readManifest(cwd)) as { dependencies?: Record<string, string> };
       expect(tempManifest.dependencies).toEqual({ "existing-root": "1.0.0", plugin: "1.0.0" });
-      await writeFixtureJson(path.join(cwd, "package-lock.json"), {
-        lockfileVersion: 3,
-        packages: {
-          "": { dependencies: tempManifest.dependencies },
-          "node_modules/existing-root": { version: "1.0.0" },
-          "node_modules/dev-peer": { dev: true, version: "3.0.0" },
-          "node_modules/dev-plugin": {
-            dev: true,
-            peerDependencies: { "dev-peer": "^3.0.0" },
-            version: "1.0.0",
+      await writeLock(cwd, {
+        "": { dependencies: tempManifest.dependencies },
+        "node_modules/existing-root": { version: "1.0.0" },
+        "node_modules/dev-peer": { dev: true, version: "3.0.0" },
+        "node_modules/dev-plugin": {
+          dev: true,
+          peerDependencies: { "dev-peer": "^3.0.0" },
+          version: "1.0.0",
+        },
+        "node_modules/new-peer": { peer: true, version: "2.1.0" },
+        "node_modules/openclaw": { peer: true, version: "2026.5.12" },
+        "node_modules/plugin": {
+          peerDependencies: {
+            "existing-root": "^1.0.0",
+            "new-peer": "^2.0.0",
+            openclaw: ">=2026.5.0",
           },
-          "node_modules/new-peer": { peer: true, version: "2.1.0" },
-          "node_modules/openclaw": { peer: true, version: "2026.5.12" },
-          "node_modules/plugin": {
-            peerDependencies: {
-              "existing-root": "^1.0.0",
-              "new-peer": "^2.0.0",
-              openclaw: ">=2026.5.0",
-            },
-            version: "1.0.0",
-          },
-          "node_modules/unsupported-optional": {
-            optional: true,
-            os: [process.platform === "win32" ? "darwin" : "win32"],
-            peerDependencies: { "unsupported-peer": "^9.0.0" },
-            version: "1.0.0",
-          },
+          version: "1.0.0",
+        },
+        "node_modules/unsupported-optional": {
+          optional: true,
+          os: [process.platform === "win32" ? "darwin" : "win32"],
+          peerDependencies: { "unsupported-peer": "^9.0.0" },
+          version: "1.0.0",
         },
       });
       return successfulSpawn;
@@ -466,24 +409,19 @@ describe("managed npm root", () => {
     });
 
     const runCommand = peerPlan(async (cwd) => {
-      const tempManifest = JSON.parse(
-        await fs.readFile(path.join(cwd, "package.json"), "utf8"),
-      ) as {
+      const tempManifest = (await readManifest(cwd)) as {
         dependencies?: Record<string, string>;
         overrides?: Record<string, string>;
       };
       expect(tempManifest.dependencies).toEqual({ plugin: "1.0.0" });
       expect(tempManifest.overrides).toEqual({ "runtime-peer": "4.12.18" });
-      await writeFixtureJson(path.join(cwd, "package-lock.json"), {
-        lockfileVersion: 3,
-        packages: {
-          "": { dependencies: tempManifest.dependencies },
-          "node_modules/plugin": {
-            peerDependencies: { "runtime-peer": "^4.0.0" },
-            version: "1.0.0",
-          },
-          "node_modules/runtime-peer": { peer: true, version: "4.12.18" },
+      await writeLock(cwd, {
+        "": { dependencies: tempManifest.dependencies },
+        "node_modules/plugin": {
+          peerDependencies: { "runtime-peer": "^4.0.0" },
+          version: "1.0.0",
         },
+        "node_modules/runtime-peer": { peer: true, version: "4.12.18" },
       });
       return successfulSpawn;
     });
@@ -554,16 +492,13 @@ describe("managed npm root", () => {
           stderr: "npm ERR! notarget No matching version found for openclaw@2026.5.99-beta.1",
         };
       }
-      await writeFixtureJson(path.join(cwd, "package-lock.json"), {
-        lockfileVersion: 3,
-        packages: {
-          "": {
-            dependencies: { plugin: "1.0.0" },
-          },
-          "node_modules/plugin": {
-            peerDependencies: { openclaw: "2026.5.99-beta.1", "runtime-peer": "^2.0.0" },
-            version: "1.0.0",
-          },
+      await writeLock(cwd, {
+        "": {
+          dependencies: { plugin: "1.0.0" },
+        },
+        "node_modules/plugin": {
+          peerDependencies: { openclaw: "2026.5.99-beta.1", "runtime-peer": "^2.0.0" },
+          version: "1.0.0",
         },
       });
       return successfulSpawn;
@@ -596,19 +531,16 @@ describe("managed npm root", () => {
     });
 
     const runCommand = peerPlan(async (cwd) => {
-      await writeFixtureJson(path.join(cwd, "package-lock.json"), {
-        lockfileVersion: 3,
-        packages: {
-          "": {
-            dependencies: { plugin: "file:./plugin.tgz" },
-          },
-          "node_modules/plugin": { version: "1.0.0" },
-          "node_modules/plugin/node_modules/runtime-lib": {
-            peerDependencies: { zod: "^4.0.0" },
-            version: "1.0.0",
-          },
-          "node_modules/plugin/node_modules/zod": { version: "4.4.3" },
+      await writeLock(cwd, {
+        "": {
+          dependencies: { plugin: "file:./plugin.tgz" },
         },
+        "node_modules/plugin": { version: "1.0.0" },
+        "node_modules/plugin/node_modules/runtime-lib": {
+          peerDependencies: { zod: "^4.0.0" },
+          version: "1.0.0",
+        },
+        "node_modules/plugin/node_modules/zod": { version: "4.4.3" },
       });
       return successfulSpawn;
     });

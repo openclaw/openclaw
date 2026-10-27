@@ -71,13 +71,13 @@ describe("delivery-owned system event selection", () => {
   it.each(["cancel", "release"] as const)(
     "%s settles surviving batch members after one occurrence disappears",
     (action) => {
-      const first = enqueueEntry("First", sessionKey);
-      const second = enqueueEntry("Second", sessionKey);
+      const first = enqueueEntry("First");
+      const second = enqueueEntry("Second");
       const cancelled = vi.fn();
       const owner = claim([first, second], cancelled);
       expect(peekDeliverable(sessionKey)).toEqual([]);
       consumeSelected(sessionKey, [first]);
-      const replacement = enqueueEntry("Replacement", sessionKey);
+      const replacement = enqueueEntry("Replacement");
       expect(() => owner.start()).toThrow("cancelled before admission");
       expect(owner[action]()).toBe(true);
       expect(peekDeliverable(sessionKey)).toEqual(
@@ -91,8 +91,8 @@ describe("delivery-owned system event selection", () => {
   it.each(["missing", "already-owned", "duplicate"] as const)(
     "refuses an entire batch with a %s member before taking other occurrences",
     (invalid) => {
-      const first = enqueueEntry("First", sessionKey);
-      const second = enqueueEntry("Second", sessionKey);
+      const first = enqueueEntry("First");
+      const second = enqueueEntry("Second");
       if (invalid === "missing") {
         consumeSelected(sessionKey, [second]);
       } else if (invalid === "already-owned") {
@@ -110,14 +110,14 @@ describe("delivery-owned system event selection", () => {
   );
 
   it("leaves an ordinary occurrence with its owner through periodic and user selection", async () => {
-    const occurrence = enqueueEntry("Task completed", sessionKey);
+    const occurrence = enqueueEntry("Task completed");
     const cancelled = vi.fn();
-    const sibling = enqueueEntry("Sibling completed", sessionKey);
+    const sibling = enqueueEntry("Sibling completed");
     const owner = expectDefined(
       claimSystemEventTurn(sessionKey, [occurrence, sibling], cancelled, "main"),
       "ordinary owner",
     );
-    enqueueSystemEvent("Passive notice", { sessionKey });
+    enqueue("Passive notice");
     expect(texts(peekDeliverable(sessionKey))).toEqual(["Passive notice"]);
     const prompt = await drainFormattedEvents(sessionKey);
     expect(prompt).toContain("Passive notice");
@@ -163,7 +163,7 @@ describe("delivery-owned system event selection", () => {
     "cancels only the original ordinary occurrence during %s",
     (boundary) => {
       const options = { sessionKey, contextKey: "task:completion" };
-      const occurrence = expectDefined(enqueueSystemEventEntry("Original", options), "original");
+      const occurrence = enqueueEntry("Original", sessionKey, options);
       const cancelled = vi.fn();
       const owner = claim([occurrence], cancelled);
       if (boundary === "replace") {
@@ -185,17 +185,14 @@ describe("delivery-owned system event selection", () => {
   it.each([false, true])(
     "formats only live captured occurrences (consumed by another turn: %s)",
     async (consumed) => {
-      enqueueSystemEvent("Restart first", {
-        sessionKey,
-        contextKey: "task:restart-sentinel:first",
-      });
-      enqueueSystemEvent("Newer instruction second", { sessionKey });
+      enqueue("Restart first", { contextKey: "task:restart-sentinel:first" });
+      enqueue("Newer instruction second");
       const captured = peekEntries(sessionKey);
       const retainedId = expectDefined(captured[0]?.id, "captured restart occurrence ID");
       if (consumed) {
         consumeSelected(sessionKey, captured);
       }
-      enqueueSystemEvent("Late arrival third", { sessionKey });
+      enqueue("Late arrival third");
       const text = await drainFormattedEvents(sessionKey, {
         events: captured,
         deferredEventIds: [retainedId],
@@ -377,11 +374,7 @@ describe("system events (session routing)", () => {
   it("does not consume an identical successor from a serialized stale snapshot", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-08T00:00:00Z"));
-    const options = {
-      sessionKey: key,
-      contextKey: "build:123",
-      deliveryContext: { ...route },
-    };
+    const options = { contextKey: "build:123", deliveryContext: { ...route } };
     const original = enqueueEntry("Build completed", key, options);
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercises a serialized SDK snapshot.
     const staleCopy: SystemEvent = JSON.parse(JSON.stringify(original));
@@ -430,15 +423,11 @@ describe("system events (session routing)", () => {
   });
 
   it("does not evict another agent's global notification when one queue fills", async () => {
-    enqueueSystemEvent(
-      "Beta result is ready",
-      withSystemEventOwner({ sessionKey: "global" }, "beta"),
-    );
+    const notify = (text: string, agent: string) =>
+      enqueueSystemEvent(text, withSystemEventOwner({ sessionKey: "global" }, agent));
+    notify("Beta result is ready", "beta");
     for (let index = 0; index < 25; index += 1) {
-      enqueueSystemEvent(
-        `Alpha progress ${index}`,
-        withSystemEventOwner({ sessionKey: "global" }, "alpha"),
-      );
+      notify(`Alpha progress ${index}`, "alpha");
     }
     expect(peekSystemEvents("agent:alpha:global")).toEqual(
       Array.from({ length: 20 }, (_, index) => "Alpha progress " + index),
