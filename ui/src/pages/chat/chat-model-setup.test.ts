@@ -85,3 +85,44 @@ it.each(["missing-auth", "auth-failed"] as const)(
     expect(banner(proxied)).toBeDefined();
   },
 );
+
+it.each([
+  ["claude-cli", undefined],
+  ["openclaw", "No provider credential"],
+  [undefined, "No provider credential"],
+] as const)(
+  "uses the session's selected runtime for the credential banner (runtime=%s)",
+  (agentRuntime, expected) => {
+    // The base API route lacks an OpenClaw credential; the native Claude CLI route is ready.
+    const entry = {
+      id: "claude-opus-5-5",
+      name: "Claude Opus 5.5",
+      provider: "anthropic",
+      available: false,
+      unavailableReason: "missing-auth" as const,
+      agentRuntime: { id: "openclaw", source: "model" as const },
+      runtimeChoices: [
+        { agentRuntime: { id: "claude-cli", source: "model" as const }, available: true },
+      ],
+    };
+    const banner = resolveChatModelSetup({
+      ...loaded,
+      agentModel: "anthropic/claude-opus-5-5",
+      chatModelCatalog: [entry],
+      modelOverrides: {},
+      sessionKey: "agent:main:main",
+      sessionsResult: null,
+      catalogError: null,
+      onSetup: () => undefined,
+      activeSession: {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 1,
+        model: "claude-opus-5-5",
+        modelProvider: "anthropic",
+        ...(agentRuntime ? { agentRuntime: { id: agentRuntime, source: "session" as const } } : {}),
+      },
+    }).modelUnavailableBanner;
+    expect(banner?.text).toEqual(expected ? expect.stringContaining(expected) : undefined);
+  },
+);

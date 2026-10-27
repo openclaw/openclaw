@@ -63,7 +63,12 @@ export function resolveChatModelSetup(
     };
   } else {
     const message = chatModelUnavailableMessage(
-      resolveChatModelUnavailableReason(model, provider, catalog),
+      resolveChatModelUnavailableReason(
+        model,
+        provider,
+        catalog,
+        state.activeSession?.agentRuntime?.id,
+      ),
       inference,
     );
     modelUnavailableBanner = message ? createChatModelSetupBanner(onSetup, message) : undefined;
