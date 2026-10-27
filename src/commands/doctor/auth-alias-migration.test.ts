@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { createAuthProfileStoreFixture } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential as apiKey,
+  createAuthProfileStoreFixture as authStore,
+} from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import { resolveSharedAuthStorePath } from "../../agents/auth-profiles/path-resolve.js";
 import {
   loadPersistedAuthProfileStore,
@@ -40,11 +43,22 @@ import { runDoctorRepairSequence } from "./repair-sequencing.js";
 function writeStore(env: NodeJS.ProcessEnv, store: unknown, agentDir?: string) {
   runAuthProfileWriteTransaction(
     agentDir,
-    (database) => {
-      writePersistedAuthProfileStoreRaw(store, agentDir, database);
-    },
+    (db) => writePersistedAuthProfileStoreRaw(store, agentDir, db),
     { env },
   );
+}
+function runDoctor(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  return runDoctorRepairSequence({
+    state: { cfg, candidate: structuredClone(cfg), pendingChanges: false, fixHints: [] },
+    doctorFixCommand: "openclaw doctor --fix",
+    env,
+  });
+}
+function legacyKey(provider: string, key: string) {
+  return { mode: "api_key", provider, apiKey: key };
+}
+function exampleCredential<T extends Record<string, unknown>>(type: string, fields: T) {
+  return { type, provider: "example", ...fields };
 }
 
 describe("Doctor stored auth alias migration", () => {
@@ -59,8 +73,8 @@ describe("Doctor stored auth alias migration", () => {
           const sourcePath = fixture.statePath("agents/main/agent/auth-profiles.json");
           await fixture.writeJson(
             "agents/main/agent/auth-profiles.json",
-            createAuthProfileStoreFixture({
-              "example:default": { mode: "api_key", provider: "example", apiKey: "synthetic-key" },
+            authStore({
+              "example:default": legacyKey("example", "synthetic-key"),
               "openai-codex:default": {
                 type: "oauth",
                 provider: "openai-codex",
@@ -132,7 +146,7 @@ describe("Doctor stored auth alias migration", () => {
       async (fixture) => {
         await fixture.writeJson(
           "agents/main/agent/auth-profiles.json",
-          createAuthProfileStoreFixture({
+          authStore({
             "example:json": {
               mode: "api_key",
               provider: "example",
@@ -153,21 +167,17 @@ describe("Doctor stored auth alias migration", () => {
         });
         expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toMatchObject({
           profiles: {
-            "example:json": {
-              type: "api_key",
-              provider: "example",
+            "example:json": exampleCredential("api_key", {
               key: "synthetic-json-key",
               metadata: { label: "retained" },
-            },
+            }),
           },
         });
         expect(loadPersistedSharedAuthProfileStore(fixture.env)?.profiles).toEqual({
-          "example:json": {
-            type: "api_key",
-            provider: "example",
+          "example:json": exampleCredential("api_key", {
             key: "synthetic-json-key",
             metadata: { label: "retained" },
-          },
+          }),
         });
         const archives = fs
           .readdirSync(agentDir)
@@ -183,8 +193,8 @@ describe("Doctor stored auth alias migration", () => {
     await withOpenClawTestState(
       { label: "auth-backup-generation", layout: "home" },
       async (fixture) => {
-        const original = createAuthProfileStoreFixture({
-          "example:work": { mode: "api_key", provider: "example", apiKey: "synthetic-key" },
+        const original = authStore({
+          "example:work": legacyKey("example", "synthetic-key"),
         });
         writeStore(fixture.env, original);
         const databasePath = resolveSharedAuthStorePath(fixture.env);
@@ -249,7 +259,7 @@ describe("Doctor stored auth alias migration", () => {
             secrets: { defaults: { env: "configured-env" } },
           };
           const ref = { source: "env", provider: "default", id: "SYNTHETIC_AUTH_KEY" };
-          const original = createAuthProfileStoreFixture({
+          const original = authStore({
             "example:malformed-oauth": {
               mode: "oauth",
               provider: "example",
@@ -257,74 +267,51 @@ describe("Doctor stored auth alias migration", () => {
               refresh: { unrecognized: "synthetic" },
               expires: "unknown",
             },
-            "example:token-extras": {
-              type: "token",
-              provider: "example",
+            "example:token-extras": exampleCredential("token", {
               token: "synthetic-token",
               mode: "oauth",
               apiKey: "synthetic-extension",
               key: ref,
-            },
-            "example:malformed": {
-              type: "api_key",
-              provider: "example",
+            }),
+            "example:malformed": exampleCredential("api_key", {
               key: "synthetic-canonical",
               apiKey: 123,
               mode: "unknown",
-            },
-            "example:malformed-only": {
-              type: "api_key",
-              provider: "example",
+            }),
+            "example:malformed-only": exampleCredential("api_key", {
               apiKey: 123,
               mode: "unknown",
-            },
-            "example:unknown": {
-              type: "unsupported",
-              provider: "example",
+            }),
+            "example:unknown": exampleCredential("unsupported", {
               mode: "future",
               apiKey: "synthetic-retained",
-            },
+            }),
             "example:mode": {
               mode: "api_key",
               provider: "example",
               apiKey: "synthetic-api-key",
               email: "owner@example.test",
             },
-            "example:type": { type: "apiKey", provider: "example", apiKey: "synthetic-type-key" },
-            "example:ref": { type: "api_key", provider: "example", key: ref },
-            "example:providerless-key": {
-              type: "api_key",
-              provider: "example",
+            "example:type": exampleCredential("apiKey", { apiKey: "synthetic-type-key" }),
+            "example:ref": exampleCredential("api_key", { key: ref }),
+            "example:providerless-key": exampleCredential("api_key", {
               keyRef: { source: "env", id: "SYNTHETIC_AUTH_KEY", opaque: "keep-in-backup" },
               extension: "preserved",
-            },
-            "example:providerless-token": {
-              type: "token",
-              provider: "example",
+            }),
+            "example:providerless-token": exampleCredential("token", {
               tokenRef: {
                 source: "env",
                 id: "SYNTHETIC_AUTH_KEY",
                 opaque: { note: "keep-in-backup" },
               },
-            },
-            "example:api-ref": { type: "api_key", provider: "example", key: null, apiKey: ref },
-            "example:empty": {
-              type: "api_key",
-              provider: "example",
+            }),
+            "example:api-ref": exampleCredential("api_key", { key: null, apiKey: ref }),
+            "example:empty": exampleCredential("api_key", {
               key: "",
               apiKey: "synthetic-fallback",
-            },
-            "example:token": {
-              type: "token",
-              provider: "example",
-              token: ref,
-              expires: 1900000000000,
-            },
-            "example:alias": {
-              type: "api_key",
-              provider: "example",
-              api_key: "synthetic-underscore-key",
-            },
+            }),
+            "example:token": exampleCredential("token", { token: ref, expires: 1900000000000 }),
+            "example:alias": exampleCredential("api_key", { api_key: "synthetic-underscore-key" }),
           });
           const state = {
             order: { example: ["example:mode", "example:ref"] },
@@ -344,12 +331,7 @@ describe("Doctor stored auth alias migration", () => {
             { env: fixture.env },
           );
           const databasePath = resolveSharedAuthStorePath(fixture.env);
-          const run = () =>
-            runDoctorRepairSequence({
-              state: { cfg, candidate: structuredClone(cfg), pendingChanges: false, fixHints: [] },
-              doctorFixCommand: "openclaw doctor --fix",
-              env: fixture.env,
-            });
+          const run = () => runDoctor(cfg, fixture.env);
           const repaired = await run();
           expect(
             repaired.changeNotes
@@ -363,68 +345,33 @@ describe("Doctor stored auth alias migration", () => {
           const expected = {
             version: 1,
             profiles: {
-              "example:malformed-oauth": {
-                type: "oauth",
-                provider: "example",
+              "example:malformed-oauth": exampleCredential("oauth", {
                 access: 17,
                 refresh: { unrecognized: "synthetic" },
                 expires: "unknown",
-              },
-              "example:token-extras": {
-                type: "token",
-                provider: "example",
-                token: "synthetic-token",
-                mode: "oauth",
-                apiKey: "synthetic-extension",
-                key: ref,
-              },
-              "example:malformed": {
-                type: "api_key",
-                provider: "example",
-                key: "synthetic-canonical",
-                apiKey: 123,
-                mode: "unknown",
-              },
-              "example:malformed-only": {
-                type: "api_key",
-                provider: "example",
-                apiKey: 123,
-                mode: "unknown",
-              },
-              "example:unknown": {
-                type: "unsupported",
-                provider: "example",
-                mode: "future",
-                apiKey: "synthetic-retained",
-              },
-              "example:mode": {
-                type: "api_key",
-                provider: "example",
+              }),
+              "example:token-extras": original.profiles["example:token-extras"],
+              "example:malformed": original.profiles["example:malformed"],
+              "example:malformed-only": original.profiles["example:malformed-only"],
+              "example:unknown": original.profiles["example:unknown"],
+              "example:mode": exampleCredential("api_key", {
                 key: "synthetic-api-key",
                 email: "owner@example.test",
-              },
-              "example:type": { type: "api_key", provider: "example", key: "synthetic-type-key" },
-              "example:ref": { type: "api_key", provider: "example", keyRef: ref },
-              "example:providerless-key": {
-                type: "api_key",
-                provider: "example",
+              }),
+              "example:type": apiKey("example", "synthetic-type-key"),
+              "example:ref": exampleCredential("api_key", { keyRef: ref }),
+              "example:providerless-key": exampleCredential("api_key", {
                 keyRef: ref,
                 extension: "preserved",
-              },
-              "example:providerless-token": { type: "token", provider: "example", tokenRef: ref },
-              "example:api-ref": { type: "api_key", provider: "example", keyRef: ref },
-              "example:empty": { type: "api_key", provider: "example", key: "synthetic-fallback" },
-              "example:token": {
-                type: "token",
-                provider: "example",
+              }),
+              "example:providerless-token": exampleCredential("token", { tokenRef: ref }),
+              "example:api-ref": exampleCredential("api_key", { keyRef: ref }),
+              "example:empty": apiKey("example", "synthetic-fallback"),
+              "example:token": exampleCredential("token", {
                 tokenRef: ref,
                 expires: 1900000000000,
-              },
-              "example:alias": {
-                type: "api_key",
-                provider: "example",
-                key: "synthetic-underscore-key",
-              },
+              }),
+              "example:alias": apiKey("example", "synthetic-underscore-key"),
             },
           };
           expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual(expected);
@@ -443,25 +390,18 @@ describe("Doctor stored auth alias migration", () => {
           const runtimeStore = loadPersistedSharedAuthProfileStore(fixture.env);
           expect(runtimeStore?.profiles["example:mode"]).toEqual(expected.profiles["example:mode"]);
           expect(runtimeStore?.profiles).not.toHaveProperty("example:unknown");
-          expect(runtimeStore?.profiles["example:malformed"]).toEqual({
-            type: "api_key",
-            provider: "example",
-            key: "synthetic-canonical",
-          });
-          expect(runtimeStore?.profiles["example:malformed-only"]).toEqual({
-            type: "api_key",
-            provider: "example",
-          });
-          expect(runtimeStore?.profiles["example:malformed-oauth"]).toEqual({
-            type: "oauth",
-            provider: "example",
-            expires: 0,
-          });
-          expect(runtimeStore?.profiles["example:token-extras"]).toEqual({
-            type: "token",
-            provider: "example",
-            token: "synthetic-token",
-          });
+          expect(runtimeStore?.profiles["example:malformed"]).toEqual(
+            apiKey("example", "synthetic-canonical"),
+          );
+          expect(runtimeStore?.profiles["example:malformed-only"]).toEqual(
+            exampleCredential("api_key", {}),
+          );
+          expect(runtimeStore?.profiles["example:malformed-oauth"]).toEqual(
+            exampleCredential("oauth", { expires: 0 }),
+          );
+          expect(runtimeStore?.profiles["example:token-extras"]).toEqual(
+            exampleCredential("token", { token: "synthetic-token" }),
+          );
           const backups = () =>
             fs
               .readdirSync(path.dirname(databasePath))
@@ -520,7 +460,7 @@ describe("Doctor stored auth alias migration", () => {
         };
         const original: AuthProfileStore = {
           version: 1,
-          profiles: { [legacyId]: { type: "api_key", provider: legacyProvider, key: legacyId } },
+          profiles: { [legacyId]: apiKey(legacyProvider, legacyId) },
           order: { [legacyProvider]: [legacyId] },
           lastGood: { [legacyProvider]: legacyId },
           usageStats: { [legacyId]: { errorCount: 4, lastUsed: 4321 } },
@@ -547,7 +487,7 @@ describe("Doctor stored auth alias migration", () => {
           ? loadPersistedAuthProfileStore(agentDir)
           : loadPersistedSharedAuthProfileStore(fixture.env);
         expect(reopened?.profiles).toEqual({
-          [canonicalId]: { type: "api_key", provider: canonicalProvider, key: legacyId },
+          [canonicalId]: apiKey(canonicalProvider, legacyId),
         });
         expect(reopened?.order).toEqual({ [canonicalProvider]: [canonicalId] });
         expect(reopened?.lastGood).toEqual({ [canonicalProvider]: canonicalId });
@@ -579,11 +519,7 @@ describe("Doctor stored auth alias migration", () => {
         },
       };
       writeStore(fixture.env, "unreadable-store-shape");
-      const result = await runDoctorRepairSequence({
-        state: { cfg, candidate: structuredClone(cfg), pendingChanges: false, fixHints: [] },
-        doctorFixCommand: "openclaw doctor --fix",
-        env: fixture.env,
-      });
+      const result = await runDoctor(cfg, fixture.env);
       expect(result.state.candidate.auth).toEqual(cfg.auth);
       expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toBe("unreadable-store-shape");
       expect(result.warningNotes.join("\n")).toContain("unreadable or invalid");
@@ -597,18 +533,14 @@ describe("Doctor stored auth alias migration", () => {
         auth: { profiles: { "claude-cli:default": { provider: "claude-cli", mode: "api_key" } } },
       };
       await fixture.writeJson("agents/main/agent/auth.json", {
-        "claude-cli": { type: "api_key", provider: "claude-cli", key: "retained-flat-key" },
+        "claude-cli": apiKey("claude-cli", "retained-flat-key"),
       });
-      const result = await runDoctorRepairSequence({
-        state: { cfg, candidate: structuredClone(cfg), pendingChanges: false, fixHints: [] },
-        doctorFixCommand: "openclaw doctor --fix",
-        env: fixture.env,
-      });
+      const result = await runDoctor(cfg, fixture.env);
       expect(result.state.candidate.auth?.profiles).toEqual({
         "anthropic:default": { provider: "anthropic", mode: "api_key" },
       });
       expect(loadPersistedSharedAuthProfileStore(fixture.env)?.profiles).toEqual({
-        "anthropic:default": { type: "api_key", provider: "anthropic", key: "retained-flat-key" },
+        "anthropic:default": apiKey("anthropic", "retained-flat-key"),
       });
     });
   });
@@ -616,11 +548,11 @@ describe("Doctor stored auth alias migration", () => {
   it("keeps an invalid agent store while an independent shared profile migrates", async () => {
     await withOpenClawTestState({ label: "alias-partial", layout: "home" }, async (fixture) => {
       const cfg: OpenClawConfig = { plugins: { enabled: false } };
-      const invalid = createAuthProfileStoreFixture({ "google-gemini-cli:broken": 17 });
+      const invalid = authStore({ "google-gemini-cli:broken": 17 });
       writeStore(
         fixture.env,
-        createAuthProfileStoreFixture({
-          "claude-cli:work": { type: "api_key", provider: "claude-cli", key: "retained-key" },
+        authStore({
+          "claude-cli:work": apiKey("claude-cli", "retained-key"),
         }),
       );
       writeStore(fixture.env, invalid, fixture.agentDir("broken"));
@@ -632,7 +564,7 @@ describe("Doctor stored auth alias migration", () => {
       });
       expect(readPersistedAuthProfileStoreRaw(fixture.agentDir("broken"))).toEqual(invalid);
       expect(loadPersistedSharedAuthProfileStore(fixture.env)?.profiles).toEqual({
-        "anthropic:work": { type: "api_key", provider: "anthropic", key: "retained-key" },
+        "anthropic:work": apiKey("anthropic", "retained-key"),
       });
       expect(result.warnings.join("\n")).toContain("unreadable or invalid");
     });
@@ -657,7 +589,7 @@ describe("Doctor stored auth alias migration", () => {
               }
             : {}),
         };
-        const original = createAuthProfileStoreFixture({
+        const original = authStore({
           "openai-codex:work": {
             type: "oauth",
             provider: "openai-codex",
@@ -687,8 +619,8 @@ describe("Doctor stored auth alias migration", () => {
     async (occupied) => {
       await withOpenClawTestState({ label: "alias-stale-map", layout: "home" }, async (fixture) => {
         const cfg: OpenClawConfig = { plugins: { enabled: false } };
-        const original = createAuthProfileStoreFixture({
-          "openai-codex:work": { type: "api_key", provider: "openai-codex", key: "old-key" },
+        const original = authStore({
+          "openai-codex:work": apiKey("openai-codex", "old-key"),
         });
         writeStore(fixture.env, original);
         const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
@@ -698,7 +630,7 @@ describe("Doctor stored auth alias migration", () => {
                 ...original,
                 profiles: {
                   ...original.profiles,
-                  "openai:work": { type: "api_key", provider: "openai", key: "new-account-key" },
+                  "openai:work": apiKey("openai", "new-account-key"),
                 },
               }
             : original;
@@ -738,8 +670,8 @@ describe("Doctor stored auth alias migration", () => {
       const cfg: OpenClawConfig = { plugins: { enabled: false } };
       writeStore(
         fixture.env,
-        createAuthProfileStoreFixture({
-          "claude-cli:work": { type: "api_key", provider: "claude-cli", key: "retained-key" },
+        authStore({
+          "claude-cli:work": apiKey("claude-cli", "retained-key"),
         }),
       );
       await fixture.writeText("agents/unavailable/agent", "not an agent directory");
@@ -781,7 +713,7 @@ describe("Doctor stored auth alias migration", () => {
         lastGood: { "openai-codex": "openai-codex:work" },
         usageStats: { "openai-codex:work": { lastUsed: 1234, errorCount: 2 } },
       };
-      const agent: AuthProfileStore = createAuthProfileStoreFixture({
+      const agent: AuthProfileStore = authStore({
         "openai:chatgpt-work": agentCredential,
       });
       // Keep the retired field explicit in this migration fixture.
@@ -835,11 +767,7 @@ describe("Doctor stored auth alias migration", () => {
       expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual(shared);
       expect(readPersistedAuthProfileStoreRaw(fixture.agentDir("worker"))).toEqual(agent);
 
-      const result = await runDoctorRepairSequence({
-        state: { cfg, candidate: structuredClone(cfg), pendingChanges: false, fixHints: [] },
-        doctorFixCommand: "openclaw doctor --fix",
-        env: fixture.env,
-      });
+      const result = await runDoctor(cfg, fixture.env);
 
       const migratedConfig = result.state.candidate;
       const migratedRuntime =

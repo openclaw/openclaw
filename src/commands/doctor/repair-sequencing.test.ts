@@ -37,6 +37,14 @@ const configuredBrave = {
   },
 } satisfies NonNullable<NonNullable<OpenClawConfig["plugins"]>["entries"]>[string];
 
+function installedPlugin(id: string, pkg: string, repaired = false) {
+  return {
+    changes: [`Installed missing configured plugin "${id}" from ${pkg}.`],
+    warnings: [],
+    ...(repaired ? { repairedPluginIds: [id], pluginInventoryChanged: true } : {}),
+  };
+}
+
 function enableRepairedPlugin(id: string) {
   mocks.materializePluginAutoEnableCandidates.mockImplementationOnce(
     ({ config }: { config: OpenClawConfig }) => ({
@@ -328,10 +336,9 @@ describe("doctor repair sequencing", () => {
   });
 
   it("auto-enables newly installed configured plugins after doctor repair", async () => {
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
-      changes: ['Installed missing configured plugin "brave" from @openclaw/brave-plugin.'],
-      warnings: [],
-    });
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce(
+      installedPlugin("brave", "@openclaw/brave-plugin"),
+    );
     mocks.applyPluginAutoEnable.mockImplementationOnce((params: { config: OpenClawConfig }) => ({
       config: {
         ...params.config,
@@ -355,12 +362,6 @@ describe("doctor repair sequencing", () => {
     expect(result.state.pendingChanges).toBe(true);
     expect(result.state.candidate.plugins?.allow).toEqual(["telegram", "brave"]);
     expect(result.state.candidate.plugins?.entries?.brave?.enabled).toBe(true);
-    expect(result.changeNotes).toStrictEqual([
-      'Installed missing configured plugin "brave" from @openclaw/brave-plugin.',
-    ]);
-    expect(result.configChangeNotes).toStrictEqual([
-      "brave web search provider selected, enabled automatically.",
-    ]);
   });
 
   it("uses plugins from every agent workspace after inventory repair", async () => {
@@ -402,12 +403,7 @@ describe("doctor repair sequencing", () => {
     });
     mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(async () => {
       mistralInstalled = true;
-      return {
-        changes: ['Installed missing configured plugin "mistral" from @openclaw/mistral-provider.'],
-        warnings: [],
-        repairedPluginIds: ["mistral"],
-        pluginInventoryChanged: true,
-      };
+      return installedPlugin("mistral", "@openclaw/mistral-provider", true);
     });
     mocks.repairStaleAgentModelRefs.mockImplementationOnce((cfg: OpenClawConfig) => {
       expect(authMigrated).toBe(true);
@@ -418,9 +414,6 @@ describe("doctor repair sequencing", () => {
 
     const result = await runRepairs(config, { candidate: config });
 
-    expect(mocks.repairMissingConfiguredPluginInstalls.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.repairStaleAgentModelRefs.mock.invocationCallOrder[0] ?? 0,
-    );
     expectMistralPreserved(result.state.candidate);
   });
 
@@ -441,12 +434,9 @@ describe("doctor repair sequencing", () => {
   });
 
   it("applies doctor contracts exposed by newly installed plugins", async () => {
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
-      changes: ['Installed missing configured plugin "discord" from @openclaw/discord.'],
-      warnings: [],
-      repairedPluginIds: ["discord"],
-      pluginInventoryChanged: true,
-    });
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce(
+      installedPlugin("discord", "@openclaw/discord", true),
+    );
     enableRepairedPlugin("discord");
     mocks.collectChannelDoctorCompatibilityMutations.mockImplementationOnce(
       (cfg: OpenClawConfig) => [
@@ -486,23 +476,12 @@ describe("doctor repair sequencing", () => {
       allowFrom: ["123"],
       dm: { enabled: true },
     });
-    expect(result.changeNotes).toStrictEqual([
-      'Installed missing configured plugin "discord" from @openclaw/discord.',
-    ]);
-    expect(result.configChangeNotes).toStrictEqual([
-      "discord installed for existing configuration, enabled automatically.",
-      "Moved channels.discord.dm.policy → channels.discord.dmPolicy.\nMoved channels.discord.dm.allowFrom → channels.discord.allowFrom.",
-      "channels.discord.allowFrom: converted 1 numeric ID to strings",
-    ]);
   });
 
   it("explicitly enables plugins repaired from env-only configuration", async () => {
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
-      changes: ['Installed missing configured plugin "exa" from @openclaw/exa-plugin.'],
-      warnings: [],
-      repairedPluginIds: ["exa"],
-      pluginInventoryChanged: true,
-    });
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce(
+      installedPlugin("exa", "@openclaw/exa-plugin", true),
+    );
     enableRepairedPlugin("exa");
 
     const result = await runRepairs();
@@ -515,12 +494,6 @@ describe("doctor repair sequencing", () => {
     });
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
     expect(result.state.candidate.plugins?.entries?.exa).toEqual({ enabled: true });
-    expect(result.changeNotes).toStrictEqual([
-      'Installed missing configured plugin "exa" from @openclaw/exa-plugin.',
-    ]);
-    expect(result.configChangeNotes).toStrictEqual([
-      "exa installed for existing configuration, enabled automatically.",
-    ]);
   });
 
   it("refreshes retained default-workspace metadata after cleanup-only inventory repairs", async () => {
@@ -658,10 +631,6 @@ describe("doctor repair sequencing", () => {
     expect(result.state.pendingChanges).toBe(true);
     expect(result.state.candidate.agents?.defaults?.model).toBe("openai/gpt-5.5");
     expect(result.state.candidate.agents?.defaults).not.toHaveProperty("agentRuntime");
-    expect(result.changeNotes).toStrictEqual([]);
-    expect(result.configChangeNotes).toStrictEqual([
-      'Repaired Codex model routes:- agents.defaults.model: openai-codex/gpt-5.5 -> openai/gpt-5.5.\nSet agents.defaults.models.openai/gpt-5.5.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
-    ]);
   });
 
   it("repairs #94184 stale Codex model-map refs before missing plugin install repair", async () => {

@@ -27,7 +27,10 @@ import {
   setUserProfileAuthLink,
 } from "../../state/user-model-accounts.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
@@ -40,19 +43,29 @@ import { repairAuthProfileMigration } from "./auth-profile-repair.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 import { maybeRepairCodexSessionRoutes } from "./shared/codex-route-session-repair.js";
 
-function withFixture(run: Parameters<typeof withOpenClawTestState>[1]) {
-  return withOpenClawTestState({ label: "auth-alias", layout: "home" }, run);
+function bindFixture(fixture: OpenClawTestState) {
+  return {
+    ...fixture,
+    write(value: unknown, agentDir?: string, writer = writePersistedAuthProfileStoreRaw) {
+      return runAuthProfileWriteTransaction(agentDir, (db) => writer(value, agentDir, db), {
+        env: fixture.env,
+      });
+    },
+    run: (cfg: OpenClawConfig) => runDoctor(cfg, fixture.env),
+  };
 }
 
-function writeAuthFixture(
-  env: NodeJS.ProcessEnv,
-  agentDir: string | undefined,
-  value: unknown,
-  writer = writePersistedAuthProfileStoreRaw,
-) {
-  return runAuthProfileWriteTransaction(agentDir, (database) => writer(value, agentDir, database), {
-    env,
-  });
+function withFixture(run: (fixture: ReturnType<typeof bindFixture>) => Promise<void>) {
+  return withOpenClawTestState({ label: "auth-alias", layout: "home" }, (fixture) =>
+    run(bindFixture(fixture)),
+  );
+}
+
+function keyStore(id: string, provider: string, key: string) {
+  return authStore({ [id]: apiKey(provider, key) });
+}
+function legacyStore(id: string, provider: string, key: string) {
+  return authStore({ [id]: { mode: "api_key", provider, apiKey: key } });
 }
 
 function authSelection(provider: string, id: string) {
@@ -181,13 +194,7 @@ describe("Doctor auth alias preservation", () => {
       if (invalid === "inherited rotation reference") {
         await fixture.writeJson(
           "agents/main/agent/auth-profiles.json",
-          authStore({
-            [legacyId]: {
-              mode: "api_key",
-              provider: "claude-cli",
-              apiKey: "synthetic-key",
-            },
-          }),
+          legacyStore(legacyId, "claude-cli", "synthetic-key"),
         );
         const imported = await maybeMigrateAuthProfileJsonStoresToSqlite({
           cfg,
@@ -220,22 +227,9 @@ describe("Doctor auth alias preservation", () => {
       const repair = (profileIdMap = new Map<string, string>()) =>
         maybeRepairLegacyAuthProfileStores({ cfg, env: fixture.env, profileIdMap });
       const collect = () => collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
-      const source = authStore({
-        [legacyId]: {
-          mode: "api_key",
-          provider: "claude-cli",
-          apiKey: "synthetic-original",
-        },
-      });
-      const renamed = authStore({
-        [canonicalId]: {
-          mode: "api_key",
-          provider: "anthropic",
-          apiKey: "synthetic-original",
-        },
-      });
-      const write = (owner: string | undefined, store: unknown) =>
-        writeAuthFixture(fixture.env, owner, store);
+      const source = legacyStore(legacyId, "claude-cli", "synthetic-original");
+      const renamed = legacyStore(canonicalId, "anthropic", "synthetic-original");
+      const write = (owner: string | undefined, store: unknown) => fixture.write(store, owner);
       write(undefined, renamed);
       write(agentDir, source);
       const paths = [
@@ -282,7 +276,7 @@ describe("Doctor auth alias preservation", () => {
       expect(collect().get(legacyId)).toBe(canonicalId);
       await repair();
       expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(
-        authStore({ [canonicalId]: apiKey("anthropic", "synthetic-original") }),
+        keyStore(canonicalId, "anthropic", "synthetic-original"),
       );
       expect(collect().get(legacyId)).toBe(canonicalId);
       // A rollback or interrupted multi-owner commit can leave the other owner on its exact preimage.
@@ -320,10 +314,7 @@ describe("Doctor auth alias preservation", () => {
         clock.mockRestore();
       }
       expect(receiptTimes()).toEqual(previousTimes);
-      write(
-        agentDir,
-        authStore({ [canonicalId]: apiKey("anthropic", "synthetic-different-account") }),
-      );
+      write(agentDir, keyStore(canonicalId, "anthropic", "synthetic-different-account"));
       expect(collect().has(legacyId)).toBe(false);
     });
   });
@@ -336,32 +327,24 @@ describe("Doctor auth alias preservation", () => {
         const cfg = authConfig(authSelection("openai-codex", "openai-codex:work"), {
           entries: { main: {}, worker: { agentDir } },
         });
-        writeAuthFixture(
-          fixture.env,
-          undefined,
-          authStore({
-            "openai-codex:work": apiKey("openai-codex", "synthetic-original-account"),
-          }),
+        fixture.write(keyStore("openai-codex:work", "openai-codex", "synthetic-original-account"));
+        const workerStore = keyStore(
+          "openai-codex:work",
+          "openai-codex",
+          "synthetic-worker-account",
         );
-        const workerStore = authStore({
-          "openai-codex:work": apiKey("openai-codex", "synthetic-worker-account"),
-        });
-        writeAuthFixture(fixture.env, agentDir, workerStore);
-        const run = () => runDoctor(cfg, fixture.env);
+        fixture.write(workerStore, agentDir);
+        const run = () => fixture.run(cfg);
         // The durable store commit survives even when the caller cannot save this candidate.
         await run();
         expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toMatchObject({
           profiles: { "openai:work": { provider: "openai", key: "synthetic-original-account" } },
         });
         if (replaceAccount) {
-          writeAuthFixture(
-            fixture.env,
-            undefined,
-            authStore({ "openai:work": apiKey("openai", "synthetic-replacement-account") }),
-          );
+          fixture.write(keyStore("openai:work", "openai", "synthetic-replacement-account"));
         } else {
           // A stopped multi-store pass can leave one owner at its recorded pre-migration state.
-          writeAuthFixture(fixture.env, agentDir, workerStore);
+          fixture.write(workerStore, agentDir);
         }
         const resumed = await run();
         if (replaceAccount) {
@@ -394,10 +377,9 @@ describe("Doctor auth alias preservation", () => {
           { profiles: { [id]: { provider, mode: "api_key" } } },
           { entries: { main: {}, worker: { agentDir } } },
         );
-        writeAuthFixture(
-          fixture.env,
+        fixture.write(
+          keyStore(id, provider, "synthetic-session-key"),
           owner === "shared" ? undefined : agentDir,
-          authStore({ [id]: apiKey(provider, "synthetic-session-key") }),
         );
         const storePath = path.join(fixture.stateDir, "agents/worker/sessions/sessions.json");
         const sessionKey = "agent:worker:main";
@@ -410,7 +392,7 @@ describe("Doctor auth alias preservation", () => {
             authProfileOverrideSource: "user",
           },
         );
-        const repaired = await runDoctor(cfg, fixture.env);
+        const repaired = await fixture.run(cfg);
         await maybeRepairCodexSessionRoutes({
           cfg: repaired.state.candidate,
           env: fixture.env,
@@ -430,14 +412,11 @@ describe("Doctor auth alias preservation", () => {
     await withFixture(async (fixture) => {
       const agentDir = fixture.agentDir("worker");
       const cfg = authConfig();
-      const shared = authStore({
-        "openai-codex:work": apiKey("openai-codex", "synthetic-shared-key"),
-      });
-      writeAuthFixture(fixture.env, undefined, shared);
-      writeAuthFixture(
-        fixture.env,
-        agentDir,
+      const shared = keyStore("openai-codex:work", "openai-codex", "synthetic-shared-key");
+      fixture.write(shared);
+      fixture.write(
         { version: 1, usageStats: { "openai-codex:work": { errorCount: 2 } } },
+        agentDir,
         writePersistedAuthProfileStateRaw,
       );
       const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
@@ -449,7 +428,7 @@ describe("Doctor auth alias preservation", () => {
           "openai:work": { errorCount: 99 },
         },
       };
-      writeAuthFixture(fixture.env, agentDir, currentState, writePersistedAuthProfileStateRaw);
+      fixture.write(currentState, agentDir, writePersistedAuthProfileStateRaw);
       const result = await maybeRepairLegacyAuthProfileStores({
         cfg,
         env: fixture.env,
@@ -477,7 +456,7 @@ describe("Doctor auth alias preservation", () => {
         },
         order: { "claude-cli": ["work-account"], codex: ["codex:ready"] },
       });
-      writeAuthFixture(fixture.env, undefined, {
+      fixture.write({
         version: 1,
         profiles: {
           "work-account": blocked,
@@ -485,7 +464,7 @@ describe("Doctor auth alias preservation", () => {
         },
         order: cfg.auth?.order,
       });
-      const result = await runDoctor(cfg, fixture.env);
+      const result = await fixture.run(cfg);
       expect(result.state.candidate.auth?.order).toEqual({
         "claude-cli": ["work-account"],
         openai: ["openai:ready"],
@@ -508,9 +487,7 @@ it("repairs credential fields while deferring an occupied JSON alias destination
     const cfg = authConfig({
       profiles: { [from]: { provider: "claude-cli", mode: "api_key" } },
     });
-    writeAuthFixture(
-      fixture.env,
-      undefined,
+    fixture.write(
       authStore({
         [to]: {
           mode: "api_key",
@@ -526,7 +503,7 @@ it("repairs credential fields while deferring an occupied JSON alias destination
     );
     await fixture.writeJson(
       "agents/main/agent/auth-profiles.json",
-      authStore({ [from]: apiKey("claude-cli", "synthetic-imported-account") }),
+      keyStore(from, "claude-cli", "synthetic-imported-account"),
     );
     const repaired = await repairAuthProfileMigration({
       cfg,
@@ -563,18 +540,14 @@ it("repairs credential fields while deferring an occupied JSON alias destination
 it("keeps an old selection unresolved when its source ID is recreated", async () => {
   await withFixture(async (fixture) => {
     const cfg = authConfig(authSelection("claude-cli", "claude-cli:work"));
-    writeAuthFixture(
-      fixture.env,
-      undefined,
-      authStore({ "claude-cli:work": apiKey("claude-cli", "original-account") }),
-    );
-    const run = () => runDoctor(cfg, fixture.env);
+    fixture.write(keyStore("claude-cli:work", "claude-cli", "original-account"));
+    const run = () => fixture.run(cfg);
     await run();
     const replaced = authStore({
       "anthropic:work": apiKey("anthropic", "original-account"),
       "claude-cli:work": apiKey("claude-cli", "recreated-account"),
     });
-    writeAuthFixture(fixture.env, undefined, replaced);
+    fixture.write(replaced);
     const result = await run();
     expect(result.state.candidate.auth).toEqual(cfg.auth);
     expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual(replaced);
@@ -616,7 +589,7 @@ it.each([
         "agents/main/agent/" + file,
         flat ? { [provider]: credential } : authStore({ [id]: credential }),
       );
-      const run = () => runDoctor(cfg, fixture.env);
+      const run = () => fixture.run(cfg);
       await run();
       const saved = loadPersistedSharedAuthProfileStore(fixture.env);
       expect(saved?.profiles[canonical]?.type).toBe("api_key");
@@ -634,7 +607,7 @@ it("keeps the recorded target when import verification rolls back", async () => 
     const cfg = authConfig();
     await fixture.writeJson(
       "agents/main/agent/auth-profiles.json",
-      authStore({ "claude-cli:work": apiKey("claude-cli", "retry-account") }),
+      keyStore("claude-cli:work", "claude-cli", "retry-account"),
     );
     const map = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
     const result = await withPersistedAuthProfileStoreRead(
@@ -673,20 +646,16 @@ it.each(["main", "worker"])(
       await fixture.writeJson("agents/main/agent/auth.json", {
         "claude-cli": apiKey("claude-cli", "original-shared-account"),
       });
-      const run = (config: OpenClawConfig) => runDoctor(config, fixture.env);
+      const run = (config: OpenClawConfig) => fixture.run(config);
       await run(cfg);
       const detected = detectSharedAuthStoreMigration({
         stateDir: fixture.stateDir,
         doctorOnlyStateMigrations: true,
       });
       await migrateSharedAuthStore({ detected, stateDir: fixture.stateDir, env: fixture.env });
-      const local = authStore({
-        "anthropic:default": apiKey("anthropic", "different-local-account"),
-      });
-      writeAuthFixture(fixture.env, agentDir, local);
-      writeAuthFixture(
-        fixture.env,
-        undefined,
+      const local = keyStore("anthropic:default", "anthropic", "different-local-account");
+      fixture.write(local, agentDir);
+      fixture.write(
         authStore({
           "anthropic:default": apiKey("anthropic", "original-shared-account"),
           "codex:ready": apiKey("codex", "independent-account"),
@@ -737,7 +706,7 @@ it("recovers independently verified imports of the same alias across two stores"
         authStore({ "claude-cli:work": apiKey("claude-cli", key) }),
       );
     }
-    const run = () => runDoctor(cfg, fixture.env);
+    const run = () => fixture.run(cfg);
     const first = await run();
     expect(first.findings).toEqual([]);
     expect(first.state.candidate.auth).toEqual({
