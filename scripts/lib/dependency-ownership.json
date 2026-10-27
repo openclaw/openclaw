@@ -11,6 +11,21 @@
       "class": "default-runtime-initially",
       "risk": ["provider-sdk", "network"]
     },
+    "@babel/generator": {
+      "owner": "core:plugin-loader",
+      "class": "core-runtime",
+      "risk": ["compiler-api"]
+    },
+    "@babel/parser": {
+      "owner": "core:typescript-analysis",
+      "class": "core-runtime",
+      "risk": ["parser", "compiler-api"]
+    },
+    "@babel/traverse": {
+      "owner": "core:typescript-analysis",
+      "class": "core-runtime",
+      "risk": ["compiler-api"]
+    },
     "@clack/core": {
       "owner": "core:cli",
       "class": "core-runtime",
@@ -36,11 +51,6 @@
       "class": "default-runtime-initially",
       "risk": ["provider-sdk", "network", "realtime"]
     },
-    "@grammyjs/runner": {
-      "owner": "plugin:telegram",
-      "class": "plugin-runtime",
-      "risk": ["telegram-bot-api", "polling"]
-    },
     "@grammyjs/transformer-throttler": {
       "owner": "plugin:telegram",
       "class": "plugin-runtime",
@@ -51,21 +61,36 @@
       "class": "plugin-runtime",
       "risk": ["mdns", "network"]
     },
+    "@modelcontextprotocol/client": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["protocol-client", "network"]
+    },
+    "@modelcontextprotocol/core": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["schema-validation"]
+    },
+    "@modelcontextprotocol/node": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["protocol-server", "network"]
+    },
     "@modelcontextprotocol/sdk": {
       "owner": "core:mcp",
       "class": "core-runtime",
       "risk": ["protocol-client", "network"]
+    },
+    "@modelcontextprotocol/server": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["protocol-server", "network"]
     },
     "@mozilla/readability": {
       "owner": "plugin:web-readability",
       "class": "plugin-runtime",
       "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
-    },
-    "@mistralai/mistralai": {
-      "owner": "provider:mistral",
-      "class": "default-runtime-initially",
-      "risk": ["provider-sdk", "network"]
     },
     "@openclaw/ai": {
       "owner": "core:ai-runtime",
@@ -75,7 +100,17 @@
     "@openclaw/fs-safe": {
       "owner": "core:filesystem-safety",
       "class": "core-runtime",
-      "risk": ["filesystem", "path-safety"]
+      "risk": ["native", "filesystem", "path-safety", "secret-input"]
+    },
+    "@openclaw/proc-safe": {
+      "owner": "core:process-execution",
+      "class": "core-runtime",
+      "risk": ["native", "process-execution", "service-manager"]
+    },
+    "@opentelemetry/semantic-conventions": {
+      "owner": "provider:mistral",
+      "class": "default-runtime-initially",
+      "risk": ["telemetry"]
     },
     "@silvia-odwyer/photon-node": {
       "owner": "core:media",
@@ -99,10 +134,10 @@
       "class": "core-runtime",
       "risk": ["formatting"]
     },
-    "chokidar": {
-      "owner": "core:watch-mode",
-      "class": "core-runtime",
-      "risk": ["filesystem-watch"]
+    "chrome-devtools-mcp": {
+      "owner": "plugin:browser",
+      "class": "plugin-runtime",
+      "risk": ["browser-control", "protocol-client"]
     },
     "commander": {
       "owner": "core:cli",
@@ -129,6 +164,11 @@
       "class": "core-runtime",
       "risk": ["parser", "untrusted-html"]
     },
+    "esbuild": {
+      "owner": "core:plugin-loader",
+      "class": "core-runtime",
+      "risk": ["native", "compiler-api"]
+    },
     "execa": {
       "owner": "core:process-execution",
       "class": "core-runtime",
@@ -138,6 +178,11 @@
       "owner": "capability:http-route-host",
       "class": "default-runtime-initially",
       "risk": ["http-server", "large-transitive-cone"]
+    },
+    "fast-uri": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["schema-validation"]
     },
     "file-type": {
       "owner": "core:media-admission",
@@ -174,6 +219,11 @@
       "class": "core-runtime",
       "risk": ["network", "proxy"]
     },
+    "import-meta-resolve": {
+      "owner": "core:plugin-loader",
+      "class": "core-runtime",
+      "risk": ["module-resolution"]
+    },
     "jiti": {
       "owner": "core:plugin-loader",
       "class": "core-runtime",
@@ -188,11 +238,6 @@
       "owner": "core:archive-handling",
       "class": "core-runtime",
       "risk": ["archive-parser", "untrusted-files"]
-    },
-    "koffi": {
-      "owner": "core:process-execution",
-      "class": "core-runtime",
-      "risk": ["native", "ffi", "process-execution", "secret-input"]
     },
     "kysely": {
       "owner": "core:sqlite-storage",
@@ -210,15 +255,15 @@
       "class": "core-runtime",
       "risk": ["pattern-matching"]
     },
-    "ms": {
-      "owner": "core:duration-parsing",
-      "class": "core-runtime",
-      "risk": ["duration-parser"]
-    },
     "node-edge-tts": {
       "owner": "plugin:microsoft",
       "class": "plugin-runtime",
       "risk": ["tts", "network"]
+    },
+    "npm": {
+      "owner": "core:plugin-install",
+      "class": "core-runtime",
+      "risk": ["package-manager", "network", "filesystem"]
     },
     "openai": {
       "owner": "provider:openai",
@@ -245,10 +290,10 @@
       "class": "core-runtime",
       "risk": ["browser-automation", "cdp"]
     },
-    "pretty-ms": {
-      "owner": "core:duration-formatting",
-      "class": "core-runtime",
-      "risk": ["formatting"]
+    "proxy-from-env": {
+      "owner": "provider:openai",
+      "class": "default-runtime-initially",
+      "risk": ["network", "proxy"]
     },
     "quickjs-wasi": {
       "owner": "plugin:code-mode-quickjs",
@@ -292,11 +337,6 @@
       "class": "core-runtime",
       "risk": ["logging"]
     },
-    "typescript": {
-      "owner": "core:typescript-analysis",
-      "class": "core-runtime",
-      "risk": ["compiler-api"]
-    },
     "typebox": {
       "owner": "core:json-schema-contracts",
       "class": "core-runtime",
@@ -330,6 +370,11 @@
     "zod": {
       "owner": "core:config-and-plugin-sdk-validation",
       "class": "core-runtime",
+      "risk": ["schema-validation"]
+    },
+    "zod-to-json-schema": {
+      "owner": "provider:mistral",
+      "class": "default-runtime-initially",
       "risk": ["schema-validation"]
     }
   }

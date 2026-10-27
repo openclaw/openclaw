@@ -1,4 +1,5 @@
-// Slack tests cover provider reconnect loop behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { getSlackClient, getSlackTestState, resetSlackTestState } from "../monitor.test-helpers.js";
@@ -7,138 +8,91 @@ const { monitorSlackProvider } = await import("./provider.js");
 const slackTestState = getSlackTestState();
 
 describe("slack socket reconnect loop", () => {
-  beforeEach(async () => {
-    await resetSlackTestState();
-    // Reconnect backoff uses timeouts. Keep ingress polling and SQLite WAL intervals
-    // real so runAllTimersAsync cannot turn periodic maintenance into an infinite loop.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
-
-  it.each([
-    ["network error", () => new Error("ECONNRESET")],
-    [
-      "Slack Web API request error",
-      () =>
-        Object.assign(new Error("Slack Web API request error"), {
-          code: "slack_webapi_request_error",
-          original: new Error("ECONNRESET"),
-        }),
-    ],
-    [
-      "Slack Web API HTTP error",
-      () =>
-        Object.assign(new Error("Slack Web API HTTP error"), {
-          code: "slack_webapi_http_error",
-          statusCode: 503,
-          statusMessage: "Service Unavailable",
-        }),
-    ],
-  ])(
-    "continues after thirteen consecutive recoverable %s failures",
-    async (_label, createError) => {
-      const controller = new AbortController();
-      const runtimeError = vi.fn();
-      const setStatus = vi.fn();
-      let attempts = 0;
-      slackTestState.appStartMock.mockImplementation(async () => {
-        attempts += 1;
-        if (attempts <= 13) {
-          throw createError();
-        }
-        controller.abort();
-      });
-
-      const run = monitorSlackProvider({
-        botToken: "bot-token",
-        appToken: "app-token",
-        abortSignal: controller.signal,
-        config: slackTestState.config,
-        runtime: {
-          log: vi.fn(),
-          error: runtimeError,
-          exit: vi.fn(),
-        },
-        setStatus,
-      });
-
-      await vi.runAllTimersAsync();
-      await expect(run).resolves.toBeUndefined();
-
-      expect(slackTestState.appStartMock).toHaveBeenCalledTimes(14);
-      expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("retry 13/∞"));
-      expect(setStatus).toHaveBeenCalledWith(
-        expect.objectContaining({ connected: false, lifecycle: "recovering" }),
-      );
-    },
-  );
-
-  it("includes the configured Socket Mode logger context in start retry diagnostics", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const controller = new AbortController();
-    const runtimeError = vi.fn();
-    let attempts = 0;
-    slackTestState.appStartMock.mockImplementation(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        slackTestState.socketModeLogger?.error("failed to retrieve WSS URL", {
-          data: { error: "missing_scope", needed: "connections:write" },
-        });
-        throw new Error();
-      }
-      controller.abort();
-    });
-
-    const run = monitorSlackProvider({
+  let controller: AbortController;
+  let runtime: ReturnType<typeof createRuntimeSpies>;
+  const setStatus = vi.fn<(next: Record<string, unknown>) => void>();
+  const start = () =>
+    monitorSlackProvider({
+      scheduler: createTestPluginServiceScheduler(),
       botToken: "bot-token",
       appToken: "app-token",
       abortSignal: controller.signal,
       config: slackTestState.config,
-      runtime: {
-        log: vi.fn(),
-        error: runtimeError,
-        exit: vi.fn(),
-      },
+      runtime,
+      setStatus,
     });
-
+  function failStarts(count: number, error: () => Error, ready = () => controller.abort()) {
+    let attempts = 0;
+    slackTestState.appStartMock.mockImplementation(async () => {
+      if (attempts++ < count) {
+        throw error();
+      }
+      ready();
+    });
+  }
+  async function finishRetries() {
+    const run = start();
     await vi.runAllTimersAsync();
     await expect(run).resolves.toBeUndefined();
-
-    expect(runtimeError).toHaveBeenCalledWith(
+  }
+  beforeEach(async () => {
+    await resetSlackTestState();
+    controller = new AbortController();
+    runtime = createRuntimeSpies();
+    setStatus.mockClear();
+    // Reconnect backoff uses timeouts. Keep ingress polling and SQLite WAL intervals
+    // real so runAllTimersAsync cannot turn periodic maintenance into an infinite loop.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  it("continues after thirteen consecutive recoverable Slack Web API HTTP failures", async () => {
+    failStarts(13, () =>
+      Object.assign(new Error("Slack Web API HTTP error"), {
+        code: "slack_webapi_http_error",
+        statusCode: 503,
+        statusMessage: "Service Unavailable",
+      }),
+    );
+    await finishRetries();
+    expect(slackTestState.appStartMock).toHaveBeenCalledTimes(14);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("retry 13/∞"));
+    const error =
+      "Slack Web API HTTP error; code: slack_webapi_http_error; statusCode: 503; statusMessage: Service Unavailable";
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: false,
+      lifecycle: "recovering",
+      lastDisconnect: { at: expect.any(Number), error },
+      lastError: error,
+    });
+  });
+  it("includes the configured Socket Mode logger context in start retry diagnostics", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    failStarts(1, () => {
+      slackTestState.socketModeLogger?.error("failed to retrieve WSS URL", {
+        data: { error: "missing_scope", needed: "connections:write" },
+      });
+      return new Error();
+    });
+    await finishRetries();
+    expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining(
         "last SDK log: socket-mode:socket-mode failed to retrieve WSS URL slack error: missing_scope; needed: connections:write",
       ),
     );
   });
-
   it("publishes blocked before rejecting a non-recoverable socket start failure", async () => {
-    const controller = new AbortController();
-    const setStatus = vi.fn();
-    slackTestState.appStartMock.mockRejectedValue(new Error("invalid_auth"));
-
-    await expect(
-      monitorSlackProvider({
-        botToken: "bot-token",
-        appToken: "app-token",
-        abortSignal: controller.signal,
-        config: slackTestState.config,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        setStatus,
-      }),
-    ).rejects.toThrow("invalid_auth");
-
+    slackTestState.appStartMock.mockRejectedValue(new Error("token_revoked"));
+    await expect(start()).rejects.toThrow("token_revoked");
     expect(setStatus).toHaveBeenCalledWith({
       connected: false,
       lifecycle: "blocked",
       terminalDisconnect: true,
-      lastError: "invalid_auth",
+      lastError: "token_revoked",
     });
   });
-
   it("re-resolves degraded identity after a recoverable reconnect", async () => {
     getSlackClient().auth.test.mockResolvedValueOnce({
       app_id: "A1",
@@ -146,35 +100,13 @@ describe("slack socket reconnect loop", () => {
       team_id: "T1",
       is_enterprise_install: false,
     });
-    const controller = new AbortController();
-    const setStatus = vi.fn();
-    let attempts = 0;
-    let resolveSecondStart: (() => void) | undefined;
-    const secondStart = new Promise<void>((resolve) => {
-      resolveSecondStart = resolve;
-    });
-    slackTestState.appStartMock.mockImplementation(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new Error("ECONNRESET");
-      }
-      resolveSecondStart?.();
-    });
-
-    const run = monitorSlackProvider({
-      botToken: "bot",
-      appToken: "app",
-      abortSignal: controller.signal,
-      config: slackTestState.config,
-      runtime: createRuntimeSpies(),
-      setStatus,
-    });
-
+    const secondStart = createDeferred<void>();
+    failStarts(1, () => new Error("ECONNRESET"), secondStart.resolve);
+    const run = start();
     await vi.runOnlyPendingTimersAsync();
-    await secondStart;
+    await secondStart.promise;
     await Promise.resolve();
     await Promise.resolve();
-
     expect(setStatus).toHaveBeenCalledWith({
       running: true,
       connected: true,
@@ -183,8 +115,45 @@ describe("slack socket reconnect loop", () => {
       lifecycle: "ready",
       lastError: null,
     });
+    expect(setStatus.mock.calls.find(([patch]) => patch.connected)?.[0]).not.toHaveProperty(
+      "lastEventAt",
+    );
     expect(getSlackClient().auth.test).toHaveBeenCalledTimes(2);
     controller.abort();
     await expect(run).resolves.toBeUndefined();
+  });
+  it("recovers a single invalid_auth start failure without blocking the channel", async () => {
+    failStarts(1, () => new Error("invalid_auth"));
+    await finishRetries();
+    expect(setStatus.mock.calls.some(([next]) => next.lifecycle === "blocked")).toBe(false);
+  });
+  it("blocks at the exact consecutive invalid_auth limit", async () => {
+    slackTestState.appStartMock.mockRejectedValue(new Error("invalid_auth"));
+    const run = start();
+    await vi.runAllTimersAsync();
+    await expect(run).rejects.toThrow("invalid_auth");
+    expect(slackTestState.appStartMock).toHaveBeenCalledTimes(3);
+    expect(setStatus.mock.calls.some(([next]) => next.lifecycle === "blocked")).toBe(true);
+  });
+  it("resets the consecutive invalid_auth count after a successful reconnect", async () => {
+    let attempts = 0;
+    slackTestState.appStartMock.mockImplementation(async () => {
+      attempts += 1;
+      if (attempts !== 2) {
+        throw new Error("invalid_auth");
+      }
+      // Connected once, then the SDK reports an auth failure on the live socket.
+      slackTestState.socketModeClient?.emit(
+        "unable_to_socket_mode_start",
+        new Error("invalid_auth"),
+      );
+    });
+    const run = start();
+    await vi.runAllTimersAsync();
+    await expect(run).rejects.toThrow("invalid_auth");
+    // The pre-connect failure must not carry over: terminal only after a fresh
+    // run of three consecutive failures.
+    expect(slackTestState.appStartMock).toHaveBeenCalledTimes(4);
+    expect(setStatus.mock.calls.some(([next]) => next.lifecycle === "blocked")).toBe(true);
   });
 });

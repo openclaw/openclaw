@@ -4,12 +4,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 
 type ConnectedNodePluginTool = {
   nodeId: string;
   displayName?: string;
-  platform?: string;
-  remoteIp?: string;
   descriptor: NodePluginToolDescriptor;
   /** See NormalizedNodePluginTool.registered. */
   registered: boolean;
@@ -38,16 +37,8 @@ const NODE_PLUGIN_TOOL_MAX_DESCRIPTORS = 128;
 const log = createSubsystemLogger("gateway/node-plugin-tools");
 let snapshotVersion = 0;
 
-function bumpSnapshotVersion(): void {
-  snapshotVersion += 1;
-}
-
 function defaultParameters(): Record<string, unknown> {
   return { type: "object", properties: {}, additionalProperties: true };
-}
-
-function isProviderSafeToolName(value: string): boolean {
-  return NODE_PLUGIN_TOOL_NAME_RE.test(value);
 }
 
 export function createRegisteredNodePluginToolDescriptorMap(
@@ -59,7 +50,7 @@ export function createRegisteredNodePluginToolDescriptorMap(
     const name = normalizeOptionalString(agentTool?.name) ?? "";
     const description = normalizeOptionalString(agentTool?.description) ?? "";
     const command = normalizeOptionalString(entry.command.command) ?? "";
-    if (!isProviderSafeToolName(name) || !description || !command) {
+    if (!NODE_PLUGIN_TOOL_NAME_RE.test(name) || !description || !command) {
       continue;
     }
     const mcpServer = normalizeOptionalString(agentTool?.mcp?.server) ?? "";
@@ -110,7 +101,7 @@ export function normalizeNodePluginToolDescriptors(params: {
     const command = normalizeOptionalString(tool.command) ?? "";
     if (
       !pluginId ||
-      !isProviderSafeToolName(name) ||
+      !NODE_PLUGIN_TOOL_NAME_RE.test(name) ||
       !description ||
       !command ||
       !allowedCommands.has(command)
@@ -155,14 +146,10 @@ export function normalizeNodePluginToolDescriptors(params: {
       left.descriptor.name.localeCompare(right.descriptor.name) ||
       (left.descriptor.command ?? "").localeCompare(right.descriptor.command ?? ""),
   );
-  const byKey = new Map<string, NormalizedNodePluginTool>();
-  for (const entry of normalized) {
-    const key = `${entry.descriptor.pluginId}\0${entry.descriptor.name}`;
-    if (!byKey.has(key)) {
-      byKey.set(key, entry);
-    }
-  }
-  const entries = [...byKey.values()];
+  const entries = dedupeByKey(
+    normalized,
+    (entry) => `${entry.descriptor.pluginId}\0${entry.descriptor.name}`,
+  );
   const droppedCount = entries.length - NODE_PLUGIN_TOOL_MAX_DESCRIPTORS;
   if (droppedCount > 0) {
     log.warn(
@@ -175,15 +162,10 @@ export function normalizeNodePluginToolDescriptors(params: {
 export function replaceConnectedNodePluginTools(params: {
   nodeId: string;
   displayName?: string;
-  platform?: string;
-  remoteIp?: string;
   tools: readonly NormalizedNodePluginTool[];
 }): void {
   if (params.tools.length === 0) {
-    const removed = toolsByNodeId.delete(params.nodeId);
-    if (removed) {
-      bumpSnapshotVersion();
-    }
+    removeConnectedNodePluginTools(params.nodeId);
     return;
   }
   toolsByNodeId.set(
@@ -191,31 +173,32 @@ export function replaceConnectedNodePluginTools(params: {
     params.tools.map((entry) => ({
       nodeId: params.nodeId,
       displayName: params.displayName,
-      platform: params.platform,
-      remoteIp: params.remoteIp,
       descriptor: entry.descriptor,
       registered: entry.registered,
     })),
   );
-  bumpSnapshotVersion();
+  snapshotVersion += 1;
 }
 
 export function removeConnectedNodePluginTools(nodeId: string): void {
   const removed = toolsByNodeId.delete(nodeId);
   if (removed) {
-    bumpSnapshotVersion();
+    snapshotVersion += 1;
   }
 }
 
 export function listConnectedNodePluginTools(): ConnectedNodePluginTool[] {
-  return [...toolsByNodeId.values()]
-    .flat()
-    .toSorted(
-      (left, right) =>
-        left.descriptor.pluginId.localeCompare(right.descriptor.pluginId) ||
-        left.descriptor.name.localeCompare(right.descriptor.name) ||
-        left.nodeId.localeCompare(right.nodeId),
-    );
+  return (
+    [...toolsByNodeId.values()]
+      .flat()
+      // oxlint-disable-next-line unicorn/no-array-sort -- flat creates a private array, leaving node snapshots untouched.
+      .sort(
+        (left, right) =>
+          left.descriptor.pluginId.localeCompare(right.descriptor.pluginId) ||
+          left.descriptor.name.localeCompare(right.descriptor.name) ||
+          left.nodeId.localeCompare(right.nodeId),
+      )
+  );
 }
 
 export function getConnectedNodePluginToolsVersion(): number {

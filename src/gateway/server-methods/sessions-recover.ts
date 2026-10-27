@@ -2,11 +2,11 @@ import {
   validateSessionsRecoverParams,
   type SessionsRecoverResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { recoverGatewaySession } from "../session-recovery-service.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
-import { emitSessionArchived, emitSessionsChanged } from "./session-change-event.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { launchSessionRecoveryContinuation } from "./session-recovery-continuation.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -38,6 +38,9 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
     const recovered = await recoverGatewaySession({
       cfg: context.getRuntimeConfig(),
       key: params.key,
+      mode: params.mode,
+      sessionId: params.sessionId,
+      recoveryCycleId: params.recoveryCycleId,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(creation.actor ? { actor: creation.actor } : {}),
       ...(client?.authenticatedUserProfile
@@ -49,16 +52,32 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
       authorizedPluginId: client?.internal?.pluginRuntimeOwnerId,
       ...(commitGuard ? { commitGuard } : {}),
       workerPlacementContext: resolveSessionWorkerPlacementContext(context),
-      launchContinuation: async (continuation) =>
-        await launchSessionRecoveryContinuation({
+      launchContinuation: async (continuation) => {
+        const continuationGuard =
+          commitGuard || continuation.assertRecoveryCurrent
+            ? () => {
+                commitGuard?.();
+                continuation.assertRecoveryCurrent?.();
+              }
+            : undefined;
+        return await launchSessionRecoveryContinuation({
           ...continuation,
           client,
-          ...(commitGuard ? { commitGuard } : {}),
+          ...(continuationGuard ? { commitGuard: continuationGuard } : {}),
+          assertAdmittedSourceCurrent: () => {
+            authority.commitGuard?.();
+            // The input commit replaces recovery state; its old row guard ends at admission.
+            (
+              sessionMutationAuthorization?.assertAdmittedSourceCurrent ??
+              sessionMutationAuthorization?.assertCurrent
+            )?.();
+          },
           context,
           ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
           req,
           sessionScope: readGatewayRequestMutationAuthority(options).sessionScope,
-        }),
+        });
+      },
     }).catch((error: unknown) => authority.handleClosedError(error));
     if (!recovered) {
       return;
@@ -68,12 +87,14 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    if (recovered.sourceKey !== recovered.successorKey) {
-      emitSessionArchived(
-        context,
-        recovered.sourceKey,
-        recovered.sourceKey === "global" ? recovered.agentId : undefined,
-      );
+    if (recovered.sourceKey && recovered.sourceKey !== recovered.successorKey) {
+      emitSessionsChanged(context, {
+        sessionKey: recovered.sourceKey,
+        ...(recovered.sourceKey === "global" && recovered.agentId
+          ? { agentId: recovered.agentId }
+          : {}),
+        reason: "archive",
+      });
     }
     emitSessionsChanged(context, {
       sessionKey: recovered.successorKey,

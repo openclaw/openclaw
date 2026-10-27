@@ -1,4 +1,3 @@
-// Together setup module handles plugin onboarding behavior.
 import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   createModelCatalogPresetAppliers,
@@ -18,7 +17,7 @@ const togetherPreset = {
     providerId: "together",
     api: "openai-completions",
     baseUrl: TOGETHER_BASE_URL,
-    catalogModels: () => structuredClone(TOGETHER_MODEL_CATALOG),
+    catalogModels: TOGETHER_MODEL_CATALOG,
     aliases: [{ modelRef: TOGETHER_DEFAULT_MODEL_REF, alias: "Together AI" }],
   }),
 } satisfies Parameters<typeof createProviderConnectionPresetAppliers<[]>>[0];

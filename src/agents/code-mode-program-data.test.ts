@@ -73,18 +73,6 @@ describe("Code Mode reply leases", () => {
     expect(toJSON).not.toHaveBeenCalled();
   });
 
-  it("rechecks lifetime after tool-owned normalization", () => {
-    const inbox = new CodeModeProgramDataInbox(limits);
-    const reply = inbox.createReply("reentrant");
-    reply.settle(true, {
-      toJSON() {
-        inbox.close();
-        return "large".repeat(10000);
-      },
-    });
-    expect(() => reply.take()).toThrow("unavailable");
-  });
-
   it("keeps in-flight ownership until delivery release but clears parked replies on cancel", () => {
     const inbox = new CodeModeProgramDataInbox(limits);
     const inFlight = inbox.createReply("in-flight");

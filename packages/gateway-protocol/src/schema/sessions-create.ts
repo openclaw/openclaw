@@ -3,14 +3,17 @@ import { closedObject } from "./closed-object.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
+import { SessionCommunicationPolicySchema } from "./sessions-communication.js";
 import {
+  CyberAccessProgramSchema,
+  SessionDeviceFolderSchema,
   SessionPermissionModeSchema,
   SessionRepositorySourceSchema,
   SessionToolOverridesSchema,
 } from "./sessions-row.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
-export const SESSION_CREATE_RETRY_WINDOW_MS = 4 * 60_000;
+export { SESSION_CREATE_RETRY_WINDOW_MS } from "../session-limits.js";
 export const SESSION_CREATE_IDEMPOTENCY_RETENTION_MS = 5 * 60_000;
 
 /** Creates or adopts a session with optional model, thinking, fast mode, label, and parent linkage. */
@@ -18,6 +21,12 @@ export const SessionsCreateParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
   idempotencyKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
+  surface: Type.Optional(
+    Type.Literal("plugin-dock", {
+      description:
+        "Immutable presentation surface for a new operator-created dock conversation. Preserves creator identity and permissions; ignored when adopting an existing session.",
+    }),
+  ),
   label: Type.Optional(SessionLabelString),
   displayName: Type.Optional(
     Type.String({
@@ -39,8 +48,12 @@ export const SessionsCreateParamsSchema = closedObject({
   agentRuntime: Type.Optional(NonEmptyString),
   contextWindow: Type.Optional(NonEmptyString),
   thinkingLevel: Type.Optional(NonEmptyString),
-  fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+  cyberAccessProgram: Type.Optional(Type.Union([CyberAccessProgramSchema, Type.Null()])),
+  fastMode: Type.Optional(
+    Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
+  ),
   permissionMode: Type.Optional(SessionPermissionModeSchema),
+  communication: Type.Optional(SessionCommunicationPolicySchema),
   toolOverrides: Type.Optional(SessionToolOverridesSchema),
   incognito: Type.Optional(Type.Boolean()),
   visibility: Type.Optional(SessionVisibilitySchema),
@@ -90,6 +103,7 @@ export const SessionsCreateParamsSchema = closedObject({
   ),
   /** Remote-owned source; create, dispatch, then send the initial turn. */
   repository: Type.Optional(SessionRepositorySourceSchema),
+  deviceFolder: Type.Optional(SessionDeviceFolderSchema),
   worktree: Type.Optional(Type.Boolean()),
   worktreeSource: Type.Optional(
     Type.Literal("empty", {

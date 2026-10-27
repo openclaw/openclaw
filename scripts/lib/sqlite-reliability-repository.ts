@@ -1,4 +1,3 @@
-import { fork, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,57 +10,15 @@ import {
 import {
   assertSameCompactionPayload,
   assertSameReliabilityState,
-  formatReliabilityStderr,
   type CompactionPayloadProof,
-  type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
-import {
-  assertReliabilityForcedExit,
-  waitForReliabilityWorkerExit,
-  waitForReliabilityWorkerMessage,
-} from "./sqlite-reliability-process.js";
-import { resolveForwardedNodeCompilerArgs } from "./tsx-cli-shim.mjs";
+import { startReliabilityCrashWorker } from "./sqlite-reliability-process.js";
 
 type RepositoryCrashPoint = "after-commit" | "before-pending" | "pending";
-type RepositoryExit =
-  ReliabilityReport["maintenanceProof"]["repositoryInterruption"]["beforePending"]["exit"];
-type CrashPointResult = {
-  crashSnapshotVerifiedAfterCrash: boolean;
-  crashSnapshotVisibleAfterCrash: boolean;
-  exit: RepositoryExit;
-  incompleteEntries: number;
-  payload: CompactionPayloadProof;
-  stagingEntries: number;
-  state: ReliabilityStateProof;
-  visibleSnapshotsAfterCrash: number;
-};
-
 const REPOSITORY_WORKER_PATH = fileURLToPath(
   new URL("./sqlite-reliability-repository-worker.ts", import.meta.url),
 );
-const REPOSITORY_TIMEOUT_MS = 120_000;
-const WORKER_EXIT_TIMEOUT_MESSAGE =
-  "SQLite repository worker did not exit after forced termination.";
-
-async function waitForCrashPoint(params: {
-  child: ChildProcess;
-  crashPoint: RepositoryCrashPoint;
-  readStderr: () => string;
-}): Promise<void> {
-  await waitForReliabilityWorkerMessage({
-    child: params.child,
-    matches: (message) => {
-      const event = message as { crashPoint?: unknown; kind?: unknown } | undefined;
-      return event?.kind === "crash-point" && event.crashPoint === params.crashPoint;
-    },
-    timeoutMs: REPOSITORY_TIMEOUT_MS,
-    timeoutMessage: () =>
-      `SQLite repository worker did not reach ${params.crashPoint}.${formatReliabilityStderr(params.readStderr())}`,
-    exitMessage: (code, signal) =>
-      `SQLite repository worker exited before ${params.crashPoint}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
-  });
-}
 
 async function verifySnapshot(params: {
   expectedPayload: CompactionPayloadProof;
@@ -85,25 +42,18 @@ function listRepositoryEntries(repositoryPath: string): string[] {
   return fs.existsSync(repositoryPath) ? fs.readdirSync(repositoryPath) : [];
 }
 
-async function runCrashPoint(params: {
-  crashPoint: RepositoryCrashPoint;
-  expectedPayload: CompactionPayloadProof;
-  expectedState: ReliabilityStateProof;
-  identity: SnapshotDatabaseIdentity;
-  provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
-  repositoryPath: string;
-  sourcePath: string;
-  validationRootPath: string;
-  verifyPayload: (databasePath: string) => CompactionPayloadProof;
-  verifyState: (databasePath: string) => ReliabilityStateProof;
-}): Promise<CrashPointResult> {
+async function runCrashPoint(
+  params: Parameters<typeof runRepositoryInterruptionProof>[0] & {
+    crashPoint: RepositoryCrashPoint;
+    provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
+  },
+) {
   const visibleBefore = await params.provider.list();
   const visiblePathsBefore = new Set(
     visibleBefore.map((snapshot) => path.resolve(snapshot.ref.path)),
   );
   const entriesBefore = new Set(listRepositoryEntries(params.repositoryPath));
-  let stderr = "";
-  const child = fork(
+  const worker = startReliabilityCrashWorker(
     REPOSITORY_WORKER_PATH,
     [
       params.crashPoint,
@@ -113,30 +63,14 @@ async function runCrashPoint(params: {
       JSON.stringify(params.identity),
     ],
     {
+      label: "SQLite repository worker",
       cwd: process.cwd(),
-      execArgv: [...resolveForwardedNodeCompilerArgs(), "--import", "tsx"],
-      serialization: "json",
-      stdio: ["ignore", "ignore", "pipe", "ipc"],
     },
   );
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (chunk: string) => {
-    stderr += chunk;
-  });
 
   try {
-    await waitForCrashPoint({
-      child,
-      crashPoint: params.crashPoint,
-      readStderr: () => stderr,
-    });
-    if (!child.kill("SIGKILL")) {
-      throw new Error(
-        `SQLite repository worker exited before the ${params.crashPoint} crash signal was delivered.`,
-      );
-    }
-    const exit = await waitForReliabilityWorkerExit(child, WORKER_EXIT_TIMEOUT_MESSAGE);
-    assertReliabilityForcedExit(exit, "SQLite repository worker");
+    await worker.waitForCrashPoint(params.crashPoint);
+    const exit = await worker.crash(params.crashPoint);
 
     const createdEntries = listRepositoryEntries(params.repositoryPath).filter(
       (entry) => !entriesBefore.has(entry),
@@ -206,12 +140,13 @@ async function runCrashPoint(params: {
       stagingEntries,
       state: sourceState,
       visibleSnapshotsAfterCrash: visibleAfter.length,
+      repositoryVerified: true,
+      retryCreated: true,
+      sourcePayloadPreserved: true,
+      sourceStatePreserved: true,
     };
   } finally {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-      await waitForReliabilityWorkerExit(child, WORKER_EXIT_TIMEOUT_MESSAGE).catch(() => undefined);
-    }
+    await worker.stop();
   }
 }
 
@@ -224,7 +159,7 @@ export async function runRepositoryInterruptionProof(params: {
   validationRootPath: string;
   verifyPayload: (databasePath: string) => CompactionPayloadProof;
   verifyState: (databasePath: string) => ReliabilityStateProof;
-}): Promise<ReliabilityReport["maintenanceProof"]["repositoryInterruption"]> {
+}) {
   const provider = createLocalSqliteSnapshotProvider({
     repositoryPath: params.repositoryPath,
     validationRootPath: params.validationRootPath,
@@ -257,36 +192,5 @@ export async function runRepositoryInterruptionProof(params: {
     provider,
   });
 
-  return {
-    afterCommit: {
-      ...afterCommit,
-      crashSnapshotVerifiedAfterCrash: true,
-      crashSnapshotVisibleAfterCrash: true,
-      incompleteEntries: 0,
-      repositoryVerified: true,
-      retryCreated: true,
-      sourcePayloadPreserved: true,
-      sourceStatePreserved: true,
-    },
-    beforePending: {
-      ...beforePending,
-      crashSnapshotVerifiedAfterCrash: false,
-      crashSnapshotVisibleAfterCrash: false,
-      incompleteEntries: 1,
-      repositoryVerified: true,
-      retryCreated: true,
-      sourcePayloadPreserved: true,
-      sourceStatePreserved: true,
-    },
-    pending: {
-      ...pending,
-      crashSnapshotVerifiedAfterCrash: true,
-      crashSnapshotVisibleAfterCrash: true,
-      incompleteEntries: 0,
-      repositoryVerified: true,
-      retryCreated: true,
-      sourcePayloadPreserved: true,
-      sourceStatePreserved: true,
-    },
-  };
+  return { afterCommit, beforePending, pending };
 }

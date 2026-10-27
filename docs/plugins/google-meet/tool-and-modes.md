@@ -38,6 +38,8 @@ Agents use the `google_meet` tool:
 | `export`                | Write the artifacts/attendance/transcript/manifest bundle; set `"dryRun": true` for manifest-only |
 | `recover_current_tab`   | Focus/inspect an existing Meet tab without opening a new one                                      |
 | `transcript`            | Read the bounded caption transcript; `sinceIndex` resumes from the previous `nextIndex`           |
+| `participation_context` | Read currently available native actions and fresh observed source references for a session        |
+| `participate`           | Execute a supported native action using a stable `requestId` and `participationAction`            |
 | `leave`                 | End a session (Chrome clicks Leave; closes only tabs it opened; Twilio hangs up)                  |
 | `end_active_conference` | End the active Google Meet conference for an API-managed space                                    |
 | `speak`                 | Make the realtime agent speak immediately, given `sessionId` and `message`                        |
@@ -108,6 +110,56 @@ Speaking on demand:
 | `outputGeneration` / `verifiedOutputGeneration`                | Monotonic ids; equality means the current output, rather than an older utterance, passed loopback proof                |
 | `lastOutputLoopbackRms` / `lastOutputLoopbackPeak`             | Audio-energy diagnostics for the latest verified loopback capture chunk                                                |
 | `lastSuppressedInputAt` / `suppressedInputBytes`               | Input ignored by legacy mixed-loopback echo protection; isolated browser input is not suppressed during playback       |
+
+## Native participation requests
+
+Call `participation_context` with `sessionId` before using `participate`. It lists
+only capabilities available for the current tracked browser session; an empty
+list means no native action is available. A platform must provide the native
+implementation before the runtime advertises its capability. Twilio does not
+support browser participation actions.
+
+Pass the advertised action object in `participationAction` and reuse the same
+`requestId` when checking an unclear response. Reusing that ID never repeats the
+effect. An `uncertain` result means the effect may have occurred; do not generate
+a new ID to retry it. Stored results remain readable after leaving, without
+allowing any new action on the closed session.
+
+Cancellation is best effort for browser actions already dispatched. If the
+meeting ends or source authority changes during delivery, the effect may occur
+before the runtime detects that change. An `uncertain` result is not confirmation
+that the action was cancelled; do not retry it with a new request ID.
+
+Incoming chat or caption requests must keep the `sourceId` issued by their
+observer. A tool caller must not remove it to turn meeting input into an unrelated
+operator command. Sources expire after two minutes from their first observation;
+interim text, edits, own echoes, and page changes invalidate old references.
+Edits retain their original order and do not become fresh invitations. Direct
+operator commands may omit `sourceId`.
+
+Participation context retains at most 1,024 live sources, using their original
+observation order for capacity decisions. At capacity, rereading older history
+does not displace newer retained sources. A newer eligible observation replaces
+only the oldest retained source. Unchanged retained sources keep their references
+and live guards; rereading them does not extend the two-minute lifetime.
+
+Retained caption rows also carry independent observation provenance, including
+the observed speaker label and native self/other/unknown marker. Equal text does
+not transfer those facts between participants. Historical, interim, own-echo, and
+capacity-ineligible rows retain their provenance even when they have no actionable
+`source`. A duplicate DOM row disappearing does not finalize another live copy.
+The latest retained snapshots are not a complete journal of intermediate edits.
+
+A rejected request may return `correctionOf`. It permits one corrected request
+with a new `requestId`, that exact `correctionOf`, and the same source and action
+type. It does not permit retrying an uncertain effect or changing who authorized
+it. Attempts and results use the existing SQLite plugin state store. History is
+bounded: at capacity, the oldest closed-session rows are reclaimed. Active
+claims never expire or get evicted to admit another action; discarded closed
+requests remain inactive and cannot run again. A known pre-insertion capacity
+rejection permits one fresh atomic admission attempt after bounded cleanup,
+including when another request reclaimed the same rows. Unknown write outcomes
+are never retried automatically.
 
 ## Agent and bidi modes
 

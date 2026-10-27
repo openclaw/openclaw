@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
+import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import {
@@ -8,12 +9,13 @@ import {
   resolveCronScheduledToolPolicy,
   type CronScheduledToolPolicy,
 } from "../scheduled-tool-policy.js";
+import { isCronOperatorSourceParent } from "../session-target.js";
 import {
   normalizeCronToolsAllowProvenance,
   resolveCronAuthenticatedCallerOrigin,
   resolveCronAuthenticatedChannelRequester,
 } from "../tools-allow-provenance.js";
-import { cronJobUsesToolRuntime } from "../tools-allow.js";
+import { cronJobUsesToolRuntime, resolveCronRunToolsAllow } from "../tools-allow.js";
 import type {
   CronStoredJob,
   CronToolsAllowExecTarget,
@@ -23,14 +25,13 @@ import type {
 import type { CronAddOptions, CronUpdateOptions } from "./state.js";
 
 function resolveCronJobScheduledMessagePolicy(job: CronStoredJob) {
+  const toolsAllow = resolveCronRunToolsAllow(job);
   const policy = resolveCronScheduledToolPolicy({
-    toolsAllow: job.payload.toolsAllow,
+    toolsAllow,
     scheduledToolPolicy: job.scheduledToolPolicy,
     owner: job.owner,
   });
-  return cronJobUsesToolRuntime(job) &&
-    policy &&
-    isRuntimeToolAllowed("message", job.payload.toolsAllow)
+  return cronJobUsesToolRuntime(job) && policy && isRuntimeToolAllowed("message", toolsAllow)
     ? policy
     : undefined;
 }
@@ -88,8 +89,9 @@ export function cronJobMessageActionAuthorityInputsEqual(
 }
 
 /** Binds native requester authority to executable inputs using the canonical storage projection. */
-function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
+export function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
   const {
+    operatorSource: _operatorSource,
     description: _description,
     displayName: _displayName,
     createdActor: _createdActor,
@@ -97,6 +99,46 @@ function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
     ...executableJob
   } = job;
   return resolveCronJobConfigRevision(executableJob);
+}
+
+/** Runtime auto-disable writes enabled into job_json without rebinding the owner's source. */
+export function resolveCronOperatorExecutionRevision(job: CronStoredJob): string {
+  return resolveCronRequesterExecutionRevision({ ...job, enabled: true });
+}
+
+/** Executable edits cannot borrow the previous creator's authenticated source. */
+export function reconcileCronOperatorSource(params: {
+  job: CronStoredJob;
+  previousJob?: CronStoredJob;
+  captured?: NonNullable<CronStoredJob["operatorSource"]>["source"];
+  capturedExecutionRevision?: string;
+  /** Agent-less jobs run as the configured default agent, so they match on that agent. */
+  defaultAgentId?: string;
+}): void {
+  const { job, previousJob } = params;
+  if (!params.captured && !previousJob?.operatorSource) {
+    delete job.operatorSource;
+    return;
+  }
+  const executionRevision = resolveCronOperatorExecutionRevision(job);
+  const captured =
+    params.capturedExecutionRevision === executionRevision ? params.captured : undefined;
+  const previous = previousJob?.operatorSource;
+  const source = captured ?? previous?.source;
+  if (
+    source &&
+    (captured || previous?.executionRevision === executionRevision) &&
+    job.payload.kind === "agentTurn" &&
+    job.scheduledToolPolicy?.mode === "account" &&
+    job.owner?.sessionKey === source.sessionKey &&
+    job.scheduledToolPolicy.ownerSessionKey === source.sessionKey &&
+    tryResolveCronJobEffectiveAgentId(job, params.defaultAgentId) === source.agentId &&
+    isCronOperatorSourceParent(job, source.sessionKey)
+  ) {
+    job.operatorSource = { source, executionRevision };
+  } else {
+    delete job.operatorSource;
+  }
 }
 
 /** Rebinds or clears authenticated requester facts after the complete mutation is known. */
@@ -288,14 +330,16 @@ function reconcileToolsAllowExecTarget(params: {
   if (!params.explicitlyMutatesToolsAllow) {
     return;
   }
-  const grantsExec =
-    Array.isArray(job.payload.toolsAllow) && job.payload.toolsAllow.includes("exec");
-  if (params.toolsAllowExecTarget && grantsExec) {
+  const toolsAllow = job.payload.toolsAllow;
+  const execIndex = toolsAllow.indexOf("exec");
+  // A wildcard cap carries the creator's exec pin like an explicit exec grant.
+  const grantIndex = execIndex === -1 && toolsAllow.includes("*") ? 0 : execIndex;
+  if (params.toolsAllowExecTarget && grantIndex !== -1) {
     job.toolsAllowExecTarget = structuredClone(params.toolsAllowExecTarget);
     job.toolsAllowExecTargetRequirement = {
       version: 1,
       target: structuredClone(params.toolsAllowExecTarget),
-      grantIndex: job.payload.toolsAllow.indexOf("exec"),
+      grantIndex,
     } satisfies CronToolsAllowExecTargetRequirement;
   } else {
     delete job.toolsAllowExecTarget;

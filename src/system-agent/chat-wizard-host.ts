@@ -17,7 +17,6 @@ import type { SystemAgentOperation } from "./operations.js";
 import { classifySystemAgentApprovalText } from "./operator-approval.js";
 
 type WizardPrompter = import("../wizard/prompts.js").WizardPrompter;
-type HostedRuntime = typeof import("./hosted-setup.runtime.js");
 type HostedSetupCompletion = import("./hosted-setup.runtime.js").HostedSetupCompletion;
 type HostedMemoryImportOutcome = import("./hosted-setup.runtime.js").HostedMemoryImportOutcome;
 type HostedWizardRunResult = void | HostedSetupCompletion | HostedMemoryImportOutcome;
@@ -46,32 +45,6 @@ export type ChatWizardAnswerResult = ChatWizardResult & {
   userHistoryText: string;
 };
 
-export type ChatWizardHostDependencies = {
-  runChannelSetupWizard?: (
-    channel: string,
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-  ) => Promise<void | HostedSetupCompletion>;
-  runSkillsSetupWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-  ) => Promise<void | HostedSetupCompletion>;
-  runSearchSetupWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-  ) => Promise<void | HostedSetupCompletion>;
-  runGatewaySetupWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-  ) => Promise<void | HostedSetupCompletion>;
-  runMemoryImportWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-    onProviderOutcome: (outcome: MemoryImportProviderOutcome) => void,
-  ) => Promise<HostedMemoryImportOutcome>;
-  appendAuditEntry?: typeof import("./audit.js").appendSystemAgentAuditEntry;
-};
-
 type ActiveWizardBridge = {
   session: WizardSession;
   step: WizardStep | null;
@@ -87,11 +60,38 @@ type ActiveWizardBridge = {
 
 const log = createSubsystemLogger("system-agent/chat-wizard-host");
 const WIZARD_CANCEL_HINT = "Say `cancel` to stop this setup.";
-let hostedRuntimePromise: Promise<HostedRuntime> | undefined;
-
-function loadHostedRuntime(): Promise<HostedRuntime> {
-  return (hostedRuntimePromise ??= import("./hosted-setup.runtime.js"));
-}
+const HOSTED_SETUP = {
+  skills: {
+    label: "skills",
+    runtime: "runHostedSkillsSetup",
+    success: ["Done — skills dependency setup is complete."],
+    operation: "skills.setup",
+    summary: "Completed skills dependency setup via chat",
+    capability: "skills",
+  },
+  search: {
+    label: "web search",
+    runtime: "runHostedSearchSetup",
+    success: [
+      "Done — web search setup is complete.",
+      "Restart the Gateway if the selected provider or plugin changed.",
+    ],
+    operation: "search.setup",
+    summary: "Configured web search via chat setup",
+    capability: "web-search",
+  },
+  gateway: {
+    label: "gateway",
+    runtime: "runHostedGatewaySetup",
+    success: [
+      "Done — gateway settings saved.",
+      "Restart the Gateway to apply them (`restart gateway`).",
+    ],
+    operation: "gateway.setup",
+    summary: "Configured Gateway via chat setup",
+    capability: "gateway",
+  },
+} as const;
 
 function formatWizardOptions(step: WizardStep): string[] {
   return (step.options ?? []).map((option, index) => {
@@ -253,12 +253,13 @@ export class SystemAgentWizardAnswerError extends Error {}
 
 export class ChatWizardHost {
   private bridge: ActiveWizardBridge | null = null;
+  private awaitingSetupChannel = false;
+  private lastSensitiveChannel: string | undefined;
 
   constructor(
     private readonly options: {
       surface?: "cli" | "gateway";
       beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>;
-      dependencies?: ChatWizardHostDependencies;
     },
   ) {}
 
@@ -273,6 +274,68 @@ export class ChatWizardHost {
   dispose(): void {
     this.bridge?.session.cancel();
     this.bridge = null;
+  }
+
+  clearHandoff(): void {
+    this.awaitingSetupChannel = false;
+    this.lastSensitiveChannel = undefined;
+  }
+
+  resolveChannelHandoffInput(
+    text: string,
+  ): SystemAgentChatReply | Extract<SystemAgentOperation, { kind: "open-setup" }> | null {
+    if (!this.awaitingSetupChannel) {
+      return null;
+    }
+    if (/^(cancel|abort|stop)$/i.test(text)) {
+      this.awaitingSetupChannel = false;
+      return { text: "Channel wizard handoff cancelled.", action: "none" };
+    }
+    if (!/^[a-z0-9_-]+$/i.test(text)) {
+      return {
+        text: "Reply with one channel id, such as `slack` or `telegram`, or say `cancel`.",
+        action: "none",
+      };
+    }
+    this.awaitingSetupChannel = false;
+    return { kind: "open-setup", target: "channels", channel: text.toLowerCase() };
+  }
+
+  openSetup(
+    operation: Extract<SystemAgentOperation, { kind: "open-setup" }>,
+  ): SystemAgentChatReply {
+    if (this.options.surface === "gateway") {
+      return {
+        text: "Open Settings to change your model or connect a channel. To change providers from a shell, run `openclaw onboard` on the machine running OpenClaw.",
+        action: "none",
+      };
+    }
+    if (!["channels", "search", "gateway"].includes(operation.target)) {
+      return {
+        text: "Setup can replace the inference route powering this session. Exit OpenClaw and run `openclaw onboard`; it saves only a route that passes a live test. Then start OpenClaw again.",
+        action: "none",
+      };
+    }
+    let handoff = operation;
+    if (handoff.target === "channels" && !handoff.channel) {
+      if (!this.lastSensitiveChannel) {
+        this.awaitingSetupChannel = true;
+        return {
+          text: "Which channel should I open in the masked terminal wizard?",
+          action: "none",
+        };
+      }
+      handoff = { ...handoff, channel: this.lastSensitiveChannel };
+      this.lastSensitiveChannel = undefined;
+    }
+    this.awaitingSetupChannel = false;
+    const label =
+      handoff.target === "channels"
+        ? `${handoff.channel ?? "channel"} setup`
+        : handoff.target === "search"
+          ? "web search setup"
+          : "Gateway setup";
+    return { text: `Opening the ${label} wizard.`, action: "open-setup", handoff };
   }
 
   decorateReply(reply: SystemAgentChatReply): SystemAgentChatReply {
@@ -353,61 +416,40 @@ export class ChatWizardHost {
   }
 
   async startChannel(channel: string): Promise<ChatWizardResult> {
-    const run = this.options.dependencies?.runChannelSetupWizard;
     return await this.start({
       kind: "channel",
       label: channel,
       autoSelectChannel: channel,
-      run: async (prompter) =>
-        run
-          ? await run(channel, prompter, this.options.beforePersistentApply)
-          : await (
-              await loadHostedRuntime()
-            ).runHostedChannelSetup(channel, prompter, this.options.beforePersistentApply),
+      run: async (prompter, assertPersistentEffectCurrent) => {
+        const beforePersistentApply = async (runtime: RuntimeEnv) => {
+          assertPersistentEffectCurrent();
+          await this.options.beforePersistentApply(runtime);
+          assertPersistentEffectCurrent();
+        };
+        return await (
+          await import("./hosted-setup.runtime.js")
+        ).runHostedChannelSetup(
+          channel,
+          prompter,
+          beforePersistentApply,
+          undefined,
+          assertPersistentEffectCurrent,
+        );
+      },
     });
   }
 
-  async startSkills(): Promise<ChatWizardResult> {
-    const run = this.options.dependencies?.runSkillsSetupWizard;
-    return await this.start({
-      kind: "skills",
-      label: "skills",
-      run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply)
-          : await (
-              await loadHostedRuntime()
-            ).runHostedSkillsSetup(prompter, this.options.beforePersistentApply),
-    });
-  }
-
-  async startSearch(): Promise<ChatWizardResult> {
-    const run = this.options.dependencies?.runSearchSetupWizard;
-    return await this.start({
-      kind: "search",
-      label: "web search",
-      run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply)
-          : await (
-              await loadHostedRuntime()
-            ).runHostedSearchSetup(prompter, this.options.beforePersistentApply),
-    });
-  }
-
-  async startGateway(): Promise<ChatWizardResult> {
-    const run = this.options.dependencies?.runGatewaySetupWizard;
+  async startSetup(kind: keyof typeof HOSTED_SETUP): Promise<ChatWizardResult> {
+    const setup = HOSTED_SETUP[kind];
     const result = await this.start({
-      kind: "gateway",
-      label: "gateway",
+      kind,
+      label: setup.label,
       run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply)
-          : await (
-              await loadHostedRuntime()
-            ).runHostedGatewaySetup(prompter, this.options.beforePersistentApply),
+        await (
+          await import("./hosted-setup.runtime.js")
+        )[setup.runtime](prompter, this.options.beforePersistentApply),
     });
-    if (this.options.surface !== "gateway" || !this.bridge) {
+    if (kind !== "gateway" || this.options.surface !== "gateway" || !this.bridge) {
       return result;
     }
     const warning = [
@@ -418,22 +460,17 @@ export class ChatWizardHost {
   }
 
   async startMemoryImport(): Promise<ChatWizardResult> {
-    const run = this.options.dependencies?.runMemoryImportWizard;
     const providers: MemoryImportProviderOutcome[] = [];
     return await this.start({
       kind: "memory-import",
       label: "memory import",
       memoryImportProviders: providers,
       run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply, (value) =>
-              providers.push(value),
-            )
-          : await (
-              await loadHostedRuntime()
-            ).runHostedMemoryImport(prompter, this.options.beforePersistentApply, (value) =>
-              providers.push(value),
-            ),
+        await (
+          await import("./hosted-setup.runtime.js")
+        ).runHostedMemoryImport(prompter, this.options.beforePersistentApply, (value) =>
+          providers.push(value),
+        ),
     });
   }
 
@@ -442,16 +479,29 @@ export class ChatWizardHost {
     label: string;
     autoSelectChannel?: string;
     memoryImportProviders?: MemoryImportProviderOutcome[];
-    run: (prompter: WizardPrompter) => Promise<HostedWizardRunResult>;
+    run: (
+      prompter: WizardPrompter,
+      assertPersistentEffectCurrent: () => void,
+    ) => Promise<HostedWizardRunResult>;
   }): Promise<ChatWizardResult> {
+    // A masked channel handoff belongs only to the immediately preceding wizard.
+    this.lastSensitiveChannel = undefined;
     const completion: ActiveWizardBridge["completion"] = {
       status: "applied",
       ...(params.memoryImportProviders
         ? { memoryImportProviders: params.memoryImportProviders }
         : {}),
     };
-    const session = new WizardSession(async (prompter) => {
-      const result = await params.run(prompter);
+    const session = new WizardSession(async (prompter, _signal, owner) => {
+      // Publish the bridge before a setup callback can use its retained authority.
+      await Promise.resolve();
+      const assertPersistentEffectCurrent = () => {
+        owner.assertPersistentEffectCurrent();
+        if (this.bridge?.session !== owner) {
+          throw new Error("Setup session is no longer active");
+        }
+      };
+      const result = await params.run(prompter, assertPersistentEffectCurrent);
       if (typeof result === "string") {
         completion.status = result;
       } else if (result) {
@@ -466,7 +516,11 @@ export class ChatWizardHost {
       completion,
       ...(params.autoSelectChannel ? { autoSelectChannel: params.autoSelectChannel } : {}),
     };
-    return await this.pump();
+    const result = await this.pump();
+    if (result.sensitiveChannel) {
+      this.lastSensitiveChannel = result.sensitiveChannel;
+    }
+    return result;
   }
 
   private tryAutoSelect(step: WizardStep): { value: unknown } | null {
@@ -496,25 +550,12 @@ export class ChatWizardHost {
       const label = bridge.label;
       if (result.status === "done") {
         if (bridge.kind === "memory-import") {
-          try {
-            return {
-              text: await (
-                await loadHostedRuntime()
-              ).renderMemoryImport(
-                bridge.completion.memoryImport,
-                this.options.dependencies?.appendAuditEntry,
-              ),
-              configWritten: false,
-            };
-          } catch (error) {
-            log.warn(`memory import completed without audit entry: ${formatErrorMessage(error)}`);
-            return {
-              text: await (
-                await loadHostedRuntime()
-              ).renderMemoryImport(bridge.completion.memoryImport, async () => ""),
-              configWritten: false,
-            };
-          }
+          return {
+            text: await (
+              await import("./hosted-setup.runtime.js")
+            ).renderMemoryImport(bridge.completion.memoryImport),
+            configWritten: false,
+          };
         }
         if (bridge.completion.status === "kept-current") {
           return {
@@ -522,37 +563,20 @@ export class ChatWizardHost {
             configWritten: false,
           };
         }
-        await this.auditSetup(bridge);
+        await this.auditSetup(bridge.kind, bridge.label);
         const success =
           bridge.kind === "channel"
             ? [
                 `Done — ${label} is configured.`,
                 "Say `restart gateway` to apply channel changes, or `channels` to review.",
               ]
-            : bridge.kind === "skills"
-              ? ["Done — skills dependency setup is complete."]
-              : bridge.kind === "search"
-                ? [
-                    "Done — web search setup is complete.",
-                    "Restart the Gateway if the selected provider or plugin changed.",
-                  ]
-                : [
-                    "Done — gateway settings saved.",
-                    "Restart the Gateway to apply them (`restart gateway`).",
-                  ];
+            : HOSTED_SETUP[bridge.kind].success;
         return { text: success.join("\n"), configWritten: true };
       }
       if (bridge.kind === "memory-import") {
-        try {
-          await (
-            await loadHostedRuntime()
-          ).auditMemoryImport(
-            bridge.completion.memoryImportProviders ?? [],
-            this.options.dependencies?.appendAuditEntry,
-          );
-        } catch (error) {
-          log.warn(`memory import completed without audit entry: ${formatErrorMessage(error)}`);
-        }
+        await (
+          await import("./hosted-setup.runtime.js")
+        ).auditMemoryImport(bridge.completion.memoryImportProviders ?? []);
       }
       if (result.status === "cancelled") {
         return {
@@ -567,14 +591,9 @@ export class ChatWizardHost {
     }
     bridge.step = result.step ?? null;
     if (bridge.step) {
-      const auto = this.tryAutoSelect(bridge.step);
-      if (auto) {
-        const step = bridge.step;
-        bridge.step = null;
-        await bridge.session.answer(step.id, auto.value);
-        return await this.pump();
-      }
-      if (this.options.surface === "cli" && bridge.step.sensitive === true) {
+      const step = bridge.step;
+      const auto = this.tryAutoSelect(step);
+      if (!auto && this.options.surface === "cli" && step.sensitive === true) {
         bridge.session.cancel();
         this.bridge = null;
         const target =
@@ -592,55 +611,40 @@ export class ChatWizardHost {
           ...(bridge.kind === "channel" ? { sensitiveChannel: bridge.label } : {}),
         };
       }
-      if (bridge.step.type === "note" || bridge.step.type === "progress") {
-        const step = bridge.step;
+      const displayStep = step.type === "note" || step.type === "progress";
+      if (auto || displayStep || (step.type === "action" && step.executor !== "client")) {
         bridge.step = null;
-        await bridge.session.answer(step.id, undefined);
+        await bridge.session.answer(step.id, auto ? auto.value : displayStep ? undefined : true);
         const next = await this.pump();
-        return { ...next, text: [renderWizardStep(step), next.text].filter(Boolean).join("\n\n") };
-      }
-      if (bridge.step.type === "action" && bridge.step.executor !== "client") {
-        const step = bridge.step;
-        bridge.step = null;
-        await bridge.session.answer(step.id, true);
-        return await this.pump();
+        return displayStep
+          ? { ...next, text: [renderWizardStep(step), next.text].filter(Boolean).join("\n\n") }
+          : next;
       }
     }
     return { text: bridge.step ? renderWizardStep(bridge.step) : "", configWritten: false };
   }
 
-  private async auditSetup(bridge: ActiveWizardBridge): Promise<void> {
-    const entry =
-      bridge.kind === "channel"
-        ? {
-            operation: "channels.setup",
-            summary: `Configured channel ${bridge.label} via chat setup`,
-            details: { channel: bridge.label },
-          }
-        : bridge.kind === "skills"
-          ? {
-              operation: "skills.setup",
-              summary: "Completed skills dependency setup via chat",
-              details: { capability: "skills" },
-            }
-          : bridge.kind === "search"
-            ? {
-                operation: "search.setup",
-                summary: "Configured web search via chat setup",
-                details: { capability: "web-search" },
-              }
-            : {
-                operation: "gateway.setup",
-                summary: "Configured Gateway via chat setup",
-                details: { capability: "gateway" },
-              };
+  private async auditSetup(
+    kind: Exclude<ActiveWizardBridge["kind"], "memory-import">,
+    label: string,
+  ): Promise<void> {
+    const setup = kind === "channel" ? undefined : HOSTED_SETUP[kind];
+    const entry = !setup
+      ? {
+          operation: "channels.setup",
+          summary: `Configured channel ${label} via chat setup`,
+          details: { channel: label },
+        }
+      : {
+          operation: setup.operation,
+          summary: setup.summary,
+          details: { capability: setup.capability },
+        };
     try {
-      const append =
-        this.options.dependencies?.appendAuditEntry ??
-        (await import("./audit.js")).appendSystemAgentAuditEntry;
+      const append = (await import("./audit.js")).appendSystemAgentAuditEntry;
       await append(entry);
     } catch (error) {
-      log.warn(`${bridge.kind} setup completed without audit entry: ${formatErrorMessage(error)}`);
+      log.warn(`${kind} setup completed without audit entry: ${formatErrorMessage(error)}`);
     }
   }
 }

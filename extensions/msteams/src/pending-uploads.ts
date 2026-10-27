@@ -9,7 +9,7 @@
 import crypto from "node:crypto";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 
-interface PendingUpload {
+export interface PendingUpload {
   id: string;
   buffer: Buffer;
   filename: string;
@@ -20,23 +20,17 @@ interface PendingUpload {
   createdAt: number;
 }
 
-const { pendingUploads, pendingUploadTimers } = resolveGlobalSingleton(
+const pendingUploads = resolveGlobalSingleton(
   Symbol.for("openclaw.msteams.pendingUploadState"),
-  () => ({
-    pendingUploads: new Map<string, PendingUpload>(),
-    /** Timer handles keyed by upload ID, cleared on explicit removal to prevent ghost cleanup. */
-    pendingUploadTimers: new Map<string, ReturnType<typeof setTimeout>>(),
-  }),
+  () => new Map<string, { upload: PendingUpload; timer: ReturnType<typeof setTimeout> }>(),
   (state) => {
-    for (const timer of state.pendingUploadTimers.values()) {
+    for (const { timer } of state.values()) {
       clearTimeout(timer);
     }
-    state.pendingUploadTimers.clear();
-    state.pendingUploads.clear();
+    state.clear();
   },
 );
 
-/** TTL for pending uploads: 5 minutes */
 const PENDING_UPLOAD_TTL_MS = 5 * 60 * 1000;
 
 /**
@@ -50,39 +44,26 @@ export function storePendingUpload(upload: Omit<PendingUpload, "id" | "createdAt
     id,
     createdAt: Date.now(),
   };
-  pendingUploads.set(id, entry);
-
-  // Auto-cleanup after TTL; timer ref stored so removePendingUpload can cancel it
   const timer = setTimeout(() => {
     pendingUploads.delete(id);
-    pendingUploadTimers.delete(id);
   }, PENDING_UPLOAD_TTL_MS);
-  pendingUploadTimers.set(id, timer);
+  pendingUploads.set(id, { upload: entry, timer });
 
   return id;
 }
 
-/**
- * Retrieve a pending upload by ID.
- * Returns undefined if not found or expired.
- */
 export function getPendingUpload(id?: string): PendingUpload | undefined {
   if (!id) {
     return undefined;
   }
-  const entry = pendingUploads.get(id);
+  const entry = pendingUploads.get(id)?.upload;
   if (!entry) {
     return undefined;
   }
 
   // Check if expired (in case timeout hasn't fired yet)
   if (Date.now() - entry.createdAt > PENDING_UPLOAD_TTL_MS) {
-    pendingUploads.delete(id);
-    const timer = pendingUploadTimers.get(id);
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      pendingUploadTimers.delete(id);
-    }
+    removePendingUpload(id);
     return undefined;
   }
 
@@ -95,21 +76,13 @@ export function getPendingUpload(id?: string): PendingUpload | undefined {
  */
 export function removePendingUpload(id?: string): void {
   if (id) {
+    clearTimeout(pendingUploads.get(id)?.timer);
     pendingUploads.delete(id);
-    const timer = pendingUploadTimers.get(id);
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      pendingUploadTimers.delete(id);
-    }
   }
 }
 
-/**
- * Set the consent card activity ID on an existing pending upload.
- * Called after the FileConsentCard is sent and we know its activity ID.
- */
 export function setPendingUploadActivityId(uploadId: string, activityId: string): void {
-  const entry = pendingUploads.get(uploadId);
+  const entry = pendingUploads.get(uploadId)?.upload;
   if (entry) {
     entry.consentCardActivityId = activityId;
   }

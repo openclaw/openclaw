@@ -1,104 +1,87 @@
-import fsSync from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
-import type { WorkerOptions } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
-import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
+import * as workers from "../infra/worker-cpu.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { loadCronJobsStoreWithConfigJobsReadOnly } from "./store.js";
-
-const injection = vi.hoisted((): { preload?: string } => ({}));
-vi.mock("node:worker_threads", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:worker_threads")>();
-  return {
-    ...actual,
-    Worker: class extends actual.Worker {
-      constructor(filename: string | URL, options?: WorkerOptions) {
-        super(filename, {
-          ...options,
-          execArgv: [
-            ...(options?.execArgv ?? []),
-            ...(injection.preload && String(filename).includes("/cron/store/read-only.worker.")
-              ? ["--import", injection.preload]
-              : []),
-          ],
-        });
-      }
-    },
-  };
-});
+import { installCronSnapshotFaults } from "./store.readonly-worker-faults.test-support.js";
+import { withCronStore } from "./store.worker.test-support.js";
+import { resolveCronStoreKeyAsync } from "./store/paths.js";
 
 it.each(["read", "copy"] as const)(
-  "retains cold snapshot cleanup after a worker %s failure",
+  "retains the worker %s failure and cold snapshot cleanup custody",
   async (failureStage) => {
-    await withOpenClawTestState(
-      { label: "cron-cold-cleanup", env: { XDG_CACHE_HOME: undefined } },
+    await withCronStore(
+      "cron-cold-cleanup",
       async (state) => {
         const cacheRoot = state.statePath("snapshot-cache");
         process.env.XDG_CACHE_HOME = cacheRoot;
-        const databasePath = resolveOpenClawStateSqlitePath(state.env);
-        await fs.mkdir(path.dirname(databasePath), { recursive: true });
-        const db = new DatabaseSync(databasePath);
-        db.exec("CREATE TABLE marker(value TEXT)");
-        db.close();
-        const preload = await state.writeText(
-          "snapshot-removal-failure.mjs",
-          `
-import fs from "node:fs";
-${failureStage === "copy" ? 'process.env.NODE_OPTIONS = (process.env.NODE_OPTIONS ?? "") + " --import=" + import.meta.url;' : ""}
-const remove = fs.rmSync;
-fs.rmSync = (target, ...args) => {
-  if (String(target).includes("openclaw-sqlite-readonly-")) {
-    throw Object.assign(new Error("controlled worker snapshot removal failure"), { code: "EACCES" });
-  }
-  return remove(target, ...args);
-};
-`,
-        );
-        injection.preload = pathToFileURL(preload).href;
-        const remove = fsSync.promises.rm;
-        let parentRemovalFailed = false;
-        const removal = vi
-          .spyOn(fsSync.promises, "rm")
-          .mockImplementation(async (target, options) => {
-            if (
-              !parentRemovalFailed &&
-              String(target).startsWith(cacheRoot) &&
-              String(target).includes("openclaw-sqlite-readonly-")
-            ) {
-              parentRemovalFailed = true;
-              throw Object.assign(new Error("controlled parent snapshot removal failure"), {
-                code: "EACCES",
-              });
+        await state.createDatabase();
+        // Selection uses another worker; keep the cron reader cold for these faults.
+        await resolveCronStoreKeyAsync(state.storePath, state.env);
+        const originalBytes = await state.bytes();
+        const fault = await installCronSnapshotFaults(state, failureStage);
+        const originalFailure =
+          failureStage === "read"
+            ? "controlled cron read query failure"
+            : "controlled worker snapshot copy failure";
+        const observe = vi.fn();
+        const create = workers.createCpuTrackedWorker;
+        const injection = vi
+          .spyOn(workers, "createCpuTrackedWorker")
+          .mockImplementation((url, options) => {
+            if (String(url) !== fault.cronWorkerUrl) {
+              return create(url, options);
             }
-            await remove(target, options);
+            const worker = create(url, {
+              ...options,
+              execArgv: [...(options?.execArgv ?? []), "--import", fault.cronPreload!],
+            });
+            worker.on("message", observe);
+            return worker;
           });
+        const failure = expect.objectContaining({
+          message: expect.stringContaining(originalFailure),
+        });
         const remaining = async () =>
-          (await fs.readdir(cacheRoot, { recursive: true })).filter((name) =>
-            name.includes("openclaw-sqlite-readonly-"),
-          );
+          (await listDirectoryTreeStrict(cacheRoot))
+            .map((walkEntry) => walkEntry.relativePath)
+            .filter((name) => name.includes("openclaw-sqlite-readonly-"));
         try {
-          await expect(
-            withArtifactPreservingStateReads(() =>
-              loadCronJobsStoreWithConfigJobsReadOnly(
-                state.statePath("cron", "jobs.json"),
-                state.env,
-              ),
-            ),
-          ).rejects.toThrow("cleanup failed");
+          await expect(state.read(true)).rejects.toMatchObject({
+            errors: [
+              failure,
+              expect.objectContaining({ message: "Cron read-only state snapshot cleanup failed." }),
+            ],
+            cause: failure,
+          });
+          expect(observe).toHaveBeenCalledWith(
+            expect.objectContaining({
+              status: "ok",
+              value: expect.objectContaining({ ok: false, error: failure }),
+            }),
+          );
+          expect(fault.count(failureStage === "read" ? "read-query" : "copy-open")).toBeGreaterThan(
+            0,
+          );
+          expect(fault.count("staging-rm")).toBeGreaterThan(0);
+          expect(await state.bytes()).toEqual(originalBytes);
           expect((await remaining()).length).toBeGreaterThan(0);
-          await closeOpenClawStateDatabaseByPathAsync(databasePath);
+          await closeOpenClawStateDatabaseByPathAsync(state.statePath("unrelated.sqlite"));
+          expect((await remaining()).length).toBeGreaterThan(0);
+          fault.allowRemoval();
+          await state.close();
           expect(await remaining()).toEqual([]);
-          expect(parentRemovalFailed).toBe(true);
+          expect(await state.bytes()).toEqual(originalBytes);
         } finally {
-          removal.mockRestore();
-          injection.preload = undefined;
+          fault.allowRemoval();
+          try {
+            await state.close();
+          } finally {
+            fault.restore();
+            injection.mockRestore();
+          }
         }
       },
+      { XDG_CACHE_HOME: undefined },
     );
   },
 );

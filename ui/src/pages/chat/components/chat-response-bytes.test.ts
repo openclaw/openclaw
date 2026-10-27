@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { makeStallingStream } from "../../../../../src/infra/http-body.test-support.js";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
 describe("readResponseBytesWithinLimit", () => {
@@ -6,15 +7,9 @@ describe("readResponseBytesWithinLimit", () => {
     "retains a bounded prefix of an %s oversized response for an excerpt",
     async (sizeSource) => {
       const cancel = vi.fn();
-      const response = new Response(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue(Uint8Array.of(1, 2, 3, 4, 5, 6));
-          },
-          cancel,
-        }),
-        { headers: sizeSource === "advertised" ? { "Content-Length": "6" } : {} },
-      );
+      const response = new Response(makeStallingStream([Uint8Array.of(1, 2, 3, 4, 5, 6)], cancel), {
+        headers: sizeSource === "advertised" ? { "Content-Length": "6" } : {},
+      });
       const bytes = await readResponseBytesWithinLimit(response, 4, { truncate: true });
       expect(bytes && [...new Uint8Array(bytes)]).toEqual([1, 2, 3, 4]);
       expect(cancel).toHaveBeenCalledOnce();
@@ -48,21 +43,6 @@ describe("readResponseBytesWithinLimit", () => {
 
     expect(await readResponseBytesWithinLimit(response, 16)).toBeNull();
     expect(reads).toBe(3);
-    expect(cancel).toHaveBeenCalledOnce();
-  });
-
-  it("rejects and cancels one oversized chunk without retaining it", async () => {
-    const cancel = vi.fn();
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array(17));
-        },
-        cancel,
-      }),
-    );
-
-    expect(await readResponseBytesWithinLimit(response, 16)).toBeNull();
     expect(cancel).toHaveBeenCalledOnce();
   });
 

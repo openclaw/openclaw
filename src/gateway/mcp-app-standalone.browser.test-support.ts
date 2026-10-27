@@ -6,6 +6,7 @@ export type StandaloneHostBrowserOptions = {
   operationStatus?: number;
   initialBody?: ReturnType<typeof createDeferred<unknown>>;
   abortable401Body?: boolean;
+  initialSignal?: AbortSignal;
 };
 
 export async function createStandaloneHostBrowserHarness(
@@ -15,9 +16,14 @@ export async function createStandaloneHostBrowserHarness(
   const listeners = new Map<string, (event: unknown) => void>();
   const timers: Array<{ run: () => void; delayMs: number }> = [];
   const postMessage = vi.fn();
-  const frame = { contentWindow: { postMessage }, setAttribute: vi.fn(), remove: vi.fn() };
+  const frame = {
+    contentWindow: { postMessage },
+    setAttribute: vi.fn(),
+    remove: vi.fn(),
+    style: { height: "" },
+  };
   const replaceChildren = vi.fn();
-  const timeout = vi.fn(() => new AbortController().signal);
+  const timeout = vi.fn(() => options.initialSignal ?? new AbortController().signal);
   const reload = vi.fn();
   const operations: Array<{
     signal: AbortSignal | undefined;
@@ -63,6 +69,7 @@ export async function createStandaloneHostBrowserHarness(
     document: { createElement: () => frame, getElementById: () => ({ replaceChildren }) },
     fetch,
     innerWidth: 800,
+    innerHeight: 900,
     location: { hash: `#${ticket}`, origin: "http://127.0.0.1:18789", reload },
     matchMedia: () => ({ matches: false }),
     navigator: { language: "en" },
@@ -101,6 +108,7 @@ export async function createStandaloneHostBrowserHarness(
     replaceChildren,
     timers,
     timeout,
+    fetch,
     reload,
     pagehide: (persisted = false) => listeners.get("pagehide")?.({ persisted }),
     pageshow: (persisted = false) => listeners.get("pageshow")?.({ persisted }),

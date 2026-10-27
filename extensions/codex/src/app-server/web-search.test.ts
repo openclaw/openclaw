@@ -1,48 +1,47 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
+
+type Params = Parameters<typeof resolveCodexWebSearchPlan>[0];
+type SearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
+const config = (search: SearchConfig) => ({ tools: { web: { search } } });
+const threadConfig = (web_search: "cached" | "live" | "disabled") => ({
+  "features.standalone_web_search": false,
+  web_search,
+});
 
 describe("resolveCodexWebSearchPlan", () => {
   it("uses Codex hosted web search by default when no managed provider is selected", () => {
     expect(resolveCodexWebSearchPlan({})).toEqual({
       kind: "native-hosted",
       suppressManagedWebSearch: true,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "cached",
-      },
+      threadConfig: threadConfig("cached"),
     });
   });
 
   it("projects Codex native web search tuning into thread config", () => {
     const plan = resolveCodexWebSearchPlan({
-      config: {
-        tools: {
-          web: {
-            search: {
-              openaiCodex: {
-                enabled: true,
-                mode: "live",
-                allowedDomains: [" example.com ", "example.com", ""],
-                contextSize: "high",
-                userLocation: {
-                  country: " CA ",
-                  region: " Alberta ",
-                  city: " Edmonton ",
-                  timezone: "America/Edmonton",
-                },
-              },
-            },
+      config: config({
+        openaiCodex: {
+          enabled: true,
+          mode: "live",
+          allowedDomains: [" example.com ", "example.com", ""],
+          contextSize: "high",
+          userLocation: {
+            country: " CA ",
+            region: " Alberta ",
+            city: " Edmonton ",
+            timezone: "America/Edmonton",
           },
         },
-      },
+      }),
     });
 
     expect(plan).toEqual({
       kind: "native-hosted",
       suppressManagedWebSearch: true,
       threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "live",
+        ...threadConfig("live"),
         "tools.web_search.allowed_domains": ["example.com"],
         "tools.web_search.context_size": "high",
         "tools.web_search.location.country": "CA",
@@ -54,143 +53,27 @@ describe("resolveCodexWebSearchPlan", () => {
     });
   });
 
-  it("keeps managed web_search when an explicit managed provider is selected", () => {
-    expect(
-      resolveCodexWebSearchPlan({
-        config: {
-          tools: {
-            web: {
-              search: { provider: "brave" },
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      kind: "managed",
-      suppressManagedWebSearch: false,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      },
-    });
-  });
-
-  it("keeps managed web_search for an explicit Codex native search opt-out", () => {
-    expect(
-      resolveCodexWebSearchPlan({
-        config: {
-          tools: {
-            web: {
-              search: { openaiCodex: { enabled: false } },
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      kind: "managed",
-      suppressManagedWebSearch: false,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      },
-    });
-  });
-
-  it("keeps managed web_search when runtime policy disables Codex native tools", () => {
-    expect(resolveCodexWebSearchPlan({ nativeToolSurfaceEnabled: false })).toEqual({
-      kind: "managed",
-      suppressManagedWebSearch: false,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      },
-    });
-  });
-
-  it("keeps managed web_search when the active Codex provider lacks hosted search", () => {
-    expect(resolveCodexWebSearchPlan({ nativeProviderWebSearchSupport: "unsupported" })).toEqual({
-      kind: "managed",
-      suppressManagedWebSearch: false,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      },
-    });
-  });
-
-  it("keeps managed web_search when active provider support is unknown", () => {
-    expect(resolveCodexWebSearchPlan({ nativeProviderWebSearchSupport: "unknown" })).toEqual({
-      kind: "managed",
-      suppressManagedWebSearch: false,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      },
-    });
-  });
-
-  it("fails closed instead of bypassing native domain restrictions through managed fallback", () => {
-    expect(
-      resolveCodexWebSearchPlan({
-        config: {
-          tools: {
-            web: {
-              search: { openaiCodex: { allowedDomains: ["example.com"] } },
-            },
-          },
-        },
+  it.each<[string, Params, "managed" | "disabled"]>([
+    ["explicit managed provider", { config: config({ provider: "brave" }) }, "managed"],
+    ["native search disabled", { config: config({ openaiCodex: { enabled: false } }) }, "managed"],
+    ["native tools denied", { nativeToolSurfaceEnabled: false }, "managed"],
+    ["unsupported provider", { nativeProviderWebSearchSupport: "unsupported" }, "managed"],
+    [
+      "domain restrictions fail closed",
+      {
+        config: config({ openaiCodex: { allowedDomains: ["example.com"] } }),
         nativeProviderWebSearchSupport: "unsupported",
-      }),
-    ).toEqual({
-      kind: "disabled",
-      suppressManagedWebSearch: true,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "disabled",
       },
-    });
-  });
-
-  it("disables native and managed search for tool-disabled runs", () => {
-    expect(resolveCodexWebSearchPlan({ disableTools: true })).toEqual({
-      kind: "disabled",
-      suppressManagedWebSearch: true,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      },
-    });
-  });
-
-  it("disables native and managed search when effective tool policy denies web_search", () => {
-    expect(resolveCodexWebSearchPlan({ webSearchAllowed: false })).toEqual({
-      kind: "disabled",
-      suppressManagedWebSearch: true,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      },
-    });
-  });
-
-  it("disables both native and managed search when OpenClaw web search is disabled", () => {
-    expect(
-      resolveCodexWebSearchPlan({
-        config: {
-          tools: {
-            web: {
-              search: { enabled: false },
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      kind: "disabled",
-      suppressManagedWebSearch: true,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      },
+      "disabled",
+    ],
+    ["tool-disabled run", { disableTools: true }, "disabled"],
+    ["effective policy denial", { webSearchAllowed: false }, "disabled"],
+    ["OpenClaw search disabled", { config: config({ enabled: false }) }, "disabled"],
+  ])("%s keeps the intended search ownership", (_name, params, kind) => {
+    expect(resolveCodexWebSearchPlan(params)).toEqual({
+      kind,
+      suppressManagedWebSearch: kind === "disabled",
+      threadConfig: threadConfig("disabled"),
     });
   });
 });

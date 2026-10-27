@@ -1,12 +1,5 @@
-import type { MainRestartRecoveryState, RestartRecoveryRun } from "../../config/sessions.js";
-
-type MainSessionRecoveryExecutionIdentity = NonNullable<
-  MainRestartRecoveryState["executionIdentity"]
->;
-
-type MainSessionRecoveryExecutionIdentityAdmission =
-  | { kind: "capture"; token: MainSessionRecoveryExecutionIdentity }
-  | { kind: "retry-reference"; token: MainSessionRecoveryExecutionIdentity };
+import type { MainRestartRecoveryState } from "../../config/sessions/main-session-recovery.types.js";
+import type { RestartRecoveryRun } from "../../config/sessions/types.js";
 
 export type MainSessionRecoveryObservation = {
   sessionId: string;
@@ -20,7 +13,6 @@ export type MainSessionRecoveryReservation = {
   lifecycleGeneration: string;
   runId: string;
   attempt: number;
-  executionIdentityAdmission?: MainSessionRecoveryExecutionIdentityAdmission;
 };
 
 export type MainSessionRecoveryOwnerClaim = {
@@ -65,13 +57,17 @@ type RecoveryRunOwner = {
   sessionId: string;
 };
 
+type AdmittedRecoveryAttempt = RecoveryRunOwner & {
+  cycleId: string;
+  attempt: number;
+};
+
 export type MainSessionRecoveryCommand =
   | {
       kind: "mark_interrupted";
       cycleId: string;
       now: number;
       runs?: RestartRecoveryRun[];
-      resetRuntime?: boolean;
     }
   | {
       kind: "observe";
@@ -95,33 +91,25 @@ export type MainSessionRecoveryCommand =
     }
   | ({
       kind: "bind_admitted_execution_identity";
-      attempt: number;
-      cycleId: string;
-      token: MainSessionRecoveryExecutionIdentity;
-    } & RecoveryRunOwner)
-  | ({
-      kind: "register_recovery_turn";
-      attempt: number;
-      cycleId: string;
-    } & RecoveryRunOwner)
+      token: NonNullable<MainRestartRecoveryState["executionIdentity"]>;
+    } & AdmittedRecoveryAttempt)
+  | ({ kind: "register_recovery_turn" } & AdmittedRecoveryAttempt)
   | {
       kind: "cancel_reservation" | "abandon_reservation";
       reservation: MainSessionRecoveryReservation;
     }
   | ({ kind: "validate_recovery" } & RecoveryRunOwner)
   | ({
-      kind: "admit_recovery" | "mark_admitted_recovery_interrupted";
+      kind: "admit_recovery";
       now: number;
     } & RecoveryRunOwner)
-  | {
-      kind: "claim_foreground";
-      cycleId: string;
-      lifecycleGeneration: string;
-      sessionId: string;
-      sessionKey: string;
-      claimId: string;
-      runId?: string;
-    }
+  | ({
+      kind: "mark_admitted_recovery_interrupted";
+      now: number;
+      /** Refuse an attempt whose runtime turn already started. */
+      unstartedOnly?: true;
+    } & AdmittedRecoveryAttempt)
+  | ({ kind: "claim_foreground" } & MainSessionRecoveryOwnerClaim)
   | { kind: "bind_foreground_run"; claim: MainSessionRecoveryOwnerClaim; runId: string }
   | { kind: "validate_foreground"; claim: MainSessionRecoveryOwnerClaim }
   | { kind: "release_foreground"; claim: MainSessionRecoveryOwnerClaim }
@@ -132,12 +120,12 @@ export type MainSessionRecoveryCommand =
       reason: string;
     }
   | { kind: "doctor_repair"; now: number }
+  | { kind: "interrupt_owed"; now: number }
   | { kind: "clear" };
 
 export type MainSessionRecoveryTransitionResult =
   | {
       kind:
-        | "admitted_recovery"
         | "applied"
         | "doctor_repaired"
         | "foreground_validated"
@@ -145,6 +133,7 @@ export type MainSessionRecoveryTransitionResult =
         | "recovery_validated"
         | "tombstoned";
     }
+  | { kind: "admitted_recovery"; admission: AdmittedRecoveryAttempt }
   | { kind: "foreground_claimed"; claim: MainSessionRecoveryOwnerClaim }
   | { kind: "observed"; view: MainSessionRecoveryView }
   | { kind: "rejected"; reason: MainSessionRecoveryConflict }

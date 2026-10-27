@@ -8,9 +8,7 @@ export async function terminateExactCarrierProcesses(params: {
 }): Promise<void> {
   params.assertCurrent();
   if (params.peers.size === 0) {
-    throw new Error(
-      "no authenticated carrier process identity is available for fail-closed shutdown",
-    );
+    throw new Error("no authenticated carrier process identity is available for safe shutdown");
   }
   for (const peer of params.peers.values()) {
     const expected =
@@ -18,11 +16,7 @@ export async function terminateExactCarrierProcesses(params: {
         ? "FaceTime"
         : peer.bundleIdentifier === "com.apple.FaceTime.FTConversationService"
           ? "FTConversationService"
-          : peer.bundleIdentifier === "com.apple.mobilephone"
-            ? "Phone"
-            : peer.bundleIdentifier === "com.apple.TelephonyUtilities"
-              ? "TelephonyUtilities"
-              : "";
+          : "";
     const inspectExactProcess = async (): Promise<boolean> => {
       const inspected = await params.runtime.system.runCommandWithTimeout(
         ["/bin/ps", "-p", String(peer.processId), "-o", "comm="],

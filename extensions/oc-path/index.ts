@@ -1,12 +1,42 @@
-// OC Path plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { registerOcPathCli } from "./cli-registration.js";
+
+function hasCliFlag(argv: readonly string[], flag: "--human" | "--json"): boolean {
+  for (const arg of argv.slice(2)) {
+    if (arg === "--") {
+      return false;
+    }
+    if (arg === flag) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export default definePluginEntry({
   id: "oc-path",
   name: "OC Path",
   description: "Adds the openclaw path CLI for oc:// workspace file addressing.",
   register(api) {
-    registerOcPathCli(api);
+    api.registerCli(
+      async ({ program }) => {
+        const { registerPathCli } = await import("./src/cli.js");
+        registerPathCli(program);
+      },
+      {
+        descriptors: [
+          {
+            name: "path",
+            description: "Inspect and edit workspace files via oc:// paths",
+            hasSubcommands: true,
+            machineOutput: (params) => {
+              if (hasCliFlag(params.argv, "--json")) {
+                return true;
+              }
+              return !hasCliFlag(params.argv, "--human") && !params.stdoutIsTTY;
+            },
+          },
+        ],
+      },
+    );
   },
 });

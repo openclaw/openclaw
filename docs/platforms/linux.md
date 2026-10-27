@@ -9,29 +9,31 @@ title: "Linux app"
 ---
 
 The Gateway is fully supported on Linux. Node is the primary, default, and
-recommended runtime; Bun 1.4+ builds with WAL-reset-safe `node:sqlite` can run
+recommended runtime; Bun 1.4.4+ builds with WAL-reset-safe `node:sqlite` can run
 OpenClaw as an explicit opt-in. Use `pnpm` rather than Bun for dependency
 installation.
 
 ## Desktop companion
 
 The OpenClaw Linux companion is a Tauri desktop app for local and remote
-Gateways. It:
+Gateways. On Windows, the native [Windows Hub](/platforms/windows#recommended-windows-hub)
+is recommended; this cross-platform [Tauri app](/platforms/windows#backup-tauri-desktop-app)
+is the backup, available in regular OpenClaw releases with bundled Bun for a local
+Windows Gateway. On Linux, it:
 
-- walks new users through choosing a local Gateway, a discovered remote Gateway,
-  a manually entered Gateway URL, or an SSH tunnel
-- installs the OpenClaw CLI and Node in a private managed runtime when local
-  setup needs them, rather than requiring a global CLI install; release builds
-  install the stable channel automatically, while development builds ask for
-  the channel first
+- automatically sets up a local Gateway for fresh installs, with manual local,
+  discovered remote, direct URL, and SSH choices available if setup fails
+- installs the OpenClaw CLI and runs fresh local installations on the bundled
+  OpenClaw Bun fork, without requiring a global CLI install; release builds
+  install their matching stable version, while development builds use
+  Development for automatic setup
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
 - discovers nearby Bonjour Gateways and opens each Control UI in a route-scoped window, so several
   Gateway dashboards can stay connected and be used simultaneously
 - opens the Gateway-served Control UI with its resolved authentication URL
-- opens Model Setup for an unconfigured local or remote Gateway, discovers
-  available AI access, and waits for your explicit action before selecting,
-  testing, installing, or saving a provider
+- opens custodian onboarding after automatic local setup to prepare AI access
+  and explain the selection; manual setup retains the explicit Model Setup picker
 - continues into guided onboarding after connecting a new model; onboarding can
   import detected Claude Code, Codex, or Hermes memories into the agent workspace
   (the same import stays available later under Settings → Import Memory)
@@ -62,7 +64,7 @@ endpoint.
 The app prepares the local Chrome native helper at startup and after CLI
 installation. Release builds reuse a matching CLI or install a version-matched
 browser runtime under their own app-data directory. This download does not
-create, probe, refresh, or restart a Gateway service, replace its runtime, or
+create, check, refresh, or restart a Gateway service, replace its runtime, or
 change the selected remote connection. It requires an internet connection.
 
 Choose **Set Up Chrome Extension…** in the tray to retry setup and open the
@@ -74,11 +76,19 @@ credential. A remote-only desktop connection still needs a browser node on this
 computer to expose its tabs to the remote Gateway.
 
 Development builds use an existing local CLI rather than downloading an
-unrelated stable runtime. The Windows Tauri test build does not provide this
+unrelated stable runtime. The Windows Tauri build does not provide this
 runtime installer. See [Chrome extension](/tools/chrome-extension) for approval,
 disconnection, and manual recovery.
 
 ### Desktop compatibility
+
+The Linux companion shares one Bun fork pin with the native macOS app and CI.
+Runtime admission, SQLite safety checks, and the fork's disabled implicit package
+auto-install remain enabled. macOS Tauri test builds keep their existing runtime
+behavior; the native macOS app owns its separate bundled runtime. Windows Tauri
+releases use the signed Windows fork from the shared pin for local setup; an
+unsigned dry-run is not shippable. See
+[Bun compatibility](/install/bun-compatibility).
 
 Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
 newer plus a `libstdc++` that provides `GLIBCXX_3.4.30`. Ubuntu 22.04 and
@@ -103,8 +113,9 @@ streaming only. Other device commands belong to the [CLI node host](/cli/node) a
 [Linux Node plugin](/platforms/linux#node-capabilities).
 
 The [native macOS app](/platforms/macos) and [Windows Hub](/platforms/windows)
-are separate applications, not this shell's opt-in macOS and Windows Tauri test
-bundles. See their platform pages for requirements and capabilities.
+are separate applications. Windows Hub is the recommended Windows app; this
+Tauri shell is the backup. The macOS Tauri build remains an opt-in test bundle.
+See the platform pages for requirements and capabilities.
 
 ### Gateway selection
 
@@ -127,7 +138,10 @@ Changing it requires the separate **Set as Primary** confirmation on a saved
 token-authenticated connection. Other Gateway windows retain their own targets.
 The companion remembers successful explicit selections, returns to Primary when
 that saved connection is removed, and keeps credentials in the operating
-system's credential store. Linux requires an unlocked Secret Service, such as
+system's credential store. Each saved Gateway keeps its own dashboard storage, so
+an approved device pairing survives restarts. Removing the Gateway retires that
+storage: saving it again pairs a new dashboard session, and the old storage is
+deleted at the next launch. Linux requires an unlocked Secret Service, such as
 GNOME Keyring or KWallet's Secret Service support.
 
 An unavailable credential store shows a dismissible notice without blocking the
@@ -140,6 +154,44 @@ after the new dashboard loads successfully.
 
 The macOS Tauri build is named **OpenClaw-Tauri** and keeps its saved connections
 separate from the native **OpenClaw** app.
+
+<a id="adopt-the-bundled-runtime" />
+
+### Use the bundled runtime
+
+On Linux, fresh local setup installs the Gateway on the bundled OpenClaw Bun
+fork through the standard CLI. The install guard requires the service to still
+be absent. A service that appears during setup blocks that installation. The app's
+runtime marker is informational and never authorizes automatic service changes.
+
+For any existing Gateway that uses another runtime, choose **Use bundled
+runtime…** in the tray menu. This includes Node, an older bundled Bun after an
+app update, and an operator-selected runtime. The confirmation shows the current
+runtime. The CLI install checks that the service definition and runtime pin still
+match what you confirmed before switching to the current bundled Bun. If either
+changed, the action refuses. A paused or stopped Gateway stays stopped; choose
+**Start Gateway** before switching runtimes.
+
+The app checks Gateway health after installation. On failure it shows the error
+and a CLI command to return to the previous runtime. It does not automatically
+restore a runtime. To return to Node, install a
+[supported Node version](/install/node-compatibility) if needed, then run:
+
+```sh
+openclaw gateway install --force --runtime node
+```
+
+To return to a particular previous executable, use
+`openclaw gateway install --force --runtime-path /absolute/path/to/node-or-bun`.
+The CLI owns service installation. Switching an existing Gateway's runtime
+leaves its CLI launcher unchanged.
+
+Startup and app updates never change an existing Gateway service or runtime pin.
+After an app update, the current service keeps its existing runtime until you
+choose **Use bundled runtime…** again. Immutable app runtime directories are
+retained, so updates never remove a runtime referenced by a service. These actions
+are Linux-only; macOS Tauri keeps its existing behavior, separate from the
+[native macOS app](/platforms/mac/bundled-gateway).
 
 ### Desktop sharing
 
@@ -164,8 +216,21 @@ desktop connection. Closing the window to the tray keeps sharing active.
 
 ### First-run setup
 
-Choose **Get started** on the welcome screen, then choose where your assistant
-should live:
+With no saved OpenClaw configuration or Gateway profiles, the app starts local
+setup automatically and opens custodian onboarding in the Control UI. The
+custodian prepares available AI access and explains the selection and alternatives.
+**Use a different Gateway** opens Manage Gateways, **Review permissions** opens
+this computer's permissions, and **Open AI setup** opens Model Setup.
+The card labels the local Gateway **This computer** and saved remote Gateways
+by name; its native actions retain the selected Gateway's base path.
+
+Automatic setup uses the same bundled runtime, installer, and CLI-managed service
+as manual local setup. It never automatically joins a discovered Gateway. Existing
+configurations and remote setups keep their current behavior. An unreadable saved
+profile store or any automatic setup failure returns to the manual choices with
+the error visible.
+
+In manual setup, choose where your assistant should live:
 
 - **On this computer** installs any missing local prerequisites and starts the
   Gateway as a systemd user service.
@@ -190,7 +255,7 @@ shared-store references must be resolved on their owning Gateway host.
 SSH uses your existing OpenSSH authentication and host-key verification. See
 [Remote access](/gateway/remote) for secure Gateway configuration.
 
-After the connection succeeds, Model Setup discovers AI access available to the
+After a manual connection succeeds, Model Setup discovers AI access available to the
 selected Gateway and shows it as a choice. Discovery does not import or copy an
 account. On a fresh visit, the companion does not select, test, install, or save
 a provider until you choose its action. Provider sign-in or API-key entry is
@@ -273,7 +338,7 @@ file; a new Gateway release alone does not prove a new Linux app is available.
 The shipped updater still uses `releases/latest/download/latest.json`.
 Independent `linux-stable` publication tooling is not a client endpoint or
 download-link migration. That activation requires separate release approval and
-signed installed-client proof; see [Linux companion publication](/reference/RELEASING#linux-companion-publication).
+signed installed-client proof; see [Linux companion publication](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/platform-publication.md#linux).
 
 ### Media codecs
 
@@ -287,7 +352,7 @@ either Linux bundle, install the packages and inspection tool explicitly:
 
 ```bash
 sudo apt update && sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good \
-  gstreamer1.0-plugins-bad gstreamer1.0-tools patchelf xdg-utils
+  gstreamer1.0-plugins-bad gstreamer1.0-tools patchelf xdg-utils unzip
 ```
 
 The packaging script stages only that media capability set before Tauri invokes
@@ -379,7 +444,7 @@ and its reply.
 The CLI remains the simplest option for a headless server or VPS. Use a manual
 SSH tunnel when connecting without the Linux desktop companion:
 
-1. Install Node 26 (recommended), or another supported release: Node 24.16+ or Node 26.1+.
+1. Install Node 26 (recommended), or another supported release: Node 24.22.1+ or Node 26.12.1+.
 2. On npm 12 or npm 11.16+, run `npm i -g openclaw@latest --allow-scripts=openclaw`. On npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
@@ -438,7 +503,7 @@ The bundled Linux Canvas bridge and its desktop Canvas window have been removed.
 For inline widgets in the Control UI, use [`show_widget`](/tools/show-widget).
 The separate [macOS widget panel](/platforms/mac/canvas) requires a connected
 Mac and is render-only. These widget surfaces do not restore the former Linux
-Canvas bridge or its A2UI push commands.
+Canvas bridge.
 
 ## Install
 
@@ -452,7 +517,7 @@ On Linux hosts without a supported service manager, run the Gateway in the
 foreground or through your own supervisor, such as rc.d. `openclaw gateway status
 --deep` reports **no supported service manager detected** and identifies a
 remaining service unit as stale. That recorded unit does not select the status
-probe's configuration or port. Updates continue with a service warning; restart
+check's configuration or port. Updates continue with a service warning; restart
 your manually launched Gateway after the update. An unavailable user session bus
 on a systemd host remains a separate service-access diagnostic.
 
@@ -514,6 +579,24 @@ Hand-written units do not inherit the adaptive heap sizing that `openclaw gatewa
 
 `TimeoutStopSec=330` covers the Gateway's five-minute cooperative drain plus teardown reserve. To inspect the current managed unit body, run `systemctl --user cat openclaw-gateway.service` (or `systemctl --user cat openclaw-gateway-<profile>.service` for a named profile).
 
+Host shutdown also stops the enclosing `user@<uid>.service`. Its timeout can cut
+short the Gateway's own drain; Ubuntu 24.04 ships a five-second limit in
+`/usr/lib/systemd/system/user@.service.d/timeout.conf`. Doctor and Gateway status
+warn when the effective user-manager timeout is below 90 seconds. This warning
+does not trigger a Gateway reinstall or change host policy.
+
+Inspect it with `systemctl show user@$(id -u).service -p TimeoutStopUSec`. To allow
+more time, create `/etc/systemd/system/user@<uid>.service.d/zz-openclaw-stop-timeout.conf`:
+
+```ini
+[Service]
+TimeoutStopSec=90
+```
+
+Use `330` to preserve the full Gateway drain, accepting a potentially longer host
+shutdown. The drop-in name sorts after Ubuntu's `timeout.conf`; run
+`sudo systemctl daemon-reload` and inspect the effective value again.
+
 Enable it:
 
 ```bash
@@ -531,6 +614,12 @@ For eligible Linux child spawns, OpenClaw wraps the command in a short
 `/bin/sh` shim that attempts to raise the child's own `oom_score_adj` to
 `1000`, then `exec`s the real command. This is unprivileged: a process may
 always raise its own OOM score.
+
+The small spawn broker and service-child anchor avoid this extra shell exec:
+they temporarily raise their own score around the native spawn, then restore it.
+The child inherits `1000` before it can execute or fork descendants. If the
+helper cannot adjust its score, it uses the shim. Direct launches and PTYs
+keep the shim so the Gateway's own score never needs to change.
 
 Covered child process surfaces:
 

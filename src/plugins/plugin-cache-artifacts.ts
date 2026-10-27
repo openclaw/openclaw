@@ -1,7 +1,15 @@
-/** Immutable artifact facts acquired by one plugin cache generation. */
-type PluginArtifactLocation = { modulePath: string; boundaryRoot: string };
-
 export type PluginModuleLoader = (target: string) => unknown;
+
+export type InspectionNativeEsmPolicy = {
+  workspaces: ReadonlySet<string>;
+  sources: ReadonlyMap<string, string>;
+  devSourceRoot?: string | null;
+};
+
+/** Admission owns the lifetime; the module loader owns concrete code and capture resources. */
+export type InspectionNativeEsmRetention = InspectionNativeEsmPolicy & {
+  dispose?: () => Promise<void>;
+};
 
 type PluginModuleCacheVariant = {
   exports?: { value: unknown };
@@ -21,12 +29,10 @@ export type PluginSourceCacheRecord = {
   publicSurface?: { exports: object };
 };
 
-type PluginPublicSurfaceBoundary = { boundaryLabel: string; rejectHardlinks: boolean };
-
-type PluginRootArtifactCache = {
-  publicSurfaceBoundary?: PluginPublicSurfaceBoundary;
-  artifactLoadsInProgress: Set<string>;
-  artifacts: Map<string, PluginArtifactLocation | null>;
+export type PluginRootArtifactCache = {
+  publicSurfaceBoundary?: { boundaryLabel: string; rejectHardlinks: boolean };
+  /** Immutable artifact facts acquired by one plugin cache generation. */
+  artifacts: Map<string, { modulePath: string; boundaryRoot: string } | null>;
   runtimeArtifacts: Map<string, { source: string; rootDir: string }>;
   entryBoundaries: Map<
     string,
@@ -40,26 +46,9 @@ type PluginRootArtifactCache = {
   entryPaths: Map<string, { path: string } | { error: Error }>;
 };
 
-export function createPluginCacheArtifacts(): {
+export type PluginCacheArtifacts = {
   moduleLoaders: Map<string, PluginModuleLoader>;
   sources: Map<string, PluginSourceCacheRecord>;
   sourceAliases: Map<string, string>;
   runtimeRecordRoots: WeakMap<object, { rootDir: string; resolvedRootDir: string; prefix: string }>;
-} {
-  return {
-    moduleLoaders: new Map(),
-    sources: new Map(),
-    sourceAliases: new Map(),
-    runtimeRecordRoots: new WeakMap(),
-  };
-}
-
-export function createPluginRootArtifacts(): PluginRootArtifactCache {
-  return {
-    artifactLoadsInProgress: new Set<string>(),
-    artifacts: new Map<string, PluginArtifactLocation | null>(),
-    runtimeArtifacts: new Map(),
-    entryBoundaries: new Map(),
-    entryPaths: new Map(),
-  };
-}
+};

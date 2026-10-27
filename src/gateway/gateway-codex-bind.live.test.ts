@@ -1,4 +1,3 @@
-// Codex bind live gateway tests verify bundled Codex plugin channel binding and outbound session routing.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -28,6 +27,8 @@ import {
   getCliBackendPortBlock,
 } from "./gateway-cli-backend.live-helpers.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
+// Codex bind live gateway tests verify bundled Codex plugin channel binding and outbound session routing.
+import { liveOpenAiApiKeyModels } from "./live-openai-models.test-support.js";
 import { startGatewayServer } from "./server.js";
 
 const LIVE = isLiveTestEnabled();
@@ -312,7 +313,6 @@ async function writeGatewayConfig(params: {
           [`${modelProvider}/${params.model}`]: { agentRuntime: { id: "codex" } },
         },
         skipBootstrap: true,
-        heartbeat: { every: "0m" },
         sandbox: { mode: "off" },
       },
     },
@@ -323,17 +323,7 @@ async function writeGatewayConfig(params: {
             order: { openai: ["openai:default"] },
           },
           secrets: { providers: { default: { source: "env" } } },
-          models: {
-            mode: "merge",
-            providers: {
-              openai: {
-                api: "openai-responses",
-                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-                baseUrl: "https://api.openai.com/v1",
-                models: [],
-              },
-            },
-          },
+          models: liveOpenAiApiKeyModels(),
         }
       : {}),
   };

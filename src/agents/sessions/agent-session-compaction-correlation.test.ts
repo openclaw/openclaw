@@ -13,7 +13,7 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import {
-  createCompactionHandlers,
+  createCompactionExtension,
   createResourceLoader,
 } from "./agent-session-loop-resource-loader.test-support.js";
 import { SessionManager } from "./session-manager.js";
@@ -42,7 +42,7 @@ describe("AgentSession compaction correlation", () => {
       const { session } = await createTestSession({
         sessionManager,
         settingsManager: createAutoCompactionSettings(),
-        resourceLoader: createResourceLoader(createCompactionHandlers()),
+        resourceLoader: await createResourceLoader(createCompactionExtension()),
       });
       const onAgentEvent = vi.fn();
       const subscription = subscribeEmbeddedAgentSession({ session, runId, onAgentEvent });

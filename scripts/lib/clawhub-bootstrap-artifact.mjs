@@ -23,10 +23,10 @@ const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const PACKAGE_NAME_PATTERN = /^@openclaw\/[a-z0-9][a-z0-9._-]*$/u;
 const PACKAGE_DIR_PATTERN = /^extensions\/[a-z0-9][a-z0-9._-]*$/u;
 const TAG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/u;
+const PACKAGE_FAMILIES = new Set(["", "bundle-plugin"]);
 const PROTECTED_WORKFLOW_TAG_PATTERN =
   /^refs\/tags\/(release-publish\/([a-f0-9]{12})-[1-9][0-9]*)$/u;
-const VERSION_PATTERN =
-  /^[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-(?:alpha|beta)\.[1-9][0-9]*|-[1-9][0-9]*)?$/u;
+const VERSION_PATTERN = /^[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-beta\.[1-9][0-9]*|-[1-9][0-9]*)?$/u;
 const TOOLCHAIN_VERSION_PATTERN = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
 const MAX_BOOTSTRAP_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MAX_BOOTSTRAP_ARCHIVE_FILES = 128;
@@ -99,6 +99,9 @@ function normalizePlanEntry(value, index) {
     PACKAGE_DIR_PATTERN,
     `matrix[${index}].packageDir`,
   );
+  if (value.version?.includes("-alpha.") || value.publishTag === "alpha") {
+    fail("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const publishTag = requirePattern(value.publishTag, TAG_PATTERN, `matrix[${index}].publishTag`);
   const version = requirePattern(value.version, VERSION_PATTERN, `matrix[${index}].version`);
   const bootstrapMode = requireString(value.bootstrapMode, `matrix[${index}].bootstrapMode`);
@@ -112,6 +115,10 @@ function normalizePlanEntry(value, index) {
   if (bootstrapMode === "configure-only" && !requiresManualOverride) {
     fail(`matrix[${index}] configure-only entries must require the manual override.`);
   }
+  const family = typeof value.family === "string" ? value.family : "";
+  if (!PACKAGE_FAMILIES.has(family)) {
+    fail(`matrix[${index}].family is invalid.`);
+  }
   return {
     packageName,
     version,
@@ -119,6 +126,7 @@ function normalizePlanEntry(value, index) {
     publishTag,
     bootstrapMode,
     requiresManualOverride,
+    family,
   };
 }
 
@@ -254,6 +262,7 @@ function normalizeBootstrapManifestEntry(value, index) {
     [
       "artifactPath",
       "bootstrapMode",
+      "family",
       "packageDir",
       "packageName",
       "publishTag",
@@ -586,6 +595,32 @@ function assertExactPackageSet(entries, expectedPlugins) {
   }
 }
 
+function readBootstrapIdentity(options) {
+  return {
+    repository: requirePattern(options.repository, REPOSITORY_PATTERN, "repository"),
+    targetSha: requirePattern(options.targetSha, COMMIT_PATTERN, "targetSha"),
+    workflowSha: requirePattern(options.workflowSha, COMMIT_PATTERN, "workflowSha"),
+    runId: requirePattern(options.runId, POSITIVE_INTEGER_PATTERN, "runId"),
+    runAttempt: requirePattern(options.runAttempt, POSITIVE_INTEGER_PATTERN, "runAttempt"),
+    artifactName: requireString(options.artifactName, "artifactName"),
+    clawhubToolchainIntegrity: requirePattern(
+      options.clawhubToolchainIntegrity,
+      SHA512_INTEGRITY_PATTERN,
+      "clawhubToolchainIntegrity",
+    ),
+    clawhubToolchainSha256: requirePattern(
+      options.clawhubToolchainSha256,
+      SHA256_PATTERN,
+      "clawhubToolchainSha256",
+    ),
+    clawhubToolchainVersion: requirePattern(
+      options.clawhubToolchainVersion,
+      TOOLCHAIN_VERSION_PATTERN,
+      "clawhubToolchainVersion",
+    ),
+  };
+}
+
 export async function createClawHubBootstrapArtifactManifest(options) {
   const artifactRoot = resolve(options.artifactRoot);
   const matrix = JSON.parse(
@@ -619,27 +654,7 @@ export async function createClawHubBootstrapArtifactManifest(options) {
 
   const manifest = {
     schemaVersion: 1,
-    repository: requirePattern(options.repository, REPOSITORY_PATTERN, "repository"),
-    targetSha: requirePattern(options.targetSha, COMMIT_PATTERN, "targetSha"),
-    workflowSha: requirePattern(options.workflowSha, COMMIT_PATTERN, "workflowSha"),
-    runId: requirePattern(options.runId, POSITIVE_INTEGER_PATTERN, "runId"),
-    runAttempt: requirePattern(options.runAttempt, POSITIVE_INTEGER_PATTERN, "runAttempt"),
-    artifactName: requireString(options.artifactName, "artifactName"),
-    clawhubToolchainIntegrity: requirePattern(
-      options.clawhubToolchainIntegrity,
-      SHA512_INTEGRITY_PATTERN,
-      "clawhubToolchainIntegrity",
-    ),
-    clawhubToolchainSha256: requirePattern(
-      options.clawhubToolchainSha256,
-      SHA256_PATTERN,
-      "clawhubToolchainSha256",
-    ),
-    clawhubToolchainVersion: requirePattern(
-      options.clawhubToolchainVersion,
-      TOOLCHAIN_VERSION_PATTERN,
-      "clawhubToolchainVersion",
-    ),
+    ...readBootstrapIdentity(options),
     requestedPlugins: expectedPlugins,
     entries: manifestEntries,
   };
@@ -651,29 +666,7 @@ export async function createClawHubBootstrapArtifactManifest(options) {
 export async function verifyClawHubBootstrapArtifactManifest(options) {
   const artifactRoot = resolve(options.artifactRoot);
   const manifest = readClawHubBootstrapManifest(options.manifestPath);
-  const expected = {
-    repository: requirePattern(options.repository, REPOSITORY_PATTERN, "repository"),
-    targetSha: requirePattern(options.targetSha, COMMIT_PATTERN, "targetSha"),
-    workflowSha: requirePattern(options.workflowSha, COMMIT_PATTERN, "workflowSha"),
-    runId: requirePattern(options.runId, POSITIVE_INTEGER_PATTERN, "runId"),
-    runAttempt: requirePattern(options.runAttempt, POSITIVE_INTEGER_PATTERN, "runAttempt"),
-    artifactName: requireString(options.artifactName, "artifactName"),
-    clawhubToolchainIntegrity: requirePattern(
-      options.clawhubToolchainIntegrity,
-      SHA512_INTEGRITY_PATTERN,
-      "clawhubToolchainIntegrity",
-    ),
-    clawhubToolchainSha256: requirePattern(
-      options.clawhubToolchainSha256,
-      SHA256_PATTERN,
-      "clawhubToolchainSha256",
-    ),
-    clawhubToolchainVersion: requirePattern(
-      options.clawhubToolchainVersion,
-      TOOLCHAIN_VERSION_PATTERN,
-      "clawhubToolchainVersion",
-    ),
-  };
+  const expected = readBootstrapIdentity(options);
   for (const [key, value] of Object.entries(expected)) {
     if (manifest[key] !== value) {
       fail(`Bootstrap artifact manifest ${key} mismatch.`);
@@ -681,24 +674,11 @@ export async function verifyClawHubBootstrapArtifactManifest(options) {
   }
 
   const expectedPlugins = parsePlugins(options.plugins);
-  if (!Array.isArray(manifest.requestedPlugins)) {
-    fail("Bootstrap artifact manifest requestedPlugins must be an array.");
-  }
   if (JSON.stringify(manifest.requestedPlugins) !== JSON.stringify(expectedPlugins)) {
     fail("Bootstrap artifact manifest requestedPlugins mismatch.");
   }
-  if (
-    !Array.isArray(manifest.entries) ||
-    manifest.entries.length === 0 ||
-    manifest.entries.length > MAX_BOOTSTRAP_PACKAGES
-  ) {
-    fail("Bootstrap artifact manifest entries must be a non-empty array.");
-  }
-
-  const entries = [];
   const allowedFiles = new Set([relative(artifactRoot, options.manifestPath).split(sep).join("/")]);
-  for (const [index, rawEntry] of manifest.entries.entries()) {
-    const entry = normalizeBootstrapManifestEntry(rawEntry, index);
+  for (const entry of manifest.entries) {
     const { artifactPath } = entry;
     const filePath = await resolveRegularArtifactFile(artifactRoot, artifactPath);
     const identity = await hashFile(filePath);
@@ -706,12 +686,7 @@ export async function verifyClawHubBootstrapArtifactManifest(options) {
       fail(`${entry.packageName} packed artifact hash or size mismatch.`);
     }
     allowedFiles.add(artifactPath);
-    entries.push({ ...entry, artifactPath, ...identity });
   }
-  if (new Set(entries.map((entry) => entry.packageName)).size !== entries.length) {
-    fail("Bootstrap artifact manifest must not contain duplicate package names.");
-  }
-  assertExactPackageSet(entries, expectedPlugins);
 
   const inventory = await listFiles(artifactRoot);
   const expectedInventory = [...allowedFiles].toSorted(compareCodeUnits);
@@ -720,22 +695,26 @@ export async function verifyClawHubBootstrapArtifactManifest(options) {
       `Bootstrap artifact inventory mismatch: expected ${expectedInventory.join(",")}, found ${inventory.join(",")}.`,
     );
   }
-  return { ...manifest, entries };
+  return manifest;
 }
 
-function parseArgs(argv) {
-  const values = [...argv];
-  const command = values.shift();
-  const result = { command };
-  while (values.length > 0) {
-    const key = values.shift();
-    const value = values.shift();
+export function parseClawHubArtifactOptions(argv) {
+  const result = {};
+  for (let index = 0; index < argv.length; index += 2) {
+    const key = argv[index];
+    const value = argv[index + 1];
     if (!key?.startsWith("--") || value === undefined) {
       fail(`Invalid argument: ${String(key)}`);
     }
     result[key.slice(2).replaceAll("-", "_")] = value;
   }
   return result;
+}
+
+function parseArgs(argv) {
+  const values = [...argv];
+  const command = values.shift();
+  return { command, ...parseClawHubArtifactOptions(values) };
 }
 
 async function main() {

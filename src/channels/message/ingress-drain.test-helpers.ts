@@ -1,42 +1,80 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { Insertable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import { createChannelIngressQueue } from "./ingress-queue.js";
+  createChannelIngressQueue,
+  type ChannelIngressQueue,
+  type ChannelIngressQueueClaimRef,
+} from "./ingress-queue.js";
 
 export type IngressDrainTestPayload = { text: string };
+type QueueOptions = Parameters<typeof createChannelIngressQueue>[0];
+
+/** Observe the real commit, not just invocation of a queue write. */
+export function observeChannelIngressQueueWrite<TCompletedMetadata>(
+  queue: Pick<
+    ChannelIngressQueue<unknown, unknown, TCompletedMetadata>,
+    "complete" | "release" | "fail"
+  >,
+  method: "complete" | "release" | "fail",
+  eventId?: string,
+): Promise<boolean> {
+  const committed = createDeferredCore<boolean>();
+  const observe = <TArgs extends [string | ChannelIngressQueueClaimRef, ...unknown[]]>(
+    write: (...args: TArgs) => Promise<boolean>,
+    restore: (write: (...args: TArgs) => Promise<boolean>) => void,
+  ) => {
+    return (...args: TArgs) => {
+      const result = write.apply(queue, args);
+      const [id] = args;
+      if (eventId === undefined || (typeof id === "string" ? id : id.id) === eventId) {
+        restore(write);
+        committed.resolve(result);
+      }
+      return result;
+    };
+  };
+  switch (method) {
+    case "complete":
+      queue.complete = observe(queue.complete, (write) => {
+        queue.complete = write;
+      });
+      break;
+    case "release":
+      queue.release = observe(queue.release, (write) => {
+        queue.release = write;
+      });
+      break;
+    case "fail":
+      queue.fail = observe(queue.fail, (write) => {
+        queue.fail = write;
+      });
+      break;
+  }
+  return committed.promise;
+}
 
 export function createTestIngressQueue(
   stateDir: string,
-  options: Omit<
-    Parameters<typeof createChannelIngressQueue>[0],
-    "channelId" | "accountId" | "stateDir"
-  > = {},
+  options: Omit<QueueOptions, "channelId" | "accountId" | "stateDir"> = {},
 ) {
   return createChannelIngressQueue<IngressDrainTestPayload>({
     channelId: "test",
     accountId: "a",
     stateDir,
+    now: () => Date.now(),
     ...options,
   });
 }
 
 export async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
-  const stateDir = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-ingress-drain-"),
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-ingress-drain-", applyEnv: false },
+    ({ stateDir }) => fn(stateDir),
   );
-  try {
-    return await fn(stateDir);
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
 }
 
 export function seedPendingBacklog(stateDir: string, total: number): void {
@@ -54,17 +92,9 @@ export function seedPendingBacklog(stateDir: string, total: number): void {
         channel_id: "test",
         account_id: "a",
         status: "pending",
-        lane_key: null,
         payload_json: JSON.stringify({ text: `msg-${index}` }),
-        metadata_json: null,
-        completed_metadata_json: null,
         received_at: index,
         updated_at: index,
-        attempts: 0,
-        claim_token: null,
-        claim_owner: null,
-        claimed_at: null,
-        completed_at: null,
       });
     }
     executeSqliteQuerySync(database.db, kysely.insertInto("channel_ingress_events").values(rows));

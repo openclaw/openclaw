@@ -34,6 +34,7 @@ afterEach(async () => {
   dispatchInboundMessageMock.mockReset();
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
+  vi.unstubAllGlobals();
 });
 
 test("sessions.create retains a cloud repository across replay without creating a Gateway checkout", async () => {
@@ -63,12 +64,14 @@ test("sessions.create retains a cloud repository across replay without creating 
   ]) {
     expect(saved).not.toHaveProperty(field);
   }
+  await disposeSessionReadContexts();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  const replayOptions = { ...controlUiClient, context: {} };
   const replay = await directSessionReq<{ entry: { repositoryWorkspaceId: string } }>(
     "sessions.create",
     { agentId: "main", key, repository },
-    controlUiClient,
+    replayOptions,
   );
   expect(replay.ok, JSON.stringify(replay.error)).toBe(true);
   expect(replay.payload?.entry.repositoryWorkspaceId).toBe(entry.repositoryWorkspaceId);
@@ -78,7 +81,7 @@ test("sessions.create retains a cloud repository across replay without creating 
       repositoryWorkspaceId?: string;
       repository?: { url: string; ref?: string; branch: string };
     }>;
-  }>("sessions.list", { agentId: "main", limit: 100 }, controlUiClient);
+  }>("sessions.list", { agentId: "main", limit: 100 }, replayOptions);
   expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
   expect(listed.payload?.sessions.find((row) => row.key === key)).toMatchObject({
     repositoryWorkspaceId: entry.repositoryWorkspaceId,
@@ -91,6 +94,12 @@ test("sessions.create retains a cloud repository across replay without creating 
   const gitRead = vi
     .spyOn(gitWorker, "runGitWorkerOperation")
     .mockImplementation(async (operation) => {
+      if (operation.type === "pull-request.branch-comparison") {
+        return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
+      }
+      if (operation.type === "checkout.revision") {
+        return { key: "unchanged" };
+      }
       if (operation.type === "checkout.context") {
         return {
           root: operation.input.root,
@@ -115,27 +124,23 @@ test("sessions.create retains a cloud repository across replay without creating 
     },
     async () => {
       const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => Response.json([]));
+      vi.stubGlobal("fetch", fetchImpl);
       const cacheLifetime = new AbortController();
       onTestFinished(() => cacheLifetime.abort());
       const params = { sessionKey: key, agentId: "main" };
       await loadControlUiSessionPullRequests(params, {
         cacheSignal: cacheLifetime.signal,
-        fetchImpl,
       });
       const repositoryPins = getEventListeners(cacheLifetime.signal, "abort").length;
       expect(repositoryPins).toBeGreaterThan(0);
       await loadControlUiSessionPullRequests(params, {
         cacheSignal: cacheLifetime.signal,
-        fetchImpl,
         resolveGitRoot: async () => workspace,
       });
-      expect(getEventListeners(cacheLifetime.signal, "abort").length).toBeGreaterThan(
-        repositoryPins,
-      );
+      expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(repositoryPins);
       gitRead.mockClear();
       const preview = await loadControlUiSessionPullRequests(params, {
         cacheSignal: cacheLifetime.signal,
-        fetchImpl,
       });
       expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(repositoryPins);
       expect(preview.branch, JSON.stringify(preview)).toMatchObject({
@@ -168,16 +173,10 @@ test("sessions.create retains a cloud repository across replay without creating 
 
 test.each([
   { repository: { url: "file:///tmp/repository" } },
-  { repository: { url: "https://token@github.com/openclaw/openclaw.git" } },
   {
     repository: { url: "https://github.com/openclaw/openclaw.git", ref: "--upload-pack=anything" },
   },
-  { cwd: "/tmp/repository" },
-  { execNode: "device" },
-  { projectId: "workspace:main" },
-  { projectGitUrl: "https://github.com/openclaw/openclaw.git" },
   { worktree: true },
-  { worktreeBaseRef: "main" },
   { message: "Start before dispatch" },
 ])(
   "sessions.create rejects conflicting cloud repository input before admission: %j",

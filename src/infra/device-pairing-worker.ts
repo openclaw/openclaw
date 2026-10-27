@@ -1,23 +1,34 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { reserveWorkerEnvironmentNativePublication } from "../gateway/worker-environments/store-native-publication.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import type { WorkerOperations } from "../state/worker-operation-registry.js";
+import { clearDeviceAuthToken } from "./device-auth-store.js";
+import type { DeviceBootstrapOperations } from "./device-bootstrap.worker-kernel.js";
+import type { DevicePairingAdmissionFacts } from "./device-pairing-admission.types.js";
 import { invalidatePairedCardRendererCache } from "./device-pairing-card-renderer.js";
+import type { devicePairingOperations } from "./device-pairing-core.worker.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
+import type { nodePairingOperations } from "./device-pairing-node.worker.js";
 import { captureDevicePairingPublication } from "./device-pairing-publication.js";
 import type { DevicePairingCommitReceipt } from "./device-pairing-read.types.js";
 import { listDevicePairingStoreRecordsReadOnly } from "./device-pairing-store-readonly.js";
-import type {
-  DevicePairingAdmissionFacts,
-  DevicePairingWorkerOperations,
-} from "./device-pairing-worker-contract.js";
 import type { PairedDevice } from "./device-pairing.types.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
+
+type DevicePairingWorkerOperations = WorkerOperations<typeof devicePairingOperations> &
+  WorkerOperations<typeof nodePairingOperations> &
+  DeviceBootstrapOperations;
+
+const pairingLog = createSubsystemLogger("gateway/device-pairing");
 
 export const DevicePairingAuthorityRefusedError = resolveGlobalSingleton(
   Symbol.for("openclaw.devicePairingAuthorityRefusedError"),
@@ -29,6 +40,14 @@ export const DevicePairingAuthorityRefusedError = resolveGlobalSingleton(
     },
 );
 
+const setupChanges = resolveGlobalSingleton(
+  Symbol.for("openclaw.devicePairSetupChanges"),
+  () => new Set<(databasePath: string) => void>(),
+);
+
+export const onDevicePairSetupChange = (listener: (databasePath: string) => void) =>
+  registerListener(setupChanges, listener);
+
 // The broker owns this private channel; domain kernels supply the discriminated facts.
 function admissionFacts(value: unknown): DevicePairingAdmissionFacts[] {
   if (
@@ -37,106 +56,85 @@ function admissionFacts(value: unknown): DevicePairingAdmissionFacts[] {
   ) {
     throw new Error("Invalid pairing admission facts");
   }
+  for (const entry of value) {
+    if (
+      (entry.kind === "bootstrap.cloudWorkerSetup" &&
+        (typeof entry.environmentId !== "string" ||
+          typeof entry.setupId !== "string" ||
+          typeof entry.credentialDigest !== "string" ||
+          typeof entry.provisionOperationId !== "string" ||
+          typeof entry.ownerEpoch !== "number")) ||
+      ((entry.kind === "bootstrap.consume" || entry.kind === "bootstrap.token") &&
+        typeof entry.expiresAtMs !== "number")
+    ) {
+      throw new Error("Invalid pairing admission facts");
+    }
+  }
   // SAFETY: This private broker port only accepts the admitted backend's typed pairing facts.
   return value as DevicePairingAdmissionFacts[];
 }
 
 function commitReceipt(value: unknown): DevicePairingCommitReceipt {
-  if (
-    !isRecord(value) ||
-    value.kind !== "devicePairing" ||
-    typeof value.beforeRevision !== "string" ||
-    typeof value.revision !== "string" ||
-    !Array.isArray(value.changed) ||
-    !value.changed.every(
-      (entry) =>
-        isRecord(entry) &&
-        typeof entry.deviceId === "string" &&
-        (entry.binding === null ||
-          (isRecord(entry.binding) &&
-            typeof entry.binding.identity === "string" &&
-            (entry.binding.generation === undefined ||
-              typeof entry.binding.generation === "string"))),
-    )
-  ) {
+  if (!isRecord(value) || value.kind !== "devicePairing") {
     throw new Error("Invalid pairing commit receipt");
   }
-  let tokensReplaced: DevicePairingCommitReceipt["tokensReplaced"];
-  if (value.tokensReplaced !== undefined) {
-    const replaced = value.tokensReplaced;
-    if (
-      !isRecord(replaced) ||
-      typeof replaced.deviceId !== "string" ||
-      !Array.isArray(replaced.roles) ||
-      !replaced.roles.every((role) => typeof role === "string")
-    ) {
-      throw new Error("Invalid pairing token replacement receipt");
-    }
-    tokensReplaced = { deviceId: replaced.deviceId, roles: replaced.roles };
-  }
-  let workerEnvironment: DevicePairingCommitReceipt["workerEnvironment"];
-  if (value.workerEnvironment !== undefined) {
-    const environment = value.workerEnvironment;
-    if (
-      !isRecord(environment) ||
-      typeof environment.environmentId !== "string" ||
-      typeof environment.nodeDeviceId !== "string" ||
-      typeof environment.updatedAtMs !== "number"
-    ) {
-      throw new Error("Invalid pairing worker-environment receipt");
-    }
-    workerEnvironment = {
-      environmentId: environment.environmentId,
-      nodeDeviceId: environment.nodeDeviceId,
-      updatedAtMs: environment.updatedAtMs,
-    };
-  }
-  return {
-    kind: "devicePairing",
-    beforeRevision: value.beforeRevision,
-    revision: value.revision,
-    ...(tokensReplaced ? { tokensReplaced } : {}),
-    ...(workerEnvironment ? { workerEnvironment } : {}),
-    changed: value.changed.map((entry) => ({
-      deviceId: entry.deviceId,
-      binding:
-        entry.binding === null
-          ? null
-          : {
-              identity: entry.binding.identity,
-              ...(entry.binding.generation === undefined
-                ? {}
-                : { generation: entry.binding.generation }),
-            },
-    })),
-  };
+  // SAFETY: The private mutation worker builds this typed receipt after native COMMIT.
+  return value as DevicePairingCommitReceipt;
 }
 
 export function executeDevicePairingMutation<Key extends keyof DevicePairingWorkerOperations>(
   command: { type: Key; input: DevicePairingWorkerOperations[Key]["input"] },
   options: {
     baseDir?: string;
+    context?: OpenClawStateWorkerContext;
     assertCurrent?: () => void;
     admit?: (facts: DevicePairingAdmissionFacts) => void;
     onTokensReplaced?: (deviceId: string, roles: readonly string[]) => void;
+    onNodeApproved?: (approval: NonNullable<DevicePairingCommitReceipt["nodeApproval"]>) => void;
+    /** Map a refused operation only after its admission and publication have settled. */
+    onAuthorityRefused?: () => DevicePairingWorkerOperations[Key]["output"];
   } = {},
 ): Promise<DevicePairingWorkerOperations[Key]["output"]> {
-  const context = captureOpenClawStateWorkerContext(
-    options.baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: options.baseDir } } : {},
-  );
+  const context =
+    options.context ??
+    captureOpenClawStateWorkerContext(
+      options.baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: options.baseDir } } : {},
+    );
   const captured = structuredClone(command);
-  return withDevicePairingLock(async () => {
+  const credentialEnvironment = { ...process.env, ...context.environment };
+  const operation = withDevicePairingLock(async () => {
     context.admission.assertCurrent();
     options.assertCurrent?.();
-    const publication = captureDevicePairingPublication(context.admission);
-    const mutation = publication.beginMutation();
+    // Join codes and retained setup cleanup cannot change paired-device authority.
+    const publication =
+      captured.type === "devicePairing.registerJoinCode" ||
+      captured.type === "devicePairing.redeemJoinCode" ||
+      captured.type === "bootstrap.prune"
+        ? undefined
+        : captureDevicePairingPublication(context.admission);
+    const mutation = publication?.beginMutation();
     let admission: SqliteWorkerOperationAdmission | undefined;
     let published = false;
+    let cacheCleanup: Promise<boolean> | undefined;
     let publishEnvironment: ReturnType<typeof reserveWorkerEnvironmentNativePublication>;
     const install = () => {
+      if (!mutation) {
+        return;
+      }
       const committed = admission?.committed;
       if (committed && !published) {
         const receipt = commitReceipt(committed.facts);
+        if (receipt.retiredNodeToken) {
+          cacheCleanup = clearDeviceAuthToken({
+            ...receipt.retiredNodeToken,
+            role: "node",
+            env: credentialEnvironment,
+          }).catch((error: unknown) => {
+            // Server revocation is committed. A failed cache cleanup cannot restore authority.
+            pairingLog.warn(`Local retired node token cleanup failed: ${String(error)}`);
+            return false;
+          });
+        }
         const environment = receipt.workerEnvironment;
         let environmentPublished = false;
         if (environment && publishEnvironment) {
@@ -146,10 +144,13 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
             updatedAtMs: environment.updatedAtMs,
           });
         }
-        mutation.publish(receipt);
-        invalidatePairedCardRendererCache();
         // A callback can throw or read publication recursively; the commit is already installed.
         published = true;
+        mutation.publish(receipt);
+        if (receipt.nodeApproval) {
+          options.onNodeApproved?.(receipt.nodeApproval);
+        }
+        invalidatePairedCardRendererCache();
         if (environmentPublished) {
           sessionChanges.emit({ all: true, scope: "worker-environments" });
         }
@@ -158,9 +159,9 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
         }
       }
     };
-    const removeService = publication.servicePending(install);
+    const removeService = publication?.servicePending(install);
     try {
-      return await runOpenClawStateWorkerOperation(
+      const result = await runOpenClawStateWorkerOperation(
         context,
         async (scope) => {
           try {
@@ -179,8 +180,8 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
               }
               context.admission.assertCurrent();
               options.assertCurrent?.();
-              for (const facts of admissionFacts(request.facts)) {
-                options.admit?.(facts);
+              for (const fact of admissionFacts(request.facts)) {
+                options.admit?.(fact);
               }
               if (request.stage === "commit" && captured.type === "bootstrap.consume") {
                 publishEnvironment = reserveWorkerEnvironmentNativePublication(
@@ -196,24 +197,48 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
           },
         },
       );
+      await cacheCleanup;
+      return result;
     } finally {
       try {
         install();
       } finally {
-        mutation.finish(!admission || admission.settlement?.kind === "completed");
-        removeService();
+        mutation?.finish(!admission || admission.settlement?.kind === "completed");
+        removeService?.();
+        // Unknown outcomes can have committed; retry discovery without reviving authority.
+        if (
+          captured.type === "bootstrap.consume" ||
+          captured.type === "bootstrap.confirm" ||
+          captured.type === "bootstrap.ensure" ||
+          captured.type === "bootstrap.readCompletion"
+        ) {
+          notifyListeners(setupChanges, context.admission.databasePath);
+        }
       }
     }
   });
+  const onAuthorityRefused = options.onAuthorityRefused;
+  return onAuthorityRefused
+    ? operation.catch((error: unknown) => {
+        if (error instanceof DevicePairingAuthorityRefusedError) {
+          return onAuthorityRefused();
+        }
+        throw error;
+      })
+    : operation;
 }
 
 /** Start the privileged effect in the same interval that publishes its pairing facts. */
 export async function withCurrentDevicePairingSnapshot<T>(
   baseDir: string | undefined,
   prepare: (paired: readonly PairedDevice[]) => { start: () => T | Promise<T> } | undefined,
+  preparePublication?: () => Promise<void>,
 ): Promise<T | undefined> {
   const begun = await withDevicePairingLock(async () => {
     const { paired } = await listDevicePairingStoreRecordsReadOnly(baseDir, true);
+    if (preparePublication) {
+      await preparePublication();
+    }
     const action = prepare(paired);
     return { value: action?.start() };
   });

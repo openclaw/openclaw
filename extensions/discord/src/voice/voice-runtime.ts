@@ -1,5 +1,7 @@
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { APIVoiceState, Client } from "../internal/discord.js";
 import { formatMention } from "../mentions.js";
@@ -43,10 +45,6 @@ const DISCORD_VOICE_FATAL_AUTOJOIN_ERROR_PATTERNS = [
   "forbidden",
 ];
 
-function formatAutoJoinFailureKey(entry: { guildId: string; channelId: string }): string {
-  return `${entry.guildId}:${entry.channelId}`;
-}
-
 function isFatalAutoJoinFailure(message: string): boolean {
   const normalized = message.toLowerCase();
   return DISCORD_VOICE_FATAL_AUTOJOIN_ERROR_PATTERNS.some((pattern) =>
@@ -60,14 +58,14 @@ type CaptureJoinOrigin = {
 };
 
 export class DiscordVoiceManager {
-  private sessions = new Map<string, VoiceSessionEntry>();
+  private readonly sessions = new Map<string, VoiceSessionEntry>();
   private readonly guildLifecycles = new Map<string, VoiceGuildLifecycle>();
   private nextGuildGeneration = 0;
   private readonly joinTasks = new Map<string, Promise<void>>();
   private readonly botUserId?: string;
   private readonly client: Client;
   private readonly voiceEnabled: boolean;
-  private readonly autoJoinTasks = new Map<string, Promise<VoiceOperationResult | undefined>>();
+  private readonly autoJoinTasks = new Map<string, Promise<void>>();
   private readonly fatalAutoJoinFailures = new Map<
     string,
     { message: string; skipLogged: boolean }
@@ -86,8 +84,10 @@ export class DiscordVoiceManager {
   // Room watchers outlive individual bot sessions; only unsubscribe/destroy retires them.
   private readonly occupancyWatchers = new Set<{ guildId: string; refresh: () => void }>();
   private destroyed = false;
+  private readonly abort = new AbortController();
 
   constructor(params: {
+    scheduler: PluginServiceSchedulerV1;
     readPolicy?: DiscordLivePolicyReader;
     client: Client;
     cfg: OpenClawConfig;
@@ -123,36 +123,26 @@ export class DiscordVoiceManager {
       params.accountId,
     );
     this.receive = new DiscordVoiceReceive({
+      ...params,
       bindCaptureReceipts: ({ guildId, channelId }) =>
         bindDiscordCaptureReceipts({ accountId: params.accountId, guildId, channelId }, this),
       readPolicy: this.readPolicy,
-      accountId: params.accountId,
       admissionAllowFrom,
-      botUserId: () => this.botUserId,
-      cfg: params.cfg,
-      client: params.client,
-      discordConfig: params.discordConfig,
-      getSession: (guildId) => this.sessions.get(guildId),
+      sessions: this.sessions,
       isEntryCurrent: (entry) => this.isEntryCurrent(entry),
       isFollowOwnedGuild: (guildId) => this.following.isFollowOwnedGuild(guildId),
       join: (entry, options) => this.join(entry, options),
       leave: (entry, options) => this.leave(entry, options),
       membership: this.membership,
-      runtime: params.runtime,
       speakerContext,
     });
     this.following = new DiscordVoiceFollowing({
-      accountId: params.accountId,
+      ...params,
       allowedChannels: this.allowedChannels,
       autoJoinChannels: this.autoJoinChannels,
-      botUserId: () => this.botUserId,
-      client: params.client,
-      deleteRecoveryAttempt: (guildId) => this.receive.daveRecoveryAttempts.delete(guildId),
-      destroyed: () => this.destroyed,
+      daveRecoveryAttempts: this.receive.daveRecoveryAttempts,
       stopTransport: (guildId) => this.voiceSessions.stopTransport(guildId),
-      discordConfig: params.discordConfig,
-      getRecoveryAttempt: (guildId) => this.receive.daveRecoveryAttempts.get(guildId),
-      getSession: (guildId) => this.sessions.get(guildId),
+      sessions: this.sessions,
       hasVoiceLifecycle: (guildId) => {
         const lifecycle = this.guildLifecycles.get(guildId);
         return lifecycle?.status === "starting" || lifecycle?.status === "active";
@@ -160,22 +150,17 @@ export class DiscordVoiceManager {
       isAllowedVoiceChannel: (entry) => this.isAllowedVoiceChannel(entry),
       join: (entry, options) => this.join(entry, options),
       leave: (entry, options) => this.leave(entry, options),
-      listSessions: () => this.sessions.values(),
       voiceEnabled: this.voiceEnabled,
     });
     this.voiceSessions = new DiscordVoiceSessions({
-      accountId: params.accountId,
-      botUserId: () => this.botUserId,
-      cfg: params.cfg,
-      client: params.client,
+      ...params,
+      signal: this.abort.signal,
+      isSessionGenerationCurrent: (entry) =>
+        this.guildLifecycles.get(entry.guildId)?.generation === entry.generation,
       destroyed: () => this.destroyed,
-      discordConfig: params.discordConfig,
       getTranscripts: this.getTranscripts,
       membership: this.membership,
-      onLeaveFollowState: (guildId) => {
-        this.following.followedVoiceGuilds.delete(guildId);
-        this.following.deleteFollowedUserChannelsForGuild(guildId);
-      },
+      onLeaveFollowState: (guildId) => this.following.clearFollowedGuild(guildId),
       onSessionStopped: (entry, reason) => {
         const lifecycle = this.guildLifecycles.get(entry.guildId);
         if (lifecycle?.status === "active" && lifecycle.instance === entry) {
@@ -507,7 +492,7 @@ export class DiscordVoiceManager {
       }
       this.guildLifecycles.set(guildId, { status: "active", generation, instance: entry });
       if (result.ok) {
-        this.fatalAutoJoinFailures.delete(formatAutoJoinFailureKey({ guildId, channelId }));
+        this.fatalAutoJoinFailures.delete(`${guildId}:${channelId}`);
         // Recovery can finish after the last human leaves. Keep capture registered, not presence.
         if (waitingForOccupancy()) {
           await this.leave({ guildId, channelId });
@@ -521,9 +506,7 @@ export class DiscordVoiceManager {
       }
       return result;
     } finally {
-      if (this.joinTasks.get(guildId) === joinCompletion.promise) {
-        this.joinTasks.delete(guildId);
-      }
+      this.joinTasks.delete(guildId);
       joinCompletion.resolve();
     }
   }
@@ -547,8 +530,7 @@ export class DiscordVoiceManager {
         return await this.voiceSessions.leave(params, options);
       }
       if (!options?.preserveFollowState) {
-        this.following.followedVoiceGuilds.delete(guildId);
-        this.following.deleteFollowedUserChannelsForGuild(guildId);
+        this.following.clearFollowedGuild(guildId);
       }
       return {
         ok: true,
@@ -601,8 +583,9 @@ export class DiscordVoiceManager {
 
   async destroy(): Promise<void> {
     this.destroyed = true;
+    this.abort.abort(new Error("Discord voice manager stopped"));
     this.occupancyWatchers.clear();
-    this.following.destroy();
+    const followingStopped = this.following.destroy();
     for (const entry of this.sessions.values()) {
       void entry.stop();
     }
@@ -614,7 +597,7 @@ export class DiscordVoiceManager {
       });
     }
     this.receive.daveRecoveryAttempts.clear();
-    await this.voiceSessions.waitForStops();
+    await Promise.all([followingStopped, this.voiceSessions.waitForStops()]);
   }
 
   private isEntryCurrent(entry: VoiceSessionEntry): boolean {
@@ -636,7 +619,7 @@ export class DiscordVoiceManager {
   }
 
   private resolveAutoJoinTarget(guildId: string): VoiceChannelResidency | undefined {
-    return this.autoJoinChannels.toReversed().find((entry) => entry.guildId === guildId.trim());
+    return this.autoJoinChannels.findLast((entry) => entry.guildId === guildId.trim());
   }
 
   private countHumanParticipants(target: { guildId: string; channelId: string }): number | null {
@@ -650,17 +633,11 @@ export class DiscordVoiceManager {
     entry: VoiceChannelResidency,
     captureOrigin?: CaptureJoinOrigin,
   ): Promise<VoiceOperationResult | undefined> {
-    const previous = this.autoJoinTasks.get(entry.guildId) ?? Promise.resolve();
-    const task = previous
-      .catch(() => undefined)
-      .then(async () => await this.reconcileAutoJoinEntry(entry, captureOrigin))
-      .finally(() => {
-        if (this.autoJoinTasks.get(entry.guildId) === task) {
-          this.autoJoinTasks.delete(entry.guildId);
-        }
-      });
-    this.autoJoinTasks.set(entry.guildId, task);
-    return task;
+    return enqueueKeyedTask({
+      tails: this.autoJoinTasks,
+      key: entry.guildId,
+      task: () => this.reconcileAutoJoinEntry(entry, captureOrigin),
+    });
   }
 
   private async reconcileAutoJoinEntry(
@@ -673,7 +650,7 @@ export class DiscordVoiceManager {
     if (captureOrigin && !captureOrigin.isCurrent()) {
       return { ok: false, message: "Discord voice join was cancelled." };
     }
-    const failureKey = formatAutoJoinFailureKey(entry);
+    const failureKey = `${entry.guildId}:${entry.channelId}`;
     const fatalFailure = this.fatalAutoJoinFailures.get(failureKey);
     if (fatalFailure) {
       if (!fatalFailure.skipLogged) {
@@ -745,10 +722,3 @@ export class DiscordVoiceManager {
     return result;
   }
 }
-
-export {
-  DiscordVoiceGuildCreateListener,
-  DiscordVoiceReadyListener,
-  DiscordVoiceResumedListener,
-  DiscordVoiceStateUpdateListener,
-} from "./listeners.js";

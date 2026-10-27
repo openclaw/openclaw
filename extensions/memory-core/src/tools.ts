@@ -10,11 +10,10 @@ import {
   readPositiveIntegerParam,
   readStringParam,
   resolveMemoryDreamingPluginConfig,
-  resolveRuntimeConfigCacheKey,
-  type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
   attemptMemoryCorpus,
   composeMemoryCorpusMetadata,
@@ -24,7 +23,7 @@ import {
   type MemoryCorpusAttempt,
   type MemoryCorpusFailure,
 } from "./memory-corpus.js";
-import { executeMemoryReadResult, executeWikiMemoryReadResult } from "./memory-read-tool.js";
+import { executeMemoryReadResult } from "./memory-read-tool.js";
 import {
   buildPausedMemoryIndexUnavailableResult,
   executeMemorySearchToolQuery,
@@ -37,7 +36,6 @@ import {
 import {
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
   resolveMemorySearchAbortError,
-  runMemorySearchWithDeadline,
 } from "./memory/search-deadline.js";
 import {
   buildMemorySearchPresentation,
@@ -72,10 +70,7 @@ type PrimaryMemorySearchValue = {
 
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
-const memorySearchToolCooldowns = new Map<
-  string,
-  MemoryCorpusFailure & { until: number; configKey: string }
->();
+const memorySearchToolCooldowns = new Map<string, MemoryCorpusFailure & { until: number }>();
 
 /**
  * Validate the model-authored corpus argument against the tool's closed enum.
@@ -97,16 +92,13 @@ function readCorpusParam<T extends string>(
   throw new Error(`corpus must be one of: ${allowed.join(", ")}`);
 }
 
-function readMemorySearchToolCooldown(
-  key: string,
-  cfg: OpenClawConfig,
-): MemoryCorpusFailure | undefined {
+function readMemorySearchToolCooldown(key: string): MemoryCorpusFailure | undefined {
   const entry = memorySearchToolCooldowns.get(key);
   if (!entry) {
     return undefined;
   }
-  // Failed searches pause retries only for the configuration that produced them.
-  if (entry.until <= Date.now() || entry.configKey !== resolveRuntimeConfigCacheKey(cfg)) {
+  // A configuration change may retain the previous failure for this one-minute pause.
+  if (entry.until <= Date.now()) {
     memorySearchToolCooldowns.delete(key);
     return undefined;
   }
@@ -117,14 +109,9 @@ function readMemorySearchToolCooldown(
   };
 }
 
-function recordMemorySearchToolCooldown(
-  key: string,
-  cfg: OpenClawConfig,
-  failure: MemoryCorpusFailure,
-): void {
+function recordMemorySearchToolCooldown(key: string, failure: MemoryCorpusFailure): void {
   memorySearchToolCooldowns.set(key, {
     until: Date.now() + MEMORY_SEARCH_TOOL_COOLDOWN_MS,
-    configKey: resolveRuntimeConfigCacheKey(cfg),
     ...failure,
   });
 }
@@ -135,12 +122,6 @@ export const testing = {
   },
 } as const;
 
-function isActiveMemoryManagerContext(
-  context: MemoryManagerContext | null,
-): context is ActiveMemoryManagerContext {
-  return context !== null && "manager" in context;
-}
-
 async function closeMemoryManagers(
   managers: Iterable<ActiveMemoryManagerContext["manager"]>,
   parentSignal?: AbortSignal,
@@ -149,19 +130,24 @@ async function closeMemoryManagers(
   if (pending.length === 0) {
     return;
   }
-  try {
-    await runMemorySearchWithDeadline({
-      timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
-      parentSignal,
-      run: async () => {
-        await Promise.allSettled(pending);
+  if (parentSignal?.aborted) {
+    throw resolveMemorySearchAbortError(parentSignal);
+  }
+  // Manager close owns settlement; its best-effort wait must not hide search results.
+  await raceWithTimeout(
+    Promise.allSettled(pending),
+    DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+    () => undefined,
+    {
+      ref: false,
+      signal: parentSignal,
+      onAbort: (signal) => {
+        throw resolveMemorySearchAbortError(signal);
       },
-    });
-  } catch (error) {
-    if (parentSignal?.aborted) {
-      throw error;
-    }
-    // Search results should not be hidden by best-effort transient cleanup.
+    },
+  );
+  if (parentSignal?.aborted) {
+    throw resolveMemorySearchAbortError(parentSignal);
   }
 }
 
@@ -266,7 +252,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
           );
         }
         const cooldown =
-          requestedCorpus === "wiki" ? undefined : readMemorySearchToolCooldown(agentId, cfg);
+          requestedCorpus === "wiki" ? undefined : readMemorySearchToolCooldown(agentId);
         const toolStartedAt = Date.now();
         const searchesMemory = requestedCorpus !== "wiki";
         const searchesWiki = requestedCorpus === "wiki" || requestedCorpus === "all";
@@ -277,8 +263,15 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
         const rebuildNotices: Array<() => string | undefined> = [];
         const readRebuildWarning = () =>
           [...new Set(rebuildNotices.map((read) => read()).filter(Boolean))].join(" ") || undefined;
-        const trackMemoryManager = (context: MemoryManagerContext): MemoryManagerContext => {
-          if (memoryManagerPurpose === "cli" && isActiveMemoryManagerContext(context)) {
+        const acquireMemoryManager = async (): Promise<MemoryManagerContext> => {
+          const context = await getMemoryManagerContextWithPurpose({
+            cfg,
+            agentId,
+            purpose: memoryManagerPurpose,
+            acquireLocalService: options.acquireLocalService,
+            runInBackgroundContext: options.runInBackgroundContext,
+          });
+          if (memoryManagerPurpose === "cli" && "manager" in context) {
             if (cleanupStarted) {
               void closeMemoryManagers([context.manager]);
             } else {
@@ -296,24 +289,15 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
           }
           let partial: Awaited<ReturnType<typeof executeMemorySearchToolQuery>> | null = null;
           let acceptingPartial = true;
-          const attempted = await attemptMemoryCorpus<Awaited<
-            ReturnType<typeof executeMemorySearchToolQuery>
-          > | null>({
-            corpus: "memory",
+          const attempted = await attemptMemoryCorpus({
             signal,
-            unavailableValue: null,
             getPartialValue: () => (partial?.rawResults.length ? partial : null),
             run: async () => {
-              const memory = trackMemoryManager(
-                await getMemoryManagerContextWithPurpose({
-                  cfg,
-                  agentId,
-                  purpose: memoryManagerPurpose,
-                  acquireLocalService: options.acquireLocalService,
-                }),
-              );
+              const memory = await acquireMemoryManager();
               if ("error" in memory) {
-                throw new Error(memory.error ?? "memory search unavailable");
+                throw Object.assign(new Error(memory.error ?? "memory search unavailable"), {
+                  code: memory.code,
+                });
               }
               signal.throwIfAborted();
               const explicitSources: MemorySource[] | undefined =
@@ -326,19 +310,6 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
               return await executeMemorySearchToolQuery({
                 onRebuildNotice: (read) => rebuildNotices.push(read),
                 initialManager: { manager: memory.manager, managerMs: memory.debug?.managerMs },
-                refreshManager: async () => {
-                  const refreshed = trackMemoryManager(
-                    await getMemoryManagerContextWithPurpose({
-                      cfg,
-                      agentId,
-                      purpose: memoryManagerPurpose,
-                      acquireLocalService: options.acquireLocalService,
-                    }),
-                  );
-                  return "error" in refreshed
-                    ? null
-                    : { manager: refreshed.manager, managerMs: refreshed.debug?.managerMs };
-                },
                 query: {
                   text: query,
                   resultLimit: maxResults ?? settings.query.maxResults,
@@ -375,7 +346,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                     ...(attempted.code ? { code: attempted.code } : {}),
                   }
                 : { error: "memory search unavailable", deadline: false };
-            recordMemorySearchToolCooldown(agentId, cfg, failure);
+            recordMemorySearchToolCooldown(agentId, failure);
             return {
               corpus: "memory",
               outcome: "unavailable",
@@ -556,7 +527,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
           }
           const failed = unavailableMemoryCorpus("memory", null, error);
           if (requestedCorpus !== "wiki") {
-            recordMemorySearchToolCooldown(agentId, cfg, failed);
+            recordMemorySearchToolCooldown(agentId, failed);
           }
           return jsonResult(
             buildMemorySearchUnavailableResult(failed.error, {
@@ -593,19 +564,15 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
         const lines = readPositiveIntegerParam(rawParams, "lines");
         const requestedCorpus = readCorpusParam(rawParams, ["memory", "wiki", "all"]);
         const { readAgentMemoryFile } = await loadMemoryToolRuntime();
-        if (requestedCorpus === "wiki") {
-          return await executeWikiMemoryReadResult({
-            relPath,
-            from: from ?? undefined,
-            lines: lines ?? undefined,
-            agentId,
-            agentSessionKey: options.agentSessionKey,
-            sandboxed: options.sandboxed,
-            requestedCorpus,
-            signal: callerSignal,
-          });
-        }
         return await executeMemoryReadResult({
+          relPath,
+          from: from ?? undefined,
+          lines: lines ?? undefined,
+          agentId,
+          agentSessionKey: options.agentSessionKey,
+          sandboxed: options.sandboxed,
+          requestedCorpus,
+          signal: callerSignal,
           read: async () =>
             await readAgentMemoryFile({
               cfg,
@@ -614,14 +581,6 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
               from: from ?? undefined,
               lines: lines ?? undefined,
             }),
-          requestedCorpus,
-          relPath,
-          from: from ?? undefined,
-          lines: lines ?? undefined,
-          agentId,
-          agentSessionKey: options.agentSessionKey,
-          sandboxed: options.sandboxed,
-          signal: callerSignal,
         });
       },
   });

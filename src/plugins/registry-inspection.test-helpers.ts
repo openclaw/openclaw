@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   captureAsyncWorkTracker,
   getAsyncWorkSignal,
@@ -16,12 +17,23 @@ type InspectionConnection = {
 };
 let inspectionFixtureId = 0;
 
+function inspectionConfig(plugins: { id: string; file: string }[], contextEngine?: string) {
+  return {
+    plugins: {
+      allow: plugins.map(({ id }) => id),
+      load: { paths: plugins.map(({ file }) => file) },
+      slots: { memory: "none", ...(contextEngine ? { contextEngine } : {}) },
+    },
+  };
+}
+
 export function createInspectionFixture(options?: {
   registration?: "throw" | "async-resolve" | "async-reject" | "thenable" | "tracked";
   pauseDisposal?: boolean;
+  resourceProvider?: boolean;
   disposalFailure?: boolean;
   contextEngine?: boolean;
-  capturedDisposal?: "async-context" | "work-tracker" | "sibling-tracker";
+  capturedDisposal?: "async-context" | "work-tracker";
   queuedAbortCleanup?: boolean;
   capturedInstanceDisposal?: boolean;
 }) {
@@ -29,15 +41,7 @@ export function createInspectionFixture(options?: {
   const id = `owned-inspection-${inspectionFixtureId++}`;
   const key = `__openclaw_${id}`;
   const connections: InspectionConnection[] = [];
-  const resume = createDeferredCore();
-  const finishDisposal = createDeferredCore();
-  const disposalStarted = createDeferredCore();
-  const disposed = createDeferredCore();
-  const sibling: {
-    read?: () => unknown;
-    result?: unknown;
-    track?: (run: () => Promise<void>) => Promise<void>;
-  } = {};
+  const sibling: { read?: () => unknown; result?: unknown } = {};
   const captured: {
     registrationSignal?: AbortSignal;
     disposalSignal?: AbortSignal;
@@ -45,14 +49,13 @@ export function createInspectionFixture(options?: {
     read?: unknown;
     abortCleanup?: Promise<void>;
     abortRead?: unknown;
-    tracker?: ReturnType<typeof captureAsyncWorkTracker>;
   } = {};
   const state = {
     connections,
-    resume,
-    finishDisposal,
-    disposalStarted,
-    disposed,
+    resume: createDeferredCore(),
+    finishDisposal: createDeferredCore(),
+    disposalStarted: createDeferredCore(),
+    disposed: createDeferredCore(),
     sibling,
     captured,
     captureAsyncWorkTracker,
@@ -65,10 +68,7 @@ export function createInspectionFixture(options?: {
   Object.defineProperty(globalThis, key, { value: state, configurable: true });
   const plugin = writePlugin({
     id,
-    body: `const { DatabaseSync } = require("node:sqlite");
-module.exports = {
-  id: ${JSON.stringify(id)},
-  register(api) {
+    registration: `const { DatabaseSync } = require("node:sqlite");
     const state = globalThis[${JSON.stringify(key)}];
     const database = new DatabaseSync(":memory:");
     const connection = { database, disposals: 0, cleanups: 0, instanceDisposals: 0 };
@@ -98,7 +98,6 @@ module.exports = {
         if (captureMode) state.captured.disposalSignal = state.getAsyncWorkSignal();
         state.disposalStarted.resolve();
         if (${options?.pauseDisposal === true}) await state.finishDisposal.promise;
-        if (captureMode === "sibling-tracker") state.sibling.result = state.sibling.read();
         if (captureMode) state.captured.read = this.#database.prepare("SELECT 42 AS value").get();
         this.#database.close();
         state.disposed.resolve();
@@ -124,12 +123,21 @@ module.exports = {
     if (captureMode) {
       state.captured.registrationSignal = state.getAsyncWorkSignal();
       const dispose = lifecycle.dispose.bind(lifecycle);
-      const track = state.captured.tracker = state.captureAsyncWorkTracker();
+      const track = state.captureAsyncWorkTracker();
       lifecycle.dispose = captureMode === "async-context"
         ? require("node:async_hooks").AsyncLocalStorage.bind(() => state.trackAsyncWork(dispose))
-        : captureMode === "sibling-tracker" ? () => state.sibling.track(dispose) : () => track(dispose);
+        : () => track(dispose);
     }
     api.registerRuntimeLifecycle(lifecycle);
+    if (${options?.resourceProvider === true}) {
+      api.registerProvider({
+        id: "inspection-resource", label: "Inspection resource", auth: [],
+        normalizeModelId() {
+          state.captured.read = database.prepare("SELECT 42 AS value").get();
+          return String(state.captured.read.value);
+        },
+      });
+    }
     if (${options?.contextEngine === true}) {
       api.registerContextEngine(${JSON.stringify(id)}, () => {
         state.factoryCalls++;
@@ -151,34 +159,22 @@ module.exports = {
     if (mode === "tracked") {
       void state.trackAsyncWork(finishRegistration);
     } else if (mode?.startsWith("async")) return finishRegistration();
-  },
-};`,
+`,
   });
-  const config = {
-    plugins: {
-      allow: [id],
-      load: { paths: [plugin.file] },
-      slots: { memory: "none", ...(options?.contextEngine ? { contextEngine: id } : {}) },
-    },
-  };
   return {
     plugin,
     event: key,
-    config,
+    config: inspectionConfig([plugin], options?.contextEngine ? id : undefined),
     state,
     connection(index = 0) {
-      const connection = connections[index];
-      if (!connection) {
-        throw new Error(`Missing native inspection connection ${index}`);
-      }
-      return connection;
+      return expectDefined(connections[index], `Missing native inspection connection ${index}`);
     },
     async cleanup(
       inspection?: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>>,
       borrowed?: { release: () => Promise<void> },
     ) {
-      resume.resolve();
-      finishDisposal.resolve();
+      state.resume.resolve();
+      state.finishDisposal.resolve();
       await borrowed?.release().catch(() => undefined);
       await inspection?.release().catch(() => undefined);
       for (const connection of connections) {
@@ -197,12 +193,6 @@ export function acquireFixtureInspection(
   fixtures: Array<ReturnType<typeof createInspectionFixture>>,
 ) {
   return acquirePluginRegistryForInspection({
-    config: {
-      plugins: {
-        allow: fixtures.map((fixture) => fixture.plugin.id),
-        load: { paths: fixtures.map((fixture) => fixture.plugin.file) },
-        slots: { memory: "none" },
-      },
-    },
+    config: inspectionConfig(fixtures.map(({ plugin }) => plugin)),
   });
 }

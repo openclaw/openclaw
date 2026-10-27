@@ -1,0 +1,227 @@
+import { isDeepStrictEqual } from "node:util";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ChannelDoctorConfigMutation } from "../../../channels/plugins/types.adapters.js";
+import { getConfigValueAtPath, setConfigValueAtPath } from "../../../config/config-paths.js";
+import { resolveConfigPath, resolveIsConfigReadOnly } from "../../../config/paths.js";
+import { cloneConfigWithResolutionFacts } from "../../../config/resolution-facts.js";
+import type { ConfigFileSnapshot } from "../../../config/types.openclaw.js";
+import { isTruthyEnvValue } from "../../../infra/env.js";
+import {
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../../infra/kysely-sync.js";
+import { resolveUpdateRehearsalRoot } from "../../../infra/update-rehearsal-paths.js";
+import { resolveChannelConfigEnablement } from "../../../plugins/config-normalization-shared.js";
+import { normalizePluginsConfig } from "../../../plugins/config-state.js";
+import type { PluginDoctorHistoricalWebhookListener } from "../../../plugins/doctor-contract-module.js";
+import { passesManifestOwnerBasePolicy } from "../../../plugins/manifest-owner-policy.js";
+import type { PluginOrigin } from "../../../plugins/plugin-origin.types.js";
+import { normalizeOptionalAccountId } from "../../../routing/account-id.js";
+import { readConfigMachineStateAsync } from "../../../state/config-machine-state-async.js";
+import { writeConfigMachineState } from "../../../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../../../state/config-machine-state.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../../../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../../../state/openclaw-state-db-schema-helpers.js";
+import type { DB } from "../../../state/openclaw-state-db.generated.js";
+
+export const HISTORICAL_WEBHOOK_CHANNELS = ["telegram", "feishu", "msteams", "nextcloud-talk"];
+
+function webhookCompletionKey(env: NodeJS.ProcessEnv): string {
+  return `webhookListeners:${resolveConfigPath(env)}`;
+}
+
+export function readUnwrittenWebhookCompletion(env: NodeJS.ProcessEnv) {
+  return readConfigMachineStateAsync<true | Record<string, string[][]>>(webhookCompletionKey(env), {
+    env,
+  });
+}
+
+/** No config bytes changed, so this completion does not depend on config rollback. */
+export function prepareUnwrittenWebhookCompletion(
+  snapshot: Pick<ConfigFileSnapshot, "sourceConfig">,
+  mutation: ChannelDoctorConfigMutation,
+  env: NodeJS.ProcessEnv,
+) {
+  const completion = mutation.config.meta?.migrations?.webhookListeners;
+  if (completion === undefined) {
+    return undefined;
+  }
+  const readOnly = resolveIsConfigReadOnly(env);
+  const markerOnly = cloneConfigWithResolutionFacts(snapshot.sourceConfig);
+  markerOnly.meta ??= {};
+  markerOnly.meta.migrations ??= {};
+  markerOnly.meta.migrations.webhookListeners = completion;
+  if (!isDeepStrictEqual(markerOnly, mutation.config)) {
+    if (!readOnly) {
+      return undefined;
+    }
+    throw new Error(
+      `Webhook listeners need migration in the externally managed config. Add the required legacyWebhook endpoints and meta.migrations.webhookListeners completion marker in that source, then restart.\n${mutation.changes.join("\n")}`,
+    );
+  }
+  return { key: webhookCompletionKey(env), value: markerOnly.meta.migrations.webhookListeners };
+}
+
+function recordUnwrittenWebhookCompletion(
+  snapshot: Pick<ConfigFileSnapshot, "sourceConfig">,
+  mutation: ChannelDoctorConfigMutation,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const completion = prepareUnwrittenWebhookCompletion(snapshot, mutation, env);
+  if (!completion) {
+    return false;
+  }
+  writeConfigMachineState(completion.key, completion.value, { env });
+  return true;
+}
+
+export type HistoricalWebhookCompletion = {
+  marker: true | Record<string, string[][]> | undefined;
+};
+
+type HistoricalWebhookPinState = {
+  env: NodeJS.ProcessEnv;
+  completion?: HistoricalWebhookCompletion;
+  preserveConfiguredListeners: boolean;
+  existingInstallation?: boolean;
+};
+
+/** One synchronous pass shares its receipt, including its own rehearsal writes. */
+export function createHistoricalWebhookPinMigration(
+  env: NodeJS.ProcessEnv = process.env,
+  completion?: HistoricalWebhookCompletion,
+  preserveConfiguredListeners = false,
+) {
+  const state: HistoricalWebhookPinState = { env, completion, preserveConfiguredListeners };
+  return applyHistoricalWebhookPins.bind(undefined, state);
+}
+
+/** Pins and completion travel together through Doctor's config backup and publication. */
+function applyHistoricalWebhookPins(
+  state: HistoricalWebhookPinState,
+  mutation: ChannelDoctorConfigMutation,
+  declaration: PluginDoctorHistoricalWebhookListener | undefined,
+  context: {
+    startup?: boolean;
+    pluginId?: string;
+    origin?: PluginOrigin;
+  } = {},
+): ChannelDoctorConfigMutation {
+  const { env } = state;
+  const marker =
+    mutation.config.meta?.migrations?.webhookListeners ??
+    (state.completion ??= {
+      marker: readConfigMachineState<true | Record<string, string[][]>>(webhookCompletionKey(env), {
+        env,
+      }),
+    }).marker;
+  if (marker === true || mutation.warnings?.length) {
+    return mutation;
+  }
+  const accountIds =
+    (context.startup && mutation.historicalWebhookAccountIds === null) ||
+    (context.pluginId &&
+      !passesManifestOwnerBasePolicy({
+        plugin: { id: context.pluginId },
+        normalizedConfig: normalizePluginsConfig(mutation.config.plugins),
+        allowRestrictiveAllowlistBypass:
+          context.origin === "bundled" &&
+          resolveChannelConfigEnablement(
+            mutation.config,
+            declaration?.channelId ?? context.pluginId,
+          ) === true,
+      }))
+      ? []
+      : mutation.historicalWebhookAccountIds;
+  const existing =
+    state.preserveConfiguredListeners ||
+    marker !== undefined ||
+    isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) ||
+    (state.existingInstallation ??= Boolean(
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => {
+          const query = getNodeSqliteKysely<DB>(db);
+          let evidence = query
+            .selectFrom("gateway_boot_lifecycle")
+            .select("boot_id as evidence")
+            .unionAll(query.selectFrom("channel_ingress_events").select("event_id as evidence"));
+          // The update ledger exists only after its first write.
+          if (tableExists(db, "update_runs")) {
+            evidence = evidence.unionAll(
+              query.selectFrom("update_runs").select("run_id as evidence"),
+            );
+          }
+          return executeSqliteQueryTakeFirstSync(db, evidence.limit(1));
+        },
+        { env },
+      ),
+    ));
+  const completed = { ...marker };
+  const channelId = declaration?.channelId;
+  if (existing && (!channelId || !accountIds || Object.hasOwn(completed, channelId))) {
+    return mutation;
+  }
+  const config = cloneConfigWithResolutionFacts(mutation.config);
+  const changes = [...mutation.changes];
+  if (existing && declaration) {
+    const rootPath = ["channels", declaration.channelId];
+    const root = asNullableRecord(getConfigValueAtPath(config, rootPath));
+    const accounts = Object.keys(asNullableRecord(root?.accounts) ?? {});
+    const paths: string[][] = [];
+    const { channelId: _channelId, preserveAuthoredActivation, ...endpoint } = declaration;
+    if (
+      preserveAuthoredActivation &&
+      root?.legacyWebhook !== undefined &&
+      root.enabled === undefined
+    ) {
+      setConfigValueAtPath(config, [...rootPath, "enabled"], true);
+      paths.push([...rootPath, "enabled"]);
+      changes.push(`Set ${rootPath.join(".")}.enabled to preserve authored webhook activation.`);
+    }
+    for (const accountId of accountIds ?? []) {
+      if (root?.legacyWebhook !== undefined) {
+        continue;
+      }
+      const accountPath = [...rootPath];
+      if (accountId !== undefined) {
+        const matches = accounts.includes(accountId)
+          ? [accountId]
+          : accounts.filter(
+              (id) => normalizeOptionalAccountId(id) === normalizeOptionalAccountId(accountId),
+            );
+        if (matches.length > 1) {
+          return {
+            ...mutation,
+            warnings: [
+              `Ambiguous ${declaration.channelId} account ${JSON.stringify(accountId)} matches ${matches.map((id) => JSON.stringify(id)).join(", ")}; no pins were written for this channel. Pin the intended account manually: channels.${declaration.channelId}.accounts[<exact account key>].legacyWebhook = ${JSON.stringify(endpoint)}.`,
+            ],
+          };
+        }
+        accountPath.push("accounts", matches[0] ?? accountId);
+      }
+      const pinPath = [...accountPath, "legacyWebhook"];
+      if (getConfigValueAtPath(config, pinPath) !== undefined) {
+        continue;
+      }
+      setConfigValueAtPath(config, pinPath, endpoint);
+      paths.push(pinPath);
+      changes.push(
+        `Pinned ${accountPath.join(".")}.legacyWebhook. Move the callback or proxy to the Gateway route, then remove the pin.`,
+      );
+    }
+    completed[declaration.channelId] = paths;
+  }
+  config.meta ??= {};
+  config.meta.migrations ??= {};
+  config.meta.migrations.webhookListeners = existing ? completed : true;
+  changes.push("Recorded webhook listener decisions; removed pins will not be recreated.");
+  const result = { ...mutation, config, changes };
+  if (
+    resolveUpdateRehearsalRoot(env) &&
+    recordUnwrittenWebhookCompletion({ sourceConfig: mutation.config }, result, env)
+  ) {
+    state.completion = { marker: result.config.meta?.migrations?.webhookListeners };
+    return mutation;
+  }
+  return result;
+}

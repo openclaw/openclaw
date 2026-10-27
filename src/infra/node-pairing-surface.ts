@@ -1,4 +1,3 @@
-// Exposes the Node pairing surface used by gateway and CLI flows.
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
 export type NodeApprovalSurface = {
@@ -35,15 +34,10 @@ export function sameNodeApprovalSurfaceSet(
 ): boolean {
   const normalizedLeft = new Set(normalizeNodeApprovalSurfaceList(left));
   const normalizedRight = new Set(normalizeNodeApprovalSurfaceList(right));
-  if (normalizedLeft.size !== normalizedRight.size) {
-    return false;
-  }
-  for (const entry of normalizedLeft) {
-    if (!normalizedRight.has(entry)) {
-      return false;
-    }
-  }
-  return true;
+  return (
+    normalizedLeft.size === normalizedRight.size &&
+    [...normalizedLeft].every((entry) => normalizedRight.has(entry))
+  );
 }
 
 /** Compare node permission maps deterministically so key order cannot trigger repairs. */
@@ -51,17 +45,12 @@ export function sameNodePermissionSurface(
   left: Record<string, boolean> | undefined,
   right: Record<string, boolean> | undefined,
 ): boolean {
-  const leftEntries = Object.entries(left ?? {}).toSorted(([leftKey], [rightKey]) =>
-    leftKey.localeCompare(rightKey),
+  const leftEntries = Object.entries(left ?? {});
+  const rightPermissions = right ?? {};
+  return (
+    leftEntries.length === Object.keys(rightPermissions).length &&
+    leftEntries.every(
+      ([key, value]) => Object.hasOwn(rightPermissions, key) && rightPermissions[key] === value,
+    )
   );
-  const rightEntries = Object.entries(right ?? {}).toSorted(([leftKey], [rightKey]) =>
-    leftKey.localeCompare(rightKey),
-  );
-  if (leftEntries.length !== rightEntries.length) {
-    return false;
-  }
-  return leftEntries.every(([key, value], index) => {
-    const rightEntry = rightEntries[index];
-    return rightEntry !== undefined && rightEntry[0] === key && rightEntry[1] === value;
-  });
 }

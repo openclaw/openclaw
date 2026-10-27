@@ -1,4 +1,3 @@
-// Vercel Ai Gateway plugin module implements thinking behavior.
 import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/core";
 import {
   matchesExactOrPrefix,
@@ -39,30 +38,14 @@ function stripTrustedUpstreamPrefix(modelId: string, prefix: string): string | n
   return upstreamModelId || null;
 }
 
-function resolveOpenAiThinkingProfile(modelId: string): ProviderThinkingProfile | undefined {
-  if (!matchesExactOrPrefix(modelId, VERCEL_OPENAI_XHIGH_MODEL_IDS)) {
-    return undefined;
-  }
-  return {
-    levels: [...BASE_OPENAI_THINKING_LEVELS, { id: "xhigh" }],
-  };
-}
-
-function hasVercelSpecificClaudeProfile(profile: ProviderThinkingProfile): boolean {
-  return Boolean(
-    profile.defaultLevel ||
-    profile.levels.some(
-      (level) => level.id === "adaptive" || level.id === "xhigh" || level.id === "max",
-    ),
-  );
-}
-
 export function resolveVercelAiGatewayThinkingProfile(
   modelId: string,
 ): ProviderThinkingProfile | undefined {
   const openAiModelId = stripTrustedUpstreamPrefix(modelId, UPSTREAM_OPENAI_PREFIX);
   if (openAiModelId) {
-    return resolveOpenAiThinkingProfile(openAiModelId);
+    return matchesExactOrPrefix(openAiModelId, VERCEL_OPENAI_XHIGH_MODEL_IDS)
+      ? { levels: [...BASE_OPENAI_THINKING_LEVELS, { id: "xhigh" }] }
+      : undefined;
   }
 
   const anthropicModelId = stripTrustedUpstreamPrefix(modelId, UPSTREAM_ANTHROPIC_PREFIX);
@@ -71,7 +54,12 @@ export function resolveVercelAiGatewayThinkingProfile(
     // Returning a base-only provider profile would hide catalog compat metadata
     // from generic thinking resolution. Only take over when Claude has an
     // upstream-specific default or elevated level set.
-    return hasVercelSpecificClaudeProfile(profile) ? profile : undefined;
+    return profile.defaultLevel ||
+      profile.levels.some(
+        (level) => level.id === "adaptive" || level.id === "xhigh" || level.id === "max",
+      )
+      ? profile
+      : undefined;
   }
 
   return undefined;

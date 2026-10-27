@@ -1,0 +1,243 @@
+import {
+  decodeSystemOneResponse,
+  encodeSystemOneQuestions,
+  validateDecisionBatchV2,
+  validateDecisionResultV2,
+  type DecisionBatchV2,
+  type DecisionProviderV2,
+  type DecisionProviderContextV2,
+  type ProviderDecisionOutcomeV2,
+} from "openclaw/plugin-sdk/decisions";
+import {
+  readProviderJsonResponse,
+  resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
+} from "openclaw/plugin-sdk/provider-http";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  OPENROUTER_BASE_URL,
+  resolveOpenRouterApiBaseUrl,
+  resolveOpenRouterSsrfPolicy,
+} from "./provider-catalog.js";
+import {
+  resolveOpenRouterConfiguredExtraParams,
+  resolveOpenRouterExtraParamsForTransport,
+} from "./provider-routing.js";
+
+export function isOpenRouterDecisionModel(modelId: string): boolean {
+  return (
+    modelId === "typesafe/jev-1.13" ||
+    modelId === "typesafe/jev-1.14" ||
+    modelId === "~typesafe/jev-latest"
+  );
+}
+
+function unsupported(): ProviderDecisionOutcomeV2 {
+  return { status: "unavailable", reason: "unsupported-input" };
+}
+
+function supportsBatch(batch: DecisionBatchV2, modelId: string): boolean {
+  if (!validateDecisionBatchV2(batch)) {
+    return false;
+  }
+  // Jev accepts PNG/JPEG only. The shared validator bounds and checks inline data;
+  // neither this adapter nor the host fetches image URLs or resizes caller evidence.
+  if (
+    batch.state.type !== "image" &&
+    batch.state.type !== "text" &&
+    (batch.state.type !== "json" ||
+      batch.state.value === null ||
+      (typeof batch.state.value !== "object" && typeof batch.state.value !== "string"))
+  ) {
+    return false;
+  }
+  if (
+    batch.state.type === "image" &&
+    !/^data:image\/(?:png|jpeg);base64,/.test(batch.state.dataUri)
+  ) {
+    return false;
+  }
+  return Object.values(batch.questions).every((q) => {
+    if (q.type === "sort" || q.type === "tags" || q.instructions == null) {
+      return false;
+    }
+    if (q.type === "box") {
+      return modelId !== "typesafe/jev-1.13";
+    }
+    if (q.type === "choice") {
+      return Object.keys(q.criteria).length <= 255;
+    }
+    if (q.type === "score") {
+      return q.criteria.length <= 10 && q.criteria.every((entry) => entry !== null);
+    }
+    return (
+      q.criteria === undefined ||
+      (q.criteria !== null && q.criteria.true != null && q.criteria.false != null)
+    );
+  });
+}
+
+function buildRequest(batch: DecisionBatchV2, context: DecisionProviderContextV2) {
+  const extraParams =
+    resolveOpenRouterConfiguredExtraParams({
+      config: context.config,
+      agentId: context.agentId,
+      modelId: context.model.id,
+    }) ?? {};
+  const routed =
+    resolveOpenRouterExtraParamsForTransport({
+      config: context.config,
+      provider: "openrouter",
+      model: context.model,
+      extraParams,
+    })?.patch ?? extraParams;
+  // This route only documents provider preferences. Do not silently drop configured
+  // parameter limits, privacy settings or unsupported chat controls.
+  if (routed && Object.keys(routed).some((key) => key !== "provider")) {
+    return undefined;
+  }
+  return {
+    model: context.model.id,
+    state:
+      batch.state.type === "text"
+        ? batch.state.text
+        : batch.state.type === "json"
+          ? batch.state.value
+          : batch.state.type === "image"
+            ? [
+                ...(batch.state.text === undefined ? [] : [batch.state.text]),
+                { type: "image_url", image_url: { url: batch.state.dataUri } },
+              ]
+            : undefined,
+    questions: encodeSystemOneQuestions(batch),
+    ...(routed?.provider !== undefined ? { provider: routed.provider } : {}),
+  };
+}
+
+export function buildOpenRouterDecisionProvider(): DecisionProviderV2 {
+  return {
+    id: "openrouter",
+    contractVersion: 2,
+    async evaluate(batch, context) {
+      context.signal.throwIfAborted();
+      if (
+        !isOpenRouterDecisionModel(context.model.id) ||
+        (context.reasoning !== undefined && context.reasoning !== "auto") ||
+        !supportsBatch(batch, context.model.id)
+      ) {
+        return unsupported();
+      }
+      const body = buildRequest(batch, context);
+      if (!body) {
+        return unsupported();
+      }
+      if (!context.auth.apiKey && !context.model.headers) {
+        return { status: "unavailable", reason: "credentials-unavailable" };
+      }
+      const providerConfig = context.config.models?.providers?.openrouter;
+      let release: (() => Promise<void>) | undefined;
+      let admissionError: { error: unknown } | undefined;
+      const assertActive = () => {
+        context.signal.throwIfAborted();
+        let admitted: boolean;
+        try {
+          admitted = context.isAdmissible();
+        } catch (error) {
+          admissionError = { error };
+          throw error;
+        }
+        if (!admitted || performance.now() >= context.deadlineMonotonicMs) {
+          throw new Error("OpenRouter decision is no longer admitted.");
+        }
+      };
+      try {
+        // Auth and effective headers are prepared by the host. Only proxy/TLS/SSRF
+        // policy is read here; never select a second credential or auth profile.
+        const configuredRequest = providerConfig?.request;
+        const request = sanitizeConfiguredModelProviderRequest(
+          configuredRequest
+            ? {
+                proxy: configuredRequest.proxy,
+                tls: configuredRequest.tls,
+                allowPrivateNetwork: configuredRequest.allowPrivateNetwork,
+              }
+            : undefined,
+        );
+        const requestConfig = resolveProviderHttpRequestConfig({
+          provider: "openrouter",
+          capability: "llm",
+          transport: "http",
+          baseUrl: resolveOpenRouterApiBaseUrl(context.model.baseUrl ?? providerConfig?.baseUrl),
+          defaultBaseUrl: OPENROUTER_BASE_URL,
+          defaultHeaders: {
+            "Content-Type": "application/json",
+            // The host already applied an explicit auth override to its private headers.
+            // Do not restore the provider-default bearer after a custom header replaced it.
+            ...(context.auth.apiKey &&
+            (!configuredRequest?.auth || configuredRequest.auth.mode === "provider-default")
+              ? { Authorization: `Bearer ${context.auth.apiKey}` }
+              : {}),
+          },
+          headers: context.model.headers,
+          request,
+        });
+        const timeoutMs = context.deadlineMonotonicMs - performance.now();
+        context.signal.throwIfAborted();
+        if (timeoutMs <= 0) {
+          return { status: "unavailable", reason: "transport" };
+        }
+        const guarded = await fetchWithSsrFGuard({
+          // Append to the effective API prefix; custom proxies must never escape to the canonical host.
+          url: requestConfig.baseUrl + "/systemone",
+          init: { method: "POST", headers: requestConfig.headers, body: JSON.stringify(body) },
+          signal: context.signal,
+          timeoutMs,
+          // DNS, proxy and capture preparation can yield after the host handed us
+          // this context. Recheck its live authority at each physical dispatch.
+          beforeRequest: assertActive,
+          policy: resolveOpenRouterSsrfPolicy(requestConfig, configuredRequest),
+          dispatcherPolicy: requestConfig.dispatcherPolicy,
+          auditContext: "openrouter-decisions",
+        });
+        release = guarded.release;
+        const response = guarded.response;
+        if (!response.ok) {
+          return {
+            status: "unavailable",
+            reason:
+              response.status === 401 || response.status === 403
+                ? "authentication"
+                : response.status === 429 || response.status === 529
+                  ? "rate-limited"
+                  : [400, 413, 422].includes(response.status)
+                    ? "unsupported-input"
+                    : "transport",
+          };
+        }
+        let value: unknown;
+        try {
+          value = await readProviderJsonResponse(response, "OpenRouter decisions", {
+            maxBytes: 1_048_576,
+            timeoutMs: Math.max(1, context.deadlineMonotonicMs - performance.now()),
+          });
+        } catch {
+          context.signal.throwIfAborted();
+          return { status: "unavailable", reason: "invalid-response" };
+        }
+        context.signal.throwIfAborted();
+        const result = decodeSystemOneResponse(batch, value);
+        return validateDecisionResultV2(batch, result, context.model.inference?.decision)
+          ? { status: "ok", result }
+          : { status: "unavailable", reason: "invalid-response" };
+      } catch {
+        context.signal.throwIfAborted();
+        if (admissionError) {
+          throw admissionError.error;
+        }
+        return { status: "unavailable", reason: "transport" };
+      } finally {
+        await release?.();
+      }
+    },
+  };
+}

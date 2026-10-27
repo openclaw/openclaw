@@ -1,78 +1,28 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { pipeline } from "node:stream/promises";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { normalizeChatImageRenditionWidth } from "../shared/chat-image-renditions.js";
+import {
+  assertArtifactDownloadGrantCurrent,
+  resolveArtifactDownloadGrant,
+  retainArtifactDownloadStream,
+} from "./artifact-download-grants.js";
+import type { ArtifactDownloadResponse } from "./artifact-download-projection.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
 import { sendMethodNotAllowed } from "./http-common.js";
-import type { ArtifactRecord } from "./server-methods/artifacts-content.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
+import {
+  encodeImageThumbnail,
+  resolveManagedImageThumbnail,
+} from "./managed-image-thumbnail-cache.js";
 import type { GatewayClient } from "./server-methods/types.js";
-
-const DOWNLOAD_TTL_MS = 5 * 60_000;
-const MAX_DOWNLOADS_PER_CONNECTION = 128;
-
-type Download = {
-  expiresAt: number;
-  digest: string;
-  assertCurrent: () => void;
-  read: () => Promise<ArtifactRecord | undefined>;
-};
-
-// Connection-owned grants retain only a reader, never artifact bytes or durable state.
-const downloads = new WeakMap<GatewayClient, Map<string, Download>>();
-
-function artifactContentDigest(artifact: ArtifactRecord): string {
-  return createHash("sha256")
-    .update(JSON.stringify([artifact.id, artifact.type, artifact.title, artifact.mimeType]))
-    .update("\0")
-    .update(artifact.data ?? "")
-    .digest("hex");
-}
-
-export function createArtifactDownload(params: {
-  client: GatewayClient | null;
-  artifact: ArtifactRecord;
-  assertCurrent: Download["assertCurrent"];
-  read: Download["read"];
-}): { url: string; expiresAt: string } | undefined {
-  const { client } = params;
-  if (
-    !client?.connId ||
-    client.connectionSignal?.aborted !== false ||
-    client.invalidated ||
-    params.artifact.download.mode !== "bytes" ||
-    params.artifact.data === undefined
-  ) {
-    return undefined;
-  }
-  params.assertCurrent();
-  let grants = downloads.get(client);
-  if (!grants) {
-    grants = new Map();
-    downloads.set(client, grants);
-  }
-  const now = Date.now();
-  for (const [ticket, grant] of grants) {
-    if (grant.expiresAt <= now) {
-      grants.delete(ticket);
-    }
-  }
-  pruneMapToMaxSize(grants, MAX_DOWNLOADS_PER_CONNECTION - 1);
-  const ticket = randomBytes(32).toString("base64url");
-  const expiresAt = now + DOWNLOAD_TTL_MS;
-  grants.set(ticket, {
-    expiresAt,
-    digest: artifactContentDigest(params.artifact),
-    assertCurrent: params.assertCurrent,
-    read: params.read,
-  });
-  return {
-    url: `${ARTIFACT_DOWNLOAD_PATH}${encodeURIComponent(client.connId)}/${ticket}`,
-    expiresAt: new Date(expiresAt).toISOString(),
-  };
-}
 
 /** The RPC chooses and authorizes the resource; HTTP never accepts a replacement query. */
 export async function handleArtifactDownloadHttpRequest(
@@ -92,46 +42,88 @@ export async function handleArtifactDownloadHttpRequest(
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
-  const [connection, ticket, extra] = pathname.slice(ARTIFACT_DOWNLOAD_PATH.length).split("/");
-  const client = [...opts.clients].find(
-    (candidate) => candidate.connId && encodeURIComponent(candidate.connId) === connection,
+  const selected = resolveArtifactDownloadGrant(
+    opts.clients,
+    pathname.slice(ARTIFACT_DOWNLOAD_PATH.length),
   );
-  const grants = client ? downloads.get(client) : undefined;
-  const grant = ticket && extra === undefined ? grants?.get(ticket) : undefined;
-  if (!client || !grant || !ticket) {
+  if (!selected || selected.grant.source.kind !== "bytes") {
     respondNotFound(res);
     return true;
   }
+  const { client, grant, ticket } = selected;
+  const grantSource = selected.grant.source;
+  let assertGrantCurrent = () =>
+    assertArtifactDownloadGrantCurrent(opts.clients, client, ticket, grant);
   const assertCurrent = () => {
+    const ingress = getRemoteControlUiIngressContext(req);
+    assertRemoteControlUiIngressCurrent(ingress);
     if (
-      !opts.clients.has(client) ||
-      client.connectionSignal?.aborted !== false ||
-      client.invalidated ||
-      grant.expiresAt <= Date.now() ||
-      grants?.get(ticket) !== grant
+      ingress &&
+      client.internal?.remoteIngressPrincipal?.assertCurrent !==
+        ingress.resolvePrincipal().assertCurrent
     ) {
-      throw new Error("Artifact download expired");
+      throw new Error("Artifact download belongs to another ingress grant");
     }
-    grant.assertCurrent();
+    assertGrantCurrent();
   };
-  let artifact: ArtifactRecord | undefined;
+  let prepared: ArtifactDownloadResponse | undefined;
+  const thumbnail = grantSource.image && url.searchParams.get("variant") === "thumbnail";
   try {
     assertCurrent();
-    artifact = await grant.read();
+    prepared = await grantSource.read({
+      expectedDigest: grantSource.digest,
+      method: thumbnail ? "GET" : req.method,
+      headers: thumbnail
+        ? {}
+        : {
+            range: req.headers.range,
+            "if-range": req.headers["if-range"],
+            "if-none-match": req.headers["if-none-match"],
+          },
+    });
     assertCurrent();
+    if (thumbnail) {
+      // Lazy streams own their resources when opened. A preview must never open
+      // one as an implicit original-image fallback or buffer it without a bound.
+      if (!prepared?.body || prepared.stream) {
+        throw new Error("Artifact image preview bytes are unavailable");
+      }
+      const source = prepared.body;
+      const width = normalizeChatImageRenditionWidth(url.searchParams.get("width"));
+      const cacheKey = `${createHash("sha256").update(source).digest("hex")}\0${width}`;
+      // Preview failures are unavailable, never an implicit full-image download.
+      const bytes = new Uint8Array(
+        await resolveManagedImageThumbnail(cacheKey, () => encodeImageThumbnail(source, width)),
+      );
+      prepared.artifact = {
+        ...prepared.artifact,
+        mimeType: "image/webp",
+        title: `${prepared.artifact.title}-preview.webp`,
+      };
+      const response = resolveByteResponse({
+        file: { size: bytes.byteLength },
+        method: req.method,
+        request: req,
+      });
+      prepared.response = response;
+      prepared.body =
+        req.method === "HEAD" ||
+        response.kind === "not-modified" ||
+        response.kind === "unsatisfiable"
+          ? undefined
+          : response.kind === "partial"
+            ? bytes.subarray(response.range.start, response.range.end + 1)
+            : bytes;
+      assertCurrent();
+    }
   } catch {
+    prepared = undefined;
+  }
+  if (!prepared) {
     respondNotFound(res);
     return true;
   }
-  if (
-    artifact?.download.mode !== "bytes" ||
-    artifact.data === undefined ||
-    artifactContentDigest(artifact) !== grant.digest
-  ) {
-    respondNotFound(res);
-    return true;
-  }
-  const bytes = Buffer.from(artifact.data, "base64");
+  const { artifact, response, body } = prepared;
   const mime = normalizeMimeType(artifact.mimeType);
   const contentType =
     mime && /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i.test(mime)
@@ -144,18 +136,35 @@ export async function handleArtifactDownloadHttpRequest(
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("cache-control", "private, no-store");
-  const response = resolveByteResponse({
-    file: { size: bytes.length },
-    method: req.method,
-    request: req,
-  });
   writeByteHeaders(res, response);
-  res.end(
-    req.method === "HEAD" || response.kind === "unsatisfiable" || response.kind === "not-modified"
-      ? undefined
-      : response.kind === "partial"
-        ? bytes.subarray(response.range.start, response.range.end + 1)
-        : bytes,
-  );
+  if (prepared.stream) {
+    const stream = prepared.stream;
+    let retained: ReturnType<typeof retainArtifactDownloadStream> | undefined;
+    try {
+      retained = retainArtifactDownloadStream(opts.clients, client, ticket, grant);
+      assertGrantCurrent = retained.assertCurrent;
+      await pipeline(
+        async function* (options) {
+          // pipeline supplies its cancellation signal to function sources.
+          const signal = options!.signal!;
+          for await (const chunk of stream(signal)) {
+            signal.throwIfAborted();
+            assertCurrent();
+            yield chunk;
+          }
+        },
+        res,
+        { signal: client.connectionSignal },
+      );
+    } catch {
+      // Headers may already be delivered. A truncated transfer must fail, not
+      // acquire a successful end marker or a second HTTP response.
+      res.destroy();
+    } finally {
+      retained?.release();
+    }
+  } else {
+    res.end(body);
+  }
   return true;
 }

@@ -1,4 +1,3 @@
-// Google plugin module implements memory embedding adapter behavior.
 import {
   hasNonTextEmbeddingParts,
   isMissingEmbeddingApiKeyError,
@@ -16,6 +15,7 @@ import {
 
 export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
   id: "gemini",
+  aliases: ["google"],
   defaultModel: DEFAULT_GEMINI_EMBEDDING_MODEL,
   transport: "remote",
   authProviderId: "google",
@@ -52,24 +52,20 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
             return null;
           }
           const byCustomId = await runGeminiEmbeddingBatches({
+            ...batch,
             gemini: client,
-            agentId: batch.agentId,
             requests: batch.chunks.map((chunk, index) => ({
               custom_id: String(index),
               request: buildGeminiEmbeddingRequest({
                 input: chunk.embeddingInput ?? { text: chunk.text },
                 model: client.model,
                 role: "document",
+                documentFormatApplied: batch.documentFormatApplied,
                 taskType: "RETRIEVAL_DOCUMENT",
                 modelPath: client.modelPath,
                 outputDimensionality: client.outputDimensionality,
               }),
             })),
-            wait: batch.wait,
-            concurrency: batch.concurrency,
-            pollIntervalMs: batch.pollIntervalMs,
-            timeoutMs: batch.timeoutMs,
-            debug: batch.debug,
           });
           return mapBatchEmbeddingsByIndex(byCustomId, batch.chunks.length);
         },

@@ -44,8 +44,11 @@ class AndroidLicenseNoticesTest {
         "AndroidX Room",
         "AndroidX SQLite",
         "AndroidX Wear",
+        "AndroidX WebKit",
         "AndroidX WindowManager",
         "Bouncy Castle Provider",
+        "Chevrotain",
+        "chevrotain-allstar",
         "CodexBar",
         "Coil",
         "CommonMark Java",
@@ -95,21 +98,28 @@ class AndroidLicenseNoticesTest {
         "Iconify Utils",
         "internmap",
         "JamaJS",
+        "JNA",
         "js-yaml",
         "KaTeX",
         "khroma",
         "Kotlin Libraries",
+        "Langium",
         "layout-base",
+        "libffi",
+        "libsodium",
         "llama.cpp",
         "Lobe Icons",
         "lodash-es",
+        "Lucide",
         "Manrope",
         "Markdown",
         "Marked",
         "Mermaid",
+        "Mermaid Parser",
         "nibor autolink",
         "OkHttp and Okio",
         "path-data-parser",
+        "Pele",
         "points-on-curve",
         "points-on-path",
         "roughjs",
@@ -119,6 +129,11 @@ class AndroidLicenseNoticesTest {
         "ts-dedent",
         "uuid",
         "venn.js",
+        "vscode-jsonrpc",
+        "vscode-languageserver-protocol",
+        "vscode-languageserver-textdocument",
+        "vscode-languageserver-types",
+        "vscode-uri",
       ),
       licenses.map { license -> license.title },
     )
@@ -133,5 +148,7 @@ class AndroidLicenseNoticesTest {
     assertTrue(licenses.any { license -> license.title == "CodexBar" && license.text.contains("Peter Steinberger") })
     assertTrue(licenses.any { license -> license.title == "Lobe Icons" && license.text.contains("LobeHub") })
     assertTrue(licenses.any { license -> license.title == "llama.cpp" && license.text.contains("ggml authors") })
+    assertTrue(licenses.any { license -> license.title == "Pele" && license.text.contains("Copyright (c) 2026 kepano") })
+    assertTrue(licenses.any { license -> license.title == "Pele" && license.text.contains("Copyright (c) 2026 Lucide Icons and Contributors") })
   }
 }

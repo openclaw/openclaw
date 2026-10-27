@@ -1,31 +1,36 @@
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 // Canonicalizes the portable policy snapshot carried with delayed exec approvals.
-type ExecApprovalPolicyRule = {
-  pattern: string;
-  argPattern?: string;
-  source?: "allow-always";
-};
+import type { ExecApprovalRequestParams } from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
 
-export type ExecApprovalPolicySnapshot = {
-  security: "deny" | "allowlist" | "full";
-  ask: "off" | "on-miss" | "always";
-  askFallback: "deny" | "allowlist" | "full";
-  autoAllowSkills: boolean;
+type PolicySnapshot = SchemaContract<
+  NonNullable<NonNullable<ExecApprovalRequestParams["systemRunPlan"]>["policySnapshot"]>
+>;
+type ExecApprovalPolicyRule = PolicySnapshot["allowlistRules"][number];
+
+export type ExecApprovalPolicySnapshot = Omit<PolicySnapshot, "allowlistRules"> & {
   allowlistRules: readonly ExecApprovalPolicyRule[];
 };
 
-const utf8Encoder = new TextEncoder();
-
 function compareUtf8(left: string, right: string): number {
-  const leftBytes = utf8Encoder.encode(left);
-  const rightBytes = utf8Encoder.encode(right);
-  const sharedLength = Math.min(leftBytes.length, rightBytes.length);
-  for (let index = 0; index < sharedLength; index += 1) {
-    const difference = (leftBytes[index] ?? 0) - (rightBytes[index] ?? 0);
-    if (difference !== 0) {
-      return difference;
+  let leftIndex = 0;
+  let rightIndex = 0;
+  while (leftIndex < left.length && rightIndex < right.length) {
+    let leftPoint = left.codePointAt(leftIndex)!;
+    let rightPoint = right.codePointAt(rightIndex)!;
+    leftIndex += leftPoint > 0xffff ? 2 : 1;
+    rightIndex += rightPoint > 0xffff ? 2 : 1;
+    // UTF-8 preserves scalar order; Buffer encodes lone surrogates as U+FFFD.
+    if (leftPoint >= 0xd800 && leftPoint <= 0xdfff) {
+      leftPoint = 0xfffd;
+    }
+    if (rightPoint >= 0xd800 && rightPoint <= 0xdfff) {
+      rightPoint = 0xfffd;
+    }
+    if (leftPoint !== rightPoint) {
+      return leftPoint - rightPoint;
     }
   }
-  return leftBytes.length - rightBytes.length;
+  return left.length - leftIndex - (right.length - rightIndex);
 }
 
 function compareOptionalUtf8(left: string | undefined, right: string | undefined): number {
@@ -50,7 +55,8 @@ function compareExecApprovalPolicyRules(
   );
 }
 
-function buildExecApprovalPolicyRuleKey(rule: ExecApprovalPolicyRule): string {
+export function buildExecApprovalPolicyRuleKey(rule: ExecApprovalPolicyRule): string {
+  // A JSON tuple preserves exact regex bytes without delimiter collisions.
   return JSON.stringify([rule.pattern, rule.argPattern ?? null, rule.source ?? null]);
 }
 

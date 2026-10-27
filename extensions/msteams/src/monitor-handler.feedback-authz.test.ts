@@ -1,310 +1,150 @@
-// Msteams tests cover monitor handler.feedback authz plugin behavior.
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import type { MSTeamsConfig, OpenClawConfig } from "../runtime-api.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
-import { createMSTeamsMessageHandlerDeps } from "./monitor-handler.test-helpers.js";
-import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
-import { setMSTeamsRuntime } from "./runtime.js";
+import {
+  createMSTeamsMessageHandlerDeps,
+  installMSTeamsTestRuntime,
+} from "./monitor-handler.test-helpers.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
-const feedbackReflectionMockState = vi.hoisted(() => ({
-  runFeedbackReflection: vi.fn(),
-}));
-const channelInboundMockState = vi.hoisted(() => ({
-  recordChannelFeedbackEvent: vi.fn(async () => true),
+const feedback = vi.hoisted(() => ({
+  record: vi.fn(async () => true),
+  reflect: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
-  recordChannelFeedbackEvent: channelInboundMockState.recordChannelFeedbackEvent,
+  recordChannelFeedbackEvent: feedback.record,
+  runChannelFeedbackReflection: feedback.reflect,
 }));
 
-vi.mock("./monitor-handler/message-handler.js", () => ({
-  createMSTeamsMessageHandler: () => async () => {},
-}));
-
-vi.mock("./monitor-handler/reaction-handler.js", () => ({
-  createMSTeamsReactionHandler: () => async () => {},
-}));
-
-vi.mock("./feedback-reflection.js", async () => {
-  const actual = await vi.importActual<typeof import("./feedback-reflection.js")>(
-    "./feedback-reflection.js",
-  );
-  return {
-    ...actual,
-    runFeedbackReflection: feedbackReflectionMockState.runFeedbackReflection,
-  };
-});
-
-function createRuntimeStub(readAllowFromStore: ReturnType<typeof vi.fn>): PluginRuntime {
-  return {
-    logging: {
-      shouldLogVerbose: () => false,
-    },
-    channel: {
-      inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress },
-      debounce: {
-        resolveInboundDebounceMs: () => 0,
-        createInboundDebouncer: () => ({
-          enqueue: async () => {},
-          flushKey: async () => {},
-          cancelKey: () => false,
-          drain: async () => {},
-        }),
-      },
-      pairing: {
-        readAllowFromStore,
-        upsertPairingRequest: vi.fn(async () => null),
-      },
-      routing: {
-        resolveAgentRoute: ({ peer }: { peer: { kind: string; id: string } }) => ({
-          sessionKey: `msteams:${peer.kind}:${peer.id}`,
-          agentId: "default",
-        }),
-      },
-      session: {
-        resolveStorePath: (storePath?: string) => storePath ?? "/tmp",
-      },
-    },
-  } as unknown as PluginRuntime;
-}
-
-function createDeps(params: {
-  cfg: OpenClawConfig;
-  readAllowFromStore?: ReturnType<typeof vi.fn>;
-}): MSTeamsMessageHandlerDeps {
-  const readAllowFromStore = params.readAllowFromStore ?? vi.fn(async () => []);
-  setMSTeamsRuntime(createRuntimeStub(readAllowFromStore));
-  return createMSTeamsMessageHandlerDeps({
-    cfg: params.cfg,
-    runtime: { error: vi.fn() } as unknown as RuntimeEnv,
-  });
-}
-
-function createFeedbackInvokeContext(params: {
-  reaction: "like" | "dislike";
-  conversationId: string;
-  conversationType: string;
-  senderId: string;
-  senderName?: string;
-  teamId?: string;
-  channelName?: string;
-  comment?: string;
-}): MSTeamsTurnContext {
+function createFeedbackInvokeContext({
+  reaction = "like",
+  senderId = "owner-aad",
+  ...activity
+}: Partial<MSTeamsTurnContext["activity"]> & {
+  reaction?: "like" | "dislike";
+  senderId?: string;
+} = {}): MSTeamsTurnContext {
   return {
     activity: {
-      id: `invoke-${params.reaction}`,
       type: "invoke",
-      name: "message/submitAction",
-      channelId: "msteams",
-      serviceUrl: "https://service.example.test",
-      from: {
-        id: `${params.senderId}-botframework`,
-        aadObjectId: params.senderId,
-        name: params.senderName ?? "Sender",
-      },
-      recipient: {
-        id: "bot-id",
-        name: "Bot",
-      },
+      from: { id: `${senderId}-botframework`, aadObjectId: senderId, name: "Owner" },
+      recipient: { id: "bot-id", name: "Bot" },
       conversation: {
-        id: params.conversationId,
-        conversationType: params.conversationType,
-        tenantId: params.teamId ? "tenant-1" : undefined,
+        id: "a:personal-chat;messageid=bot-msg-1",
+        conversationType: "personal",
       },
-      channelData: params.teamId
-        ? {
-            team: { id: params.teamId, name: "Team 1" },
-            channel: params.channelName ? { name: params.channelName } : undefined,
-          }
-        : {},
       value: {
         actionName: "feedback",
         actionValue: {
-          reaction: params.reaction,
-          feedback: JSON.stringify({ feedbackText: params.comment ?? "feedback text" }),
+          reaction,
+          feedback: JSON.stringify({ feedbackText: "allowed feedback" }),
         },
         replyToId: "bot-msg-1",
       },
+      ...activity,
     },
     sendActivity: vi.fn(async () => ({ id: "ignored" })),
-    sendActivities: async () => [],
   } as unknown as MSTeamsTurnContext;
 }
 
-async function withFeedbackHandler(params: {
-  cfg: OpenClawConfig;
-  context: Parameters<typeof createFeedbackInvokeContext>[0];
-  assertResult: () => Promise<void>;
-}) {
-  const deps = createDeps({ cfg: params.cfg });
-  await runMSTeamsFeedbackInvokeHandler(createFeedbackInvokeContext(params.context), deps);
-  await params.assertResult();
+function dmConfig(overrides: Partial<MSTeamsConfig> = {}): OpenClawConfig {
+  return {
+    channels: { msteams: { dmPolicy: "allowlist", allowFrom: ["owner-aad"], ...overrides } },
+  };
+}
+
+async function invoke(context: MSTeamsTurnContext, cfg: OpenClawConfig) {
+  await runMSTeamsFeedbackInvokeHandler(context, createMSTeamsMessageHandlerDeps({ cfg }));
 }
 
 describe("msteams feedback invoke authz", () => {
   beforeEach(() => {
-    feedbackReflectionMockState.runFeedbackReflection.mockReset();
-    feedbackReflectionMockState.runFeedbackReflection.mockResolvedValue(undefined);
-    channelInboundMockState.recordChannelFeedbackEvent.mockClear();
+    installMSTeamsTestRuntime();
+    feedback.reflect.mockReset().mockResolvedValue({ status: "empty" });
+    feedback.record.mockClear();
   });
 
-  it("records feedback for an allowlisted DM sender", async () => {
-    await withFeedbackHandler({
-      cfg: {
-        channels: {
-          msteams: {
-            dmPolicy: "allowlist",
-            allowFrom: ["owner-aad"],
-          },
+  it("records DM feedback even when team route allowlists exist", async () => {
+    await invoke(
+      createFeedbackInvokeContext(),
+      dmConfig({
+        teams: {
+          team123: { channels: { "19:group@thread.tacv2": { requireMention: false } } },
         },
-      } as OpenClawConfig,
-      context: {
-        reaction: "like",
-        conversationId: "a:personal-chat;messageid=bot-msg-1",
-        conversationType: "personal",
-        senderId: "owner-aad",
-        senderName: "Owner",
-        comment: "allowed feedback",
-      },
-      assertResult: async () => {
-        expect(channelInboundMockState.recordChannelFeedbackEvent).toHaveBeenCalledWith({
-          cfg: expect.any(Object),
-          agentId: "default",
-          sessionKey: "msteams:direct:owner-aad",
-          event: {
-            type: "custom",
-            event: "feedback",
-            ts: expect.any(Number),
-            messageId: "bot-msg-1",
-            value: "positive",
-            comment: "allowed feedback",
-            sessionKey: "msteams:direct:owner-aad",
-            agentId: "default",
-            conversationId: "a:personal-chat",
-          },
-        });
-      },
-    });
-  });
-
-  it("keeps DM feedback allowed when team route allowlists exist", async () => {
-    await withFeedbackHandler({
-      cfg: {
-        channels: {
-          msteams: {
-            dmPolicy: "allowlist",
-            allowFrom: ["owner-aad"],
-            teams: {
-              team123: {
-                channels: {
-                  "19:group@thread.tacv2": { requireMention: false },
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      context: {
-        reaction: "like",
-        conversationId: "a:personal-chat;messageid=bot-msg-1",
-        conversationType: "personal",
-        senderId: "owner-aad",
-        senderName: "Owner",
-        comment: "allowed dm feedback",
-      },
-      assertResult: async () => {
-        expect(channelInboundMockState.recordChannelFeedbackEvent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            agentId: "default",
-            sessionKey: "msteams:direct:owner-aad",
-            event: expect.objectContaining({ comment: "allowed dm feedback" }),
-          }),
-        );
-      },
-    });
-  });
-
-  it("does not record feedback when personal scope contradicts team metadata", async () => {
-    await withFeedbackHandler({
-      cfg: {
-        channels: {
-          msteams: {
-            dmPolicy: "allowlist",
-            allowFrom: ["owner-aad"],
-          },
-        },
-      } as OpenClawConfig,
-      context: {
-        reaction: "like",
-        conversationId: "a:personal-chat;messageid=bot-msg-1",
-        conversationType: "personal",
-        senderId: "owner-aad",
-        teamId: "unexpected-team",
-        comment: "must not cross scope",
-      },
-      assertResult: async () => {
-        expect(channelInboundMockState.recordChannelFeedbackEvent).not.toHaveBeenCalled();
-        expect(feedbackReflectionMockState.runFeedbackReflection).not.toHaveBeenCalled();
-      },
-    });
-  });
-
-  it("does not record feedback for a DM sender outside allowFrom", async () => {
-    await withFeedbackHandler({
-      cfg: {
-        channels: {
-          msteams: {
-            dmPolicy: "allowlist",
-            allowFrom: ["owner-aad"],
-          },
-        },
-      } as OpenClawConfig,
-      context: {
-        reaction: "like",
-        conversationId: "a:personal-chat;messageid=bot-msg-1",
-        conversationType: "personal",
-        senderId: "attacker-aad",
-        senderName: "Attacker",
-        comment: "blocked feedback",
-      },
-      assertResult: async () => {
-        expect(channelInboundMockState.recordChannelFeedbackEvent).not.toHaveBeenCalled();
-        expect(feedbackReflectionMockState.runFeedbackReflection).not.toHaveBeenCalled();
-      },
-    });
-  });
-
-  it("does not trigger reflection for a group sender outside groupAllowFrom", async () => {
-    const deps = createDeps({
-      cfg: {
-        channels: {
-          msteams: {
-            groupPolicy: "allowlist",
-            groupAllowFrom: ["owner-aad"],
-            feedbackReflection: true,
-          },
-        },
-      } as OpenClawConfig,
-    });
-
-    await runMSTeamsFeedbackInvokeHandler(
-      createFeedbackInvokeContext({
-        reaction: "dislike",
-        conversationId: "19:group@thread.tacv2;messageid=bot-msg-1",
-        conversationType: "groupChat",
-        senderId: "attacker-aad",
-        senderName: "Attacker",
-        teamId: "team-1",
-        channelName: "General",
-        comment: "blocked reflection",
       }),
-      deps,
     );
-
-    expect(channelInboundMockState.recordChannelFeedbackEvent).not.toHaveBeenCalled();
-    expect(feedbackReflectionMockState.runFeedbackReflection).not.toHaveBeenCalled();
+    expect(feedback.record).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      agentId: "default",
+      sessionKey: "msteams:direct:owner-aad",
+      event: {
+        type: "custom",
+        event: "feedback",
+        ts: expect.any(Number),
+        messageId: "bot-msg-1",
+        value: "positive",
+        comment: "allowed feedback",
+        sessionKey: "msteams:direct:owner-aad",
+        agentId: "default",
+        conversationId: "a:personal-chat",
+      },
+    });
   });
+
+  it.each([
+    ["19:channel@thread.tacv2;messageid=root", "nested"],
+    ["19:channel@thread.tacv2", "root"],
+  ])("records channel feedback in its message thread: %s", async (conversationId, replyToId) => {
+    await invoke(
+      createFeedbackInvokeContext({
+        conversation: { id: conversationId, conversationType: "channel" },
+        replyToId,
+      }),
+      { channels: { msteams: { groupPolicy: "open" } } },
+    );
+    expect(feedback.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "msteams:channel:19:channel@thread.tacv2:thread:root",
+        event: expect.objectContaining({
+          sessionKey: "msteams:channel:19:channel@thread.tacv2:thread:root",
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    [
+      "personal scope contradicts team metadata",
+      { channelData: { team: { id: "unexpected-team", name: "Team 1" } } },
+      dmConfig(),
+    ],
+    ["DM sender outside allowFrom", { senderId: "attacker-aad" }, dmConfig()],
+    [
+      "group sender outside groupAllowFrom",
+      {
+        reaction: "dislike",
+        conversation: {
+          id: "19:group@thread.tacv2;messageid=bot-msg-1",
+          conversationType: "groupChat",
+          tenantId: "tenant-1",
+        },
+        senderId: "attacker-aad",
+        channelData: { team: { id: "team-1", name: "Team 1" }, channel: { name: "General" } },
+      },
+      dmConfig({
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["owner-aad"],
+        feedbackReflection: true,
+      }),
+    ],
+  ] satisfies Array<[string, Parameters<typeof createFeedbackInvokeContext>[0], OpenClawConfig]>)(
+    "blocks feedback and reflection: %s",
+    async (_reason, context, cfg) => {
+      await invoke(createFeedbackInvokeContext(context), cfg);
+      expect(feedback.record).not.toHaveBeenCalled();
+      expect(feedback.reflect).not.toHaveBeenCalled();
+    },
+  );
 });

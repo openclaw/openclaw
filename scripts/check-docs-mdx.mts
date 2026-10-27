@@ -1,17 +1,11 @@
 #!/usr/bin/env node
 
-// Validates docs MDX files for syntax and repository-specific conventions.
-
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { compile } from "@mdx-js/mdx";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
-import {
-  checkMintlifyAccordionIndentation,
-  MINTLIFY_ACCORDION_INDENT_MESSAGE,
-} from "./lib/mintlify-accordion.mjs";
 
 type DocsCheckError = {
   type: string;
@@ -32,7 +26,6 @@ function validationCache(cacheFile: string) {
   for (const input of [
     fileURLToPath(import.meta.url),
     fileURLToPath(new URL("./lib/arg-utils.runtime.mjs", import.meta.url)),
-    fileURLToPath(new URL("./lib/mintlify-accordion.mjs", import.meta.url)),
     path.join(root, "package.json"),
     path.join(root, "package-lock.json"),
     path.join(root, "node_modules", ".package-lock.json"),
@@ -78,45 +71,6 @@ function validationCache(cacheFile: string) {
   };
 }
 
-const MINTLIFY_LANGUAGE_CODES = new Set([
-  "en",
-  "cn",
-  "zh",
-  "zh-Hans",
-  "zh-Hant",
-  "es",
-  "fr",
-  "fr-CA",
-  "fr-ca",
-  "ja",
-  "jp",
-  "ja-jp",
-  "pt",
-  "pt-BR",
-  "de",
-  "ko",
-  "it",
-  "ru",
-  "ro",
-  "cs",
-  "id",
-  "ar",
-  "tr",
-  "hi",
-  "sv",
-  "no",
-  "lv",
-  "nl",
-  "uk",
-  "vi",
-  "pl",
-  "uz",
-  "he",
-  "ca",
-  "fi",
-  "hu",
-]);
-
 const POISON_TEXT_PATTERNS = [
   {
     pattern: /\banalysis\s+to=functions\./iu,
@@ -160,9 +114,6 @@ function parsePositiveIntegerArg(raw: string | undefined, label: string): number
   return value;
 }
 
-/**
- * Parses docs MDX check arguments.
- */
 export function parseArgs(argv: string[]) {
   const roots: string[] = [];
   let jsonOut = "";
@@ -259,16 +210,6 @@ function formatMdxError(filePath: string, error: unknown): DocsCheckError {
   };
 }
 
-function checkMintlifyMdxStructure(filePath: string, raw: string): DocsCheckError[] {
-  return checkMintlifyAccordionIndentation(stripFrontmatter(raw)).map((error) => ({
-    type: "mintlify-mdx",
-    file: filePath,
-    line: error.line,
-    column: error.column,
-    message: MINTLIFY_ACCORDION_INDENT_MESSAGE,
-  }));
-}
-
 function lineColumnForIndex(raw: string, offset: number): { line: number; column: number } {
   const prefix = raw.slice(0, offset);
   const lines = prefix.split(/\r?\n/u);
@@ -302,10 +243,6 @@ async function checkMdxFile(filePath: string, raw: string): Promise<DocsCheckErr
   if (poisonErrors.length > 0) {
     return poisonErrors;
   }
-  const structureErrors = checkMintlifyMdxStructure(filePath, raw);
-  if (structureErrors.length > 0) {
-    return structureErrors;
-  }
   await compile({ path: filePath, value: stripFrontmatter(raw) });
   return [];
 }
@@ -332,28 +269,6 @@ function findDocsJsonPaths(roots: string[]): string[] {
   return [...paths];
 }
 
-function collectNavigationLanguages(value: unknown, out: string[] = []): string[] {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectNavigationLanguages(item, out);
-    }
-    return out;
-  }
-  if (!value || typeof value !== "object") {
-    return out;
-  }
-  const record = value as Record<string, unknown>;
-  if (typeof record.language === "string") {
-    out.push(record.language);
-  }
-  for (const child of Object.values(record)) {
-    if (child && typeof child === "object") {
-      collectNavigationLanguages(child, out);
-    }
-  }
-  return out;
-}
-
 function checkDocsJson(filePath: string): DocsCheckError[] {
   const errors: DocsCheckError[] = [];
   let data: unknown;
@@ -369,15 +284,33 @@ function checkDocsJson(filePath: string): DocsCheckError[] {
     ];
   }
 
-  const navigation =
-    data && typeof data === "object" && "navigation" in data ? data.navigation : undefined;
-  const languages = collectNavigationLanguages(navigation);
-  for (const language of languages) {
-    if (!MINTLIFY_LANGUAGE_CODES.has(language)) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    errors.push({
+      type: "docs-json",
+      file: filePath,
+      message: "Docs configuration must be an object.",
+    });
+  } else if ("navigation" in data) {
+    const navigation = data.navigation;
+    if (
+      !navigation ||
+      typeof navigation !== "object" ||
+      Array.isArray(navigation) ||
+      !("languages" in navigation) ||
+      !Array.isArray(navigation.languages) ||
+      navigation.languages.some(
+        (entry: unknown) =>
+          !entry ||
+          typeof entry !== "object" ||
+          !("language" in entry) ||
+          typeof entry.language !== "string" ||
+          !entry.language.trim(),
+      )
+    ) {
       errors.push({
         type: "docs-json",
         file: filePath,
-        message: `Unsupported Mintlify navigation language: ${language}`,
+        message: "Docs navigation.languages must contain language entries.",
       });
     }
   }

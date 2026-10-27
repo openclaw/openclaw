@@ -4,6 +4,7 @@
  * expanded only after unknown core/plugin entries are classified.
  */
 import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
+import { rememberBoundedKey } from "../infra/dedupe.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
 import { auditToolPolicyFilter } from "./tool-policy-audit.js";
@@ -20,24 +21,25 @@ import {
 const MAX_TOOL_POLICY_WARNING_CACHE = 256;
 const seenToolPolicyWarnings = new Set<string>();
 
-function rememberToolPolicyWarning(warning: string): boolean {
-  if (seenToolPolicyWarnings.has(warning)) {
-    return false;
-  }
-  if (seenToolPolicyWarnings.size >= MAX_TOOL_POLICY_WARNING_CACHE) {
-    const oldest = seenToolPolicyWarnings.values().next().value;
-    if (oldest) {
-      seenToolPolicyWarnings.delete(oldest);
-    }
-  }
-  seenToolPolicyWarnings.add(warning);
-  return true;
-}
+/** Provenance travels with the decision; consumers never infer it from log labels. */
+type ToolPolicySource = {
+  kind: "profile" | "config" | "session" | "runtime";
+  path?: string;
+  profile?: string;
+  alsoAllowPath?: string;
+};
 
-/** One named policy layer in the effective runtime tool policy pipeline. */
+export type ConfiguredToolPolicySources = Partial<
+  Record<
+    "profile" | "providerProfile" | "global" | "globalProvider" | "agent" | "agentProvider",
+    ToolPolicySource
+  >
+>;
+
 export type ToolPolicyPipelineStep = {
   policy: ToolPolicyLike | undefined;
   label: string;
+  source?: ToolPolicySource;
   stripPluginOnlyAllowlist?: boolean;
   suppressUnavailableCoreToolWarning?: boolean;
   suppressUnavailableCoreToolWarningAllowlist?: string[];
@@ -67,67 +69,53 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
   groupPolicy?: ToolPolicyLike;
   senderPolicy?: ToolPolicyLike;
   agentId?: string;
+  sources?: ConfiguredToolPolicySources;
   unavailableCoreToolReason?: string;
 }): ToolPolicyPipelineStep[] {
   const agentId = params.agentId?.trim();
   const profile = params.profile?.trim();
   const providerProfile = params.providerProfile?.trim();
   const unavailableCoreToolReason = params.unavailableCoreToolReason?.trim();
-  return [
+  const steps: ToolPolicyPipelineStep[] = [
     {
       policy: params.profilePolicy,
+      source: params.sources?.profile,
       label: profile ? `tools.profile (${profile})` : "tools.profile",
-      stripPluginOnlyAllowlist: true,
       suppressUnavailableCoreToolWarningAllowlist: params.profileUnavailableCoreWarningAllowlist,
-      unavailableCoreToolReason,
     },
     {
       policy: params.providerProfilePolicy,
+      source: params.sources?.providerProfile,
       label: providerProfile
         ? `tools.byProvider.profile (${providerProfile})`
         : "tools.byProvider.profile",
-      stripPluginOnlyAllowlist: true,
       suppressUnavailableCoreToolWarningAllowlist:
         params.providerProfileUnavailableCoreWarningAllowlist,
-      unavailableCoreToolReason,
     },
-    {
-      policy: params.globalPolicy,
-      label: "tools.allow",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
-    },
-    {
-      policy: params.globalProviderPolicy,
-      label: "tools.byProvider.allow",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
-    },
-    {
-      policy: params.agentPolicy,
-      label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
-    },
-    {
-      policy: params.agentProviderPolicy,
-      label: agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
-    },
-    {
-      policy: params.groupPolicy,
-      label: "group tools.allow",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
-    },
-    {
-      policy: params.senderPolicy,
-      label: "tools.toolsBySender",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
-    },
+    ...(
+      [
+        [params.globalPolicy, params.sources?.global, "tools.allow"],
+        [params.globalProviderPolicy, params.sources?.globalProvider, "tools.byProvider.allow"],
+        [
+          params.agentPolicy,
+          params.sources?.agent,
+          agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
+        ],
+        [
+          params.agentProviderPolicy,
+          params.sources?.agentProvider,
+          agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
+        ],
+        [params.groupPolicy, { kind: "session" }, "group tools.allow"],
+        [params.senderPolicy, { kind: "session" }, "tools.toolsBySender"],
+      ] as const
+    ).map(([policy, source, label]) => ({ policy, source, label })),
   ];
+  for (const step of steps) {
+    step.stripPluginOnlyAllowlist = true;
+    step.unavailableCoreToolReason = unavailableCoreToolReason;
+  }
+  return steps;
 }
 
 /** Applies configured policy layers to a tool list and emits deduped warnings/audit events. */
@@ -186,13 +174,23 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
         const warningEntries = [...warnableGatedCoreEntries, ...otherEntries];
         if (warningEntries.length > 0) {
           const entries = warningEntries.join(", ");
-          const suffix = describeUnknownAllowlistSuffix({
-            hasGatedCoreEntries: warnableGatedCoreEntries.length > 0,
-            hasOtherEntries: otherEntries.length > 0,
-            unavailableCoreToolReason: step.unavailableCoreToolReason,
-          });
+          const hasGatedCoreEntries = warnableGatedCoreEntries.length > 0;
+          const hasOtherEntries = otherEntries.length > 0;
+          const unavailableCoreToolReason = step.unavailableCoreToolReason?.trim();
+          const unavailableCoreDetail = unavailableCoreToolReason
+            ? `These entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}.`
+            : "These entries are shipped core tools but unavailable in the current runtime/provider/model/config.";
+          const mixedUnavailableCoreDetail = unavailableCoreToolReason
+            ? `Some entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}; other entries won't match any tool unless the plugin is enabled.`
+            : "Some entries are shipped core tools but unavailable in the current runtime/provider/model/config; other entries won't match any tool unless the plugin is enabled.";
+          const suffix =
+            hasGatedCoreEntries && hasOtherEntries
+              ? mixedUnavailableCoreDetail
+              : hasGatedCoreEntries
+                ? unavailableCoreDetail
+                : "These entries won't match any tool unless the plugin is enabled.";
           const warning = `tools: ${step.label} allowlist contains unknown entries (${entries}). ${suffix}`;
-          if (rememberToolPolicyWarning(warning)) {
+          if (rememberBoundedKey(seenToolPolicyWarnings, warning, MAX_TOOL_POLICY_WARNING_CACHE)) {
             params.warn(warning);
           }
         }
@@ -219,23 +217,4 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
     });
   }
   return filtered;
-}
-
-function describeUnknownAllowlistSuffix(params: {
-  hasGatedCoreEntries: boolean;
-  hasOtherEntries: boolean;
-  unavailableCoreToolReason?: string;
-}): string {
-  const unavailableCoreToolReason = params.unavailableCoreToolReason?.trim();
-  const unavailableCoreDetail = unavailableCoreToolReason
-    ? `These entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}.`
-    : "These entries are shipped core tools but unavailable in the current runtime/provider/model/config.";
-  const mixedUnavailableCoreDetail = unavailableCoreToolReason
-    ? `Some entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}; other entries won't match any tool unless the plugin is enabled.`
-    : "Some entries are shipped core tools but unavailable in the current runtime/provider/model/config; other entries won't match any tool unless the plugin is enabled.";
-  return params.hasGatedCoreEntries && params.hasOtherEntries
-    ? mixedUnavailableCoreDetail
-    : params.hasGatedCoreEntries
-      ? unavailableCoreDetail
-      : "These entries won't match any tool unless the plugin is enabled.";
 }

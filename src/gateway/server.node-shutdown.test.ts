@@ -1,30 +1,40 @@
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.test-support.js";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { GatewaySuspendPrepareResult } from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
+import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { writeConfigFile } from "../config/config.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { withTimeout } from "../infra/fs-safe.js";
+import {
+  getGatewaySuspendStatus,
+  resetGatewaySuspendCoordinatorForLifecycleRestart,
+} from "../infra/gateway-suspend-coordinator.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import { markGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
+import { openTrackedWs, pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import { respondToNodeShutdown } from "./node-shutdown.test-support.js";
-import { createGatewayKernel } from "./server-kernel.js";
+import * as kernelModule from "./server-kernel.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
-import { installGatewayTestHooks, startServer, writeSessionStore } from "./test-helpers.js";
+import {
+  connectOk,
+  installGatewayTestHooks,
+  rpcReq,
+  startServer,
+  writeSessionStore,
+} from "./test-helpers.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import { sessionStoreEntry } from "./test/server-sessions.test-helpers.js";
 import { hashWorkerCredential } from "./worker-environments/credential.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./worker-environments/device-provider-identity.js";
 import {
-  BUNDLE_HASH,
+  createDispatchEnvironmentFixtures,
   REQUEST,
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
@@ -32,6 +42,15 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
 installGatewayTestHooks({ scope: "suite" });
+
+const waitForShutdown = <T>(pending: Promise<T>, label: string) =>
+  withTimeout(pending, 5_000, label);
+const credential = (secret: string, sessionId: string | null) => ({
+  credentialHash: hashWorkerCredential(secret),
+  sessionId,
+  rpcSetVersion: 1,
+  expiresAtMs: Date.now() + 60_000,
+});
 
 test.for(["direct", "restart"] as const)(
   "settles rootless worker cleanup and joins an unanswered invoke during %s Gateway shutdown",
@@ -48,8 +67,9 @@ test.for(["direct", "restart"] as const)(
       clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
       clientMode: GATEWAY_CLIENT_MODES.NODE,
     });
+    const nodeId = pairedNode.identity.deviceId;
     const pairing = await requestNodePairing({
-      nodeId: pairedNode.identity.deviceId,
+      nodeId,
       platform: "linux",
       deviceFamily: "Linux",
       commands: ["camera.list"],
@@ -59,32 +79,33 @@ test.for(["direct", "restart"] as const)(
     });
     await writeConfigFile({ gateway: { nodes: { commands: { allow: ["camera.list"] } } } });
 
-    let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
-    const createKernel = createGatewayKernel;
-    const factory = vi
-      .spyOn(await import("./server-kernel.js"), "createGatewayKernel")
-      .mockImplementation(async (...args) => {
-        kernel = await createKernel(...args);
-        return kernel;
-      });
-    const previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    const factory = vi.spyOn(kernelModule, "createGatewayKernel");
     let started: Awaited<ReturnType<typeof startServer>>;
     try {
-      delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-      started = await startServer("secret");
+      started = await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: undefined }, () =>
+        startServer("secret"),
+      );
     } catch (error) {
       factory.mockRestore();
       throw error;
-    } finally {
-      if (previousMinimalGateway === undefined) {
-        delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-      } else {
-        process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
-      }
     }
     const { port, server } = started;
+    const connectNode = (overrides: Partial<Parameters<typeof connectGatewayClient>[0]> = {}) =>
+      connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: "secret",
+        role: "node",
+        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        mode: GATEWAY_CLIENT_MODES.NODE,
+        platform: "linux",
+        deviceFamily: "Linux",
+        scopes: [],
+        deviceIdentity: pairedNode.identity,
+        ...overrides,
+      });
     let node: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     let operator: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    let controller: WebSocket | undefined;
     let closing: Promise<void> | undefined;
     let ordinaryRequest: Promise<unknown> | undefined;
     const stopped = createDeferredCore<unknown>();
@@ -107,11 +128,13 @@ test.for(["direct", "restart"] as const)(
       await runQaGatewayFixture(
         async () => {
           await server.startupSettled;
-          if (!kernel) {
-            throw new Error("expected the real Gateway kernel");
+          const creation = factory.mock.results[0];
+          if (creation?.type !== "return") {
+            throw new Error("expected real Gateway kernel creation");
           }
-          const invoke = kernel.nodeRegistry.invoke.bind(kernel.nodeRegistry);
-          vi.spyOn(kernel.nodeRegistry, "invoke").mockImplementation(async (params) => {
+          const runtime = await creation.value;
+          const invoke = runtime.nodeRegistry.invoke.bind(runtime.nodeRegistry);
+          vi.spyOn(runtime.nodeRegistry, "invoke").mockImplementation(async (params) => {
             const result = await invoke(params);
             if (params.command === "camera.list") {
               finalizerEntered.resolve();
@@ -119,19 +142,10 @@ test.for(["direct", "restart"] as const)(
             }
             return result;
           });
-          kernel.registerGatewayLifetimeSidecars({ stop: stopDependencies });
-          node = await connectGatewayClient({
-            url: `ws://127.0.0.1:${port}`,
-            token: "secret",
-            role: "node",
-            clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+          runtime.registerGatewayLifetimeSidecars({ stop: stopDependencies });
+          node = await connectNode({
             clientDisplayName: "shutdown worker node",
-            mode: GATEWAY_CLIENT_MODES.NODE,
-            platform: "linux",
-            deviceFamily: "Linux",
-            scopes: [],
             commands: ["camera.list"],
-            deviceIdentity: pairedNode.identity,
             onEvent: (event) => {
               const respondingNode = node;
               if (event.event !== "node.invoke.request" || !event.payload || !respondingNode) {
@@ -147,30 +161,26 @@ test.for(["direct", "restart"] as const)(
                 ordinaryDispatched.resolve();
                 return;
               }
-              const result =
-                frame.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND
-                  ? (async () => {
-                      stopRequested.resolve();
-                      await releaseStopReply.promise;
-                      return respondToNodeShutdown(respondingNode, frame);
-                    })()
-                  : respondToNodeShutdown(respondingNode, frame);
-              if (!result) {
-                stopped.reject(new Error(`unexpected shutdown command: ${frame.command}`));
-                return;
-              }
               if (frame.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
+                stopRequested.resolve();
                 stopRequests.push(JSON.parse(frame.paramsJSON));
-                void result.then(stopped.resolve, stopped.reject);
+                void releaseStopReply.promise
+                  .then(() => respondToNodeShutdown(respondingNode, frame))
+                  .then(stopped.resolve, stopped.reject);
               } else {
-                void result.catch(() => undefined);
+                const result = respondToNodeShutdown(respondingNode, frame);
+                if (!result) {
+                  stopped.reject(new Error(`unexpected shutdown command: ${frame.command}`));
+                } else {
+                  void result.catch(() => undefined);
+                }
               }
             },
           });
           const ping = vi.spyOn(WebSocket.prototype, "ping");
-          await expect(
-            kernel.nodeRegistry.checkConnectivity(pairedNode.identity.deviceId),
-          ).resolves.toEqual({ ok: true });
+          await expect(runtime.nodeRegistry.checkConnectivity(nodeId)).resolves.toEqual({
+            ok: true,
+          });
           expect(ping).toHaveBeenCalledOnce();
           ping.mockRestore();
           await node.request("node.runnerInventory.update", {
@@ -189,11 +199,8 @@ test.for(["direct", "restart"] as const)(
           await environments.createIntent({
             environmentId,
             providerId: DEVICE_WORKER_PROVIDER_ID,
-            profileId: `device:${pairedNode.identity.deviceId}`,
-            profileSnapshot: {
-              install: "bundle",
-              settings: { device: pairedNode.identity.deviceId },
-            },
+            profileId: `device:${nodeId}`,
+            profileSnapshot: { install: "bundle", settings: { device: nodeId } },
             provisionOperationId: "provision-node-shutdown",
           });
           await environments.transition({ environmentId, from: "requested", to: "provisioning" });
@@ -203,23 +210,14 @@ test.for(["direct", "restart"] as const)(
             to: "ready",
             patch: {
               leaseId: "lease-node-shutdown",
-              nodeDeviceId: pairedNode.identity.deviceId,
+              nodeDeviceId: nodeId,
               sharedHost: true,
               bootstrapReceipt: {
-                bundleHash: BUNDLE_HASH,
+                ...createDispatchEnvironmentFixtures().attached.bootstrapReceipt,
                 openclawVersion: "2026.8.19",
-                protocolFeatures: [
-                  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-                  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-                ],
                 installKind: "bundle",
               },
-              credential: {
-                credentialHash: hashWorkerCredential("node-shutdown-ready-fixture"),
-                sessionId: null,
-                rpcSetVersion: 1,
-                expiresAtMs: Date.now() + 60_000,
-              },
+              credential: credential("node-shutdown-ready-fixture", null),
             },
           });
           const attached = await environments.transition({
@@ -228,16 +226,11 @@ test.for(["direct", "restart"] as const)(
             to: "attached",
             patch: {
               attachedSessionIds: [REQUEST.sessionId],
-              credential: {
-                credentialHash: hashWorkerCredential("node-shutdown-fixture"),
-                sessionId: REQUEST.sessionId,
-                rpcSetVersion: 1,
-                expiresAtMs: Date.now() + 60_000,
-              },
+              credential: credential("node-shutdown-fixture", REQUEST.sessionId),
             },
           });
           const placements = createWorkerSessionPlacementStore();
-          seedActivePlacement(placements, { environmentId, ownerEpoch: attached.ownerEpoch });
+          await seedActivePlacement(placements, { environmentId, ownerEpoch: attached.ownerEpoch });
           expect(placements.get(REQUEST.sessionId)).toMatchObject({
             state: "active",
             turnClaim: null,
@@ -251,39 +244,83 @@ test.for(["direct", "restart"] as const)(
             mode: GATEWAY_CLIENT_MODES.BACKEND,
             scopes: ["operator.admin", "operator.read", "operator.write"],
           });
+          const ordinaryInvoke = {
+            nodeId,
+            command: "camera.list",
+            timeoutMs: 0,
+            idempotencyKey: "shutdown-unanswered-invoke",
+          };
           ordinaryRequest = operator
-            .request(
-              "node.invoke",
-              {
-                nodeId: pairedNode.identity.deviceId,
-                command: "camera.list",
-                timeoutMs: 0,
-                idempotencyKey: "shutdown-unanswered-invoke",
-              },
-              { timeoutMs: 10_000 },
-            )
+            .request("node.invoke", ordinaryInvoke, { timeoutMs: 10_000 })
             .catch((error: unknown) => error);
-          await withTimeout(ordinaryDispatched.promise, 5_000, "ordinary node invocation");
+          await waitForShutdown(ordinaryDispatched.promise, "ordinary node invocation");
 
-          // Cleanup has no request root. The unanswered invoke must not block the owner
-          // that needs this node to acknowledge physical worker shutdown first.
+          // Rootless cleanup needs the node's shutdown ACK before joining the unanswered invoke.
+          let suspensionId: string | undefined;
           if (mode === "restart") {
+            const suspension = await operator.request<GatewaySuspendPrepareResult>(
+              "gateway.suspend.prepare",
+              { requestId: "node-shutdown", drain: true },
+            );
+            if (suspension.status === "busy") {
+              throw new Error("expected an owned suspension before restart");
+            }
+            suspensionId = suspension.suspensionId;
             markGatewayRestartDraining();
+            controller = await openTrackedWs(port);
+            await connectOk(controller, {
+              token: "secret",
+              scopes: ["operator.admin"],
+              client: {
+                id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+                mode: GATEWAY_CLIENT_MODES.BACKEND,
+                version: "dev",
+                platform: process.platform,
+              },
+            });
+            await expect(
+              rpcReq(controller, "gateway.suspend.status", {
+                suspensionId,
+                includeLifecycle: true,
+              }),
+            ).resolves.toMatchObject({
+              ok: true,
+              payload: {
+                status: "draining",
+                ownerId: "node-shutdown",
+                phase: "interrupting",
+              },
+            });
+            await expect(
+              rpcReq(controller, "gateway.suspend.status", { suspensionId: "foreign" }),
+            ).resolves.toMatchObject({
+              ok: false,
+              error: { message: "a different gateway suspension is prepared" },
+            });
+            // The high-level client parks bootstrap reads; assert the server's wire refusal.
+            await expect(rpcReq(controller, "sessions.list", {})).resolves.toMatchObject({
+              ok: false,
+              error: {
+                code: "UNAVAILABLE",
+                message: "sessions.list unavailable during gateway restart",
+                details: { reason: "gateway-restarting" },
+              },
+            });
+            await expect(connectNode()).rejects.toThrow(
+              "connect unavailable during gateway restart",
+            );
           }
           closing = server.close({ reason: "gateway stopping" });
           void closing.then(closeSettled, closeSettled);
-          await withTimeout(stopRequested.promise, 5_000, "worker stop dispatch");
-          const reconnect = connectGatewayClient({
-            url: `ws://127.0.0.1:${port}`,
-            token: "secret",
-            role: "node",
-            clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-            mode: GATEWAY_CLIENT_MODES.NODE,
-            platform: "linux",
-            deviceFamily: "Linux",
-            deviceIdentity: pairedNode.identity,
-            timeoutMs: 5_000,
-          });
+          await waitForShutdown(stopRequested.promise, "worker stop dispatch");
+          if (suspensionId) {
+            expect(getGatewaySuspendStatus(suspensionId, true)).toMatchObject({
+              status: "draining",
+              ownerId: "node-shutdown",
+              phase: "exiting",
+            });
+          }
+          const reconnect = connectNode({ timeoutMs: 5_000 });
           if (mode === "restart") {
             await expect(reconnect).rejects.toMatchObject({
               name: "GatewayClientRequestError",
@@ -298,16 +335,14 @@ test.for(["direct", "restart"] as const)(
           }
           expect(closeSettled).not.toHaveBeenCalled();
           releaseStopReply.resolve();
-          await expect(withTimeout(stopped.promise, 5_000, "node shutdown reply")).resolves.toEqual(
-            {
-              ok: true,
-            },
-          );
-          await withTimeout(finalizerEntered.promise, 5_000, "ordinary invocation finalizer");
+          await expect(waitForShutdown(stopped.promise, "node shutdown reply")).resolves.toEqual({
+            ok: true,
+          });
+          await waitForShutdown(finalizerEntered.promise, "ordinary invocation finalizer");
           expect(stopDependencies).not.toHaveBeenCalled();
           expect(closeSettled).not.toHaveBeenCalled();
           releaseFinalizer.resolve();
-          await withTimeout(closing, 5_000, "Gateway shutdown");
+          await withinTest(closing, signal);
           expect(stopDependencies).toHaveBeenCalledOnce();
           expect(stopRequests).toEqual([
             {
@@ -325,11 +360,13 @@ test.for(["direct", "restart"] as const)(
         },
         () => node?.stopAndWait({ timeoutMs: 1_000 }),
         () => operator?.stopAndWait({ timeoutMs: 1_000 }),
+        () => controller && closeGatewayTestWebSocket(controller),
         async () => {
           await ordinaryRequest;
         },
       );
     } finally {
+      resetGatewaySuspendCoordinatorForLifecycleRestart();
       factory.mockRestore();
       vi.restoreAllMocks();
       signal.removeEventListener("abort", unblock);

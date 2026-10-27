@@ -2,52 +2,24 @@ import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { describe, expect, it, vi } from "vitest";
 import type { CliToolResultDelta, CliToolUseStartDelta } from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
-
-function joinJsonlFrames(...frames: unknown[]) {
-  return frames
-    .map((frame) => (typeof frame === "string" ? frame : JSON.stringify(frame)))
-    .join("\n");
-}
-
-function claudeStreamEvent(event: Record<string, unknown>) {
-  return { type: "stream_event", event };
-}
-
-function claudeBlockStart(contentBlock: Record<string, unknown>, index?: number) {
-  return claudeStreamEvent({
-    type: "content_block_start",
-    ...(index === undefined ? {} : { index }),
-    content_block: contentBlock,
-  });
-}
-
-function claudeBlockStop(index?: number) {
-  return claudeStreamEvent({
-    type: "content_block_stop",
-    ...(index === undefined ? {} : { index }),
-  });
-}
-
-function claudeInputJsonDelta(partialJson: string, index?: number) {
-  return claudeStreamEvent({
-    type: "content_block_delta",
-    ...(index === undefined ? {} : { index }),
-    delta: { type: "input_json_delta", partial_json: partialJson },
-  });
-}
+import {
+  claudeBlockStart,
+  claudeBlockStop,
+  claudeInputJsonDelta,
+  createClaudeParser,
+  createClaudeBackend,
+  joinJsonlFrames,
+} from "./cli-output.test-helpers.js";
 
 describe("createCliJsonlStreamingParser framing", () => {
   it("frames coalesced Claude image and PDF lines before omitting retained binary bytes", () => {
     const results: CliToolResultDelta[] = [];
     const pluginLines: string[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-      providerId: "claude-cli",
+    const parser = createClaudeParser({
       parseJsonlEvent: (line) => {
         pluginLines.push(line);
         return null;
       },
-      onAssistantDelta: () => {},
       onToolResult: (result) => results.push(result),
     });
     const base64 = "a".repeat(4_300_000);
@@ -129,9 +101,7 @@ describe("createCliJsonlStreamingParser framing", () => {
   ])("counts $name claimed by Claude plugin parsers before dispatch", ({ padded }) => {
     const pluginLines: string[] = [];
     const assistantDeltas: string[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-      providerId: "claude-cli",
+    const parser = createClaudeParser({
       parseJsonlEvent: (line) => {
         pluginLines.push(line);
         return { kind: "text", text: "claimed" };
@@ -170,13 +140,7 @@ describe("createCliJsonlStreamingParser framing", () => {
 
   it("counts actual blank Claude frames without invoking hooks or inventing a finish frame", () => {
     const parseJsonlEvent = vi.fn(() => null);
-    const createParser = () =>
-      createCliJsonlStreamingParser({
-        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-        providerId: "claude-cli",
-        parseJsonlEvent,
-        onAssistantDelta: () => {},
-      });
+    const createParser = () => createClaudeParser({ parseJsonlEvent });
     const completeParser = createParser();
     completeParser.push("\r\n".repeat(20_000));
     completeParser.finish();
@@ -222,11 +186,7 @@ describe("createCliJsonlStreamingParser framing", () => {
         }).replace('"message":', `"message":${" ".repeat(4_300_000)}`),
     },
   ])("charges $name against the Claude raw-output budget", ({ createLine }) => {
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-      providerId: "claude-cli",
-      onAssistantDelta: () => {},
-    });
+    const parser = createClaudeParser();
     const line = createLine();
 
     parser.push(`${line}\n${line}\n`);
@@ -236,10 +196,7 @@ describe("createCliJsonlStreamingParser framing", () => {
 
   it("normalizes empty Claude image data without treating zero omitted bytes as unchanged", () => {
     const results: CliToolResultDelta[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-      providerId: "claude-cli",
-      onAssistantDelta: () => {},
+    const parser = createClaudeParser({
       onToolResult: (result) => results.push(result),
     });
 
@@ -275,10 +232,7 @@ describe("createCliJsonlStreamingParser framing", () => {
 
   it("omits the echoed tool_use_result payload MCP image tools duplicate alongside the message copy", () => {
     const results: CliToolResultDelta[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-      providerId: "claude-cli",
-      onAssistantDelta: () => {},
+    const parser = createClaudeParser({
       onToolResult: (result) => results.push(result),
     });
     const data = "A".repeat(600_000);
@@ -325,11 +279,7 @@ describe("createCliJsonlStreamingParser framing", () => {
   });
 
   it("omits the base64 file payload Claude echoes for built-in image reads", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-      providerId: "claude-cli",
-      onAssistantDelta: () => {},
-    });
+    const parser = createClaudeParser();
     const base64 = "A".repeat(600_000);
     const readLine = (index: number) =>
       `${JSON.stringify({
@@ -372,11 +322,7 @@ describe("createCliJsonlStreamingParser framing", () => {
   ] as const)(
     "omits Agent SDK REPL $name output from retained accounting",
     ({ field, metadata }) => {
-      const parser = createCliJsonlStreamingParser({
-        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-        providerId: "claude-cli",
-        onAssistantDelta: () => {},
-      });
+      const parser = createClaudeParser();
       const base64 = "A".repeat(600_000);
       const replLine = () =>
         `${JSON.stringify({
@@ -400,11 +346,7 @@ describe("createCliJsonlStreamingParser framing", () => {
   );
 
   it("normalizes a deeply nested record without exhausting the stack", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-      providerId: "claude-cli",
-      onAssistantDelta: () => {},
-    });
+    const parser = createClaudeParser();
     // Built as text: JSON.stringify is itself recursive and cannot serialize this.
     const depth = 50_000;
     const payload = JSON.stringify({
@@ -420,12 +362,7 @@ describe("createCliJsonlStreamingParser framing", () => {
   });
 
   it("still enforces raw Claude line and retained-text limits", () => {
-    const createParser = () =>
-      createCliJsonlStreamingParser({
-        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-        providerId: "claude-cli",
-        onAssistantDelta: () => {},
-      });
+    const createParser = createClaudeParser;
     const oversizedLineParser = createParser();
     oversizedLineParser.push(
       `${JSON.stringify({
@@ -592,15 +529,8 @@ describe("createCliJsonlStreamingParser framing", () => {
     },
   ])("$name", ({ frames, expected }) => {
     const starts: CliToolUseStartDelta[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
-      onAssistantDelta: () => undefined,
+    const parser = createClaudeParser({
+      backend: createClaudeBackend(),
       onToolUseStart: (delta) => starts.push(delta),
     });
 

@@ -1,36 +1,15 @@
-import type { FailoverReason } from "../failover/signal.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
-import type { ModelFallbackRunOptions } from "../model-fallback-attempt.js";
 import type { runWithModelFallback } from "../model-fallback-runner.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
+
+export {
+  initialModelFallbackAttemptOptions as initialAttemptOptions,
+  fallbackModelAttemptOptions as fallbackAttemptOptions,
+} from "../test-helpers/model-fallback-runner.test-support.js";
 
 export type FallbackRunnerParams = Parameters<
   typeof runWithModelFallback<EmbeddedAgentRunResult>
 >[0];
-
-export function initialAttemptOptions(params: FallbackRunnerParams): ModelFallbackRunOptions {
-  return {
-    modelRoutingProvenance: {
-      requestedProvider: params.provider,
-      requestedModel: params.model,
-      stage: "initial",
-    },
-  };
-}
-
-export function fallbackAttemptOptions(
-  params: FallbackRunnerParams,
-  fallbackReason: FailoverReason,
-): ModelFallbackRunOptions {
-  return {
-    modelRoutingProvenance: {
-      requestedProvider: params.provider,
-      requestedModel: params.model,
-      stage: "fallback",
-      fallbackReason,
-    },
-  };
-}
 
 export function recordTurnAttempt(
   record: ((facts: ContextEngineTurnAttemptFacts) => void) | undefined,
@@ -39,14 +18,17 @@ export function recordTurnAttempt(
   if (!record) {
     throw new Error("expected context-engine turn candidate callback");
   }
+  const owner = {
+    agentId: "main",
+    sessionId: label,
+    sessionKey: `agent:main:${label}`,
+    storePath: `/${label}.sqlite`,
+    generation: "generation-1",
+  };
   record({
     boundary: {
       admission: {
-        agentId: "main",
-        sessionId: label,
-        sessionKey: `agent:main:${label}`,
-        storePath: `/${label}.sqlite`,
-        generation: "generation-1",
+        ...owner,
         entryId: `${label}-user`,
         rawSeq: 1,
         effectiveParentId: null,
@@ -55,11 +37,7 @@ export function recordTurnAttempt(
         role: "user",
       },
       terminal: {
-        agentId: "main",
-        sessionId: label,
-        sessionKey: `agent:main:${label}`,
-        storePath: `/${label}.sqlite`,
-        generation: "generation-1",
+        ...owner,
         entryId: `${label}-assistant`,
         rawSeq: 2,
         effectiveParentId: `${label}-user`,
@@ -76,31 +54,30 @@ export function recordTurnAttempt(
 export function makeResult(params: {
   provider: string;
   model: string;
+  sessionId?: string;
+  text?: string;
   classification?: "empty";
   meta?: Partial<EmbeddedAgentRunResult["meta"]>;
 }): EmbeddedAgentRunResult {
+  const { provider, model, classification, meta } = params;
   return {
-    payloads: params.classification ? [] : [{ text: "recovered" }],
+    payloads: classification ? [] : [{ text: params.text ?? "recovered" }],
     meta: {
       durationMs: 10,
       aborted: false,
       providerStarted: true,
       stopReason: "completed",
-      agentHarnessResultClassification: params.classification,
-      agentMeta: {
-        sessionId: "session-1",
-        provider: params.provider,
-        model: params.model,
-      },
-      ...params.meta,
+      agentHarnessResultClassification: classification,
+      agentMeta: { sessionId: params.sessionId ?? "session-1", provider, model },
+      ...meta,
     },
   };
 }
 
-export function createDirectHarness() {
+export function createDirectHarness(workspaceDir = "/tmp/workspace", runtime?: string) {
   return {
-    workspaceDir: "/tmp/workspace",
+    workspaceDir,
     preparation: { kind: "direct" as const },
-    resolveRuntimeOverride: () => undefined,
+    resolveRuntimeOverride: () => runtime,
   };
 }

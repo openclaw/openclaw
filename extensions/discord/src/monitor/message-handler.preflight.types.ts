@@ -1,4 +1,3 @@
-// Discord type declarations define plugin contracts.
 import type {
   GroupThreadMentionFacts,
   InboundEventKind,
@@ -23,18 +22,15 @@ import type { DiscordThreadChannel } from "./threading.js";
 
 export type { DiscordSenderIdentity } from "./sender-identity.js";
 
-type LoadedConfig = OpenClawConfig;
 type BuildChannelInboundContext =
   typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
-export type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
+type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 
 export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
 
 type DiscordMessagePreflightSharedFields = {
-  cfg: LoadedConfig;
-  discordConfig: NonNullable<
-    import("openclaw/plugin-sdk/config-contracts").OpenClawConfig["channels"]
-  >["discord"];
+  cfg: OpenClawConfig;
+  discordConfig: NonNullable<OpenClawConfig["channels"]>["discord"];
   accountId: string;
   token: string;
   runtime: RuntimeEnv;
@@ -50,11 +46,13 @@ type DiscordMessagePreflightSharedFields = {
   ackReactionScope: "all" | "direct" | "group-all" | "group-mentions" | "off" | "none";
   groupPolicy: "open" | "disabled" | "allowlist";
   turnAdoptionLifecycle?: DiscordIngressLifecycle;
+  data: DiscordMessageEvent;
+  client: Client;
+  threadBindings: DiscordThreadBindingLookup;
+  discordRestFetch?: typeof fetch;
 };
 
 export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields & {
-  data: DiscordMessageEvent;
-  client: Client;
   message: DiscordMessageEvent["message"];
   messageChannelId: string;
   author: User;
@@ -71,7 +69,6 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   isGroupDm: boolean;
 
   commandAuthorized: boolean;
-  channelIngress: ResolvedChannelMessageIngress;
   resolveChannelIngress: (
     contextBinding: ChannelIngressContextBinding,
     conversation?: { parentId?: string; threadId?: string },
@@ -82,13 +79,11 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   // Keep one required receipt-time snapshot: queued processing must never
   // fall back to Discord's expiring attachment URLs.
   preparedMedia: DiscordMediaInfo[];
-  wasMentioned: boolean;
   conversationAvatar?: string;
 
   route: ReturnType<typeof resolveAgentRoute>;
   threadBinding?: SessionBindingRecord;
   boundSessionKey?: string;
-  boundAgentId?: string;
 
   guildInfo: DiscordGuildEntryResolved | null;
   guildSlug: string;
@@ -99,30 +94,20 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   threadParentType?: ChannelType;
   threadName?: string | null;
 
-  configChannelName?: string;
-  configChannelSlug: string;
-  displayChannelName?: string;
   displayChannelSlug: string;
 
   baseSessionKey: string;
   channelConfig: DiscordChannelConfigResolved | null;
-  channelAllowlistConfigured: boolean;
-  channelAllowed: boolean;
 
   shouldRequireMention: boolean;
   groupRequireMention: boolean;
   hasAnyMention: boolean;
   hasControlCommand: boolean;
-  allowTextCommands: boolean;
   shouldBypassMention: boolean;
   effectiveWasMentioned: boolean;
   groupThread?: GroupThreadMentionFacts;
   inboundEventKind: InboundEventKind;
   canDetectMention: boolean;
-
-  historyEntry?: DiscordHistoryEntry;
-  threadBindings: DiscordThreadBindingLookup;
-  discordRestFetch?: typeof fetch;
 };
 
 export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields & {
@@ -132,12 +117,6 @@ export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields 
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom?: string[];
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
-  ackReactionScope: DiscordMessagePreflightContext["ackReactionScope"];
-  groupPolicy: DiscordMessagePreflightContext["groupPolicy"];
-  threadBindings: DiscordThreadBindingLookup;
-  discordRestFetch?: typeof fetch;
   avatarResolver?: DiscordAvatarResolver;
   precedingMessages?: readonly DiscordMessageEvent["message"][];
-  data: DiscordMessageEvent;
-  client: Client;
 };

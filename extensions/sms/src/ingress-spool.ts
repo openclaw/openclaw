@@ -1,4 +1,3 @@
-// Sms plugin module owns durable Twilio webhook admission and replay.
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressMonitor,
@@ -147,7 +146,6 @@ export function createSmsIngressSpool(params: {
         event.receivedAt,
       ),
     pollIntervalMs: SMS_INGRESS_DRAIN_INTERVAL_MS,
-    // The 1-day / 20k tombstones dominate the retired 10-minute / 10,000-key cache.
     retention: {
       pruneIntervalMs: 0,
       completedTtlMs: 24 * 60 * 60 * 1_000,

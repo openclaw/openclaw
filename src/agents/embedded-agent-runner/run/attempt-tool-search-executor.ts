@@ -1,45 +1,49 @@
-import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
-import {
-  createNestedToolActivity,
-  readNestedToolActivity,
-  type NestedToolActivity,
-} from "../../../sessions/nested-tool-activity.js";
-import { raceWithAbortSignal } from "../../agent-tools.abort.js";
-import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
-import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import { sanitizeToolResult } from "../../embedded-agent-tool-results.js";
 import {
   copyInternalToolResultState,
   getInternalToolExecutionPreparer,
-} from "../../runtime/internal-hooks.js";
+} from "../../../../packages/agent-core/src/internal-hooks.js";
+import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
+import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
+import { notifyToolActivity } from "../../../shared/tool-activity-heartbeat.js";
+import { raceWithAbortSignal } from "../../agent-tools.abort.js";
+import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
+import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { retainToolSearchImplementation } from "../../tool-search-scheduling.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
-import { redactTranscriptMessage } from "../../transcript-redact.js";
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
+import type { AttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
-import { notifyToolActivity } from "./tool-activity-heartbeat.js";
 
 /** One owner for nested execution, acceptance, and durable display activity. */
 export function createSubscribedToolSearchExecutor(params: {
-  attempt: Pick<EmbeddedRunAttemptInternalParams, "config" | "runId" | "sessionId" | "sessionKey">;
+  attempt: Pick<EmbeddedRunAttemptInternalParams, "runId" | "sessionKey">;
   runSignal: AbortSignal;
   sessionManager: AgentSession["sessionManager"];
   subscription: Pick<ReturnType<typeof subscribeEmbeddedAgentSession>, "runToolLifecycle">;
   isCurrent: () => boolean;
   isReplaySafeTool: (tool: Parameters<ToolSearchCatalogToolExecutor>[0]["tool"]) => boolean;
-  nestedToolActivities: NestedToolActivity[];
+  nestedToolActivityState: AttemptNestedToolActivityState;
 }): ToolSearchCatalogToolExecutor {
   const { attempt, subscription } = params;
-  const activityScope = randomUUID();
+  const { scopeId: activityScope } = params.nestedToolActivityState;
   let nestedStartOrder = 0;
   return async (toolParams) => {
     const runSignal = params.runSignal;
     const signal = AbortSignal.any([toolParams.signal ?? runSignal, runSignal]);
+    let input = toolParams.input;
+    let preparationFailure: { error: unknown } | undefined;
+    try {
+      if (toolParams.tool.prepareArguments) {
+        input = toolParams.tool.prepareArguments(toolParams.input);
+      }
+    } catch (error) {
+      preparationFailure = { error };
+    }
+    const lifecycleArgs = preparationFailure ? toolParams.input : input;
     const yieldRunSignal = toolParams.toolName === "sessions_yield" ? runSignal : undefined;
     const startedAt = Date.now();
     const startOrder = nestedStartOrder++;
@@ -58,7 +62,7 @@ export function createSubscribedToolSearchExecutor(params: {
         toolName: toolParams.toolName,
         toolCallId: toolParams.toolCallId,
         parentToolCallId: toolParams.parentToolCallId,
-        args: toolParams.input,
+        args: lifecycleArgs,
         replaySafe: toolParams.replaySafe ?? params.isReplaySafeTool(toolParams.tool),
         hideFromChannelProgress:
           "hideFromChannelProgress" in toolParams.tool &&
@@ -74,41 +78,58 @@ export function createSubscribedToolSearchExecutor(params: {
               toolCallId: toolParams.toolCallId,
               toolName: toolParams.toolName,
               input: terminal.executedArguments,
-              result: sanitizeToolResult(terminal.result),
+              result: terminal.readSanitizedResult(),
               isError: terminal.isError,
               startedAt,
               timestamp: Date.now(),
             }),
             idempotencyKey: `${activityScope}:${toolParams.toolCallId}`,
           };
-          await runWithOwnedSessionTranscriptWrite(
+          const accepted = await runWithOwnedSessionTranscriptWrite(
             { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
             () =>
-              withSessionManagerWrite(manager, () => {
+              withSessionManagerAppend(manager, async () => {
                 // Revalidate the exact attempt after awaited acceptance and writer admission.
                 if (!params.isCurrent()) {
-                  return;
+                  return false;
                 }
                 if (isRecord(terminal.result)) {
                   copyInternalToolResultState(terminal.result, message);
                 }
-                manager.appendMessage(message);
-                const recorded = readNestedToolActivity(
-                  redactTranscriptMessage(message, attempt.config),
-                );
-                if (!recorded) {
-                  throw new Error("Nested activity became invalid during transcript redaction");
+                const target = manager.getSessionTarget();
+                const sessionId = manager.getSessionId();
+                const entryId = await manager.appendMessageAsync(message);
+                // Committed activity still belongs to settlement after presentation loses authority.
+                const activity = params.nestedToolActivityState;
+                if (!terminal.isError) {
+                  activity.successfulToolNames.add(toolParams.toolName);
                 }
-                params.nestedToolActivities.push(recorded);
+                if (entryId) {
+                  activity.accepted ??= {
+                    firstEntryId: entryId,
+                    lastEntryId: entryId,
+                    sessionId,
+                    target,
+                  };
+                  activity.accepted.lastEntryId = entryId;
+                }
+                return params.isCurrent();
               }),
           );
+          if (!accepted) {
+            return false;
+          }
           notifyToolActivity(attempt.runId);
+          return undefined;
         },
         // Acceptance belongs inside execution: observers must never see a rejected success.
         execute: async (onImplementationStart) =>
           await raceWithAbortSignal(
             retainToolSearchImplementation(
               (async () => {
+                if (preparationFailure) {
+                  throw preparationFailure.error;
+                }
                 signal.throwIfAborted();
                 const preparer = getInternalToolExecutionPreparer(toolParams.tool);
                 if (!preparer) {
@@ -116,14 +137,14 @@ export function createSubscribedToolSearchExecutor(params: {
                   // SAFETY: toClientToolDefinitions pre-binds client dispatch to the native execution contract.
                   return await (toolParams.tool as AnyAgentTool).execute(
                     toolParams.toolCallId,
-                    toolParams.input,
+                    input,
                     signal,
                     toolParams.onUpdate,
                   );
                 }
                 const prepared = await preparer({
                   toolCallId: toolParams.toolCallId,
-                  args: toolParams.input,
+                  args: input,
                   signal,
                   onUpdate: toolParams.onUpdate,
                 });

@@ -1,16 +1,15 @@
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createConditionalWarningCollector,
   createOpenProviderConfiguredRouteWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveDiscordAccountAllowFrom,
   resolveDiscordAccountDmPolicy,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
-import type { ChannelPlugin } from "./channel-api.js";
 import { discordIngressIdentity } from "./monitor/ingress-identity.js";
 
 const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAccount>({
@@ -49,20 +48,15 @@ const collectDiscordSecurityWarnings =
         'Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels',
     },
   });
-const collectDiscordSecurityFindings = createConditionalWarningCollector.findings({
-  collectWarnings: collectDiscordSecurityWarnings,
-  checkId: "channels.discord.groups.open",
-  severity: "warn",
-  title: "Discord security warning",
-});
-
-const loadDiscordSecurityAuditModule = createLazyRuntimeModule(
-  () => import("./security-audit.runtime.js"),
-);
 
 export const discordSecurityAdapter = {
   resolveDmPolicy: resolveDiscordDmPolicy,
-  collectWarnings: collectDiscordSecurityFindings,
+  collectWarnings: createConditionalWarningCollector.findings({
+    collectWarnings: collectDiscordSecurityWarnings,
+    checkId: "channels.discord.groups.open",
+    severity: "warn",
+    title: "Discord security warning",
+  }),
   collectAuditFindings: async (params) =>
-    (await loadDiscordSecurityAuditModule()).collectDiscordSecurityAuditFindings(params),
+    (await import("./security-audit.js")).collectDiscordSecurityAuditFindings(params),
 } satisfies NonNullable<ChannelPlugin<ResolvedDiscordAccount>["security"]>;
