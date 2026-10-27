@@ -8,6 +8,7 @@ import { createSignal } from "solid-js";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ChatFastModePresentation } from "../../lib/chat/model-select-state.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
+import type { ChatHeaderViewersSnapshot } from "./chat-header-viewers-snapshot.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
@@ -69,6 +70,7 @@ export type ChatComposerSnapshot = Pick<
 
 export type ChatSessionSnapshot = {
   sessionState?: ChatSessionStateSnapshot;
+  headerViewers?: ChatHeaderViewersSnapshot;
   composer?: ChatComposerSnapshot | null;
   // The board provider validates cached payloads before they can reach a view.
   board?: { snapshot: unknown; receivedAtMs: number } | null;
@@ -407,12 +409,16 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.sessionId === incoming.sessionId
       ? { ...withBoard, composer: existing.snapshot.composer }
       : withBoard;
-  const snapshot =
+  const withSessionState =
     withComposer.sessionState === undefined &&
     existing?.snapshot.sessionState !== undefined &&
     existing.snapshot.sessionId === incoming.sessionId
       ? { ...withComposer, sessionState: existing.snapshot.sessionState }
       : withComposer;
+  const snapshot =
+    withSessionState.headerViewers === undefined && existing?.snapshot.sessionId === incoming.sessionId
+      ? { ...withSessionState, headerViewers: existing.snapshot.headerViewers }
+      : withSessionState;
   const previousState = existing?.snapshot.sessionState;
   const sessionState = snapshot.sessionState;
   if (
@@ -433,6 +439,7 @@ export function cacheChatSessionSnapshot(
         previousState?.sharingRole === sessionState?.sharingRole &&
         previousState?.unarchiveAllowed === sessionState?.unarchiveAllowed &&
         previousState?.parentSession === sessionState?.parentSession)) &&
+    existing.snapshot.headerViewers === snapshot.headerViewers &&
     samePagination(existing.snapshot.pagination, snapshot.pagination)
   ) {
     return;

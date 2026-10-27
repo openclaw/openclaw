@@ -643,7 +643,14 @@ describe("persistent chat session snapshots", () => {
   it.each(["unrelated", "session", "cache-eviction", "all"] as const)(
     "settles an in-flight transcript through %s invalidation",
     async (scope) => {
-      const value = snapshot("important transcript");
+      const value: ChatSessionSnapshot = {
+        ...snapshot("important transcript"),
+        headerViewers: {
+          users: [{ id: "peer", name: "Peer", avatarUrl: "/peer.png" }],
+          totalCount: 5,
+          ownerViewing: true,
+        },
+      };
       writer.connect();
       connected.add(writer);
       writeSnapshotFixture(writer, sessionKey, value);

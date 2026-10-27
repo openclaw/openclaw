@@ -95,6 +95,28 @@ describe("session message cache", () => {
     expect(read()?.composer).toBeUndefined();
   });
 
+  it("retains header viewers through history catch-up without crossing session or account scope", () => {
+    const cache: ChatMessageCache = new Map();
+    const host = {
+      settings: { gatewayUrl: "wss://gateway.example" },
+      client: { recoveryScope: "account-a", recoveryScopeReady: true },
+    };
+    const target = { sessionKey: "agent:main:viewers" };
+    const headerViewers = {
+      users: [{ id: "peer", name: "Peer" }],
+      totalCount: 5,
+      ownerViewing: false,
+    };
+    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot([], "one", { headerViewers }));
+    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot(["live"], "one"));
+    expect(readChatSessionSnapshot(cache, host, target)?.headerViewers).toEqual(headerViewers);
+    host.client.recoveryScope = "account-b";
+    expect(readChatSessionSnapshot(cache, host, target)).toBeNull();
+    host.client.recoveryScope = "account-a";
+    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot(["replacement"], "two"));
+    expect(readChatSessionSnapshot(cache, host, target)?.headerViewers).toBeUndefined();
+  });
+
   it("publishes a footprint batch once and rejects a retired session's deferred batch", () => {
     const cache: ChatMessageCache = new Map();
     const host = { assistantAgentId: "main" };

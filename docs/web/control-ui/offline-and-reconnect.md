@@ -138,7 +138,10 @@ cached transcript opens at its latest messages without an initial scroll animati
 It retains participant and completed-work timing information and the last task
 progress card for display while connecting; live Gateway results replace those
 cached facts in place. Cached progress does not authorize offline actions. The
-first chat request uses the saved cursor if the cached transcript is ready when
+header also retains its last three viewer avatars and overflow count for that
+conversation while connecting. The reconnect indicator describes connection
+state; live presence replaces these last-known viewers when it arrives.
+The first chat request uses the saved cursor if the cached transcript is ready when
 the live message subscription finishes connecting. Otherwise, the live read and
 cache restoration run in parallel. Agent switches and stale asynchronous reads
 retain their own identity checks. When the cached conversation also has the exact

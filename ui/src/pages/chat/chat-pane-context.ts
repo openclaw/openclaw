@@ -315,7 +315,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.presence.update(undefined);
     } else if (clientChanged || !wasConnected) {
       const presence = readPresenceEntries(snapshot.hello?.snapshot);
-      this.presence.update(presence ? { presence } : undefined);
+      this.presence.update({ presence: presence ?? [] });
     }
     const rename = this.headerPresentation.renameSession;
     const draftOwnerChanged = state.client !== snapshot.client || pairingOwnerChanged;

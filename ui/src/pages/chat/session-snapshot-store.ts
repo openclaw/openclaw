@@ -8,6 +8,7 @@ import {
 import { listen } from "../../lib/reactive/listener.ts";
 import * as json from "../../lib/snapshot-json.ts";
 import { chatSessionStateSnapshotSchema } from "./chat-session-state-snapshot.ts";
+import { chatHeaderViewersSnapshotSchema } from "./chat-header-viewers-snapshot.ts";
 import {
   getSessionCacheValue,
   MAX_CACHED_CHAT_SESSIONS,
@@ -86,6 +87,7 @@ const permissionModeSchema = json.enumeration(["read-only", "guarded", "workspac
 const snapshotSchema = json.object(
   {
     sessionState: json.optional(chatSessionStateSnapshotSchema),
+    headerViewers: json.optional(chatHeaderViewersSnapshotSchema),
     composer: json.optional(
       json.nullable(
         json.object({
