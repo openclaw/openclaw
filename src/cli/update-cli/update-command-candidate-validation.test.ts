@@ -6,6 +6,7 @@ import * as canaryProcess from "../../infra/update-candidate-canary-process.js";
 import { createCanaryProcessFixture } from "../../infra/update-candidate-canary.test-support.js";
 import * as rehearsals from "../../infra/update-candidate-rehearsal.js";
 import { createUpdateRun, getUpdateRunAsync } from "../../infra/update-run-ledger.js";
+import * as exec from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createGatewayRestartDeadline } from "../daemon-cli/restart-health-deadline.js";
@@ -21,13 +22,15 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 afterEach(() => vi.restoreAllMocks());
 
-async function prepareValidation(stall?: "doctor" | "lint") {
+async function prepareValidation(stall?: "doctor" | "lint", fullIntegrityCheck = false) {
   const root = await fs.realpath(dirs.make("candidate-budget-"));
   const rehearsal = await createCanaryProcessFixture(
     root,
     `import { createServer } from "node:http";
 const args = process.argv.slice(2);
-if (args.includes("--fix")) {
+if (args.includes("--help")) {
+  console.log("  --full-integrity-check  Verify copied state");
+} else if (args.includes("--fix")) {
   if (${JSON.stringify(stall === "doctor")}) setInterval(() => {}, 1000);
 } else if (args.includes("--lint")) {
   if (${JSON.stringify(stall === "lint")}) setInterval(() => {}, 1000);
@@ -61,14 +64,15 @@ if (args.includes("--fix")) {
         assertCurrent: guards.assertCurrent,
         writeOptions: guards.captureWriteOptions(),
       },
-      { opts: { json: true }, progress: {} },
+      { opts: { json: true, fullIntegrityCheck }, progress: {} },
       run,
     );
   return { validate, snapshot, rehearsal, run };
 }
 
 it("preserves each size-aware check budget after a long snapshot and Doctor", async () => {
-  const { validate, snapshot, rehearsal, run } = await prepareValidation();
+  const { validate, snapshot, rehearsal, run } = await prepareValidation(undefined, true);
+  const capabilityProbe = vi.spyOn(exec, "runExec");
   const wallClock = Date.now.bind(Date);
   const monotonicClock = performance.now.bind(performance);
   let elapsed = 0;
@@ -93,6 +97,11 @@ it("preserves each size-aware check budget after a long snapshot and Doctor", as
 
   expect(result).toMatchObject({ status: "ok", phase: "readiness" });
   expect(result.durationMs).toBeGreaterThanOrEqual(2_900_000);
+  expect(capabilityProbe).toHaveBeenCalledWith(
+    expect.any(String),
+    expect.arrayContaining(["doctor", "--help"]),
+    expect.objectContaining({ timeoutMs: 2_860_000 }),
+  );
   expect(result.steps).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ name: "candidate-doctor", exitCode: 0 }),

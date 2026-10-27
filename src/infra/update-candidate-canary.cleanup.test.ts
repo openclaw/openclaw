@@ -127,6 +127,34 @@ describe("canary teardown evidence", () => {
     stubHealthyGateway();
   });
 
+  it.each(["local", "parent"])(
+    "cancels a stalled port probe with its %s allowance",
+    async (owner) => {
+      const parent = new AbortController();
+      const failure = new Error("parent update cancelled");
+      let probeSignal: AbortSignal | undefined;
+      mocks.port.mockImplementation(({ signal }: { signal: AbortSignal }) => {
+        probeSignal = signal;
+        if (owner === "parent") {
+          queueMicrotask(() => parent.abort(failure));
+        }
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      });
+
+      const result = await runCanary({ signal: parent.signal }, 1);
+
+      expect(result).toMatchObject({ status: "error", phase: "snapshot" });
+      expect(probeSignal?.aborted).toBe(true);
+      expect(parent.signal.aborted).toBe(owner === "parent");
+      if (owner === "parent") {
+        expect(probeSignal?.reason).toBe(failure);
+      }
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    },
+  );
+
   it("preserves a candidate failure when private-copy cleanup reporting throws", async () => {
     const original = new TypeError("synthetic candidate receipt failure");
     const steps: UpdateStepResult[] = [];

@@ -83,7 +83,11 @@ async function readSqliteSidecarIdentities(databasePath: string) {
 export function registerCanaryProgressWorkerTests(
   getRoot: () => string,
   mocks: CanaryProgressMocks,
-  admission: { active: boolean; beforeGrant?: (stage: string) => void },
+  admission: {
+    active: boolean;
+    beforeGrant?: (stage: string) => void;
+    afterGrant?: (stage: string) => void;
+  },
 ) {
   it.each([
     "recorded",
@@ -200,13 +204,15 @@ export function registerCanaryProgressWorkerTests(
       let commits = 0;
       admission.beforeGrant = (stage) => {
         // Initial admission warms the writer before streamed snapshot receipts.
-        if (stage === "commit" && ++commits === 2) {
-          if (outcome === "interrupted-after-acceptance") {
-            run.interrupted = true;
-          } else if (deadline) {
-            elapsed += 60_001;
-            deadline.remainingMs();
-          }
+        if (stage === "commit" && ++commits === 2 && outcome === "interrupted-after-acceptance") {
+          run.interrupted = true;
+        }
+      };
+      admission.afterGrant = (stage) => {
+        // The commit grant has passed its signal guard; cancellation must join its receipt.
+        if (stage === "commit" && commits === 2 && deadline) {
+          elapsed += 60_001;
+          deadline.remainingMs();
         }
       };
       const onStepComplete = vi.fn();
@@ -313,6 +319,7 @@ export function registerCanaryProgressWorkerTests(
         );
       } finally {
         admission.beforeGrant = undefined;
+        admission.afterGrant = undefined;
         deadline?.dispose();
         await pending.catch(() => undefined);
         for (const mock of [prepare, exec, worker, stdout, stderr]) {
