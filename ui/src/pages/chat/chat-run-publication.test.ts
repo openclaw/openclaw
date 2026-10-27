@@ -55,7 +55,9 @@ afterEach(() => {
 describe("chat run publication", () => {
   it("publishes growing tool output at its flush without republishing unchanged frame activity", () => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const { frames } = captureAnimationFrames();
     const paint = () => {
       const callbacks = Array.from(frames.values());
