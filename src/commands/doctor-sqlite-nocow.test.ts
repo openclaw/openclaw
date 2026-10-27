@@ -603,14 +603,14 @@ describe("Doctor NOCOW recovery identities", () => {
     },
   );
 
-  it.each(["unchanged", "destination", "backup metadata"])(
+  it.each(["unchanged", "destination", "backup", "backup metadata"])(
     "retires only the recorded recovery original after rewrite: %s",
     async (change) => {
       const backupPath = await prepareCompletedBackup();
       const recorded = readTarget();
       const original = fs.readFileSync(backupPath);
-      if (change === "destination") {
-        replaceDatabase(sqlitePath);
+      if (change === "destination" || change === "backup") {
+        replaceDatabase(change === "destination" ? sqlitePath : backupPath);
       } else if (change === "backup metadata") {
         const touched = new Date("2030-01-01T00:00:00Z");
         fs.utimesSync(backupPath, touched, touched);

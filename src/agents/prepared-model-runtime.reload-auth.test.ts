@@ -64,8 +64,8 @@ function holdBuilds(...builds: ReturnType<typeof build>[]) {
 }
 function routeBuilds(builds: Record<string, ReturnType<typeof build>>) {
   mocks.ensureOpenClawModelsJson.mockImplementation(async (_config, directory) => {
-    const agent = Object.keys(builds).find((id) => agentDir(id) === directory);
-    return agent ? await builds[agent].promise : {};
+    const pending = Object.entries(builds).find(([id]) => agentDir(id) === directory)?.[1];
+    return pending ? await pending.promise : {};
   });
 }
 function pendingWork() {
