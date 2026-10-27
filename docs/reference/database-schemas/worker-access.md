@@ -1064,6 +1064,14 @@ to the Gateway, which publishes runtime changes and appends failure records in
 the existing order. Terminal persistence still completes before reply accounting
 and final-delivery custody.
 
+Internal metadata patches that preserve activity compare their projected entry
+with the actor's complete current facts inside the existing writer FIFO. An
+unchanged entry skips the worker commit request; real changes retain the existing
+transaction and publication. Cold or invalidated facts, transaction predicates,
+source checks, and commit observers keep their worker path. Live host authority
+still gates no-op completion, and returned entries retain caller-owned copies.
+This adds no cache or deferred writes and changes no durability or stored format.
+
 Trajectory append and retention writers publish the session and trajectory
 sequence range they changed. Their trajectory-only SQL declares no session-row
 or transcript changes, so it does not invalidate unrelated actor facts. Durable
