@@ -100,7 +100,10 @@ function titledSessionNavigation(face: "chat" | "dashboard") {
   const context = {
     basePath: "/control",
     gateway: { snapshot: { phase: "connected", client: {}, hello: {} } },
-    sessions: { state: { result: { sessions: [{ key, displayName: "Updated session name" }] } } },
+    sessions: {
+      state: { result: null },
+      presentation: { result: { sessions: [{ key, displayName: "Updated session name" }] } },
+    },
     replace,
   } as unknown as ApplicationContext;
   const host: ShellNavigationHost = {
@@ -137,12 +140,14 @@ it.each(["chat", "dashboard"] as const)(
   },
 );
 
-it.each(["pending route", "new address", "other page"] as const)(
+it.each(["pending route", "pending identity", "new address", "other page"] as const)(
   "does not let title publications replace a %s",
   (mode) => {
     const { host, navigation, replace, location } = titledSessionNavigation("chat");
     if (mode === "pending route") {
       host.routeState = { ...host.routeState, location: { ...location, pathname: "/chat/other" } };
+    } else if (mode === "pending identity") {
+      host.routeState = { ...host.routeState, sessionUrlPending: true };
     } else if (mode === "new address") {
       window.history.pushState({}, "", "/settings");
     } else {

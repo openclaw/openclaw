@@ -197,6 +197,7 @@ export class ShellNavigationOwner {
     if (
       !context ||
       context.gateway.snapshot.phase !== "connected" ||
+      this.host.routeState.sessionUrlPending ||
       !isSessionRouteId(committedRouteId) ||
       routeId !== committedRouteId ||
       !committedLocation ||
@@ -207,7 +208,10 @@ export class ShellNavigationOwner {
       return;
     }
     const target = sessionRefFromPath(committedLocation.pathname, context.basePath);
-    const row = findUiSessionRow(context, committedSessionKey);
+    // The settled route owns identity; use the same live name projection as the tab title.
+    const row = context.sessions.presentation.result?.sessions.find(
+      (candidate) => candidate.key === committedSessionKey,
+    );
     if (target?.kind !== "short" || !row?.displayName?.trim()) {
       return;
     }
