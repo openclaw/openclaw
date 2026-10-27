@@ -11,6 +11,7 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { observeSqliteWalPeriodicWork } from "../infra/sqlite-wal-scheduler.test-support.js";
+import * as splitBrain from "../infra/sqlite-wal-split-brain.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   agentDatabaseBorrowers,
@@ -22,6 +23,7 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
+import { getOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   borrowOpenClawAgentDatabase,
   clearOpenClawAgentDatabaseOpenFailure,
@@ -240,7 +242,7 @@ describe("agent database lease acquisition owner", () => {
       external: false,
       worker: true,
     },
-  ])("releases the original lease with $kind", ({ ambient, external, worker }) => {
+  ])("releases the original lease with $kind", async ({ ambient, external, worker }) => {
     const owner = createOwner();
     if (external) {
       owner.env.OPENCLAW_SUPERVISOR_MODE = "external";
@@ -262,7 +264,7 @@ describe("agent database lease acquisition owner", () => {
       }
       expect(fs.readdirSync(owner.nextStateDir)).toEqual([]);
       if (worker) {
-        expect(settleOpenClawAgentDatabaseWorkerClose(database.path)).toEqual({
+        expect(await settleOpenClawAgentDatabaseWorkerClose(database.path)).toEqual({
           errors: [],
           settled: true,
         });
@@ -343,6 +345,39 @@ describe("openclaw agent database handle cache", () => {
     const database = openOpenClawAgentDatabase({ agentId: "idle-maintenance", env });
     await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
     expect(database.db.isOpen).toBe(false);
+  });
+
+  it("settles a worker close after WAL inspection without revoking reader validation", async () => {
+    vi.useRealTimers();
+    openOpenClawStateDatabase({ env });
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const scheduled = observeSqliteWalPeriodicWork();
+    const database = openOpenClawAgentDatabase({ agentId: "worker-inspection", env });
+    platform.mockRestore();
+    scheduled.restore();
+    const validation = getOpenClawAgentDatabaseValidation(database);
+    expect(validation).toBeDefined();
+    const inspecting = createDeferredCore();
+    const inspected = createDeferredCore<splitBrain.SqliteWalSplitBrainEvent | undefined>();
+    vi.spyOn(splitBrain, "detectSqliteWalSplitBrain").mockImplementation(() => {
+      inspecting.resolve();
+      return inspected.promise;
+    });
+    const running = scheduled.periodic();
+    await inspecting.promise;
+    const closing = Promise.resolve(settleOpenClawAgentDatabaseWorkerClose(database.path));
+    try {
+      expect(database.db.isOpen).toBe(true);
+      expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).toHaveLength(1);
+    } finally {
+      inspected.resolve(undefined);
+      await running;
+    }
+    expect(await closing).toEqual({ errors: [], settled: true });
+    expect(database.db.isOpen).toBe(false);
+    expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).toEqual([]);
+    // A healthy inspection must not send the next reader through integrity re-admission.
+    expect(Atomics.load(new Int32Array(validation!.valid), 0)).toBe(1);
   });
 
   it.each([false, true])(

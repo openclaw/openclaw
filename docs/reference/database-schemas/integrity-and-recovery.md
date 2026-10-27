@@ -1135,6 +1135,10 @@ check. Native close and replacement refuse while inspection is pending; idle evi
 retains its handle and lease until a later retry. Otherwise, a stopped owner
 dispatches no further maintenance.
 
+Reclamation workers await maintenance shutdown before settling native close.
+A healthy inspection overlap therefore preserves shared runtime validation,
+instead of forcing unrelated session reads through integrity re-admission.
+
 If the warning persists, capture `openclaw status --deep` output and restart the
 Gateway with `openclaw gateway restart`. Report the captured output
 if the warning returns. Do not delete the WAL: it can contain committed data
