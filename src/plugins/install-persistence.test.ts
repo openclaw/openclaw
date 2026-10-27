@@ -58,6 +58,18 @@ function npmInstall(spec: string, installPath = `/tmp/${spec.split("@")[0]}`) {
   return { source: "npm" as const, spec, installPath };
 }
 
+function temporaryInstall(label: string) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), label));
+  return { root, [Symbol.dispose]: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
+function mockActiveSource(id: string, source: string, status?: string) {
+  snapshotReport.mockReturnValue({
+    plugins: [{ id, origin: "config", source, ...(status ? { status } : {}) }],
+    diagnostics: [],
+  });
+}
+
 function writeEnginePlugin(
   root: string,
   id: string,
@@ -202,37 +214,36 @@ describe("persistPluginInstall", () => {
     "persists manifest engine selection and ownership: %s",
     async (_name, enabled, previousIds, declaredIds) => {
       await prepareRealInstallMetadata();
-      const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-engine-install-"));
-      try {
-        writeEnginePlugin(rootDir, "vendor-plugin", declaredIds, { version: "2.0.0" });
-        if (previousIds) {
-          setInstalledPluginIndexInstallRecords({
-            "vendor-plugin": {
-              source: "path",
-              sourcePath: rootDir,
-              contextEngineIdsByPlugin: { "vendor-plugin": previousIds },
-            },
-          });
-        }
-        const next = await persistPluginInstall({
-          snapshot: installSnapshot({}),
-          pluginId: "vendor-plugin",
+      using directory = temporaryInstall("openclaw-engine-install-");
+      const rootDir = directory.root;
+      writeEnginePlugin(rootDir, "vendor-plugin", declaredIds, { version: "2.0.0" });
+      if (previousIds) {
+        setInstalledPluginIndexInstallRecords({
+          "vendor-plugin": {
+            source: "path",
+            sourcePath: rootDir,
+            contextEngineIdsByPlugin: { "vendor-plugin": previousIds },
+          },
+        });
+      }
+      const next = await persistNpm(
+        "vendor-plugin",
+        {},
+        {
           install: { source: "path", sourcePath: rootDir },
           enable: enabled,
-        });
-        expect(writeIndex).toHaveBeenCalled();
-        const records = writeIndex.mock.calls[0]?.[0] ?? {};
-        expect(records["vendor-plugin"]).toMatchObject({ source: "path", sourcePath: rootDir });
-        expect(
-          (records["vendor-plugin"] as Record<string, unknown>).contextEngineIdsByPlugin,
-        ).toEqual(declaredIds ? { "vendor-plugin": declaredIds } : undefined);
-        expect(next.plugins?.slots?.contextEngine).toBe(
-          enabled ? (declaredIds?.[0] ?? "vendor-plugin") : undefined,
-        );
-        expect(writeConfig).toHaveBeenCalledWith(next);
-      } finally {
-        fs.rmSync(rootDir, { recursive: true, force: true });
-      }
+        },
+      );
+      expect(writeIndex).toHaveBeenCalled();
+      const records = writeIndex.mock.calls[0]?.[0] ?? {};
+      expect(records["vendor-plugin"]).toMatchObject({ source: "path", sourcePath: rootDir });
+      expect(
+        (records["vendor-plugin"] as Record<string, unknown>).contextEngineIdsByPlugin,
+      ).toEqual(declaredIds ? { "vendor-plugin": declaredIds } : undefined);
+      expect(next.plugins?.slots?.contextEngine).toBe(
+        enabled ? (declaredIds?.[0] ?? "vendor-plugin") : undefined,
+      );
+      expect(writeConfig).toHaveBeenCalledWith(next);
     },
   );
 
@@ -244,36 +255,31 @@ describe("persistPluginInstall", () => {
     "preserves current engine ownership during real install: %s",
     async (_name, competing, denied, selected) => {
       await prepareRealInstallMetadata();
-      const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-owner-install-"));
-      try {
-        const vendorDir = path.join(rootDir, "vendor-plugin");
-        const ownerDir = path.join(rootDir, "owner-a");
-        const importMarker = path.join(rootDir, "runtime-imported");
-        for (const [dir, id, contextEngineIds] of [
-          [vendorDir, "vendor-plugin", ["canonical-engine"]],
-          [ownerDir, "owner-a", ["vendor-plugin"]],
-        ] as const) {
-          writeEnginePlugin(dir, id, contextEngineIds, { marker: importMarker });
-        }
-        const config: OpenClawConfig = {
-          plugins: {
-            load: { paths: competing ? [ownerDir] : [] },
-            entries: competing ? { "owner-a": { enabled: true } } : {},
-            ...(denied ? { deny: ["owner-a"] } : {}),
-            slots: { contextEngine: "vendor-plugin" },
-          },
-        };
-        const next = await persistPluginInstall({
-          snapshot: installSnapshot(config),
-          pluginId: "vendor-plugin",
-          install: { source: "path", sourcePath: vendorDir },
-        });
-        expect(next.plugins?.slots?.contextEngine).toBe(selected);
-        expect(writeConfig).toHaveBeenCalledWith(next);
-        expect(fs.existsSync(importMarker)).toBe(false);
-      } finally {
-        fs.rmSync(rootDir, { recursive: true, force: true });
+      using directory = temporaryInstall("openclaw-owner-install-");
+      const rootDir = directory.root;
+      const vendorDir = path.join(rootDir, "vendor-plugin");
+      const ownerDir = path.join(rootDir, "owner-a");
+      const importMarker = path.join(rootDir, "runtime-imported");
+      for (const [dir, id, contextEngineIds] of [
+        [vendorDir, "vendor-plugin", ["canonical-engine"]],
+        [ownerDir, "owner-a", ["vendor-plugin"]],
+      ] as const) {
+        writeEnginePlugin(dir, id, contextEngineIds, { marker: importMarker });
       }
+      const config: OpenClawConfig = {
+        plugins: {
+          load: { paths: competing ? [ownerDir] : [] },
+          entries: competing ? { "owner-a": { enabled: true } } : {},
+          ...(denied ? { deny: ["owner-a"] } : {}),
+          slots: { contextEngine: "vendor-plugin" },
+        },
+      };
+      const next = await persistNpm("vendor-plugin", config, {
+        install: { source: "path", sourcePath: vendorDir },
+      });
+      expect(next.plugins?.slots?.contextEngine).toBe(selected);
+      expect(writeConfig).toHaveBeenCalledWith(next);
+      expect(fs.existsSync(importMarker)).toBe(false);
     },
   );
 
@@ -354,7 +360,8 @@ describe("persistPluginInstall", () => {
 
   it("preserves replaced npm install directories across generation updates", async () => {
     mockEnabledPlugin("codex");
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-persist-"));
+    using directory = temporaryInstall("openclaw-plugin-persist-");
+    const tempRoot = directory.root;
     const previousProjectRoot = path.join(tempRoot, "npm", "projects", "codex-v1");
     const previousInstallPath = path.join(previousProjectRoot, "node_modules/@openclaw/codex");
     const nextInstallPath = path.join(
@@ -370,31 +377,21 @@ describe("persistPluginInstall", () => {
       rootKind: "isolated-project",
     });
 
-    try {
-      await persistNpm("codex", undefined, {
-        install: npmInstall("@openclaw/codex@2.0.0", nextInstallPath),
-      });
+    await persistNpm("codex", undefined, {
+      install: npmInstall("@openclaw/codex@2.0.0", nextInstallPath),
+    });
 
-      expect(removeDirectory).not.toHaveBeenCalled();
-      expect(hasRetainedManagedNpmInstallMarker(previousInstallPath)).toBe(true);
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
+    expect(removeDirectory).not.toHaveBeenCalled();
+    expect(hasRetainedManagedNpmInstallMarker(previousInstallPath)).toBe(true);
   });
 
   it("does not warn when the config-selected source is inside the npm install path", async () => {
     mockEnabledPlugin("discord");
-    snapshotReport.mockReturnValue({
-      plugins: [
-        {
-          id: "discord",
-          origin: "config",
-          source: "/tmp/openclaw/npm/node_modules/@openclaw/discord/dist/index.js",
-          status: "loaded",
-        },
-      ],
-      diagnostics: [],
-    });
+    mockActiveSource(
+      "discord",
+      "/tmp/openclaw/npm/node_modules/@openclaw/discord/dist/index.js",
+      "loaded",
+    );
 
     await persistNpm("discord", undefined, {
       install: npmInstall("@openclaw/discord", "/tmp/openclaw/npm/node_modules/@openclaw/discord"),
@@ -581,19 +578,9 @@ describe("plugin install persistence warning audiences", () => {
       expect(writeConfig).toHaveBeenCalledOnce();
       throw new Error(refreshDetail);
     });
-    snapshotReport.mockReturnValue({
-      plugins: [{ id: "workboard", origin: "config", source: configuredSource }],
-      diagnostics: [],
-    });
+    mockActiveSource("workboard", configuredSource);
 
-    await persistNpm(
-      "workboard",
-      {},
-      {
-        install,
-        persistenceLogger: { warn },
-      },
-    );
+    await persistNpm("workboard", {}, { install, persistenceLogger: { warn } });
 
     const warnings = warn.mock.calls.map(([message]) => String(message));
     expect(warnings).toHaveLength(3);

@@ -11,6 +11,8 @@ vi.mock("typebox/value", () => {
 });
 
 const jsonSchemaThenKeyword = ["the", "n"].join("");
+type ValidationInput = Parameters<typeof validateJsonSchemaValue>[0];
+type ValidationFailure = Extract<ReturnType<typeof validateJsonSchemaValue>, { ok: false }>;
 
 const fields = (properties: Record<string, unknown>, required?: string[]) => ({
   properties,
@@ -41,9 +43,7 @@ function endpointDefaults(required = false) {
   return required ? fields(properties, ["endpoint"]) : fields(properties);
 }
 
-function expectValidationFailure(
-  params: Parameters<typeof validateJsonSchemaValue>[0],
-): Extract<ReturnType<typeof validateJsonSchemaValue>, { ok: false }> {
+function expectValidationFailure(params: ValidationInput): ValidationFailure {
   const result = validateJsonSchemaValue(params);
   expect(result.ok).toBe(false);
   if (result.ok) {
@@ -52,10 +52,7 @@ function expectValidationFailure(
   return result;
 }
 
-function expectValidationIssue(
-  result: Extract<ReturnType<typeof validateJsonSchemaValue>, { ok: false }>,
-  path: string,
-) {
+function expectValidationIssue(result: ValidationFailure, path: string) {
   const issue = result.errors.find((entry) => entry.path === path);
   if (!issue) {
     expect(result.errors.map((entry) => entry.path)).toContain(path);
@@ -64,23 +61,16 @@ function expectValidationIssue(
   return issue;
 }
 
-function expectSuccessfulValidationValue(
-  input: Parameters<typeof validateJsonSchemaValue>[0],
-  expectedValue: unknown,
-) {
-  expect(validateJsonSchemaValue(input)).toEqual({ ok: true, value: expectedValue });
-}
-
-function expectDefaults(
-  schema: Parameters<typeof validateJsonSchemaValue>[0]["schema"],
+function expectValue(
+  schema: ValidationInput["schema"],
   value: unknown,
   expectedValue: unknown,
+  applyDefaults = true,
 ) {
-  expectSuccessfulValidationValue({ schema, value, applyDefaults: true }, expectedValue);
-}
-
-function expectReference(schema: Parameters<typeof validateJsonSchemaValue>[0]["schema"]) {
-  expectSuccessfulValidationValue({ schema, value: "ok" }, "ok");
+  expect(validateJsonSchemaValue({ schema, value, applyDefaults })).toEqual({
+    ok: true,
+    value: expectedValue,
+  });
 }
 
 describe("schema validator", () => {
@@ -123,7 +113,6 @@ describe("schema validator", () => {
 
   it("accepts valid local refs to boolean schemas and anchors", () => {
     const denied = expectValidationFailure({
-      cacheKey: "schema-validator.test.false-ref",
       schema: { $defs: { Never: false }, $ref: "#/$defs/Never" },
       value: "anything",
     });
@@ -152,11 +141,10 @@ describe("schema validator", () => {
       { $id: "", $defs: { Value: string }, $ref: "#/$defs/Value" },
       { $defs: { Value: { ...string, $dynamicAnchor: "value" } }, $dynamicRef: "#value" },
     ]) {
-      expectReference(schema);
+      expectValue(schema, "ok", "ok", false);
     }
 
     expectValidationFailure({
-      cacheKey: "schema-validator.test.dynamic-ref",
       schema: {
         $defs: { Value: { $dynamicAnchor: "value", type: "string" } },
         $dynamicRef: "#value",
@@ -168,11 +156,11 @@ describe("schema validator", () => {
   it("accepts draft-07 tuples and applies defaults to legacy and prefix items", () => {
     const pair = [defaulted("string", "mode"), defaulted("number", 1)];
     const tuple = { type: "array", items: pair, additionalItems: false };
-    expectSuccessfulValidationValue({ schema: tuple, value: ["mode", 1] }, ["mode", 1]);
+    expectValue(tuple, ["mode", 1], ["mode", 1], false);
     for (const items of [{ items: pair, additionalItems: false }, { prefixItems: pair }]) {
-      expectDefaults({ type: "array", minItems: 2, ...items }, [], ["mode", 1]);
+      expectValue({ type: "array", minItems: 2, ...items }, [], ["mode", 1]);
     }
-    expectDefaults(
+    expectValue(
       {
         type: "array",
         minItems: 1,
@@ -189,8 +177,8 @@ describe("schema validator", () => {
     const kind = { kind: { const: "api" } };
     const defaultKind = { kind: { const: "api", default: "api" } };
     const kindReference = fields({ value: { const: "api" } }, ["value"]);
-    const withEndpoint = (schema: Parameters<typeof expectDefaults>[0], value = { kind: "api" }) =>
-      expectDefaults(schema, value, { ...value, endpoint: "https://example.com" });
+    const withEndpoint = (schema: ValidationInput["schema"], value = { kind: "api" }) =>
+      expectValue(schema, value, { ...value, endpoint: "https://example.com" });
     const flagConditional = conditionalSchema(
       fields({ flag: { const: true } }, ["flag"]),
       { required: ["secret"] },
@@ -202,7 +190,7 @@ describe("schema validator", () => {
       { else: fields({ explicit: defaulted("boolean", true) }, ["explicit"]) },
     );
 
-    expectDefaults(
+    expectValue(
       objectSchema({ flag: { type: "boolean" } }, { dependencies: { flag: modeDefaults() } }),
       { flag: true },
       { flag: true, mode: "auto" },
@@ -222,7 +210,7 @@ describe("schema validator", () => {
     ]) {
       withEndpoint(schema);
     }
-    expectDefaults(
+    expectValue(
       conditionalSchema(
         fields({ contact: { type: "string", format: "email" } }, ["contact"]),
         modeDefaults(),
@@ -231,7 +219,7 @@ describe("schema validator", () => {
       { contact: "not an email" },
       { contact: "not an email", mode: "auto" },
     );
-    expectDefaults(
+    expectValue(
       conditionalSchema(
         fields({ kind: { $ref: "#/properties/kind" } }, ["kind"]),
         endpointDefaults(true),
@@ -240,7 +228,7 @@ describe("schema validator", () => {
       { kind: { value: "api" } },
       { kind: { value: "api" }, endpoint: "https://example.com" },
     );
-    expectDefaults(
+    expectValue(
       conditionalSchema(apiCondition(), endpointDefaults(), {
         properties: defaultKind,
         else: fields({ path: defaulted("string", "/tmp") }),
@@ -248,8 +236,8 @@ describe("schema validator", () => {
       {},
       { kind: "api", endpoint: "https://example.com" },
     );
-    expectDefaults(modeConditional, {}, { mode: "auto" });
-    expectDefaults(flagConditional, {}, { flag: true });
+    expectValue(modeConditional, {}, { mode: "auto" });
+    expectValue(flagConditional, {}, { flag: true });
     expectValidationIssue(
       expectValidationFailure({
         schema: flagConditional,
@@ -271,7 +259,7 @@ describe("schema validator", () => {
     ]) {
       expectValidationFailure({ schema, value: {}, applyDefaults: true });
     }
-    expectDefaults(
+    expectValue(
       conditionalSchema(
         apiCondition(),
         fields({ settings: { type: "object", default: {} } }, ["settings"]),
@@ -285,7 +273,7 @@ describe("schema validator", () => {
       { kind: "api" },
       { kind: "api", settings: { mode: "auto" } },
     );
-    expectDefaults(
+    expectValue(
       conditionalSchema(apiCondition(), requiredFlagDefault("flag"), {
         properties: kind,
         dependencies: { flag: modeDefaults() },
@@ -293,7 +281,7 @@ describe("schema validator", () => {
       { kind: "api" },
       { kind: "api", flag: true, mode: "auto" },
     );
-    expectDefaults(
+    expectValue(
       conditionalSchema(apiCondition(), endpointDefaults(true), {
         properties: { a: defaulted("boolean", true) },
         dependencies: { b: fields(defaultKind, ["kind"]), a: requiredFlagDefault("b") },
@@ -351,15 +339,13 @@ describe("source-aware schema validation", () => {
     },
     { required: ["credential"] },
   );
-  function fixture(
-    selectedSchema: Parameters<typeof validateJsonSchemaValue>[0]["schema"] = schema,
-  ) {
+  function fixture(selectedSchema: ValidationInput["schema"] = schema) {
     const sourceValue = { credential: { id: "KEY" } };
     const value = { credential: "resolved-fixture-key" };
     return {
       value,
       sourceValue,
-      validate: (overrides: Partial<Parameters<typeof validateJsonSchemaValue>[0]> = {}) =>
+      validate: (overrides: Partial<ValidationInput> = {}) =>
         validateJsonSchemaValue({
           schema: selectedSchema,
           sourceValue,
@@ -502,26 +488,18 @@ const dependencySchema = (trigger: string) => ({
 
 describe("required and dependency diagnostics", () => {
   it("preserves exact value paths despite ambiguous display paths", () => {
+    const literalProperties = ["slash/name", "tilde~1name", "", "<root>"];
     const result = expectValidationFailure({
-      schema: {
-        type: "object",
-        properties: {
-          "dot.name": { type: "number" },
-          dot: { type: "object", properties: { name: { type: "number" } } },
-          "slash/name": { type: "number" },
-          "tilde~1name": { type: "number" },
-          "": { type: "number" },
-          "<root>": { type: "number" },
-          items: { type: "array", items: { type: "number" } },
-        },
-      },
+      schema: objectSchema({
+        "dot.name": { type: "number" },
+        dot: objectSchema({ name: { type: "number" } }),
+        ...Object.fromEntries(literalProperties.map((name) => [name, { type: "number" }])),
+        items: { type: "array", items: { type: "number" } },
+      }),
       value: {
         "dot.name": "invalid",
         dot: { name: "invalid" },
-        "slash/name": "invalid",
-        "tilde~1name": "invalid",
-        "": "invalid",
-        "<root>": "invalid",
+        ...Object.fromEntries(literalProperties.map((name) => [name, "invalid"])),
         items: ["invalid"],
       },
     });
@@ -571,48 +549,43 @@ describe("required and dependency diagnostics", () => {
   });
 
   it.each([
-    {
-      title: "all dependencies missing in one condition",
-      schema: { type: "object", dependentRequired: { a: ["b", "c"] } },
-      value: { a: true },
-      expectedErrors: [dependency("<root>", [], "a", "b, c")],
-    },
-    {
-      title: "root with the first dependency already present",
-      schema: { type: "object", dependencies: { a: ["b", "c"] } },
-      value: { a: true, b: "present" },
-      expectedErrors: [dependency("<root>", [], "a", "b, c")],
-    },
-    {
-      title: "literal and nested containers with distinct conditions",
-      schema: {
-        type: "object",
-        properties: {
-          "room/one": dependencySchema("literal"),
-          room: objectSchema({ one: dependencySchema("nested") }),
-          "room~1one": dependencySchema("tilde"),
-          "room%2Fone": dependencySchema("percent"),
-        },
-      },
-      value: {
+    [
+      "all dependencies missing in one condition",
+      { type: "object", dependentRequired: { a: ["b", "c"] } },
+      { a: true },
+      [dependency("<root>", [], "a", "b, c")],
+    ],
+    [
+      "root with the first dependency already present",
+      { type: "object", dependencies: { a: ["b", "c"] } },
+      { a: true, b: "present" },
+      [dependency("<root>", [], "a", "b, c")],
+    ],
+    [
+      "literal and nested containers with distinct conditions",
+      objectSchema({
+        "room/one": dependencySchema("literal"),
+        room: objectSchema({ one: dependencySchema("nested") }),
+        "room~1one": dependencySchema("tilde"),
+        "room%2Fone": dependencySchema("percent"),
+      }),
+      {
         "room/one": { literal: true, left: "present" },
         room: { one: { nested: true, right: "present" } },
         "room~1one": { tilde: true, left: "present" },
         "room%2Fone": { percent: true, right: "present" },
       },
-      expectedErrors: [
+      [
         dependency("room.one", ["room/one"], "literal"),
         dependency("room.one", ["room", "one"], "nested"),
         dependency("room~1one", ["room~1one"], "tilde"),
         dependency("room%2Fone", ["room%2Fone"], "percent"),
       ],
+    ],
+  ] as const)(
+    "preserves the dependency condition at %s",
+    (_title, schema, value, expectedErrors) => {
+      expect(expectValidationFailure({ schema, value }).errors).toEqual(expectedErrors);
     },
-  ])("preserves the dependency condition at $title", ({ schema, value, expectedErrors }) => {
-    const result = expectValidationFailure({
-      schema,
-      value,
-    });
-
-    expect(result.errors).toEqual(expectedErrors);
-  });
+  );
 });

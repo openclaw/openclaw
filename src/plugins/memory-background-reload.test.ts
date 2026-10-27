@@ -92,7 +92,7 @@ type MemorySearchSettings = NonNullable<NonNullable<OpenClawConfig["memory"]>["s
 
 function memoryConfig(
   workspace: string,
-  search: MemorySearchSettings,
+  search: MemorySearchSettings = { sources: ["memory"], rememberAcrossConversations: false },
   agentId = "main",
 ): OpenClawConfig {
   return {
@@ -226,10 +226,7 @@ it("retires live watchers and starts successor indexing without a search or turn
   signal,
 }) => {
   const state = await createOpenClawTestState({ label: "memory-watcher-retirement" });
-  const config = memoryConfig(state.workspaceDir, {
-    sources: ["memory"],
-    rememberAcrossConversations: false,
-  });
+  const config = memoryConfig(state.workspaceDir);
   const { subscriptions, release, nextSubscription } = registerMemoryWorkspaceWatch(
     state.workspaceDir,
   );
@@ -268,8 +265,7 @@ it("retires live watchers and starts successor indexing without a search or turn
     const successorWatching = nextSubscription();
     await service.start(context);
     await withinTest(successorWatching, signal);
-    expect(subscriptions).toHaveLength(2);
-    expect(subscriptions[1]!.signal.aborted).toBe(false);
+    expect(subscriptions.map((entry) => entry.signal.aborted)).toEqual([true, false]);
     await writeMemory(
       state.workspaceDir,
       "memory/after-reload.md",
@@ -303,10 +299,7 @@ it("restarts memory watchers after reload waits for active indexing past its sto
   signal,
 }) => {
   const state = await createOpenClawTestState({ label: "memory-indexing-reload-timeout" });
-  const config = memoryConfig(state.workspaceDir, {
-    sources: ["memory"],
-    rememberAcrossConversations: false,
-  });
+  const config = memoryConfig(state.workspaceDir);
   const entered = createDeferredCore();
   const releaseIndexing = createDeferredCore();
   let holdIndexing = false;
@@ -344,15 +337,12 @@ it("restarts memory watchers after reload waits for active indexing past its sto
     const reloading = services.reload(config, new Set([index.id]));
     await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
     await reloading;
-    expect(watch.subscriptions).toHaveLength(1);
-    expect(watch.subscriptions[0]!.signal.aborted).toBe(false);
+    expect(watch.subscriptions.map((entry) => entry.signal.aborted)).toEqual([false]);
     vi.useRealTimers();
     holdIndexing = false;
     releaseIndexing.resolve();
     await withinTest(replacementWatching, signal);
-    expect(watch.subscriptions).toHaveLength(2);
-    expect(watch.subscriptions[0]!.signal.aborted).toBe(true);
-    expect(watch.subscriptions[1]!.signal.aborted).toBe(false);
+    expect(watch.subscriptions.map((entry) => entry.signal.aborted)).toEqual([true, false]);
   } finally {
     holdIndexing = false;
     releaseIndexing.resolve();
