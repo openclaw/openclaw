@@ -1,4 +1,3 @@
-import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
 import type { ProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
@@ -104,28 +103,6 @@ export async function prepareAndAdmitChatSend(
     );
     return undefined;
   }
-  const recoveryEntry = loadedSession.value.entry;
-  let recoveryOutcome: "rejected" | "admitted" | "retried" = "rejected";
-  using recoveryLog =
-    recoveryEntry?.mainRestartRecovery && !normalizedRequest.value.stopCommand
-      ? {
-          [Symbol.dispose]() {
-            try {
-              context.logGateway.info("chat.send recovery admission", {
-                outcome: recoveryOutcome,
-                sessionIdHash: sha256HexPrefixCore(recoveryEntry.sessionId, 16),
-                runId: loadedSession.value.clientRunId,
-                sourceRunId: recoveryEntry.restartRecoveryDeliverySourceRunId,
-                recoveryRunId: recoveryEntry.restartRecoveryDeliveryRunId,
-                // Capture the incoming custody, including rejected requests that never write.
-                chargedAttempts: recoveryEntry.mainRestartRecovery?.chargedAttempts,
-              });
-            } catch {
-              // Observability must not change admission or retry outcomes.
-            }
-          },
-        }
-      : undefined;
   if (normalizedRequest.value.mentions) {
     const mentions = await context.mentionInbox?.validateRecipientsAsync(
       client,
@@ -151,12 +128,7 @@ export async function prepareAndAdmitChatSend(
   const preparation = {
     request: normalizedRequest.value,
     session: loadedSession.value,
-    respond: recoveryLog
-      ? (((...response) => {
-          recoveryOutcome = response[0] ? "retried" : "rejected";
-          respond(...response);
-        }) satisfies typeof respond)
-      : respond,
+    respond,
     context,
     client,
     assertCurrent,
@@ -196,7 +168,6 @@ export async function prepareAndAdmitChatSend(
   if (!admitted.ok) {
     return undefined;
   }
-  recoveryOutcome = "admitted";
   phase?.finish();
   return {
     request: normalizedRequest.value,

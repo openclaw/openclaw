@@ -489,7 +489,7 @@ it.each([
       const committed = expectCommitted(f.mutate(command));
       expect(committed.receipt.postimage).toEqual(f.read(target));
       expect(committed.receipt.postimage).toMatchObject({
-        entry: { sessionId, ...lifecycle },
+        entry: { sessionId, startedAt: 2 },
         pendingInputs: [],
       });
       expect(f.read(target)?.entry?.status).toBeUndefined();
