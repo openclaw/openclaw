@@ -393,14 +393,7 @@ describe("native overlay lifecycle", () => {
       { opacity: [0.8, 1] },
       { duration: 100, iterations: Infinity },
     );
-    const opening = fixture.surface.animate({ opacity: [0, 1] }, { duration: 60_000 });
-    opening.pause();
-    const shown = completion(fixture, "open");
-    expect(fixture.owner.request(true)).toBe(true);
-    await frame();
-    expect(fixture.owner.phase).toBe("opening");
-    opening.finish();
-    await shown;
+    await open(fixture);
     expect(fixture.owner.phase).toBe("open");
     spinner.cancel();
     const fading = fixture.surface.animate({ opacity: [1, 0] }, { duration: 60_000 });
@@ -469,6 +462,18 @@ describe("native overlay lifecycle", () => {
       }
     },
   );
+  it("waits for a paused finite animation before publishing completion", async () => {
+    const fixture = mountOverlay();
+    const animation = fixture.surface.animate({ opacity: [0, 1] }, { duration: 60_000 });
+    animation.pause();
+    const shown = completion(fixture, "open");
+    expect(fixture.owner.request(true)).toBe(true);
+    await frame();
+    expect(fixture.owner.phase).toBe("opening");
+    animation.finish();
+    await shown;
+    expect(fixture.owner.phase).toBe("open");
+  });
   it("retires detached content without retaining a stale completion on remount", async () => {
     const { fixture, release } = await openWithLease();
     const phases = recordPhases(fixture);
