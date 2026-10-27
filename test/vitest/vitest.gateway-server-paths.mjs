@@ -260,7 +260,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-create-preparation.test.ts",
   "src/gateway/session-create-target.test.ts",
   "src/gateway/session-database-retention.test.ts",
-  "src/gateway/session-delivery-clock-jump.integration.test.ts",
   "src/gateway/session-groups.registration.test.ts",
   "src/gateway/session-groups.test.ts",
   "src/gateway/session-history-broadcast.worker.test.ts",

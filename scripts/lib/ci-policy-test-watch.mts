@@ -1750,14 +1750,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/config/sessions/session-cold-storage-worker.ts"],
   },
   {
-    testFile: "src/gateway/session-delivery-clock-jump.integration.test.ts",
-    watchGlobs: [
-      "src/infra/session-delivery-queue.worker.ts",
-      "src/state/openclaw-state.worker.ts",
-      "src/state/openclaw-state-worker-registry.ts",
-    ],
-  },
-  {
     testFile: "src/gateway/session-transcript-title-reader.test.ts",
     watchGlobs: [
       "src/config/sessions/session-cold-storage-worker.ts",

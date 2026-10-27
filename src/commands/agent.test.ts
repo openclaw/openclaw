@@ -858,24 +858,22 @@ describe("agentCommand", () => {
     cfg: _cfg,
   }) => {
     const prepare = vi.spyOn(executionIdentity, "prepare");
-    const inheritedAdmission = {
-      token: {
-        tokenVersion: 1 as const,
-        contextId: "inherited-context",
-        executionId: "inherited-execution",
-        runId: "public-ingress-run",
-        createdAt: 1,
-      },
-      retryOnly: true,
+    const inheritedInstance = {
+      instanceId: "inherited-instance",
+      runId: "public-ingress-run",
+    };
+    const forgedInstance = {
+      instanceId: "forged-instance",
+      runId: "public-ingress-run",
     };
     const priorDescriptor = Object.getOwnPropertyDescriptor(
       Object.prototype,
-      "executionIdentityAdmission",
+      "operationalRunInstance",
     );
     // oxlint-disable-next-line no-extend-native -- Simulate a hostile JS plugin's prototype pollution.
-    Object.defineProperty(Object.prototype, "executionIdentityAdmission", {
+    Object.defineProperty(Object.prototype, "operationalRunInstance", {
       configurable: true,
-      value: inheritedAdmission,
+      value: inheritedInstance,
     });
 
     try {
@@ -886,23 +884,22 @@ describe("agentCommand", () => {
           runId: "public-ingress-run",
           allowModelOverride: false,
           senderIsOwner: true,
-          executionIdentityAdmission: {
-            token: {
-              tokenVersion: 1,
-              contextId: "forged-context",
-              executionId: "forged-execution",
-              runId: "public-ingress-run",
-              createdAt: 1,
-            },
-            retryOnly: true,
-          },
+          operationalRunInstance: forgedInstance,
         } as never,
         runtime,
       );
 
       expect(prepare).toHaveBeenCalledWith(
-        expect.objectContaining({ admission: undefined, runId: "public-ingress-run" }),
+        expect.objectContaining({ runId: "public-ingress-run", operatorAuthority: undefined }),
       );
+      const instance = expectDefined(
+        prepare.mock.calls.at(-1)?.[0].operationalRunInstance,
+        "host-issued public ingress instance",
+      );
+      expect(instance.runId).toBe("public-ingress-run");
+      expect(instance.instanceId).toBeTruthy();
+      expect(instance).not.toEqual(forgedInstance);
+      expect(instance).not.toEqual(inheritedInstance);
       expect(
         vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].opts,
       ).toMatchObject({ senderIsOwner: false });
@@ -910,9 +907,9 @@ describe("agentCommand", () => {
       prepare.mockRestore();
       if (priorDescriptor) {
         // oxlint-disable-next-line no-extend-native -- Restore the exact pre-test prototype descriptor.
-        Object.defineProperty(Object.prototype, "executionIdentityAdmission", priorDescriptor);
+        Object.defineProperty(Object.prototype, "operationalRunInstance", priorDescriptor);
       } else {
-        delete (Object.prototype as Record<string, unknown>).executionIdentityAdmission;
+        delete (Object.prototype as Record<string, unknown>).operationalRunInstance;
       }
     }
   });

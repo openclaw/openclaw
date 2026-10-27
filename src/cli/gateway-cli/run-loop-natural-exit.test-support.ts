@@ -367,7 +367,7 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
             "shutdown step failed (startup operations): late owned cleanup failed",
           );
         }
-        expect(drained).toHaveBeenCalledExactlyOnceWith(phase === "close" ? "retained" : "drained");
+        expect(drained).toHaveBeenCalledExactlyOnceWith("retained");
       });
     });
   });

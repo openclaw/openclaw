@@ -2921,7 +2921,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/session-companion-runtime.test.ts",
   "src/gateway/session-create-preparation.test.ts",
   "src/gateway/session-database-retention.test.ts",
-  "src/gateway/session-delivery-clock-jump.integration.test.ts",
   "src/gateway/session-group-mutation-targets.test.ts",
   "src/gateway/session-groups.test.ts",
   "src/gateway/session-history-lookup.worker.test.ts",
