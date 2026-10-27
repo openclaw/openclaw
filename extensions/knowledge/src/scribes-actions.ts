@@ -95,23 +95,29 @@ export function retryScribe(host: ScribeHost, snapshot: ScribeSnapshot, agentId:
   return startScribe(host, snapshot, setup, crypto.randomUUID());
 }
 
+// What a refused run means for the operator, by the scheduler's reason.
+const RUN_REFUSALS: Record<string, string> = {
+  stopped: "the scheduler is stopped",
+  disabled: "the automation is paused",
+  ownerless: "the automation lost its owner; open the conversation and ask it to repair its setup",
+  "invalid-spec": "its schedule is invalid; open the conversation and ask it to repair its setup",
+};
+
 /**
- * Why a `cron.run` answer did not admit a run, or undefined when it did: queued, ran, or one is
- * already running. The scheduler can answer `ok` without running (stopped, disabled, ownerless).
+ * Run the scribe's automation now, even when it is not due. Rejects unless the scheduler queued
+ * or ran it (or one is already running): it can answer `ok` without running.
  */
-export function runRefusal(answer: unknown): string | undefined {
+export async function runScribeNow(host: ScribeHost, job: ScribeJob) {
+  const answer = await host.request("cron.run", { id: job.id, mode: "force" });
   if (
     isRecord(answer) &&
     (answer.enqueued === true || answer.ran === true || answer.reason === "already-running")
   ) {
-    return undefined;
+    return;
   }
-  return isRecord(answer) && typeof answer.reason === "string" ? answer.reason : "not admitted";
+  const reason = isRecord(answer) && typeof answer.reason === "string" ? answer.reason : "";
+  throw new Error(`The run did not start: ${(RUN_REFUSALS[reason] ?? reason) || "not accepted"}.`);
 }
-
-/** Run the scribe's automation now, even when it is not due. */
-export const runScribeNow = (host: ScribeHost, job: ScribeJob) =>
-  host.request("cron.run", { id: job.id, mode: "force" });
 
 /** Pause or resume the scribe's automation; rejected if it changed since it was read. */
 export const setScribePaused = (host: ScribeHost, job: ScribeJob, paused: boolean) =>

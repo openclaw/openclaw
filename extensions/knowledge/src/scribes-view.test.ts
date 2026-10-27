@@ -435,7 +435,9 @@ it("tries the first run again on the next load when forcing it failed", async ()
   const view = await render();
   expect(view.textContent).not.toContain("First run");
   expect(ui.announce).toHaveBeenCalledWith(
-    "Review unlinked claims: the first run did not start. stopped",
+    expect.stringContaining(
+      "the first run did not start. Error: The run did not start: the scheduler is stopped.",
+    ),
   );
   expect((await render()).textContent).not.toContain("First run");
   const later = await render();
@@ -532,4 +534,26 @@ it("recovers a conversation whose setup never arrived or whose setup turn stoppe
   buttonNamed(detail, "Retry").click();
   await vi.waitFor(() => expect(calls.at(-1)![1]!.sessionKey).toBe("s-mem-stopped"));
   expect(calls.at(-1)![1]!.message).toBe(setupMessage(setup));
+});
+
+it("shows a Run now the scheduler refused instead of reporting it running", async () => {
+  const label = "Scribe · Review unlinked claims";
+  const { render, ui, request, load } = fixture({
+    sessions: { [label]: { key: "s-review", displayName: label } },
+    jobs: [reviewJob],
+  });
+  ui.s.scribe = "unlinked-review";
+  const view = await render();
+  const answer = request.getMockImplementation()!;
+  request.mockImplementation(async (method: string, params?: Record<string, unknown>) =>
+    method === "cron.run" ? { ok: true, ran: false, reason: "ownerless" } : answer(method, params),
+  );
+  buttonNamed(view, "Run now").click();
+  await vi.waitFor(() =>
+    expect(view.querySelector(".knowledge-error")?.textContent).toContain(
+      "the automation lost its owner",
+    ),
+  );
+  expect(ui.announce).not.toHaveBeenCalledWith("Review unlinked claims is running.");
+  expect(load).not.toHaveBeenCalled();
 });
