@@ -338,7 +338,9 @@ export async function completeEmbeddedAttemptAfterTurn(
   if (
     attempt.operation !== "settled-tool-finalization" &&
     attempt.sessionPersistence !== "detached" &&
-    !beforeAgentFinalizeRevisionReason
+    !beforeAgentFinalizeRevisionReason &&
+    // A refresh continues this logical turn; agent_end fires once, after its final attempt.
+    !(executionState.terminal.kind === "ok" && attempt.pluginRuntimeRefreshPending?.())
   ) {
     const lifecycleForAgentEnd = projectAgentRunAttemptTerminal(executionState.terminal);
     // Abort outranks failure in terminal-outcome precedence: teardown races can

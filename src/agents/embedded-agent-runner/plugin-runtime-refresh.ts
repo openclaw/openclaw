@@ -92,6 +92,7 @@ export function createEmbeddedAgentPluginRuntimeRefresh(
       preparedRunAdmission: undefined,
       pluginGeneration: undefined,
       pluginRuntimeRefreshContinuation: true,
+      pluginRuntimeRefreshUserPrompt: params.pluginRuntimeRefreshUserPrompt ?? params.prompt,
       pluginRuntimeRefreshMessages: [
         ...(params.pluginRuntimeRefreshMessages ?? []),
         ...(session.continuation?.messages ?? []),

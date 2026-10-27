@@ -86,6 +86,7 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   /** Re-admit from the committed transcript without persisting the original prompt again. */
   pluginRuntimeRefreshContinuation?: true;
+  pluginRuntimeRefreshUserPrompt?: EmbeddedRunAttemptParams["pluginRuntimeRefreshUserPrompt"];
   pluginRuntimeRefreshMessages?: EmbeddedRunAttemptParams["pluginRuntimeRefreshMessages"];
   /** Actual generation cleanup, including source callbacks after native terminal publication. */
   runCleanupSettlement?: Promise<void>;

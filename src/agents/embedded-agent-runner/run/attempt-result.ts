@@ -182,7 +182,9 @@ export function completeEmbeddedAttemptResult(
   if (
     attempt.operation !== "settled-tool-finalization" &&
     hookRunner?.hasHooks("llm_output") &&
-    terminal.promptErrorSource !== "hook:before_agent_run"
+    terminal.promptErrorSource !== "hook:before_agent_run" &&
+    // A refresh continues this logical turn; its final attempt reports the output.
+    !(state.terminal.kind === "ok" && attempt.pluginRuntimeRefreshPending?.())
   ) {
     const contextWindow = {
       ...(attempt.contextWindowInfo?.tokens

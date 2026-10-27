@@ -155,10 +155,11 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     ? undefined
     : await resolvePromptBuildHookResult({
         config: attempt.config ?? getRuntimeConfig(),
-        prompt: effectivePrompt,
+        prompt: attempt.pluginRuntimeRefreshUserPrompt ?? effectivePrompt,
         messages: promptBuildMessages,
         hookCtx,
         hookRunner: input.hookRunner,
+        refreshContinuation: attempt.pluginRuntimeRefreshUserPrompt !== undefined,
       });
 
   const assertAdmittedActive = resolveAdmittedRunActiveAssertion(

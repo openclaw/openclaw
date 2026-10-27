@@ -247,6 +247,23 @@ describe("attempt result projection", () => {
     expect(result).not.toHaveProperty("beforeAgentFinalizeRevisionReason");
   });
 
+  it.each([
+    { refreshPending: true, outputs: 0 },
+    { refreshPending: false, outputs: 1 },
+  ])(
+    "reports llm_output only once a refresh no longer continues the turn: $refreshPending",
+    ({ refreshPending, outputs }) => {
+      const fixture = createResultFixture({ hasSuccessfulModelResponse: true });
+      Object.assign(fixture.input.attempt, { pluginRuntimeRefreshPending: () => refreshPending });
+      vi.spyOn(fixture.hookRunner, "hasHooks").mockReturnValue(true);
+      const output = vi.spyOn(fixture.hookRunner, "runLlmOutput").mockResolvedValue(undefined);
+
+      completeFixture(fixture);
+
+      expect(output).toHaveBeenCalledTimes(outputs);
+    },
+  );
+
   it("keeps current tool replay evidence separate from cumulative replay state", () => {
     const result = completeResult({ toolMetas: [{ toolName: "cron", replaySafe: false }] });
 
