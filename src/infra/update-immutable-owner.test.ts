@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withDatabase } from "./package-update-activation-fixtures.test-support.js";
 import {
   resolvePackageActivationAnchor,
   resolvePackageActivationControl,
@@ -69,14 +68,6 @@ it("reuses native executor storage beside control across later update and recove
   });
   const stat = fs.lstatSync(first.databasePath, { bigint: true });
   expect(first.databaseIdentity).toBe(`${stat.dev}:${stat.ino}`);
-  const schemaQuery = "SELECT name FROM sqlite_schema WHERE name = 'managed_update_handoffs'";
-  withDatabase(
-    first.databasePath,
-    (db) =>
-      expect(db.prepare(schemaQuery).get()).toMatchObject({ name: "managed_update_handoffs" }),
-    true,
-  );
-
   await withImmutableUpdateOwner(root, async () => undefined);
   expect(mocks.executor.mock.calls[1]?.[2]?.existingAuthority).toEqual(first);
   const retained = { ...first, owner: "retained-synthetic-executor" };

@@ -28,7 +28,7 @@ import {
   readDirectErrorMessage,
   type CliTimeoutContext,
 } from "./failover/error.js";
-import { findLocalWorkerTaskTimeout } from "./failover/local-preparation-error.js";
+import { findLocalWorkerTaskFailure } from "./failover/local-preparation-error.js";
 import { resolveExecutionApprovalFailureMessage } from "./failover/message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
 import { renderRateLimitRetryExhaustion } from "./failover/user-copy.js";
@@ -484,7 +484,7 @@ export function resolveFailoverClassificationFromError(
 ): FailoverClassification | null {
   // A direct preflight owns the refusal; its cause is diagnostic, not a failed
   // provider attempt that may rotate credentials or replay the turn.
-  if (isAgentHarnessPreflightError(err) || findLocalWorkerTaskTimeout(err)) {
+  if (isAgentHarnessPreflightError(err) || findLocalWorkerTaskFailure(err)) {
     return null;
   }
   // Local coordination codes such as SQLite "overloaded" are not provider signals.
@@ -554,9 +554,9 @@ export function describeFailoverError(err: unknown): {
   sessionId?: string;
   lane?: string;
 } {
-  const localTimeout = findLocalWorkerTaskTimeout(err);
-  if (localTimeout) {
-    return { message: localTimeout.message };
+  const localFailure = findLocalWorkerTaskFailure(err);
+  if (localFailure) {
+    return { message: localFailure.message };
   }
   if (isAgentHarnessPreflightError(err)) {
     return { message: err.message };
@@ -611,7 +611,7 @@ export function coerceToFailoverError(
   context?: FailoverErrorContext,
 ): FailoverError | null {
   if (isFailoverError(err)) {
-    if (findLocalWorkerTaskTimeout(err)) {
+    if (findLocalWorkerTaskFailure(err)) {
       return null;
     }
     const status = normalizeFailoverStatus(err.status, err.code);
@@ -706,7 +706,7 @@ export function resolveModelFallbackError(
   }
   // Gateway admission can fail before any provider turn starts. Preserve that
   // identity through wrappers and aggregates so fallback cannot blame a model.
-  if (hasRuntimeCoordinationFailure(err) || findLocalWorkerTaskTimeout(err)) {
+  if (hasRuntimeCoordinationFailure(err) || findLocalWorkerTaskFailure(err)) {
     return { kind: "coordination", error: err };
   }
   const staleLifecycleFailure = hasStaleAgentRunLifecycleFailure(err);

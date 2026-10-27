@@ -21,7 +21,10 @@ import {
   createPrometheusMetricStore,
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
-import { recordGatewayWsEvent } from "./service-gateway-ws.js";
+import {
+  createGatewayWsMetricsRecorder,
+  recordGatewayWsConnections,
+} from "./service-gateway-ws.js";
 import { recordMemorySample } from "./service-memory.js";
 import { recordModelUsage } from "./service-model-usage.js";
 import { recordOperationTimingEvent, reserveMainGcHistograms } from "./service-operation-timing.js";
@@ -67,10 +70,9 @@ function recordDiagnosticEvent(
   }
 
   switch (evt.type) {
-    case "gateway.ws.event":
     case "gateway.ws.connections":
       if (metadata.trusted) {
-        recordGatewayWsEvent(store, evt);
+        recordGatewayWsConnections(store, evt.operators);
       }
       return;
     case "sessions.list.retention":
@@ -602,9 +604,7 @@ export function createDiagnosticsPrometheusExporter() {
       `diagnostics-prometheus: series budget reached for ${family}; new label sets are being dropped. See openclaw_prometheus_family_series_dropped_total.`,
     );
   });
-  let unsubscribe: (() => void) | undefined;
-  let unsubscribeWork: (() => void) | undefined;
-  let unsubscribeWorkerRequests: (() => void) | undefined;
+  let subscriptions: Array<(() => void) | undefined> = [];
   let internalDiagnostics: TrustedExporterDiagnosticsBridge | undefined;
   const reportExporterStatus = (update: PrometheusExporterHealthUpdate) => {
     try {
@@ -645,46 +645,52 @@ export function createDiagnosticsPrometheusExporter() {
           1,
         );
       }
-      unsubscribeWork = ctx.internalDiagnostics?.onGatewayWorkMetrics?.((snapshot) => {
-        if (!snapshot) {
-          store.clearGauges("openclaw_sessions_active");
-          store.clearGauges("openclaw_gateway_active_work");
-          return;
-        }
-        for (const state of ["running", "queued"] as const) {
-          store.gauge(
-            "openclaw_sessions_active",
-            "Current active sessions in the Gateway session roster by run state.",
-            { state },
-            snapshot.sessions[state],
-          );
-        }
-        for (const kind of ["agentRuns", "chatRuns", "queuedTurns"] as const) {
-          store.gauge(
-            "openclaw_gateway_active_work",
-            "Current Gateway work by owner; categories may overlap.",
-            { kind },
-            snapshot.work[kind],
-          );
-        }
-      });
-      unsubscribeWorkerRequests = ctx.internalDiagnostics?.onWorkerRequestMetrics?.(
-        createWorkerRequestMetricsRecorder(store),
-      );
-      unsubscribe = subscribe(
-        (event, metadata) => {
-          try {
-            recordDiagnosticEvent(store, event, metadata);
-          } catch (err) {
-            ctx.logger.error(
-              `diagnostics-prometheus: event handler failed (${event.type}): ${safeErrorMessage(err)}`,
+      subscriptions = [
+        ctx.internalDiagnostics?.onGatewayWorkMetrics?.((snapshot) => {
+          if (!snapshot) {
+            store.clearGauges("openclaw_sessions_active");
+            store.clearGauges("openclaw_gateway_active_work");
+            return;
+          }
+          for (const state of ["running", "queued"] as const) {
+            store.gauge(
+              "openclaw_sessions_active",
+              "Current active sessions in the Gateway session roster by run state.",
+              { state },
+              snapshot.sessions[state],
             );
           }
-        },
-        // Metrics do not consume logs; avoid enabling their diagnostic copy/formatting path.
-        { exclude: ["log.record", "worker.request"], includePromptStats: false },
-        { includePrivateData: false },
-      );
+          for (const kind of ["agentRuns", "chatRuns", "queuedTurns"] as const) {
+            store.gauge(
+              "openclaw_gateway_active_work",
+              "Current Gateway work by owner; categories may overlap.",
+              { kind },
+              snapshot.work[kind],
+            );
+          }
+        }),
+        ctx.internalDiagnostics?.onGatewayWsMetrics?.(createGatewayWsMetricsRecorder(store)),
+        ctx.internalDiagnostics?.onWorkerRequestMetrics?.(
+          createWorkerRequestMetricsRecorder(store),
+        ),
+        subscribe(
+          (event, metadata) => {
+            try {
+              recordDiagnosticEvent(store, event, metadata);
+            } catch (err) {
+              ctx.logger.error(
+                `diagnostics-prometheus: event handler failed (${event.type}): ${safeErrorMessage(err)}`,
+              );
+            }
+          },
+          // Metrics do not consume logs; avoid enabling their diagnostic copy/formatting path.
+          {
+            exclude: ["log.record", "worker.request", "gateway.ws.event"],
+            includePromptStats: false,
+          },
+          { includePrivateData: false },
+        ),
+      ];
       internalDiagnostics = ctx.internalDiagnostics;
       reportExporterStatus({
         signal: "metrics",
@@ -694,12 +700,10 @@ export function createDiagnosticsPrometheusExporter() {
       });
     },
     stop() {
-      unsubscribeWorkerRequests?.();
-      unsubscribeWorkerRequests = undefined;
-      unsubscribeWork?.();
-      unsubscribeWork = undefined;
-      unsubscribe?.();
-      unsubscribe = undefined;
+      for (const unsubscribe of subscriptions) {
+        unsubscribe?.();
+      }
+      subscriptions = [];
       reportExporterStatus({
         signal: "metrics",
         transport: "prometheus-scrape",

@@ -153,6 +153,7 @@ stale index records without `--force` or re-embedding unchanged conversations.
 Historical transcripts without a recognizable helper identity remain eligible.
 
 Full rebuilds wait for temporary database cleanup before reporting completion.
+Searches remain available against the published index while a rebuild finishes.
 File removal runs asynchronously so cleanup does not block the Gateway event loop.
 SQLite background rebuilds retain completed work when foreground activity interrupts
 indexing. The next sync resumes the rebuild, incorporating source changes before

@@ -243,27 +243,6 @@ function QuestionPageContent(
     );
   }
 
-  function pageTitle(
-    value: QuestionPrompt | undefined,
-    error: QuestionPageRequestError | "loading",
-  ): string {
-    if (error === "loading") {
-      return t("common.loading");
-    }
-    if (error) {
-      return t(
-        error === "connection"
-          ? "chat.questions.disconnected"
-          : error === "load"
-            ? "chat.questions.loadFailed"
-            : "chat.questions.unavailable",
-      );
-    }
-    return value && value.status !== "pending"
-      ? questionStatusLabel(value)
-      : t("chat.questions.eyebrow");
-  }
-
   const refreshQuestions = () => questionState.onChange();
   const setPanel = (element: HTMLElement) => {
     questionPanel = element;
@@ -286,7 +265,25 @@ function QuestionPageContent(
   };
   function Frame(frameProps: { state: QuestionPageRequestError | "loading"; retry?: () => void }) {
     let heading: HTMLHeadingElement | undefined;
-    const title = () => pageTitle(readPrompt(), frameProps.state);
+    const title = (): string => {
+      const value = readPrompt();
+      const error = frameProps.state;
+      if (error === "loading") {
+        return t("common.loading");
+      }
+      if (error) {
+        return t(
+          error === "connection"
+            ? "chat.questions.disconnected"
+            : error === "load"
+              ? "chat.questions.loadFailed"
+              : "chat.questions.unavailable",
+        );
+      }
+      return value && value.status !== "pending"
+        ? questionStatusLabel(value)
+        : t("chat.questions.eyebrow");
+    };
     createDocumentTitle(() => `${title()} — ${t("approvalPage.brandName")}`);
     createPendingFocus(title, {
       requested: needsFocus,

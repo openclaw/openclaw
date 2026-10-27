@@ -24,9 +24,12 @@ import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { mapColdLoadCpuProfile, summarizeCpuProfile } from "./lib/control-ui-cold-load-trace.ts";
 import {
-  createInteractionFixture,
+  createScenarioFixture,
   interactionScenarios,
+  installInteractionNavigationPreloadObserver,
+  settleInteractionNavigationPreloads,
   settleSidebarBackgroundWork,
+  type InteractionNavigationPreloads,
   type InteractionEvidence,
   type InteractionSandbox,
 } from "./lib/control-ui-interaction-scenarios.ts";
@@ -58,8 +61,10 @@ const { values } = parseArgs({
   options: {
     "bundle-dir": { type: "string", default: "dist/control-ui" },
     "compare-bundle-dir": { type: "string" },
+    "control-bundle-dir": { type: "string" },
     "workboard-source-root": { type: "string" },
     "compare-workboard-source-root": { type: "string" },
+    "control-workboard-source-root": { type: "string" },
     output: { type: "string", default: ".artifacts/control-ui-interactions" },
     steps: { type: "string" },
     viewport: { type: "string", default: "both" },
@@ -69,6 +74,7 @@ const { values } = parseArgs({
     "selector-stats": { type: "boolean", default: false },
     theme: { type: "string", default: "light" },
     "thread-cpu-time": { type: "boolean", default: false },
+    "function-counts": { type: "boolean", default: false },
     "first-pair-screenshots": { type: "boolean", default: false },
     "invalidation-tracking": { type: "boolean", default: false },
     "resource-counts": { type: "boolean", default: false },
@@ -78,7 +84,8 @@ const { values } = parseArgs({
     "asset-latency-ms": { type: "string", default: "0" },
     "projection-fixtures": { type: "boolean", default: false },
     "projection-counts": { type: "boolean", default: false },
-    headed: { type: "boolean", default: false },
+    "data-pages": { type: "boolean", default: false },
+    "retained-heap": { type: "boolean", default: false },
   },
 });
 const trace = values.trace || values["selector-stats"];
@@ -87,6 +94,9 @@ if (values["projection-counts"] && !values["projection-fixtures"]) {
 }
 if (values["projection-counts"] && trace) {
   throw new Error("Run precise projection counts separately from CPU profiles/traces");
+}
+if (values["function-counts"] && trace) {
+  throw new Error("Run precise function counts separately from CPU profiles/traces");
 }
 if (values["projection-fixtures"] && values["resource-counts"]) {
   throw new Error("Run native resource counts separately from projection fixture measurements");
@@ -107,6 +117,11 @@ if (!Number.isFinite(cpuThrottle) || cpuThrottle < 1) {
 if (!Number.isInteger(pairs) || pairs < 1) {
   throw new Error("pairs must be a positive integer");
 }
+if (values["control-bundle-dir"] && !values["compare-bundle-dir"]) {
+  throw new Error(
+    "control-bundle-dir requires compare-bundle-dir for baseline/candidate/control order",
+  );
+}
 if (!["desktop", "mobile", "both"].includes(values.viewport)) {
   throw new Error("viewport must be desktop, mobile or both");
 }
@@ -115,17 +130,22 @@ const scenarios = interactionScenarios.filter((step) => {
   if (Boolean(step.projectionFamily) !== values["projection-fixtures"]) {
     return false;
   }
+  if (!selectedIds && Boolean(step.dataPage) !== values["data-pages"]) {
+    return false;
+  }
   return selectedIds
     ? selectedIds.includes(step.id)
-    : !step.resourceOnly || values["resource-counts"];
+    : !step.explicitOnly && (!step.resourceOnly || values["resource-counts"]);
 });
 if (!scenarios.length || selectedIds?.some((id) => !scenarios.some((step) => step.id === id))) {
   throw new Error("Unknown or empty interaction steps");
 }
 const artifactDir = createControlUiE2eArtifactDir("warm", values.output);
-const bundles = [values["bundle-dir"], values["compare-bundle-dir"]].filter(
-  (directory): directory is string => Boolean(directory),
-);
+const bundles = [
+  values["bundle-dir"],
+  values["compare-bundle-dir"],
+  values["control-bundle-dir"],
+].filter((directory): directory is string => Boolean(directory));
 const viewports = [
   { name: "desktop", width: 1440, height: 1000 },
   { name: "mobile", width: 390, height: 844 },
@@ -339,17 +359,21 @@ type Result = {
     error?: string;
   };
   durationBreakdownMs?: Record<string, number>;
+  retainedHeap?: { beforeBytes: number; afterBytes?: number; deltaBytes?: number };
   longTasks?: { count: number; totalMs: number; maxMs: number };
   requests?: Record<string, number>;
   scenarioEvidence?: InteractionEvidence;
   domBefore?: { nodes: number; menuItems: number; namedAnchors: number };
   domAfter?: { nodes: number; menuItems: number; namedAnchors: number };
   rowIdentity?: { initial: number; created: number; retained: number; final: number };
+  navigationPreloads?: InteractionNavigationPreloads;
   resourcesBefore?: ControlUiResourceCounts;
   resourcesAfter?: ControlUiResourceCounts;
   processWakeups?: ProcessWakeups;
   projectionFixture?: ProjectionFixtureFacts;
   projectionCoverageArtifact?: string;
+  functionCoverageArtifact?: string;
+  functionCoveragePreparationArtifact?: string;
   projectionScreenshotArtifact?: string;
   measurementClass?:
     | "production-interaction"
@@ -410,7 +434,6 @@ if (values["process-wakeups"]) {
 const browserExecutable = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const browser = await chromium.launch({
   executablePath: browserExecutable,
-  headless: !values.headed,
 });
 
 async function launchNativeVisibilityContext() {
@@ -424,6 +447,8 @@ async function launchNativeVisibilityContext() {
       "--no-default-browser-check",
       "--password-store=basic",
       "--use-mock-keychain",
+      // Full Chrome headless still hides a natively minimized window; the headless shell does not.
+      "--headless=new",
       "about:blank",
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
@@ -529,9 +554,11 @@ try {
       throw new Error(`Missing build identity: ${directory}`);
     }
     const build: { buildId: string; version: string } = JSON.parse(raw);
-    const sourceRoot = [values["workboard-source-root"], values["compare-workboard-source-root"]][
-      bundleIndex
-    ];
+    const sourceRoot = [
+      values["workboard-source-root"],
+      values["compare-workboard-source-root"],
+      values["control-workboard-source-root"],
+    ][bundleIndex];
     const needsWorkboard = scenarios.some((scenario) => scenario.fixture?.workboardResources);
     if (needsWorkboard && !sourceRoot) {
       throw new Error(`Missing explicit Workboard source root for bundle ${bundleIndex}`);
@@ -583,8 +610,20 @@ try {
           ? "CDP trace + 1ms CPU profiler (overhead included)"
           : "untraced CDP metrics",
         metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+        functionCounts: values["function-counts"]
+          ? "Precise coverage starts before navigation and resets after preparation; diagnostic overhead, not timing evidence."
+          : false,
         cpuThrottle,
-        pairOrder: values.counterbalance ? "AB/BA alternating by pair" : "AB",
+        retainedHeap: values["retained-heap"]
+          ? "Separate GC-controlled proof: collect before tracing and after action metrics/tracing; not a timing comparison."
+          : false,
+        pairOrder: values["control-bundle-dir"]
+          ? values.counterbalance
+            ? "ABC/CBA alternating by pair"
+            : "ABC"
+          : values.counterbalance
+            ? "AB/BA alternating by pair"
+            : "AB",
         assetLatency: {
           milliseconds: assetLatencyMs,
           scope:
@@ -617,7 +656,6 @@ try {
             }
           : false,
         preferences: { lobsterPetVisits: false },
-        headed: values.headed,
         invalidationTracking:
           trace && (values["invalidation-tracking"] || values["selector-stats"]),
         selectorStats: values["selector-stats"],
@@ -652,25 +690,27 @@ try {
             }
           : undefined,
         acceptance:
-          "For fixed steps: >=10 serial AB pairs per viewport, all median/p95/min/max cells reviewed; any >20% regression stops landing. No boot growth beyond 64 B.",
+          "For fixed steps: >=10 serial AB pairs per viewport, all median/p95/min/max cells reviewed; any >20% regression stops landing. Compare startup with its same-host merge base; growth beyond build variance needs an accepted measured win.",
         exclusions: [
           "No live Gateway/provider",
           "No sidebar text input exists; measure command palette search separately",
-          "No fake clocks or Lit probes; optional simulated asset delay is recorded above",
+          "No fake clocks or Lit probes; optional asset delay is recorded above and other simulated transport delays are named by their scenario",
         ],
         scenarios: scenarios.map(
-          ({ id, route, expected, fixture, diagnostic, observationBrowser }) => ({
+          ({ id, route, expected, fixture, dataPage, diagnostic, observationBrowser }) => ({
             id,
             route,
             expected,
             fixture,
+            dataPage,
             diagnostic,
             observationBrowser,
           }),
         ),
         viewports,
         bundles: servers.map(
-          ({ directory, build, indexSha256, workboardSource, projectionBuild }) => ({
+          ({ directory, build, indexSha256, workboardSource, projectionBuild }, index) => ({
+            role: index === 0 ? "baseline" : index === 1 ? "candidate" : "control",
             directory,
             ...build,
             indexSha256,
@@ -695,16 +735,13 @@ try {
         for (const [bundle, slot] of slots) {
           const artifactPrefix = `${viewport.name}-${theme}-${scenario.id}-${pair + 1}-${bundle}`;
           const nativeVisibility =
-            scenario.visibility === "hidden" && values.headed
-              ? await launchNativeVisibilityContext()
-              : undefined;
+            scenario.visibility === "hidden" ? await launchNativeVisibilityContext() : undefined;
           const observationBrowser =
             scenario.observationBrowser && !nativeVisibility
               ? await launchControlUiObservationBrowser({
                   viewport: { width: viewport.width, height: viewport.height },
                   artifactDir,
                   artifactPrefix,
-                  headless: !values.headed,
                   colorScheme: theme,
                   isMobile: viewport.name === "mobile",
                   hasTouch: viewport.name === "mobile",
@@ -740,6 +777,7 @@ try {
             // tsx preserves names in serialized fixture callbacks, as in the cold-load runner.
             await page.addInitScript("globalThis.__name = (fn) => fn");
             await page.addInitScript(() => performance.setResourceTimingBufferSize(2048));
+            await page.addInitScript(installInteractionNavigationPreloadObserver);
             // Random per-load pets can repaint continuously; measure the selected interaction.
             await page.addInitScript(
               ({ key, gatewayUrl }) => {
@@ -792,6 +830,12 @@ try {
           try {
             cdp = await context.newCDPSession(page);
             await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
+            if (values["function-counts"]) {
+              // Starting after warmup can miss calls in already optimized functions.
+              await cdp.send("Profiler.enable");
+              await cdp.send("Profiler.startPreciseCoverage", { callCount: true, detailed: true });
+              preciseCoverage = true;
+            }
             if (
               nativeVisibility &&
               (scenario.fixture?.boardFrameResources ||
@@ -811,12 +855,7 @@ try {
                   slot.build.version,
                   workboardSource.root,
                 )
-              : createInteractionFixture(
-                  slot.build.buildId,
-                  slot.build.version,
-                  scenario.fixture,
-                  sandbox,
-                );
+              : createScenarioFixture(slot.build.buildId, slot.build.version, scenario, sandbox);
             const sessions = createTeamScaleSidebarListOwner({
               rows: fixture.sessions,
               viewerProfileId: "interaction-viewer",
@@ -825,28 +864,32 @@ try {
               owners: [],
             });
             const boardResponse = createProjectionBoardResponses();
+            const defaultRequestHandlers: Record<string, (params: unknown) => unknown> = {
+              ...(scenario.projectionFamily
+                ? {
+                    "board.get": (params: unknown) => {
+                      if (!isRecord(params)) {
+                        throw new Error("Expected board.get parameters");
+                      }
+                      return boardResponse(params);
+                    },
+                  }
+                : {}),
+              "sessions.list": (params: unknown) => {
+                if (!isRecord(params)) {
+                  throw new Error("Expected sessions.list query parameters");
+                }
+                return sessions.list(params).result;
+              },
+            };
             // Keep the same readiness contract with a timeout scaled for intentional throttling.
             const gateway = await installMockGateway(
               page,
               { ...fixture, awaitInitialRoster: false },
               {
                 requestHandlers: {
-                  ...(scenario.projectionFamily
-                    ? {
-                        "board.get": (params: unknown) => {
-                          if (!isRecord(params)) {
-                            throw new Error("Expected board.get parameters");
-                          }
-                          return boardResponse(params);
-                        },
-                      }
-                    : {}),
-                  "sessions.list": (params) => {
-                    if (!isRecord(params)) {
-                      throw new Error("Expected sessions.list query parameters");
-                    }
-                    return sessions.list(params).result;
-                  },
+                  ...defaultRequestHandlers,
+                  ...scenario.createRequestHandlers?.(defaultRequestHandlers),
                 },
               },
             );
@@ -863,13 +906,14 @@ try {
               await cdp.send("Network.setBypassServiceWorker", { bypass: false });
               await cdp.send("Network.disable");
             }
-            result.measurementClass = scenario.diagnostic
-              ? "diagnostic"
-              : scenario.projectionFamily
-                ? values["projection-counts"]
-                  ? "projection-counter"
-                  : "projection-cpu"
-                : "production-interaction";
+            result.measurementClass =
+              scenario.diagnostic || values["function-counts"]
+                ? "diagnostic"
+                : scenario.projectionFamily
+                  ? values["projection-counts"]
+                    ? "projection-counter"
+                    : "projection-cpu"
+                  : "production-interaction";
             if (scenario.projectionFamily) {
               result.projectionFixture = await prepareProjectionFixture(
                 page,
@@ -881,6 +925,9 @@ try {
                 await page.waitForFunction(() => window.openclawControlUi !== undefined);
                 await settleSidebarBackgroundWork(page);
               }
+            }
+            if (scenario.route !== "/instance-resource-fixture.html") {
+              result.navigationPreloads = await settleInteractionNavigationPreloads(page);
             }
             // Slow CPUs can still be loading boot modules after the first ready frame.
             await page.waitForLoadState("networkidle");
@@ -896,6 +943,14 @@ try {
             await cdp.send("Performance.enable", {
               timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
             });
+            if (values["retained-heap"]) {
+              await cdp.send("HeapProfiler.collectGarbage");
+              const initial = await metrics(cdp);
+              if (initial.JSHeapUsedSize === undefined) {
+                throw new Error("Missing JSHeapUsedSize after initial garbage collection");
+              }
+              result.retainedHeap = { beforeBytes: initial.JSHeapUsedSize };
+            }
             if (values["selector-stats"]) {
               cdp.on(
                 "CSS.styleSheetAdded",
@@ -943,8 +998,7 @@ try {
                 windowId,
                 bounds: { windowState: "minimized" },
               });
-              // Headless Chromium accepts minimization without hiding the page.
-              // A frozen renderer would make this idle measurement meaningless.
+              // Never simulate hidden: an unhidden or frozen renderer would make this idle measurement meaningless.
               const hidden = await page
                 .waitForFunction(() => document.visibilityState === "hidden", undefined, {
                   timeout: 1_000,
@@ -956,7 +1010,7 @@ try {
                 );
               if (!hidden) {
                 throw new ScenarioSkipped(
-                  "Native window minimization did not hide the page; use --headed on a windowed host for hidden-idle proof.",
+                  "Native window minimization did not hide the page; this Chromium build cannot produce hidden-idle proof.",
                 );
               }
             }
@@ -1049,7 +1103,14 @@ try {
               return { durations, observer };
             });
             const before = await metrics(cdp);
-            if (scenario.projectionFamily && values["projection-counts"]) {
+            if (values["function-counts"]) {
+              const artifact = `${artifactPrefix}.preparation-function-coverage.json`;
+              await writeFile(
+                path.join(artifactDir, artifact),
+                JSON.stringify(await cdp.send("Profiler.takePreciseCoverage")),
+              );
+              result.functionCoveragePreparationArtifact = artifact;
+            } else if (scenario.projectionFamily && values["projection-counts"]) {
               await cdp.send("Profiler.enable");
               await cdp.send("Profiler.startPreciseCoverage", { callCount: true, detailed: true });
               preciseCoverage = true;
@@ -1066,9 +1127,16 @@ try {
               const coverage = await cdp.send("Profiler.takePreciseCoverage");
               await cdp.send("Profiler.stopPreciseCoverage");
               preciseCoverage = false;
-              const artifact = `${artifactPrefix}.projection-coverage.json`;
-              await writeFile(path.join(artifactDir, artifact), JSON.stringify(coverage));
-              result.projectionCoverageArtifact = artifact;
+              if (values["function-counts"]) {
+                const artifact = `${artifactPrefix}.function-coverage.json`;
+                await writeFile(path.join(artifactDir, artifact), JSON.stringify(coverage));
+                result.functionCoverageArtifact = artifact;
+              }
+              if (scenario.projectionFamily && values["projection-counts"]) {
+                const artifact = `${artifactPrefix}.projection-coverage.json`;
+                await writeFile(path.join(artifactDir, artifact), JSON.stringify(coverage));
+                result.projectionCoverageArtifact = artifact;
+              }
             }
             const after = await metrics(cdp);
             if (processSession && result.rendererProcessMetrics?.before) {
@@ -1331,6 +1399,18 @@ try {
                   }
                 });
               }
+              const retainedHeap = result.retainedHeap;
+              if (values["retained-heap"] && cdp && retainedHeap && result.status === "passed") {
+                await capture(async () => {
+                  await cdp!.send("HeapProfiler.collectGarbage");
+                  const final = await metrics(cdp!);
+                  if (final.JSHeapUsedSize === undefined) {
+                    throw new Error("Missing JSHeapUsedSize after final garbage collection");
+                  }
+                  retainedHeap.afterBytes = final.JSHeapUsedSize;
+                  retainedHeap.deltaBytes = final.JSHeapUsedSize - retainedHeap.beforeBytes;
+                });
+              }
               if (!values["first-pair-screenshots"] || pair === 0 || result.status === "failed") {
                 await capture(() =>
                   page.screenshot({ path: path.join(artifactDir, `${artifactPrefix}.png`) }),
@@ -1468,6 +1548,7 @@ const summary = viewports
             ).map((metric) => [
               metric,
               !diagnostic &&
+              !values["function-counts"] &&
               samples.length &&
               !values["projection-counts"] &&
               samples.every((row) => row[metric] !== undefined)
@@ -1480,37 +1561,42 @@ const summary = viewports
     ),
   )
   .toSorted((a, b) => (b.metrics.scriptMs?.median ?? 0) - (a.metrics.scriptMs?.median ?? 0));
-const comparisons = summary
-  .filter((row) => row.bundle === 0)
-  .flatMap((baseline) => {
-    const candidate = summary.find(
-      (row) => row.bundle === 1 && row.viewport === baseline.viewport && row.step === baseline.step,
-    );
-    if (!candidate) {
-      return [];
-    }
-    return Object.entries(baseline.metrics).flatMap(([metric, before]) => {
-      const after = candidate.metrics[metric];
-      if (!before || !after) {
+const compareBundle = (bundle: number) =>
+  summary
+    .filter((row) => row.bundle === 0)
+    .flatMap((baseline) => {
+      const candidate = summary.find(
+        (row) =>
+          row.bundle === bundle && row.viewport === baseline.viewport && row.step === baseline.step,
+      );
+      if (!candidate) {
         return [];
       }
-      return (["median", "p95", "min", "max"] as const).map((statistic) => ({
-        viewport: baseline.viewport,
-        step: baseline.step,
-        metric,
-        statistic,
-        before: before[statistic],
-        after: after[statistic],
-        percent: before[statistic] ? (after[statistic] / before[statistic] - 1) * 100 : null,
-        regression: after[statistic] > before[statistic] * 1.2,
-      }));
+      return Object.entries(baseline.metrics).flatMap(([metric, before]) => {
+        const after = candidate.metrics[metric];
+        if (!before || !after) {
+          return [];
+        }
+        return (["median", "p95", "min", "max"] as const).map((statistic) => ({
+          viewport: baseline.viewport,
+          step: baseline.step,
+          metric,
+          statistic,
+          before: before[statistic],
+          after: after[statistic],
+          percent: before[statistic] ? (after[statistic] / before[statistic] - 1) * 100 : null,
+          regression: after[statistic] > before[statistic] * 1.2,
+        }));
+      });
     });
-  });
+const comparisons = compareBundle(1);
+const controlComparisons = values["control-bundle-dir"] ? compareBundle(2) : undefined;
 await writeFile(
   path.join(artifactDir, "summary.json"),
   JSON.stringify(
     {
       comparisons,
+      controlComparisons,
       planned: viewports.length * scenarios.length * pairs * servers.length,
       executed: results.length,
       failed: results.filter((row) => row.status === "failed").length,

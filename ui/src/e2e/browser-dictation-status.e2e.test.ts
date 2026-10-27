@@ -349,6 +349,7 @@ suite.define(() => {
   it("gates unavailable voice capabilities in the microphone picker", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         heldMethods: ["chat.startup", "talk.catalog"],
         historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: { "talk.catalog": catalog(false, false) },

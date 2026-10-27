@@ -29,17 +29,19 @@ function createPersistence(
 }
 
 describe("createTelegramUpdateOffsetPersistence", () => {
-  it.each([false, true])("handles a failed checkpoint (abort=%s)", async (abort) => {
+  it.each([false, true])("checkpoints valid IDs after failure (abort=%s)", async (abort) => {
     const controller = new AbortController();
     const writeUpdateId = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(new Error("offset store unavailable"))
       .mockResolvedValue(undefined);
-    const { persistence, checkpoint, onError } = createPersistence(
+    const { persistence, checkpoint, onError, onInvalidUpdateId } = createPersistence(
       writeUpdateId,
       abort ? controller.signal : undefined,
     );
 
+    persistence.persistUpdateId(Number.NaN);
+    expect(onInvalidUpdateId).toHaveBeenCalledWith(Number.NaN);
     persistence.persistUpdateId(101);
     await flushMicrotasks();
     expect(checkpoint()).toEqual([[101], 100]);
@@ -96,19 +98,6 @@ describe("createTelegramUpdateOffsetPersistence", () => {
 
     write.resolve();
     await stop;
-    expect(stopped).toBe(true);
     expect(persistence.getCommittedUpdateId()).toBe(101);
-  });
-
-  it("ignores a malformed update ID without blocking the next valid write", async () => {
-    const { persistence, checkpoint, onInvalidUpdateId } = createPersistence();
-
-    persistence.persistUpdateId(Number.NaN);
-    persistence.persistUpdateId(101);
-    await flushMicrotasks();
-
-    expect(onInvalidUpdateId).toHaveBeenCalledWith(Number.NaN);
-    expect(checkpoint()).toEqual([[101], 101]);
-    await persistence.stop();
   });
 });

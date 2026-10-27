@@ -54,6 +54,8 @@ Debian 12 meet that ABI floor. RHEL 9 and Rocky Linux 9 ship glibc 2.34, so
 they cannot run the published AppImage. Extraction does not bypass this
 requirement.
 
+The AppImage keeps its bundled libraries for the companion and WebKit helpers. Host CLI tools and SSH ProxyCommand programs use the host libraries; non-AppImage launches preserve the user's library path.
+
 See [Desktop compatibility](https://docs.openclaw.ai/platforms/linux#desktop-compatibility)
 for package updates, desktop limitations, and native-app distinctions.
 
@@ -562,6 +564,12 @@ you can still uncheck it without retrying the unavailable power service. A new
 enable request is saved only after the native request succeeds.
 Turning it off or quitting releases the request. Closing the dashboard to the
 tray does not release it.
+
+If the shared Saved Gateways credential store cannot be read at startup, the
+connection UI reports that problem once and Keep computer awake stays off for
+this run. The saved preference is preserved. An explicit toggle that cannot save
+its preference reports **Saved Gateways**; native power-service errors report
+**Keep computer awake**.
 
 Linux uses GNOME’s native session inhibitor when available, or another desktop’s
 xdg-desktop-portal idle inhibitor, such as KDE’s backend. A working session or

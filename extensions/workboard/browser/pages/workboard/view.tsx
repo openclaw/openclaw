@@ -7,7 +7,6 @@ import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { createElementRefs } from "../../lib/element-refs.ts";
 import {
-  filterWorkboardCards,
   groupWorkboardCardsByStatus,
   workboardCardMatchesHealthKey,
 } from "../../lib/workboard/derived.ts";
@@ -53,6 +52,8 @@ import { WorkboardSearch } from "./view-search.tsx";
 import { matchesWorkboardCardScope, SelectionActions, SelectionDialog } from "./view-selection.tsx";
 import type { WorkboardSelectOption } from "./workboard-select.ts";
 
+const WORKBOARD_RECENT_DONE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
 const workboardFilterPopoverId = "workboard-filter-popover";
 
 function AgentControl(props: { workboard: WorkboardProps; options: WorkboardSelectOption[] }) {
@@ -84,6 +85,7 @@ function WorkboardColumns(props: {
   statuses: WorkboardStatus[];
   byStatus: Map<WorkboardStatus, WorkboardCard[]>;
   cardRefs: ReturnType<typeof createElementRefs<HTMLElement>>;
+  menuCardId?: string;
 }) {
   const state = workboardViewState(() => props.workboard);
   const boardEdges = boardScrollEdgesRef();
@@ -121,6 +123,7 @@ function WorkboardColumns(props: {
               status={status()}
               cards={props.byStatus.get(status()) ?? []}
               cardRefs={props.cardRefs}
+              menuCardId={props.menuCardId}
               options={{ surface: state().viewMode === "list" ? "list" : "page" }}
             />
           )}
@@ -147,14 +150,31 @@ export function WorkboardView(
       .filter((card) => matchesWorkboardCardScope(props, card))
       .filter((card) => matchesCardQuery(card, current.query));
     const now = Date.now();
-    const cardsForFilters = (ignore?: "status" | "priority" | "attention") =>
-      filterWorkboardCards({
-        cards: scopedCards,
-        filters: current,
-        sessions: props.sessions,
-        now,
-        ignore,
+    const cardsForFilters = (ignore?: "status" | "priority" | "attention") => {
+      const sessions = props.sessions;
+      const { statusFilter, priorityFilter, attentionFilter, donePeriod } = current;
+      return scopedCards.filter((card) => {
+        if (ignore !== "status" && statusFilter.size && !statusFilter.has(card.status)) {
+          return false;
+        }
+        if (ignore !== "priority" && priorityFilter.size && !priorityFilter.has(card.priority)) {
+          return false;
+        }
+        if (
+          ignore !== "attention" &&
+          attentionFilter.size &&
+          ![...attentionFilter].some((key) => workboardCardMatchesHealthKey(card, key, sessions))
+        ) {
+          return false;
+        }
+        // The completion window trims history without hiding unfinished work.
+        return (
+          donePeriod === "all" ||
+          card.status !== "done" ||
+          (card.completedAt ?? card.updatedAt) >= now - WORKBOARD_RECENT_DONE_WINDOW_MS
+        );
       });
+    };
     const filtered = cardsForFilters();
     const visibleError = workboardErrorMessage(current, props.pageError);
     const selectedCards = current.cards.filter((card) => current.selectedCardIds.has(card.id));
@@ -332,7 +352,7 @@ export function WorkboardView(
   const filterPopover = workboardPopoverRef("end");
   return (
     <WorkboardCardMenus workboard={props} cards={view().filtered}>
-      {(menu) => (
+      {(menu, selectedMenuCardId) => (
         <section class="workboard">
           <div
             class="workboard-main"
@@ -612,6 +632,7 @@ export function WorkboardView(
                 statuses={view().visibleStatuses}
                 byStatus={view().byStatus}
                 cardRefs={cardRefs}
+                menuCardId={selectedMenuCardId()}
               />
             )}
             {menu}

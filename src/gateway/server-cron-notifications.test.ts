@@ -692,11 +692,10 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       const gateway = publicOrigin
         ? { publicOrigin: "https://gateway.example", controlUi: { basePath: "/control" } }
         : undefined;
-      const expectedText =
-        "cron failed\nRun started: 2026-01-15 10:30 EST" +
-        (publicOrigin
-          ? "\nInspect: https://gateway.example/control/automations?job=job-1&run=cron%3Ajob-1%3A1768491000000"
-          : "");
+      const expectedText = "cron failed\nRun started: 2026-01-15 10:30 EST";
+      const inspectionUrl = publicOrigin
+        ? "https://gateway.example/control/automations?job=job-1&run=cron%3Ajob-1%3A1768491000000"
+        : undefined;
       await sendGatewayCronFailureAlert({
         runAtMs,
         resolveCronAgent: () => ({
@@ -718,6 +717,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
             text: expectedText,
             presentation,
           },
+          inspectionUrl,
         }),
       );
     },

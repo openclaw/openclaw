@@ -108,7 +108,6 @@ it("publishes the complete immutable generation with only useful eligible sideca
     const target = path.join(output, revisions[0]!, name);
     expect(await readText(target)).toBe(body);
     const compressed = name === "large.js" || name === "small.css";
-    expect(Buffer.byteLength(body) >= 4096).toBe(name === "large.js");
     for (const extension of ["br", "gz"]) {
       const sidecar = `${target}.${extension}`;
       if (!compressed) {

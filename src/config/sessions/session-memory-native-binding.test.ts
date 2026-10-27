@@ -117,64 +117,53 @@ it.each(["commit", "rollback", "revoked"])(
       registry.plugins.push(record);
       registry.agentHarnesses.push({ harness, pluginId: record.id, source: "runtime" });
       markPluginRegistryActive(registry);
-      try {
-        const completed = await withPluginRuntimeRegistryScope(registry, () =>
-          withSessionActorStorage(
-            scope,
-            {
-              authority: { assertCurrent() {}, authorize() {} },
-              lifetime: { assertCurrent() {}, assertReadable() {} },
-              create: true,
-            },
-            async (memory) => {
-              try {
-                await createSessionEntryWithTranscript(scope, () => ({
-                  ok: true,
-                  entry: {
-                    sessionId: original.sessionId,
-                    updatedAt: 1,
-                    incognito: true,
-                    agentHarnessId: harness.id,
-                  },
-                }));
-                sql = observeMainThreadSql();
-                sql.calibrate();
-                try {
-                  const deletion = deleteSessionEntryLifecycle({
-                    ...scope,
-                    storePath: memory.path,
-                    target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-                    archiveTranscript: false,
-                    deleteTranscriptWithoutArchive: true,
-                  });
-                  if (mode !== "commit") {
-                    await expect(deletion).rejects.toThrow(
-                      rollback ? "injected companion failure" : "outer cleanup authority revoked",
-                    );
-                    expect(await state.lookup(sessionKey)).toMatchObject(original);
-                    expect(loadSessionEntry(scope)).toMatchObject({
-                      sessionId: original.sessionId,
-                    });
-                  } else {
-                    expect(await deletion).toMatchObject({ deleted: true });
-                    expect(await state.lookup(sessionKey)).toBeUndefined();
-                    expect(loadSessionEntry(scope)).toBeUndefined();
-                  }
-                  sql.expectIdle();
-                  return true;
-                } finally {
-                  sql.restore();
-                }
-              } finally {
-                memorySessionActorOwners.closeDatabase(memory);
-              }
-            },
-          ),
-        );
-        expect(completed).toBe(true);
-      } finally {
-        markPluginRegistryRetired(registry);
-      }
+      using registryCleanup = new DisposableStack();
+      registryCleanup.defer(() => markPluginRegistryRetired(registry));
+      await withPluginRuntimeRegistryScope(registry, () =>
+        withSessionActorStorage(
+          scope,
+          {
+            authority: { assertCurrent() {}, authorize() {} },
+            lifetime: { assertCurrent() {}, assertReadable() {} },
+            create: true,
+          },
+          async (memory) => {
+            using storageCleanup = new DisposableStack();
+            storageCleanup.defer(() => memorySessionActorOwners.closeDatabase(memory));
+            await createSessionEntryWithTranscript(scope, () => ({
+              ok: true,
+              entry: {
+                sessionId: original.sessionId,
+                updatedAt: 1,
+                incognito: true,
+                agentHarnessId: harness.id,
+              },
+            }));
+            sql = observeMainThreadSql();
+            storageCleanup.defer(sql.restore);
+            sql.calibrate();
+            const deletion = deleteSessionEntryLifecycle({
+              ...scope,
+              storePath: memory.path,
+              target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+              archiveTranscript: false,
+              deleteTranscriptWithoutArchive: true,
+            });
+            if (mode !== "commit") {
+              await expect(deletion).rejects.toThrow(
+                rollback ? "injected companion failure" : "outer cleanup authority revoked",
+              );
+              expect(await state.lookup(sessionKey)).toMatchObject(original);
+              expect(loadSessionEntry(scope)).toMatchObject({ sessionId: original.sessionId });
+            } else {
+              expect(await deletion).toMatchObject({ deleted: true });
+              expect(await state.lookup(sessionKey)).toBeUndefined();
+              expect(loadSessionEntry(scope)).toBeUndefined();
+            }
+            sql.expectIdle();
+          },
+        ),
+      );
     });
   },
 );

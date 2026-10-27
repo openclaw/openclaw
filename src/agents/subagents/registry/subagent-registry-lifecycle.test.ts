@@ -134,9 +134,8 @@ type AnnounceFlowOutcome = Awaited<
 
 vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../context-engine/init.js", () => ({ ensureContextEnginesInitialized: vi.fn() }));
-vi.mock("../../runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(),
-}));
+// mock-isolation: Lifecycle fixtures supply their own registries without loading installed plugins.
+vi.mock("../../runtime-plugins.js", () => import("../../runtime-plugins.test-support.js"));
 
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
@@ -619,7 +618,6 @@ describe("subagent registry lifecycle hardening", () => {
       });
 
       expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
-      expect(readLifecycleRun(entry).completion).toMatchObject({ terminalReply });
       expect(readLifecycleRun(entry).completion?.resultText).toBeUndefined();
       expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion).toMatchObject({
         terminalReply,
@@ -2313,11 +2311,11 @@ describe("subagent registry lifecycle hardening", () => {
     expect(readLifecycleRun(entry)).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
       execution: { outcome: { status: "ok" } },
-      completion: { terminalReply: { disposition: "visible", text: "Canonical success." } },
     });
-    expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion?.resultText).toBe(
-      "Canonical success.",
-    );
+    expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion).toMatchObject({
+      terminalReply: { disposition: "visible", text: "Canonical success." },
+      resultText: "Canonical success.",
+    });
     expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
     expect(runSubagentAnnounceFlow.mock.calls[0]?.[0]).toMatchObject({
       outcome: { status: "ok" },

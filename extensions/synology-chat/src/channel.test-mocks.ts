@@ -18,7 +18,7 @@ export const dispatchReplyWithBufferedBlockDispatcher: Mock<
 export const finalizeInboundContextMock: Mock<
   (ctx: Record<string, unknown>) => Record<string, unknown>
 > = vi.fn((ctx) => ctx);
-export const buildChannelInboundEventContextMock: Mock<
+const buildChannelInboundEventContextMock: Mock<
   (params: {
     channel: string;
     accountId?: string;

@@ -1,6 +1,7 @@
 // Bench Gateway Startup tests cover bench gateway startup script behavior.
 import fs from "node:fs";
 import { createServer, type RequestListener } from "node:http";
+import type { HeapProfiler } from "node:inspector";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
@@ -14,9 +15,11 @@ import {
   waitForInitialProbe,
 } from "../../scripts/lib/gateway-bench-runtime.ts";
 import { isStartupTraceDuration } from "../../scripts/lib/gateway-startup-trace-ranking.js";
+import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { validateConfigObject } from "../../src/config/validation.js";
 import { isPidAlive } from "../../src/shared/pid-alive.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { waitForPidToExit } from "../../src/test-utils/process-tree.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -134,6 +137,73 @@ async function listenOnLoopback(handler: RequestListener) {
 }
 
 describe("gateway startup benchmark script", () => {
+  it("samples collected startup allocations and stops before post-ready work", async ({
+    signal,
+  }) => {
+    const root = tempDirs.make("openclaw-startup-heap-");
+    const outputPath = path.join(root, "startup.heapprofile");
+    let acknowledgment: unknown;
+    const exitCode = await runManagedCommand({
+      bin: resolveTestNodeExecPath(),
+      args: [
+        "--expose-gc",
+        "--import",
+        path.resolve("scripts/lib/gateway-startup-heap-profile.mjs"),
+        "--input-type=module",
+        "--eval",
+        `function allocateBeforeReady() {
+  globalThis.fixture = Array.from({ length: 4096 }, (_, index) => new Array(128).fill(index));
+}
+function allocateAfterReady() {
+  globalThis.fixture = Array.from({ length: 4096 }, (_, index) => new Array(128).fill(index));
+}
+allocateBeforeReady();
+globalThis.fixture = undefined;
+globalThis.gc();
+process.on("message", (message) => {
+  if (message !== "after-ready") return;
+  allocateAfterReady();
+  globalThis.fixture = undefined;
+  globalThis.gc();
+  process.exit(0);
+});
+// The real Gateway has a listening server; this tiny fixture uses IPC for liveness.
+process.channel.ref();
+process.send("fixture-ready");`,
+      ],
+      signal,
+      stdio: ["ignore", "ignore", "inherit", "ipc"],
+      onReady(child) {
+        child.on("message", (message: unknown) => {
+          if (message === "fixture-ready") {
+            child.send({ type: "openclaw-startup-heap:capture", outputPath });
+          } else if (
+            message !== null &&
+            typeof message === "object" &&
+            "type" in message &&
+            message.type === "openclaw-startup-heap:captured"
+          ) {
+            acknowledgment = message;
+            child.send("after-ready");
+          }
+        });
+      },
+    });
+    expect(exitCode).toBe(0);
+    expect(acknowledgment).toEqual({ type: "openclaw-startup-heap:captured", outputPath });
+    const profile = JSON.parse(
+      fs.readFileSync(outputPath, "utf8"),
+    ) as HeapProfiler.SamplingHeapProfile;
+    const functionNames = new Set<string>();
+    const collect = (node: HeapProfiler.SamplingHeapProfileNode) => {
+      functionNames.add(node.callFrame.functionName);
+      node.children.forEach(collect);
+    };
+    collect(profile.head);
+    expect(functionNames.has("allocateBeforeReady")).toBe(true);
+    expect(functionNames.has("allocateAfterReady")).toBe(false);
+  });
+
   it.skipIf(process.platform === "win32")(
     "reports an unavailable high-port range without retrying indefinitely",
     async ({ signal }) => {

@@ -1,4 +1,6 @@
+import { execFile } from "node:child_process";
 import path from "node:path";
+import { promisify } from "node:util";
 import { isNativeError } from "node:util/types";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -603,4 +605,23 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     );
     expect(login).not.toHaveBeenCalled();
   });
+});
+
+// Native ESM resolution is outside Vitest's module cache: exercise the request
+// owner in a subprocess so repeated import() work remains observable.
+it("reuses loaded request modules across warm requests", async ({ signal }) => {
+  await promisify(execFile)(
+    process.execPath,
+    [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/perf/codex-request-imports.ts",
+      "--mode",
+      "counts",
+      "--iterations",
+      "3",
+      "--assert-single-load",
+    ],
+    { cwd: process.cwd(), signal },
+  );
 });

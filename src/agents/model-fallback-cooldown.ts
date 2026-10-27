@@ -6,11 +6,6 @@ import type { FailoverReason } from "./failover/signal.js";
 import type { ModelFallbackAuthRuntime } from "./model-fallback-attempt.js";
 import type { ModelCandidate } from "./model-fallback.types.js";
 
-type CooldownAuthRuntime = Pick<
-  ModelFallbackAuthRuntime,
-  "getSoonestCooldownExpiry" | "resolveProfilesUnavailableReason"
->;
-
 const lastProbeAttempt = new Map<string, number>();
 const MIN_PROBE_INTERVAL_MS = 30_000;
 const PROBE_MARGIN_MS = 2 * 60 * 1000;
@@ -45,7 +40,10 @@ export function resolveCooldownDecision(params: {
   hasFallbackCandidates: boolean;
   now: number;
   probeThrottleKey: string;
-  authRuntime: CooldownAuthRuntime;
+  authRuntime: Pick<
+    ModelFallbackAuthRuntime,
+    "getSoonestCooldownExpiry" | "resolveProfilesUnavailableReason"
+  >;
   authStore: AuthProfileStore;
   profileIds: string[];
 }): CooldownDecision {

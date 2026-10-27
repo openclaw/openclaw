@@ -35,14 +35,6 @@ const VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS = 30000;
 const VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS = 10000;
 const VOICE_CALL_GATEWAY_POLL_INTERVAL_MS = 1000;
 
-function isGatewayUnavailableForLocalFallback(err: unknown): boolean {
-  return (
-    isGatewayTransportError(err) &&
-    err.kind === "closed" &&
-    (err.code === undefined || err.code === 1006)
-  );
-}
-
 function isGatewayCredentialFailure(err: unknown): err is Error {
   return (
     err instanceof Error &&
@@ -95,7 +87,11 @@ export async function callVoiceCallGateway(
     );
     return { ok: true, payload };
   } catch (err) {
-    if (isGatewayUnavailableForLocalFallback(err)) {
+    if (
+      isGatewayTransportError(err) &&
+      err.kind === "closed" &&
+      (err.code === undefined || err.code === 1006)
+    ) {
       return { ok: false, error: err };
     }
     throw gatewayOperationalError(err);

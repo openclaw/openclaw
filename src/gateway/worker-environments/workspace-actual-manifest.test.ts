@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { observeSettlement } from "../../agents/promise-settlement.test-support.js";
 import {
   readActualWorkspaceManifestImpl,
   readWorkspaceFileContentsWithLimit,
@@ -31,15 +32,6 @@ async function inventoryFixture(count = 0) {
   const capture = (options: Omit<InventoryOptions, "root" | "baseCommit"> = {}) =>
     readActualWorkspaceManifestImpl({ root, baseCommit: null, ...options });
   return { root, files, capture };
-}
-
-function observeSettlement(promise: Promise<unknown>) {
-  let settled = false;
-  const markSettled = () => {
-    settled = true;
-  };
-  void promise.then(markSettled, markSettled);
-  return () => settled;
 }
 
 it.each(["before traversal", "during traversal", "root resolution", "safe-root setup"] as const)(

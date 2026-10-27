@@ -14,7 +14,10 @@ import {
   parseCatalogSessionKey,
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
+import {
+  scopedAgentParamsForSession,
+  visibleSessionMatches,
+} from "../../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,

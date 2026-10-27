@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
@@ -14,7 +13,7 @@ import {
   resolveNodeServiceIdentityEnvironment,
 } from "./constants.js";
 import { resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
-import { resolveGatewayStateDir } from "./paths.js";
+import { resolveServiceTmpDir } from "./service-tmp-dir.js";
 
 export const SERVICE_PROXY_ENV_KEYS = [
   "OPENCLAW_PROXY_URL",
@@ -290,29 +289,14 @@ export function buildNodeServiceEnvironment(
   };
 }
 
-function resolveServiceTmpDir(
-  env: Record<string, string | undefined>,
-  platform: NodeJS.Platform,
-): string {
-  if (platform === "darwin") {
-    try {
-      return path.join(resolveGatewayStateDir(env), "tmp");
-    } catch {
-      // Fall back to the same host temporary directory used by other platforms.
-    }
-  }
-  return env.TMPDIR?.trim() || os.tmpdir();
-}
-
 function buildCommonServiceEnvironment(
   { env: invocationEnv, extraPathDirs, execPath, runtime }: ServiceEnvironmentParams,
   platform: NodeJS.Platform,
 ): Record<string, string | undefined> {
   const env = omitSecretEgressProxyEnvironment(invocationEnv, platform);
   const tmpDir = resolveServiceTmpDir(env, platform);
-  // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
-  // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
-  // works correctly when running as a LaunchAgent without extra user configuration.
+  // On macOS, launchd services don't inherit the shell environment, so default
+  // NODE_USE_SYSTEM_CA to read the macOS trust store when running as a LaunchAgent.
   // On Linux, nvm-installed Node may need the host CA bundle injected before startup.
   const startupTlsEnv = resolveNodeStartupTlsEnvironment({
     env,
@@ -341,7 +325,7 @@ function buildCommonServiceEnvironment(
   // Match the installing shell's probed SQLite library; wrappers hide the runtime.
   if (
     platform === "darwin" &&
-    (runtime === "bun" || normalizeOptionalString(env.OPENCLAW_WRAPPER))
+    (runtime === "bun" || runtime === "standalone" || normalizeOptionalString(env.OPENCLAW_WRAPPER))
   ) {
     const library = normalizeOptionalString(env.OPENCLAW_SQLITE_LIBRARY);
     const prefix = normalizeOptionalString(env.HOMEBREW_PREFIX);

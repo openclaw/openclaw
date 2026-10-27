@@ -1,6 +1,6 @@
 import type { callGateway } from "../../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
-import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import {
   isGatewayRestartDrainError,
@@ -367,7 +367,7 @@ export function createSubagentRegistrySweeper(params: {
         }
         if (typeof entry.execution.endedAt !== "number") {
           // Queued collectors have no run context until FIFO dispatch; the scheduler owns them.
-          const notStale = entry.execution.status === "queued" || getAgentRunContext(runId);
+          const notStale = entry.execution.status === "queued" || hasLiveAgentRunContext(runId);
           const activeAgeMs = now - (entry.execution.startedAt ?? entry.createdAt);
           if (!notStale && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
             await settleStaleActiveSubagentRun({

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { resetWorkingProgress } from "../chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
+import { makeMessage } from "../chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState, setExpansionState } from "../chat-thread.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import {
@@ -11,14 +12,7 @@ import {
 } from "./chat-transcript-message-index.ts";
 
 const sessionKey = "agent:main:dashboard:0f6d5a1c-5a9e-4c1e-9b1a-2f3c4d5e6f70";
-function makeMessage(
-  id: string,
-  seq: number,
-  fields: { role?: string; timestamp?: number; runId?: string; [key: string]: unknown } = {},
-) {
-  const { role = "assistant", timestamp = seq * 10, runId = "run-1", ...extra } = fields;
-  return { role, content: id, timestamp, __openclaw: { id, seq, runId }, ...extra };
-}
+
 const finalAnswer = (id: string, seq: number, fields = {}) =>
   makeMessage(id, seq, { phase: "final_answer", stopReason: "stop", ...fields });
 function makeTool(

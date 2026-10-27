@@ -70,6 +70,11 @@ Anthropic streaming errors retain their structured error type, so rate limits,
 overload, and authentication failures follow the same recovery policy even when
 the provider's message is generic.
 
+Local worker deadlines and capacity refusals stop model fallback because another
+provider cannot repair local saturation. Capacity errors ask you to check for
+completed work before trying again. Genuine provider HTTP errors keep the normal
+fallback policy.
+
 Local transcript write conflicts do not retry the model, rotate accounts, or
 trigger model fallback. The transcript owner rereads the current revision and
 retries an eligible append once. A repeated conflict is reported as a local
@@ -143,6 +148,10 @@ the idle-timeout cost-runaway breaker returns a terminal error, the
 reason `agent_run_terminal_timeout` or `idle_timeout_circuit_breaker`. These are
 terminal stops, not provider failures or requests to try another model. The
 existing run deadline and cost limits still apply.
+
+Fallback requests reuse the original user turn and its attachments exactly once.
+Fresh plugin context for the fallback model is added separately, preserving the
+user turn and the prompt prefix already sent to the primary model.
 
 ## Automatic cyber-policy escalation
 

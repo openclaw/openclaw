@@ -4,8 +4,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
-import { setWorkboardCards } from "../../lib/workboard/card-state.ts";
-import { resetWorkboardConnectionState } from "../../lib/workboard/runtime.ts";
+import { replaceCard, setWorkboardCards } from "../../lib/workboard/card-state.ts";
+import { notifyWorkboard, resetWorkboardConnectionState } from "../../lib/workboard/runtime.ts";
 import { createWorkboardCard } from "../../lib/workboard/test/index-helpers.ts";
 import { workboardTestHost } from "../../test/host.setup.ts";
 import { waitForFast } from "../../test/wait-for.ts";
@@ -589,6 +589,60 @@ describe("WorkboardView", () => {
     expect(detailRunButtons.every((button) => button.disabled)).toBe(false);
     expect(detailOpenButtons.length).toBeGreaterThan(0);
     expect(detailOpenButtons.every((button) => button.disabled)).toBe(false);
+  });
+
+  it("refreshes retained child dependencies when parents or window completeness change", () => {
+    const { host, state, container, renderView } = createWorkboardView();
+    const parent = createWorkboardCard({ id: "parent", title: "Parent draft" });
+    const child = createWorkboardCard({
+      id: "child",
+      title: "Dependent child",
+      position: 2000,
+      metadata: {
+        links: [{ id: "parent-link", type: "parent", targetCardId: "parent", createdAt: 1 }],
+      },
+    });
+    setWorkboardCards(state, [parent, child]);
+    renderView();
+    const childRow = expectDefined(
+      container.querySelector<HTMLElement>('[data-card-id="child"] .workboard-card'),
+      "dependent card",
+    );
+    expect(childRow.textContent).toContain("1 blocked");
+    childRow.click();
+    renderView();
+    const dependencies = expectDefined(
+      container.querySelector(".workboard-detail__dependencies"),
+      "dependency details",
+    );
+    expect(dependencies.textContent).toContain("Parent draft");
+    expect(dependencies.textContent).toContain("Todo");
+    replaceCard(state, { ...parent, title: "Parent complete", status: "done", updatedAt: 2 });
+    notifyWorkboard(host);
+    flush();
+    expect(state.cards.find((card) => card.id === "child")).toBe(child);
+    expect(container.querySelector('[data-card-id="child"] .workboard-card')).toBe(childRow);
+    expect(childRow.querySelector(".workboard-card__alert")).toBeNull();
+    expect(dependencies.textContent).toContain("Parent complete");
+    expect(dependencies.textContent).toContain("Done");
+    expect(dependencies.querySelector("li")?.classList.contains("is-done")).toBe(true);
+
+    setWorkboardCards(state, [child]);
+    state.nextCursor = { id: child.id, position: child.position, createdAt: child.createdAt };
+    notifyWorkboard(host);
+    flush();
+    expect(dependencies.textContent).toContain("Not loaded");
+    expect(dependencies.querySelector(".is-blocked")).toBeNull();
+    expect(childRow.querySelector(".workboard-card__alert")).toBeNull();
+    const partialCards = state.cards;
+    state.nextCursor = null;
+    notifyWorkboard(host);
+    flush();
+    expect(state.cards).toBe(partialCards);
+    expect(container.querySelector('[data-card-id="child"] .workboard-card')).toBe(childRow);
+    expect(dependencies.textContent).toContain("Missing");
+    expect(dependencies.querySelectorAll(".is-blocked")).toHaveLength(1);
+    expect(childRow.textContent).toContain("1 blocked");
   });
 
   it.each(["non-admin", "ACP"] as const)(

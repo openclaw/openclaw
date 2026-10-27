@@ -86,17 +86,13 @@ describe("Claude partial-message output budgets", () => {
       "oversized metadata",
       { ...streamDelta({ type: "text_delta", text: "a" }), uuid: "u".repeat(129) },
     ],
-  ] as const)("keeps the ordinary frame limit for %s", (_name, record) => {
-    const parser = createParser();
+    ["custom parser", streamDelta({ type: "text_delta", text: "a" })],
+  ] as const)("keeps the ordinary frame limit for %s", (name, record) => {
+    const parser =
+      name === "custom parser"
+        ? createClaudeParser({ parseJsonlEvent: () => ({ kind: "text", text: "a" }) })
+        : createParser();
     parser.push(line(record, 20_001));
-    expect(parser.getErrorText()).toContain("exceeded 20000 lines");
-  });
-
-  it("keeps the ordinary frame limit when a custom parser claims deltas", () => {
-    const parser = createClaudeParser({
-      parseJsonlEvent: () => ({ kind: "text", text: "a" }),
-    });
-    parser.push(line(streamDelta({ type: "text_delta", text: "a" }), 20_001));
     expect(parser.getErrorText()).toContain("exceeded 20000 lines");
   });
 

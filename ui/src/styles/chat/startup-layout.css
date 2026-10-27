@@ -224,11 +224,15 @@
   --chat-avatar-gutter: calc(var(--chat-avatar-column) + var(--chat-avatar-gap));
   --chat-message-column-max: var(--chat-message-max-width, min(900px, 68%));
   --chat-run-block-gap: 8px;
+  --chat-group-inset-start: 4px;
+  --chat-group-inset-end: 16px;
   display: flex;
   gap: var(--chat-avatar-gap);
   align-items: flex-start;
   margin-block: 0 var(--chat-turn-gap);
-  margin-inline: 4px 16px;
+  /* Keep the row bounds fixed while identity adds its existing inner gutter. */
+  margin-inline: 0;
+  padding-inline: var(--chat-group-inset-start) var(--chat-group-inset-end);
 }
 
 @media (hover: none),
@@ -247,7 +251,7 @@
 
 /* Both sides share the content edge inside the trailing avatar gutter. */
 .chat-group:where(:not(.user), .chat-group--peer) {
-  padding-inline-end: var(--chat-avatar-gutter);
+  padding-inline-end: calc(var(--chat-group-inset-end) + var(--chat-avatar-gutter));
 }
 
 .chat-group.user {
@@ -337,7 +341,8 @@
 .chat-thread--direct .chat-group {
   --chat-avatar-column: 0px;
   --chat-avatar-gap: 0px;
-  margin-inline: 0;
+  --chat-group-inset-start: 0px;
+  --chat-group-inset-end: 0px;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -345,7 +350,8 @@
     --chat-avatar-column: 0px;
     --chat-avatar-gap: 0px;
     --chat-message-column-max: 82%;
-    margin-inline: 0;
+    --chat-group-inset-start: 0px;
+    --chat-group-inset-end: 0px;
   }
 
   .chat-group :is(.chat-avatar, .chat-avatar-slot) {
@@ -387,6 +393,21 @@
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-trailing {
   gap: 4px;
   flex-wrap: nowrap;
+}
+
+/* Keep the trailing region stable while presence and session actions arrive. */
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-trailing {
+  flex-grow: 1;
+  align-self: stretch;
+  justify-self: stretch;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile)
+  > .chat-pane__header-trailing
+  > .chat-pane__actions:only-child {
+  flex-grow: 1;
+  align-self: stretch;
+  justify-content: flex-end;
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__identity-actions {

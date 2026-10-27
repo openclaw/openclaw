@@ -16,8 +16,13 @@ import {
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistry, listImportedRuntimePluginIds } from "../plugins/runtime.js";
+import { memoizeFrozenPlainDataProjection } from "../shared/immutable-data.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { VERSION } from "../version.js";
+
+const redactTrajectoryConfig = memoizeFrozenPlainDataProjection((config: OpenClawConfig) =>
+  redactConfigObject(config),
+);
 
 // Runtime metadata capture for trajectory events. This records enough config,
 // plugin, skill, and prompt context to explain a run after logs are exported.
@@ -332,7 +337,7 @@ export function buildTrajectoryRunMetadata(
       reasoningLevel: params.reasoningLevel ?? "off",
     },
     config: {
-      redacted: params.config ? redactConfigObject(params.config) : undefined,
+      redacted: params.config ? redactTrajectoryConfig(params.config) : undefined,
       runtime: {
         timeoutMs: params.timeoutMs,
         trigger: params.trigger,

@@ -51,6 +51,7 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: { error: vi.fn(), log: vi.fn() },
 }));
 
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import * as shared from "./shared.js";
 import * as pluginConfig from "./update-command-config.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
@@ -251,7 +252,7 @@ describe("candidate convergence Doctor dispatch authority", () => {
       const root = tempDirs.make("openclaw-runtime-completion-");
       const state = path.join(root, "unavailable-state");
       await fs.writeFile(state, "not a state directory");
-      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: VERSION }));
+      await writeFixtureJson(path.join(root, "package.json"), { version: VERSION });
       vi.stubEnv("OPENCLAW_STATE_DIR", state);
       vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
       vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", undefined);
@@ -288,11 +289,8 @@ describe("candidate convergence Doctor dispatch authority", () => {
       const entry = path.join(dist, "entry.mjs");
       const executed = path.join(root, "executed");
       await fs.mkdir(dist);
-      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: VERSION }));
-      await fs.writeFile(
-        path.join(dist, "build-info.json"),
-        JSON.stringify({ commit: "same-commit" }),
-      );
+      await writeFixtureJson(path.join(root, "package.json"), { version: VERSION });
+      await writeFixtureJson(path.join(dist, "build-info.json"), { commit: "same-commit" });
       await fs.writeFile(writer, "export const generation = 1;\n");
       await fs.writeFile(
         entry,

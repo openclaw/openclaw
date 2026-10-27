@@ -153,11 +153,11 @@ describe("prepareChatSendUserTurn", () => {
           sessionKey: scope.sessionKey,
           storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
         };
-        // Sender labels do not grant eligibility for personal bootstrap.
+        // Sender labels do not grant eligibility; internal turns use the session's selection.
         prepared.ctx.SenderId = profile.id;
         prepared.ctx.SenderName = profile.id;
         expect(isSessionPersonalBootstrapTurn({ ...prepared.ctx })).toBe(
-          kind === "profile" || kind === "profileless",
+          kind === "profile" || kind === "profileless" || kind === "system",
         );
         prepareChannelParticipantObservation(prepared.ctx);
         recordAcceptedSessionParticipantInput({ ...prepared.ctx }, target);

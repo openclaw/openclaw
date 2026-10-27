@@ -119,7 +119,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.sidebarSnapshot = model;
     this.navigationView = model.navigationView;
     this.sessionOrganizer.collapsedSessionSections = new Set(model.collapsedSections);
-    const rows = [...model.sessions, ...model.sections.flatMap((section) => section.rows)];
+    const rows = [...model.pinnedSessions, ...model.sections.flatMap((section) => section.rows)];
     for (const row of rows) {
       rows.push(...row.children);
     }
@@ -133,7 +133,13 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   releaseSidebarSnapshot(): void {
     const snapshot = this.sidebarSnapshot;
     if (snapshot) {
-      this.pinnedSessions.seed(snapshot.pinnedSessions);
+      const rows = this.reconciledSidebarZone().sessionRows;
+      this.pinnedSessions.seed(
+        snapshot.pinnedSessions.flatMap(({ key }) => {
+          const row = rows.get(key);
+          return row ? [row] : [];
+        }),
+      );
       // Newer pagination choices override the saved view, independently per mode.
       const limits = snapshot.sections.map(({ id, visibleLimit }) => [id, visibleLimit] as const);
       this.sessionData.visibleSessionLimits = new Map([

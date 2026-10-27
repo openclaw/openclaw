@@ -1,6 +1,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,6 +11,7 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
 import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   operatorSessionCap,
@@ -330,6 +332,11 @@ export function createSessionSharingInputAuthority(
   };
 }
 
+const projectedSharingKeys = new WeakMap<
+  object,
+  WeakMap<object, { facts: readonly unknown[]; key: string }>
+>();
+
 export function prepareProjectedSessionSharing(params: {
   cfg: OpenClawConfig;
   client: GatewayClient | null;
@@ -367,19 +374,80 @@ export function prepareProjectedSessionSharing(params: {
       isMember,
     }),
     policy,
-    getCacheKey() {
-      return (cacheKey ??= JSON.stringify([
+    /** Only publication owners may supply a revision retired on sharing/config changes. */
+    getCacheKey(revision?: object) {
+      if (cacheKey !== undefined) {
+        return cacheKey;
+      }
+      let keys = revision && projectedSharingKeys.get(revision);
+      const viewer = client ?? cfg;
+      const scopes = client?.connect.scopes;
+      const previous = keys?.get(viewer);
+      const facts = previous?.facts;
+      // Compare live authority directly; only misses need a new fact snapshot.
+      if (
+        facts &&
+        facts[0] === cfg &&
+        facts[1] === getRuntimeConfigSnapshotMetadata() &&
+        facts[2] === readGatewayAccessRevision() &&
+        facts[3] === actor?.kind &&
+        facts[4] === (actor?.kind === "operator" ? actor.profileId : undefined) &&
+        facts[5] === identity?.id &&
+        facts[6] === client?.authenticatedUserProfile?.profileId &&
+        facts[7] === client?.authenticatedUserId &&
+        facts[8] === Boolean(client?.authenticatedGitHubIdentitySync) &&
+        facts[9] === profile &&
+        facts[10] === policy &&
+        facts[11] === Boolean(cfg.gateway?.roles) &&
+        facts[12] === (scopes !== undefined) &&
+        facts.length === 13 + (scopes?.length ?? 0)
+      ) {
+        let i = 0;
+        while (i < (scopes?.length ?? 0) && facts[13 + i] === scopes?.[i]) {
+          i++;
+        }
+        if (i === (scopes?.length ?? 0)) {
+          return (cacheKey = previous.key);
+        }
+      }
+      cacheKey = JSON.stringify([
         actor,
         identity?.id,
         client?.authenticatedUserProfile?.profileId,
         client?.authenticatedUserId,
         Boolean(client?.authenticatedGitHubIdentitySync),
-        client?.connect.scopes?.toSorted(),
+        scopes?.toSorted(),
         profile?.profileId,
         profile && [...profile.aliases].toSorted(),
         policy,
         Boolean(cfg.gateway?.roles),
-      ]));
+      ]);
+      if (revision) {
+        const currentFacts: unknown[] = [
+          cfg,
+          getRuntimeConfigSnapshotMetadata(),
+          readGatewayAccessRevision(),
+          actor?.kind,
+          actor?.kind === "operator" ? actor.profileId : undefined,
+          identity?.id,
+          client?.authenticatedUserProfile?.profileId,
+          client?.authenticatedUserId,
+          Boolean(client?.authenticatedGitHubIdentitySync),
+          profile,
+          policy,
+          Boolean(cfg.gateway?.roles),
+          scopes !== undefined,
+        ];
+        if (scopes) {
+          currentFacts.push(...scopes);
+        }
+        if (!keys) {
+          keys = new WeakMap();
+          projectedSharingKeys.set(revision, keys);
+        }
+        keys.set(viewer, { facts: currentFacts, key: cacheKey });
+      }
+      return cacheKey;
     },
   };
 }

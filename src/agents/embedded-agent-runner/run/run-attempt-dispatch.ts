@@ -642,6 +642,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     codeModeOverride: params.codeModeOverride,
     disableToolSearch: params.disableToolSearch,
     sessionReadScopeKey: params.sessionReadScopeKey,
+    blindPrompt: params.blindPrompt,
     forceMessageTool: params.forceMessageTool,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     internalEvents: params.internalEvents,

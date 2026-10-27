@@ -40,6 +40,8 @@ it.each(["read", "refresh"] as const)(
     );
     const taskFinished = createDeferredCore();
     const finishScope = createDeferredCore();
+    const value =
+      kind === "read" ? { kind: "inventory", files: [] } : { kind: "refresh", changed: false };
     nativePosts.observe = (worker, message) => {
       if (!message.input) {
         return;
@@ -48,14 +50,7 @@ it.each(["read", "refresh"] as const)(
         worker.emit("message", {
           status: "ok",
           taskId: message.taskId,
-          value: {
-            ok: true,
-            value:
-              kind === "read"
-                ? { kind: "inventory", files: [] }
-                : { kind: "refresh", changed: false },
-            closedDatabases: [database],
-          },
+          value: { ok: true, value, closedDatabases: [database] },
         });
       });
     };
@@ -136,7 +131,6 @@ it.each([false, true])(
       expect(observed.unregister).not.toHaveBeenCalled();
       allowExit.resolve();
       const failure = await outcome;
-      expect(failure).toBeInstanceOf(AggregateError);
       if (!(failure instanceof AggregateError)) {
         throw new Error("Expected original usage failure and its native cleanup error");
       }

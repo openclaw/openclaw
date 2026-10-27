@@ -539,15 +539,10 @@ describe("host-hook fixture plugin contract", () => {
 
   it("scopes trusted policies through canonical OpenClaw tool ids", async () => {
     const evaluate = vi.fn(() => ({ block: true, blockReason: "covered" }));
-    const registry = createEmptyPluginRegistry();
-    registry.trustedToolPolicies = [
-      {
-        pluginId: "shell-policy",
-        source: "test",
-        policy: { ...makePolicy("shell-policy", evaluate), matcher: ["exec"] },
-      },
-    ];
+    const registry = policyRegistry(evaluate);
+    expectDefined(registry.trustedToolPolicies[0], "trusted policy").policy.matcher = ["exec"];
 
+    using matcherCopies = vi.spyOn(Array, "from");
     await expect(
       runTrustedToolPolicies(
         { toolName: "web_search", params: {} },
@@ -559,6 +554,9 @@ describe("host-hook fixture plugin contract", () => {
       runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }, { registry }),
     ).resolves.toMatchObject({ block: true, blockReason: "covered" });
     expect(evaluate).toHaveBeenCalledOnce();
+    expect(
+      matcherCopies.mock.calls.filter(([value]) => value instanceof Set && value.has("exec")),
+    ).toHaveLength(2);
   });
 
   it.each([

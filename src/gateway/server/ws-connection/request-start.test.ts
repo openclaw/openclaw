@@ -23,6 +23,12 @@ const independentReads = [
   "sessions.github.options",
   "workboard.cards.list",
   "github.preview",
+  "sessions.describe",
+  "users.list",
+  "agents.list",
+  "agent.identity.get",
+  "plugins.controlUi.list",
+  "workboard.boards.list",
 ];
 function requestStart(
   bytes = 1,
@@ -52,6 +58,15 @@ function holdPreparations(
         ),
       ),
   };
+}
+
+function recordStarts(label = (method: string, _connId: string) => method) {
+  const starts: string[] = [];
+  const start = (method: string, connId = "viewer", params: unknown = {}) =>
+    requestStart(100, { method, params }, connId).then(() => {
+      starts.push(label(method, connId));
+    });
+  return { starts, start };
 }
 
 afterEach(async () => {
@@ -106,15 +121,7 @@ describe("Gateway request start fairness", () => {
 
   it("parks preparations without blocking reads or reordering connection mutations", async () => {
     const { held, start: startHeld } = holdPreparations();
-    const starts: string[] = [];
-    const start = (method: string, connId: string, params = {}) => {
-      const permission = requestStart(100, { method, params }, connId);
-      const started = permission.then(() => {
-        starts.push(method);
-      });
-      permissions.push(started);
-      return started;
-    };
+    const { starts, start } = recordStarts();
     await startHeld();
     const subscription = start("sessions.messages.subscribe", "viewer", {
       key: "main",
@@ -140,22 +147,10 @@ describe("Gateway request start fairness", () => {
   it("starts event-only roster subscriptions while snapshot preparation is saturated", async () => {
     const { held, start } = holdPreparations();
     await start();
-    const starts: string[] = [];
-    const eventOnly = requestStart(
-      100,
-      { method: "sessions.subscribe", params: {} },
-      "events",
-    ).then(() => starts.push("events"));
-    const messageBodies = requestStart(
-      100,
-      { method: "sessions.subscribe", params: { includeMessageBodies: true } },
-      "bodies",
-    ).then(() => starts.push("bodies"));
-    const snapshot = requestStart(
-      100,
-      { method: "sessions.subscribe", params: { limit: 100 } },
-      "snapshot",
-    ).then(() => starts.push("snapshot"));
+    const { starts, start: record } = recordStarts((_method, connId) => connId);
+    const eventOnly = record("sessions.subscribe", "events");
+    const messageBodies = record("sessions.subscribe", "bodies", { includeMessageBodies: true });
+    const snapshot = record("sessions.subscribe", "snapshot", { limit: 100 });
     await nextTurn();
     expect(starts).toEqual(["events", "bodies"]);
     held[0]!.resolve();
@@ -163,45 +158,17 @@ describe("Gateway request start fairness", () => {
     expect(starts.at(-1)).toBe("snapshot");
   });
 
-  it.each([
-    "sessions.describe",
-    "users.list",
-    "agents.list",
-    "agent.identity.get",
-    "plugins.controlUi.list",
-    "workboard.boards.list",
-  ])("starts %s past a parked snapshot without admitting connection mutations", async (method) => {
-    const { held, start } = holdPreparations();
-    await start();
-    const starts: string[] = [];
-    const requests = [
-      { method: "sessions.subscribe", params: { limit: 100 } },
-      { method: "chat.send" },
-      { method },
-      { method: "sessions.patch" },
-    ].map((request) =>
-      requestStart(100, request, "viewer").then(() => starts.push(request.method)),
-    );
-    await nextTurn();
-    expect(starts).toEqual([method]);
-    held[0]!.resolve();
-    await Promise.all(requests);
-    expect(starts).toEqual([method, "sessions.subscribe", "chat.send", "sessions.patch"]);
-  });
-
   it("keeps a parked catalog read from blocking later connection work", async () => {
     const { held, start } = holdPreparations();
     await start();
-    const starts: string[] = [];
+    const { starts, start: record } = recordStarts();
     const requests = [
       { method: "models.list" },
       { method: "sessions.subscribe", params: {} },
       subscribeRequest,
       { method: "sessions.messages.unsubscribe", params: { key: "session" } },
       workRequest,
-    ].map((request) =>
-      requestStart(100, request, "viewer").then(() => starts.push(request.method)),
-    );
+    ].map((request) => record(request.method, "viewer", "params" in request ? request.params : {}));
     await nextTurn();
     expect(starts).toEqual([
       "sessions.subscribe",

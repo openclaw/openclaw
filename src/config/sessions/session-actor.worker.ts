@@ -30,6 +30,7 @@ import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-sna
 import { projectSessionActorAuthority } from "./session-actor-command.js";
 import { initializeSessionActorContextStats } from "./session-actor-context-stats.worker.js";
 import type {
+  SessionActorAuthorityFacts,
   SessionActorOperations,
   SessionActorOutcome,
   SessionActorPhase,
@@ -52,7 +53,10 @@ import {
   deferSessionActorOutcome,
   SessionActorStaleStateError,
 } from "./session-actor-phase.worker.js";
-import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
+import {
+  createSessionActorCommittedOutcome,
+  projectSessionActorCommittedOutcome,
+} from "./session-actor-receipt.js";
 import { createSessionActorResidency } from "./session-actor-residency.worker.js";
 import {
   forkSessionActorStoredState,
@@ -492,13 +496,17 @@ export function createSessionActorWorker(
           };
           const resident = residents.get(target.sessionKey);
           const before = read(opened, target);
+          const entryReference =
+            command.input.entryReference === before.hot.writeToken ? before.hot : undefined;
+          const projectAuthority = (state: SessionActorAuthorityFacts) =>
+            projectSessionActorAuthority(state, entryReference);
           recordPhase("actorReadMs");
           diagnosticContext.actorResident = before === resident;
           diagnosticContext.actorTranscriptEvents = before.transcript.identities.size;
           diagnosticContext.actorActiveEvents = before.transcript.active.size;
           admit("transaction", {
             kind: "session-actor-admission",
-            snapshot: projectSessionActorAuthority(before.hot),
+            snapshot: projectAuthority(before.hot),
           });
           if (
             command.input.expected !== undefined &&
@@ -538,7 +546,7 @@ export function createSessionActorWorker(
                 stage,
                 {
                   kind: "session-actor-admission",
-                  snapshot: projectSessionActorAuthority(working.hot),
+                  snapshot: projectAuthority(working.hot),
                   publication,
                 },
                 transferList,
@@ -603,8 +611,9 @@ export function createSessionActorWorker(
                   : undefined;
             deferSessionActorOutcome({
               database: opened,
-              outcome: accepted,
+              outcome: projectSessionActorCommittedOutcome(accepted, entryReference),
               state,
+              projectAuthority,
               publication: turn ?? commitPublication,
               admit,
               diagnosticContext,

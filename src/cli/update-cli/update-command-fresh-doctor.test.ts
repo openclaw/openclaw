@@ -1,4 +1,3 @@
-import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -113,6 +112,7 @@ vi.mock("./shared.js", async (importOriginal) => ({
   resolveNodeRunner: vi.fn(() => "/usr/bin/node"),
 }));
 
+import { writeFixtureJson, writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
@@ -164,7 +164,7 @@ const expectNoCalls = (...spies: unknown[]) => {
 };
 async function writeConfig(configPath: string, config: unknown) {
   await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, JSON.stringify(config));
+  await writeFixtureJson(configPath, config);
 }
 async function useRealConfig() {
   const owner =
@@ -214,13 +214,11 @@ describe("post-plugin update readiness", () => {
       });
       const onWarnings = vi.fn();
       mocks.command.mockImplementationOnce(async (_command, _args, options) => {
-        await fs.writeFile(
+        await writeFixtureJson(
           options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
-          JSON.stringify(
-            kind === "deferred"
-              ? { status: "ok", warnings: [warning], maintenanceRefusal: refusal }
-              : { status: "error", failureFacts: [], maintenanceRefusal: refusal },
-          ),
+          kind === "deferred"
+            ? { status: "ok", warnings: [warning], maintenanceRefusal: refusal }
+            : { status: "error", failureFacts: [], maintenanceRefusal: refusal },
         );
         if (kind === "data-at-risk") {
           throw childFailure;
@@ -815,7 +813,7 @@ describe("post-plugin update readiness", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-    writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local" } }));
+    writeFixtureJsonSync(configPath, { gateway: { mode: "local" } });
     const filename = openOpenClawStateDatabase({ env: process.env }).path;
     closeOpenClawStateDatabaseForTest();
     const db = new DatabaseSync(filename);

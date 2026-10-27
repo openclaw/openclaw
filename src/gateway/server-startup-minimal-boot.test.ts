@@ -121,21 +121,18 @@ it.for(["default", "split", "profile"] as const)(
       if (selection !== "default") {
         expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
       }
-      const resolve = vi.spyOn(path, "resolve");
-      const join = vi.spyOn(path, "join");
-      try {
+      {
+        using resolve = vi.spyOn(path, "resolve");
+        using join = vi.spyOn(path, "join");
         for (let index = 0; index < 10; index++) {
           expect(readAgentDatabaseAdmissionRefusal("main")).toBeUndefined();
         }
-        if (selection === "default" && process.platform !== "win32") {
-          expect(resolve).not.toHaveBeenCalled();
-        }
         if (selection === "default") {
+          if (process.platform !== "win32") {
+            expect(resolve).not.toHaveBeenCalled();
+          }
           expect(join).not.toHaveBeenCalled();
         }
-      } finally {
-        resolve.mockRestore();
-        join.mockRestore();
       }
       expect(
         sql.queries.filter((query) => /\bfrom\s+"?gateway_restart_handoff\b/iu.test(query)),

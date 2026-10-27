@@ -1,17 +1,15 @@
 import type { MatrixRoomKeyBackupStatus } from "./sdk/client-support.js";
 
-type MatrixRoomKeyBackupIssueCode =
-  | "missing-server-backup"
-  | "key-load-failed"
-  | "key-not-loaded"
-  | "key-mismatch"
-  | "untrusted-signature"
-  | "inactive"
-  | "indeterminate"
-  | "ok";
-
 type MatrixRoomKeyBackupIssue = {
-  code: MatrixRoomKeyBackupIssueCode;
+  code:
+    | "missing-server-backup"
+    | "key-load-failed"
+    | "key-not-loaded"
+    | "key-mismatch"
+    | "untrusted-signature"
+    | "inactive"
+    | "indeterminate"
+    | "ok";
   summary: string;
   message: string | null;
 };

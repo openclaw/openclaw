@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { serialize } from "node:v8";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -17,12 +18,18 @@ import { readTranscriptEventRows } from "../../config/sessions/session-accessor.
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import { readSessionActorTranscriptReplica } from "../../config/sessions/session-actor-replica.js";
 import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
 import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
+import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
+import {
+  historyLane,
+  targetDiscoveryLane,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import {
   getOwnedSessionTranscriptReader,
@@ -103,6 +110,103 @@ function readMessages(
 function withActor<T>(target: ContextTarget, run: (actor?: SessionActor) => Promise<T>) {
   return withSelectedTranscriptReader(target, run, true);
 }
+
+it("reuses resident transcript bytes for admitted reads outside the actor without growing residency", () =>
+  withTranscriptState("resident-hydration", async ({ scope: target }) => {
+    const source = await SessionManager.openAsync(target);
+    const message = userMessage("synthetic transcript ".repeat(8192), 1);
+    const entryId = await source.appendMessageAsync(message);
+    assert(entryId);
+    const limits = { maxBytes: 1024 * 1024, maxEvents: 100 };
+    await withActor(target, async (actor) => {
+      assert(actor);
+      const expected = await transcriptHydration
+        .prepareSessionTranscriptHydration(target, limits)
+        .read();
+      await transcriptHydration.prepareSessionTranscriptHydration(target, limits).readCohort!(
+        { sessionKey: target.sessionKey, entryIds: [entryId] },
+        () => {},
+      );
+      const hot = actor.snapshot({ assertCurrent() {}, authorize() {} });
+      assert(hot);
+      const retained = readSessionActorTranscriptReplica(hot);
+      assert(retained?.context);
+      const retainedBytes = serialize(retained).byteLength;
+      const replies: number[] = [];
+      const spies = [historyLane, targetDiscoveryLane].map(({ pool }) => {
+        const run = pool.run.bind(pool);
+        return vi.spyOn(pool, "run").mockImplementation((input, options) => {
+          let hydration = false;
+          return run(async () => {
+            const request = typeof input === "function" ? await input() : input;
+            hydration = request.kind === "transcript-hydration";
+            return request;
+          }, options).then((reply) => {
+            if (hydration) {
+              replies.push(serialize(reply).byteLength);
+            }
+            return reply;
+          });
+        });
+      });
+      try {
+        await runWithoutOwnedSessionTranscriptWrites(async () => {
+          for (let index = 0; index < 10; index++) {
+            const actual = await transcriptHydration
+              .prepareSessionTranscriptHydration(target, limits)
+              .read();
+            expect(actual.snapshot).toEqual(expected.snapshot);
+            actual.snapshot.events.length = 0;
+            await transcriptHydration.prepareSessionTranscriptHydration(target, limits).readCohort!(
+              { sessionKey: target.sessionKey, entryIds: [entryId] },
+              (prepared) => {
+                assert(prepared.kind === "bounded");
+                expect(prepared.snapshot).toEqual(expected.snapshot);
+                const anchor = prepared.transcript?.anchors[0];
+                assert(anchor);
+                expect(anchor.entryId).toBe(entryId);
+                expect(Reflect.set(anchor, "entryId", "caller-owned-edit")).toBe(true);
+              },
+            );
+          }
+        });
+        expect(replies.reduce((sum, bytes) => sum + bytes, 0)).toBe(0);
+        expect(readSessionActorTranscriptReplica(hot)).toBe(retained);
+        expect(serialize(retained).byteLength).toBe(retainedBytes);
+        await runWithoutOwnedSessionTranscriptWrites(async () => {
+          const reader = transcriptHydration.prepareSessionTranscriptHydration(target, limits);
+          for (const selection of [
+            { sessionKey: "other-session", entryIds: [entryId] },
+            { sessionKey: target.sessionKey, entryIds: Array<string>(65).fill(entryId) },
+          ]) {
+            await expect(reader.readCohort!(selection, () => {})).rejects.toThrow(
+              "Transcript hydration cohort must select its own bounded session",
+            );
+          }
+          const compaction = await reader.read({ compaction: true });
+          assert(compaction.kind === "bounded");
+          expect(compaction.compaction?.sessionTarget.sessionId).toBe(target.sessionId);
+          const { anchor } = await reader.readCurrentTurnEntry({
+            entryId,
+            version: expected.snapshot.version,
+            includeEntry: false,
+          });
+          assert(anchor);
+          const fenced = await runWithSessionTranscriptReadFence(
+            { ...anchor, logicalTurnId: "resident-fence", role: "user" },
+            () => transcriptHydration.prepareSessionTranscriptHydration(target, limits).read(),
+          );
+          expect(fenced.snapshot.events).toEqual([expected.snapshot.events[0]]);
+          await source.appendMessageAsync(userMessage("new revision", 2));
+          const changed = await reader.read();
+          expect(changed.snapshot.events).toEqual(source.getPersistedEntries());
+          expect(replies.reduce((sum, bytes) => sum + bytes, 0)).toBeGreaterThan(0);
+        });
+      } finally {
+        spies.forEach((spy) => spy.mockRestore());
+      }
+    });
+  }));
 
 it("reloads a durable sibling transcript under the parent writer without borrowing its actor", () =>
   withOpenClawTestState({ label: "sibling-transcript-reload" }, async (state) => {

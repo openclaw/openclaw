@@ -34,6 +34,11 @@ export function isCronExecutionInputProvenance(provenance: InputProvenance | und
   );
 }
 
+/** Background exec exit wake; its prompt invites NO_REPLY when nothing new needs reporting. */
+export function isExecCompletionInputProvenance(provenance: InputProvenance | undefined): boolean {
+  return provenance?.kind === "internal_system" && provenance.sourceTool === "exec";
+}
+
 /** The card is the only visible result of this Gateway-authored status request. */
 export function isProgressCardRefreshInputProvenance(
   provenance: InputProvenance | undefined,

@@ -45,7 +45,7 @@ type CommandArgument = {
   text: string;
   value: string;
   span: SourceSpan;
-  decodedSourceOffsets: number[];
+  node: TreeSitterNode;
 };
 
 type CommandArgv = {
@@ -124,57 +124,22 @@ function advancePosition(
   return { row, column };
 }
 
-function valuePrefixLength(node: TreeSitterNode): number {
-  if (node.type === "string" || node.type === "raw_string") {
-    return 1;
-  }
-  if (node.type === "ansi_c_string") {
-    return 2;
-  }
-  return 0;
-}
-
-type DecodedShellText = {
-  value: string;
-  sourceOffsets: number[];
-};
-
-function appendDecodedText(
-  decoded: DecodedShellText,
-  value: string,
-  sourceEndOffset: number,
-): void {
-  decoded.value += value;
-  decoded.sourceOffsets.push(...Array.from({ length: value.length }, () => sourceEndOffset));
-}
-
-function identityDecodedShellText(text: string, sourceOffset = 0): DecodedShellText {
-  return {
-    value: text,
-    sourceOffsets: Array.from({ length: text.length + 1 }, (_, index) => sourceOffset + index),
-  };
-}
-
 function decodedSourceOffsetsForNode(node: TreeSitterNode, value: string): number[] {
-  let decoded: DecodedShellText;
-  switch (node.type) {
-    case "raw_string":
-      decoded = identityDecodedShellText(node.text.slice(1, -1), 1);
-      break;
-    case "string":
-      decoded = decodeShellTextWithOffsets(node.text, "double");
-      break;
-    case "ansi_c_string":
-      decoded = decodeShellTextWithOffsets(node.text, "ansi-c");
-      break;
-    default:
-      decoded = decodeShellTextWithOffsets(node.text);
-      break;
+  const prefixLength =
+    node.type === "string" || node.type === "raw_string"
+      ? 1
+      : node.type === "ansi_c_string"
+        ? 2
+        : 0;
+  if (node.type !== "raw_string") {
+    const sourceOffsets: number[] = [];
+    const quoting =
+      node.type === "string" ? "double" : node.type === "ansi_c_string" ? "ansi-c" : "unquoted";
+    const decoded = decodeShellText(node.text, quoting, sourceOffsets);
+    if (decoded === value && sourceOffsets.length === value.length + 1) {
+      return sourceOffsets;
+    }
   }
-  if (decoded.value === value && decoded.sourceOffsets.length === value.length + 1) {
-    return decoded.sourceOffsets;
-  }
-  const prefixLength = valuePrefixLength(node);
   return Array.from({ length: value.length + 1 }, (_, index) => prefixLength + index);
 }
 
@@ -250,15 +215,28 @@ const ANSI_C_SIMPLE_ESCAPES: Record<string, string> = {
   v: "\v",
 };
 
-function decodeShellTextWithOffsets(
+function decodeShellText(
   text: string,
   quoting: "unquoted" | "double" | "ansi-c" = "unquoted",
-): DecodedShellText {
+  sourceOffsets?: number[],
+): string {
   const prefix = quoting === "double" ? '"' : quoting === "ansi-c" ? "$'" : "";
   const hasQuotes = prefix && text.startsWith(prefix) && text.endsWith(prefix.slice(-1));
   const bodyStart = hasQuotes ? prefix.length : 0;
   const body = hasQuotes ? text.slice(bodyStart, -1) : text;
-  const decoded: DecodedShellText = { value: "", sourceOffsets: [bodyStart] };
+  let decoded = "";
+  if (sourceOffsets) {
+    sourceOffsets.push(bodyStart);
+  }
+  const append = (value: string, sourceEndOffset: number) => {
+    decoded += value;
+    if (sourceOffsets) {
+      // Source offsets count UTF-16 units, including both halves of an ANSI-C code point.
+      for (let remaining = value.length; remaining > 0; remaining -= 1) {
+        sourceOffsets.push(sourceEndOffset);
+      }
+    }
+  };
   for (let index = 0; index < body.length; index += 1) {
     const ch = body.charAt(index);
     const next = body[index + 1];
@@ -268,12 +246,14 @@ function decodeShellTextWithOffsets(
       next === undefined ||
       (quoting === "double" && !["\\", '"', "$", "`", "\n", "\r"].includes(next))
     ) {
-      appendDecodedText(decoded, ch, sourceOffset + 1);
+      append(ch, sourceOffset + 1);
       continue;
     }
     if (quoting !== "ansi-c" && (next === "\n" || next === "\r")) {
       const width = next === "\r" && body[index + 2] === "\n" ? 3 : 2;
-      decoded.sourceOffsets[decoded.value.length] = sourceOffset + width;
+      if (sourceOffsets) {
+        sourceOffsets[decoded.length] = sourceOffset + width;
+      }
       index += width - 1;
       continue;
     }
@@ -294,16 +274,16 @@ function decodeShellTextWithOffsets(
     if (digits) {
       const endOffset = sourceOffset + prefixLength + digits.length;
       try {
-        appendDecodedText(decoded, String.fromCodePoint(Number.parseInt(digits, radix)), endOffset);
+        append(String.fromCodePoint(Number.parseInt(digits, radix)), endOffset);
       } catch {
-        appendDecodedText(decoded, `\\${next}${digits}`, endOffset);
+        append(`\\${next}${digits}`, endOffset);
       }
       index += prefixLength + digits.length - 1;
       continue;
     }
 
     const value = quoting === "ansi-c" ? (ANSI_C_SIMPLE_ESCAPES[next] ?? next) : next;
-    appendDecodedText(decoded, value, sourceOffset + 2);
+    append(value, sourceOffset + 2);
     index += 1;
   }
   return decoded;
@@ -333,8 +313,7 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
   ) {
     return {
       kind: "dynamic",
-      value:
-        node.type === "string" ? decodeShellTextWithOffsets(node.text, "double").value : node.text,
+      value: node.type === "string" ? decodeShellText(node.text, "double") : node.text,
     };
   }
 
@@ -347,7 +326,7 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
       ) {
         return {
           kind: hasUnescapedDynamicPattern(node.text) ? "dynamic" : "literal",
-          value: decodeShellTextWithOffsets(node.text).value,
+          value: decodeShellText(node.text),
         };
       }
       let value = "";
@@ -367,20 +346,20 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
     case "word":
       return {
         kind: hasUnescapedDynamicPattern(node.text) ? "dynamic" : "literal",
-        value: decodeShellTextWithOffsets(node.text).value,
+        value: decodeShellText(node.text),
       };
     case "raw_string":
       return { kind: "literal", value: node.text.slice(1, -1) };
     case "string":
-      return { kind: "literal", value: decodeShellTextWithOffsets(node.text, "double").value };
+      return { kind: "literal", value: decodeShellText(node.text, "double") };
     case "ansi_c_string":
-      return { kind: "literal", value: decodeShellTextWithOffsets(node.text, "ansi-c").value };
+      return { kind: "literal", value: decodeShellText(node.text, "ansi-c") };
     default:
       return {
         kind: node.namedChildren.some((child) => shellWordValue(child).kind === "dynamic")
           ? "dynamic"
           : "literal",
-        value: decodeShellTextWithOffsets(node.text).value,
+        value: decodeShellText(node.text),
       };
   }
 }
@@ -391,7 +370,7 @@ function appendCommandArgument(node: TreeSitterNode, parsed: CommandArgv, state:
     text: node.text,
     value: value.value,
     span: spanFromNode(node, state.spanBase),
-    decodedSourceOffsets: decodedSourceOffsetsForNode(node, value.value),
+    node,
   };
   parsed.arguments.push(argument);
   if (value.kind === "dynamic") {
@@ -549,13 +528,15 @@ function payloadBaseFromArgument(argument: CommandArgument, payload: string): Sp
   if (payloadOffset < 0) {
     return null;
   }
-  const rawPayloadOffset = argument.decodedSourceOffsets[payloadOffset];
+  // Trees remain alive for the synchronous walk; only wrapper payloads need offset maps.
+  const sourceOffsets = decodedSourceOffsetsForNode(argument.node, argument.value);
+  const rawPayloadOffset = sourceOffsets[payloadOffset];
   if (rawPayloadOffset === undefined) {
     return null;
   }
   return {
     mapOffset(offset) {
-      const rawOffset = argument.decodedSourceOffsets[payloadOffset + offset];
+      const rawOffset = sourceOffsets[payloadOffset + offset];
       const mappedRawOffset = rawOffset ?? rawPayloadOffset + offset;
       return {
         index: argument.span.startIndex + mappedRawOffset,

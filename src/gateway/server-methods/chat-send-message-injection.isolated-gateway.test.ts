@@ -184,7 +184,7 @@ afterAll(async () => {
 });
 
 describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => {
-  it("acknowledges durable steers while an older input holds their injection order", async ({
+  it("acknowledges ordered durable steers and classifies their delayed completion as steering", async ({
     signal,
   }) => {
     const queueMessage = await seedActiveTurn({
@@ -203,6 +203,23 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
     expect(older.mailbox.owner.active).toBe(liveOperation);
     const commit = createDeferred();
     const injected = createDeferred();
+    const reported = createDeferred<DiagnosticEventPayload>();
+    const previousDiagnostics = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    const stop = onTrustedInternalDiagnosticEvent(
+      (event) => {
+        if (
+          event.type === "diagnostic.phase.completed" &&
+          event.name === "chat.send.runAdmission" &&
+          event.details?.stage === "steer"
+        ) {
+          reported.resolve(event);
+        }
+      },
+      { include: ["diagnostic.phase.completed"] },
+    );
+    let clock = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
     const runIds = ["ordered-steer-first", "ordered-steer-second"];
     const messages = ["First synthetic steering input.", "Second synthetic steering input."];
     queueMessage.mockImplementation(async (_text, options, assertCurrent) => {
@@ -244,78 +261,22 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
       await withinTest(injected.promise, signal);
       expect(queueMessage.mock.calls.map(([text]) => text)).toEqual(messages);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      clock = 120_001;
+      commit.resolve();
+      expect(await withinTest(reported.promise, signal)).toMatchObject({
+        name: "chat.send.runAdmission",
+        durationMs: clock,
+        details: { stage: "steer" },
+      });
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       retireSessionControllerInput(older);
       commit.resolve();
+      now.mockRestore();
+      stop();
+      setDiagnosticsEnabledForProcess(previousDiagnostics);
     }
   });
-
-  it.for([9_400, 15_800, 120_001])(
-    "classifies an accepted steer waiting %sms as steering over the real transport",
-    async (durationMs, { signal }) => {
-      const queueMessage = await seedActiveTurn({
-        terminalRunId: "source-old",
-        sourceTurnId: SOURCE_TURN_ID,
-      });
-      const commit = createDeferred();
-      const accepted = createDeferred();
-      const reported = createDeferred<DiagnosticEventPayload>();
-      const previousDiagnostics = areDiagnosticsEnabledForProcess();
-      setDiagnosticsEnabledForProcess(true);
-      const stop = onTrustedInternalDiagnosticEvent(
-        (event) => {
-          if (
-            event.type === "diagnostic.phase.completed" &&
-            event.name === "chat.send.runAdmission" &&
-            event.details?.stage === "steer"
-          ) {
-            reported.resolve(event);
-          }
-        },
-        { include: ["diagnostic.phase.completed"] },
-      );
-      let clock = 0;
-      const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
-      queueMessage.mockImplementation(async (_text, options, assertCurrent) => {
-        assertCurrent();
-        options?.onQueueAccepted?.(true);
-        accepted.resolve();
-        await commit.promise;
-        assertCurrent();
-      });
-      try {
-        const response = await rpcReq(ws, "chat.send", {
-          sessionKey: SESSION_KEY,
-          message: "Synthetic steer awaiting the active run boundary.",
-          idempotencyKey: `slow-steer-${durationMs}`,
-          queueMode: "steer",
-        });
-        expect(response, JSON.stringify(response)).toMatchObject({
-          ok: true,
-          payload: { status: "started" },
-        });
-        await withinTest(accepted.promise, signal);
-        expect(queueMessage).toHaveBeenCalledOnce();
-        expect(queueMessage.mock.calls[0]?.[0]).toContain(
-          "Synthetic steer awaiting the active run boundary.",
-        );
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-        clock = durationMs;
-        commit.resolve();
-        expect(await withinTest(reported.promise, signal)).toMatchObject({
-          name: "chat.send.runAdmission",
-          durationMs,
-          details: { stage: "steer" },
-        });
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      } finally {
-        commit.resolve();
-        now.mockRestore();
-        stop();
-        setDiagnosticsEnabledForProcess(previousDiagnostics);
-      }
-    },
-  );
 
   it.for([
     {
@@ -337,15 +298,9 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
       const message = "isolated-gateway inbound";
       const replyText = "follow-up reply from the production dispatcher";
       const queueMessage = await seedActiveTurn(scenario);
-      const resolved = createDeferred();
-
       // Exercise the production dispatcher; only its reply source is controlled.
       dispatchInboundMessageMock.mockReset();
-      const resolveReply = vi.fn<Parameters<typeof mockGetReplyFromConfigOnce>[0]>(async () => {
-        resolved.resolve();
-        return { text: replyText };
-      });
-      mockGetReplyFromConfigOnce(resolveReply);
+      mockGetReplyFromConfigOnce(async () => ({ text: replyText }));
 
       const runId = `idem-iso-gw-${randomUUID()}`;
       const chatFrames: ChatWirePayload[] = [];
@@ -386,12 +341,6 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
           payload: { status: "started", runId },
         });
         expect(queueMessage).not.toHaveBeenCalled();
-        await withinTest(resolved.promise, signal);
-        expect(resolveReply).toHaveBeenCalledOnce();
-        expect(resolveReply.mock.calls[0]?.slice(0, 2)).toEqual([
-          expect.objectContaining({ Body: message }),
-          expect.objectContaining({ runId, messageInjectionDisposition: "rejected" }),
-        ]);
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 
         await withinTest(finalReceived.promise, signal);

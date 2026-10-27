@@ -51,7 +51,7 @@ it("charges shared current encodings once and replaces their cost with identity 
   const view = cache.get("encoded");
   const emptyBytes = view.bytes;
   cache.setRows(view, rows, true);
-  expect(view.bytes - emptyBytes).toBe(8 + encoded.length * 2 + Buffer.byteLength(`[${encoded}]`));
+  expect(view.bytes - emptyBytes).toBe(16 + encoded.length * 2 + Buffer.byteLength(`[${encoded}]`));
   const shared = cache.get("shared");
   cache.setRows(shared, [encodedRow], true);
   await flushReports();
@@ -80,6 +80,25 @@ it("coalesces a turn of retention updates into one report with the final counter
     { views: 1, refs: 2, estimatedBytes: 1_050 },
     { views: 0, refs: 0, estimatedBytes: 0 },
   ]);
+});
+
+it("charges an encoding prepared after a shared row was admitted until its last view retires", async () => {
+  const lateRow = { ...row, label: "Late encoding" };
+  const other = { ...row, key: "other" };
+  const first = cache.get("first");
+  cache.setRows(first, [lateRow, other], true, 0, () => 30);
+  const encodedBytes = serializeSessionRow(lateRow).length * 2;
+  const singleton = cache.get("singleton");
+  cache.setRows(singleton, [lateRow], true);
+  await flushReports();
+  expect(reports.at(-1)?.estimatedBytes).toBe(first.bytes + singleton.bytes + 60 + encodedBytes);
+
+  cache.retireRows(singleton);
+  await flushReports();
+  expect(reports.at(-1)?.estimatedBytes).toBe(first.bytes + singleton.bytes + 60 + encodedBytes);
+  cache.retireRows(first);
+  await flushReports();
+  expect(reports.at(-1)?.estimatedBytes).toBe(first.bytes + singleton.bytes);
 });
 
 it("evicts least recently used views under byte pressure and releases all accounting", async () => {

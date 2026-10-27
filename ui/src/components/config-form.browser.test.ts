@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { i18n } from "../i18n/index.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import {
+  expectElement,
   renderAnalyzedFormFixture,
   renderConfigFormFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
@@ -30,14 +31,6 @@ beforeEach(() => {
   onTestFinished(() => container.remove());
   onPatch = vi.fn();
 });
-
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element instanceof Element, label).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${label}`);
-  }
-  return element;
-}
 
 function query<T extends Element>(
   selector: string,

@@ -213,6 +213,7 @@ it.each([
       ),
       { container },
     );
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(
         container.querySelector(".chat-environment__branch .chat-pr__actions-trigger"),

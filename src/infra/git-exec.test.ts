@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { requireGitBuffer } from "../agents/worktrees/git.js";
+import { readCommandProcessFailure } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -282,6 +283,40 @@ it("reports the applied 120-second Git timeout", async () => {
 });
 
 describe("required Git output", () => {
+  it.each(["cooperative", "uncertain"] as const)(
+    "retains private native cancellation facts with %s cleanup",
+    async (cleanup) => {
+      const result = {
+        ...createCommandResult({
+          pid: 123,
+          code: null,
+          signal: null,
+          termination: "signal",
+          cleanup,
+          killIssuedByAbort: true,
+          outputLimitExceeded: false,
+          stderr: "cancelled fixture",
+        }),
+        timeoutMs: 30_000,
+      };
+      const failure = await Promise.resolve()
+        .then(() => requireGitCommandOutput("git remote", result))
+        .catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        name: "CommandExecutionError",
+        message: "git remote failed (terminated):\ncancelled fixture",
+      });
+      expect(readCommandProcessFailure(failure)).toStrictEqual({
+        pid: 123,
+        code: null,
+        termination: "signal",
+        cleanup,
+        killIssuedByAbort: true,
+        outputLimitExceeded: false,
+      });
+    },
+  );
+
   async function withGitBlob(
     input: string | Buffer,
     run: (root: string, args: string[]) => Promise<void>,

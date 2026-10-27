@@ -9,6 +9,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { resolveDeferredPluginMigrationConfigPaths } from "../config/deferred-plugin-migration-config.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { readConfigFileSnapshot, readConfigFileSnapshotWithPluginMetadata } from "../config/io.js";
@@ -52,7 +53,7 @@ function writeConfig(
 ) {
   const configPath = process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw/openclaw.json");
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config));
+  writeFixtureJsonSync(configPath, config);
   return configPath;
 }
 
@@ -272,18 +273,15 @@ it("waits through temporary schema custody before reading startup configuration 
     const before = fs.readFileSync(databasePath);
     const marker = resolveGatewayStateOwnerPath(databasePath);
     fs.mkdirSync(path.dirname(marker), { recursive: true });
-    fs.writeFileSync(
-      marker,
-      JSON.stringify({
-        pid: process.ppid,
-        ownerId: "synthetic-schema-owner",
-        processNamespace: readGatewayLockProcessNamespace(),
-        createdAt: new Date().toISOString(),
-        configPath,
-        role: "sqlite-maintenance",
-        stateOwnerKind: "schema",
-      }),
-    );
+    writeFixtureJsonSync(marker, {
+      pid: process.ppid,
+      ownerId: "synthetic-schema-owner",
+      processNamespace: readGatewayLockProcessNamespace(),
+      createdAt: new Date().toISOString(),
+      configPath,
+      role: "sqlite-maintenance",
+      stateOwnerKind: "schema",
+    });
     const readSnapshot = vi.fn(async () => ({
       snapshot: await readCore(),
     }));

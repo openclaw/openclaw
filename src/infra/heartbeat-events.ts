@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CronEvent } from "../cron/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -71,7 +72,7 @@ export function emitLegacyHeartbeatCronOutcome(evt: CronEvent): void {
           : evt.delivered
             ? "sent"
             : "ok-empty",
-    preview: evt.summary?.slice(0, 2000),
+    preview: evt.summary === undefined ? undefined : truncateUtf16Safe(evt.summary, 2000),
     reason:
       evt.error ??
       evt.deliveryError ??

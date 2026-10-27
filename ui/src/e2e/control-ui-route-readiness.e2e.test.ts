@@ -30,6 +30,7 @@ suite.define(() => {
         const activeLeafEntryId = "history-ready-leaf";
         const submittedMessage = "Send before history.";
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: false,
           sessionKey,
           sessions: [
             {

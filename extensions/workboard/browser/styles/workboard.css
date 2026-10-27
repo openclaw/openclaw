@@ -1832,6 +1832,24 @@
   scroll-padding-block: 24px;
 }
 
+.workboard-column__window {
+  /* Keep an aggregate content box for the scroll viewport's resize observer. */
+  display: grid;
+  grid-auto-rows: max-content;
+  gap: inherit;
+  align-content: start;
+}
+
+.workboard-column__slot {
+  display: contents;
+}
+
+.workboard-column__window--active {
+  display: block;
+  position: relative;
+  overflow-anchor: none;
+}
+
 .workboard-column__cards[data-scrollable],
 .workboard-detail__body[data-scrollable] {
   /* Keep the native scrollbar opaque while fading only the content. */
@@ -3903,7 +3921,7 @@ workboard-inline-text {
   top: -6px;
 }
 
-.workboard-column__item--drop-before:first-child::before {
+.workboard-column__slot:first-child > .workboard-column__item--drop-before::before {
   top: 0;
 }
 
@@ -4376,7 +4394,10 @@ workboard-inline-text {
   box-shadow: none;
 }
 
-.workboard-board.workboard-board--list .workboard-column__item:last-child > .workboard-card--list {
+.workboard-board.workboard-board--list
+  .workboard-column__slot:last-child
+  > .workboard-column__item
+  > .workboard-card--list {
   border-bottom: 0;
 }
 

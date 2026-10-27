@@ -1,13 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AuthProfileMigrationRequiredError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { removeAuthProfilesAcrossOwnerStores } from "../agents/auth-profiles/profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
-import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/store-unreadable-error.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import {
   createClaudeCliBackends,
   testing as cliBackendsTesting,
 } from "../agents/cli-backends.test-support.js";
+import { resolveCliExecutionAuthProfileId } from "../agents/cli-execution-auth.js";
 import type { RunEmbeddedAgentInternalParams as AgentRequest } from "../agents/embedded-agent-runner/run/internal-params.js";
+import {
+  isRecordedModelFallbackStop,
+  recordModelFallbackStop,
+} from "../agents/model-fallback-stop.js";
 import {
   runFallbackModelAttempt,
   runInitialModelFallbackAttempt,
@@ -26,6 +33,7 @@ import {
 } from "./isolated-agent/job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
 import * as h from "./isolated-agent/run.test-harness.js";
+import { normalizeCronRunErrorText } from "./service/execution-errors.js";
 import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
 import type { CronStoredJob } from "./types.js";
 
@@ -33,6 +41,7 @@ const runCronIsolatedAgentTurn = await h.loadRunCronIsolatedAgentTurn();
 const { resolveAgentDir } = await import("./isolated-agent/run.runtime.js");
 // Install the harness before capture loads the shared scheduled-model selector.
 const { captureCronInferenceBinding } = await import("./inference-binding.runtime.js");
+const { prepareCronRunInference } = await import("./run-inference.js");
 const { captureCronUpdatedInferenceBinding } =
   await import("../gateway/server-methods/cron-input-validation.js");
 const platformId = "openai:platform";
@@ -398,6 +407,95 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       expect(h.runCliAgentMock.mock.lastCall?.[0].nativeAuthOnly).toBeUndefined();
       expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(() => assertCurrent?.()).toThrow(/disconnected|replaced|settlement/i);
+    },
+  );
+
+  it.each(["migration", "unreadable", "abort", "terminal"] as const)(
+    "preserves a CLI account %s failure after acquiring scheduled authorization",
+    async (kind) => {
+      const cfg = await claudeCliConfig();
+      const binding = await capture(cfg);
+      const inference = await prepareCronRunInference({ binding, cfg, agentDir: state.agentDir() });
+      if (!inference) {
+        throw new Error("Expected the captured account's run authorization");
+      }
+      const secret = "sk-abcdefghijklmnopqrstuv";
+      const failure =
+        kind === "migration"
+          ? new AuthProfileMigrationRequiredError({ agentDir: state.agentDir(), sources: [] })
+          : kind === "unreadable"
+            ? new AuthProfileStoreUnreadableError(state.statePath("unreadable.sqlite"))
+            : new Error(`Authorization: Bearer ${secret}`);
+      if (kind === "abort") {
+        failure.name = "AbortError";
+      } else if (kind === "terminal") {
+        recordModelFallbackStop(failure);
+      }
+      try {
+        // Fail the resolver's second store read, after the saved account was admitted.
+        // Failing initial authorization would never reach the compatibility wrapper.
+        await expect(
+          inference.resolveCliAuthProfile((selected) =>
+            resolveCliExecutionAuthProfileId({
+              cliExecutionProvider: "claude-cli",
+              authProfileProvider: "anthropic",
+              config: cfg,
+              agentDir: state.agentDir(),
+              selected,
+              loadAuthProfileStoreForRuntimeAsync: async () => {
+                throw failure;
+              },
+            }),
+          ),
+        ).rejects.toBe(failure);
+        const message = normalizeCronRunErrorText(failure);
+        expect(message).not.toContain(secret);
+        expect(message).not.toContain("incompatible with its recorded inference account");
+        if (
+          failure instanceof AuthProfileMigrationRequiredError ||
+          failure instanceof AuthProfileStoreUnreadableError
+        ) {
+          expect(message).toContain(failure.code);
+          expect(message).toContain("openclaw doctor --fix");
+        }
+        expect(isRecordedModelFallbackStop(failure)).toBe(kind === "terminal");
+      } finally {
+        inference.dispose();
+      }
+    },
+  );
+
+  it.each(["missing", "incompatible"] as const)(
+    "keeps account adoption advice for a %s CLI profile",
+    async (kind) => {
+      const cfg = await claudeCliConfig();
+      const binding = await capture(cfg);
+      const inference = await prepareCronRunInference({ binding, cfg, agentDir: state.agentDir() });
+      if (!inference) {
+        throw new Error("Expected the captured account's run authorization");
+      }
+      try {
+        await expect(
+          inference.resolveCliAuthProfile((selected) =>
+            resolveCliExecutionAuthProfileId({
+              cliExecutionProvider: "claude-cli",
+              authProfileProvider: "anthropic",
+              config: cfg,
+              agentDir: state.agentDir(),
+              selected,
+              loadAuthProfileStoreForRuntimeAsync: async (): Promise<AuthProfileStore> => ({
+                version: 1,
+                profiles: kind === "missing" ? {} : { [claudeProfile]: apiKey() },
+              }),
+            }),
+          ),
+        ).rejects.toMatchObject({
+          message: expect.stringContaining("--model <provider/model>@<profileId>"),
+          cause: expect.objectContaining({ name: "CliExecutionAuthProfileError" }),
+        });
+      } finally {
+        inference.dispose();
+      }
     },
   );
 

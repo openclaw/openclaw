@@ -24,6 +24,7 @@ import {
   renderPendingSessionCreateRow,
 } from "./app-sidebar-session-row-render.tsx";
 import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
+import { PersonalSessionGroups } from "./personal-session-groups.tsx";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
 function RosterLoadMore(props: {
@@ -52,13 +53,7 @@ function RosterLoadMore(props: {
   );
 }
 
-function renderSessionListBody(params: {
-  host: SidebarSessionListHost;
-  sections: RenderableSessionSection[];
-  nativeSessionsHaveMore: boolean;
-  catalogs: SessionCatalogRenderSnapshot;
-  catalogRenderer: SessionCatalogGroupsRenderer;
-}) {
+function renderSessionListBody(params: Parameters<typeof renderSessionList>[0]) {
   const host = createMemo(() => params.host);
   const personHeaders = createMemo<PersonHeaders | undefined>(() => {
     if (host().sessionsGrouping !== "person") {
@@ -243,7 +238,9 @@ export function renderSessionListFrame(host: () => SidebarSessionListHost, body:
           {t("sessionsView.moveToTopLevel")}
         </div>
       ) : undefined}
-      {renderSessionMutationError(host())} <PinnedSessionSection host={host()} />
+      {renderSessionMutationError(host())}
+      <PersonalSessionGroups host={host()} />
+      <PinnedSessionSection host={host()} />
       {body}
     </section>
   );
