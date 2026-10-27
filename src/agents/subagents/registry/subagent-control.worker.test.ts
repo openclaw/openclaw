@@ -618,14 +618,13 @@ describe("subagent progress drafts", () => {
   }
 
   it.each([
-    ["a visible answer", [DONE], true],
-    ["external NO_REPLY with undelivered findings", ["NO_REPLY"], false],
-    ["required internal result", ["NO_REPLY"], false],
-  ] as const)("settles the progress card according to %s", async (name, replies, retired) => {
-    const requesterOrigin =
-      name === "external NO_REPLY with undelivered findings"
-        ? { channel: "telegram", to: "12345", accountId: "default" }
-        : undefined;
+    ["a visible answer", [DONE], false],
+    ["successful external NO_REPLY", ["NO_REPLY"], true],
+    ["successful internal NO_REPLY", ["NO_REPLY"], false],
+  ] as const)("settles the progress card according to %s", async (_name, replies, external) => {
+    const requesterOrigin = external
+      ? { channel: "telegram", to: "12345", accountId: "default" }
+      : undefined;
     if (requesterOrigin) {
       const { channel, to, accountId } = requesterOrigin;
       await sessions.upsertSessionEntryCore(
@@ -649,13 +648,8 @@ describe("subagent progress drafts", () => {
 
     await endRun("b");
     expect(wakes.map(({ retiredBefore }) => retiredBefore)).toEqual(replies.map(() => 0));
-    expectCard(draft, retired ? 1 : 0);
-    if (name === "external NO_REPLY with undelivered findings") {
-      expect(subagentRuns.get("b")?.requesterSettleWake).toMatchObject({
-        status: "pending",
-        attemptCount: 1,
-      });
-    }
+    expectCard(draft);
+    expect(subagentRuns.get("b")?.requesterSettleWake).toBeUndefined();
     expect(draft.push).toHaveBeenCalledWith(
       expect.objectContaining({ itemId: "b", kind: "subagent", status: "completed" }),
     );
@@ -672,43 +666,23 @@ describe("subagent progress drafts", () => {
     expect(stale.push).not.toHaveBeenCalled();
   });
 
-  it.each(["visible result", "exhausted"] as const)(
-    "recovers a known missing required result through periodic admission: %s",
-    async (outcome) => {
-      const draft = await adoptCohort(["a"]);
-      const wakes = answerWakes(draft, [
-        "NO_REPLY",
-        outcome === "visible result" ? DONE : "NO_REPLY",
-        "NO_REPLY",
-      ]);
-      await endRun("a");
-      expect(wakes).toHaveLength(1);
-      expect(draft.retire).not.toHaveBeenCalled();
-      expect(subagentRuns.get("a")?.requesterSettleWake).toMatchObject({
-        status: "pending",
-        attemptCount: 1,
-      });
-      await registryTesting.sweepOnceForTests();
-      await fixture.settle();
-      expect(wakes).toHaveLength(1);
+  it("does not re-wake a settled silent parent through periodic admission", async () => {
+    const draft = await adoptCohort(["a"]);
+    const wakes = answerWakes(draft, ["NO_REPLY"]);
+    await endRun("a");
+    expect(wakes).toHaveLength(1);
+    expectCard(draft);
+    expect(subagentRuns.get("a")?.requesterSettleWake).toBeUndefined();
 
-      using clock = vi.spyOn(Date, "now");
-      for (let attempt = 1; attempt < (outcome === "visible result" ? 2 : 3); attempt++) {
-        const due = subagentRuns.get("a")?.requesterSettleWake?.nextAttemptAt;
-        expect(due).toBeTypeOf("number");
-        clock.mockReturnValue(due!);
-        await registryTesting.sweepOnceForTests();
-        await fixture.settle();
-        expect(wakes).toHaveLength(attempt + 1);
-        expect(wakes[attempt]?.runId).toBe(`${wakes[0]!.runId}:retry-${attempt}`);
-      }
-      expect(draft.retire).toHaveBeenCalledOnce();
-      expect(subagentRuns.get("a")?.requesterSettleWake).toBeUndefined();
-      await registryTesting.sweepOnceForTests();
-      await fixture.settle();
-      expect(wakes).toHaveLength(outcome === "visible result" ? 2 : 3);
-    },
-  );
+    const later = Date.now() + 10 * 60_000;
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(later);
+    await registryTesting.sweepOnceForTests();
+    await fixture.settle();
+    expect(wakes).toHaveLength(1);
+    expectCard(draft);
+    expect(subagentRuns.get("a")?.requesterSettleWake).toBeUndefined();
+  });
 
   it.each([
     ["killSessionSubagentRuns", "running", "committed"],
