@@ -13,6 +13,26 @@ These semantics keep selection-time and runtime auth behavior aligned. They are 
 - `openclaw models status --probe`
 - `openclaw doctor` auth checks (`doctor-auth`)
 
+## Account status in Models
+
+In **Settings → Models**, OAuth access-token expiry is separate from sign-in
+health. **Access token expires in…** or **Access token expired** describes the
+short-lived token, not necessarily the saved sign-in. The page does not infer
+refresh support from OAuth alone. **Ready** requires a ready catalog result;
+without that evidence, an account reporting only access-token expiry remains
+**Credentials configured**.
+
+A missing OAuth credential shows **Sign in again**. A refresh marker whose outcome
+is not distinguished by the status response shows **Sign-in unavailable**, not a
+claim that another login is required. A provider authentication rejection shows
+**Credentials rejected** and takes precedence over expiry information. The card-wide
+result does not identify the rejected credential, so it does not prescribe OAuth
+sign-in or change recovery advice for an unrelated saved account. Static token
+expiry keeps its warning. Externally managed credentials remain identified as
+such, rather than being declared healthy just because another tool manages them.
+Provider-reported quota exhaustion and temporary rate-limit errors remain usage
+or connection results, not sign-out instructions.
+
 <a id="stable-probe-reason-codes" />
 
 ## Stable check reason codes

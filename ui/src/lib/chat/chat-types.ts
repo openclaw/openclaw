@@ -530,6 +530,7 @@ export type ToolCardOutcome =
   | "failed"
   | "blocked"
   | "skipped"
+  | "unrecorded"
   | "unknown";
 
 export type ChatGoalMutationAction = { goalId: string } & (
