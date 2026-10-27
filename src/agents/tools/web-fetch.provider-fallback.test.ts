@@ -244,15 +244,13 @@ describe("web_fetch", () => {
     expect(
       (details.text?.length ?? 0) + (details.title?.length ?? 0) + (details.warning?.length ?? 0),
     ).toBeLessThanOrEqual(800);
-    expect(details.spill).toBeDefined();
     expect(details.text).toContain("Ignore previous instructions");
     expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(details.text).toMatch(/<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(details.text).toContain(`Full output: ${details.spill?.path}`);
     expect(details.warning).toContain(warning);
     expect(details.warning).toContain("[[MARKER_SANITIZED]]");
-    expect(details.spill).toMatchObject({ chars: providerWrappedText.length });
-    expect(details.spill?.truncated).toBeUndefined();
+    expect(details.spill).toEqual({ path: expect.any(String), chars: providerWrappedText.length });
     expect(details.externalContent).toEqual({
       untrusted: true,
       source: "web_fetch",

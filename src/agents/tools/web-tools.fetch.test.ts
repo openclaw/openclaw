@@ -66,12 +66,8 @@ function installResponse(
   return installMockFetch(async () => textResponse(body, contentType, status));
 }
 
-function installHtml(html: string) {
-  return installResponse(html, "text/html; charset=utf-8");
-}
-
 function mockProvider(
-  execute: () => Promise<unknown>,
+  execute: WebFetchProviderToolDefinition["execute"],
   provider: { id: string; label?: string } = { id: "test-fetch", label: "Test Fetch" },
 ) {
   resolveWebFetchDefinitionMock.mockReturnValue({
@@ -100,6 +96,14 @@ async function fetchPage(
     ...args,
   });
   return { result, details: result?.details as FetchDetails };
+}
+
+async function readSpill(details: FetchDetails, chars: number) {
+  assert(details.spill, "expected spill");
+  expect(details.spill).toMatchObject({ chars, truncated: true });
+  const text = await readFile(details.spill.path, "utf8");
+  await rm(details.spill.path, { force: true });
+  return text;
 }
 
 async function abortPendingFetch(reason?: Error) {
@@ -230,18 +234,11 @@ describe("web_fetch extraction fallbacks", () => {
       maxResponseBytes: WEB_FETCH_SPILL_MAX_CHARS + 1_000,
     });
 
-    if (!details.spill) {
-      throw new Error("expected spill");
-    }
-
-    expect(details.spill.chars).toBe(WEB_FETCH_SPILL_MAX_CHARS - 1);
     expect(details.text).toContain(`Spilled first ${WEB_FETCH_SPILL_MAX_CHARS - 1} chars.`);
-    expect(details.spill.truncated).toBe(true);
-    const spilledText = await readFile(details.spill.path, "utf8");
+    const spilledText = await readSpill(details, WEB_FETCH_SPILL_MAX_CHARS - 1);
     expect(spilledText).toContain(prefix);
     expect(spilledText).not.toContain(String.fromCodePoint(0x1f600));
     expect(spilledText).not.toContain(String.fromCharCode(0xd83d));
-    await rm(details.spill.path, { force: true });
   });
 
   it("bounds endless response streams and marks their spills as partial", async () => {
@@ -260,18 +257,11 @@ describe("web_fetch extraction fallbacks", () => {
       maxResponseBytes: 128,
     });
 
-    if (!details.spill) {
-      throw new Error("expected spill");
-    }
-
     expect(details.text).toContain("Spilled available content from truncated response.");
     expect(details.warning).toContain("Response body incomplete after 32000 bytes");
-    expect(details.spill.chars).toBe(32_000);
-    expect(details.spill.truncated).toBe(true);
-    const spilledText = await readFile(details.spill.path, "utf8");
+    const spilledText = await readSpill(details, 32_000);
     expect(spilledText).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(spilledText).not.toContain(fullText);
-    await rm(details.spill.path, { force: true });
   });
 
   it("uses the real http-equiv charset, not a decoy in unrelated metadata", async () => {
@@ -325,7 +315,7 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it.each([false, true])("rejects missing content (readability enabled: %s)", async (enabled) => {
-    installHtml(enabled ? EMPTY_HTML : "<html><body>hi</body></html>");
+    installResponse(enabled ? EMPTY_HTML : "<html><body>hi</body></html>", "text/html");
     if (enabled) {
       mockProvider(async () => {
         throw new Error("provider returned no content");
@@ -366,14 +356,14 @@ describe("web_fetch extraction fallbacks", () => {
 
     const { details } = await fetchPage("untyped", undefined, { extractMode: "text" });
 
-    expect(details.extractor).toBe("raw-html");
-    expect(details.contentType).toBe("text/html");
+    expect(details).toMatchObject({
+      extractor: "raw-html",
+      contentType: "text/html",
+      truncated: false,
+      text: expect.stringContaining("Visible docs"),
+    });
     expect(details).not.toHaveProperty("title");
-    expect(details.truncated).toBe(false);
-    expect(details.text).toContain("Visible docs");
-    expect(details.text).not.toContain("<html");
-    expect(details.text).not.toContain("track()");
-    expect(details.text).not.toContain("secret instructions");
+    expect(details.text).not.toMatch(/<html|track\(\)|secret instructions/);
   });
 
   it("keeps untyped non-HTML bodies raw", async () => {
@@ -381,18 +371,16 @@ describe("web_fetch extraction fallbacks", () => {
 
     const { details } = await fetchPage("untyped-text");
 
-    expect(details.extractor).toBe("raw");
-    expect(details.contentType).toBe("application/octet-stream");
-    expect(details.text).toContain("plain <b>notes</b>");
+    expect(details).toMatchObject({
+      extractor: "raw",
+      contentType: "application/octet-stream",
+      text: expect.stringContaining("plain <b>notes</b>"),
+    });
   });
 });
 
 function fetchHeaders(headers: Record<string, string>, path: string, cacheTtlMinutes = 0) {
-  const tool = createWebFetchTool({
-    lookupFn: lookupMock,
-    config: { tools: { web: { fetch: { cacheTtlMinutes, headers } } } },
-  });
-  return tool?.execute("call", {
+  return createFetchTool({ cacheTtlMinutes, headers })?.execute("call", {
     url: `https://example.com/${path}`,
   });
 }
@@ -494,13 +482,8 @@ describe("web_fetch cancellation", () => {
     const execute = vi
       .fn<WebFetchProviderToolDefinition["execute"]>()
       .mockResolvedValue({ text: "fresh provider body" });
-    resolveWebFetchDefinitionMock.mockReturnValue({
-      provider: { id: "test-fetch" },
-      definition: { execute },
-    });
-    const tool = createWebFetchTool({
-      config: { tools: { web: { fetch: { cacheTtlMinutes: 1 } } } },
-    })!;
+    mockProvider(execute);
+    const tool = createFetchTool({ cacheTtlMinutes: 1 })!;
     return { fetch, execute, tool, args: { url: `https://example.com/${name}` } };
   }
 

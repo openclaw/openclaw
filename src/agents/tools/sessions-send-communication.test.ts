@@ -260,7 +260,7 @@ describe("sessions_send communication boundary", () => {
         endpoint("source", direction === "send" ? neverSend : {}),
         endpoint("target", direction === "receive" ? neverReceive : {}),
       );
-      await expect(prepareSessionsSendCommunication(input)).rejects.toThrow("disabled");
+      await denied(input, "disabled");
       expectNoApprovalOrDelivery(input);
     },
   );
@@ -280,7 +280,7 @@ describe("sessions_send communication boundary", () => {
         communication: { send: "always" },
       }),
     );
-    await expect(prepareSessionsSendCommunication(input)).rejects.toThrow("disabled");
+    await denied(input, "disabled");
   });
   it("delivers parent and peer sends through recorded same-key rollover/recovery lineage", async () => {
     const { parent, entry: parentEntry } = await rotatedParent();
@@ -424,9 +424,7 @@ describe("sessions_send communication boundary", () => {
   );
   it("does not request fresh consent during durable delivery recovery", async () => {
     const input = operation(endpoint("source", askSend));
-    await expect(
-      prepareSessionsSendCommunication({ ...input, allowApproval: false }),
-    ).rejects.toThrow("fresh human communication approval");
+    await denied({ ...input, allowApproval: false }, "fresh human communication approval");
     expectNoApprovalOrDelivery(input);
   });
   it("provenance strings cannot turn an optional peer send into task-owned work", async () => {
@@ -523,9 +521,7 @@ describe("sessions_send communication boundary", () => {
       state.task = undefined;
       expect(gate.assertCurrent).toThrow("authority changed");
     });
-    await expect(prepareSessionsSendCommunication(operation(source, target))).rejects.toThrow(
-      "disabled",
-    );
+    await denied(operation(source, target), "disabled");
   });
   it.each(["entry", "replacement"] as const)(
     "survives neutral %s metadata but keeps permission revocation sticky",
@@ -643,7 +639,7 @@ describe("sessions_send communication boundary", () => {
   it("always cannot override the disabled cross-agent access ceiling", async () => {
     state.config = { tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: false } } };
     const input = operation(undefined, endpoint("target", {}, "peer"));
-    await expect(prepareSessionsSendCommunication(input)).rejects.toThrow();
+    await denied(input);
     expectNoApprovalOrDelivery(input);
   });
 
@@ -679,12 +675,7 @@ describe("sessions_send communication boundary", () => {
       const missing = missingTarget();
       const ensureTarget = vi.fn(async () => endpoint("target"));
       state.approve.mockRejectedValueOnce(new Error("refused"));
-      await expect(
-        prepareSessionsSendCommunication({
-          ...operation(endpoint("source"), missing),
-          ensureTarget,
-        }),
-      ).rejects.toThrow();
+      await denied({ ...operation(endpoint("source"), missing), ensureTarget });
       expect(ensureTarget).not.toHaveBeenCalled();
       if (reason === "never") {
         expect(state.approve).not.toHaveBeenCalled();
