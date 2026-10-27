@@ -384,7 +384,8 @@ export const usageHandlers: GatewayRequestHandlers = {
             });
           }
 
-          if (overviewSummaries) {
+          // Prepare reusable cohorts only once the overview is fully summarized.
+          if (overviewSummaries && !summarizing) {
             await budget.read(
               () =>
                 prepareUsageOverviewUsage({

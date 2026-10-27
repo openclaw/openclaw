@@ -66,12 +66,13 @@ const { values } = parseArgs({
     diagnostic: { type: "boolean", default: false },
     structure: { type: "boolean", default: false },
     "structure-rtt": { type: "string" },
+    "trace-adverse": { type: "boolean", default: false },
     help: { type: "boolean", default: false },
   },
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--sessions 12000] [--pairs 20] [--warm-cpu 1|4] [--smoke | --cold | --cold-backend [--cold-pairs 20] | --diagnostic | --structure [--structure-rtt 0|100]]",
+    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--sessions 12000] [--pairs 20] [--warm-cpu 1|4] [--smoke | --cold | --cold-backend [--cold-pairs 20] | --diagnostic | --structure [--structure-rtt 0|100] [--trace-adverse]]",
   );
   process.exit(0);
 }
@@ -108,6 +109,7 @@ if (values["structure-rtt"] !== undefined) {
     "--structure-rtt must be 0 or 100",
   );
 }
+assert(!values["trace-adverse"] || values.structure, "--trace-adverse requires --structure");
 const warmCpu = values["warm-cpu"] === undefined ? undefined : Number(values["warm-cpu"]);
 if (warmCpu !== undefined) {
   assert(values["warm-cpu"] === "1" || values["warm-cpu"] === "4", "--warm-cpu must be 1 or 4");
@@ -1236,46 +1238,50 @@ try {
             await page.addInitScript("globalThis.__name = (fn) => fn");
           }
           if (values.diagnostic || values.structure) {
-            await page.addInitScript(() => {
-              // oxlint-disable-next-line typescript/unbound-method -- Forward the original socket receiver with call.
-              const send = WebSocket.prototype.send;
-              const requests = new WeakMap<WebSocket, Set<string>>();
-              WebSocket.prototype.send = function (this: WebSocket, data) {
-                if (typeof data === "string") {
-                  let frame;
-                  try {
-                    frame = JSON.parse(data);
-                  } catch {
-                    return send.call(this, data);
-                  }
-                  if (
-                    frame?.type === "req" &&
-                    frame.method === "sessions.usage" &&
-                    frame.params?.query === "model:fixture-model-00-end"
-                  ) {
-                    let ids = requests.get(this);
-                    if (!ids) {
-                      ids = new Set();
-                      requests.set(this, ids);
-                      this.addEventListener("message", (event) => {
-                        let response;
-                        try {
-                          response = JSON.parse(event.data);
-                        } catch {
-                          return;
-                        }
-                        if (requests.get(this)?.delete(response?.id)) {
-                          // Observed in the page's message task, after earlier app listeners.
-                          performance.mark("usage:response-observed");
-                        }
-                      });
+            await page.addInitScript(
+              ({ watchModel01 }) => {
+                // oxlint-disable-next-line typescript/unbound-method -- Forward the original socket receiver with call.
+                const send = WebSocket.prototype.send;
+                const requests = new WeakMap<WebSocket, Set<string>>();
+                WebSocket.prototype.send = function (this: WebSocket, data) {
+                  if (typeof data === "string") {
+                    let frame;
+                    try {
+                      frame = JSON.parse(data);
+                    } catch {
+                      return send.call(this, data);
                     }
-                    ids.add(frame.id);
+                    if (
+                      frame?.type === "req" &&
+                      frame.method === "sessions.usage" &&
+                      (frame.params?.query === "model:fixture-model-00-end" ||
+                        (watchModel01 && frame.params?.query === "model:fixture-model-01-end"))
+                    ) {
+                      let ids = requests.get(this);
+                      if (!ids) {
+                        ids = new Set();
+                        requests.set(this, ids);
+                        this.addEventListener("message", (event) => {
+                          let response;
+                          try {
+                            response = JSON.parse(event.data);
+                          } catch {
+                            return;
+                          }
+                          if (requests.get(this)?.delete(response?.id)) {
+                            // Observed in the page's message task, after earlier app listeners.
+                            performance.mark("usage:response-observed");
+                          }
+                        });
+                      }
+                      ids.add(frame.id);
+                    }
                   }
-                }
-                return send.call(this, data);
-              };
-            });
+                  return send.call(this, data);
+                };
+              },
+              { watchModel01: values["trace-adverse"] },
+            );
           }
           const url = new URL(`http://127.0.0.1:${proxy?.port ?? owner.ready.port}/usage`);
           const gatewayUrl = `ws://${url.host}`;
@@ -1396,18 +1402,22 @@ try {
             const requestsBefore = responses.length;
             const dispatchBefore = (await owner.snapshot()).length;
             const condition =
-              values.structure && iteration >= 2 && iteration % 2 === 0
-                ? iteration === 2
-                  ? "natural"
-                  : "gc-conditioned"
-                : undefined;
+              values.structure && values["trace-adverse"] && (iteration === 0 || iteration === 3)
+                ? iteration === 0
+                  ? "first-model00"
+                  : "reset-model01"
+                : values.structure && iteration >= 2 && iteration % 2 === 0
+                  ? iteration === 2
+                    ? "natural"
+                    : "gc-conditioned"
+                  : undefined;
             const retainedBefore =
               condition === "gc-conditioned" ? await browserRetention(cdp) : undefined;
             const diagnostic = (values.diagnostic && iteration === 2) || condition !== undefined;
             if (diagnostic) {
               await startUsageDiagnostic(
                 entry,
-                `${owner.role}-${cpu}x-${rtt}ms-model00${condition ? `-${condition}` : ""}`,
+                `${owner.role}-${cpu}x-${rtt}ms-${model.endsWith("00-end") ? "model00" : "model01"}${condition ? `-${condition}` : ""}`,
               );
             }
             if (condition) {
