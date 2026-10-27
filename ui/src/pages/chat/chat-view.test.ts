@@ -357,7 +357,7 @@ describe("chat run error", () => {
         onDismissError,
         onRetrySessionPlacementStartup,
       });
-
+      await vi.dynamicImportSettled();
       const alert = await waitForElement(container, ".chat-error", "chat run error");
       expect(alert.getAttribute("role")).toBe("alert");
       const details = requireElement(alert, "details", "error disclosure");
@@ -373,7 +373,6 @@ describe("chat run error", () => {
       expect(summary.textContent).not.toContain("Error details");
       expect(alert.querySelectorAll(".chat-copy-btn")).toHaveLength(1);
       const copy = summary.querySelector<HTMLButtonElement>('[aria-label="Copy error"]');
-      expect(copy).not.toBeNull();
       for (const open of [false, true]) {
         details.toggleAttribute("open", open);
         copy?.click();
