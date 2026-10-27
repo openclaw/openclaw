@@ -598,6 +598,7 @@ const repositoryScriptEntries = [
   "scripts/perf/agent-deletion-blocked-measure.ts!",
   "scripts/perf/agent-list-read-measure.ts!",
   "scripts/perf/chat-history-response-page-measure.mjs!",
+  "scripts/perf/chat-history-tool-text-measure.mjs!",
   "scripts/perf/chat-metadata-auth-check-measure.ts!",
   "scripts/perf/config-schema-retention-measure.ts!",
   "scripts/perf/sandbox-retirement-authority.ts!",
