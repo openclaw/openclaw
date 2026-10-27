@@ -13,7 +13,6 @@ import {
   projectPresencePayload,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
-import { profileDirectory } from "../lib/profile-directory.ts";
 import { ChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar-view.tsx";
 import { createContext, createGateway, createSessions } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
@@ -463,7 +462,7 @@ it("links faces only when the host opts in, so nested facepiles stay plain", asy
   }
 });
 
-it("keeps a newly advertised teammate avatar ahead of cached directory availability", async () => {
+it("reads the profile directory only when teammate avatar metadata is missing", async () => {
   setAvatarGatewayOrigin("https://gateway.example.test", ["viewer-token"]);
   const fetchAvatar = vi
     .spyOn(globalThis, "fetch")
@@ -471,25 +470,26 @@ it("keeps a newly advertised teammate avatar ahead of cached directory availabil
   vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:teammate");
   const fixture = createApplicationGateway();
   const { gateway } = fixture;
+  const request = vi.fn(async () => ({
+    profiles: [
+      {
+        id: "teammate",
+        displayName: "Teammate",
+        hasAvatar: true,
+        updatedAt: 7,
+        createdAt: 1,
+        avatarMime: null,
+        mergedInto: null,
+        emails: [],
+        githubIdentity: null,
+      },
+    ],
+  }));
   fixture.publish({
     ...gateway.snapshot,
-    phase: "connected",
-    hello: gatewayHelloForMethods(["users.list"], ["operator.read"]),
-    client: createTestGatewayClient(async () => ({
-      profiles: [
-        {
-          id: "teammate",
-          displayName: "Teammate",
-          hasAvatar: true,
-          updatedAt: 7,
-          createdAt: 1,
-          avatarMime: null,
-          mergedInto: null,
-          emails: [],
-          githubIdentity: null,
-        },
-      ],
-    })),
+    phase: "connecting",
+    hello: null,
+    client: createTestGatewayClient(request),
   });
   // SAFETY: Avatar consumers use only the Gateway capability in this fixture.
   const provider = createSolidApplicationContextProvider({ gateway } as ApplicationContext);
@@ -497,6 +497,7 @@ it("keeps a newly advertised teammate avatar ahead of cached directory availabil
     id: "teammate",
     identity: { type: "profile" as const, id: "teammate" },
     name: "Teammate",
+    avatarUrl: "/api/users/teammate/avatar?v=8",
     watchedSessions: [],
   };
   const view = mountSolid(() => createComponent(ViewerAvatar, { user }), {
@@ -504,12 +505,24 @@ it("keeps a newly advertised teammate avatar ahead of cached directory availabil
   });
   const avatar = view.container.querySelector("openclaw-viewer-avatar")!;
   await avatar.updateComplete;
-  await profileDirectory(gateway).load();
-  avatar.user = { ...user, avatarUrl: "/api/users/teammate/avatar?v=8" };
+  fixture.publish({
+    ...gateway.snapshot,
+    phase: "connected",
+    hello: gatewayHelloForMethods(["users.list"], ["operator.read"]),
+  });
   await avatar.updateComplete;
   await waitForSolid(() =>
     expect(fetchAvatar.mock.calls.at(-1)?.[0]).toBe(
       "https://gateway.example.test/api/users/teammate/avatar?v=8",
+    ),
+  );
+  expect(request).not.toHaveBeenCalled();
+  avatar.user = { ...user, avatarUrl: undefined };
+  await avatar.updateComplete;
+  await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
+  await waitForSolid(() =>
+    expect(fetchAvatar.mock.calls.at(-1)?.[0]).toBe(
+      "https://gateway.example.test/api/users/teammate/avatar?v=7",
     ),
   );
 });
