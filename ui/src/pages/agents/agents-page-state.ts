@@ -7,8 +7,13 @@ import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { buildToolsEffectiveRequestKey, type AgentsState } from "../../lib/agents/index.ts";
 import { setDefaultAgent } from "../../lib/agents/mutations.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
+import { createChannelCapability } from "../../lib/channels/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
+import {
+  hasCronInventoryEvents,
+  isCronInventoryInvalidation,
+} from "../../lib/cron/inventory-connection.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import {
   canCallGatewayMethod,
@@ -16,6 +21,7 @@ import {
 } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { createGitHubIdentityView } from "../../lib/reactive/domain-github-identity.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -80,7 +86,8 @@ export function createAgentsPageState(
   const presentation = createAgentsPageLifetime();
   const [skillsFilter, setSkillsFilter] = createSignal("");
   const identities = projectOwner(context.agentIdentity, (identity) => identity.entries());
-  const channels = projectOwner(context.channels, (source) => source.state);
+  const channelCapability = context.acquireChannels(createChannelCapability);
+  const channels = projectOwner(channelCapability, (source) => source.state);
   const navigation = projectOwner(context.navigation, (source) => source.snapshot);
   // The domain helpers mutate then read their state synchronously; Solid only observes it.
   const observation = observeState<AgentsPageData>({
@@ -140,7 +147,11 @@ export function createAgentsPageState(
   const cron = createAgentCronPresenter({
     currentState: () => state.cron,
     readState: () => readData().cron,
-    canCall: (method, scope) => active && canCall(method, scope),
+    canCall: (method, scope) =>
+      active &&
+      state.agentsPanel === "cron" &&
+      document.visibilityState !== "hidden" &&
+      canCall(method, scope),
     publish,
   });
   const selectionDrafts = createAgentSelectionDrafts(state, resetSelectionState);
@@ -335,9 +346,7 @@ export function createAgentsPageState(
     if (!state.connected || !state.client || !routeDataInitialized || !routeData) {
       return;
     }
-    if (!context.runtimeConfig.state.configSnapshot && !context.runtimeConfig.state.configLoading) {
-      void context.runtimeConfig.ensureLoaded();
-    }
+    void context.runtimeConfig.ensureLoaded();
     if (!state.agentsList && !context.agents.state.agentsLoading) {
       void refreshAgents("ensure");
       return;
@@ -397,8 +406,8 @@ export function createAgentsPageState(
       githubIdentity.ensureVerified();
       return;
     }
-    if (state.agentsPanel === "channels" && !context.channels.state.channelsSnapshot) {
-      void context.channels.refresh(false);
+    if (state.agentsPanel === "channels" && !channelCapability.state.channelsSnapshot) {
+      void channelCapability.refresh(false);
       return;
     }
     if (state.agentsPanel === "cron") {
@@ -545,7 +554,7 @@ export function createAgentsPageState(
       memoryTarget,
       config: configState,
       channels: {
-        onRefresh: () => void context.channels.refresh(false),
+        onRefresh: () => void channelCapability.refresh(false),
       },
       cron: {
         read: cron.read,
@@ -572,7 +581,9 @@ export function createAgentsPageState(
         onModelCatalogOpen: () => modelCatalog.ensure({ refresh: true }),
       },
       agentSkills: {
-        filter: skillsFilter(),
+        get filter() {
+          return skillsFilter();
+        },
         onFilterChange: (next: string) => {
           setSkillsFilter(next);
         },
@@ -632,6 +643,20 @@ export function createAgentsPageState(
     const selection = context.settingsAgentSelection;
     let intentRevision = selection.intentRevision;
     const stops = [
+      context.gateway.subscribeEvents((event) => {
+        if (hasCronInventoryEvents(context.gateway.snapshot)) {
+          if (isCronInventoryInvalidation(event, context.gateway.snapshot)) {
+            cron.onRefresh(false);
+          } else if (event.event === "cron") {
+            cron.onRuntime(event.payload);
+          }
+        }
+      }),
+      listen(document, "visibilitychange", () => {
+        if (document.visibilityState !== "hidden") {
+          cron.onRefresh(false);
+        }
+      }),
       // Selection receipts transfer draft custody and retire prior-agent work synchronously.
       selection.subscribe(() => {
         const explicitSelection = selection.intentRevision !== intentRevision;

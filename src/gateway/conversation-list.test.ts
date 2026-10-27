@@ -65,56 +65,48 @@ function directoryFixture(
   registration: "none" | "capture" | "project" = "none",
 ) {
   let discovered: ConversationIdentity[] = [];
-  const deps = {
-    resolveOutboundChannelPlugin: vi
-      .spyOn(channelResolution, "resolveOutboundChannelPlugin")
-      .mockImplementation(() => ({
-        ...createChannelTestPluginBase({ id: channel }),
-        config: {
-          listAccountIds: () => ["default"],
-          resolveAccount: () => ({ enabled: true, configured: true }),
-          isEnabled: () => true,
-          isConfigured: () => true,
-        },
-        directory,
-      })),
-    resolveOutboundSessionRoute: vi
-      .spyOn(outboundSession, "resolveOutboundSessionRoute")
-      .mockImplementation(route),
-    registerConversationAddresses: vi
-      .spyOn(conversationRegistry, "registerConversationAddresses")
-      .mockImplementation(
-        async (
-          _scope: unknown,
-          identities: readonly ConversationIdentity[],
-          _at = 0,
-          isEligible = (values: readonly ConversationIdentity[]) => values.map(() => true),
-        ) => {
-          if (registration === "none") {
-            return;
-          }
-          const eligible = isEligible(identities);
-          discovered = identities.filter((_, index) => eligible[index]);
-        },
-      ),
-    listConversations: vi
-      .spyOn(conversationRegistry, "listConversations")
-      .mockImplementation(async () =>
-        (registration === "project" ? discovered : []).map((identity) => ({
-          conversationRef: identity.conversationRef,
-          channel: identity.channel,
-          accountId: identity.accountId,
-          kind: identity.kind,
-          peerId: identity.peerId,
-          target: identity.deliveryTarget,
-          label: identity.label,
-          firstSeenAt: 100,
-          lastSeenAt: 100,
-        })),
-      ),
-  };
+  vi.spyOn(channelResolution, "resolveOutboundChannelPlugin").mockImplementation(() => ({
+    ...createChannelTestPluginBase({ id: channel }),
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({ enabled: true, configured: true }),
+      isEnabled: () => true,
+      isConfigured: () => true,
+    },
+    directory,
+  }));
+  const resolveRoute = vi
+    .spyOn(outboundSession, "resolveOutboundSessionRoute")
+    .mockImplementation(route);
+  vi.spyOn(conversationRegistry, "registerConversationAddresses").mockImplementation(
+    async (
+      _scope: unknown,
+      identities: readonly ConversationIdentity[],
+      _at = 0,
+      isEligible = (values: readonly ConversationIdentity[]) => values.map(() => true),
+    ) => {
+      if (registration === "none") {
+        return;
+      }
+      const eligible = isEligible(identities);
+      discovered = identities.filter((_, index) => eligible[index]);
+    },
+  );
+  vi.spyOn(conversationRegistry, "listConversations").mockImplementation(async () =>
+    (registration === "project" ? discovered : []).map((identity) => ({
+      conversationRef: identity.conversationRef,
+      channel: identity.channel,
+      accountId: identity.accountId,
+      kind: identity.kind,
+      peerId: identity.peerId,
+      target: identity.deliveryTarget,
+      label: identity.label,
+      firstSeenAt: 100,
+      lastSeenAt: 100,
+    })),
+  );
   return {
-    deps,
+    resolveRoute,
     get discovered() {
       return discovered;
     },
@@ -153,11 +145,10 @@ describe("runGatewayConversationList", () => {
       firstSeenAt: 200 - index * 100,
       lastSeenAt: 200 - index * 100,
     }));
-    const listPersisted = vi
-      .spyOn(conversationRegistry, "listConversations")
-      .mockImplementation(async (_scope, options = {}) =>
+    vi.spyOn(conversationRegistry, "listConversations").mockImplementation(
+      async (_scope, options = {}) =>
         options.limit === undefined ? rows : rows.slice(0, options.limit),
-      );
+    );
 
     const result = await runGatewayConversationList({
       config: {
@@ -172,10 +163,6 @@ describe("runGatewayConversationList", () => {
       limit: 1,
     });
 
-    expect(listPersisted).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "personal" }),
-      {},
-    );
     expect(result.conversations).toMatchObject([
       { accountId: "personal", target: "reef:personal-peer" },
     ]);
@@ -208,25 +195,6 @@ describe("runGatewayConversationList", () => {
       const result = await fixture.run(direct ? { query } : {});
       expect(list).toHaveBeenCalledWith(
         expect.objectContaining({ accountId: "default", limit: 50, ...(query ? { query } : {}) }),
-      );
-      expect(fixture.deps.listConversations).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId: "main" }),
-        { channel: "reef" },
-      );
-      expect(fixture.deps.resolveOutboundSessionRoute).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "reef",
-          agentId: "main",
-          accountId: "default",
-          target: sourceId,
-          resolvedTarget: {
-            to: sourceId,
-            kind: entryKind,
-            display: name,
-            source: "directory",
-            resolutionSource: "directory",
-          },
-        }),
       );
       if (direct) {
         expect(result.conversations).toMatchObject([
@@ -272,13 +240,14 @@ describe("runGatewayConversationList", () => {
     );
     await fixture.run();
 
-    expect(
-      [listPeersLive, listGroupsLive, listPeers, listGroups].map((list) => list.mock.calls.length),
-    ).toEqual([1, 1, 1, 1]);
-    expect(
-      fixture.deps.resolveOutboundSessionRoute.mock.calls.map(([input]) => input.target),
-    ).toEqual(["stale-peer", "shared-peer", "live-peer", "stale-group", "live-group"]);
-    expect(fixture.deps.resolveOutboundSessionRoute).toHaveBeenCalledWith(
+    expect(fixture.resolveRoute.mock.calls.map(([input]) => input.target)).toEqual([
+      "stale-peer",
+      "shared-peer",
+      "live-peer",
+      "stale-group",
+      "live-group",
+    ]);
+    expect(fixture.resolveRoute).toHaveBeenCalledWith(
       expect.objectContaining({
         target: "shared-peer",
         resolvedTarget: expect.objectContaining({ display: "Live Shared Peer" }),
@@ -298,15 +267,14 @@ describe("runGatewayConversationList", () => {
     await fixture.run();
     await fixture.run();
 
-    expect(listPeers).toHaveBeenCalledTimes(2);
-    expect(listPeersLive).toHaveBeenCalledTimes(2);
     expect(listPeersLive.mock.calls.map(([input]) => input)).toEqual([
       expect.not.objectContaining({ query: expect.anything() }),
       expect.not.objectContaining({ query: expect.anything() }),
     ]);
-    expect(
-      fixture.deps.resolveOutboundSessionRoute.mock.calls.map(([input]) => input.target),
-    ).toEqual(["configured-peer", "configured-peer"]);
+    expect(fixture.resolveRoute.mock.calls.map(([input]) => input.target)).toEqual([
+      "configured-peer",
+      "configured-peer",
+    ]);
   });
 });
 

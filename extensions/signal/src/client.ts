@@ -245,17 +245,33 @@ export async function signalCheck(
   }
 }
 
-function openSignalEventStream(
-  url: URL,
-  abortSignal?: AbortSignal,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-): Promise<{ response: IncomingMessage; cleanup: () => void }> {
+export async function streamSignalEvents(params: {
+  baseUrl: string;
+  account?: string;
+  abortSignal?: AbortSignal;
+  timeoutMs?: number;
+  onEvent: (event: SignalSseEvent) => unknown;
+  onStreamOpen?: () => void;
+}): Promise<void> {
+  if (params.baseUrl.trim().startsWith("unix:")) {
+    return streamSignalUnixEvents(params);
+  }
+  const url = resolveSignalEndpointUrl(params.baseUrl, "/api/v1/events");
+  if (params.account) {
+    url.searchParams.set("account", params.account);
+  }
+
+  const abortSignal = params.abortSignal;
+  const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   if (abortSignal?.aborted) {
     throw createSignalSseAbortError();
   }
 
   const client = url.protocol === "https:" ? https : http;
-  return new Promise((resolve, reject) => {
+  const { response: streamResponse, cleanup: cleanupStream } = await new Promise<{
+    response: IncomingMessage;
+    cleanup: () => void;
+  }>((resolve, reject) => {
     let settled = false;
     let response: IncomingMessage | undefined;
     let onAbort: () => void = () => {};
@@ -322,29 +338,6 @@ function openSignalEventStream(
     request.on("error", rejectOnce);
     request.end();
   });
-}
-
-export async function streamSignalEvents(params: {
-  baseUrl: string;
-  account?: string;
-  abortSignal?: AbortSignal;
-  timeoutMs?: number;
-  onEvent: (event: SignalSseEvent) => unknown;
-  onStreamOpen?: () => void;
-}): Promise<void> {
-  if (params.baseUrl.trim().startsWith("unix:")) {
-    return streamSignalUnixEvents(params);
-  }
-  const url = resolveSignalEndpointUrl(params.baseUrl, "/api/v1/events");
-  if (params.account) {
-    url.searchParams.set("account", params.account);
-  }
-
-  const { response, cleanup } = await openSignalEventStream(
-    url,
-    params.abortSignal,
-    params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  );
   params.onStreamOpen?.();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -409,7 +402,7 @@ export async function streamSignalEvents(params: {
   };
 
   try {
-    for await (const chunk of response as AsyncIterable<Buffer | string>) {
+    for await (const chunk of streamResponse as AsyncIterable<Buffer | string>) {
       const value = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
       bufferedBytes += value.byteLength;
       if (bufferedBytes > MAX_SIGNAL_SSE_BUFFER_BYTES) {
@@ -428,7 +421,7 @@ export async function streamSignalEvents(params: {
     }
     await drainCompleteLines();
   } finally {
-    cleanup();
+    cleanupStream();
   }
 
   await flushEvent();

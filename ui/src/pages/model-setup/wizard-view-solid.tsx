@@ -188,7 +188,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                         presentation="model-setup"
                         step={state().step}
                         externalAuthInput={state().externalAuthInput}
-                        providerId={state().authChoice}
+                        brandId={props.state.authBrandId}
                         providerLabel={props.state.authLabel}
                         value={props.value}
                         busy={props.busy || state().busy}

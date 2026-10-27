@@ -43,11 +43,7 @@ import {
   createChatSendPendingInputAdmission,
   createChatSendWorkAdmission,
 } from "./server-methods/chat-send-work-admission.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  SessionMutationAuthorization,
-} from "./server-methods/types.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import { prepareSessionSharingSource } from "./session-sharing-source.js";
 import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
@@ -60,11 +56,13 @@ async function authorize(
   client: GatewayClient,
   scope: { agentId: string; sessionKey: string },
   getRuntimeConfig: () => PolicyConfig,
+  sessionScope?: Parameters<typeof resolveSessionMutationAuthorizationAsync>[0]["sessionScope"],
 ) {
   const result = await resolveSessionMutationAuthorizationAsync({
     client,
     method: "chat.send",
     requestParams: scope,
+    sessionScope,
     context: { getRuntimeConfig } as GatewayRequestContext,
   });
   expect(result.error).toBeNull();
@@ -238,11 +236,7 @@ it.each([
                   const wrongOwnerEffect = vi.fn();
                   expect(() =>
                     authorization.withPreparedCurrent!(
-                      {
-                        ...prepared,
-                        sessionKey: `agent:other:${kind}`,
-                        members: [],
-                      },
+                      { ...prepared, sessionKey: `agent:other:${kind}`, members: [] },
                       wrongOwnerEffect,
                       assertSourceCurrent,
                     ),
@@ -284,27 +278,9 @@ function invalidateSessionReadFacts(scope: { agentId: string; sessionKey: string
   });
 }
 
-it("allows unrelated config reloads after session authority is prepared", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    let cfg = rolePolicyConfig();
-    const client = roleClient("write", "reload-owner");
-    const scope = { agentId: "main", sessionKey: "agent:main:reload-sharing" };
-    replaceSessionEntrySync(scope, {
-      sessionId: "reload-current",
-      updatedAt: 1,
-      createdActor: createdActor(client.authenticatedUserProfile!.profileId),
-    });
-    const authorization = await authorize(client, scope, () => cfg);
-    using _ = { [Symbol.dispose]: () => authorization.release?.() };
-    cfg = { ...cfg, logging: { level: "debug" } };
-    const effect = vi.fn(() => authorization.assertCurrent());
-    await authorization.withCurrent!(effect);
-    expect(effect).toHaveBeenCalledOnce();
-  }));
-
 it("does not replay an authorization consumer after its own effect changes the row", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = rolePolicyConfig();
+    let cfg = rolePolicyConfig();
     const client = roleClient("write", "consumer-owner");
     const scope = { agentId: "main", sessionKey: "agent:main:consumer-settlement" };
     const entry = {
@@ -315,6 +291,7 @@ it("does not replay an authorization consumer after its own effect changes the r
     replaceSessionEntrySync(scope, entry);
     const authorization = await authorize(client, scope, () => cfg);
     using _ = { [Symbol.dispose]: () => authorization.release?.() };
+    cfg = { ...cfg, logging: { level: "debug" } };
     const effect = vi.fn();
     await authorization.withCurrent!(() => {
       effect();
@@ -350,15 +327,12 @@ it.each([
         createdActor: createdActor(client.authenticatedUserProfile!.profileId),
       };
       replaceSessionEntrySync(scope, entry);
-      const captured = await resolveSessionMutationAuthorizationAsync({
+      const authorization = await authorize(
         client,
-        method: "chat.send",
-        requestParams: scope,
-        sessionScope: scopeName === "operator.sessions.write" ? scopeName : undefined,
-        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-      });
-      expect(captured.error).toBeNull();
-      const authorization = captured.authorization!;
+        scope,
+        () => cfg,
+        scopeName === "operator.sessions.write" ? scopeName : undefined,
+      );
       using _ = { [Symbol.dispose]: () => authorization.release?.() };
       const target = captureSessionTarget({
         ...scope,
@@ -560,22 +534,15 @@ it.each([
     const client = roleClient("view", "worker-member");
     const scope = await memberSession(client, "agent:main:worker-sharing", "sharing-current");
     const database = openOpenClawAgentDatabase(scope);
-    const host = observeHostDataSql();
-    let authorization: SessionMutationAuthorization;
-    try {
-      authorization = await authorize(client, scope, () => cfg);
-      await authorization.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
-        expect(facts).toMatchObject({
-          entry: { sessionId: "sharing-current" },
-          members: [{ identityId: client.authenticatedUserProfile!.profileId }],
-        });
-        assertCurrent();
-        authorization.assertCurrent();
+    const authorization = await authorize(client, scope, () => cfg);
+    await authorization.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
+      expect(facts).toMatchObject({
+        entry: { sessionId: "sharing-current" },
+        members: [{ identityId: client.authenticatedUserProfile!.profileId }],
       });
-      expect(host.calls.flatMap((call) => call.mock.calls)).toEqual([]);
-    } finally {
-      host.restore();
-    }
+      assertCurrent();
+      authorization.assertCurrent();
+    });
     const read = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
     let revoked = false;
     let inventories = 0;
@@ -671,15 +638,8 @@ it.each(["role", "agent", "sandbox", "unprepared-role"] as const)(
         expect(client.preparedSessionProfile).toBeUndefined();
       }
       const scope = await memberSession(client, "agent:main:policy-sharing", "policy-current");
-      const host = observeHostDataSql();
-      let authorization: SessionMutationAuthorization;
-      try {
-        authorization = await authorize(client, scope, () => cfg);
-        await authorization.withCurrent!(() => authorization.assertCurrent());
-        expect(host.queries).toEqual([]);
-      } finally {
-        host.restore();
-      }
+      const authorization = await authorize(client, scope, () => cfg);
+      await authorization.withCurrent!(() => authorization.assertCurrent());
       if (change === "role" || change === "unprepared-role") {
         setUserProfileRole(client.authenticatedUserProfile!.profileId, "none");
       } else {

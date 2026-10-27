@@ -49,6 +49,32 @@ const decision = (id: string, name: string, fields: Record<string, unknown> = {}
 const cli = { id: "anthropic", providers: ["anthropic"], cliBackends: ["claude-cli"] };
 
 describe("loadPluginManifest JSON5 tolerance", () => {
+  it.each([
+    {
+      ids: ["canonical-engine", " other-engine ", "canonical-engine"],
+      kind: "context-engine",
+      expected: ["canonical-engine", "other-engine"],
+    },
+    { ids: [], kind: "context-engine" },
+    { ids: ["legacy"], kind: "context-engine" },
+    { ids: [42], kind: "context-engine" },
+    { ids: [""], kind: "context-engine" },
+    { ids: "canonical-engine", kind: "context-engine" },
+    { ids: ["canonical-engine"], kind: "memory" },
+  ])("validates manifest engine ownership: $ids / $kind", ({ ids, kind, expected }) => {
+    const dir = roots.make("openclaw-manifest-json5-");
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({ id: "vendor-plugin", kind, contextEngineIds: ids, configSchema: {} }),
+      "utf-8",
+    );
+    const result = loadPluginManifest(dir, false);
+    expect(result.ok).toBe(Boolean(expected));
+    if (result.ok) {
+      expect(result.manifest.contextEngineIds).toEqual(expected);
+    }
+  });
+
   it("normalizes static doctor session route-state owners", () => {
     const manifest = parseManifest({
       sessionRouteStateOwners: [
@@ -77,10 +103,6 @@ describe("loadPluginManifest JSON5 tolerance", () => {
 
   it.each([
     ["memory", "memory"],
-    [
-      ["context-engine", "memory"],
-      ["context-engine", "memory"],
-    ],
     [
       ["memory", "unknown-kind", 42, "memory", "context-engine", null],
       ["memory", "context-engine"],
@@ -133,7 +155,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     onCapabilities: ["provider", "tool", "wat"]
   },
   cliCommands: [
-    { name: "models", description: "Inspect provider models", hasSubcommands: true },
+    { name: "models", description: "Models", hasSubcommands: true },
     { name: "bad command", description: "ignored", hasSubcommands: false },
     { name: "models", description: "duplicate", hasSubcommands: false }
   ],
@@ -160,7 +182,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     expect(manifest.cliCommands).toEqual([
       {
         name: "models",
-        description: "Inspect provider models",
+        description: "Models",
         hasSubcommands: true,
       },
     ]);

@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
-import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildNodeServiceEnvironment,
@@ -132,37 +131,21 @@ describe("service environment", () => {
     expect([resolveIsConfigReadOnly(env), resolveIsNixMode(env)]).toEqual([true, false]);
   });
   it.each([
-    ["Linux TMPDIR", { TMPDIR: "/tmp/service/" }, "linux", { TMPDIR: "/tmp/service/" }],
-    [
-      "profile identity",
-      { OPENCLAW_PROFILE: "work" },
-      "darwin",
-      {
-        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-work.service",
-        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (work)",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.work",
-      },
-    ],
-  ] satisfies Array<
-    [string, NodeJS.ProcessEnv, NodeJS.Platform | undefined, Record<string, string>]
-  >)("preserves %s", (_name, env, platform, expected) => {
-    expect(serviceEnv(env, { platform })).toMatchObject(expected);
-  });
-  it.each(["maintenance", "maintenance.service"])("normalizes unit override %s", (unit) => {
-    expect(
-      serviceEnv(
-        {
-          ...(unit === "maintenance" ? { OPENCLAW_PROFILE: "work" } : {}),
-          OPENCLAW_SYSTEMD_UNIT: unit,
-        },
-        { platform: "linux" },
-      ).OPENCLAW_SYSTEMD_UNIT,
-    ).toBe("maintenance.service");
-  });
-  it("trims the proxy URL fallback", () => {
-    expect(serviceEnv({ OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 " }).OPENCLAW_PROXY_URL).toBe(
-      "http://127.0.0.1:3128",
+    ["TMPDIR", "/tmp/service/", "/tmp/service/"],
+    ["OPENCLAW_PROXY_URL", " http://127.0.0.1:3128 ", "http://127.0.0.1:3128"],
+    ["OPENCLAW_SYSTEMD_UNIT", "maintenance", "maintenance.service"],
+    ["OPENCLAW_SYSTEMD_UNIT", "maintenance.service", "maintenance.service"],
+  ])("normalizes %s=%s", (key, input, value) => {
+    expect(serviceEnv({ OPENCLAW_PROFILE: "work", [key]: input }, { platform: "linux" })[key]).toBe(
+      value,
     );
+  });
+  it("preserves profile identity", () => {
+    expect(serviceEnv({ OPENCLAW_PROFILE: "work" }, { platform: "darwin" })).toMatchObject({
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-work.service",
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (work)",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.work",
+    });
   });
   it("does not persist ambient proxy variables", () => {
     const proxies = {
@@ -196,53 +179,28 @@ describe("service environment", () => {
     );
   });
   it.each([
-    [
-      "ambient options",
-      { NODE_OPTIONS: "--require /tmp/preload.js --max-old-space-size=16384" },
-      {},
-      "",
-    ],
-    [
-      "existing service heap only",
-      {},
-      { existingNodeOptions: "--require /tmp/preload.js --max_old_space_size=6144" },
-      "--max-old-space-size=6144",
-    ],
-  ] satisfies Array<[string, NodeJS.ProcessEnv, ServiceOptions, string]>)(
-    "filters %s",
-    (_name, env, options, expected) => {
-      expect(serviceEnv(env, options).NODE_OPTIONS).toBe(expected);
-    },
-  );
-  it("does not apply the Gateway heap policy to node services", () => {
-    expect(buildNodeServiceEnvironment({ env: { HOME: home } }).NODE_OPTIONS).toBeUndefined();
+    [undefined, ""],
+    ["--require /tmp/preload.js --max_old_space_size=6144", "--max-old-space-size=6144"],
+  ])("filters ambient options and existing service options %s", (existingNodeOptions, expected) => {
+    const env = { NODE_OPTIONS: "--require /tmp/preload.js --max-old-space-size=16384" };
+    expect(serviceEnv(env, { existingNodeOptions }).NODE_OPTIONS).toBe(expected);
   });
-  it("retains the selected profile in the installed node environment", () => {
-    expect(
-      buildNodeServiceEnvironment({ env: { HOME: home, OPENCLAW_PROFILE: "work" } }),
-    ).toMatchObject({
+  it("builds a profile node environment without Gateway heap or inherited compile cache", () => {
+    const environment = buildNodeServiceEnvironment({
+      env: { HOME: "/Users/u", OPENCLAW_PROFILE: "work", NODE_COMPILE_CACHE: "/tmp/ambient-cache" },
+      platform: "darwin",
+    });
+    expect(environment).toMatchObject({
       OPENCLAW_PROFILE: "work",
       OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node.work",
       OPENCLAW_SYSTEMD_UNIT: "openclaw-node-work",
       OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node (work)",
+      NODE_DISABLE_COMPILE_CACHE: "1",
     });
-  });
-  it("fences inherited Node compile cache in macOS node LaunchAgents", () => {
-    const environment = buildNodeServiceEnvironment({
-      env: { HOME: "/Users/u", NODE_COMPILE_CACHE: "/tmp/ambient-cache" },
-      platform: "darwin",
-    });
-    const plist = buildLaunchAgentPlist({
-      label: "ai.openclaw.node",
-      programArguments: ["/usr/local/bin/node", "dist/index.js", "node", "run"],
-      stdoutPath: "/tmp/node.log",
-      stderrPath: "/tmp/node.err.log",
-      environment,
-    });
-    expect(environment.NODE_DISABLE_COMPILE_CACHE).toBe("1");
-    expect(environment.NODE_COMPILE_CACHE).toBeUndefined();
-    expect(plist).toContain("<key>NODE_DISABLE_COMPILE_CACHE</key>");
-    expect(plist).not.toContain("<key>NODE_COMPILE_CACHE</key>");
+    expect([environment.NODE_OPTIONS, environment.NODE_COMPILE_CACHE]).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 });
 
@@ -268,6 +226,22 @@ describe("process-owned egress trust", () => {
         expect(environment.NODE_EXTRA_CA_CERTS).not.toEqual(
           expect.stringContaining("secret-egress-proxy"),
         );
+      }
+    },
+  );
+});
+
+describe("macOS service trust", () => {
+  it.each([undefined, "/etc/ssl/cert.pem"])(
+    "uses the system trust store, not the stale /etc/ssl/cert.pem (inherited %s)",
+    (inherited) => {
+      const env = { HOME: home, NODE_EXTRA_CA_CERTS: inherited };
+      for (const environment of [
+        buildServiceEnvironment({ env, platform: "darwin", port: 18789 }),
+        buildNodeServiceEnvironment({ env, platform: "darwin" }),
+      ]) {
+        expect(environment.NODE_USE_SYSTEM_CA).toBe("1");
+        expect(environment.NODE_EXTRA_CA_CERTS).toBeUndefined();
       }
     },
   );

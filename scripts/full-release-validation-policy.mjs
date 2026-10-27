@@ -28,15 +28,20 @@ import { validateQualificationBaselines } from "./lib/release-upgrade-baseline.m
 import {
   evaluateReleaseChildPolicy,
   isFailedReleaseJob as isFailedJob,
+  releaseChildAdvisories,
 } from "./lib/release-validation-waivers.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import { parseGithubResponse } from "./pr-lib/gh-api-preflight.mjs";
 import { validateQualificationCoverage } from "./release-qualification-coverage.mjs";
 
-export { MAX_RELEASE_ARTIFACT_BYTES, serializeReleaseArtifact, buildReleaseValidationManifest };
+export {
+  MAX_RELEASE_ARTIFACT_BYTES,
+  serializeReleaseArtifact,
+  buildReleaseValidationManifest,
+  releaseChildAdvisories,
+};
 
-function validateReleaseAdvisoryJobs(value) {
-  const expected = [];
+function validateReleaseAdvisoryJobs(value, expected = []) {
   const recorded = value === undefined ? [] : value;
   if (!Array.isArray(recorded) || jsonSha256(recorded) !== jsonSha256(expected)) {
     throw new Error("Release advisory jobs differ from the release policy evidence");
@@ -65,7 +70,12 @@ export function validateReleaseManifestAdvisoryJobs(manifest) {
       throw new Error("Release manifest contains failed selected job evidence");
     }
   }
-  return validateReleaseAdvisoryJobs(manifest.advisoryJobs);
+  return validateReleaseAdvisoryJobs(
+    manifest.advisoryJobs,
+    Object.entries(manifest.childEvidence ?? {}).flatMap(([key, child]) =>
+      releaseChildAdvisories({ ...child, key }),
+    ),
+  );
 }
 
 const MAX_REPORTED_ISSUES = 25;
@@ -211,6 +221,7 @@ const LEGACY_CHILD_SPECS = Object.freeze([
       "all",
       "install-smoke",
       "cross-os",
+      "windows-node",
       "live-e2e",
       "package",
       "qa-parity",
@@ -262,7 +273,7 @@ const CHILD_SPECS = Object.freeze([
     displayName: "OpenClaw Release Checks",
     key: "releaseChecksCandidate",
     parentJobName: "Run release checks candidate validation",
-    rerunGroups: ["all", "cross-os", "live-e2e", "package"],
+    rerunGroups: ["all", "cross-os", "windows-node", "live-e2e", "package"],
     suffix: "-release-checks-candidate",
     workflow: "openclaw-release-checks.yml",
   },
@@ -761,7 +772,9 @@ function candidatePreparationRequired(input) {
   ) {
     return false;
   }
-  if (["all", "plugin-prerelease", "cross-os", "package"].includes(input.rerunGroup)) {
+  if (
+    ["all", "plugin-prerelease", "cross-os", "windows-node", "package"].includes(input.rerunGroup)
+  ) {
     return true;
   }
   return input.rerunGroup === "live-e2e" && !stringValue(input.liveSuiteFilter).trim();
@@ -779,7 +792,7 @@ function releaseExecutionChildRequired(spec, input, npmTelegramForAll) {
       return input.rerunGroup === "npm-telegram" || npmTelegramForAll;
     case "releaseChecksCandidate":
       return (
-        ["all", "cross-os", "package"].includes(input.rerunGroup) ||
+        ["all", "cross-os", "windows-node", "package"].includes(input.rerunGroup) ||
         (input.rerunGroup === "live-e2e" && !stringValue(input.liveSuiteFilter).trim())
       );
     default:
@@ -1449,15 +1462,82 @@ export function terminalPolicyPass(child, targetVersion) {
     child.status === "completed" &&
     child.jobs.every((job) => job.status === "completed") &&
     (child.conclusion === "success" ||
-      (child.conclusion === "failure" && policy.waivers.length > 0)) &&
+      (child.conclusion === "failure" &&
+        (policy.waivers.length > 0 || policy.advisoryJobs.some(isFailedJob)))) &&
+    policy.advisoryFailureAllowed &&
     policy.blockingJobs.length === 0
   );
 }
 
+const INSTALL_SMOKE_JOB_PREFIX = "install_smoke_release_checks / ";
+const INSTALL_SMOKE_PAYLOAD_PRODUCER = `${INSTALL_SMOKE_JOB_PREFIX}installer_smoke_candidate_payload`;
+// `needs` of .github/workflows/install-smoke-reusable.yml; frv.test.ts pins it to the workflow.
+export const INSTALL_SMOKE_JOB_NEEDS = {
+  preflight: [],
+  "install-smoke-fast": ["preflight"],
+  root_dockerfile_image: ["preflight"],
+  root_dockerfile_image_ready: ["preflight", "root_dockerfile_image"],
+  qr_package_install_smoke: ["preflight"],
+  root_dockerfile_smokes: ["preflight", "root_dockerfile_image", "root_dockerfile_image_ready"],
+  installer_smoke_candidate_payload: ["preflight"],
+  installer_smoke_update_image: ["preflight"],
+  installer_smoke_nonroot_image: ["preflight"],
+  installer_smoke_update: [
+    "preflight",
+    "installer_smoke_candidate_payload",
+    "installer_smoke_update_image",
+  ],
+  installer_smoke_nonroot: [
+    "preflight",
+    "installer_smoke_candidate_payload",
+    "installer_smoke_nonroot_image",
+  ],
+  installer_smoke: [
+    "preflight",
+    "root_dockerfile_image",
+    "root_dockerfile_image_ready",
+    "installer_smoke_candidate_payload",
+    "installer_smoke_update_image",
+    "installer_smoke_update",
+    "installer_smoke_nonroot_image",
+    "installer_smoke_nonroot",
+  ],
+  bun_global_install_smoke: ["preflight", "installer_smoke_candidate_payload"],
+  bun_only_runtime_smoke: ["preflight", "installer_smoke_candidate_payload"],
+  "docker-e2e-fast": ["preflight"],
+};
+// Consumers whose payload verification binds GITHUB_RUN_ATTEMPT rather than the producer's
+// recorded attempt (#161317); frv.test.ts pins them to the workflow.
+export const INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS = new Set([
+  "installer_smoke_update",
+  "installer_smoke_nonroot",
+]);
+// Release Checks jobs that need install_smoke_release_checks, so a producer job rerun
+// re-executes them too; frv.test.ts pins them to openclaw-release-checks.yml.
+export const INSTALL_SMOKE_CALLER_DEPENDENTS = new Set([
+  "Verify release checks",
+  FULL_RELEASE_CHILD_EVIDENCE_JOB,
+]);
+
+// Seeds plus every job that transitively needs one, as a GitHub rerun re-executes them.
+function installSmokeDependents(seeds) {
+  const closure = new Set(seeds);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [job, needs] of Object.entries(INSTALL_SMOKE_JOB_NEEDS)) {
+      if (!closure.has(job) && needs.some((need) => closure.has(need))) {
+        closure.add(job);
+        grew = true;
+      }
+    }
+  }
+  return closure;
+}
+
 export function planReleaseChildRerun({ childKey, jobs }) {
-  const failed = jobs
-    .filter(isFailedJob)
-    .map((job) => job.name)
+  const failed = evaluateReleaseChildPolicy({ child: { key: childKey, jobs } })
+    .blockingJobs.map((job) => job.name)
     .toSorted();
   if (failed.length === 0) {
     throw new Error(`${childKey} has no blocking failed job to rerun`);
@@ -1467,19 +1547,23 @@ export function planReleaseChildRerun({ childKey, jobs }) {
   if (failed.length === 1 && failed[0] === FULL_RELEASE_CHILD_EVIDENCE_JOB) {
     return { failed, mode: "receipt", producer: FULL_RELEASE_CHILD_EVIDENCE_JOB };
   }
-  // These consumers bind their producer's artifact to the current run attempt, so a
-  // failed-jobs rerun that leaves the green producer behind stays red (#161317).
-  const producer = "install_smoke_release_checks / installer_smoke_candidate_payload";
-  const producerJob = jobs.find((job) => job.name === producer);
-  if (
-    producerJob?.status === "completed" &&
-    producerJob.conclusion === "success" &&
-    [
-      "install_smoke_release_checks / installer_smoke_nonroot_image",
-      "install_smoke_release_checks / installer_smoke_nonroot",
-    ].some((name) => failed.includes(name))
-  ) {
-    return { failed, mode: "producer", producer };
+  const producerJob = jobs.find((job) => job.name === INSTALL_SMOKE_PAYLOAD_PRODUCER);
+  if (producerJob?.status === "completed" && producerJob.conclusion === "success") {
+    const local = (name) =>
+      name.startsWith(INSTALL_SMOKE_JOB_PREFIX) ? name.slice(INSTALL_SMOKE_JOB_PREFIX.length) : "";
+    const failedJobsRerun = installSmokeDependents(failed.map(local).filter(Boolean));
+    // A failed-jobs rerun that re-executes an attempt-bound consumer without the
+    // producer stays red, whether the consumer or an upstream image job failed.
+    if ([...failedJobsRerun].some((name) => INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS.has(name))) {
+      // A job rerun only re-executes the producer and its dependents; failures outside
+      // that closure (for example an upstream image build) need the whole run.
+      const producerDependents = installSmokeDependents([local(INSTALL_SMOKE_PAYLOAD_PRODUCER)]);
+      return failed.every(
+        (name) => producerDependents.has(local(name)) || INSTALL_SMOKE_CALLER_DEPENDENTS.has(name),
+      )
+        ? { failed, mode: "producer", producer: INSTALL_SMOKE_PAYLOAD_PRODUCER }
+        : { failed, mode: "all-jobs" };
+    }
   }
   return { failed, mode: "failed-jobs" };
 }
@@ -1593,7 +1677,7 @@ export function classifyReleaseSnapshot({
     .toSorted((left, right) => String(left.primaryAt).localeCompare(String(right.primaryAt), "en"));
   return {
     activeRunIds,
-    advisoryJobs: [],
+    advisoryJobs: selected.flatMap(releaseChildAdvisories),
     waivers: selected.flatMap((child) =>
       evaluateReleaseChildPolicy({ child, targetVersion }).waivers.map((waiver) =>
         Object.assign({}, waiver, { runId: child.runId, runAttempt: child.runAttempt }),
@@ -2160,7 +2244,12 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
   return {
     ...payload,
     activeRunIds,
-    advisoryJobs: validateReleaseAdvisoryJobs(payload.advisoryJobs),
+    advisoryJobs: validateReleaseAdvisoryJobs(
+      payload.advisoryJobs,
+      Object.entries(children).flatMap(([key, child]) =>
+        releaseChildAdvisories({ ...child, key, jobs: child.timing.jobs }),
+      ),
+    ),
     waivers: payload.waivers ?? [],
     blockerCount: machineEvidence ? payload.blockerCount : null,
     blockerIndex: completeBlockerIndex,

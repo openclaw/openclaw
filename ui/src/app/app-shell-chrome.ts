@@ -9,6 +9,7 @@ import {
   shellNavDrawerTriggerFromEvent,
   type CommandPaletteTargetDetail,
 } from "../components/command-palette-contract.ts";
+import { tabbableElements } from "../components/focus-navigation.ts";
 import { registryFor } from "../components/overlay-registry.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
@@ -72,7 +73,6 @@ import {
   dismissNavigationTransientSurfaces,
   handleNavDrawerKeydown,
   setToastInNavDrawer,
-  navDrawerFocusableElements,
   visibleNavDrawerToggle,
   type ShellNavigationElements,
   type ShellNavigationSurfaces,
@@ -211,7 +211,7 @@ export class ShellChromeOwner {
         this.navDrawerSwipe.reset();
         const drawer = host.navDrawerElement;
         if (drawer) {
-          const target = navDrawerFocusableElements(drawer)[0] ?? drawer;
+          const [target = drawer] = tabbableElements(drawer.children);
           focusWithoutTooltip(target, { preventScroll: true });
         }
       });
@@ -428,7 +428,9 @@ export class ShellChromeOwner {
     // A replaced workspace can retain its palette ref after the DOM is detached.
     if (!host.elements.commandPalette?.isConnected && isCommandPaletteShortcut(event)) {
       event.preventDefault();
-      this.togglePalette();
+      if (!event.repeat) {
+        this.togglePalette();
+      }
       return;
     }
     if (
@@ -647,7 +649,8 @@ export class ShellChromeOwner {
       // the update that first renders the element.
       return;
     }
-    this.dispatchLazyShellEvent(event);
+    const { eventType, detail } = event;
+    window.dispatchEvent(new CustomEvent(eventType, { cancelable: true, detail }));
     // The palette clears its own intent when composition hands off the live input.
     if (component !== "palette") {
       this.clearPendingLazyAction(event);
@@ -705,10 +708,6 @@ export class ShellChromeOwner {
         this.pendingLazyAction === event &&
         (!event || persistLazyShellAction(event)),
     });
-  }
-
-  private dispatchLazyShellEvent({ eventType, detail }: LazyShellEvent): boolean {
-    return window.dispatchEvent(new CustomEvent(eventType, { cancelable: true, detail }));
   }
 
   private clearPendingLazyAction(event: LazyShellEvent): void {

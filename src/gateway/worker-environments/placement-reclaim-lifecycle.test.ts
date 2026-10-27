@@ -349,6 +349,8 @@ it.each(["reclaim", "move", "idle suspend"] as const)(
         target: { kind: "gateway" },
       });
     } else if (operation === "idle suspend") {
+      using clock = vi.spyOn(Date, "now");
+      clock.mockImplementation(() => support.testState.nowMs);
       support.getDevelopmentProfile().suspendAfter = "1m";
       const warn = vi.fn();
       await createWorkerPlacementIdleSweep({
@@ -357,7 +359,6 @@ it.each(["reclaim", "move", "idle suspend"] as const)(
         dispatch: harness.service,
         reportChanges: (sweep) => sweep(),
         getConfig: () => support.testState.config,
-        now: () => support.testState.nowMs,
         info: vi.fn(),
         warn,
       }).sweep();

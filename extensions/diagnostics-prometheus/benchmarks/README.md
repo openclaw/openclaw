@@ -23,6 +23,10 @@ It is an owner workload, not a traffic replay or a claim about actual scrape byt
 lengths. Omitting `--shape` instead fills the current 16,384-entry exporter budget
 with the existing mixed scalar/histogram saturation fixture.
 
+`render-shape-2026-10-23.json` is a second observed shape with 1,462 histogram
+and 1,520 scalar label sets, producing 38,779 rows across 112 families. As with
+the original shape, all label values and metric values are synthetic.
+
 The first phase measures 200 warm renders without allocation sampling. It reports
 CPU per scrape, wall time, and scrape latency samples, median, p95, p99, and max.
 The second phase measures 100 renders with V8 heap allocation sampling at a 4 KiB
@@ -37,7 +41,10 @@ Add `--http --http-port <port>` to measure rendering through a real loopback Nod
 HTTP server after the owner phases, or use `--http-only --http-port <port>` to
 run only the HTTP phases. Each paired side needs a distinct port in 40000–65535.
 The server mirrors the authorized metrics GET response: render, set its content
-type and byte length, and `res.end(body)`. The client runs in a child process so
+type and byte length, and `res.end(body)`. Buffer responses alone use a completion
+callback to release their private backing store after a successful write. The
+baseline string path has no callback retaining its body. Failed writes leave
+reclamation to GC. Static metric prefixes never share response backing storage. The client runs in a child process so
 its CPU and heap allocation do not enter the server measurements. It makes ten
 warmup requests, then sequential requests with a keep-alive agent, consuming all
 response bytes without concatenation. Each phase verifies one render per request
@@ -72,9 +79,39 @@ emits a JSON object after each `ms: GC:` prefix. Parse that JSON and sum its
 `promoted` field only between matching `benchmarkPhase` start/end markers in the
 combined log, then divide by operations. Forced collections, fixture generation,
 and profiler startup/teardown are outside these markers. Keep unprofiled and
-profiled promotion separate. The synchronous owner phases omit HTTP transport
-copying; use the HTTP phases to include it. Neither mode measures Gateway
+profiled promotion separate. The synchronous owner phases omit HTTP transport; use the HTTP phases to
+include it. Neither mode measures Gateway
 event-loop delay.
+
+The store encodes fixed prefixes into private 4 KiB chunks. Oversized prefixes
+own separate allocations, so clearing them cannot leave a large chunk held by
+the prefix allocator cursor.
+Each series lazily retains its rendered bytes; removing gauges or resetting the
+store releases their blocks. Changed series use a growing scratch buffer and refill
+their block when its length is unchanged, otherwise replacing it with an exact-size
+block. Every scrape copies the blocks into a fresh response buffer.
+Family HELP/TYPE bytes share the exporter-owned prefix chunks. One header per
+metric name is reused while its winning series' help and type stay unchanged;
+clearing gauges evicts that family's header, and reset clears all headers.
+Report the additional retained blocks alongside allocation savings.
+`scrape.bufferByteLength` records the transient response allocation; it is not
+included in sampled V8 heap allocation. After consuming a render in an owner phase,
+the benchmark releases its private backing store, matching the successful HTTP
+completion lifetime. Owner CPU includes release; the render-latency timer ends
+before release. The HTTP phase releases only after Node's completion callback.
+The scratch buffer retains only bytes, never pooled Buffer slabs or response
+storage; reset releases its capacity and the current prefix chunk. The 1 ms event-loop monitor reports sample counts and tails for each phase;
+synchronous owner loops normally have no samples.
+
+Use `--updates-per-render <count>` with `--shape` to rotate through that many
+existing series before each measured render and each HTTP request. Histogram
+observations increment count/sum/buckets; counters increase and gauges change.
+The synthetic event inputs are prepared before the store-retention baseline.
+CPU and allocation include updates; the owner render-latency timer excludes
+them. Both sides must use the same count. Updated HTTP bodies have variable
+lengths, so compare aggregate received bytes and the final `.final.prom` files
+between sides, as well as initial and escaped fixtures. This workload measures
+invalidation cost; it does not claim to replay a production event distribution.
 
 The JSON includes full scrape and small escaped/Unicode fixture digests.
 `<output>.prom` holds the full fixture and `<output>.fixed.prom` holds the small
@@ -115,7 +152,9 @@ side; total GC time remains relevant. When collection counts fall by at least
 20% and total GC time does not rise, per-collection GC p95/p99 are context, unless
 the candidate's maximum single pause exceeds the larger of 50 ms and twice the
 baseline maximum. Always report both maximum pauses. Flat or rising collection
-counts leave an adequately sampled per-pause p95 eligible to gate.
+counts leave an adequately sampled per-pause p95 eligible to gate. Per-collection
+p95/p99 changes with an absolute paired-mean delta below 1 ms are context only;
+total GC time, promotion, and event-loop p99 retain their gates.
 
 When paired baselines differ by more than 5x, or paired deltas have opposite
 signs, report absolute and relative deltas and label that metric inconclusive.
@@ -123,3 +162,22 @@ If it gates the decision, run a third pair and decide on the absolute mean; do
 not reject on a relative mean dominated by a tiny baseline. Whole-Gateway
 confirmation must additionally compare matching work/reset counts and properly
 sampled event-loop delay under the same host rules.
+
+## Prefix backing-store retention
+
+Add `--pool-churn` to interleave a disposable 8 KiB `Buffer.from`
+allocation between new series. This models series accumulating between unrelated
+Buffer traffic; compare post-GC `retained.populated` and `retained.warmed`, then
+`retained.afterReset`. It changes fixture construction only, not the timed render
+loops. Run at full capacity (omit `--shape`) and with the same observed shape on
+both sides. Report heap and ArrayBuffer deltas separately, since moving bytes
+between them is not a total-memory saving.
+
+For a separate synthetic retention-only pass, use `--render-only` with
+`--heap-snapshot <path>`.
+This captures the live store after warmup and skips the large measured render
+phases; do not compare its CPU with ordinary runs or combine it with HTTP.
+Count `ArrayBuffer` objects and native `system / JSArrayBufferData` backing
+stores in the snapshot. Use the runtime's actual pool allocation size rather
+than assuming 8 KiB: Node 26.12.1 reports `Buffer.poolSize = 65536` and a
+65,600-byte backing allocation for small pooled buffers.

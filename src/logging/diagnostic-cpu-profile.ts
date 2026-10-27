@@ -1,5 +1,6 @@
 import type { Profiler } from "node:inspector";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { observeRuntimeProfileCapability } from "../infra/runtime-capabilities.js";
 import {
   assertProfile,
   captureDiagnosticProfile,
@@ -137,21 +138,24 @@ export function captureDiagnosticCpuProfile(options: {
   signal: AbortSignal;
   hasAuthority: () => boolean;
 }) {
-  return captureDiagnosticProfile({
-    ...options,
-    durationMs: DURATION_MS,
-    create: (inspector) =>
-      process.versions.bun
-        ? createInspectorProfileCapture(inspector, {
-            setup: async (session) => {
-              await session.post("Profiler.enable");
-              await session.post("Profiler.setSamplingInterval", { interval: INTERVAL_MICROS });
-            },
-            start: (session) => session.post("Profiler.start"),
-            stop: (session) => session.post("Profiler.stop"),
-            disable: (session) => session.post("Profiler.disable"),
-          })
-        : createNativeCpuProfileCapture(INTERVAL_MICROS),
-    sanitize: sanitizeDiagnosticCpuProfile,
-  });
+  return observeRuntimeProfileCapability(
+    "cpuProfiling",
+    captureDiagnosticProfile({
+      ...options,
+      durationMs: DURATION_MS,
+      create: (inspector) =>
+        process.versions.bun
+          ? createInspectorProfileCapture(inspector, {
+              setup: async (session) => {
+                await session.post("Profiler.enable");
+                await session.post("Profiler.setSamplingInterval", { interval: INTERVAL_MICROS });
+              },
+              start: (session) => session.post("Profiler.start"),
+              stop: (session) => session.post("Profiler.stop"),
+              disable: (session) => session.post("Profiler.disable"),
+            })
+          : createNativeCpuProfileCapture(INTERVAL_MICROS),
+      sanitize: sanitizeDiagnosticCpuProfile,
+    }),
+  );
 }

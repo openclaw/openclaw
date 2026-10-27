@@ -90,7 +90,7 @@ async function releaseCliProcessChild(child: ChildProcessWithoutNullStreams): Pr
 }
 
 // A deadlock guard, not a startup SLO: leave time for diagnostics and SIGKILL before Vitest expires.
-export const CLI_PROCESS_DEADLOCK_GUARD_MS = DEFAULT_VITEST_TEST_TIMEOUT_MS - 20_000;
+const CLI_PROCESS_DEADLOCK_GUARD_MS = DEFAULT_VITEST_TEST_TIMEOUT_MS - 20_000;
 
 /** A sequential test stops at its first timed-out child, so reserve one diagnostic drain and cleanup. */
 export function getCliProcessTestTimeout(

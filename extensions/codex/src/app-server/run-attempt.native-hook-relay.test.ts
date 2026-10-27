@@ -19,6 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
+import { rawItemCompleted } from "./protocol.test-helpers.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
@@ -336,19 +337,14 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const firstExpiresAtMs = registration.expiresAtMs;
 
     for (const id of ["raw-progress-1", "raw-progress-2"]) {
-      await harness.notify({
-        method: "rawResponseItem/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          item: {
-            type: "message",
-            id,
-            role: "assistant",
-            content: [{ type: "output_text", text: "Still working." }],
-          },
-        },
-      });
+      await harness.notify(
+        rawItemCompleted({
+          type: "message",
+          id,
+          role: "assistant",
+          content: [{ type: "output_text", text: "Still working." }],
+        }),
+      );
       expect(
         nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)?.expiresAtMs,
       ).toBe(firstExpiresAtMs);

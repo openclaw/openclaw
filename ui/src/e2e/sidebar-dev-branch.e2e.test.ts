@@ -76,22 +76,42 @@ suite.define(() => {
         await body.waitFor();
         await sidebar.locator(".sidebar-identity-card").waitFor();
         await sidebar.getByRole("button", { name: "Show more", exact: true }).click();
-        await sidebar.getByText("CI timer", { exact: true }).waitFor();
+        const last = sidebar.getByText("CI timer", { exact: true });
+        await expect
+          .poll(async () => {
+            await body.evaluate((element) => {
+              element.scrollTop = element.scrollHeight;
+            });
+            return last.isVisible();
+          })
+          .toBe(true);
         await takeControlUiScreenshotFrame(page, sidebar, [body], {
           animations: "disabled",
           scrollTo: sidebar.getByText("CI timer", { exact: true }),
           elements: [sidebar],
         });
-        const gap = await body.evaluate((element) => {
+        const footer = sidebar.locator(".sidebar-shell__footer");
+        await footer.getByText("Connected", { exact: true }).waitFor();
+        const chrome = await body.evaluate((element) => {
           const shell = element.closest(".sidebar-shell")!;
-          const style = getComputedStyle(shell);
-          return (
-            shell.getBoundingClientRect().bottom -
-            element.getBoundingClientRect().bottom -
-            Number.parseFloat(style.paddingBottom)
-          );
+          const footerBounds = shell
+            .querySelector(".sidebar-shell__footer")!
+            .getBoundingClientRect();
+          const slotBounds = shell
+            .querySelector(".sidebar-shell__connection")!
+            .getBoundingClientRect();
+          return {
+            bodyToFooter: footerBounds.top - element.getBoundingClientRect().bottom,
+            footerToShell: shell.getBoundingClientRect().bottom - footerBounds.bottom,
+            slotHeight: slotBounds.height,
+            footerOverhead: footerBounds.height - slotBounds.height,
+          };
         });
-        expect(gap).toBeLessThanOrEqual(1);
+        expect(Math.abs(chrome.bodyToFooter)).toBeLessThanOrEqual(1);
+        expect(Math.abs(chrome.footerToShell)).toBeLessThanOrEqual(1);
+        expect(chrome.slotHeight).toBeGreaterThan(0);
+        // Only the connection row, 4px block padding and 1px border consume space.
+        expect(chrome.footerOverhead).toBeLessThanOrEqual(9);
         expect(await sidebar.locator(".sidebar-footer-branch").count()).toBe(0);
       },
     );

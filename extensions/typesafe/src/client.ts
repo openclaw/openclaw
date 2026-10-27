@@ -23,8 +23,15 @@ import {
   type RuntimeConfig,
 } from "./config.js";
 import { EvaluationError, evaluationError } from "./errors.js";
-import { localInput, parseLocalResult } from "./local.js";
-import { MAX_JSON_BYTES, parseInput, parseResult } from "./schema.js";
+import {
+  MAX_IMAGE_REQUEST_BYTES,
+  MAX_JSON_BYTES,
+  parseInput,
+  parseResult,
+  type ImageAssets,
+} from "./schema.js";
+
+const IMAGE_OPT_IN_HEADER = "TypeSafe-Danger-Zone-Images";
 
 const API_BASE_URL = `${HOSTED_ORIGIN}/v1`;
 
@@ -66,6 +73,7 @@ export async function evaluate(
   abortSignal?: AbortSignal,
   deadlineMonotonicMs?: number,
   isAdmissible?: () => boolean,
+  assets?: ImageAssets,
 ) {
   if (abortSignal?.aborted) {
     throw evaluationError(undefined, true);
@@ -86,11 +94,33 @@ export async function evaluate(
     throw new Error("TypeSafe API key is missing. Configure a SecretRef in plugin Settings.");
   }
   try {
-    const wireInput = hosted ? parsed : localInput(parsed);
+    let wireInput = parsed;
+    if (!assets && !hosted) {
+      const questions: typeof parsed.questions = {};
+      for (const [id, question] of Object.entries(parsed.questions)) {
+        const instructions = question.instructions ?? null;
+        if (question.type === "score") {
+          questions[id] = {
+            ...question,
+            instructions,
+            // Send explicit text so the returned legend can be verified without reproducing Kev's renderer.
+            criteria: question.criteria.map((level) =>
+              typeof level === "string" ? level : level === null ? "" : JSON.stringify(level),
+            ),
+          };
+        } else {
+          questions[id] = { ...question, instructions };
+        }
+      }
+      wireInput = { ...parsed, questions };
+    }
     const baseUrl = config.providerConfig
       ? providerBaseUrl(config.providerConfig.baseUrl)
       : localBaseUrl(config.baseUrl);
     const apiBaseUrl = config.providerConfig ? baseUrl : baseUrl ? `${baseUrl}/v1` : API_BASE_URL;
+    if (assets && apiBaseUrl !== API_BASE_URL) {
+      throw new EvaluationError("TypeSafe images require hosted Jev at /v1.", "unsupported-input");
+    }
     let resolved: ReturnType<typeof resolveProviderHttpRequestConfigWithOriginTrust>;
     let configuredRequest: ReturnType<typeof sanitizeConfiguredModelProviderRequest>;
     try {
@@ -130,6 +160,8 @@ export async function evaluate(
         "credentials-unavailable",
       );
     }
+    // The opt-in describes this request body, not a persistent provider setting.
+    resolved.headers.delete(IMAGE_OPT_IN_HEADER);
     const reflectsCredential = createProviderCredentialMatcher({
       headers: resolved.headers,
       request: configuredRequest,
@@ -137,6 +169,9 @@ export async function evaluate(
       defaultAuthHeader: "Authorization",
       defaultAuthPrefix: "Bearer ",
     });
+    if (assets) {
+      resolved.headers.set(IMAGE_OPT_IN_HEADER, "true");
+    }
     const endpoint = `${resolved.baseUrl}/systemone`;
     const policy = baseUrl
       ? resolveProviderTransportSsrFPolicy({
@@ -146,8 +181,8 @@ export async function evaluate(
           trustConfiguredBaseUrlOrigin: resolved.trustConfiguredBaseUrlOrigin,
         })
       : undefined;
-    const body = JSON.stringify({ ...wireInput, model });
-    if (Buffer.byteLength(body) > MAX_JSON_BYTES) {
+    const body = JSON.stringify({ ...wireInput, model, ...(assets ? { assets } : {}) });
+    if (Buffer.byteLength(body) > (assets ? MAX_IMAGE_REQUEST_BYTES : MAX_JSON_BYTES)) {
       throw new EvaluationError("TypeSafe request exceeds its limit.", "unsupported-input");
     }
     const timeoutMs =
@@ -255,9 +290,33 @@ export async function evaluate(
       cleanup();
     }
     abortSignal?.throwIfAborted();
-    const evaluation = hosted
-      ? parseResult(responsePayload, parsed)
-      : parseLocalResult(responsePayload, wireInput, parsed);
+    if (!assets && !hosted) {
+      if (
+        !responsePayload ||
+        typeof responsePayload !== "object" ||
+        Array.isArray(responsePayload)
+      ) {
+        throw new Error("Invalid local System One response.");
+      }
+      if ("latency_ms" in responsePayload) {
+        const { latency_ms, ...payload } = responsePayload;
+        if (typeof latency_ms !== "number" || !Number.isFinite(latency_ms) || latency_ms < 0) {
+          throw new Error("Invalid local System One latency metadata.");
+        }
+        responsePayload = payload;
+      }
+    }
+    const evaluation = parseResult(responsePayload, wireInput);
+    if (!assets && !hosted) {
+      for (const [id, question] of Object.entries(parsed.questions)) {
+        const answer = evaluation.answers[id];
+        if (question.type === "score" && answer?.type === "score") {
+          answer.legend = Object.fromEntries(
+            question.criteria.map((level, index) => [String(index), level]),
+          );
+        }
+      }
+    }
     return { evaluation };
   } catch (error) {
     throw evaluationError(error, abortSignal?.aborted ?? false);

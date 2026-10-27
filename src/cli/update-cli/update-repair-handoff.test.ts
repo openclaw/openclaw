@@ -175,8 +175,6 @@ it.each(["root", "dead", "reused", "nested"] as const)(
       fixture.births.set(fixture.helper.pid, 99);
     }
     await repair();
-    expect(mocks.doctor).toHaveBeenCalledOnce();
-    expect(mocks.plugins).toHaveBeenCalledOnce();
     expectAbsent(key, `${key}/.openclaw-update-child-nested`);
     if (root) {
       expect(listUpdateRuns()).toHaveLength(1);

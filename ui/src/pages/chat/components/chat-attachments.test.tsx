@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import * as toast from "../../../lib/toast.ts";
+import { useFakeClock as fakeTimers } from "../../../test-helpers/fake-clock.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as payloads from "../attachment-payload-store.ts";
@@ -188,13 +189,6 @@ function previewFixture(
   const redraw = () => preview.update(view());
   onTestFinished(preview.dispose);
   return Object.assign(h, { container: preview.container, previewProps: props });
-}
-
-function fakeTimers() {
-  vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
 }
 
 function imageFile(name: string, bytes: string, type = "image/png") {
@@ -619,6 +613,33 @@ it("retains focused pasted-text actions when a peer read completes and uses curr
   expect(previousDraftChange).not.toHaveBeenCalled();
   expect(currentDraftChange).toHaveBeenCalledExactlyOnceWith("Current draft\n\nRestored text");
   expect(h.attachments.map(({ fileName }) => fileName)).toEqual(["peer.png"]);
+});
+
+it("keeps admission order when preview props lag completed attachment reads", async () => {
+  vi.stubGlobal("FileReader", StubFileReader);
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  StubFileReader.failNames = new Set();
+  StubFileReader.heldReads = [];
+  const h = readFixture([], () =>
+    preview.update({ ...h.props, attachments: [], readRevision: {} }),
+  );
+  const preview = mountSolid(AttachmentPreview, {
+    ...h.props,
+    attachments: [],
+    readRevision: {},
+  });
+  onTestFinished(preview.dispose);
+  StubFileReader.heldNames = new Set(["first.png", "second.png"]);
+  h.append([imageFile("first.png", "one"), imageFile("second.png", "two")]);
+  const [first, second] = StubFileReader.heldReads;
+  expectDefined(first, "first read")();
+  flush();
+  expect(h.attachments).toHaveLength(1);
+  expectDefined(second, "second read")();
+  await h.done.promise;
+  expect(h.attachments.map(({ fileName }) => fileName)).toEqual(["first.png", "second.png"]);
 });
 
 describe("attachment removal names", () => {

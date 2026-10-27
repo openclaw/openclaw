@@ -26,7 +26,6 @@ type NodePendingWorkState = {
 
 type DrainOptions = {
   maxItems?: number;
-  nowMs?: number;
   pairingGeneration?: string;
 };
 
@@ -167,7 +166,7 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   if (!normalizedNodeId) {
     return { revision: 0, items: [], hasMore: false };
   }
-  const nowMs = resolveDateTimestampMs(opts.nowMs ?? Date.now());
+  const nowMs = resolveDateTimestampMs(Date.now());
   const retained = stateByNodeId.get(normalizedNodeId);
   if (retained) {
     pruneExpired(retained, nowMs);

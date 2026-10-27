@@ -7,6 +7,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { resolveSessionTranscriptReadFence } from "../../../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../../../config/sessions/session-transcript-reconcile.js";
+import { appendAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.runtime.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { ImageContent } from "../../../llm/types.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
@@ -16,6 +17,7 @@ import {
   type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { SKILL_WORKSHOP_CHANGE_NOTICE_KIND } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
@@ -30,7 +32,10 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
+import { sessionManagerPrepareCurrentTurnReplay } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   appendCompletedToolWork,
   appendOversizedCacheSnapshot,
@@ -43,10 +48,40 @@ import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 registerAgentSessionLoopTestLifecycle();
 
+function replyWith(text: string) {
+  streamMocks.streamSimple.mockImplementation((model) =>
+    createAssistantResultStream(createAssistant(model, text)),
+  );
+}
+
+async function expectReply(session: AgentSession, submit: () => Promise<void>, text: string) {
+  replyWith(text);
+  await submit();
+  expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+  expect(session.getLastAssistantText()).toBe(text);
+}
+
+function transcriptUsers(events: ReturnType<typeof loadTranscriptEventsSync>) {
+  return events.filter(
+    (entry) => isRecord(entry) && isRecord(entry.message) && entry.message.role === "user",
+  );
+}
+
+type ReplayFixture = Parameters<Parameters<typeof withInterruptedTurn>[1]>[0];
+
+function usersContaining<T extends { role: string; content: unknown }>(
+  messages: readonly T[],
+  text: string,
+) {
+  return messages.filter(
+    (message) => message.role === "user" && JSON.stringify(message.content).includes(text),
+  );
+}
+
 function expectCapturedCurrentUserPrefix(
   before: ReturnType<typeof loadTranscriptEventsSync>,
-  after: ReturnType<typeof loadTranscriptEventsSync>,
-  fixture: Parameters<Parameters<typeof withInterruptedTurn>[1]>[0],
+  fixture: ReplayFixture,
+  after = loadTranscriptEventsSync(fixture.target),
 ) {
   const admission = fixture.attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
   assert(admission, "Expected the replayed current user's admission");
@@ -129,28 +164,77 @@ describe("context engine bootstrap", () => {
 });
 
 describe("interrupted canonical user replay", () => {
-  it.each([
-    { boundary: "same-run progress", sourceReply: { final: false }, resumes: true },
-    { boundary: "same-run final", sourceReply: { final: true }, resumes: false },
-    { boundary: "unmarked mirror", sourceReply: {}, resumes: false },
-    {
-      boundary: "other-run progress",
-      sourceReply: { final: false, runId: "unrelated-run" },
-      resumes: false,
+  it.each([false, true])(
+    "replays once across a background Workshop notice (selected reader: %s)",
+    async (selectedOwner) => {
+      await withInterruptedTurn(
+        false,
+        async (fixture) => {
+          const { attempt, target } = fixture;
+          const appendNotice = vi.fn(async () => {
+            const appended = await appendAssistantMessageToSessionTranscript({
+              ...target,
+              expectedSessionId: target.sessionId,
+              idempotencyKey: `skill-workshop-notice:${attempt.runId}`,
+              text: "One skill changed after review",
+              deliveryMirror: {
+                kind: SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
+                agentId: target.agentId,
+                runId: "background-review",
+                skills: [{ name: "some-skill", action: "updated" }],
+              },
+            });
+            expect(appended.ok).toBe(true);
+          });
+          await withReplaySession(
+            fixture,
+            false,
+            async (session, submit, manager) => {
+              if (!selectedOwner) {
+                const select = manager[sessionManagerPrepareCurrentTurnReplay].bind(manager);
+                vi.spyOn(manager, sessionManagerPrepareCurrentTurnReplay).mockImplementationOnce(
+                  async (...args) => {
+                    const selected = await select(...args);
+                    expect(selected).toBeDefined();
+                    // Change the real transcript after selection, before anchor validation.
+                    await appendNotice();
+                    return selected;
+                  },
+                );
+              }
+              await expectReply(session, submit, "WORKSHOP_NOTICE_RECOVERED");
+              expect(appendNotice).toHaveBeenCalledOnce();
+              expect(
+                loadTranscriptEventsSync(target).filter(
+                  (entry) =>
+                    isRecord(entry) &&
+                    isRecord(entry.message) &&
+                    entry.message.idempotencyKey === `${attempt.runId}:user`,
+                ),
+              ).toHaveLength(1);
+            },
+            selectedOwner ? { afterReplayPreparation: appendNotice } : {},
+          );
+        },
+        { selectedOwner },
+      );
     },
-  ])(
-    "resumes only unfinished same-run source replies across $boundary",
-    async ({ sourceReply, resumes }) => {
+  );
+
+  it.each([
+    ["same-run progress", { final: false }, true],
+    ["same-run final", { final: true }, false],
+    ["unmarked mirror", {}, false],
+    ["other-run progress", { final: false, runId: "unrelated-run" }, false],
+  ] as const)(
+    "resumes only unfinished same-run source replies across %s",
+    async (_boundary, sourceReply, resumes) => {
       await withInterruptedTurn(
         false,
         async (fixture) => {
           const before = loadTranscriptEventsSync(fixture.target);
           await withReplaySession(fixture, false, async (session, submit) => {
-            streamMocks.streamSimple.mockImplementation((model) =>
-              createAssistantResultStream(
-                createAssistant(model, [{ type: "text", text: "Continued after progress" }]),
-              ),
-            );
+            replyWith("Continued after progress");
             await submit();
             if (!resumes) {
               expect(streamMocks.streamSimple).not.toHaveBeenCalled();
@@ -167,13 +251,8 @@ describe("interrupted canonical user replay", () => {
             );
             expect(JSON.stringify(messages)).not.toContain("Still working after restart.");
             const after = loadTranscriptEventsSync(fixture.target);
-            expectCapturedCurrentUserPrefix(before, after, fixture);
-            expect(
-              after.filter(
-                (entry) =>
-                  isRecord(entry) && isRecord(entry.message) && entry.message.role === "user",
-              ),
-            ).toHaveLength(1);
+            expectCapturedCurrentUserPrefix(before, fixture, after);
+            expect(transcriptUsers(after)).toHaveLength(1);
           });
         },
         { sourceReply, toolProgress: true },
@@ -216,12 +295,17 @@ describe("interrupted canonical user replay", () => {
           "Turn yielded.",
           false,
         );
-        await withReplaySession(fixture, false, async (session, submit) => {
+        const before = loadTranscriptEventsSync(fixture.target);
+        await withReplaySession(fixture, false, async (session, submit, manager) => {
           await submit();
-          expect(Reflect.get(session.messages.at(-1)!, "errorMessage")).toMatch(
-            /^Session transcript keyed user is outside the current turn: \S/,
-          );
+          const error = Reflect.get(session.messages.at(-1)!, "errorMessage");
+          expect(isSessionTranscriptTurnMismatchErrorMessage(error)).toBe(true);
           expect(streamMocks.streamSimple).not.toHaveBeenCalled();
+          expect(loadTranscriptEventsSync(fixture.target).slice(0, before.length)).toEqual(before);
+          const users = manager
+            .getBranch()
+            .filter((entry) => entry.type === "message" && entry.message.role === "user");
+          expect(users).toEqual([expect.objectContaining({ message: replacementUser })]);
         });
       },
       { selectedOwner: true, admittedReceipt: true, interruptedTurn: false },
@@ -235,9 +319,7 @@ describe("interrupted canonical user replay", () => {
         const original = guardSessionManager(SessionManager.open(fixture.target), {
           runId: fixture.attempt.runId,
         });
-        await original.appendMessageAsync(
-          createAssistant(testModel, [{ type: "text", text: "Already completed" }]),
-        );
+        await original.appendMessageAsync(createAssistant(testModel, "Already completed"));
         const before = loadTranscriptEventsSync(fixture.target);
         const manager = await SessionManager.openBoundedAsync(fixture.target, {
           maxBytes: 8192,
@@ -268,33 +350,27 @@ describe("interrupted canonical user replay", () => {
   });
 
   it.each([
-    { appendOnly: false, interruptedTurn: false, toolProgress: true, partialText: undefined },
+    { appendOnly: false, interruptedTurn: false, partialText: undefined },
     {
       appendOnly: true,
       interruptedTurn: true,
-      toolProgress: true,
       oversizedMetadata: true,
       partialText: undefined,
     },
     {
       appendOnly: true,
       interruptedTurn: true,
-      toolProgress: true,
       partialText: "Already streamed answer",
     },
   ])(
-    "replays one user after restart (carrier=$appendOnly, abort row=$interruptedTurn, tools=$toolProgress, oversized metadata=$oversizedMetadata, partial=$partialText)",
-    async ({ appendOnly, interruptedTurn, toolProgress, oversizedMetadata, partialText }) => {
-      let observedWalks = 0;
-      const nativeReadFailures: unknown[] = [];
+    "replays one user after restart (carrier=$appendOnly, abort row=$interruptedTurn, oversized metadata=$oversizedMetadata, partial=$partialText)",
+    async ({ appendOnly, interruptedTurn, oversizedMetadata, partialText }) => {
       const prepare = persistedReplay.preparePersistedCurrentUserTurn;
       const observe = async <T>(operation: (beforeConsume: () => void) => Promise<T>) => {
         const sql = observeMainThreadSql();
         const finish = () => {
           try {
             sql.expectIdle();
-          } catch (error) {
-            nativeReadFailures.push(error);
           } finally {
             sql.restore();
           }
@@ -302,7 +378,6 @@ describe("interrupted canonical user replay", () => {
         try {
           return await operation(finish);
         } finally {
-          observedWalks++;
           finish();
         }
       };
@@ -334,32 +409,18 @@ describe("interrupted canonical user replay", () => {
           const before = loadTranscriptEventsSync(fixture.target);
           await withReplaySession(fixture, appendOnly, async (session, submit) => {
             expect(fixture.attempt.userTurnTranscriptRecorder!.hasPersisted()).toBe(true);
-            streamMocks.streamSimple.mockImplementation((model) =>
-              createAssistantResultStream(
-                createAssistant(model, [{ type: "text", text: "Continued from completed work" }]),
-              ),
-            );
-            await submit();
+            await expectReply(session, submit, "Continued from completed work");
             expect(Reflect.get(session.messages.at(-1)!, "errorMessage")).toBeUndefined();
-            expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
             const messages = streamMocks.streamSimple.mock.calls[0]![1].messages;
-            expect(
-              messages.filter(
-                (message: { role: string; content: unknown }) =>
-                  message.role === "user" &&
-                  JSON.stringify(message.content).includes(fixture.attempt.prompt),
-              ),
-            ).toHaveLength(1);
-            if (toolProgress) {
-              expect(JSON.stringify(messages)).not.toContain("Nested read completed");
-              expect(messages).toContainEqual(
-                expect.objectContaining({
-                  role: "toolResult",
-                  toolCallId: "completed-read",
-                  content: [{ type: "text", text: "Already read: use this completed result" }],
-                }),
-              );
-            }
+            expect(usersContaining(messages, fixture.attempt.prompt)).toHaveLength(1);
+            expect(JSON.stringify(messages)).not.toContain("Nested read completed");
+            expect(messages).toContainEqual(
+              expect.objectContaining({
+                role: "toolResult",
+                toolCallId: "completed-read",
+                content: [{ type: "text", text: "Already read: use this completed result" }],
+              }),
+            );
             if (oversizedMetadata) {
               expect(
                 messages.flatMap((message: { role: string; toolCallId?: string }) =>
@@ -367,9 +428,8 @@ describe("interrupted canonical user replay", () => {
                 ),
               ).toEqual(["completed-read-before-window", "completed-read"]);
             }
-            expect(session.getLastAssistantText()).toBe("Continued from completed work");
             const after = loadTranscriptEventsSync(fixture.target);
-            expectCapturedCurrentUserPrefix(before, after, fixture);
+            expectCapturedCurrentUserPrefix(before, fixture, after);
             if (oversizedMetadata) {
               expect(
                 after.filter(
@@ -378,17 +438,55 @@ describe("interrupted canonical user replay", () => {
                 ),
               ).toHaveLength(2);
             }
-            expect(
-              after.filter(
-                (entry) => (entry as { message?: { role?: string } }).message?.role === "user",
-              ),
-            ).toHaveLength(1);
+            expect(transcriptUsers(after)).toHaveLength(1);
           });
         },
-        { interruptedTurn, toolProgress, oversizedMetadata, partialText },
+        { interruptedTurn, toolProgress: true, oversizedMetadata, partialText },
       );
-      expect(observedWalks).toBeGreaterThan(0);
-      expect(nativeReadFailures).toEqual([]);
+      expect(replayRead).toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "resends a rate-limited request without output unchanged after completed tools (carrier=%s)",
+    async (appendOnly) => {
+      await withInterruptedTurn(
+        appendOnly,
+        async (fixture) => {
+          const requests: Array<Array<{ role: string }>> = [];
+          streamMocks.streamSimple.mockImplementation((model, context) => {
+            requests.push(structuredClone(context.messages));
+            return createAssistantResultStream(
+              requests.length === 1
+                ? {
+                    ...createAssistant(model, [], "error"),
+                    usage: createZeroUsageFixture(),
+                    errorMessage: "Rate limit reached on tokens per min (TPM).",
+                  }
+                : createAssistant(model, "Continued from completed work"),
+            );
+          });
+          // The provider rejects the first request; the retry builds a fresh session boundary.
+          await withReplaySession(fixture, appendOnly, async (_session, submit) => {
+            await submit();
+          });
+          await withReplaySession(fixture, appendOnly, async (session, submit) => {
+            await submit();
+            expect(session.getLastAssistantText()).toBe("Continued from completed work");
+          });
+
+          const [rejected, retried] = requests;
+          // Only the regenerated tail runtime context may differ; the cached prefix stays put.
+          const prefixLength = appendOnly ? rejected!.length : rejected!.length - 1;
+          expect(retried).toHaveLength(rejected!.length);
+          expect(retried!.slice(0, prefixLength)).toEqual(rejected!.slice(0, prefixLength));
+          expect(retried!.at(-1)).toMatchObject(
+            appendOnly ? { role: "toolResult" } : { role: "user", runtimeContextCarrier: true },
+          );
+          expect(transcriptUsers(loadTranscriptEventsSync(fixture.target))).toHaveLength(1);
+        },
+        { interruptedTurn: false, toolProgress: true },
+      );
     },
   );
 
@@ -399,11 +497,7 @@ describe("interrupted canonical user replay", () => {
         const persisted = vi.fn();
         fixture.attempt.onUserMessagePersisted = persisted;
         await withReplaySession(fixture, true, async (_session, submit) => {
-          streamMocks.streamSimple.mockImplementation((model) =>
-            createAssistantResultStream(
-              createAssistant(model, [{ type: "text", text: "Continued from completed work" }]),
-            ),
-          );
+          replyWith("Continued from completed work");
           await submit();
         });
         // Retries and fallbacks skip re-appending only after this report. A
@@ -418,125 +512,87 @@ describe("interrupted canonical user replay", () => {
     );
   });
 
-  it.each([
-    { appendOnly: false, queue: "steer" },
-    { appendOnly: false, queue: "follow-up" },
-  ])(
-    "persists the next $queue user after replay with append-only context $appendOnly",
-    async ({ appendOnly, queue }) => {
-      await withInterruptedTurn(appendOnly, async (fixture) => {
-        const before = loadTranscriptEventsSync(fixture.target);
-        await withReplaySession(fixture, appendOnly, async (session, submit) => {
-          const queuedText = "A distinct queued user request";
-          const recorder =
-            queue === "steer"
-              ? createUserTurnTranscriptRecorder({
-                  target: { ...fixture.target, sessionEntry: undefined },
-                  input: { text: queuedText, timestamp: 2, idempotencyKey: "queued-user:user" },
-                })
-              : undefined;
-          streamMocks.streamSimple.mockImplementation((model) =>
-            createAssistantResultStream(
-              createAssistant(model, [{ type: "text", text: "Both requests handled" }]),
+  it.each(["steer", "follow-up"])("persists the next %s user after replay", async (queue) => {
+    await withInterruptedTurn(false, async (fixture) => {
+      const before = loadTranscriptEventsSync(fixture.target);
+      await withReplaySession(fixture, false, async (session, submit) => {
+        const queuedText = "A distinct queued user request";
+        const recorder =
+          queue === "steer"
+            ? createUserTurnTranscriptRecorder({
+                target: { ...fixture.target, sessionEntry: undefined },
+                input: { text: queuedText, timestamp: 2, idempotencyKey: "queued-user:user" },
+              })
+            : undefined;
+        replyWith("Both requests handled");
+        try {
+          if (recorder) {
+            await recorder.stageApproved!({
+              runId: fixture.attempt.runId,
+              assertCurrent: () => {},
+            });
+            await session.steer(queuedText, undefined, recorder);
+          } else {
+            await session.followUp(queuedText);
+          }
+          await submit();
+          expect(
+            streamMocks.streamSimple.mock.calls.some(([, context]) =>
+              JSON.stringify(context.messages).includes(queuedText),
             ),
-          );
-          try {
-            if (recorder) {
-              await recorder.stageApproved!({
-                runId: fixture.attempt.runId,
-                assertCurrent: () => {},
-              });
-              await session.steer(queuedText, undefined, recorder);
-            } else {
-              await session.followUp(queuedText);
-            }
-            await submit();
-            expect(
-              streamMocks.streamSimple.mock.calls.some(([, context]) =>
-                JSON.stringify(context.messages).includes(queuedText),
+          ).toBe(true);
+          expectCapturedCurrentUserPrefix(before, fixture);
+          for (const [, context] of streamMocks.streamSimple.mock.calls) {
+            expect(usersContaining(context.messages, fixture.attempt.prompt)).toHaveLength(1);
+          }
+          expect(
+            SessionManager.open(fixture.target)
+              .getBranch()
+              .filter(
+                (entry) =>
+                  entry.type === "message" &&
+                  entry.message.role === "user" &&
+                  JSON.stringify(entry.message.content).includes(queuedText),
               ),
-            ).toBe(true);
-            expectCapturedCurrentUserPrefix(
-              before,
-              loadTranscriptEventsSync(fixture.target),
-              fixture,
-            );
-            for (const [, context] of streamMocks.streamSimple.mock.calls) {
-              expect(
-                context.messages.filter(
-                  (message: { role: string; content: unknown }) =>
-                    message.role === "user" &&
-                    JSON.stringify(message.content).includes(fixture.attempt.prompt),
-                ),
-              ).toHaveLength(1);
-            }
+          ).toHaveLength(1);
+          if (recorder) {
+            expect(recorder.hasPersisted()).toBe(true);
+          }
+        } finally {
+          recorder?.finishPendingInput!("interrupted");
+        }
+      });
+    });
+  });
+
+  it("hydrates one current user through the built-in owner without interruption", async () => {
+    await withInterruptedTurn(
+      false,
+      async (fixture) => {
+        const image: ImageContent = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };
+        const before = loadTranscriptEventsSync(fixture.target);
+        await withReplaySession(
+          fixture,
+          false,
+          async (session, submit) => {
+            await expectReply(session, submit, "Image turn recovered");
+            const messages = streamMocks.streamSimple.mock.calls[0]![1].messages;
+            const users = usersContaining(messages, fixture.attempt.prompt);
+            expect(users).toHaveLength(1);
+            expect(users[0]?.content).toContainEqual(image);
+            expectCapturedCurrentUserPrefix(before, fixture);
             expect(
               SessionManager.open(fixture.target)
                 .getBranch()
-                .filter(
-                  (entry) =>
-                    entry.type === "message" &&
-                    entry.message.role === "user" &&
-                    JSON.stringify(entry.message.content).includes(queuedText),
-                ),
+                .filter((entry) => entry.type === "message" && entry.message.role === "user"),
             ).toHaveLength(1);
-            if (recorder) {
-              expect(recorder.hasPersisted()).toBe(true);
-            }
-          } finally {
-            recorder?.finishPendingInput!("interrupted");
-          }
-        });
-      });
-    },
-  );
-
-  it.each([false])(
-    "hydrates one current user through the built-in owner with interruption %s",
-    async (interrupted) => {
-      await withInterruptedTurn(
-        false,
-        async (fixture) => {
-          const image: ImageContent = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };
-          const before = loadTranscriptEventsSync(fixture.target);
-          await withReplaySession(
-            fixture,
-            false,
-            async (session, submit) => {
-              streamMocks.streamSimple.mockImplementation((model) =>
-                createAssistantResultStream(
-                  createAssistant(model, [{ type: "text", text: "Image turn recovered" }]),
-                ),
-              );
-              await submit();
-              expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-              const messages = streamMocks.streamSimple.mock.calls[0]![1].messages;
-              const users = messages.filter(
-                (message: { role: string; content: unknown }) =>
-                  message.role === "user" &&
-                  JSON.stringify(message.content).includes(fixture.attempt.prompt),
-              );
-              expect(users).toHaveLength(1);
-              expect(users[0]?.content).toContainEqual(image);
-              expectCapturedCurrentUserPrefix(
-                before,
-                loadTranscriptEventsSync(fixture.target),
-                fixture,
-              );
-              expect(
-                SessionManager.open(fixture.target)
-                  .getBranch()
-                  .filter((entry) => entry.type === "message" && entry.message.role === "user"),
-              ).toHaveLength(1);
-              expect(session.getLastAssistantText()).toBe("Image turn recovered");
-            },
-            { images: finalizeRuntimePromptImages([{ image, factIndex: 0 }]).images },
-          );
-        },
-        { interruptedTurn: interrupted },
-      );
-    },
-  );
+          },
+          { images: finalizeRuntimePromptImages([{ image, factIndex: 0 }]).images },
+        );
+      },
+      { interruptedTurn: false },
+    );
+  });
 
   it("preserves an existing user/carrier reasoning prefix during SDK replay", async () => {
     const manager = SessionManager.inMemory();
@@ -570,9 +626,7 @@ describe("interrupted canonical user replay", () => {
     const { session } = await createTestSession({ sessionManager: manager });
     const before = structuredClone(session.messages);
     const providerPrefix = await session.agent.convertToLlm(before);
-    streamMocks.streamSimple.mockImplementation((model) =>
-      createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Continued" }])),
-    );
+    replyWith("Continued");
     try {
       await session.prompt("Rebuilt prompt", {
         persistedUserIdempotencyKey: user.idempotencyKey,
@@ -612,40 +666,36 @@ describe("interrupted canonical user replay", () => {
     });
   });
 
-  it.each(["partial", "final", "other-run", "coded-abort"] as const)(
-    "does not promote a %s tail into replay authority",
-    async (tail) => {
-      await withInterruptedTurn(false, async (fixture) => {
-        const original = guardSessionManager(SessionManager.open(fixture.target), {
-          runId: tail === "other-run" ? "unrelated-run" : fixture.attempt.runId,
+  it.each([
+    ["tail", "partial"],
+    ["tail", "final"],
+    ["tail", "other-run"],
+    ["tail", "coded-abort"],
+    ["tool-work", "other-run"],
+    ["tool-work", "final"],
+    ["tool-work", "hidden-user"],
+    ["tool-work", "unknown-activity"],
+  ] as const)("does not resume %s across a %s boundary", async (kind, boundary) => {
+    await withInterruptedTurn(false, async (fixture) => {
+      const original = SessionManager.open(fixture.target);
+      if (kind === "tail") {
+        const guarded = guardSessionManager(original, {
+          runId: boundary === "other-run" ? "unrelated-run" : fixture.attempt.runId,
         });
         const message = createFailureMessage(testModel, createAgentRunRestartAbortError(), true);
-        if (tail === "partial") {
+        if (boundary === "partial") {
           message.content = [{ type: "text", text: "partial response" }];
-        } else if (tail === "final") {
+        } else if (boundary === "final") {
           message.stopReason = "stop";
           message.content = [{ type: "text", text: "NO_REPLY" }];
-        } else if (tail === "coded-abort") {
+        } else if (boundary === "coded-abort") {
           Object.assign(message, { errorCode: "OPENCLAW_DIRECT_ABORT" });
         }
-        original.appendMessage(message);
-        await withReplaySession(fixture, false, async (_session, submit) => {
-          await submit();
-          expect(streamMocks.streamSimple).not.toHaveBeenCalled();
-          expect(fixture.attempt.userTurnTranscriptRecorder!.hasPersisted()).toBe(false);
-        });
-      });
-    },
-  );
-
-  it.each(["other-run", "final", "hidden-user", "unknown-activity"] as const)(
-    "does not resume tool work across %s transcript entries",
-    async (boundary) => {
-      await withInterruptedTurn(false, async (fixture) => {
-        const original = SessionManager.open(fixture.target);
+        guarded.appendMessage(message);
+      } else {
         if (boundary === "final") {
           guardSessionManager(original, { runId: fixture.attempt.runId }).appendMessage(
-            createAssistant(testModel, [{ type: "text", text: "Already finished" }]),
+            createAssistant(testModel, "Already finished"),
           );
         }
         await appendCompletedToolWork(
@@ -674,54 +724,34 @@ describe("interrupted canonical user replay", () => {
           },
         );
         await appendOversizedCacheSnapshot(original);
-        await withReplaySession(fixture, false, async (_session, submit) => {
-          await submit();
-          expect(streamMocks.streamSimple).not.toHaveBeenCalled();
-          expect(fixture.attempt.userTurnTranscriptRecorder!.hasPersisted()).toBe(false);
-        });
+      }
+      await withReplaySession(fixture, false, async (_session, submit) => {
+        await submit();
+        expect(streamMocks.streamSimple).not.toHaveBeenCalled();
+        expect(fixture.attempt.userTurnTranscriptRecorder!.hasPersisted()).toBe(false);
       });
-    },
-  );
+    });
+  });
 
-  it.each([{ ordering: "pre-core-compaction", appendOnly: false }])(
-    "replays the same interrupted turn after $ordering with append-only context $appendOnly",
-    async ({ ordering, appendOnly }) => {
-      await withInterruptedTurn(appendOnly, async (fixture) => {
-        if (ordering === "repeated-restart") {
-          const previous = guardSessionManager(SessionManager.open(fixture.target), {
-            runId: fixture.attempt.runId,
-          });
-          previous.appendMessage(
-            createFailureMessage(testModel, createAgentRunRestartAbortError(), true),
-          );
-        }
-        let activeSession: AgentSession;
-        await withReplaySession(
-          fixture,
-          appendOnly,
-          async (session, submit) => {
-            activeSession = session;
-            streamMocks.streamSimple.mockImplementation((model) =>
-              createAssistantResultStream(
-                createAssistant(model, [{ type: "text", text: "Recovered same turn" }]),
-              ),
-            );
-            await submit();
-            expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-            expect(session.getLastAssistantText()).toBe("Recovered same turn");
+  it("replays the same interrupted turn after pre-core compaction", async () => {
+    await withInterruptedTurn(false, async (fixture) => {
+      let activeSession: AgentSession;
+      await withReplaySession(
+        fixture,
+        false,
+        async (session, submit) => {
+          activeSession = session;
+          await expectReply(session, submit, "Recovered same turn");
+        },
+        {
+          recovery: "compaction",
+          beforeStart: async () => {
+            await activeSession.compact();
           },
-          ordering === "pre-core-compaction"
-            ? {
-                recovery: "compaction",
-                beforeStart: async () => {
-                  await activeSession.compact();
-                },
-              }
-            : {},
-        );
-      });
-    },
-  );
+        },
+      );
+    });
+  });
 
   it.each(
     (
@@ -772,9 +802,7 @@ describe("interrupted canonical user replay", () => {
             }
           }
           if (change === "final") {
-            other.appendMessage(
-              createAssistant(testModel, [{ type: "text", text: "already done" }]),
-            );
+            other.appendMessage(createAssistant(testModel, "already done"));
           }
           if (change === "reset") {
             other.appendResetBoundary("reset");
@@ -855,11 +883,7 @@ describe("interrupted canonical user replay", () => {
                     },
               ),
             );
-            streamMocks.streamSimple.mockImplementation((model) =>
-              createAssistantResultStream(
-                createAssistant(model, [{ type: "text", text: "Recovered after retry" }]),
-              ),
-            );
+            replyWith("Recovered after retry");
             await submit();
             expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
             expect(session.getLastAssistantText()).toBe("Recovered after retry");
@@ -871,44 +895,31 @@ describe("interrupted canonical user replay", () => {
   );
 });
 
-it.each([
-  { kind: "explicit override", detached: true, fresh: false, explicit: "caller-cache-key" },
-])(
-  "derives boundary cache affinity from the prompt owner ($kind)",
-  async ({ detached, fresh, explicit }) => {
-    await withInterruptedTurn(
-      false,
-      async ({ attempt, target, prepare }) => {
-        const durable = SessionManager.open(target, attempt.workspaceDir);
-        const manager = !detached
-          ? durable
-          : fresh
-            ? SessionManager.inMemory(attempt.workspaceDir)
-            : SessionManager.fromEntries(
-                [durable.getHeader(), ...durable.getBranch()],
-                attempt.workspaceDir,
-              );
-        attempt.sessionManager = manager;
-        attempt.userTurnTranscriptRecorder = undefined;
-        attempt.sessionPersistence = detached ? "detached" : "durable";
-        attempt.promptCacheKey = explicit;
-        if (detached) {
-          attempt.sessionId = "private-helper-routing-identity";
-          attempt.sessionKey = "agent:main:internal-session-effects:cache-fixture";
-          attempt.sessionTarget = {
-            ...target,
-            sessionId: attempt.sessionId,
-            sessionKey: attempt.sessionKey,
-          };
-          attempt.sessionFile = attempt.sessionKey;
-        }
-        const expected = explicit ?? `${manager.getSessionId()}:${manager.getBoundaryCount()}`;
-        const before = loadTranscriptEventsSync(target);
-        await prepare();
-        expect(attempt.promptCacheKey).toBe(expected);
-        expect(loadTranscriptEventsSync(target)).toEqual(before);
-      },
-      { interruptedTurn: false },
-    );
-  },
-);
+it("preserves explicit boundary cache affinity for a detached prompt owner", async () => {
+  await withInterruptedTurn(
+    false,
+    async ({ attempt, target, prepare }) => {
+      const durable = SessionManager.open(target, attempt.workspaceDir);
+      attempt.sessionManager = SessionManager.fromEntries(
+        [durable.getHeader(), ...durable.getBranch()],
+        attempt.workspaceDir,
+      );
+      attempt.userTurnTranscriptRecorder = undefined;
+      attempt.sessionPersistence = "detached";
+      attempt.promptCacheKey = "caller-cache-key";
+      attempt.sessionId = "private-helper-routing-identity";
+      attempt.sessionKey = "agent:main:internal-session-effects:cache-fixture";
+      attempt.sessionTarget = {
+        ...target,
+        sessionId: attempt.sessionId,
+        sessionKey: attempt.sessionKey,
+      };
+      attempt.sessionFile = attempt.sessionKey;
+      const before = loadTranscriptEventsSync(target);
+      await prepare();
+      expect(attempt.promptCacheKey).toBe("caller-cache-key");
+      expect(loadTranscriptEventsSync(target)).toEqual(before);
+    },
+    { interruptedTurn: false },
+  );
+});

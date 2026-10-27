@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import plugin from "../index.js";
 import { WorkboardStore } from "./store.js";
+import { toolsByName } from "./test/interaction-fixtures.js";
 import { startEmptySessionsBoardService } from "./test/sessions-board.js";
 import {
   createWorkboardSqliteTestHarness,
@@ -99,9 +100,7 @@ describe("workboard tools", () => {
       if (!Array.isArray(sessionsTools)) {
         throw new Error("Expected Sessions board tools from the registered factory.");
       }
-      const tools = new Map(
-        [...createWorkboardTools({ store }), ...sessionsTools].map((tool) => [tool.name, tool]),
-      );
+      const tools = toolsByName([...createWorkboardTools({ store }), ...sessionsTools]);
       const read = expectDefined(tools.get("workboard_sessions_board_read"), "Sessions board read");
       const update = expectDefined(
         tools.get("workboard_sessions_board_update"),
@@ -179,11 +178,11 @@ describe("workboard tools", () => {
       workspaceDir: "/workspace",
       fsPolicy: { workspaceOnly: true },
     } as const;
-    const restricted = new Map(
+    const restricted = toolsByName(
       guardWorkboardToolsForWorkspaceAccess(
         createWorkboardTools({ store, context: restrictedContext }),
         restrictedContext,
-      ).map((tool) => [tool.name, tool]),
+      ),
     );
 
     await expect(
@@ -205,11 +204,11 @@ describe("workboard tools", () => {
       workspaceDir: "/workspace",
       fsPolicy: { workspaceOnly: false },
     } as const;
-    const unrestricted = new Map(
+    const unrestricted = toolsByName(
       guardWorkboardToolsForWorkspaceAccess(
         createWorkboardTools({ store, context: unrestrictedContext }),
         unrestrictedContext,
-      ).map((tool) => [tool.name, tool]),
+      ),
     );
     await expect(
       unrestricted.get("workboard_create")?.execute("unrestricted", {
@@ -235,11 +234,11 @@ describe("workboard tools", () => {
       fsPolicy: { workspaceOnly: false },
       sandboxed: true,
     } as const;
-    const sandboxed = new Map(
+    const sandboxed = toolsByName(
       guardWorkboardToolsForWorkspaceAccess(
         createWorkboardTools({ store, context: sandboxContext }),
         sandboxContext,
-      ).map((tool) => [tool.name, tool]),
+      ),
     );
     await expect(
       sandboxed.get("workboard_create")?.execute("sandbox-outside", {
@@ -263,10 +262,8 @@ describe("workboard tools", () => {
         },
       },
     };
-    const tools = new Map(
-      guardWorkboardToolsForWorkspaceAccess(createWorkboardTools({ store, context }), context).map(
-        (tool) => [tool.name, tool],
-      ),
+    const tools = toolsByName(
+      guardWorkboardToolsForWorkspaceAccess(createWorkboardTools({ store, context }), context),
     );
 
     const created = readPayload(
@@ -294,7 +291,7 @@ describe("workboard tools", () => {
       store: workboardStore,
       context: { agentId: "main", sessionKey: "session-1" },
     });
-    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    const byName = toolsByName(tools);
 
     const store = keyed;
     await store.register("card-1", {
@@ -405,12 +402,7 @@ describe("workboard tools", () => {
     const store = createWorkboardSqliteTestStore();
     const parent = await store.create({ title: "Completed parent", status: "done" });
     const child = await store.create({ title: "Blocked child", parents: [parent.id] });
-    const tools = new Map(
-      createWorkboardTools({ store, context: { agentId: "main" } }).map((tool) => [
-        tool.name,
-        tool,
-      ]),
-    );
+    const tools = toolsByName(createWorkboardTools({ store, context: { agentId: "main" } }));
     const claim = expectDefined(tools.get("workboard_claim"), "Workboard claim");
     const claimed = readPayload(await claim.execute("claim", { id: child.id }));
     await expectDefined(tools.get("workboard_block"), "Workboard block").execute("block", {
@@ -432,7 +424,7 @@ describe("workboard tools", () => {
       store,
       context: { agentId: "main" },
     });
-    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    const byName = toolsByName(tools);
     const token = "claim-token-1";
     await keyed.register("card-1", {
       version: 1,
@@ -484,17 +476,17 @@ describe("workboard tools", () => {
 
   it("requires claim scope before creating or linking dependencies against claimed cards", async () => {
     const store = createWorkboardSqliteTestStore();
-    const mainTools = new Map(
+    const mainTools = toolsByName(
       createWorkboardTools({
         store,
         context: { agentId: "main" },
-      }).map((tool) => [tool.name, tool]),
+      }),
     );
-    const otherTools = new Map(
+    const otherTools = toolsByName(
       createWorkboardTools({
         store,
         context: { agentId: "other" },
-      }).map((tool) => [tool.name, tool]),
+      }),
     );
     const parent = await store.create({ title: "Claimed parent" });
     const claimed = await store.claim(parent.id, { ownerId: "main", token: "parent-token" });
@@ -554,11 +546,11 @@ describe("workboard tools", () => {
 
   it("creates dependent cards and completes claimed work through tools", async () => {
     const store = createWorkboardSqliteTestStore();
-    const tools = new Map(
+    const tools = toolsByName(
       createWorkboardTools({
         store,
         context: { agentId: "main" },
-      }).map((tool) => [tool.name, tool]),
+      }),
     );
 
     const parentPayload = readPayload(
@@ -631,11 +623,11 @@ describe("workboard tools", () => {
 
   it("redacts claim tokens from dispatch tool results", async () => {
     const store = createWorkboardSqliteTestStore();
-    const tools = new Map(
+    const tools = toolsByName(
       createWorkboardTools({
         store,
         context: { agentId: "main" },
-      }).map((tool) => [tool.name, tool]),
+      }),
     );
     const card = await store.create({
       title: "Scheduled",
@@ -666,11 +658,11 @@ describe("workboard tools", () => {
 
   it("exposes board lifecycle, decomposition, runs, and notification tools", async () => {
     const store = createWorkboardSqliteTestStore();
-    const tools = new Map(
+    const tools = toolsByName(
       createWorkboardTools({
         store,
         context: { agentId: "main" },
-      }).map((tool) => [tool.name, tool]),
+      }),
     );
 
     const boardPayload = readPayload(
@@ -799,12 +791,7 @@ describe("workboard tools", () => {
 
   it("moves cards with agent claim scope", async () => {
     const store = createWorkboardSqliteTestStore();
-    const tools = new Map(
-      createWorkboardTools({ store, context: { agentId: "agent-b" } }).map((tool) => [
-        tool.name,
-        tool,
-      ]),
-    );
+    const tools = toolsByName(createWorkboardTools({ store, context: { agentId: "agent-b" } }));
     const card = await store.create({ title: "Move tool card", status: "todo" });
 
     const unclaimed = readPayload(
@@ -830,6 +817,126 @@ describe("workboard tools", () => {
         token: "test-auth-token",
       }),
     );
-    expect(claimed.card).toMatchObject({ status: "review" });
+    // Review is not terminal: the claim stays with its owner.
+    expect(claimed.card).toMatchObject({
+      status: "review",
+      metadata: { claim: { ownerId: "agent-a" } },
+    });
   });
+});
+
+async function createDispatchedCard(store: ReturnType<typeof createWorkboardSqliteTestStore>) {
+  const card = await store.create({ title: "Dispatched card", status: "ready" });
+  const claim = await store.claim(card.id, { ownerId: "agent-a" });
+  const prepared = await store.prepareExecutionLaunch(card.id, {
+    requestedSessionKey: "subagent:workboard-terminal",
+    now: claim.card.updatedAt + 1,
+    scope: { ownerId: "agent-a", token: claim.token },
+  });
+  const sessionKey = "agent:main:subagent:workboard-terminal";
+  await store.acceptExecutionLaunch(card.id, {
+    expectedLaunch: prepared.launch,
+    expectedSessionKey: prepared.launch.requestedSessionKey,
+    expectedRunId: prepared.launch.provisionalRunId,
+    sessionKey,
+    runId: "terminal-run",
+    execution: { ...prepared.card.execution!, sessionKey, runId: "terminal-run" },
+    acceptedAt: prepared.launch.preparedAt + 1,
+  });
+  return { card, token: claim.token };
+}
+
+async function expectRunFinished(
+  store: ReturnType<typeof createWorkboardSqliteTestStore>,
+  id: string,
+  status: "done" | "blocked",
+) {
+  const card = expectDefined(await store.get(id), "terminal card");
+  expect(card).toMatchObject({ status, execution: { status } });
+  expect(card.metadata?.claim).toBeUndefined();
+  expect(card.metadata?.attempts).toEqual([
+    expect.objectContaining({ status: status === "done" ? "succeeded" : "blocked" }),
+  ]);
+  expect(card.metadata?.failureCount ?? 0).toBe(status === "done" ? 0 : 1);
+  expect(card.metadata?.notifications?.map((notification) => notification.kind)).toEqual([
+    status === "done" ? "completed" : "failed",
+  ]);
+  const next = await store.create({ title: "Next card", status: "ready" });
+  await expect(store.claim(next.id, { ownerId: "agent-a" })).resolves.toMatchObject({
+    card: { status: "running" },
+  });
+}
+
+describe("workboard terminal status writes", () => {
+  it.each(["done", "blocked"] as const)(
+    "releases the claim and finishes the run when workboard_move targets %s",
+    async (status) => {
+      const store = createWorkboardSqliteTestStore();
+      const tools = toolsByName(createWorkboardTools({ store, context: { agentId: "agent-a" } }));
+      const { card, token } = await createDispatchedCard(store);
+
+      const moved = readPayload(
+        await tools.get("workboard_move")?.execute("move-terminal", { id: card.id, status, token }),
+      );
+
+      expect(moved.card).toMatchObject({ status });
+      await expectRunFinished(store, card.id, status);
+    },
+  );
+
+  it("releases the claim when update writes done", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const { card } = await createDispatchedCard(store);
+
+    await store.update(card.id, { status: "done" });
+
+    await expectRunFinished(store, card.id, "done");
+  });
+
+  it("counts block() once, including later blocked writes", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const { card, token } = await createDispatchedCard(store);
+
+    await store.block(card.id, { ownerId: "agent-a", token, reason: "Workboard card blocked." });
+    await store.move(card.id, "blocked", undefined);
+    await store.update(card.id, { status: "blocked" });
+
+    await expectRunFinished(store, card.id, "blocked");
+  });
+
+  it.each(["done", "blocked"] as const)(
+    "only releases the claim when moving to %s after the run already ended",
+    async (status) => {
+      const store = createWorkboardSqliteTestStore();
+      const { card } = await createDispatchedCard(store);
+      const running = expectDefined(await store.get(card.id), "running card");
+      const now = running.updatedAt + 1;
+      await store.syncLifecycle(card.id, {
+        targetStatus: "review",
+        executionStatus: "done",
+        sourceUpdatedAt: now,
+        stale: undefined,
+        now,
+        association: {
+          expectedSessionKey: running.sessionKey,
+          expectedRunId: running.runId,
+          sessionKey: running.sessionKey!,
+          runId: running.runId,
+        },
+      });
+
+      await store.move(card.id, status, undefined);
+
+      const moved = expectDefined(await store.get(card.id), "moved card");
+      expect(moved).toMatchObject({ status, execution: { status: "done" } });
+      expect(moved.metadata?.claim).toBeUndefined();
+      expect(moved.metadata?.attempts).toEqual([expect.objectContaining({ status: "succeeded" })]);
+      expect(moved.metadata?.failureCount ?? 0).toBe(0);
+      expect(moved.metadata?.notifications ?? []).toEqual([]);
+      const next = await store.create({ title: "Next card", status: "ready" });
+      await expect(store.claim(next.id, { ownerId: "agent-a" })).resolves.toMatchObject({
+        card: { status: "running" },
+      });
+    },
+  );
 });

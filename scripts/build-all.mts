@@ -102,6 +102,12 @@ const pluginAssetStep = (phase: "build" | "copy") =>
     phase,
   ]);
 export const BUILD_ALL_STEPS: BuildAllStep[] = [
+  nodeStep("runtime:scripts:check", [
+    "--import",
+    "./scripts/tsx.mjs",
+    "scripts/generate-runtime-script-assets.mjs",
+    "--check",
+  ]),
   nodeStep("native-protocol", ["scripts/prepare-native-protocol.mjs"]),
   nodeStep("clean:dist", [
     "-e",
@@ -166,7 +172,9 @@ const RUNTIME_FINALIZE_STEP_LABELS = [
   "runtime-postbuild-stamp",
 ] as const;
 const RUNTIME_STEP_LABELS = [...RUNTIME_SETUP_STEP_LABELS, ...RUNTIME_FINALIZE_STEP_LABELS];
+const RUNTIME_SOURCE_CHECK_STEP_LABELS = ["runtime:scripts:check"];
 const ASSET_RUNTIME_STEP_LABELS = [
+  ...RUNTIME_SOURCE_CHECK_STEP_LABELS,
   "plugins:assets:build",
   "tsdown",
   ...RUNTIME_SETUP_STEP_LABELS,
@@ -180,21 +188,22 @@ const FINAL_BUILD_ARTIFACTS_STEP_LABELS = [
   "ui:build",
   ...BUILD_METADATA_STEP_LABELS,
 ] as const;
-const CI_ARTIFACT_STEP_LABELS = [
-  "native-protocol",
-  ...ASSET_RUNTIME_STEP_LABELS,
-  "write-plugin-sdk-entry-dts",
-  ...FINAL_BUILD_ARTIFACTS_STEP_LABELS,
-];
 // The final runtime pass rewrites package JS without declaration modules, whose
 // shared helpers otherwise change chunk boundaries between full/runtime builds.
 // Isolated plugin assets finish before declarations capture their inputs.
-const FULL_RUNTIME_STEP_LABELS = ASSET_RUNTIME_STEP_LABELS.flatMap((step) =>
-  step === "tsdown"
-    ? ["tsdown-ai", "tsdown-packages", "tsdown"]
-    : step === "external-plugins:local-dist"
-      ? [step, "write-unified-entry-dts"]
-      : [step],
+const PACKAGE_DECLARATION_RUNTIME_STEP_LABELS = ASSET_RUNTIME_STEP_LABELS.flatMap((step) =>
+  step === "tsdown" ? ["tsdown-ai", "tsdown-packages", "tsdown"] : [step],
+);
+// Each package declaration program sees only its own `/// <reference lib>`
+// directives; the shared core typecheck admits every directive in the repo.
+const CI_ARTIFACT_STEP_LABELS = [
+  "native-protocol",
+  ...PACKAGE_DECLARATION_RUNTIME_STEP_LABELS,
+  "write-plugin-sdk-entry-dts",
+  ...FINAL_BUILD_ARTIFACTS_STEP_LABELS,
+];
+const FULL_RUNTIME_STEP_LABELS = PACKAGE_DECLARATION_RUNTIME_STEP_LABELS.flatMap((step) =>
+  step === "external-plugins:local-dist" ? [step, "write-unified-entry-dts"] : [step],
 );
 const FULL_BUILD_STEP_LABELS = [
   "native-protocol",
@@ -219,10 +228,15 @@ const BUILD_ALL_PROFILES: Record<string, string[]> = {
     ...FULL_RUNTIME_STEP_LABELS.filter((step) => !step.startsWith("plugins:assets:")),
     "check-plugin-sdk-exports",
   ],
-  gatewayWatch: ["tsdown", ...RUNTIME_STEP_LABELS],
+  gatewayWatch: [...RUNTIME_SOURCE_CHECK_STEP_LABELS, "tsdown", ...RUNTIME_STEP_LABELS],
   qaRuntime: [...ASSET_RUNTIME_STEP_LABELS],
   sourcePerformance: [...ASSET_RUNTIME_STEP_LABELS, "write-build-info"],
-  cliStartup: ["tsdown", ...RUNTIME_STEP_LABELS, "write-cli-startup-metadata"],
+  cliStartup: [
+    ...RUNTIME_SOURCE_CHECK_STEP_LABELS,
+    "tsdown",
+    ...RUNTIME_STEP_LABELS,
+    "write-cli-startup-metadata",
+  ],
 };
 
 const FULL_BUILD_PROFILE_STEP_ENV = {
@@ -234,6 +248,9 @@ const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.ProcessEn
   full: FULL_BUILD_PROFILE_STEP_ENV,
   package: FULL_BUILD_PROFILE_STEP_ENV,
   ciArtifacts: {
+    // PR CI's only package declaration check; an ambient skip must not disable it.
+    "tsdown-ai": { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
+    "tsdown-packages": { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
     tsdown: {
       // Global declaration emission is ~95% of the tsdown wall clock and PR
       // CI's dist consumers are runtime JS only; the plugin-sdk gate below

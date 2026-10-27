@@ -107,13 +107,6 @@
   font-size: 11px;
 }
 
-.model-setup__provider-copy {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
 .model-setup__current-copy {
   min-width: 0;
 }

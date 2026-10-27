@@ -1,13 +1,56 @@
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime-admission-errors.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
-export class PreparedModelRuntimeOwnerNotPublishedError extends Error {
-  readonly admissionBlocked: boolean;
+export { PreparedModelRuntimeOwnerNotPublishedError };
 
-  constructor(message?: string, options?: ErrorOptions & { admissionBlocked?: boolean }) {
-    super(message, options);
-    this.admissionBlocked = options?.admissionBlocked === true;
+const refreshErrorSnapshots = new WeakMap<Error, Error>();
+
+function refreshErrorText(error: Error, field: "name" | "message" | "stack", fallback: string) {
+  try {
+    return String(error[field]);
+  } catch {
+    return fallback;
   }
+}
+
+/** Keep recovery identity without retaining the rejected error's generation or cause graph. */
+export function capturePreparedModelRuntimeRefreshError(value: unknown): Error {
+  const error = toStringifiedError(value);
+  const existing = refreshErrorSnapshots.get(error);
+  if (existing) {
+    return existing;
+  }
+  // Never copy a plugin-defined prototype or capture another lazy stack of this build.
+  const kind = [
+    PreparedModelRuntimeInitialRunAdmissionError,
+    PreparedModelRuntimePublicationSupersededError,
+    PreparedModelRuntimeOwnerNotPublishedError,
+    PreparedModelRuntimePluginGenerationRetiredError,
+    PluginInstanceUnavailableError,
+  ].find((ErrorType) => error instanceof ErrorType);
+  const snapshot = {
+    name: refreshErrorText(error, "name", "Error"),
+    message: refreshErrorText(error, "message", "Error message unavailable"),
+    stack: refreshErrorText(error, "stack", "Stack trace unavailable: custom formatter failed"),
+  };
+  Object.setPrototypeOf(snapshot, kind?.prototype ?? Error.prototype);
+  if (error instanceof PreparedModelRuntimeOwnerNotPublishedError) {
+    const admissionBlocked: unknown = Reflect.get(error, "admissionBlocked");
+    Object.assign(snapshot, { admissionBlocked: admissionBlocked === true });
+  }
+  try {
+    const code: unknown = Reflect.get(error, "code");
+    if (typeof code === "string" || typeof code === "number") {
+      Object.assign(snapshot, { code });
+    }
+  } catch {
+    // An opaque diagnostic property must not block publication settlement.
+  }
+  refreshErrorSnapshots.set(error, snapshot);
+  refreshErrorSnapshots.set(snapshot, snapshot);
+  return snapshot;
 }
 
 /** The embedded runner refused its initial admission before executing a generation. */

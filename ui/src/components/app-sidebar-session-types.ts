@@ -31,7 +31,6 @@ import {
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
-import type { SessionPlacementState } from "./session-row-badge-presentation.ts";
 
 type SidebarAttentionRequest = {
   kind: "question" | "approval";
@@ -94,6 +93,8 @@ export type SidebarToolActivity = {
 
 export type SidebarRecentSession = Readonly<{
   key: string;
+  /** Visible occurrence for range selection; never a Gateway/session identity. */
+  selectionKey?: string;
   agentId?: string;
   sessionId?: string;
   displayName?: string;
@@ -150,7 +151,7 @@ export type SidebarRecentSession = Readonly<{
   worktreeId?: string;
   workspaceKind?: "worktree" | "checkout";
   execNode?: string;
-  placementState?: SessionPlacementState;
+  placementState?: NonNullable<GatewaySessionRow["placement"]>["state"];
   placementProviderId?: string;
   placementProfileId?: string;
   placementMachine?: SessionPlacementMachine;
@@ -159,6 +160,7 @@ export type SidebarRecentSession = Readonly<{
   cloudWorkerStopAction: CloudWorkerStopAction | null;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
+  snapshot?: import("./sidebar-snapshot-data.ts").SidebarSnapshotSession["state"];
   outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
   unread: boolean;
@@ -394,16 +396,21 @@ function sidebarSessionOwnerFilterStorageKey(gatewayUrl: string, selfUserId: str
   return `${SIDEBAR_SESSION_OWNER_FILTER_STORAGE_PREFIX}${gatewayOriginScope(gatewayUrl)}:${encodeURIComponent(selfUserId)}`;
 }
 
+/** Without a saved choice, guests start on Involving me and everyone else on their own sessions. */
 export function loadStoredSidebarSessionOwnerFilter(
   gatewayUrl: string,
   selfUserId: string,
+  options: { guest?: boolean } = {},
 ): SidebarSessionOwnerFilter {
+  const fallback = options.guest
+    ? { ownerId: null, involvingMe: true }
+    : { ownerId: selfUserId, involvingMe: false };
   try {
     const stored = getSafeLocalStorage()?.getItem(
       sidebarSessionOwnerFilterStorageKey(gatewayUrl, selfUserId),
     );
     if (stored === null || stored === undefined) {
-      return { ownerId: selfUserId, involvingMe: false };
+      return fallback;
     }
     const ownerId = stored?.startsWith("owner:") ? stored.slice("owner:".length).trim() : "";
     return {
@@ -411,8 +418,8 @@ export function loadStoredSidebarSessionOwnerFilter(
       involvingMe: stored === "involving-me",
     };
   } catch {
-    // A disabled store still uses the signed-in owner default.
-    return { ownerId: selfUserId, involvingMe: false };
+    // A disabled store still uses the signed-in default.
+    return fallback;
   }
 }
 

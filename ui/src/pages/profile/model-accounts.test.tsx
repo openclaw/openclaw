@@ -3,7 +3,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   UserModelAccount,
-  UserProfileAuthLink,
   UsersAuthConnectCatalogResult,
   UsersAuthConnectStatusResult,
   UsersListAuthLinksResult,
@@ -11,41 +10,49 @@ import type {
   WizardStep,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ModelAccountsTargetSource } from "./model-accounts-state.ts";
 import { ModelAccounts } from "./model-accounts.tsx";
 
-const connectedResult: UsersAuthConnectStatusResult = {
+const copy = (key: string) => t(`profilePage.modelAccounts.${key}`);
+const auth = (suffix: string) => `.profile-auth-${suffix}`;
+const ui = {
+  flow: ".model-accounts-flow",
+  notice: ".model-accounts-notice",
+  answer: ".wizard-step__form input",
+  submit: '.wizard-step__form button[type="submit"]',
+  password: 'input[type="password"]',
+  alert: '[role="alert"]',
+  host: "openclaw-model-accounts",
+};
+
+const connected: UsersAuthConnectStatusResult = {
   status: "connected",
   authProfileId: "openai:personal",
   links: [{ provider: "openai", authProfileId: "openai:personal", updatedAt: 1 }],
 };
 
-const connectedAccount: UserModelAccount = {
+const personal: UserModelAccount = {
   authProfileId: "openai:personal",
   provider: "openai",
   label: "Ada · Personal workspace",
   authType: "oauth",
   selected: true,
 };
-const claudeAccount: UserModelAccount = {
-  authProfileId: "anthropic:personal",
-  provider: "anthropic",
-  label: "Ada · Claude",
-  authType: "api_key",
-  selected: true,
-};
+const work = { ...personal, authProfileId: "openai:work", label: "Work", selected: false };
 const catalog: UsersAuthConnectCatalogResult = {
   providers: [
     { id: "openai", label: "OpenAI", methods: [{ id: "browser", label: "Browser sign-in" }] },
-    { id: "anthropic", label: "Anthropic", methods: [{ id: "api-key", label: "API key" }] },
     { id: "xai", label: "Grok", methods: [{ id: "api-key", label: "API key" }] },
   ],
 };
@@ -56,194 +63,118 @@ const redirectStep = (attempt = 1): WizardStep => ({
   externalUrl: `https://auth.openai.com/oauth/authorize?state=${attempt}`,
 });
 
-async function mountAccounts(
-  handle: (
-    method: string,
-    params?: unknown,
-  ) => Promise<UsersAuthConnectStatusResult | UsersListAuthLinksResult>,
+function inventory(accounts: UserModelAccount[] = []): UsersListModelAccountsResult {
+  return {
+    profileId: "profile-1",
+    accounts,
+    links: accounts
+      .filter((account) => account.selected)
+      .map(({ provider, authProfileId }) => ({ provider, authProfileId, updatedAt: 1 })),
+  };
+}
+
+type AccountReply = UsersAuthConnectStatusResult | UsersListAuthLinksResult;
+async function mount(
+  handle: (method: string, params?: unknown) => Promise<AccountReply> = async () => {
+    throw new Error("Unexpected account mutation");
+  },
   {
     expiresInMs = 60_000,
     scopes = ["operator.write"],
     accounts: initialAccounts = [],
-    inventoryPages,
     gatewayUrl,
     step,
-    connectedAccounts = [connectedAccount, claudeAccount],
   }: {
     expiresInMs?: number;
     scopes?: string[];
     accounts?: UserModelAccount[];
-    inventoryPages?: UsersListModelAccountsResult[];
     gatewayUrl?: string;
     step?: WizardStep;
-    connectedAccounts?: UserModelAccount[];
   } = {},
 ) {
   let starts = 0;
-  let savedAccounts = initialAccounts;
-  let links: UserProfileAuthLink[] = savedAccounts
-    .filter((account) => account.selected)
-    .map((account) => ({
-      provider: account.provider,
-      authProfileId: account.authProfileId,
-      updatedAt: 1,
-    }));
-  let inventoryPage = 0;
-  const fixtures = [
-    ...savedAccounts,
-    ...(inventoryPages?.flatMap((page) => page.accounts) ?? []),
-    ...connectedAccounts,
-  ];
+  let listed = inventory(initialAccounts);
   const presented = new Set<string>();
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "users.authConnect.catalog") {
-      return catalog;
-    }
-    if (method === "users.listModelAccounts") {
-      const page = inventoryPages?.[inventoryPage++];
-      if (page) {
-        savedAccounts = [
-          ...new Map(
-            [...savedAccounts, ...page.accounts].map((account) => [account.authProfileId, account]),
-          ).values(),
-        ];
-        links = page.links;
-      }
-      return page ?? { profileId: "profile-1", accounts: savedAccounts, links };
-    }
-    if (method === "users.authConnect.start") {
-      starts += 1;
-      return {
-        connectId: `connect-${starts}`,
-        expiresAtMs: Date.now() + expiresInMs,
-      };
-    }
-    if (method === "users.authConnect.status" && !presented.has(`connect-${starts}`)) {
-      presented.add(`connect-${starts}`);
-      return { status: "pending", step: step ?? redirectStep(starts) };
-    }
-    const result = await handle(method, params);
-    if ("links" in result) {
-      links = result.links;
-      const saved = new Map(savedAccounts.map((account) => [account.authProfileId, account]));
-      for (const link of links) {
-        const account = fixtures.find(
-          (candidate) => candidate.authProfileId === link.authProfileId,
-        );
-        if (account) {
-          saved.set(account.authProfileId, account);
+  const request = vi.fn(async (method: string, params?: unknown): Promise<unknown> => {
+    switch (method) {
+      case "users.authConnect.catalog":
+        return catalog;
+      case "users.listModelAccounts":
+        return listed;
+      case "users.authConnect.start":
+        return { connectId: `connect-${++starts}`, expiresAtMs: Date.now() + expiresInMs };
+      case "users.authConnect.status":
+        if (!presented.has(`connect-${starts}`)) {
+          presented.add(`connect-${starts}`);
+          return { status: "pending", step: step ?? redirectStep(starts) };
         }
-      }
-      savedAccounts = [...saved.values()].map((account) =>
-        Object.assign({}, account, {
-          selected: links.some((link) => link.authProfileId === account.authProfileId),
-        }),
-      );
     }
-    return result;
+    return handle(method, params);
   });
   const client = createTestGatewayClient(request);
   if (gatewayUrl) {
     vi.spyOn(client, "gatewayUrl", "get").mockReturnValue(gatewayUrl);
   }
-  let snapshot = {
-    client,
-    phase: "connected",
-    hello: { auth: { role: "operator", scopes } },
-    selfUser: { id: "profile-1", name: "Ada" },
-  } as ApplicationGatewaySnapshot;
-  const listeners = new Set<() => void>();
-  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
-  const context = {
-    gateway: {
-      get snapshot() {
-        return snapshot;
-      },
-      subscribeEvents(listener: (event: GatewayEventFrame) => void) {
-        eventListeners.add(listener);
-        return () => eventListeners.delete(listener);
-      },
-    },
-  } as unknown as ApplicationContext;
-  const provider = createSolidApplicationContextProvider(context);
+  const { gateway, publish, publishEvent } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client,
+      phase: "connected",
+      hello: { type: "hello-ok", protocol: 3, auth: { role: "operator", scopes } },
+      selfUser: { id: "profile-1", name: "Ada" },
+    }),
+  );
+  const provider = createSolidApplicationContextProvider({
+    gateway,
+  } as unknown as ApplicationContext);
   let profileId = "profile-1";
   const target: ModelAccountsTargetSource = {
-    read: () => ({ gateway: snapshot, identityId: "profile-1", profileId }),
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    read: () => ({ gateway: gateway.snapshot, identityId: "profile-1", profileId }),
+    subscribe: (listener) => gateway.subscribe(listener),
   };
-  const view = mountSolid(() => <ModelAccounts target={target} />, {
-    wrapper: provider.wrapper,
-  });
+  const view = mountSolid(() => <ModelAccounts target={target} />, { wrapper: provider.wrapper });
   const accounts = view.container;
-  await waitForSolid(() =>
-    expect(button(accounts, ".profile-auth-add-account").disabled).toBe(false),
-  );
+  const button = (selector: string) => accounts.querySelector<HTMLButtonElement>(selector)!;
+  await waitForSolid(() => expect(button(auth("add-account")).disabled).toBe(false));
   return {
     accounts,
+    showAccounts(next: UserModelAccount[]) {
+      listed = inventory(next);
+    },
+    query: accounts.querySelector.bind(accounts),
+    queryAll: (selector: string) => accounts.querySelectorAll(selector),
+    button,
+    input: (selector: string, value: string) => input(accounts, selector, value),
+    text: () => accounts.textContent,
+    error: () => accounts.querySelector(ui.alert)?.textContent,
+    calls: (method: string) => request.mock.calls.filter(([called]) => called === method),
+    expectCall: (method: string, params: Record<string, unknown>) =>
+      expect(request).toHaveBeenCalledWith(method, { profileId: "profile-1", ...params }),
     unmount: view.unmount,
     setProfileId(value: string) {
       profileId = value;
-      for (const listener of listeners) {
-        listener();
-      }
+      publish(gateway.snapshot);
     },
     request,
     async start(providerId = "openai") {
-      button(accounts, ".profile-auth-add-account").click();
+      button(auth("add-account")).click();
       await waitForSolid(() =>
-        expect(button(accounts, ".profile-auth-provider .picker-select__trigger").disabled).toBe(
-          false,
-        ),
+        expect(button(auth("provider .picker-select__trigger")).disabled).toBe(false),
       );
-      await openPicker(accounts.querySelector<HTMLElement>(".profile-auth-provider")!);
-      await waitForSolid(() =>
-        expect(
-          accounts.querySelector(
-            `.profile-auth-provider [role="option"][data-value="${providerId}"]`,
-          ),
-        ).not.toBeNull(),
-      );
-      await select(accounts, ".profile-auth-provider", providerId);
-      button(accounts, ".profile-auth-connect-start").click();
-      await waitForSolid(() =>
-        expect(accounts.querySelector(".model-accounts-flow")).not.toBeNull(),
-      );
-      await vi.advanceTimersByTimeAsync(0);
+      await choosePickerValue(accounts.querySelector<HTMLElement>(auth("provider"))!, providerId);
       flush();
+      button(auth("connect-start")).click();
+      await waitForSolid(() => expect(accounts.querySelector(ui.flow)).not.toBeNull());
+      await advance(0);
     },
-    emit(phase: ApplicationGatewaySnapshot["phase"], replaceClient = false) {
-      snapshot = {
-        ...snapshot,
-        phase,
-        ...(replaceClient
-          ? { client: createTestGatewayClient(request as GatewayBrowserClient["request"]) }
-          : {}),
-      };
-      for (const listener of listeners) {
-        listener();
-      }
+    emit(next: Partial<ApplicationGatewaySnapshot>, replaceClient = false) {
+      publish({
+        ...gateway.snapshot,
+        ...next,
+        ...(replaceClient ? { client: createTestGatewayClient(request) } : {}),
+      });
     },
-    emitEvent(event: GatewayEventFrame) {
-      for (const listener of eventListeners) {
-        listener(event);
-      }
-    },
-    emitSnapshot(next: Partial<ApplicationGatewaySnapshot>) {
-      snapshot = { ...snapshot, ...next };
-      for (const listener of listeners) {
-        listener();
-      }
-    },
+    emitEvent: publishEvent,
   };
-}
-
-function button(root: ParentNode, selector: string) {
-  const element = root.querySelector<HTMLButtonElement>(selector);
-  expect(element, selector).not.toBeNull();
-  return element!;
 }
 
 async function input(accounts: HTMLElement, selector: string, value: string) {
@@ -254,9 +185,8 @@ async function input(accounts: HTMLElement, selector: string, value: string) {
   return element;
 }
 
-async function select(accounts: HTMLElement, selector: string, value: string) {
-  const element = accounts.querySelector<HTMLElement>(selector)!;
-  await choosePickerValue(element, value);
+async function advance(ms: number) {
+  await vi.advanceTimersByTimeAsync(ms);
   flush();
 }
 
@@ -266,560 +196,329 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
-it("refreshes accounts and their saved default when another client changes authentication", async () => {
-  const work = {
-    ...connectedAccount,
-    authProfileId: "openai:work",
-    label: "Ada · Work workspace",
-  };
-  const harness = await mountAccounts(
-    async () => {
-      throw new Error("Unexpected account mutation");
-    },
-    {
-      inventoryPages: [
-        { profileId: "profile-1", accounts: [connectedAccount], links: connectedResult.links },
-        {
-          profileId: "profile-1",
-          accounts: [{ ...connectedAccount, selected: false }, work],
-          links: [{ provider: work.provider, authProfileId: work.authProfileId, updatedAt: 2 }],
-        },
-      ],
-    },
-  );
-  const currentAccount = () =>
-    harness.accounts.querySelector(".profile-auth-link-unlink")?.getAttribute("aria-label");
-  expect(currentAccount()).toContain(connectedAccount.label);
-  harness.emitEvent({
-    type: "event",
-    event: "chat.metadata.changed",
-    payload: { authChanged: false },
-  });
+it("refreshes account defaults and appends later pages without losing earlier choices", async () => {
+  const updated = { ...work, selected: true };
+  const first = { ...personal, selected: false };
+  const later = { ...first, authProfileId: "openai:later" };
+  const h = await mount(undefined, { accounts: [personal] });
+  const refreshed = inventory([first, updated]);
+  h.request.mockResolvedValueOnce({ ...refreshed, nextCursor: "page-2" });
+  const currentAccount = () => h.query(auth("link-unlink"))?.getAttribute("aria-label");
+  expect(h.text()).not.toContain(first.authProfileId);
+  h.emitEvent({ type: "event", event: "chat.metadata.changed", payload: { authChanged: false } });
   flush();
-  expect(harness.request).toHaveBeenCalledTimes(1);
-
-  harness.emitEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
-  await waitForSolid(() => expect(currentAccount()).toContain(work.label));
-  expect(harness.accounts.querySelectorAll(".profile-auth-account-select")).toHaveLength(1);
-
-  harness.unmount();
-  harness.emitEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
-  expect(harness.request).toHaveBeenCalledTimes(2);
+  h.emitEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+  await waitForSolid(() => expect(currentAccount()).toContain(updated.label));
+  h.request.mockResolvedValueOnce({ ...inventory([later]), links: refreshed.links });
+  h.button(auth("accounts-more")).click();
+  await waitForSolid(() => expect(h.queryAll(auth("account-select"))).toHaveLength(2));
+  expect(h.text()).toContain(first.authProfileId);
+  expect(h.text()).toContain(later.authProfileId);
+  expect(h.query(auth("accounts-more"))).toBeNull();
+  h.expectCall("users.listModelAccounts", { cursor: "page-2" });
+  h.unmount();
+  h.emitEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+  expect(h.request).toHaveBeenCalledTimes(3);
 });
 
-it("lets a writer choose a retained account for new chats and clear the default without removing it", async () => {
-  const work = {
-    ...connectedAccount,
-    authProfileId: "openai:work",
-    label: "Ada · Work workspace",
-    selected: false,
-  };
-  const harness = await mountAccounts(
-    async (method, params) => {
-      if (method === "users.selectModelAccount") {
-        expect(params).toEqual({ profileId: "profile-1", authProfileId: work.authProfileId });
-        return { links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 2 }] };
-      }
-      expect(method).toBe("users.unlinkAuthProfile");
-      expect(params).toEqual({ profileId: "profile-1", provider: "openai" });
-      return { links: [] };
-    },
-    { accounts: [connectedAccount, work] },
-  );
-  expect(harness.accounts.querySelector(".profile-auth-link-input")).toBeNull();
-  expect(harness.accounts.textContent).toContain(connectedAccount.label);
-  expect(harness.accounts.textContent).toContain(work.label);
-  expect(harness.accounts.textContent).not.toContain(work.authProfileId);
-  button(harness.accounts, `[data-auth-profile-id="${work.authProfileId}"]`).click();
-  await waitForSolid(() =>
-    expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.notices.selected")),
-  );
-  await waitForSolid(() =>
-    expect(button(harness.accounts, ".profile-auth-link-unlink").disabled).toBe(false),
-  );
-  expect(harness.accounts.querySelector('[data-auth-profile-id="openai:personal"]')).not.toBeNull();
-  button(harness.accounts, ".profile-auth-link-unlink").click();
-  await waitForSolid(() =>
-    expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.notices.cleared")),
-  );
-  await waitForSolid(() =>
-    expect(harness.accounts.querySelectorAll(".profile-auth-account-select")).toHaveLength(2),
-  );
-  expect(harness.accounts.querySelector(".profile-auth-link-unlink")).toBeNull();
-  expect(
-    harness.request.mock.calls.some(([method]) => method.startsWith("users.authConnect.")),
-  ).toBe(false);
-});
-
-it("shows a pending default selection and restores the accepted account after rejection", async () => {
-  const pending = createDeferred<UsersListAuthLinksResult>();
-  const work = {
-    ...connectedAccount,
-    authProfileId: "openai:work",
-    label: "Ada · Work",
-    selected: false,
-  };
-  const harness = await mountAccounts(async () => pending.promise, {
-    accounts: [connectedAccount, work],
-  });
-  button(harness.accounts, '[data-auth-profile-id="openai:work"]').click();
-  await waitForSolid(() => {
-    expect(
-      harness.accounts.querySelector("openclaw-model-accounts")?.getAttribute("aria-busy"),
-    ).toBe("true");
-    expect(
-      button(harness.accounts, ".profile-auth-link-unlink").getAttribute("aria-label"),
-    ).toContain(work.label);
-  });
-  pending.reject(new Error("Default selection rejected"));
-  await waitForSolid(() => {
-    expect(
-      harness.accounts.querySelector("openclaw-model-accounts")?.getAttribute("aria-busy"),
-    ).toBe("false");
-    expect(
-      button(harness.accounts, ".profile-auth-link-unlink").getAttribute("aria-label"),
-    ).toContain(connectedAccount.label);
-    expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
-      "Default selection rejected",
+it.each(["select", "link"] as const)(
+  "sets and clears an account default through %s",
+  async (action) => {
+    const saved = action === "select" ? [personal, work] : [work];
+    const method = `users.${action === "select" ? "selectModelAccount" : "linkAuthProfile"}`;
+    const h = await mount(
+      async (called) => {
+        expect([method, "users.unlinkAuthProfile"]).toContain(called);
+        const unlink = called === "users.unlinkAuthProfile";
+        const accounts = saved.map((entry) => ({ ...entry, selected: !unlink && entry === work }));
+        h.showAccounts(accounts);
+        return { links: inventory(accounts).links };
+      },
+      {
+        accounts: action === "select" ? saved : [],
+        scopes: action === "link" ? ["operator.write", "operator.admin"] : ["operator.write"],
+      },
     );
-  });
-  expect(
-    harness.request.mock.calls.filter(([method]) => method === "users.selectModelAccount"),
-  ).toHaveLength(1);
-});
-
-it("releases an old selection presentation when the connection is replaced", async () => {
-  const pending = createDeferred<UsersListAuthLinksResult>();
-  const work = {
-    ...connectedAccount,
-    authProfileId: "openai:work",
-    label: "Ada · Work",
-    selected: false,
-  };
-  const harness = await mountAccounts(async () => pending.promise, {
-    accounts: [connectedAccount, work],
-  });
-  button(harness.accounts, '[data-auth-profile-id="openai:work"]').click();
-  await waitForSolid(() =>
-    expect(
-      harness.accounts.querySelector("openclaw-model-accounts")?.getAttribute("aria-busy"),
-    ).toBe("true"),
-  );
-  harness.emit("connected", true);
-  await waitForSolid(() => {
-    expect(
-      harness.accounts.querySelector("openclaw-model-accounts")?.getAttribute("aria-busy"),
-    ).toBe("false");
-    expect(
-      button(harness.accounts, ".profile-auth-link-unlink").getAttribute("aria-label"),
-    ).toContain(connectedAccount.label);
-    expect(button(harness.accounts, '[data-auth-profile-id="openai:work"]').disabled).toBe(false);
-  });
-  pending.resolve({
-    links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 2 }],
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
-  expect(
-    button(harness.accounts, ".profile-auth-link-unlink").getAttribute("aria-label"),
-  ).toContain(connectedAccount.label);
-});
-
-it("loads retained accounts one page at a time without dropping earlier choices", async () => {
-  const first = { ...connectedAccount, selected: false };
-  const second = { ...first, authProfileId: "openai:work" };
-  const harness = await mountAccounts(
-    async () => {
-      throw new Error("Unexpected account mutation");
-    },
-    {
-      inventoryPages: [
-        { profileId: "profile-1", accounts: [first], links: [], nextCursor: "page-2" },
-        { profileId: "profile-1", accounts: [second], links: [] },
-      ],
-    },
-  );
-  expect(harness.accounts.textContent).not.toContain(first.authProfileId);
-  button(harness.accounts, ".profile-auth-accounts-more").click();
-  await waitForSolid(() =>
-    expect(harness.accounts.querySelectorAll(".profile-auth-account-select")).toHaveLength(2),
-  );
-  expect(harness.accounts.textContent).toContain(first.authProfileId);
-  expect(harness.accounts.textContent).toContain(second.authProfileId);
-  expect(harness.accounts.querySelector(".profile-auth-accounts-more")).toBeNull();
-  expect(harness.request).toHaveBeenCalledWith("users.listModelAccounts", {
-    profileId: "profile-1",
-    cursor: "page-2",
-  });
-});
-
-it.each(["connection", "profile"] as const)(
-  "discards an inventory reply from the previous %s",
-  async (scope) => {
-    const harness = await mountAccounts(async () => {
-      throw new Error("Unexpected account mutation");
-    });
-    const old = createDeferred<UsersListModelAccountsResult>();
-    harness.request.mockImplementationOnce(async () => old.promise);
-    button(harness.accounts, ".profile-auth-accounts-refresh").click();
-    if (scope === "connection") {
-      harness.emit("reconnecting");
-      harness.emit("connected");
+    if (action === "link") {
+      expect(h.text()).toContain(copy("empty"));
+      await h.input(auth("link-input"), work.authProfileId);
+      h.button(auth("link-submit")).click();
     } else {
-      harness.setProfileId("profile-2");
+      expect(h.query(auth("link-input"))).toBeNull();
+      expect(h.text()).toContain(work.label);
+      expect(h.text()).not.toContain(work.authProfileId);
+      h.button('[data-auth-profile-id="openai:work"]').click();
     }
-    expect(harness.request).toHaveBeenLastCalledWith("users.listModelAccounts", {
-      profileId: scope === "connection" ? "profile-1" : "profile-2",
+    await waitForSolid(() => {
+      expect(h.button(auth("link-unlink")).disabled).toBe(false);
+      expect(h.button(auth("link-unlink")).getAttribute("aria-label")).toContain(work.label);
     });
-    await waitForSolid(() =>
-      expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
-    );
-    old.resolve({
-      profileId: "profile-1",
-      accounts: [connectedAccount],
-      links: connectedResult.links,
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
-    expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
-    await waitForSolid(() =>
-      expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
+    if (action === "link") {
+      expect(h.query<HTMLInputElement>(auth("link-input"))?.value).toBe("");
+    } else {
+      expect(h.query('[data-auth-profile-id="openai:personal"]')).not.toBeNull();
+    }
+    h.expectCall(method, { authProfileId: work.authProfileId });
+    expect(h.text()).toContain(copy("notices.selected"));
+    h.button(auth("link-unlink")).click();
+    await waitForSolid(() => expect(h.queryAll(auth("account-select"))).toHaveLength(saved.length));
+    expect(h.text()).toContain(copy("notices.cleared"));
+    expect(h.query(auth("link-unlink"))).toBeNull();
+    h.expectCall("users.unlinkAuthProfile", { provider: "openai" });
+    expect(h.request.mock.calls.some(([called]) => called.startsWith("users.authConnect."))).toBe(
+      false,
     );
   },
 );
 
+it.each(["rejection", "connection replacement"])(
+  "restores a pending selection after %s",
+  async (outcome) => {
+    const pending = createDeferred<UsersListAuthLinksResult>();
+    const h = await mount(async () => pending.promise, {
+      accounts: [personal, work],
+    });
+    h.button('[data-auth-profile-id="openai:work"]').click();
+    await waitForSolid(() => {
+      expect(h.query(ui.host)?.getAttribute("aria-busy")).toBe("true");
+      expect(h.button(auth("link-unlink")).getAttribute("aria-label")).toContain(work.label);
+    });
+    if (outcome === "rejection") {
+      pending.reject(new Error("Default selection rejected"));
+    } else {
+      h.emit({ phase: "connected" }, true);
+    }
+    await waitForSolid(() => {
+      expect(h.query(ui.host)?.getAttribute("aria-busy")).toBe("false");
+      expect(h.button(auth("link-unlink")).getAttribute("aria-label")).toContain(personal.label);
+      expect(h.button('[data-auth-profile-id="openai:work"]').disabled).toBe(false);
+    });
+    if (outcome === "rejection") {
+      expect(h.error()).toContain("Default selection rejected");
+    } else {
+      pending.resolve({ links: inventory([{ ...work, selected: true }]).links });
+      await advance(0);
+      expect(h.button(auth("link-unlink")).getAttribute("aria-label")).toContain(personal.label);
+    }
+  },
+);
+
+it.each(["connection", "profile"] as const)(
+  "discards an inventory reply from the previous %s",
+  async (scope) => {
+    const h = await mount();
+    const old = createDeferred<UsersListModelAccountsResult>();
+    h.request.mockImplementationOnce(async () => old.promise);
+    h.button(auth("accounts-refresh")).click();
+    if (scope === "connection") {
+      h.emit({ phase: "reconnecting" });
+      h.emit({ phase: "connected" });
+    } else {
+      h.setProfileId("profile-2");
+    }
+    expect(h.request).toHaveBeenLastCalledWith("users.listModelAccounts", {
+      profileId: scope === "connection" ? "profile-1" : "profile-2",
+    });
+    await waitForSolid(() => expect(h.button(auth("add-account")).disabled).toBe(false));
+    old.resolve(inventory([personal]));
+    await advance(0);
+    expect(h.text()).not.toContain(personal.label);
+    await waitForSolid(() => expect(h.button(auth("add-account")).disabled).toBe(false));
+  },
+);
+
 it("retains the account draft through a failed inventory refresh and recovers on retry", async () => {
-  const harness = await mountAccounts(
-    async () => {
-      throw new Error("Unexpected account mutation");
-    },
-    {
-      accounts: [connectedAccount],
-      scopes: ["operator.write", "operator.admin"],
-    },
-  );
-  const draft = await input(harness.accounts, ".profile-auth-link-input", "openai:work");
+  const h = await mount(undefined, {
+    accounts: [personal],
+    scopes: ["operator.write", "operator.admin"],
+  });
+  const draft = await h.input(auth("link-input"), "openai:work");
   const pending = createDeferred<UsersListModelAccountsResult>();
-  harness.request.mockImplementationOnce(async () => pending.promise);
-  button(harness.accounts, ".profile-auth-accounts-refresh").click();
+  h.request.mockImplementationOnce(async () => pending.promise);
+  h.button(auth("accounts-refresh")).click();
   await waitForSolid(() => expect(draft.disabled).toBe(true));
-  expect(harness.accounts.textContent).toContain(connectedAccount.label);
+  expect(h.text()).toContain(personal.label);
   pending.reject(new Error("Inventory unavailable"));
-  await waitForSolid(() =>
-    expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
-      "Inventory unavailable",
-    ),
-  );
-  expect(harness.accounts.querySelector(".profile-auth-link-input")).toBe(draft);
+  await waitForSolid(() => expect(h.error()).toContain("Inventory unavailable"));
+  expect(h.query(auth("link-input"))).toBe(draft);
   expect(draft.value).toBe("openai:work");
-  harness.request.mockImplementationOnce(async () => ({
-    profileId: "profile-1",
-    accounts: [connectedAccount],
-    links: connectedResult.links,
-  }));
-  button(harness.accounts, ".profile-auth-accounts-refresh").click();
+  h.button(auth("accounts-refresh")).click();
   await waitForSolid(() => expect(draft.disabled).toBe(false));
-  expect(harness.accounts.querySelector('[role="alert"]')).toBeNull();
+  expect(h.query(ui.alert)).toBeNull();
   expect(draft.value).toBe("openai:work");
 });
 
-it("lets an admin link and unlink an existing model account", async () => {
-  const harness = await mountAccounts(
-    async (method) => {
-      if (method === "users.linkAuthProfile") {
-        return { links: connectedResult.links };
-      }
-      if (method === "users.unlinkAuthProfile") {
-        return { links: [] };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    },
-    { scopes: ["operator.write", "operator.admin"] },
-  );
-  expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.empty"));
-  const linkInput = await input(harness.accounts, ".profile-auth-link-input", "openai:personal");
-  button(harness.accounts, ".profile-auth-link-submit").click();
-  await waitForSolid(() => expect(harness.accounts.textContent).toContain(connectedAccount.label));
-  expect(harness.request).toHaveBeenCalledWith("users.linkAuthProfile", {
-    profileId: "profile-1",
-    authProfileId: "openai:personal",
-  });
-  expect(linkInput.value).toBe("");
-  button(harness.accounts, ".profile-auth-link-unlink").click();
-  await waitForSolid(() =>
-    expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.empty")),
-  );
-  expect(harness.request).toHaveBeenCalledWith("users.unlinkAuthProfile", {
-    profileId: "profile-1",
-    provider: "openai",
-  });
-});
-
-it("keeps a held catalog disabled and recovers from its error by reopening sign-in", async () => {
+it.each(["failure", "connection replacement"])("retires a held catalog on %s", async (outcome) => {
   const held = createDeferred<UsersAuthConnectCatalogResult>();
-  const harness = await mountAccounts(async () => {
-    throw new Error("Unexpected account mutation");
-  });
-  harness.request.mockImplementationOnce(async () => held.promise);
-  button(harness.accounts, ".profile-auth-add-account").click();
+  const h = await mount();
+  h.request.mockImplementationOnce(async () => held.promise);
+  h.button(auth("add-account")).click();
   await waitForSolid(() =>
-    expect(
-      button(harness.accounts, ".profile-auth-provider .picker-select__trigger").disabled,
-    ).toBe(true),
+    expect(h.button(auth("provider .picker-select__trigger")).disabled).toBe(true),
   );
-  expect(harness.accounts.textContent).not.toContain(t("profilePage.modelAccounts.noMethods"));
+  expect(h.text()).not.toContain(copy("noMethods"));
+  if (outcome === "connection replacement") {
+    h.emit({ phase: "connected" }, true);
+    await waitForSolid(() => expect(h.button(auth("add-account")).disabled).toBe(false));
+    held.resolve(catalog);
+    await advance(0);
+    expect(h.query(".model-accounts-choice")).toBeNull();
+    return;
+  }
   held.reject(new Error("Catalog unavailable"));
-  await waitForSolid(() =>
-    expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
-      "Catalog unavailable",
-    ),
-  );
-  button(harness.accounts, ".profile-auth-connect-cancel").click();
+  await waitForSolid(() => expect(h.error()).toContain("Catalog unavailable"));
+  h.button(auth("connect-cancel")).click();
   flush();
-  button(harness.accounts, ".profile-auth-add-account").click();
+  h.button(auth("add-account")).click();
   await waitForSolid(() =>
-    expect(
-      button(harness.accounts, ".profile-auth-provider .picker-select__trigger").disabled,
-    ).toBe(false),
+    expect(h.button(auth("provider .picker-select__trigger")).disabled).toBe(false),
   );
-  expect(harness.accounts.querySelector('[role="alert"]')).toBeNull();
-});
-
-it("retires the previous connection's catalog without reopening its sign-in", async () => {
-  const held = createDeferred<UsersAuthConnectCatalogResult>();
-  const harness = await mountAccounts(async () => {
-    throw new Error("Unexpected account mutation");
-  });
-  harness.request.mockImplementationOnce(async () => held.promise);
-  button(harness.accounts, ".profile-auth-add-account").click();
-  harness.emit("connected", true);
-  await waitForSolid(() =>
-    expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
-  );
-  held.resolve(catalog);
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
-  expect(harness.accounts.querySelector(".model-accounts-choice")).toBeNull();
+  expect(h.query(ui.alert)).toBeNull();
 });
 
 it("polls one authorization at a time and uses its recorded outcome", async () => {
   const exchanging = createDeferred<UsersAuthConnectStatusResult>();
   let polls = 0;
-  const harness = await mountAccounts(async (method, params) => {
+  const h = await mount(async (method, params) => {
     expect(method).toBe("users.authConnect.status");
     expect(params).toEqual({ profileId: "profile-1", connectId: "connect-1" });
     polls += 1;
-    return polls === 1 ? exchanging.promise : connectedResult;
+    if (polls === 1) {
+      return exchanging.promise;
+    }
+    return connected;
   });
-  await harness.start();
-  await vi.advanceTimersByTimeAsync(2_000);
-  expect(polls).toBe(1);
-  await vi.advanceTimersByTimeAsync(6_000);
+  await h.start();
+  await vi.advanceTimersByTimeAsync(8_000);
   expect(polls).toBe(1);
   exchanging.resolve({
     status: "pending",
     step: { id: "saving", type: "progress", executor: "gateway", message: "Saving account…" },
   });
-  await waitForSolid(() => expect(harness.accounts.textContent).toContain("Saving account…"));
-  expect(button(harness.accounts, ".profile-auth-connect-cancel").disabled).toBe(false);
-  await vi.advanceTimersByTimeAsync(2_000);
-  flush();
-  expect(harness.accounts.textContent).toContain(connectedAccount.label);
-  expect(harness.accounts.querySelector(".model-accounts-notice")?.textContent).toContain(
-    "Account added.",
-  );
-  expect(harness.accounts.querySelector(".model-accounts-flow")).toBeNull();
+  await waitForSolid(() => expect(h.text()).toContain("Saving account…"));
+  expect(h.button(auth("connect-cancel")).disabled).toBe(false);
+  await advance(2_000);
+  expect(h.query(ui.notice)?.textContent).toContain("Account added.");
+  expect(h.query(ui.flow)).toBeNull();
   await vi.advanceTimersByTimeAsync(10_000);
   expect(polls).toBe(2);
-  expect(
-    harness.request.mock.calls.filter(([method]) => method === "users.listModelAccounts"),
-  ).toHaveLength(2);
 });
 
-it.each([
-  {
-    result: { status: "failed", reason: "identity" } as const,
-    message: "profilePage.modelAccounts.connectErrors.identity",
+it.each(["failed", "deadline"] as const)(
+  "stops polling on %s without inventing expiry",
+  async (outcome) => {
+    const deadline = outcome === "deadline";
+    const h = await mount(
+      async () => (deadline ? { status: "pending" } : { status: "failed", reason: "identity" }),
+      { expiresInMs: deadline ? 2_500 : 60_000 },
+    );
+    await h.start();
+    await advance(deadline ? 5_000 : 2_000);
+    expect(h.text()).toContain(copy(deadline ? "statusTimedOut" : "connectErrors.identity"));
+    expect(h.query(ui.flow) === null).toBe(!deadline);
+    expect(h.button(deadline ? auth("connect-cancel") : auth("add-account")).disabled).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.calls("users.authConnect.status")).toHaveLength(deadline ? 3 : 2);
   },
-])("shows a terminal $result.status result and stops polling", async ({ result, message }) => {
-  const harness = await mountAccounts(async () => result);
-  await harness.start();
-  await vi.advanceTimersByTimeAsync(2_000);
-  flush();
-  expect(harness.accounts.textContent).toContain(t(message));
-  expect(harness.accounts.querySelector(".model-accounts-flow")).toBeNull();
-  expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false);
-  await vi.advanceTimersByTimeAsync(10_000);
-  expect(
-    harness.request.mock.calls.filter(([method]) => method === "users.authConnect.status"),
-  ).toHaveLength(2);
-});
+);
 
 it("waits for cancellation and ignores a late completion from the cancelled attempt", async () => {
   const completion = createDeferred<UsersAuthConnectStatusResult>();
   const cancellation = createDeferred<UsersAuthConnectStatusResult>();
-  const harness = await mountAccounts(async (method) => {
-    if (method === "users.authConnect.answer") {
-      return completion.promise;
-    }
-    if (method === "users.authConnect.cancel") {
-      return cancellation.promise;
-    }
-    throw new Error(`unexpected method: ${method}`);
+  const h = await mount(async (method) => {
+    expect(["users.authConnect.answer", "users.authConnect.cancel"]).toContain(method);
+    return method === "users.authConnect.answer" ? completion.promise : cancellation.promise;
   });
-  await harness.start();
-  await input(
-    harness.accounts,
-    ".wizard-step__form input",
-    "http://localhost:1455/auth/callback?code=code&state=1",
-  );
-  button(harness.accounts, '.wizard-step__form button[type="submit"]').click();
+  await h.start();
+  await h.input(ui.answer, "http://localhost:1455/auth/callback?code=code&state=1");
+  h.button(ui.submit).click();
   await waitForSolid(() =>
-    expect(harness.request).toHaveBeenCalledWith("users.authConnect.answer", expect.anything()),
+    expect(h.request).toHaveBeenCalledWith("users.authConnect.answer", expect.anything()),
   );
-  button(harness.accounts, ".profile-auth-connect-cancel").click();
+  h.button(auth("connect-cancel")).click();
   flush();
-  expect(harness.request).toHaveBeenCalledWith("users.authConnect.cancel", {
-    profileId: "profile-1",
-    connectId: "connect-1",
-  });
-  expect(harness.accounts.querySelector(".model-accounts-flow")).not.toBeNull();
+  h.expectCall("users.authConnect.cancel", { connectId: "connect-1" });
+  expect(h.query(ui.flow)).not.toBeNull();
   cancellation.resolve({ status: "cancelled" });
-  await waitForSolid(() =>
-    expect(harness.accounts.querySelector(".model-accounts-flow")).toBeNull(),
-  );
-  completion.resolve(connectedResult);
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
-  expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.notices.cancelled"));
-  expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
-  expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false);
+  await waitForSolid(() => expect(h.query(ui.flow)).toBeNull());
+  completion.resolve(connected);
+  await advance(0);
+  expect(h.text()).toContain(copy("notices.cancelled"));
+  expect(h.button(auth("add-account")).disabled).toBe(false);
 });
 
-it("retains account data and sign-in input through a blip, but resets them for another client", async () => {
-  const harness = await mountAccounts(async () => ({ status: "pending", step: redirectStep() }), {
-    accounts: [connectedAccount],
+it("retains drafts through a blip, then retires the old client and its held poll", async () => {
+  const oldPoll = createDeferred<UsersAuthConnectStatusResult>();
+  const h = await mount(async () => oldPoll.promise, {
+    accounts: [personal],
     scopes: ["operator.write", "operator.admin"],
   });
-  await input(harness.accounts, ".profile-auth-link-input", "openai:draft");
-  await harness.start();
-  await input(harness.accounts, ".wizard-step__form input", "https://example.test/callback");
-  harness.emit("reconnecting");
-  flush();
-  expect(harness.accounts.textContent).toContain(connectedAccount.label);
-  expect(harness.accounts.querySelector<HTMLInputElement>(".profile-auth-link-input")?.value).toBe(
-    "openai:draft",
-  );
-  expect(harness.accounts.querySelector<HTMLInputElement>(".wizard-step__form input")?.value).toBe(
-    "https://example.test/callback",
-  );
-  expect(button(harness.accounts, '.wizard-step__form button[type="submit"]').disabled).toBe(true);
-  const requestsBeforeHello = harness.request.mock.calls.length;
-  harness.emitSnapshot({ phase: "connected", selfUser: undefined });
+  await h.input(auth("link-input"), "openai:draft");
+  await h.start();
+  await h.input(ui.answer, "https://example.test/callback");
   await vi.advanceTimersByTimeAsync(2_000);
+  h.emit({ phase: "reconnecting" });
   flush();
-  expect(harness.accounts.querySelector<HTMLInputElement>(".wizard-step__form input")?.value).toBe(
-    "https://example.test/callback",
-  );
-  expect(button(harness.accounts, '.wizard-step__form button[type="submit"]').disabled).toBe(true);
-  expect(harness.request).toHaveBeenCalledTimes(requestsBeforeHello);
-  harness.emitSnapshot({ selfUser: { id: "profile-1", name: "Ada" } });
-  await waitForSolid(() =>
-    expect(button(harness.accounts, '.wizard-step__form button[type="submit"]').disabled).toBe(
-      false,
-    ),
-  );
-  expect(harness.accounts.querySelector<HTMLInputElement>(".wizard-step__form input")?.value).toBe(
-    "https://example.test/callback",
-  );
-  harness.emit("connected", true);
+  expect(h.text()).toContain(personal.label);
+  expect(h.query<HTMLInputElement>(auth("link-input"))?.value).toBe("openai:draft");
+  expect(h.query<HTMLInputElement>(ui.answer)?.value).toBe("https://example.test/callback");
+  expect(h.button(ui.submit).disabled).toBe(true);
+  const requestsBeforeHello = h.request.mock.calls.length;
+  h.emit({ phase: "connected", selfUser: undefined });
+  await advance(2_000);
+  expect(h.query<HTMLInputElement>(ui.answer)?.value).toBe("https://example.test/callback");
+  expect(h.button(ui.submit).disabled).toBe(true);
+  expect(h.request).toHaveBeenCalledTimes(requestsBeforeHello);
+  h.emit({ selfUser: { id: "profile-1", name: "Ada" } });
+  await waitForSolid(() => expect(h.button(ui.submit).disabled).toBe(false));
+  expect(h.query<HTMLInputElement>(ui.answer)?.value).toBe("https://example.test/callback");
+  h.emit({ phase: "connected" }, true);
   flush();
-  expect(harness.accounts.querySelector(".model-accounts-flow")).toBeNull();
-  expect(harness.accounts.querySelector<HTMLInputElement>(".profile-auth-link-input")?.value).toBe(
-    "",
-  );
-  harness.unmount();
-});
-
-it("does not apply an old poll after replacing the connection and starting a new attempt", async () => {
-  const oldPoll = createDeferred<UsersAuthConnectStatusResult>();
-  const harness = await mountAccounts(async () => oldPoll.promise);
-  await harness.start();
-  await vi.advanceTimersByTimeAsync(2_000);
-  harness.emit("reconnecting");
-  harness.emit("connected", true);
-  await waitForSolid(() =>
-    expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
-  );
-  await harness.start();
-  oldPoll.resolve(connectedResult);
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
-  expect(
-    harness.accounts.querySelector<HTMLAnchorElement>(".wizard-step__external-link")?.href,
-  ).toContain("state=2");
-  expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
-  expect(harness.accounts.querySelector(".model-accounts-flow")).not.toBeNull();
+  expect(h.query(ui.flow)).toBeNull();
+  expect(h.query<HTMLInputElement>(auth("link-input"))?.value).toBe("");
+  await waitForSolid(() => expect(h.button(auth("add-account")).disabled).toBe(false));
+  await h.start();
+  oldPoll.resolve(connected);
+  await advance(0);
+  expect(h.query<HTMLAnchorElement>(".wizard-step__external-link")?.href).toContain("state=2");
+  expect(h.query(ui.flow)).not.toBeNull();
 });
 
 it("keeps repeated failed status checks retryable and retains the answer while checking", async () => {
   let polls = 0;
   const completion = createDeferred<UsersAuthConnectStatusResult>();
-  const harness = await mountAccounts(async () => {
+  const h = await mount(async () => {
     if (++polls < 3) {
       throw new Error("Gateway disconnected");
     }
-    return completion.promise;
+    return completion.promise.then((result) => {
+      h.showAccounts([personal]);
+      return result;
+    });
   });
-  await harness.start();
-  await vi.advanceTimersByTimeAsync(2_000);
-  flush();
-  expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
-    "Gateway disconnected",
-  );
+  await h.start();
+  await advance(2_000);
+  expect(h.error()).toContain("Gateway disconnected");
   await vi.advanceTimersByTimeAsync(10_000);
   expect(polls).toBe(1);
-  const answer = await input(
-    harness.accounts,
-    ".wizard-step__form input",
-    "https://example.test/callback",
-  );
-  button(harness.accounts, ".profile-auth-connect-check").click();
+  const answer = await h.input(ui.answer, "https://example.test/callback");
+  h.button(auth("connect-check")).click();
   await waitForSolid(() => {
-    expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
-      "Gateway disconnected",
-    );
-    expect(button(harness.accounts, ".profile-auth-connect-check").disabled).toBe(false);
+    expect(h.error()).toContain("Gateway disconnected");
+    expect(h.button(auth("connect-check")).disabled).toBe(false);
   });
   expect(answer.value).toBe("https://example.test/callback");
-  button(harness.accounts, ".profile-auth-connect-check").click();
-  await waitForSolid(() =>
-    expect(button(harness.accounts, ".profile-auth-connect-check").disabled).toBe(true),
-  );
-  expect(harness.accounts.querySelector(".wizard-step__form input")).toBe(answer);
+  h.button(auth("connect-check")).click();
+  await waitForSolid(() => expect(h.button(auth("connect-check")).disabled).toBe(true));
+  expect(h.query(ui.answer)).toBe(answer);
   expect(answer.value).toBe("https://example.test/callback");
-  completion.resolve(connectedResult);
-  await waitForSolid(() => expect(harness.accounts.textContent).toContain(connectedAccount.label));
-  expect(harness.accounts.querySelector('[role="alert"]')).toBeNull();
-});
-
-it("stops at the operation deadline without pretending an unknown attempt expired", async () => {
-  const harness = await mountAccounts(async () => ({ status: "pending" }), { expiresInMs: 2_500 });
-  await harness.start();
-  await vi.advanceTimersByTimeAsync(5_000);
-  flush();
-  expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.statusTimedOut"));
-  expect(harness.accounts.querySelector(".model-accounts-flow")).not.toBeNull();
-  expect(button(harness.accounts, ".profile-auth-connect-cancel").disabled).toBe(false);
-  await vi.advanceTimersByTimeAsync(10_000);
-  expect(
-    harness.request.mock.calls.filter(([method]) => method === "users.authConnect.status"),
-  ).toHaveLength(3);
+  completion.resolve(connected);
+  await waitForSolid(() => expect(h.text()).toContain(personal.label));
+  expect(h.query(ui.alert)).toBeNull();
 });
 
 it("adds a catalog-provided account through its masked auth step without provider-specific controls", async () => {
@@ -827,42 +526,33 @@ it("adds a catalog-provided account through its masked auth step without provide
     id: "grok-key",
     type: "text" as const,
     title: "Grok API key",
-    message: "Enter your Grok API key",
     sensitive: true,
   };
   const account: UserModelAccount = {
+    ...personal,
     authProfileId: "xai:personal",
     provider: "xai",
     label: "Ada · Grok",
     authType: "api_key",
-    selected: true,
   };
   const saving = createDeferred();
   const validationError = "That answer is not valid. Check the sign-in instructions and try again.";
-  const harness = await mountAccounts(
+  const answers: unknown[] = [];
+  const pending = { status: "pending", step } as const;
+  const replies: UsersAuthConnectStatusResult[] = [pending, { ...pending, error: validationError }];
+  const h = await mount(
     async (method, params) => {
       if (method === "users.authConnect.status") {
-        return { status: "pending", step };
+        return pending;
       }
       expect(method).toBe("users.authConnect.answer");
-      if ((params as { stepId: string }).stepId === "notice") {
-        expect(params).toEqual({
-          profileId: "profile-1",
-          connectId: "connect-1",
-          stepId: "notice",
-        });
-        return { status: "pending", step };
+      answers.push(params);
+      const reply = replies.shift();
+      if (reply) {
+        return reply;
       }
-      if ((params as { value: string }).value === "invalid") {
-        return { status: "pending", step, error: validationError };
-      }
-      expect(params).toEqual({
-        profileId: "profile-1",
-        connectId: "connect-1",
-        stepId: step.id,
-        value: "synthetic-grok-key",
-      });
       await saving.promise;
+      h.showAccounts([account]);
       return {
         status: "connected",
         authProfileId: account.authProfileId,
@@ -871,51 +561,37 @@ it("adds a catalog-provided account through its masked auth step without provide
     },
     {
       step: { id: "notice", type: "note", message: "Use your own API key." },
-      connectedAccounts: [account],
       gatewayUrl:
         "wss://synthetic-user:synthetic-password@test.invalid/control?token=synthetic-query#synthetic-fragment",
     },
   );
-  expect(harness.accounts.querySelector('input[type="password"]')).toBeNull();
-  expect(harness.accounts.textContent).toContain("wss://test.invalid/control");
-  expect(harness.accounts.innerHTML).not.toContain("synthetic-");
-  await harness.start("xai");
-  expect(harness.accounts.textContent).toContain("Use your own API key.");
-  const noteButton = button(harness.accounts, ".wizard-step__actions button.primary");
+  expect(h.text()).toContain("wss://test.invalid/control");
+  expect(h.accounts.innerHTML).not.toContain("synthetic-");
+  await h.start("xai");
+  const noteButton = h.button(".wizard-step__actions button.primary");
   noteButton.click();
-  await waitForSolid(() =>
-    expect(harness.accounts.querySelector('input[type="password"]')).not.toBeNull(),
-  );
+  await waitForSolid(() => expect(h.query(ui.password)).not.toBeNull());
   noteButton.click();
-  expect(
-    harness.request.mock.calls.filter(([method]) => method === "users.authConnect.answer"),
-  ).toHaveLength(1);
-  expect(harness.request).toHaveBeenCalledWith("users.authConnect.start", {
-    profileId: "profile-1",
-    provider: "xai",
-    method: "api-key",
-  });
-  const credential = await input(harness.accounts, 'input[type="password"]', "invalid");
-  button(harness.accounts, '.wizard-step__form button[type="submit"]').click();
-  await waitForSolid(() =>
-    expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
-      validationError,
-    ),
-  );
+  expect(h.calls("users.authConnect.answer")).toHaveLength(1);
+  h.expectCall("users.authConnect.start", { provider: "xai", method: "api-key" });
+  const credential = await h.input(ui.password, "invalid");
+  h.button(ui.submit).click();
+  await waitForSolid(() => expect(h.error()).toContain(validationError));
   await waitForSolid(() => expect(credential.disabled).toBe(false));
-  await input(harness.accounts, 'input[type="password"]', "synthetic-grok-key");
-  await vi.advanceTimersByTimeAsync(2_000);
-  flush();
+  await h.input(ui.password, "synthetic-grok-key");
+  await advance(2_000);
   expect(credential.value).toBe("synthetic-grok-key");
-  expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(validationError);
-  button(harness.accounts, '.wizard-step__form button[type="submit"]').click();
-  await waitForSolid(() => expect(credential.disabled).toBe(true));
-  expect(credential.value).toBe("");
+  expect(h.error()).toContain(validationError);
+  h.button(ui.submit).click();
+  await waitForSolid(() => expect(credential).toMatchObject({ disabled: true, value: "" }));
   saving.resolve();
-  await waitForSolid(() =>
-    expect(harness.accounts.querySelector(".model-accounts-flow")).toBeNull(),
-  );
-  expect(harness.accounts.querySelector('input[type="password"]')).toBeNull();
-  expect(harness.accounts.querySelector('[role="alert"]')).toBeNull();
-  expect(harness.accounts.textContent).toContain(account.label);
+  await waitForSolid(() => expect(h.query(ui.flow)).toBeNull());
+  expect(h.query(ui.alert)).toBeNull();
+  expect(h.text()).toContain(account.label);
+  const target = { profileId: "profile-1", connectId: "connect-1" };
+  expect(answers).toEqual([
+    { ...target, stepId: "notice" },
+    { ...target, stepId: step.id, value: "invalid" },
+    { ...target, stepId: step.id, value: "synthetic-grok-key" },
+  ]);
 });

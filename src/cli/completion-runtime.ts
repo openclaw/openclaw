@@ -2,11 +2,15 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { readRegularFile, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  hasTerminalControl,
+  sanitizeTerminalText,
+} from "../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isErrno } from "../infra/errors.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
@@ -21,7 +25,7 @@ export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLU
 type CompletionProfileEncoding = "utf8" | "utf8bom" | "utf16le" | "utf16be";
 
 async function readCompletionProfile(profilePath: string, shell: CompletionShell) {
-  const buffer = await fs.readFile(profilePath);
+  const { buffer } = await readRegularFile({ filePath: await fs.realpath(profilePath) });
   let encoding: CompletionProfileEncoding = "utf8";
   if (shell === "powershell" && process.platform === "win32") {
     const [first, second, third] = buffer;
@@ -449,6 +453,13 @@ export async function usesSlowDynamicCompletion(
 
 const PROFILE_WRITE_ERROR_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
 
+class CompletionCacheMissingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CompletionCacheMissingError";
+  }
+}
+
 export function findCompletionProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined {
   if (isErrno(err) && PROFILE_WRITE_ERROR_CODES.has(err.code ?? "")) {
     return err;
@@ -464,7 +475,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   const cachePath = resolveCompletionCachePath(shell, binName);
   const cacheExists = await pathExists(cachePath);
   if (!cacheExists) {
-    throw new Error(
+    throw new CompletionCacheMissingError(
       `Completion cache not found at ${cachePath}. Run \`${binName} completion --write-state\` first.`,
     );
   }
@@ -482,7 +493,9 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
         throw error;
       }
       if (!yes) {
-        console.warn(`Profile not found at ${profilePath}. Creating a new one.`);
+        console.warn(
+          `Profile not found at ${sanitizeTerminalText(profilePath)}. Creating a new one.`,
+        );
       }
       content = "";
     }
@@ -534,14 +547,14 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     }
     if (next === content) {
       if (!yes) {
-        console.log(`Completion already installed in ${profilePath}`);
+        console.log(`Completion already installed in ${sanitizeTerminalText(profilePath)}`);
       }
       return;
     }
 
     if (!yes) {
       const action = hadExisting ? "Updating" : "Installing";
-      console.log(`${action} completion in ${profilePath}...`);
+      console.log(`${action} completion in ${sanitizeTerminalText(profilePath)}...`);
     }
 
     await publishOutputFileAtomically({
@@ -555,8 +568,11 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       },
     });
     if (!yes) {
+      const profileHint = resolveCompletionProfileHint(shell);
       console.log(
-        `Completion installed. Restart your shell or run: ${formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell))}`,
+        hasTerminalControl(profileHint)
+          ? "Completion installed. Restart your shell to load it."
+          : `Completion installed. Restart your shell or run: ${formatCompletionReloadCommand(shell, profileHint)}`,
       );
     }
   } catch (err) {

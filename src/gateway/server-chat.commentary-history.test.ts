@@ -246,7 +246,6 @@ it.each([
     name: "without steer",
     reload: false,
     tail: "Live B.",
-    persistTail: false,
     canvas: false,
     includeSteer: false,
   },
@@ -254,31 +253,27 @@ it.each([
     name: "saved after steer",
     reload: false,
     tail: "Live B.",
-    persistTail: false,
     canvas: false,
     steerFirst: true,
   },
-  { name: "live", reload: false, tail: "Live B.", persistTail: false, canvas: false },
-  { name: "restored", reload: true, tail: "Live B.", persistTail: false, canvas: false },
+  { name: "live", reload: false, tail: "Live B.", canvas: false },
+  { name: "restored", reload: true, tail: "Live B.", canvas: false },
   {
     name: "identical later occurrence",
     reload: false,
     tail: "Saved A.",
-    persistTail: false,
     canvas: false,
   },
-  { name: "literal terminal tail", reload: false, tail: "[", persistTail: false, canvas: false },
-  { name: "fully committed", reload: false, tail: "Live B.", persistTail: true, canvas: false },
+  { name: "literal terminal tail", reload: false, tail: "[", canvas: false },
   {
     name: "canvas-only display tail",
     reload: false,
     tail: "Live B.",
-    persistTail: true,
     canvas: true,
   },
 ])(
   "displays each occurrence once when a run finishes ($name)",
-  async ({ reload, tail, persistTail, canvas, includeSteer = true, steerFirst = false }) => {
+  async ({ reload, tail, canvas, includeSteer = true, steerFirst = false }) => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(new Date("2026-05-09T00:00:00.000Z"));
     vi.stubGlobal("window", globalThis);
@@ -389,7 +384,7 @@ it.each([
           ...(tail === "[" ? [] : [tail]),
         ].join("\n"),
       );
-      if (persistTail) {
+      if (canvas) {
         const savedTail = {
           role: "assistant",
           content: [{ type: "text", text: tail }],
@@ -404,8 +399,6 @@ it.each([
           kind: "live",
           activeRunId: runId,
         });
-      }
-      if (canvas) {
         gateway.toolEventRecipients.add(runId, "control-ui");
         await gateway.emit(
           runId,

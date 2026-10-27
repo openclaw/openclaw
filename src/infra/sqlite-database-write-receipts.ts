@@ -14,6 +14,7 @@ import {
   type Admission,
   type ScopedWriteRevision,
 } from "./sqlite-database-admission-record.js";
+import { isPreparingSqliteNativeMutation } from "./sqlite-native-observer.js";
 import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseWriteScopes"), () => ({
@@ -429,7 +430,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     const database = sqlPublicationAnchor(connection);
     if (
       !connection.isOpen ||
-      !connection.isTransaction ||
+      (!connection.isTransaction && !isPreparingSqliteNativeMutation(database)) ||
       !hasSqlitePostCommitScope(database) ||
       owner.suspended(database)
     ) {
@@ -443,6 +444,9 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   }
 
   return {
+    cancel(database: DatabaseSync) {
+      state.pendingWriteScopes.delete(database);
+    },
     begin(database: DatabaseSync, unscoped: boolean) {
       const scope = unscoped ? undefined : state.writeScopes.get(database);
       const pending = state.pendingWriteScopes.get(database);

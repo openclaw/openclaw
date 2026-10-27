@@ -148,9 +148,14 @@ export function instrumentPluginInstanceApi(
           Reflect.apply(
             value,
             target,
-            args.map((arg) =>
-              identitySensitiveRegistrations.has(key) ? instance.adopt(arg) : instance.wrap(arg),
-            ),
+            // The tool registrar binds its inspected factory and executable results once.
+            key === "registerTool"
+              ? args
+              : args.map((arg) =>
+                  identitySensitiveRegistrations.has(key)
+                    ? instance.adopt(arg)
+                    : instance.wrap(arg),
+                ),
           ),
         );
     },

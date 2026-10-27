@@ -10,6 +10,7 @@ import { resolveIMessageRemoteHost } from "./remote-host.js";
 import {
   createClient,
   createRejectingClient,
+  createSendConfig,
   createTimedOutSendClient,
   getClientMocks,
 } from "./send.test-support.js";
@@ -63,15 +64,11 @@ async function loadFreshSendModule(): Promise<void> {
   chatDb = await import("./chat-db.js");
 }
 
-const IMESSAGE_TEST_CFG = {
-  channels: {
-    imessage: {
-      accounts: {
-        default: {},
-      },
-    },
+const IMESSAGE_TEST_CFG = createSendConfig({
+  accounts: {
+    default: {},
   },
-};
+});
 
 function createApprovalText(id = "approval-123"): string {
   return [
@@ -1148,7 +1145,7 @@ describe("sendMessageIMessage receipts", () => {
       .mockResolvedValue(createClient({ guid: "unexpected-rpc" }));
     mockAttachment({ path: mediaPath, contentType: "application/pdf" });
     const sending = sendMessageIMessage("chat_guid:fixture-chat", "", {
-      config: { channels: { imessage: { accounts: { default: { cliPath, dbPath } } } } },
+      config: createSendConfig({ accounts: { default: { cliPath, dbPath } } }),
       mediaUrl: mediaPath,
     });
     await expect(sending).rejects.toThrow("synthetic CLI rejection");
@@ -1258,9 +1255,7 @@ describe("sendMessageIMessage receipts", () => {
       async (params) => await params.use("/tmp/openclaw-imessage-safe/photo.png"),
     );
     const rejection = await sendMessageIMessage("chat_id:42", "", {
-      config: {
-        channels: { imessage: { accounts: { default: { remoteHost: "work@messages-b" } } } },
-      },
+      config: createSendConfig({ accounts: { default: { remoteHost: "work@messages-b" } } }),
       mediaUrl: "/gateway/photo.png",
     }).catch((error: unknown) => error);
     expect(rejection).toBeInstanceOf(PlatformMessageNotDispatchedError);
@@ -1294,9 +1289,7 @@ describe("sendMessageIMessage receipts", () => {
     const runCliJson = mockCliSend().mockResolvedValueOnce({ messageId: "p:0/plain-guid" });
     mockAttachment({ path: "/tmp/image.png", contentType: "image/png" });
     const result = await sendMessageIMessage("chat_guid:chat-1", "", {
-      config: {
-        channels: { imessage: { actions: { reply: false }, accounts: { default: {} } } },
-      },
+      config: createSendConfig({ actions: { reply: false }, accounts: { default: {} } }),
       client,
       replyToId: "p:0/reply-guid",
       mediaUrl: "/tmp/image.png",
@@ -1319,14 +1312,10 @@ describe("sendMessageIMessage receipts", () => {
 
     await expect(
       sendMessageIMessage("chat_id:42", "caption", {
-        config: {
-          channels: {
-            imessage: {
-              remoteHost: "qa@example.invalid",
-              accounts: { default: {} },
-            },
-          },
-        },
+        config: createSendConfig({
+          remoteHost: "qa@example.invalid",
+          accounts: { default: {} },
+        }),
         client,
         conversationReadOrigin: "delegated",
         mediaUrl: "/tmp/image.png",
@@ -1365,9 +1354,7 @@ describe("sendMessageIMessage receipts", () => {
       });
       await expect(
         sendMessageIMessage(target, "hello", {
-          config: {
-            channels: { imessage: { remoteHost: "qa@example.invalid", accounts: { default: {} } } },
-          },
+          config: createSendConfig({ remoteHost: "qa@example.invalid", accounts: { default: {} } }),
           client,
           service,
           conversationReadOrigin: "delegated",
@@ -1394,14 +1381,10 @@ describe("sendMessageIMessage receipts", () => {
 
     await expect(
       sendMessageIMessage("+15550004567", "hello", {
-        config: {
-          channels: {
-            imessage: {
-              remoteHost: "qa@example.invalid",
-              accounts: { default: {} },
-            },
-          },
-        },
+        config: createSendConfig({
+          remoteHost: "qa@example.invalid",
+          accounts: { default: {} },
+        }),
         client,
         conversationReadOrigin: "delegated",
         replyToId: "ambiguous-service-guid",
@@ -1418,22 +1401,18 @@ describe("sendMessageIMessage receipts", () => {
       .mockResolvedValue(client);
 
     await sendMessageIMessage("chat_id:42", "hello", {
-      config: {
-        channels: {
-          imessage: {
-            cliPath: "/gateway/default-imsg",
-            dbPath: "/Users/default/Library/Messages/chat.db",
-            remoteHost: "default@messages-a",
-            accounts: {
-              work: {
-                cliPath: "/gateway/work-imsg",
-                dbPath: "~/Library/Messages/chat.db",
-                remoteHost: "work@messages-b",
-              },
-            },
+      config: createSendConfig({
+        cliPath: "/gateway/default-imsg",
+        dbPath: "/Users/default/Library/Messages/chat.db",
+        remoteHost: "default@messages-a",
+        accounts: {
+          work: {
+            cliPath: "/gateway/work-imsg",
+            dbPath: "~/Library/Messages/chat.db",
+            remoteHost: "work@messages-b",
           },
         },
-      },
+      }),
       accountId: "work",
     });
 
@@ -1462,17 +1441,13 @@ describe("sendMessageIMessage receipts", () => {
     mockAttachment({ path: "/gateway/photo.png" });
 
     const result = await sendMessageIMessage("imessage:+15550004567", "", {
-      config: {
-        channels: {
-          imessage: {
-            accounts: {
-              default: {
-                remoteHost: "work@messages-b",
-              },
-            },
+      config: createSendConfig({
+        accounts: {
+          default: {
+            remoteHost: "work@messages-b",
           },
         },
-      },
+      }),
       mediaUrl: "/gateway/photo.png",
     });
 
@@ -1519,7 +1494,7 @@ describe("sendMessageIMessage receipts", () => {
 
     await expect(
       sendMessageIMessage("chat_id:42", "", {
-        config: { channels: { imessage: { cliPath } } },
+        config: createSendConfig({ cliPath }),
         mediaUrl: "/gateway/photo.png",
       }),
     ).rejects.toThrow("configure channels.imessage.remoteHost explicitly");
@@ -1552,14 +1527,10 @@ describe("sendMessageIMessage receipts", () => {
     } as unknown as IMessageRpcClient;
 
     const send = sendMessageIMessage("chat_id:42", "hello", {
-      config: {
-        channels: {
-          imessage: {
-            ...IMESSAGE_TEST_CFG.channels.imessage,
-            probeTimeoutMs: 10_000,
-          },
-        },
-      },
+      config: createSendConfig({
+        ...IMESSAGE_TEST_CFG.channels.imessage,
+        probeTimeoutMs: 10_000,
+      }),
       client,
     });
     await requestStarted.promise;
@@ -1621,7 +1592,7 @@ describe("sendMessageIMessage receipts", () => {
 
     await expect(
       sendMessageIMessage("chat_guid:chat-1", "", {
-        config: { channels: { imessage: { sendTransport: "applescript" } } },
+        config: createSendConfig({ sendTransport: "applescript" }),
         client,
         conversationReadOrigin: "direct-operator",
         mediaUrl: "/tmp/voice.caf",
@@ -1690,7 +1661,7 @@ describe("sendMessageIMessage receipts", () => {
     mockAttachment({ path: "/tmp/image.png", contentType: "image/png" });
 
     await sendMessageIMessage("imessage:+15550004567", "", {
-      config: { channels: { imessage: { sendTransport: "bridge" } } },
+      config: createSendConfig({ sendTransport: "bridge" }),
       client,
       mediaUrl: "/tmp/image.png",
     });

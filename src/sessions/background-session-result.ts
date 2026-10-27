@@ -17,24 +17,21 @@ import type { SessionTranscriptAssistantMessage } from "../config/sessions/trans
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import {
+  AUTOMATION_RESULT_MODEL,
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+  type SUBAGENT_COMPLETION_RESULT_KIND,
 } from "../shared/transcript-only-openclaw-assistant.js";
 import { captureSessionTarget, runSessionMutation } from "./session-controller.lifecycle.js";
 
-// Background completions are durable conversation output, so this identity
-// must stay outside the transcript-only delivery-mirror model set.
-const AUTOMATION_RESULT_MODEL = "automation-result" as const;
-
 type BackgroundSessionResultCommit = { ok: true } | { ok: false; reason: string };
 
-type BackgroundSessionResultProvenance = {
-  kind: "cron";
-  jobId: string;
-  runId: string;
-};
+/** Identifies which background producer wrote a result row. */
+export type BackgroundSessionResultProvenance =
+  | { kind: "cron"; jobId: string; runId: string }
+  | { kind: typeof SUBAGENT_COMPLETION_RESULT_KIND };
 
-/** Serializes a background assistant result behind active work on its target conversation. */
+/** Appends a background result without waiting for the target conversation's active turn. */
 export async function commitBackgroundResultToSession(params: {
   agentId: string;
   sessionKey: string;
@@ -44,7 +41,7 @@ export async function commitBackgroundResultToSession(params: {
   prepareDisplayContent?: () => Promise<readonly Record<string, unknown>[] | undefined>;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
   idempotencyKey: string;
-  provenance: BackgroundSessionResultProvenance;
+  provenance?: BackgroundSessionResultProvenance;
   config: OpenClawConfig;
   signal?: AbortSignal;
   /** Revalidate the producer after preparation and inside the transcript commit. */
@@ -81,7 +78,8 @@ export async function commitBackgroundResultToSession(params: {
       agentId: params.agentId,
     }),
     signal: params.signal,
-    policy: "wait",
+    // The transcript writer orders appends; only destructive mutations need turn settlement.
+    policy: "allow-live",
     run: async () => {
       params.assertCurrent?.();
       return withSessionEntryReadOnlyInWorker<BackgroundSessionResultCommit>(
@@ -144,10 +142,10 @@ export async function commitBackgroundResultToSession(params: {
             stopReason: "stop",
             timestamp: Date.now(),
             idempotencyKey,
-            openclawAutomation: params.provenance,
+            ...(params.provenance ? { openclawAutomation: params.provenance } : {}),
           } satisfies SessionTranscriptAssistantMessage & {
             idempotencyKey: string;
-            openclawAutomation: BackgroundSessionResultProvenance;
+            openclawAutomation?: BackgroundSessionResultProvenance;
           };
           owner.assertCurrent();
           params.assertCurrent?.();
@@ -166,7 +164,7 @@ export async function commitBackgroundResultToSession(params: {
                   ? {
                       ...priorMessage,
                       content: message.content,
-                      openclawAutomation: params.provenance,
+                      ...(params.provenance ? { openclawAutomation: params.provenance } : {}),
                     }
                   : message,
                 idempotencyLookup: "scan",

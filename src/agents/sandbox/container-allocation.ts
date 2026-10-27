@@ -164,7 +164,8 @@ function appendCustomBinds(args: string[], binds: readonly string[] | undefined)
   }
 }
 
-export type SandboxContainerAllocationParams = {
+/** Allocate inertly; the caller records custody before starting any container process. */
+export async function allocateSandboxContainer(params: {
   engine: SandboxContainerEngine;
   name: string;
   cfg: SandboxDockerConfig;
@@ -180,12 +181,7 @@ export type SandboxContainerAllocationParams = {
   assertCurrent?: () => void;
   labels?: Record<string, string>;
   command?: SandboxPersistentExecCommand;
-};
-
-/** Allocate inertly; the caller records custody before starting any container process. */
-export async function allocateSandboxContainer(
-  params: SandboxContainerAllocationParams,
-): Promise<string> {
+}): Promise<string> {
   const { engine, name, workspaceDir, scopeKey } = params;
   const cfg = params.command?.env
     ? { ...params.cfg, env: { ...params.cfg.env, ...params.command.env } }

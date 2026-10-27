@@ -4,7 +4,7 @@ import { computeBackoffSchedule, sleepWithAbort } from "@openclaw/retry";
 import { getRuntimeConfig } from "../../config/config.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -14,7 +14,7 @@ import {
   captureSessionTranscriptTargetBinding,
   sameSessionTranscriptStorageEnvironment,
 } from "../../config/sessions/transcript-target-binding.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../cron/run-continuation-cleanup.js";
 import {
@@ -236,7 +236,7 @@ async function createMediaGenerationTaskRun(
       : undefined;
     const entry =
       agentId && storePath
-        ? await withSessionEntryReadOnlyInWorker(
+        ? await readSessionEntryReadOnlyInWorker(
             {
               agentId,
               storePath,
@@ -249,12 +249,6 @@ async function createMediaGenerationTaskRun(
               hydrateSkillPromptRefs: false,
             },
             assertCurrent,
-            async (read) => {
-              if (!read.ok) {
-                throw read.error;
-              }
-              return read.value;
-            },
           )
         : undefined;
     assertCurrent();
@@ -397,7 +391,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
           progressSummary: params.progressSummary,
         });
       }, MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS);
-      interval.unref?.();
+      interval.unref();
       try {
         executed = await params.run();
       } finally {

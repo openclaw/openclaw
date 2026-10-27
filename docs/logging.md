@@ -480,6 +480,44 @@ must not be summed. Unfinished spans stop at the startup boundary; later model
 and tool latency does not extend them. Structured `chat.send.detail.*` phase
 events use the same durations when diagnostics are enabled.
 
+Before acknowledgement, `detail.persist.stage.*` separates pending-input resolution,
+storage preparation, reads, authority preparation, message preparation, and durable
+commit. `detail.persist.transcript.*` covers target selection, owner authority,
+append, and transcript publication; `detail.persist.turn.*` further separates the
+append's preparation, authority, message hook, commit, and completion waits.
+`detail.session.actor.command.queue` measures the physical writer FIFO wait;
+`execute` includes the command's `commit` and `publication` intervals. Commit
+timing includes worker delivery, transaction admission, and durable settlement;
+it is not an isolated fsync measurement. `detail.persist.resolveInput` identifies
+input/media resolution, and `detail.session.inputActor.acquire` times actor acquisition.
+These nested spans use the same request-owned diagnostics without logging input
+bytes or enabling timeline files.
+
+`detail.attempt.setup.*` checkpoints separate initialization, workspace preparation,
+and finalization. Within `workspace`, `policy` and `policy_finalize` cover session
+policy admission and revalidation; `baseline_wait` records only the time setup
+blocks on the concurrently captured Git baseline. `mkdir`, `sandbox`, and `roots`
+cover directory creation, sandbox preparation, and permission-root resolution.
+The `sandbox.*` checkpoints further separate session selection, state-owner
+admission, workspace selection, GitHub identity, pruning, workspace/skills layout,
+mounts, registry reads, backend provisioning, browser setup, and finalization.
+`sandbox.layout.*` separates workspace creation, skill imports, remote connections,
+eligibility, and synchronization. These are fixed labels and monotonic elapsed
+times, including failed preparation. Read siblings as consecutive phases and
+parents as inclusive totals; do not add a parent to its children. Prompt-media
+warnings beginning `Native image:` concern image-file access, not container-image
+validation, and occur outside attempt setup.
+
+`detail.worktree.managed.*` and `detail.worktree.sandbox.*` carry the worktree
+owner's recorded phase durations, including `templatePrepare`, `templateApply`,
+`checkout`, `runtimeQuiesce`, `runtimeResume`, and `unattributed`. Runtime quiescence
+and resume include pausing and unpausing sandbox writers around synchronization.
+The top-level `worktree` interval can describe an
+earlier managed checkout; it is not the sandbox work inside `attempt.setup`.
+Use the matching `detail.worktree.sandbox` total when comparing setup with its
+nested worktree preparation. Recorded worktree summaries appear when their owner
+finishes; a preparation spanning acknowledgement is reported at completion.
+
 ### Embedded attempt preparation
 
 The `model-dispatch` prep summary extends `stream-ready` through history
@@ -1164,6 +1202,21 @@ can explain delays across several sessions.
 For shorter delays, [profiler flags](/diagnostics/flags#profiler-flags) lower the
 warning thresholds. They are not required to diagnose a multi-second startup
 stall.
+
+`main-thread stall` warnings include `stallStartMs`, `stallEndMs`, and
+`reportedAtMs` as Unix timestamps in milliseconds. Scoped callbacks have measured
+start and end times. Unattributed active-loop stalls use the observed gap between
+20 ms heartbeats; these bounds describe a blocked-loop observation, not an exact
+JavaScript callback lifetime. Idle monitoring uses the missed wake deadline and
+the resumed wake instead, without adding idle heartbeats.
+
+On supported Node runtimes, `main-thread stall profile` selects samples only
+inside the longest reported stall's saved interval. `windowStartMs` and
+`windowEndMs` identify that interval; `reportedAtMs` identifies profile emission.
+The recorder keeps its 25 ms sample interval and bounded profile buffers. Later
+work outside the interval is excluded, even when reporting is delayed. Sample
+counts include idle samples whose frames are omitted from `inclusive`, so a
+single listed stack does not mean that stack occupied the whole interval.
 
 ### Model call size and timing
 

@@ -1,4 +1,4 @@
-import type { Server } from "node:http";
+import { createServer, type Server } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
 
 function mockModule(id: string, overrides: Record<string, unknown>) {
@@ -36,17 +36,13 @@ it.each([
     mockModule("vitest", {
       it: Object.assign(register, { skipIf: () => register }),
     });
-    vi.doMock("node:http", async (importOriginal) => {
-      const http = await importOriginal<typeof import("node:http")>();
-      return {
-        ...http,
-        createServer: (...args: Parameters<typeof http.createServer>) => {
-          const server = http.createServer(...args);
-          servers.push(server);
-          server.once("close", () => stopped.push("provider"));
-          return server;
-        },
-      };
+    mockModule("node:http", {
+      createServer: (...args: Parameters<typeof createServer>) => {
+        const server = createServer(...args);
+        servers.push(server);
+        server.once("close", () => stopped.push("provider"));
+        return server;
+      },
     });
     mockModule("../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts", {
       createControlUiE2eSuite: () => ({

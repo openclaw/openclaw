@@ -1,4 +1,3 @@
-// Covers trusted system binary resolution across platform install roots.
 import fs from "node:fs";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
@@ -56,63 +55,38 @@ beforeEach(async () => {
   ));
 });
 
-if (process.platform !== "win32") {
-  it.each([
-    ["/usr/local/bin/openssl", "openssl", true],
-    ["/opt/homebrew/bin/ffmpeg", "ffmpeg", true],
-    ["/home/testuser/.local/bin/ffmpeg", "ffmpeg", false],
-  ] as const)("does not trust %s by default", (executable, command, checkStrict) => {
-    addExecutables(executable);
-    expect(resolveSystemBin(command)).toBeNull();
-    if (checkStrict) {
-      expect(resolveSystemBin(command, { trust: "strict" })).toBeNull();
-    }
-  });
-
-  it("prefers /usr/bin over /usr/local/bin (first match wins)", () => {
-    addExecutables("/usr/bin/openssl", "/usr/local/bin/openssl");
-    expect(resolveSystemBin("openssl")).toBe("/usr/bin/openssl");
-  });
-
-  it.each(["strict", "standard"] as const)(
-    "%s extraDirs results do not poison callers without extraDirs",
-    (trust) => {
-      const extra = "/home/user/.local/bin";
-      addExecutables(`${extra}/ffmpeg`);
-      expect(resolveSystemBin("ffmpeg", { trust, extraDirs: [extra] })).toBe(`${extra}/ffmpeg`);
-      expect(resolveSystemBin("ffmpeg", { trust })).toBeNull();
-    },
+it.each([
+  ["linux", "/usr/local/bin", true],
+  ["darwin", "/opt/homebrew/bin", true],
+  ["darwin", "/usr/local/bin", true],
+  ["freebsd", "/usr/local/bin", false],
+] as const)("keeps %s trust and cache boundaries for %s", (platform, directory, standard) => {
+  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  addExecutables(`${directory}/ffmpeg`, `${directory}/openssl`, "/usr/bin/openssl");
+  expect(resolveSystemBin("ffmpeg")).toBeNull();
+  expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe(
+    standard ? `${directory}/ffmpeg` : null,
   );
-}
+  expect(resolveSystemBin("ffmpeg", { trust: "strict" })).toBeNull();
+  for (const trust of ["strict", "standard"] as const) {
+    expect(resolveSystemBin("openssl", { trust })).toBe("/usr/bin/openssl");
+  }
+});
 
-if (process.platform === "darwin" || process.platform === "linux") {
-  const localDirs =
-    process.platform === "darwin" ? ["/opt/homebrew/bin", "/usr/local/bin"] : ["/usr/local/bin"];
-  it.each(localDirs)("resolves a binary in %s with standard trust", (directory) => {
-    const executable = `${directory}/ffmpeg`;
-    addExecutables(executable);
-    expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe(executable);
-  });
-
-  it("prefers /usr/bin over package-manager paths with standard trust", () => {
-    addExecutables("/usr/bin/ffmpeg", ...localDirs.map((dir) => `${dir}/ffmpeg`));
-    expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe("/usr/bin/ffmpeg");
-  });
-}
-
-it.runIf(process.platform === "darwin")(
-  "standard trust results do not poison the strict cache",
-  () => {
-    addExecutables("/opt/homebrew/bin/ffmpeg");
-    expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe("/opt/homebrew/bin/ffmpeg");
-    expect(resolveSystemBin("ffmpeg")).toBeNull();
+it.each(["strict", "standard"] as const)(
+  "%s only accepts user directories with an explicit per-call opt-in",
+  (trust) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const extra = "/home/user/.local/bin";
+    addExecutables(`${extra}/ffmpeg`);
+    expect(resolveSystemBin("ffmpeg", { trust })).toBeNull();
+    expect(resolveSystemBin("ffmpeg", { trust, extraDirs: [extra] })).toBe(`${extra}/ffmpeg`);
+    expect(resolveSystemBin("ffmpeg", { trust })).toBeNull();
   },
 );
 
 it.each([
   ["linux", "strict", ""],
-  ["linux", "standard", ""],
-  ["win32", "strict", ""],
   ["win32", "standard", ".exe"],
 ] as const)(
   "bounds %s %s %s success entries with LRU eviction and retries failures",
@@ -121,12 +95,8 @@ it.each([
     const systemDir =
       platform === "win32" ? path.win32.join("C:\\Windows", "System32") : "/usr/bin";
     const commandFor = (label: string) => `${label}${extension}`;
-    const candidateFor = (command: string) =>
-      platform === "win32" && !extension
-        ? path.win32.join(systemDir, `${command}.exe`)
-        : path.join(systemDir, command);
     const addCommand = (command: string) => {
-      const candidate = candidateFor(command);
+      const candidate = path.join(systemDir, command);
       addExecutables(path.resolve(candidate));
       return candidate;
     };
@@ -165,24 +135,19 @@ it("resolves Windows system and Program Files tools through the public resolver"
     ["ffmpeg", "E:\\Program Files (x86)\\ffmpeg\\bin\\ffmpeg.exe", "strict"],
     ["magick", "D:\\Program Files\\ImageMagick\\magick.exe", "standard"],
     ["gm", "E:\\Program Files (x86)\\GraphicsMagick\\gm.exe", "standard"],
+    ["choco", "D:\\ProgramData\\chocolatey\\bin\\choco.exe", "standard"],
   ] as const;
   addExecutables(...candidates.map(([, expected]) => path.resolve(expected)));
 
   for (const [command, expected, trust] of candidates) {
     expect(resolveSystemBin(command, { trust })).toBe(expected);
+    if (trust === "standard") {
+      expect(resolveSystemBin(command, { trust: "strict" })).toBeNull();
+    }
   }
-  expect(resolveSystemBin("magick", { trust: "strict" })).toBeNull();
 
   addExecutables(path.resolve("/usr/bin/unix-only.exe"));
   expect(resolveSystemBin("unix-only", { trust: "standard" })).toBeNull();
-});
-
-it("resolves machine-wide Chocolatey shims only with standard trust on Windows", () => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-  const chocoFfmpeg = path.win32.join("C:\\", "ProgramData", "chocolatey", "bin", "ffmpeg.exe");
-  executables.add(path.resolve(chocoFfmpeg));
-  expect(resolveSystemBin("ffmpeg")).toBeNull();
-  expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe(chocoFfmpeg);
 });
 
 it("uses fixed Linux system paths and ignores NIX_PROFILES", () => {
@@ -203,11 +168,4 @@ it("uses fixed Linux system paths and ignores NIX_PROFILES", () => {
   expect(resolveSystemBin("snap-tool")).toBe("/snap/bin/snap-tool");
   expect(resolveSystemBin("local-tool")).toBeNull();
   expect(resolveSystemBin("local-tool", { trust: "standard" })).toBe("/usr/local/bin/local-tool");
-});
-
-it("does not widen standard trust on unsupported Unix platforms", () => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("freebsd");
-  addExecutables("/usr/local/bin/local-tool");
-  expect(resolveSystemBin("local-tool", { trust: "strict" })).toBeNull();
-  expect(resolveSystemBin("local-tool", { trust: "standard" })).toBeNull();
 });

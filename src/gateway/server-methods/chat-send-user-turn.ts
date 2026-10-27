@@ -39,11 +39,6 @@ import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
 import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
-type ChatSendUserTurnInputController = {
-  baseInput: UserTurnInput;
-  setInputPromise: (input: Promise<UserTurnInput>) => void;
-};
-
 const audioPreflightLoader = createLazyImportLoader(
   () => import("../../media-understanding/audio-preflight.js"),
 );
@@ -173,7 +168,10 @@ export function prepareChatSendUserTurn(params: {
   logGateway: GatewayRequestContext["logGateway"];
   getConfig?: () => OpenClawConfig;
   assertInputCurrent?: () => void;
-  userTurn: ChatSendUserTurnInputController;
+  userTurn: {
+    baseInput: UserTurnInput;
+    setInputPromise: (input: Promise<UserTurnInput>) => void;
+  };
 }) {
   const { request, session, admission, attachments, client, logGateway, userTurn } = params;
   const persistedMediaForTranscriptPromise = (async (): ReturnType<

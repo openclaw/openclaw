@@ -177,6 +177,8 @@ async function writeSupportExportFromCli(opts: {
       });
     },
     readHealthSnapshot: async () => await callGatewayReadOnlyCli("health", rpc),
+    readGatewayCapabilities: async () =>
+      await callGatewayReadOnlyCli("diagnostics.capabilities", rpc),
   });
   await printGatewayResult(opts.json, result, (rich) => [
     colorize(rich, theme.heading, "Diagnostics export"),

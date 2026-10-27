@@ -1,18 +1,12 @@
 import { metrics } from "@opentelemetry/api";
 import {
-  AggregationTemporality,
-  InMemoryMetricExporter,
-  MeterProvider,
-  PeriodicExportingMetricReader,
-} from "@opentelemetry/sdk-metrics";
-import {
   emitDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { emitInternalDiagnosticEventForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, test } from "vitest";
-import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
+import { createTestMeter, installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
 import { startOtelService } from "./service.test-helpers.js";
 
 installRealOtelSdkTestHarness();
@@ -22,10 +16,7 @@ const gauge = (unit: string, value: number) => [unit, [[{}, value]]];
 const resetCauses = ["close", "delivery-lost", "generation", "evicted", "projection"] as const;
 
 test("exports trusted session retention gauges and wire baseline reset counts", async () => {
-  const reader = new PeriodicExportingMetricReader({
-    exporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
-  });
-  const meterProvider = new MeterProvider({ readers: [reader] });
+  const { reader, meterProvider } = createTestMeter();
   metrics.disable();
   metrics.setGlobalMeterProvider(meterProvider);
   const { service, ctx } = await startOtelService({ metrics: true });

@@ -22,8 +22,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import type { GitHubPublicationRequesterSnapshot } from "../state/github-publication-requester.js";
 import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
+import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -124,7 +126,8 @@ vi.mock("../agents/git-coauthor-attribution.js", () => ({
   prepareGitCoauthorAttribution: mocks.prepareAttribution,
 }));
 
-vi.mock("../agents/worktrees/service.js", () => ({
+vi.mock("../agents/worktrees/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/worktrees/service.js")>()),
   managedWorktrees: {
     findLiveByOwner: mocks.findWorktree,
     findLiveById: mocks.findWorktreeById,
@@ -494,13 +497,18 @@ export async function persistClaimPublicationWorkspace() {
   await persistPublicationTestSession(REQUEST.sessionKey);
 }
 
+async function closePublicationTestAgentDatabases() {
+  withEngineStoreAdmission(() => closeOpenClawAgentDatabases());
+  await closeOpenClawAgentDatabasesAsync();
+}
+
 export function installGitHubPublicationTestHarness(
   harnessOptions: { creatorEmail?: string; sandbox?: "required"; realWorktree?: boolean } = {},
 ): void {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterAll(async () => {
       // Agent close releases leases through shared state; drain it before shared state.
-      await closeOpenClawAgentDatabasesAsync();
+      await closePublicationTestAgentDatabases();
       closeOpenClawAgentDatabasesForTest();
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
@@ -644,7 +652,13 @@ export function installGitHubPublicationTestHarness(
         return commandResult(JSON.stringify({ ref: `refs/heads/${branch}`, sha: BASE_HEAD }));
       }
 
-      if (argv.includes("--includes") && argv.includes("--get-regexp")) {
+      if (
+        (argv.includes("--includes") && argv.includes("--get-regexp")) ||
+        (argv[0] === "git" &&
+          argv[1] === "config" &&
+          (argv.includes("--global") || argv.includes("--system")) &&
+          argv.includes("core.attributesFile"))
+      ) {
         return commandResult("", 1);
       }
       if (command.startsWith("git ls-tree -r -z --full-tree ")) {
@@ -653,19 +667,9 @@ export function installGitHubPublicationTestHarness(
       if (argv.includes("rev-parse") && argv.includes("--git-path") && argv.at(-1) === "index") {
         return commandResult(syntheticIndex);
       }
-
-      if (
-        argv[0] === "git" &&
-        argv[1] === "config" &&
-        (argv.includes("--global") || argv.includes("--system")) &&
-        argv.includes("core.attributesFile")
-      ) {
-        return commandResult("", 1);
-      }
       if (command.endsWith("write-tree")) {
         return commandResult(`${WORKSPACE_TREE}\n`);
       }
-
       if (command.startsWith("git commit-tree ")) {
         return commandResult(`${NEW_HEAD}\n`);
       }
@@ -697,20 +701,22 @@ export function installGitHubPublicationTestHarness(
     setRuntimeConfigSnapshot({
       agents: { entries: { main: { workspace: "/repo/worktree" } } },
     });
-    for (const sessionKey of [SESSION_KEY, REQUEST.sessionKey]) {
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey },
-        { ...mocks.loadSession(sessionKey).entry, updatedAt: Date.now() },
-      );
-    }
+    withEngineStoreAdmission(() => {
+      for (const sessionKey of [SESSION_KEY, REQUEST.sessionKey]) {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey },
+          { ...mocks.loadSession(sessionKey).entry, updatedAt: Date.now() },
+        );
+      }
+    });
     // Custody remains persisted for policy reads; release its writer lease so
     // receipt-only tests can observe a genuinely cold shared database.
-    await closeOpenClawAgentDatabasesAsync();
+    await closePublicationTestAgentDatabases();
     systemPublicationRequester = (await createSystemGitHubPublicationRequesterFixture()).requester;
   });
 
   afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
+    await closePublicationTestAgentDatabases();
     clearRuntimeConfigSnapshot();
     closeOpenClawAgentDatabasesForTest();
     vi.unstubAllEnvs();

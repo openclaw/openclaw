@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup } from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   isCommandPaletteShortcut,
@@ -131,7 +131,9 @@ export class ShellCommandPaletteOwner {
       return false;
     }
     event.preventDefault();
-    this.toggle();
+    if (!event.repeat) {
+      this.toggle();
+    }
     return true;
   }
 }
@@ -183,7 +185,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
     attachmentFiles = [];
     mentionTrigger = undefined;
   }
-  onCleanup(reset);
+  onSettled(() => reset);
   function snapshot(): CommandPaletteInputSnapshot | undefined {
     return input
       ? {

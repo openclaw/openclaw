@@ -49,6 +49,7 @@ import {
   captureChannelOperatorRunAuthority,
   intersectOperatorRunModelPolicy,
 } from "./operator-run-authority.js";
+import { prepareRestartRecoveryParentSource } from "./operator-run-recovery-parent.js";
 import {
   decodeGatewayOperatorRecoverySource,
   decodeQueuedOperatorRecoverySource,
@@ -249,21 +250,29 @@ async function restoreGatewayOperatorSnapshot(params: {
     identity = await prepareUserProfileIdentity(snapshot.profileId);
     const profileIdentity = identity;
     let githubAccountIds: readonly number[] | undefined;
+    let profileRevision: object | undefined;
+    let profileFacts: ReturnType<typeof profileIdentity.readCurrentFacts>["profile"] | undefined;
     const assertFacts = () => {
       const cfg = assertSourcePolicy();
-      const profile = profileIdentity.readCurrentFacts(snapshot.aliasBindingIds).profile;
-      if (
-        profile.profileId !== snapshot.profileId ||
-        profile.assignedRole !== snapshot.assignedRole ||
-        (profile.githubLogin ?? null) !== snapshot.githubLogin ||
-        githubAccountIds?.some((accountId) => !profile.githubAccountIds?.includes(accountId))
-      ) {
-        throw new GatewayOperatorRecoveryAuthorizationError(
-          "Restart recovery operator identity changed.",
-        );
+      // The bound owner still checks lifetime, settlement, and email bindings on every use.
+      const revision = profileIdentity.readCurrentRevision(snapshot.aliasBindingIds);
+      if (!profileFacts || revision !== profileRevision) {
+        const profile = profileIdentity.readCurrentFacts(snapshot.aliasBindingIds).profile;
+        if (
+          profile.profileId !== snapshot.profileId ||
+          profile.assignedRole !== snapshot.assignedRole ||
+          (profile.githubLogin ?? null) !== snapshot.githubLogin ||
+          githubAccountIds?.some((accountId) => !profile.githubAccountIds?.includes(accountId))
+        ) {
+          throw new GatewayOperatorRecoveryAuthorizationError(
+            "Restart recovery operator identity changed.",
+          );
+        }
+        githubAccountIds ??= profile.githubAccountIds ?? [];
+        profileFacts = profile;
+        profileRevision = revision;
       }
-      githubAccountIds ??= profile.githubAccountIds ?? [];
-      return { cfg, profile };
+      return { cfg, profile: profileFacts };
     };
     let accessAuthority: ReturnType<typeof resumeGatewayOperatorAccessGrant>;
     assertPolicy = () => {
@@ -453,6 +462,7 @@ export async function restoreGatewayRunRecovery(params: {
 }): Promise<{
   operator?: RestoredGatewayOperatorAuthority;
   requesterOrigin?: RequesterOrigin;
+  parentSource?: { source: SessionSourceAssertion; release: () => void };
 }> {
   const target = { ...params.target };
   let entry: InternalSessionEntry | undefined;
@@ -558,6 +568,13 @@ export async function restoreGatewayRunRecovery(params: {
     const requesterOrigin = params.restoreRequester
       ? readRestartRecoveryRequesterSource({ ...target, entry })
       : undefined;
+    const parentSource = await prepareRestartRecoveryParentSource({
+      ...params,
+      target,
+      entry,
+      requesterOrigin,
+      operatorSource: operator ? { ...target, authority: operator.authority } : undefined,
+    });
     if (operator) {
       recoverySources.set(operator.authority, {
         target,
@@ -567,7 +584,7 @@ export async function restoreGatewayRunRecovery(params: {
         }),
       });
     }
-    return { operator, requesterOrigin };
+    return { operator, requesterOrigin, parentSource };
   } catch (error) {
     operator?.release();
     throw error;

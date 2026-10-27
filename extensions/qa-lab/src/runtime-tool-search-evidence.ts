@@ -8,17 +8,7 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
-type QaToolSearchDiscoveryReceipt = {
-  searchCallId: string;
-  searchCallExecution: string;
-  searchCallStatus?: string;
-  searchOutputExecution: string;
-  searchOutputStatus: string;
-  targetCallId: string;
-  targetNamespace: string;
-  targetTool: string;
-  targetSuccess: boolean;
-};
+type QaToolSearchDiscoveryReceipt = NonNullable<ReturnType<typeof readToolSearchDiscoveryReceipt>>;
 
 export function needsSearchEvidence(
   env: Pick<QaSuiteRuntimeEnv, "runtimeId" | "runtimeSelection">,
@@ -31,9 +21,7 @@ export function needsSearchEvidence(
   );
 }
 
-function readToolSearchDiscoveryReceipt(
-  event: SqliteTrajectoryRuntimeEventForTest,
-): QaToolSearchDiscoveryReceipt | undefined {
+function readToolSearchDiscoveryReceipt(event: SqliteTrajectoryRuntimeEventForTest) {
   if (event.type !== "tool.search.discovery" || !isRecord(event.data)) {
     return undefined;
   }

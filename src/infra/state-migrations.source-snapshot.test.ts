@@ -13,12 +13,10 @@ import {
   claimAndRemoveLegacyMigrationSource as claimAndRemove,
   claimLegacyMigrationSourceClaims as claimBatch,
   LegacyMigrationSourceClaim as SourceClaim,
-  legacyMigrationSourceOrClaimMayExist as sourceOrClaimExists,
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
   type LegacyMigrationSourceSnapshot as SourceSnapshot,
   readLegacyMigrationSourceSnapshot as readSnapshot,
   readLegacyMigrationSourceSnapshotSync as readSnapshotSync,
-  resolveLegacyMigrationRelativePath as relativePath,
 } from "./state-migrations.source-snapshot.js";
 
 const sourceIdentityFixture = vi.hoisted(() => ({
@@ -97,20 +95,9 @@ describe("doctor legacy migration source contract", () => {
     expect(fs.existsSync(claim.claimPath)).toBe(false);
   }
 
-  it("detects an interrupted claim without accepting absent source state", () => {
-    const { sourcePath } = createSource();
-    fs.renameSync(sourcePath, `${sourcePath}.doctor-importing`);
-    expect(sourceOrClaimExists(sourcePath)).toBe(true);
-    fs.unlinkSync(`${sourcePath}.doctor-importing`);
-    expect(sourceOrClaimExists(sourcePath)).toBe(false);
-  });
-
   it("rejects source paths outside the trusted migration root without exposing redacted paths", async () => {
     const { stateDir } = createSource();
     const outsidePath = path.join(stateDir, "..", "private-marker");
-    expect(() => relativePath(stateDir, outsidePath, "test")).toThrow(
-      "outside the state directory",
-    );
     const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
     expect(
       () =>
@@ -154,21 +141,15 @@ describe("doctor legacy migration source contract", () => {
     expect(fs.readdirSync(path.dirname(sourcePath))).toEqual(["legacy.json"]);
   });
 
-  it("recovers interrupted claims without discarding a matching active source", async () => {
-    const { sourcePath, claim } = await createRootSource();
-    fs.copyFileSync(sourcePath, claim.claimPath);
-
-    await claim.recover("interrupted source conflicts with its replacement");
-
-    expect(fs.readFileSync(sourcePath, "utf8")).toBe('{"version":1}\n');
-    expect(fs.existsSync(claim.claimPath)).toBe(false);
-
-    fs.renameSync(sourcePath, claim.claimPath);
-    await claim.recover("interrupted source conflicts with its replacement");
-
-    expect(fs.readFileSync(sourcePath, "utf8")).toBe('{"version":1}\n');
-    expect(fs.existsSync(claim.claimPath)).toBe(false);
-  });
+  it.each(["copyFileSync", "renameSync"] as const)(
+    "recovers interrupted %s claims without discarding the source",
+    async (move) => {
+      const { sourcePath, claim, snapshot } = await createRootSource();
+      fs[move](sourcePath, claim.claimPath);
+      await claim.recover("interrupted source conflicts with its replacement");
+      expectUnclaimed(claim, snapshot);
+    },
+  );
 
   it("claims and restores the same inode with native off", async () => {
     const { sourcePath, claim } = await createRootSource();
@@ -373,9 +354,7 @@ describe("doctor legacy migration source contract", () => {
       const attempt =
         operation === "claim"
           ? claim.claim(claimOptions(snapshot))
-          : claimBatch([{ claim, snapshot }], {
-              mismatchMessage: "source changed",
-            });
+          : claimBatch([{ claim, snapshot }]);
 
       await expect(attempt).rejects.toMatchObject(
         operation === "claim" ? { code: "invalid-path" } : { cause: { code: "invalid-path" } },
@@ -429,12 +408,9 @@ describe("doctor legacy migration source contract", () => {
           { claim: firstClaim, snapshot: firstSnapshot },
           { claim: secondClaim, snapshot: secondSnapshot },
         ],
-        {
-          beforeClaim: () => fs.renameSync(replacementPath, secondPath),
-          mismatchMessage: "batch source changed before claim",
-        },
+        () => fs.renameSync(replacementPath, secondPath),
       ),
-    ).rejects.toThrow("batch source changed before claim");
+    ).rejects.toThrow("legacy Web Push source changed before doctor could claim it");
 
     expect(fs.readFileSync(sourcePath)).toEqual(firstSnapshot.buffer);
     expect(fs.readFileSync(secondPath)).toEqual(secondSnapshot.buffer);

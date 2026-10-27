@@ -271,7 +271,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     );
   }
 
-  postMessage(value: unknown, transferList: readonly Transferable[] = []): void {
+  postMessage(value: unknown, transferList: Transferable[] = []): void {
     if (this.joined || this.stopping || this.executionStopped) {
       throw new Error("Native worker is closing");
     }
@@ -282,10 +282,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       this.taskPort.postMessage(value, transferList);
       return;
     }
-    this.runtime.post(
-      { type: "post", id: this.id, value, transferList: [...transferList] },
-      transferList,
-    );
+    this.runtime.post({ type: "post", id: this.id, value, transferList }, transferList);
   }
 
   ref(): this {
@@ -293,24 +290,16 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       throw this.runtime.failure;
     }
     this.taskPort?.assertAvailable();
-    if (!this.referenced) {
-      this.runtime.post({ type: "ref", id: this.id, referenced: true });
-      this.referenced = true;
-    }
+    this.referenced = true;
+    // Host references own process liveness; the supervisor's control port stays referenced.
     this.runtime.refreshReference();
     return this;
   }
 
   unref(): this {
-    const wasReferenced = this.referenced;
     this.referenced = false;
-    if (!this.joined) {
-      if (this.runtime.failure) {
-        throw this.runtime.failure;
-      }
-      if (wasReferenced) {
-        this.runtime.post({ type: "ref", id: this.id, referenced: false });
-      }
+    if (!this.joined && this.runtime.failure) {
+      throw this.runtime.failure;
     }
     this.runtime.refreshReference();
     return this;

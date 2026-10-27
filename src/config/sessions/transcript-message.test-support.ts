@@ -1,3 +1,4 @@
+import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { appendExactAssistantMessageToSessionTranscript } from "./transcript.js";
 
 export type ExactAssistantMessage = Parameters<
@@ -16,17 +17,23 @@ export function createExactAssistantMessage(params: {
     api: "openai-responses",
     provider: params.provider ?? "codex",
     model: params.model ?? "gpt-5.4",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: Date.now(),
   };
+}
+
+export function messageEvent<Message, Parent>(id: string, parentId: Parent, message: Message) {
+  return { type: "message", id, parentId, message };
+}
+
+export function timedMessageEvent<Message, Parent, Timestamp>(
+  id: string,
+  parentId: Parent,
+  timestamp: Timestamp,
+  message: Message,
+) {
+  return { type: "message", id, parentId, timestamp, message };
 }
 
 export function transcriptMessage(eventId: string, parentId: string | null, message: unknown) {

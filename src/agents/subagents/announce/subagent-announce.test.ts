@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import * as announceDelivery from "./subagent-announce-delivery.js";
+import { privateRequesterRouteCases } from "./subagent-announce-fixtures.test-support.js";
 
 type Runtime = typeof import("./subagent-announce.runtime.js");
 type SessionEntry = Awaited<ReturnType<Runtime["readSubagentSessionEntry"]>>;
@@ -215,25 +216,22 @@ describe("subagent announce seam flow", () => {
     });
     const entries = new Map(["main", "research"].map((agentId) => [agentId, identity(agentId)]));
     const load = announceDelivery.loadSessionEntryByKey;
-    const read = vi
+    using _ = vi
       .spyOn(announceDelivery, "loadSessionEntryByKey")
       .mockImplementation(async (key, agentId) =>
         key === "global" ? entries.get(agentId ?? "main") : load(key, agentId),
       );
-    try {
-      expect(
-        await runAnnounceFlow({
-          childSessionKey: "global",
-          childAgentId: "research",
-          childSessionIdentity: identity("research"),
-          cleanup: "delete",
-          ...terminalResult("Research result"),
-        }),
-      ).toBe("delivered");
-      expectChildDeleted(false, "global", "research", identity("research"));
-    } finally {
-      read.mockRestore();
-    }
+
+    expect(
+      await runAnnounceFlow({
+        childSessionKey: "global",
+        childAgentId: "research",
+        childSessionIdentity: identity("research"),
+        cleanup: "delete",
+        ...terminalResult("Research result"),
+      }),
+    ).toBe("delivered");
+    expectChildDeleted(false, "global", "research", identity("research"));
   });
 
   it.each(["explicit", "host", "currency"] as const)(
@@ -271,6 +269,27 @@ describe("subagent announce seam flow", () => {
     expect(didAnnounce).toBe("intentional_non_delivery");
     expect(agentSpy).not.toHaveBeenCalled();
   });
+
+  it.each(privateRequesterRouteCases())(
+    "guides private $name completions according to the requester route",
+    async ({ origin, canDeliver }) => {
+      expect(
+        await runAnnounceFlow({
+          completionTarget: "parent",
+          requesterOrigin: origin,
+          ...terminalResult("private child result"),
+        }),
+      ).toBe("delivered");
+      const trigger = agentSpy.mock.calls[0]?.[0].triggerMessage;
+      if (canDeliver) {
+        expect(trigger).toContain("send it through an available, permitted messaging tool");
+      } else {
+        expect(trigger).not.toContain("messaging tool");
+        expect(trigger).toContain("Your final reply is recorded in this session for the requester");
+        expect(trigger).toContain("no messaging send is needed");
+      }
+    },
+  );
 
   it("keeps private retry input stable when late usage arrives after failure", async () => {
     let usage: Record<string, number> = {};

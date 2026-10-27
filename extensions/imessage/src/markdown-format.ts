@@ -5,12 +5,10 @@ import {
   renderMarkdownWithAttributedRanges,
 } from "openclaw/plugin-sdk/text-chunking";
 
-type IMessageFormatStyle = "bold" | "italic" | "underline" | "strikethrough";
-
 type IMessageFormatRange = {
   start: number;
   length: number;
-  styles: IMessageFormatStyle[];
+  styles: ("bold" | "italic" | "underline" | "strikethrough")[];
 };
 
 const IMESSAGE_FORMAT_PROFILE = FormatCapabilityProfile.define({

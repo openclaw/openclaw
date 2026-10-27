@@ -5,7 +5,9 @@ import {
 } from "../../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { shouldPreserveSubagentForMaintenance } from "./subagent-delivery-state.js";
 import {
+  getSubagentActivationRuns,
   getSubagentSessionReadLookup,
   immutableSubagentRunSessionList,
   isSubagentRunPayloadEvicted,
@@ -359,7 +361,12 @@ export async function prepareSubagentMaintenanceReadSnapshot(
         yield entry;
       }
     }
-    yield* inMemoryRuns.values();
+    // Every protected live row already belongs to the registry's unfinished-work index.
+    for (const entry of getSubagentActivationRuns(inMemoryRuns)) {
+      if (shouldPreserveSubagentForMaintenance(entry)) {
+        yield entry;
+      }
+    }
   }
   if (!context) {
     return {
@@ -377,7 +384,13 @@ export async function prepareSubagentMaintenanceReadSnapshot(
       if (reply && reply.projection !== "maintenance") {
         throw new Error("Unexpected subagent maintenance read result");
       }
-      return reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();
+      const runs = reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();
+      for (const [runId, entry] of runs) {
+        if (!shouldPreserveSubagentForMaintenance(entry)) {
+          runs.delete(runId);
+        }
+      }
+      return runs;
     },
     context,
   );

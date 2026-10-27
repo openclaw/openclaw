@@ -8,10 +8,17 @@ import {
   extractErrorCode,
   formatErrorMessageWithCode,
 } from "./errors.js";
+import { findUpdateCaptureSpaceError, UpdateCaptureSpaceError } from "./update-capture-space.js";
 import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
-
-export const UPDATE_STATE_INSPECTION_PROGRESS_PREFIX = "State schema progress: ";
+import { UPDATE_STATE_INSPECTION_PROGRESS_PREFIX } from "./update-state-inspection-protocol.js";
 const DIAGNOSTIC_TAIL_CHARS = 12_000;
+const CAPTURE_SPACE_PREFIX = "Update capture space: ";
+const CaptureSpaceSchema = z
+  .object({
+    requiredBytes: z.number().int().nonnegative(),
+    availableBytes: z.number().int().nonnegative(),
+  })
+  .refine(({ requiredBytes, availableBytes }) => availableBytes < requiredBytes);
 
 export function formatUpdateStateInspectionError(error: unknown): string {
   const causes = collectErrorGraphCandidates(error, (current) => [current.cause]);
@@ -21,9 +28,13 @@ export function formatUpdateStateInspectionError(error: unknown): string {
   // Put the recognized cause before message paths, whose private suffixes are discarded.
   const detail = `${code ? `${code}\n` : ""}${formatErrorMessageWithCode(error)}`;
   // The update ledger retains the final diagnostic line within its existing bound.
-  return causes.length > 1
-    ? `${detail}\nCaused by: ${formatErrorMessageWithCode(causes.at(-1))}`
-    : detail;
+  const message =
+    causes.length > 1
+      ? `${detail}\nCaused by: ${formatErrorMessageWithCode(causes.at(-1))}`
+      : detail;
+  const space = findUpdateCaptureSpaceError(error);
+  // Keep measured capacity across the subprocess without changing released stdout contracts.
+  return space ? `${CAPTURE_SPACE_PREFIX}${JSON.stringify(space.capacity)}\n${message}` : message;
 }
 
 const ProgressSchema = z.object({
@@ -132,12 +143,28 @@ export function createUpdateStateInspectionDiagnostics(params: {
   let pending = "";
   let tail = "";
   let diagnosticBytes = 0;
+  let captureSpaceFailure: UpdateCaptureSpaceError | undefined;
   const checkLimit = (pendingBytes = 0) => {
     if (params.stderrLimit && diagnosticBytes + pendingBytes > params.stderrLimit.bytes) {
       params.stderrLimit.onExceeded();
     }
   };
   const receiveLine = (line: string) => {
+    if (line.startsWith(CAPTURE_SPACE_PREFIX)) {
+      try {
+        const capacity = CaptureSpaceSchema.safeParse(
+          JSON.parse(line.slice(CAPTURE_SPACE_PREFIX.length)),
+        );
+        if (capacity.success) {
+          captureSpaceFailure = new UpdateCaptureSpaceError(
+            "Insufficient measured disk space for update capture.",
+            capacity.data,
+          );
+        }
+      } catch {
+        // Malformed metadata remains ordinary stderr, never a classified refusal.
+      }
+    }
     if (line.startsWith(UPDATE_STATE_INSPECTION_PROGRESS_PREFIX)) {
       let decoded: unknown;
       try {
@@ -206,7 +233,11 @@ export function createUpdateStateInspectionDiagnostics(params: {
       // Path redaction discards raw detail; only the closed summary precedes source context.
       const error = new Error(
         `${params.operation} failed${termination ? ` (${termination})` : ""}: ${summary}; after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} source paths): ${detail}.${advice}\nLast progress ${idle.toFixed(3)} seconds ago: ${formatUpdateStateInspectionProgress(progress)}${lastSnapshot && lastSnapshot !== progress ? `\nLast snapshot: ${formatUpdateStateInspectionProgress(lastSnapshot)}` : ""}`,
-        reason instanceof Error ? { cause: reason } : undefined,
+        reason instanceof Error
+          ? { cause: reason }
+          : captureSpaceFailure && termination === "exit"
+            ? { cause: captureSpaceFailure }
+            : undefined,
       );
       // The supervisor's SIGTERM is a consequence of this recorded stop reason.
       // Keep the public code even when warning text and private paths are redacted.

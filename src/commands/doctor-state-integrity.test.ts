@@ -350,6 +350,7 @@ describe("doctor state integrity", () => {
           attemptedProbes.push(`readdir ${String(target)}`);
           throw new Error("another profile's state is outside integrity diagnostics");
         }
+        // oxlint-disable-next-line openclaw-boundaries/no-recursive-readdir -- Transparent access-denial spy; preserve the Doctor caller options.
         return readdir(target, options);
       });
       vi.spyOn(fs, "existsSync").mockImplementation((target) => {

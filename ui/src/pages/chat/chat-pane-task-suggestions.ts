@@ -7,7 +7,7 @@ import type {
   TaskSuggestionsAcceptResult,
   TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
@@ -108,7 +108,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         operation.outcome.phase === "starting" &&
         !operation.isCurrent()
       ) {
-        operation.outcome = { phase: "failed", error: t("chat.queue.deliveryUnconfirmed") };
+        operation.outcome = { phase: "failed", error: t("chat.taskSuggestions.startUnconfirmed") };
         this.setTaskSuggestionOperation(id, operation);
       }
     }

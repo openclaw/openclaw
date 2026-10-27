@@ -14,6 +14,7 @@ const SESSION_METADATA_READ = {
   shareInvalidationEvents: ["sessions.changed", "chat.metadata.changed"],
 } as const;
 const OBSERVATION = { lifetime: "observation" } as const;
+const UNADVERTISED_OBSERVATION = { ...UNADVERTISED, ...OBSERVATION } as const;
 const SESSION_WRITE = { sessionAccess: { mode: "write" } } as const;
 const OWN_SESSION_WRITE = { sessionAccess: { mode: "write", allowOwnSessionScope: true } } as const;
 const PORTAL_SESSION_WRITE = {
@@ -372,13 +373,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["channels.pairing.approve", "channel-pairing", "dynamic", "2026.7"],
   ["channels.pairing.dismiss", "channel-pairing", "operator.pairing", "2026.7"],
   ["assistant.media.get", null, "operator.read", "<=2026.7", UNADVERTISED],
-  [
-    "sessions.get",
-    "sessions-read",
-    "operator.read",
-    "<=2026.7",
-    { advertise: false, lifetime: "observation" },
-  ],
+  ["sessions.get", "sessions-read", "operator.read", "<=2026.7", UNADVERTISED_OBSERVATION],
   ["sessions.resolve", "sessions-read", "operator.read", "<=2026.7", UNADVERTISED],
   ["sessions.usage", "usage", "operator.read", "<=2026.7", UNADVERTISED],
   ["sessions.usage.timeseries", "usage", "operator.read", "<=2026.7", UNADVERTISED],
@@ -715,6 +710,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["skills.workshop.archive", "skills", "operator.admin", "2026.9"],
   ["skills.workshop.restore", "skills", "operator.admin", "2026.9"],
   ["skills.workshop.undo", "skills", "operator.admin", "2026.9"],
+  ["skills.workshop.applyDraft", "skills", "operator.admin", "2026.10"],
+  ["skills.workshop.discardDraft", "skills", "operator.admin", "2026.10"],
   ["memory.search.owner", "memory-search", "operator.admin", "2026.9"],
   ["secrets.store.import", null, "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["secrets.store.allowedHosts", null, "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
@@ -743,4 +740,9 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["skills.files.get", "skills", "operator.read", "2026.10"],
   ["agents.avatar.generate", "agents", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["exec.approvals.native.commit", "exec-approvals", "operator.admin", "2026.10"],
+  ["chat.pendingInputs.dismiss", "chat", "operator.write", "2026.10", OWN_SESSION_WRITE],
+  ["update.recovery.cleanup", "update", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["diagnostics.capabilities", "diagnostics", "operator.read", "2026.10"],
+  ["cron.bind", "cron", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["talk.client.say", "talk", "operator.talk", "2026.10"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

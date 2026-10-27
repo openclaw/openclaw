@@ -8,7 +8,6 @@ import {
   type resolveSessionLifecycleTimestamps,
   resolveSessionWorkStartError,
 } from "../../config/sessions/lifecycle.js";
-import { hasSessionAutoModelFallbackProvenance } from "../../config/sessions/model-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
@@ -24,6 +23,7 @@ import { preserveCreationStamp } from "../../config/sessions/session-entry-prove
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCarriedCronModelSelection } from "./session-carried-model.js";
 
 const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
   "chatType",
@@ -81,36 +81,6 @@ function copySessionFields<K extends keyof SessionEntry>(
   }
 }
 
-function preserveNonAutoModelOverride(target: Partial<SessionEntry>, entry: SessionEntry): void {
-  if (entry.modelOverrideSource === "default") {
-    target.modelOverrideSource = "default";
-    return;
-  }
-  const recoveredAutoFallbackOverride =
-    entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
-  if (entry.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
-    let preservedModelSelection = false;
-    if (entry.modelOverride !== undefined) {
-      target.modelOverride = entry.modelOverride;
-      preservedModelSelection = true;
-    }
-    if (entry.providerOverride !== undefined) {
-      target.providerOverride = entry.providerOverride;
-    }
-    if (entry.modelOverrideSource !== undefined) {
-      target.modelOverrideSource = entry.modelOverrideSource;
-    }
-    if (entry.modelOverrideRouteResolution !== undefined) {
-      target.modelOverrideRouteResolution = entry.modelOverrideRouteResolution;
-    }
-    // Runtime overrides qualify an explicit model selection; carrying one alone
-    // would pin a fresh cron session to a stale engine after its model resets.
-    if (preservedModelSelection && entry.agentRuntimeOverride !== undefined) {
-      target.agentRuntimeOverride = entry.agentRuntimeOverride;
-    }
-  }
-}
-
 function preserveUserAuthOverride(target: Partial<SessionEntry>, entry: SessionEntry): void {
   const source = resolveSessionAuthProfileOverrideSource(entry);
   if (source === "user" || source === "user-link") {
@@ -140,7 +110,7 @@ function sanitizeFreshCronSessionEntry(
     copySessionFields(next, entry, AMBIENT_SESSION_CONTEXT_FIELDS);
     Object.assign(next, preserveSessionInheritedToolPolicy(entry));
   }
-  preserveNonAutoModelOverride(next, entry);
+  Object.assign(next, resolveCarriedCronModelSelection(entry));
   preserveUserAuthOverride(next, entry);
 
   return next;
@@ -288,7 +258,9 @@ export function resolveCronSession(
     ),
     sessionId,
     lifecycleRevision,
-    updatedAt: params.nowMs,
+    // Preparing a scheduled check is not conversation activity. New rows still
+    // need an initial timestamp; visible results advance existing rows later.
+    updatedAt: targetEntry?.updatedAt ?? params.nowMs,
     sessionStartedAt: isNewSession
       ? params.nowMs
       : (baseEntry?.sessionStartedAt ?? params.lifecycleTimestamps.sessionStartedAt),

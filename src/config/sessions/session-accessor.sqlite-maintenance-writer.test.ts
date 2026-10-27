@@ -180,7 +180,7 @@ function expectArchived(entry: SessionEntry | undefined, archiveReason: string) 
 }
 
 it("returns bounded finalization outcomes while preserving conflicts and duplicate plan entries", async () => {
-  const { database, storePath, key, scope, set, load } = createPlannerStore();
+  const { database, key, scope, set, load } = createPlannerStore();
   const options = { agentId: "main", path: database.path, env: process.env };
   const entries = [0, 1, 2].map((index) => {
     set(index, {
@@ -220,13 +220,10 @@ it("returns bounded finalization outcomes while preserving conflicts and duplica
   expect(snapshots.rowCounts.snapshot).toBeLessThanOrEqual(
     entries.length + result.value.committedEntryIndices.length,
   );
-  for (const { sessionKey } of entries.slice(0, 2)) {
-    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  for (const index of [0, 1]) {
+    expect(load(index)).toBeUndefined();
   }
-  expect(loadSessionEntry({ sessionKey: changed.sessionKey, storePath })).toEqual({
-    ...changed.expectedEntry,
-    label: "newer",
-  });
+  expect(load(2)).toEqual({ ...changed.expectedEntry, label: "newer" });
   expect(database.db.prepare("SELECT count(*) AS count FROM session_windows").get()?.count).toBe(3);
 });
 

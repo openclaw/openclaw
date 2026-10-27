@@ -5,14 +5,19 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
   normalizePluginTargetConfig,
+  resolveEligibleContextEngineOwnerIds,
   resolveEffectiveEnableState,
   resolveEnableState,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
+  resolveSelectedContextEnginePluginId,
+  resolveSelectedContextEnginePluginIdFromConfig,
+  withContextEngineOwner,
 } from "./config-state.js";
 
 type ActivationParams = Parameters<typeof resolveEffectivePluginActivationState>[0];
@@ -78,6 +83,33 @@ describe("normalizePluginsConfig", () => {
       "unpublished-edit",
     ]);
   });
+
+  it("shares frozen policy only for deeply frozen plugin configs", () => {
+    const frozen = freezeJsonSnapshot({
+      entries: {
+        "voice-call": {
+          enabled: true,
+          hooks: { timeouts: { before_agent_start: 1000 } },
+          subagent: { allowedModels: ["example/model"] },
+          llm: { allowedModels: ["example/model"], allowedCompletionModels: ["example/model"] },
+        },
+      },
+    });
+    const shared = normalizePluginsConfig(frozen);
+    expect(normalizePluginsConfig(frozen)).toBe(shared);
+    expect(Object.isFrozen(shared.entries["voice-call"])).toBe(true);
+    const normalizedEntry = shared.entries["voice-call"]!;
+    for (const policy of [normalizedEntry.hooks, normalizedEntry.subagent, normalizedEntry.llm]) {
+      expect(Object.isFrozen(policy)).toBe(true);
+      for (const value of Object.values(policy!)) {
+        expect(Object.isFrozen(value)).toBe(true);
+      }
+    }
+    // Mutable sources can change in place, so every read normalizes again.
+    const mutable = { entries: { "voice-call": { enabled: true } } };
+    expect(normalizePluginsConfig(mutable)).not.toBe(normalizePluginsConfig(mutable));
+  });
+
   it("keeps targeted authored plugin state identical across JSON persistence", () => {
     const normalized = normalizePluginTargetConfig(
       { plugins: { entries: { CODEX: { enabled: true, config: { appServer: {} } } } } },
@@ -446,5 +478,188 @@ describe("resolveMemorySlotDecision", () => {
       selectedId: null,
     });
     expect({ enabled: result.enabled, selected: result.selected }).toMatchObject(expected);
+  });
+});
+
+describe("context engine ownership", () => {
+  const records = [
+    { id: "vendor-plugin", contextEngineIds: ["Canonical-Engine", "second-engine"] },
+    { id: "legacy-plugin" },
+  ];
+  it("resolves exact declared engine IDs and preserves legacy equal-ID selection", () => {
+    const resolve = (contextEngine: string) =>
+      resolveSelectedContextEnginePluginId(
+        {
+          plugins: {
+            ...(contextEngine !== "legacy-plugin" ? { allow: ["vendor-plugin"] } : {}),
+            slots: { contextEngine },
+          },
+        },
+        records,
+      );
+    expect(resolve("Canonical-Engine")).toBe("vendor-plugin");
+    expect(resolve("second-engine")).toBe("vendor-plugin");
+    expect(resolve("legacy-plugin")).toBe("legacy-plugin");
+    expect(resolve("vendor-plugin")).toBeUndefined();
+  });
+  it("carries ownership into activation without changing the engine slot", () => {
+    const config = withContextEngineOwner(
+      normalizePluginsConfig({
+        allow: ["vendor-plugin"],
+        slots: { contextEngine: "Canonical-Engine" },
+      }),
+      records,
+    );
+    expect(config.slots.contextEngine).toBe("Canonical-Engine");
+    expect(
+      resolveEffectivePluginActivationState({ id: "vendor-plugin", origin: "workspace", config })
+        .explicitlyEnabled,
+    ).toBe(true);
+    expect(
+      resolveEffectivePluginActivationState({ id: "Canonical-Engine", origin: "workspace", config })
+        .enabled,
+    ).toBe(false);
+  });
+  it("activates a mixed-case equal-ID owner from its canonical policy identity", () => {
+    const config = withContextEngineOwner(
+      normalizePluginsConfig({
+        allow: ["unrelated"],
+        slots: { contextEngine: "MiXeD-demo" },
+      }),
+      [{ id: "MiXeD-demo", contextEngineIds: ["MiXeD-demo"] }],
+    );
+    expect(config.contextEngineOwnerId).toBe("mixed-demo");
+    expect(
+      resolveEffectivePluginActivationState({ id: "MiXeD-demo", origin: "workspace", config }),
+    ).toMatchObject({ enabled: true, source: "explicit", reason: "selected context engine slot" });
+  });
+  it.each([
+    { name: "default", normalizeId: undefined },
+    { name: "exact supplied", normalizeId: (id: string) => id.trim() },
+  ])("keeps exact selected owner with $name normalizer", ({ normalizeId }) => {
+    const plugins = normalizePluginsConfig({
+      allow: ["mixed-demo"],
+      slots: { contextEngine: "canonical-engine" },
+    });
+    const mixedCaseRecords = [{ id: "MiXeD-demo", contextEngineIds: ["canonical-engine"] }];
+    expect(
+      resolveSelectedContextEnginePluginIdFromConfig(
+        plugins,
+        "canonical-engine",
+        mixedCaseRecords,
+        normalizeId,
+      ),
+    ).toBe("MiXeD-demo");
+    expect(
+      withContextEngineOwner(plugins, mixedCaseRecords, normalizeId).contextEngineOwnerId,
+    ).toBe("mixed-demo");
+  });
+  it.each([false, true])(
+    "retains both exact case-distinct eligible owners before import: declared=%s",
+    (declared) => {
+      const engineId = declared ? "canonical-engine" : "owner";
+      const plugins = normalizePluginsConfig({
+        allow: ["owner"],
+        slots: { contextEngine: engineId },
+      });
+      const caseDistinctRecords = ["Owner", "owner"].map((id) =>
+        declared ? { id, contextEngineIds: [engineId] } : { id },
+      );
+      expect(resolveEligibleContextEngineOwnerIds(plugins, engineId, caseDistinctRecords)).toEqual([
+        "Owner",
+        "owner",
+      ]);
+    },
+  );
+  it("does not choose a first owner or a same-named plugin over declared ownership", () => {
+    const config = {
+      plugins: { allow: ["vendor-plugin"], slots: { contextEngine: "Canonical-Engine" } },
+    };
+    expect(
+      resolveSelectedContextEnginePluginId(config, [...records, { id: "canonical-engine" }]),
+    ).toBe("vendor-plugin");
+    expect(
+      resolveSelectedContextEnginePluginId(config, [
+        ...records,
+        { id: "other", contextEngineIds: ["Canonical-Engine"] },
+      ]),
+    ).toBe("vendor-plugin");
+    expect(
+      resolveSelectedContextEnginePluginId(
+        { plugins: { ...config.plugins, allow: ["vendor-plugin", "other"] } },
+        [...records, { id: "other", contextEngineIds: ["Canonical-Engine"] }],
+      ),
+    ).toBeUndefined();
+  });
+  it("does not fall back to an incidental equal-ID plugin when declared owners are ineligible", () => {
+    expect(
+      resolveSelectedContextEnginePluginId(
+        { plugins: { slots: { contextEngine: "Canonical-Engine" } } },
+        [...records, { id: "canonical-engine" }],
+      ),
+    ).toBeUndefined();
+  });
+  it.each(["enabled", "allowlisted", "denied", "disabled", "incidental"] as const)(
+    "requires independent approval for legacy fallback among ineligible declarations: %s",
+    (policy) => {
+      const plugins = normalizePluginsConfig({
+        slots: { contextEngine: "legacy-plugin" },
+        allow: policy === "allowlisted" ? ["legacy-plugin"] : ["unrelated"],
+        ...(!["incidental", "allowlisted"].includes(policy)
+          ? { entries: { "legacy-plugin": { enabled: policy !== "disabled" } } }
+          : {}),
+        ...(policy === "denied" ? { deny: ["legacy-plugin"] } : {}),
+      });
+      const resolved = withContextEngineOwner(plugins, [
+        ...records,
+        { id: "unapproved", contextEngineIds: ["legacy-plugin"] },
+      ]);
+      expect(resolved.contextEngineOwnerId).toBe(
+        policy === "enabled" || policy === "allowlisted" ? "legacy-plugin" : null,
+      );
+    },
+  );
+  it("requires independent trust for a differently named declared owner", () => {
+    const config = { plugins: { slots: { contextEngine: "Canonical-Engine" } } };
+    expect(resolveSelectedContextEnginePluginId(config, records)).toBeUndefined();
+    expect(
+      resolveSelectedContextEnginePluginId(
+        { plugins: { entries: { "vendor-plugin": { enabled: true } }, ...config.plugins } },
+        records,
+      ),
+    ).toBe("vendor-plugin");
+    expect(
+      resolveSelectedContextEnginePluginId(
+        { plugins: { allow: ["vendor-plugin"], ...config.plugins } },
+        records,
+      ),
+    ).toBe("vendor-plugin");
+  });
+  it.each([false, true])(
+    "preserves equal-ID slot authorization outside an unrelated allowlist: declared=%s",
+    (declared) => {
+      const config = withContextEngineOwner(
+        normalizePluginsConfig({ allow: ["unrelated"], slots: { contextEngine: "legacy-plugin" } }),
+        declared ? [{ id: "legacy-plugin", contextEngineIds: ["legacy-plugin"] }] : records,
+      );
+      expect(config.contextEngineOwnerId).toBe("legacy-plugin");
+      expect(
+        resolveEffectivePluginActivationState({ id: "legacy-plugin", origin: "workspace", config })
+          .enabled,
+      ).toBe(true);
+    },
+  );
+  it.each([
+    { enabled: false },
+    { deny: ["vendor-plugin"] },
+    { entries: { "vendor-plugin": { enabled: false } } },
+    { allow: ["Canonical-Engine"] },
+  ])("applies owner policy %j", (policy) => {
+    expect(
+      resolveSelectedContextEnginePluginId(
+        { plugins: { ...policy, slots: { contextEngine: "Canonical-Engine" } } },
+        records,
+      ),
+    ).toBeUndefined();
   });
 });

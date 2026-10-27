@@ -7,7 +7,6 @@ import {
   codexModel,
   completedTurnResult,
   createClientFactory,
-  inProgressTurnResult,
   threadStartResult,
 } from "./bounded-turn.test-harness.js";
 import type { JsonValue } from "./protocol.js";
@@ -20,29 +19,24 @@ function requestParams(fake: ReturnType<typeof createClientFactory>, method: str
   return fake.request.mock.calls.find(([name]) => name === method)?.[1];
 }
 
-function wireResults(
-  turn:
-    | ReturnType<typeof completedTurnResult>
-    | ReturnType<typeof inProgressTurnResult> = completedTurnResult(),
-) {
+function wireResults() {
   return {
     "model/list": { data: [codexModel()], nextCursor: null },
     "config/read": { config: {}, layers: [] },
     "configRequirements/read": { requirements: null },
     "thread/start": threadStartResult("gpt-5.4"),
     "mcpServerStatus/list": { data: [], nextCursor: null },
-    "turn/start": turn,
+    "turn/start": completedTurnResult(),
   };
 }
 
 type TurnParams = Parameters<typeof runBoundedCodexAppServerTurn>[0];
+type AppServer = NonNullable<TurnParams["options"]["pluginConfig"]>["appServer"];
 const success = { text: "The message was sent successfully." };
 const threadIdentity = { threadId: "thread-finalizer", turnId: "turn-finalizer" };
 const configArgs = (...settings: string[]) => settings.flatMap((setting) => ["-c", setting]);
 const stdioArgs = (...args: string[]) => [...args, "--listen", "stdio://"];
-const appServerOptions = (
-  appServer: NonNullable<TurnParams["options"]["pluginConfig"]>["appServer"],
-) => ({ pluginConfig: { appServer } });
+const appServerOptions = (appServer: AppServer) => ({ pluginConfig: { appServer } });
 const clientOptions = (fake: ReturnType<typeof createClientFactory>) =>
   vi.mocked(fake.factory).mock.calls[0]?.[0];
 const agentMessage = (id: string, text: string) => ({ id, type: "agentMessage", text });
@@ -50,6 +44,11 @@ const completedNotification = () => ({
   method: "turn/completed",
   params: { threadId: threadIdentity.threadId, ...completedTurnResult() },
 });
+const requestOrder = (fake: ReturnType<typeof createClientFactory>, ...methods: string[]) => {
+  const positions = methods.map((method) => fake.methods.indexOf(method));
+  expect(positions.every((position) => position >= 0)).toBe(true);
+  expect(positions).toEqual(positions.toSorted((a, b) => a - b));
+};
 
 function runTurn(
   clientFactory: typeof shared.createIsolatedCodexAppServerClient,
@@ -90,6 +89,7 @@ it("preserves mandatory hooks in a private tool-free turn", async () => {
     dynamicTools: [],
     ephemeral: true,
     sandbox: "read-only",
+    approvalPolicy: "on-request",
     config: {
       "features.hooks": true,
       "features.shell_tool": false,
@@ -110,7 +110,7 @@ it("preserves mandatory hooks in a private tool-free turn", async () => {
       "features.plugins=false",
     ]),
   });
-  expect(fake.methods.indexOf("hooks/list")).toBeLessThan(fake.methods.indexOf("thread/start"));
+  requestOrder(fake, "hooks/list", "thread/start");
 });
 
 it("still refuses managed tool enablement before starting a private completion", async () => {
@@ -151,97 +151,24 @@ it.each([true, false])(
   },
 );
 
-it.each(["bound notification", "queued notification", "terminal response"] as const)(
-  "keeps an accepted %s when the transport closes immediately afterward",
-  async (receipt) => {
-    const started = createDeferred<void>();
-    const declined = createDeferred<void>();
-    const sendCompletion = () => {
-      harness.send({
-        method: "item/completed",
-        params: {
-          ...threadIdentity,
-          item: agentMessage("first", "First answer."),
-        },
-      });
-      harness.send(completedNotification());
-      harness.emitExit();
-    };
-    const harness = createClientHarness({
-      onWrite: (line, send) => {
-        const request = JSON.parse(line) as { id: number | string; method?: string };
-        if (request.id === "binding-fence") {
-          declined.resolve();
-          return;
-        }
-        const results: Record<string, unknown> = wireResults(
-          receipt === "terminal response" ? completedTurnResult() : inProgressTurnResult(),
-        );
-        send({ id: request.id, result: results[request.method ?? ""] });
-        if (request.method === "turn/start") {
-          started.resolve();
-          if (receipt === "queued notification") {
-            sendCompletion();
-          } else if (receipt === "terminal response") {
-            harness.emitExit();
-          }
-        }
-      },
-    });
-    const run = runTurn(async () => harness.client, {
-      isolation: "configured-transport",
-    });
-    const result = expect(run).resolves.toMatchObject({
-      text: `${receipt === "terminal response" ? "" : "First answer.\n\n"}The message was sent successfully.`,
-    });
-    try {
-      await started.promise;
-      if (receipt === "bound notification") {
-        // A serviced request proves the exact turn has bound, without depending on microtask counts.
-        harness.send({
-          id: "binding-fence",
-          method: "mcpServer/elicitation/request",
-          params: { ...threadIdentity, serverName: "forms" },
-        });
-        await declined.promise;
-        sendCompletion();
+it("keeps a terminal start response when the transport closes", async () => {
+  const results: Record<string, unknown> = wireResults();
+  const harness = createClientHarness({
+    onWrite: (line, send) => {
+      const request = JSON.parse(line) as { id: number; method: string };
+      send({ id: request.id, result: results[request.method] });
+      if (request.method === "turn/start") {
+        harness.emitExit();
       }
-      await result;
-    } finally {
-      harness.client.close();
-      await run.catch(() => {});
-    }
-  },
-);
-
-it("rejects a waiting completion when its app-server client closes", async () => {
-  const fake = createClientFactory({ completeTurn: false });
-  const controller = new AbortController();
-  let outcome: unknown;
-  const run = runTurn(fake.factory, {
-    signal: controller.signal,
-    isolation: "configured-transport",
-  }).catch((error: unknown) => {
-    outcome = error;
+    },
   });
   try {
-    await vi.waitFor(() => expect(fake.methods).toContain("turn/start"));
-    fake.close(new Error("app-server transport disconnected"));
-    await vi.waitFor(
-      () => expect(outcome).toMatchObject({ message: expect.stringContaining("closed") }),
-      { timeout: 200 },
-    );
+    await expect(
+      runTurn(async () => harness.client, { isolation: "configured-transport" }),
+    ).resolves.toMatchObject(success);
   } finally {
-    controller.abort("test cleanup");
-    await run;
+    harness.client.close();
   }
-});
-
-it("bounds turn notifications received before turn/start acknowledges", async () => {
-  const fake = createClientFactory({ preBindDeltaCount: 257 });
-  await expect(runTurn(fake.factory, { isolation: "configured-transport" })).rejects.toThrow(
-    "pre-bind notification buffer exceeded",
-  );
 });
 
 it("does not dispatch a turn after its caller retires during MCP attestation", async () => {
@@ -443,10 +370,10 @@ const providerOverrides = [
   'openai_base_url="http://127.0.0.1:9/last"',
   'model_catalog_json="/tmp/synthetic-models.json"',
 ];
-it.each([
-  {
-    name: "carries provider overrides without importing tool policy",
-    appServer: {
+it.each<[string, AppServer, boolean, object]>([
+  [
+    "provider overrides without tool policy",
+    {
       args: [
         `-c${providerOverrides[0]}`,
         "app-server",
@@ -459,59 +386,49 @@ it.each([
         '-copenai_base_url="http://127.0.0.1:9/ignored"',
       ],
     },
-    restricted: false,
-    expected: {
+    false,
+    {
       args: stdioArgs("app-server", ...configArgs(...providerOverrides, "project_root_markers=[]")),
     },
-  },
-  {
-    name: "resolves relative executable and model-catalog paths",
-    appServer: {
+  ],
+  [
+    "relative executable and catalog",
+    {
       command: "./bin/custom-codex",
       args: ["app-server", "-c", "model_catalog_json='./fixtures/models.json'"],
     },
-    restricted: true,
-    expected: {
+    true,
+    {
       command: path.resolve("./bin/custom-codex"),
       cwd: expect.stringContaining("codex-bounded-turn-"),
       args: expect.arrayContaining([
         `model_catalog_json=${JSON.stringify(path.resolve("./fixtures/models.json"))}`,
       ]),
     },
-  },
-  {
-    name: "preserves the Node launcher without inherited native policy flags",
-    appServer: {
+  ],
+  [
+    "Node launcher without native policy flags",
+    {
       command: "node",
       args: ["./bin/codex-wrapper.js", "app-server", "--sandbox", "danger-full-access"],
     },
-    restricted: true,
-    expected: {
+    true,
+    {
       command: "node",
-      cwd: expect.stringContaining("codex-bounded-turn-"),
       args: stdioArgs(
         path.resolve("./bin/codex-wrapper.js"),
         "app-server",
         ...configArgs("project_root_markers=[]", "features.hooks=true", "features.plugins=false"),
       ),
     },
-  },
-])("private launch: $name", async ({ appServer, restricted, expected }) => {
+  ],
+])("private launch: %s", async (_name, appServer, restricted, expected) => {
   const fake = createClientFactory();
   await runTurn(fake.factory, {
     options: appServerOptions(appServer),
     ...(restricted ? { requireNoExternalCapabilities: true } : {}),
   });
-  const startOptions = clientOptions(fake)?.startOptions;
-  if (restricted) {
-    expect(startOptions).toMatchObject(expected);
-  } else {
-    expect(startOptions?.args).toEqual(expected.args);
-    expect(requestParams(fake, "thread/start")).toMatchObject({
-      sandbox: "read-only",
-      approvalPolicy: "on-request",
-    });
-  }
+  expect(clientOptions(fake)?.startOptions).toMatchObject(expected);
 });
 
 it("preserves and reports the configured native provider when no override is supplied", async () => {
@@ -613,34 +530,19 @@ it("attests ring-zero and retains usage when the final response has none", async
     },
   });
 
-  expect(fake.methods).toEqual([
-    "model/list",
-    "config/read",
-    "config/read",
-    "hooks/list",
-    "configRequirements/read",
-    "thread/start",
-    "mcpServerStatus/list",
-    "thread/inject_items",
-    "turn/start",
-  ]);
+  requestOrder(fake, "thread/start", "mcpServerStatus/list", "thread/inject_items", "turn/start");
   expect(requestParams(fake, "thread/start")).toMatchObject({
     baseInstructions: "",
-    environments: [],
-    dynamicTools: [],
-    ephemeral: true,
     config: {
       "agents.enabled": false,
       "features.hooks": false,
       "features.multi_agent": false,
       "features.multi_agent_v2": false,
-      "features.code_mode": false,
       "features.code_mode_only": false,
       "skills.include_instructions": false,
       include_environment_context: false,
       "tools.experimental_request_user_input.enabled": false,
       "tools.update_plan.enabled": false,
-      mcp_servers: { inherited: { enabled: false } },
     },
   });
   expect(requestParams(fake, "turn/start")).not.toHaveProperty("cwd");

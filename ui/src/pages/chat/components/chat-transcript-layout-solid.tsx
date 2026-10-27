@@ -3,6 +3,7 @@ import { createMemo, createSignal, For, onSettled, runWithOwner, Show } from "so
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../../lib/presentation.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
@@ -12,7 +13,12 @@ import {
   type SolidRenderLifecycle,
 } from "../solid-render-lifecycle.ts";
 import { ChatHistoryBoundary } from "./chat-history-boundary.tsx";
-import type { TranscriptContent, TranscriptLayoutProps } from "./chat-transcript-layout.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import {
+  TranscriptRowKeyContext,
+  type TranscriptContent,
+  type TranscriptLayoutProps,
+} from "./chat-transcript-layout.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
@@ -21,7 +27,24 @@ import { nativeRows, type NativeTranscriptView } from "./chat-transcript-rows.ts
 
 function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
   const Row = dynamic(() => nativeRows[props.value.kind]);
-  return <Row {...props.value} />;
+  return (
+    <Show
+      when={props.value.kind === "group"}
+      fallback={
+        <ChatLazyBoundary
+          fallback={
+            <div class="chat-group" role="status">
+              {t("common.loading")}
+            </div>
+          }
+        >
+          <Row {...props.value} />
+        </ChatLazyBoundary>
+      }
+    >
+      <Row {...props.value} />
+    </Show>
+  );
 }
 
 function GuardedRow(props: { value: GuardedTranscriptItem }): JSX.Element {
@@ -91,11 +114,16 @@ function TranscriptRows(props: {
                       "chat-virtual-row",
                       { "chat-virtual-row--first": virtualRow().index === 0 },
                     ]}
-                    style={{ "contain-intrinsic-block-size": `${virtualRow().size}px` }}
+                    style={{
+                      "contain-intrinsic-block-size": `${virtualRow().size}px`,
+                      "min-height": `${props.snapshot.layout.rowMinimum(index())}px`,
+                    }}
                     data-index={String(virtualRow().index)}
                     data-virtual-row-key={row()?.key}
                   >
-                    <RowContent value={content()} />
+                    <TranscriptRowKeyContext value={() => row()?.key}>
+                      <RowContent value={content()} />
+                    </TranscriptRowKeyContext>
                   </div>
                 </>
               );

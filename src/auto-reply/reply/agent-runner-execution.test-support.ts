@@ -609,12 +609,9 @@ export async function setupAgentRunnerExecutionTestState() {
         imageOrder: params.imageOrder,
       }),
     );
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
-      result: await params.run("anthropic", "claude", initialModelFallbackAttemptOptions(params)),
-      provider: "anthropic",
-      model: "claude",
-      attempts: [],
-    }));
+    state.runWithModelFallbackMock.mockImplementation((params: FallbackRunnerParams) =>
+      runFallbackCandidate(params, "anthropic", "claude"),
+    );
   });
 
   afterEach(() => {

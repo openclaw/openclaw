@@ -2,13 +2,15 @@ import type {
   CanvasDocumentViewResult,
   SessionsFilesAssetsResult,
 } from "@openclaw/gateway-protocol";
+import { defaultTreeAdapter, html, parse, type DefaultTreeAdapterTypes } from "parse5";
 import { Errored, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveSandboxHostUrl } from "../../../components/sandbox-host.ts";
 import { registerBoardEnglish } from "../../../i18n/locales/en-board.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useApplication } from "../../../lib/reactive/context.ts";
@@ -17,12 +19,73 @@ import { listen } from "../../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { WidgetSandboxHost, WIDGET_LOAD_TIMEOUT_MS } from "../../../lib/widget-sandbox-host.ts";
 import { prepareHtmlPreviewAssets } from "./chat-html-preview-assets.ts";
-import { prepareHtmlPreviewLinks } from "./chat-html-preview-links.ts";
+import { applyHtmlPreviewEdits, type HtmlPreviewEdit } from "./chat-html-preview-source.ts";
 import { HtmlPreviewLoading } from "./chat-html-preview-view.tsx";
 import type { SessionFileSource } from "./chat-sidebar-content-types.ts";
 
+registerEnglishCatalog(registerChatComposerEnglish);
+
 registerEnglishCatalog(registerFilePreviewEnglish);
 registerEnglishCatalog(registerBoardEnglish);
+
+/** Prepare display bytes without serializing the author's document or changing its base URL. */
+function prepareHtmlPreviewLinks(source: string, allowScripts: boolean): string {
+  if (!source.includes("#") && !source.includes("&")) {
+    return source;
+  }
+  const document = parse(source, {
+    scriptingEnabled: allowScripts,
+    sourceCodeLocationInfo: true,
+  });
+  const links: DefaultTreeAdapterTypes.Element[] = [];
+  const pending: DefaultTreeAdapterTypes.Node[] = document.childNodes.toReversed();
+  let baseTarget: string | undefined;
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    if (!defaultTreeAdapter.isElementNode(node)) {
+      continue;
+    }
+    // Template contents are inert and are not in childNodes. Foreign links keep their own semantics.
+    if (node.namespaceURI === html.NS.HTML) {
+      if (node.tagName === "base") {
+        if (node.attrs.some((attribute) => attribute.name === "href")) {
+          return source;
+        }
+        baseTarget ??= node.attrs.find((attribute) => attribute.name === "target")?.value;
+      } else if (node.tagName === "a" || node.tagName === "area") {
+        links.push(node);
+      }
+    }
+    pending.push(...node.childNodes.toReversed());
+  }
+  const replacements: HtmlPreviewEdit[] = [];
+  for (const link of links) {
+    // URL parsing ignores leading C0 controls and space, but not other Unicode whitespace.
+    const authoredHref = link.attrs.find((attribute) => attribute.name === "href")?.value ?? "";
+    let fragmentStart = 0;
+    while (fragmentStart < authoredHref.length && authoredHref.charCodeAt(fragmentStart) <= 0x20) {
+      fragmentStart += 1;
+    }
+    const href = authoredHref.slice(fragmentStart);
+    const target = link.attrs.find((attribute) => attribute.name === "target")?.value ?? baseTarget;
+    const location = link.sourceCodeLocation?.attrs?.href;
+    if (
+      !href.startsWith("#") ||
+      !location ||
+      (target && target.toLowerCase() !== "_self") ||
+      link.attrs.some((attribute) => attribute.name === "download")
+    ) {
+      continue;
+    }
+    const escapedHref = href.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+    replacements.push({
+      start: location.startOffset,
+      end: location.endOffset,
+      text: `href="about:srcdoc${escapedHref}"`,
+    });
+  }
+  return applyHtmlPreviewEdits(source, replacements);
+}
 
 type HtmlPreviewProps = {
   desktop: boolean;

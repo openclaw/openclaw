@@ -1,13 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { WorkerNodeEnrollment } from "../../plugins/types.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
+import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import {
   bindProviderReplayNodeAvailability,
@@ -63,10 +60,7 @@ it("cancels guarded enrollment without releasing the exact lease and adopts it a
     },
     destroy,
   });
-  const protocolFeatures = [
-    WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-    WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  ];
+  const protocolFeatures = [...WORKER_PROTOCOL_FEATURES];
   support.testState.prepareInstallation = vi.fn(async () => ({
     ...support.BUNDLE_ARTIFACT,
     protocolFeatures,

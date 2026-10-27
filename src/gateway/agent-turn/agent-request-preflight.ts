@@ -20,6 +20,7 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
+  isExecCompletionInputProvenance,
   isMainSessionRestartRecoveryInputProvenance,
   isProgressCardRefreshInputProvenance,
   normalizeInputProvenance,
@@ -41,6 +42,10 @@ import {
 import { withGatewaySessionStoreTarget } from "../session-utils-store-lookup.js";
 import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
+
+// Collector children are one-shot by contract; tell callers what to do instead of continuing one.
+const COLLECTOR_CONTINUATION_REFUSAL =
+  "Collector children (spawned with collect=true) are one-shot: they accept no steering or follow-up input, including after they finish or time out. Collect the result with agents_wait using the run id from the spawn receipt. To continue the work, start a new child with sessions_spawn that includes the context it needs: give it a larger runTimeoutSeconds if the previous child timed out, and omit collect if the work needs follow-up turns.";
 
 export type AgentRequestPreflight = NonNullable<
   Awaited<ReturnType<typeof prepareAgentRequestPreflight>>
@@ -119,7 +124,10 @@ export async function prepareAgentRequestPreflight(params: {
       : undefined;
     if (request.swarmCollector !== true || schemaError) {
       return rejectInvalidRequest(
-        schemaError ?? "active swarm collector sessions require swarmCollector=true",
+        schemaError ??
+          (collectorSession || persistedCollectorSession
+            ? COLLECTOR_CONTINUATION_REFUSAL
+            : "swarm collector output schemas require swarmCollector=true"),
       );
     }
     const registeredCollector = findAuthorizedSwarmCollectorRequest({
@@ -211,11 +219,7 @@ export async function prepareAgentRequestPreflight(params: {
     return rejectInvalidRequest("Progress refresh input is reserved for progressCard.refresh.");
   }
   // Plugin tools read the starting run named on exec completion wakes; only the host stamps it.
-  if (
-    inputProvenance?.kind === "internal_system" &&
-    inputProvenance.sourceTool === "exec" &&
-    !canUseInternalRuntimeHandoff
-  ) {
+  if (isExecCompletionInputProvenance(inputProvenance) && !canUseInternalRuntimeHandoff) {
     return rejectInvalidRequest("Exec completion input is reserved for background exec owners.");
   }
   if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {

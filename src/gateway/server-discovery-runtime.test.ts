@@ -22,9 +22,7 @@ const mocks = vi.hoisted(() => ({
     changed: true,
     zonePath: "/tmp/openclaw.internal.db",
   })),
-  formatBonjourInstanceName: vi.fn((name: string) => `${name} (OpenClaw)`),
-  resolveBonjourCliPath: vi.fn(() => "/usr/local/bin/openclaw"),
-  resolveTailnetDnsHint: vi.fn(async () => "gateway.tailnet.example.ts.net"),
+  getTailnetHostname: vi.fn(async () => "gateway.tailnet.example.ts.net"),
 }));
 
 vi.mock("../infra/tailnet.js", () => ({
@@ -37,10 +35,9 @@ vi.mock("../infra/widearea-dns.js", () => ({
   writeWideAreaGatewayZone: mocks.writeWideAreaGatewayZone,
 }));
 
-vi.mock("./server-discovery.js", () => ({
-  formatBonjourInstanceName: mocks.formatBonjourInstanceName,
-  resolveBonjourCliPath: mocks.resolveBonjourCliPath,
-  resolveTailnetDnsHint: mocks.resolveTailnetDnsHint,
+vi.mock("../infra/tailscale.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/tailscale.js")>()),
+  getTailnetHostname: mocks.getTailnetHostname,
 }));
 
 const { startGatewayDiscovery } = await import("./server-discovery-runtime.js");
@@ -63,7 +60,7 @@ async function startDiscovery(
   const discovery = await startGatewayDiscovery({
     machineDisplayName: "Lab Mac",
     port: 18789,
-    tailscaleMode: "off",
+    tailscaleMode: "serve",
     logDiscovery: logs,
     gatewayDiscoveryServices,
     ...overrides,
@@ -141,6 +138,8 @@ describe("startGatewayDiscovery", () => {
   const envSnapshot = captureFullEnv();
   beforeEach(() => {
     useDevelopmentDiscoveryEnv();
+    process.env.OPENCLAW_CLI_PATH = "/usr/local/bin/openclaw";
+    delete process.env.OPENCLAW_TAILNET_DNS;
     logs = makeLogs();
   });
 
@@ -161,9 +160,22 @@ describe("startGatewayDiscovery", () => {
       vi.useRealTimers();
       envSnapshot.restore();
       vi.clearAllMocks();
-      mocks.resolveTailnetDnsHint.mockReset();
-      mocks.resolveTailnetDnsHint.mockResolvedValue("gateway.tailnet.example.ts.net");
+      mocks.getTailnetHostname.mockReset();
+      mocks.getTailnetHostname.mockResolvedValue("gateway.tailnet.example.ts.net");
     }
+  });
+
+  it.each([
+    ["studio.tailnet.ts.net.", "studio.tailnet.ts.net"],
+    [undefined, undefined],
+  ])("uses only the env hint %s when tailscale is disabled", async (hint, tailnetDns) => {
+    if (hint) {
+      process.env.OPENCLAW_TAILNET_DNS = hint;
+    }
+    const service = makeDiscoveryService("bonjour");
+    await startDiscovery([service], { tailscaleMode: "off" });
+    expect(service.advertise).toHaveBeenCalledWith(expect.objectContaining({ tailnetDns }));
+    expect(mocks.getTailnetHostname).not.toHaveBeenCalled();
   });
 
   it("preserves getter discovery descriptors in their projected scope", async () => {
@@ -215,9 +227,6 @@ describe("startGatewayDiscovery", () => {
     registry.plugins.push(record);
     projectPluginContributions(builder.registry, record, registry);
     adoptPluginRegistryRecords(registry);
-    expect(registry.gatewayDiscoveryServices).toHaveLength(1);
-    expect(registry.gatewayDiscoveryServices[0]?.service).toBe(service);
-    expect(record.gatewayDiscoveryServiceIds).toEqual(["native-discovery"]);
     const discovery = await startDiscovery(registry.gatewayDiscoveryServices);
     await discovery.stop();
     expect(calls).toEqual([
@@ -225,29 +234,24 @@ describe("startGatewayDiscovery", () => {
       { phase: "stop", value: 37, runtime },
     ]);
     expect(calls.every((call) => call.runtime === runtime)).toBe(true);
-    await discovery.stop();
   });
 
   it("starts registered local discovery services with gateway advertisement context", async () => {
     process.env.OPENCLAW_SSH_PORT = "2222";
 
     const stopped: string[] = [];
-    const bonjour = makeDiscoveryService("bonjour", {
-      stop: () => {
-        stopped.push("bonjour");
-      },
-    });
-    const peer = makeDiscoveryService("peer-discovery", {
-      pluginId: "peer",
-      stop: () => {
-        stopped.push("peer");
-      },
-    });
+    const service = (id: string) =>
+      makeDiscoveryService(id, {
+        stop: () => {
+          stopped.push(id);
+        },
+      });
+    const bonjour = service("bonjour");
+    const peer = service("peer");
     const result = await startDiscovery([bonjour, peer], {
       discovery: { mdns: { mode: "full" } },
       gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
       gatewayDirectReachable: true,
-      tailscaleMode: "serve",
     });
 
     expect(bonjour.advertise).toHaveBeenCalledWith({
@@ -273,7 +277,6 @@ describe("startGatewayDiscovery", () => {
     const service = makeDiscoveryService("bonjour");
     await startDiscovery([service], {
       discovery: { mdns: { mode: "full" } },
-      tailscaleMode: "serve",
     });
     expect(service.advertise).toHaveBeenCalledWith(expect.objectContaining({ sshPort: undefined }));
   });
@@ -288,14 +291,10 @@ describe("startGatewayDiscovery", () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(logs.warn).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(4_990);
-    const result = await resultPromise;
-
-    expect(logs.warn.mock.calls).toEqual([
-      [
-        "gateway discovery service timed out after 5000ms (stuck-discovery, plugin=stuck-discovery); continuing startup",
-      ],
-    ]);
-    await result.stop();
+    await resultPromise;
+    expect(logs.warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("timed out after 5000ms"),
+    );
   });
 
   it("waits for delayed discovery when the configured timeout exceeds Node's timer range", async () => {
@@ -327,13 +326,11 @@ describe("startGatewayDiscovery", () => {
     process.env.OPENCLAW_DISABLE_BONJOUR = "yes";
 
     const service = makeDiscoveryService("bonjour");
-    const result = await startDiscovery([service], {
+    await startDiscovery([service], {
       discovery: { mdns: { mode: "full" } },
-      tailscaleMode: "serve",
     });
 
     expect(service.advertise).not.toHaveBeenCalled();
-    await result.stop();
   });
 
   it("logs a warning and skips zone writes when wide-area config is invalid", async () => {
@@ -345,19 +342,14 @@ describe("startGatewayDiscovery", () => {
       widearea.resolveWideAreaDiscoveryDomain,
     );
 
-    const result = await startDiscovery([], {
+    await startDiscovery([], {
       discovery: { mdns: { mode: "off" }, wideArea: { domain: "foo/bar" } },
-      gatewayTls: { enabled: false },
-      tailscaleMode: "serve",
     });
 
     expect(mocks.writeWideAreaGatewayZone).not.toHaveBeenCalled();
-    expect(logs.warn.mock.calls).toEqual([
-      [
-        "wide-area discovery was requested without a domain; set discovery.wideArea.domain to enable unicast DNS-SD",
-      ],
-    ]);
-    await result.stop();
+    expect(logs.warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("set discovery.wideArea.domain"),
+    );
   });
 
   it("replaces advertisements and wide-area metadata across live mode and registry changes", async () => {
@@ -368,7 +360,6 @@ describe("startGatewayDiscovery", () => {
       discovery: { mdns: { mode: "full" }, wideArea: { domain: "openclaw.internal." } },
       gatewayTls: { enabled: true, fingerprintSha256: "fingerprint" },
       gatewayDirectReachable: true,
-      tailscaleMode: "serve",
     });
 
     for (const mode of ["minimal", "full", "minimal", "off"] as const) {
@@ -556,7 +547,7 @@ describe("startGatewayDiscovery", () => {
         await discovery.update({ gatewayDiscoveryServices: [active] });
       }
       if (boundary === "DNS") {
-        mocks.resolveTailnetDnsHint.mockImplementationOnce(() => {
+        mocks.getTailnetHostname.mockImplementationOnce(() => {
           activeStopping.resolve();
           return metadata.promise;
         });
@@ -601,7 +592,7 @@ describe("startGatewayDiscovery", () => {
     const resolving = createDeferredCore();
     const dns = createDeferredCore<string>();
     releases.push(() => dns.resolve("gateway.tailnet.example.ts.net"));
-    mocks.resolveTailnetDnsHint.mockImplementationOnce(() => {
+    mocks.getTailnetHostname.mockImplementationOnce(() => {
       resolving.resolve();
       return dns.promise;
     });

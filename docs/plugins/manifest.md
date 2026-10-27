@@ -435,6 +435,8 @@ normal allocation retains its authentication and provisioning checks.
 
 - Settings validation matches manifest IDs case-insensitively. Errors and schema defaults use the authored settings entry rather than creating a second entry with different casing.
 - Required-field errors identify every missing field after schema defaults are applied. For dependencies on multiple fields, the error reports the dependency condition without claiming that fields already present are missing.
+- Cached schemas validate every config value independently, including `unevaluatedProperties` and `unevaluatedItems` constraints. Node/Bun and JIT standalone hosts compile dynamic schemas; AOT standalone hosts use cached schema evaluation without generating JavaScript.
+- Config format checks are local to the manifest schema: `uri` requires an absolute URL, standard descriptive formats such as `email` remain annotations, and custom registered formats are captured when the schema is prepared. They do not change format validation in other plugins or tools.
 - Unknown `channels.*` keys are **errors**, unless the channel id is declared by a plugin manifest. If the same id also appears in `plugins.allow`, `plugins.entries`, or `plugins.installs` (a plugin that is referenced but not currently discoverable), OpenClaw downgrades this to a **warning** instead.
 - `plugins.entries.<id>`, `plugins.allow`, and `plugins.deny` referencing unknown plugin ids are **warnings** ("stale config entry ignored"), not errors, so upgrades and removed/renamed plugins do not block gateway startup. An exact `{ enabled: false }` plugin entry is an intentional uninstall marker, so validation and Doctor keep it without a stale-config warning.
 - `plugins.slots.memory` referencing an unknown plugin id is an **error**, except for the known `memory-lancedb` official external plugin, which warns instead.
@@ -444,6 +446,13 @@ normal allocation retains its authentication and provisioning checks.
 See [Configuration reference](/gateway/configuration-reference#plugins) for the full `plugins.*` schema.
 
 ## Notes
+
+- `contextEngineIds` optionally declares a nonempty list of registered engine IDs
+  for a `kind: "context-engine"` plugin. IDs are case-sensitive, nonblank, and
+  cannot be `legacy` or `none`. This metadata connects the engine selected in
+  `plugins.slots.contextEngine` to its plugin before runtime loading. A single
+  engine can be selected automatically during installation; multiple engines
+  require an explicit choice. See [Plugin and engine IDs](/concepts/context-engine#plugin-and-engine-ids).
 
 - The manifest is **required for native OpenClaw plugins**, including local filesystem loads. Runtime still loads the plugin module separately; the manifest is only for discovery + validation.
 - Native manifests are parsed with JSON5, so comments, trailing commas, and unquoted keys are accepted as long as the final value is still an object.

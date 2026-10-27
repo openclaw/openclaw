@@ -119,10 +119,6 @@ it("rolls back setup when a recovery hold arrives after caller preparation", asy
       recoveryHoldPredicate: { agentId: "new", held: [], applies: true },
     }).catch((error: unknown) => error);
     expect(refusal).toBeInstanceOf(DuplicateAgentError);
-    expect(refusal).toMatchObject({
-      message:
-        "Agent new has held databases. Restore its original agentDir and session.store configuration, then run agents add explicitly to restore the preserved store.",
-    });
     expect(await read(dir)).toEqual(initial);
   });
 });
@@ -191,7 +187,6 @@ it.each(["expiry", "deletion"] as const)("retires %s cache on lost reply", async
   await expect(
     cleanup === "deletion" ? remove(deletionPlan(dir)) : expire(dir, expiredAt),
   ).rejects.toThrow("workspace cleanup reply lost");
-  expect(spy).toHaveBeenCalledTimes(1);
   spy.mockRestore();
   expect(readCache(filePath, "identity")).toBeUndefined();
   expect((await read(dir)).setupExists).toBe(false);

@@ -7,8 +7,8 @@ import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-snapshot.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
-import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 import {
   agentEvent,
   createHost,
@@ -461,6 +461,51 @@ describe("app-tool-stream throttled projections", () => {
     ]);
   });
 });
+
+it.each(["live", "history"] as const)(
+  "does not create raw tool bubbles for display-hidden automation activity (%s)",
+  (source) => {
+    useToolStreamFakeTimers();
+    const host = createHost();
+    for (const [index, phase] of ["start", "update", "result"].entries()) {
+      for (const stream of ["item", "tool"] as const) {
+        handleAgentEvent(
+          host,
+          agentEvent("run-quiet", index * 2 + (stream === "item" ? 1 : 2), stream, {
+            itemId: "tool:quiet-call",
+            toolCallId: "quiet-call",
+            kind: "tool",
+            name: "automations",
+            title: "Automations",
+            phase: stream === "item" && phase === "result" ? "end" : phase,
+            hideFromChannelProgress: true,
+            display: false,
+          }),
+          source,
+        );
+      }
+    }
+    vi.advanceTimersByTime(80);
+    expect(host.chatToolMessages).toEqual([]);
+    expect(host.toolStreamOrder).toEqual([]);
+    // A later attention result has no display suppression and must still create its card.
+    handleAgentEvent(
+      host,
+      agentEvent("run-quiet", 7, "tool", {
+        toolCallId: "quiet-call",
+        name: "automations",
+        phase: "result",
+        isError: true,
+        result: "The check failed.",
+      }),
+      source,
+    );
+    expect(host.chatToolMessages.flatMap(extractToolCardsCached)).toMatchObject([
+      { name: "automations", isError: true },
+    ]);
+    resetToolStream(host);
+  },
+);
 
 it("does not render Codex reasoning items as tool calls", () => {
   const host = createHost({ chatRunId: "run-1" });

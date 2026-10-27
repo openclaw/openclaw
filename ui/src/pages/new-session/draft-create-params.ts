@@ -18,6 +18,7 @@ export function buildSelectedSessionCreateParams(
     contextWindow: place.modelControl.contextWindow,
     thinkingLevel: place.modelControl.thinkingLevel,
     fastMode: place.modelControl.fastMode,
+    cyberAccessProgram: place.modelControl.accessProgramForSubmission(),
     projectId: place.hostedEnvironment
       ? undefined
       : (place.browser.remoteProject?.projectId ?? place.browser.projectId),
@@ -79,6 +80,9 @@ export function buildSelectedSessionCreateParams(
       ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
       : {}),
     ...(displayName ? { displayName } : {}),
+    ...(displayName && draft.displayNameGenerated
+      ? { displayNameGenerated: draft.displayNameGenerated }
+      : {}),
     ...(titleSource ? { titleSource } : {}),
     ...(draft.visibility === "incognito" ? { incognito: true } : {}),
     ...(draft.visibility === "draft" ? { visibility: "draft" } : {}),
@@ -92,6 +96,9 @@ export function buildSelectedSessionCreateParams(
     ...(!catalogId && contextWindow ? { contextWindow } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
     ...(!catalogId && draft.fastMode !== undefined ? { fastMode: draft.fastMode } : {}),
+    ...(!catalogId && draft.cyberAccessProgram !== undefined
+      ? { cyberAccessProgram: draft.cyberAccessProgram }
+      : {}),
     ...(draft.toolOverrides ? { toolOverrides: draft.toolOverrides } : {}),
     ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
     ...(projectId ? { projectId } : {}),

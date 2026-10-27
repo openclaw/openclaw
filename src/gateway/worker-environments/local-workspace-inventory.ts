@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { splitNullBuffer } from "../../agents/worktrees/git-path-inventory.js";
 import { requireGitBuffer } from "../../agents/worktrees/git.js";
-import { manifestNodes } from "./workspace-manifest-comparison.js";
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
@@ -48,7 +47,7 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
   admittedPaths: string;
   // Reuse authoritative host inputs read earlier in this operation.
   preparedPaths?: ReadonlySet<string>;
-  baseline?: WorkerWorkspaceManifest;
+  baselinePaths?: ReadonlySet<string>;
   signal?: AbortSignal;
   assertCurrent: () => void;
 }): Promise<Set<string>> {
@@ -68,16 +67,17 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
     const admitted = parseLocalWorkspaceSourcePaths(params.admittedPaths);
     paths = new Set<string>([...admitted, ...decodeLocalWorkspaceGitPaths(listed)]);
   }
-  if (params.baseline) {
-    for (const entryPath of manifestNodes(params.baseline).keys()) {
+  if (params.baselinePaths) {
+    for (const entryPath of params.baselinePaths) {
       paths.add(entryPath);
     }
   }
-  // The inventory contract requires explicit ancestors, including directories
-  // omitted by Git and empty directories already accepted from the guest.
+  // Set iteration visits added parents too, so each path needs only its immediate
+  // parent to include every ancestor omitted by Git or accepted from the guest.
   for (const entryPath of paths) {
-    for (const parent of workspacePathAncestors(entryPath)) {
-      paths.add(parent);
+    const separator = entryPath.lastIndexOf("/");
+    if (separator !== -1) {
+      paths.add(entryPath.slice(0, separator));
     }
   }
   return paths;

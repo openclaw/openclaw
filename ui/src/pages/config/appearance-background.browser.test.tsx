@@ -285,7 +285,9 @@ it("passes live preferences to the shared renderer without enabling disabled pla
   await preview.updateComplete;
   expect(preview.preferenceOverride).toMatchObject({ ...disabledPlacement, visibility: 0.8 });
   expect(range.getAttribute("aria-valuetext")).toBe("80%");
-  expect(preview.querySelector(".session-background__image")).not.toBeNull();
+  await waitForSolid(() => {
+    expect(preview.querySelector(".session-background__image")).not.toBeNull();
+  });
   patchSettings({
     background: {
       ...DEFAULT_BACKGROUND_PREFERENCE,
@@ -723,12 +725,10 @@ describe("Appearance backgrounds", () => {
     expect(source("none").getAttribute("aria-pressed")).toBe("true");
     const switches = [...host.querySelectorAll<HTMLInputElement>(".settings-toggle__input")];
     expect(switches).toHaveLength(2);
-    expect(switches.every((input) => input.getAttribute("aria-disabled") === "true")).toBe(true);
+    expect(switches.every((input) => input.disabled)).toBe(true);
     expect(backgroundRange().disabled).toBe(true);
     expect(
-      buttons('[data-test-id^="background-presentation-"]').every(
-        (control) => control.getAttribute("aria-disabled") === "true",
-      ),
+      buttons('[data-test-id^="background-presentation-"]').every((control) => control.disabled),
     ).toBe(true);
     expect(mode("full-bleed").getAttribute("aria-pressed")).toBe("true");
     expect(host.textContent).toContain("without removing your saved image or choices");
@@ -766,8 +766,6 @@ describe("Appearance backgrounds", () => {
     });
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Image <failed>");
     expect(host.querySelector("failed")).toBeNull();
-    expect(
-      buttons("button").every((control) => control.matches(':disabled, [aria-disabled="true"]')),
-    ).toBe(true);
+    expect(buttons("button").every((control) => control.disabled)).toBe(true);
   });
 });

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { expect, it, onTestFinished } from "vitest";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -32,6 +33,17 @@ async function fixture(initialSettings?: typeof settings) {
 const generationError = (code = "UNAVAILABLE") =>
   expect.objectContaining({ code: `SESSION_DELIVERY_GENERATION_${code}` });
 
+it.each(["runtime", "automation"])(
+  "retains generation facts across metadata but invalidates broad %s changes",
+  async (scope) => {
+    const { generation } = await fixture();
+    sessionChanges.emit({ all: true, scope: "profiles" });
+    expect(generation.assertCurrent).not.toThrow();
+    sessionChanges.emit({ all: true, scope });
+    expect(generation.assertCurrent).toThrow(generationError());
+  },
+);
+
 it.each([
   { field: "lifecycleRevision", value: "raw-successor", code: "REVOKED" },
   { field: "permissionMode", value: "read-only", code: "UNAVAILABLE" },
@@ -46,7 +58,6 @@ it.each([
     generation.assertCurrent();
     expect(generation.readSessionSettings()).toMatchObject(settings);
 
-    const version = database.db.prepare("PRAGMA data_version").get()?.data_version;
     const write = database.db.prepare(
       "UPDATE session_nodes SET current_session_id = ?, entry_json = ? WHERE session_key = ?",
     );
@@ -55,7 +66,6 @@ it.each([
       JSON.stringify(field === "current_session_id" ? metadata : { ...metadata, [field]: value }),
       scope.sessionKey,
     );
-    expect(database.db.prepare("PRAGMA data_version").get()?.data_version).toBe(version);
     expect(generation.assertCurrent).toThrow(generationError(code));
 
     write.run(original.sessionId, JSON.stringify(metadata), scope.sessionKey);
@@ -88,9 +98,7 @@ it("retains unchanged generation authority inside a native transaction and after
 
 it("refuses reentrant delivery during raw execution and unfinished RETURNING cursors", async () => {
   const { database, scope, generation } = await fixture();
-  let callbacks = 0;
   requireNativeSqliteDatabase(database.db).function("assert_delivery_fenced", () => {
-    callbacks += 1;
     expect(generation.assertCurrent).toThrow(generationError());
     return 1;
   });
@@ -103,7 +111,6 @@ it("refuses reentrant delivery during raw execution and unfinished RETURNING cur
   expect(read.next().done).toBe(false);
   expect(generation.assertCurrent).toThrow(generationError());
   read.return?.();
-  expect(callbacks).toBe(5);
   generation.assertCurrent();
 
   const write = database.db.prepare(

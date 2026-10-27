@@ -6,6 +6,7 @@ import {
   onAgentEvent as registerAgentEventListener,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
@@ -45,6 +46,7 @@ import {
   normalizeAskUserParams,
   reserveAskUserPromptDelivery,
 } from "./tools/ask-user-tool.js";
+import { createDeploymentQuestion } from "./tools/ask-user-tool.test-support.js";
 import * as gatewayTransport from "./tools/gateway.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
 import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
@@ -119,6 +121,71 @@ function errorPayloads(ctx: ToolHandlerContext) {
 function questionButton(questionId: string, optionValue: string) {
   return { label: optionValue, action: { type: "question", questionId, optionValue } };
 }
+
+describe("automation check activity", () => {
+  it.each(["success", "error", "approval-pending"] as const)(
+    "hides routine activity but preserves %s attention",
+    async (outcome) => {
+      const { ctx, onAgentEvent } = createTestContext();
+      const claim = claimAgentRunContext(
+        ctx.params.runId,
+        {
+          cronRunsByJobId: new Map([["job", { nextCheckEnabled: false, assertCurrent: () => {} }]]),
+        },
+        { trackOwner: true, ownsContext: true },
+      );
+      onTestFinished(() => releaseAgentRunContext(ctx.params.runId, claim));
+      ctx.params.onToolResult = vi.fn();
+      ctx.shouldEmitToolResult = () => true;
+      ctx.shouldEmitToolOutput = () => true;
+      const toolName = outcome === "approval-pending" ? "exec" : "automations";
+      await startTool(ctx, { toolName, toolCallId: "quiet-call", args: {} });
+      expect(onAgentEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stream: "tool",
+          data: expect.objectContaining({ phase: "start", hideFromChannelProgress: true }),
+        }),
+      );
+      expect(ctx.emitToolSummary).not.toHaveBeenCalled();
+      updateTool(ctx, {
+        toolName,
+        toolCallId: "quiet-call",
+        partialResult: textResult("Checking..."),
+      });
+      expect(onAgentEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stream: "tool",
+          data: expect.objectContaining({ phase: "update", hideFromChannelProgress: true }),
+        }),
+      );
+      await endTool(ctx, {
+        toolName,
+        toolCallId: "quiet-call",
+        isError: outcome === "error",
+        result:
+          outcome === "approval-pending"
+            ? resultWithDetails({
+                status: "approval-pending",
+                approvalId: "approval",
+                command: "echo check",
+                host: "gateway",
+              })
+            : textResult(outcome === "error" ? "The check failed." : "Recorded."),
+      });
+      const result = onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .find((event) => event.stream === "tool" && event.data.phase === "result");
+      expect(result?.data.hideFromChannelProgress === true).toBe(outcome === "success");
+      expect(result?.data.isError).toBe(outcome === "error");
+      if (outcome === "success") {
+        expect(ctx.emitToolOutput).not.toHaveBeenCalled();
+      }
+      if (outcome === "approval-pending") {
+        expect(onAgentEvent).toHaveBeenCalledWith(expect.objectContaining({ stream: "approval" }));
+      }
+    },
+  );
+});
 
 describe("progress_card compatibility plan events", () => {
   it("emits the typed full plan snapshot after a successful write", async () => {
@@ -221,17 +288,7 @@ describe("handleToolExecutionStart read path checks", () => {
     const onToolResult = vi.fn(() => delivered.resolve());
     ctx.params.onToolResult = onToolResult;
     const args = {
-      questions: [
-        {
-          id: "deploy_target",
-          header: "Target",
-          question: "Where should this deploy?",
-          options: [
-            { label: "Staging (Recommended)", description: "Safer default" },
-            { label: "Production" },
-          ],
-        },
-      ],
+      questions: [createDeploymentQuestion("Target")],
     };
 
     const pending = startTool(ctx, { toolName: "ask_user", toolCallId: "ask-call-1", args });
@@ -1457,56 +1514,40 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     ]);
     const [
       { normalizeAgentRunTerminalReceipt },
-      { createUsageAccumulator },
-      { createEmbeddedRunContextRecoveryState },
+      { createTerminalPreparationInput },
       { prepareEmbeddedRunTerminal },
     ] = await Promise.all([
       import("./agent-run-terminal-receipt.js"),
-      import("./embedded-agent-runner/usage-accumulator.js"),
-      import("./embedded-agent-runner/run/context-recovery-state.js"),
+      import("./embedded-agent-runner/run/terminal-preparation.test-support.js"),
       import("./embedded-agent-runner/run/terminal-preparation.js"),
     ]);
-    const prepared = prepareEmbeddedRunTerminal({
-      runParams: {
+    const prepared = prepareEmbeddedRunTerminal(
+      createTerminalPreparationInput({
         admittedRunContext: createTestAdmittedRunContext("run-test"),
-        sessionId: "session-test-id",
-        runId: "run-test",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "run",
-        trigger: "user",
-        timeoutMs: 60_000,
-      },
-      attempt: {
-        terminal: { kind: "ok" },
-        sessionIdUsed: "session-test-id",
-        messagesSnapshot: [],
-        assistantTexts: [],
-        toolMetas: ctx.state.toolMetas.flatMap(({ toolName, ...entry }) =>
-          toolName ? [{ ...entry, toolName }] : [],
-        ),
-        lastAssistant: undefined,
-        didSendViaMessagingTool: false,
-        messagingToolSentTexts: [],
-        messagingToolSentMediaUrls: [],
-        messagingToolSentTargets: [],
-        cloudCodeAssistFormatError: false,
-        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-      },
-      provider: "openai",
-      model: "gpt-5.4",
-      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
-      authProfileStore: { version: 1, profiles: {} },
-      sessionIdUsed: "session-test-id",
-      outerContextTokenMeta: {},
-      usageAccumulator: createUsageAccumulator(),
-      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-      resolvedToolResultFormat: "markdown",
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
-    });
+        runParams: {
+          sessionId: "session-test-id",
+          runId: "run-test",
+          prompt: "run",
+        },
+        attempt: {
+          terminal: { kind: "ok" },
+          sessionIdUsed: "session-test-id",
+          messagesSnapshot: [],
+          assistantTexts: [],
+          toolMetas: ctx.state.toolMetas.flatMap(({ toolName, ...entry }) =>
+            toolName ? [{ ...entry, toolName }] : [],
+          ),
+          lastAssistant: undefined,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          messagingToolSentTargets: [],
+          cloudCodeAssistFormatError: false,
+          replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+        },
+      }),
+    );
     expect(
       normalizeAgentRunTerminalReceipt(Reflect.get(prepared.agentMeta, "terminalReceipt"))
         ?.successfulToolNames,

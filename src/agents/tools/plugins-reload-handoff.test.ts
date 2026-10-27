@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, it, vi, type TestContext } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import * as events from "../../auto-reply/reply/session-event-handoff.js";
+import {
+  configureEventState,
+  runEventFixture,
+  startEmbeddedTurn,
+} from "../../auto-reply/reply/session-event.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -12,7 +17,6 @@ import {
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import type { GatewayRequestHandler } from "../../gateway/server-methods/types.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
@@ -24,18 +28,13 @@ import * as exec from "../../infra/exec-request-context.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { resolveMemoryAudienceFromEntry } from "../../plugins/memory-audience.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
-import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureCanonicalGatewayOwnerProfile } from "../../state/user-profile-writes.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   prepareSystemAgentRunAdmission,
   readAdmittedRunOperatorAuthority,
@@ -43,13 +42,9 @@ import {
 import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "../embedded-agent-runner/run/attempt-sessions-yield.js";
 import { buildEmbeddedAttemptToolRunContext } from "../embedded-agent-runner/run/attempt-tool-run-context.js";
-import { hasYieldContinuationEvidence } from "../embedded-agent-runner/run/incomplete-turn-resolution.js";
-import type { RunEmbeddedAgentParams } from "../embedded-agent-runner/run/params.js";
-import { isAsyncStartedToolResult } from "../embedded-agent-tool-results.js";
 import { runEmbeddedAgent } from "../embedded-agent.js";
 import { createAgentHarnessHostCapabilities } from "../harness/host-capability.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../harness/tool-authority.runtime.js";
-import { resolveOpenClawPluginToolsForOptionsAsync } from "../openclaw-plugin-tools.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -73,24 +68,25 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 it.each([
-  ["success", '"generation":2'],
-  ["without run ID", '"generation":2'],
+  ["host system", '"generation":2'],
   ["same-ID without run ID", ""],
   ["same-ID callback", '"generation":2'],
   ["same-ID late construction", '"generation":2'],
   ["same-ID prepublication", '"generation":2'],
   ["same-ID unmatched run", ""],
-  ["reload failure", "fixture reload failed"],
   ["permission denied", "operator.admin"],
-  ["stop", ""],
+  ["personal permission denied", "operator.admin"],
 ])("ends the turn before reload and resumes once: %s", async (outcome, expectedText) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const sessionKey = "agent:main:reload";
     const sessionId = "reload-session";
     const runId = "reload-run";
-    const withoutRunId = outcome === "without run ID" || outcome === "same-ID without run ID";
+    const withoutRunId = outcome === "same-ID without run ID";
     const refusesHandoff =
-      outcome === "same-ID unmatched run" || outcome === "same-ID without run ID";
+      outcome === "same-ID unmatched run" ||
+      outcome === "same-ID without run ID" ||
+      outcome === "permission denied" ||
+      outcome === "personal permission denied";
     const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
     setRuntimeConfigSnapshot(config);
     await upsertSessionEntryCore({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
@@ -114,17 +110,10 @@ it.each([
     }
     const cleanup = createDeferredCore();
     const resumed = createDeferredCore<string>();
-    const plugin = new PluginInstance("reload-fixture");
-    const consumer = plugin.retainConsumer();
     const order: string[] = [];
     const endpoint = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
-      expect(plugin.hasRetainedConsumers).toBe(false);
       order.push("reload");
-      if (outcome === "reload failure") {
-        respond(false, undefined, { code: "UNAVAILABLE", message: "fixture reload failed" });
-      } else {
-        respond(true, { ok: true, runtime: { generation: 2, pluginIds: ["reload-fixture"] } });
-      }
+      respond(true, { ok: true, runtime: { generation: 2, pluginIds: ["reload-fixture"] } });
     });
     const context = createContext([["plugins.reload", "operator.admin", "plugins", endpoint]]);
     context.getRuntimeConfig = () => config;
@@ -132,7 +121,11 @@ it.each([
     const enqueue = vi
       .spyOn(events, "enqueueSessionEventForHost")
       .mockImplementation((text, opts) => {
-        expect(opts).toMatchObject({ sessionKey, expectedTarget: { sessionId } });
+        expect(opts).toMatchObject({
+          sessionKey,
+          source: "tool_handoff",
+          expectedTarget: { sessionId },
+        });
         order.push("resume");
         resumed.resolve(text);
         return {
@@ -158,12 +151,11 @@ it.each([
           onYield: () => {
             order.push("yield");
             runAbort.abort(SESSIONS_YIELD_ABORT_REASON);
-            // Mirror the runtime: cleanup owns its asynchronous consumer close.
-            const closing = consumer.close(async () => {
-              await cleanup.promise;
-              order.push("cleanup");
-            });
-            operation.completeWithAfterClearBarrier(closing);
+            operation.completeWithAfterClearBarrier(
+              cleanup.promise.then(() => {
+                order.push("cleanup");
+              }),
+            );
           },
         });
       const start = async () => {
@@ -177,18 +169,19 @@ it.each([
             ? withSessionControllerOwner(other, () => tool.execute("handoff", request))
             : tool.execute("handoff", request);
         if (refusesHandoff) {
-          await expect(execute()).rejects.toThrow(callerRequired);
+          await expect(execute()).rejects.toThrow(
+            outcome.includes("permission denied") ? "operator.admin" : callerRequired,
+          );
           expect(order).toEqual([]);
           expectNoHandoff();
           expect(operation.result).toBeNull();
-          expect(other).toMatchObject({ result: null, abortSignal: { aborted: false } });
+          if (other) {
+            expect(other).toMatchObject({ result: null, abortSignal: { aborted: false } });
+          }
           return;
         }
         const result = await execute();
         expect(result.details).toMatchObject({ status: "started", async: true, yielded: true });
-        const asyncStarted = isAsyncStartedToolResult(result);
-        expect(asyncStarted).toBe(true);
-        expect(hasYieldContinuationEvidence({ toolMetas: [{ asyncStarted }] })).toBe(true);
         expect(order).toEqual(["yield"]);
         expectNoHandoff();
         await expect(sourceTool.execute("duplicate", request)).rejects.toThrow(
@@ -241,20 +234,9 @@ it.each([
       if (refusesHandoff) {
         return;
       }
-      if (outcome === "stop") {
-        exec.cancelExecRequestOwners(exec.activeExecRequestOwners({ sessionKey }, () => true));
-        cleanup.resolve();
-        await operation.ownerSettlement;
-        return;
-      }
       cleanup.resolve();
       const text = await resumed.promise;
-      expect(order).toEqual([
-        "yield",
-        "cleanup",
-        ...(outcome === "permission denied" ? [] : ["reload"]),
-        "resume",
-      ]);
+      expect(order).toEqual(["yield", "cleanup", "reload", "resume"]);
       expect(text).toContain(expectedText);
       expect(enqueue).toHaveBeenCalledOnce();
       if (other) {
@@ -267,29 +249,40 @@ it.each([
     };
     try {
       await withPluginRuntimeGatewayRequestScope(
-        { context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
-        () =>
-          withOperatorToolGatewayAuthority(
-            {
-              scopes: outcome === "permission denied" ? ["operator.write"] : ["operator.admin"],
-              operatorRoleActor: { kind: "system" },
-            },
-            () =>
-              exec.withExecRequestTurn(
-                { identity: { agentId: "main", sessionKey, sessionId, runId } },
-                () => withGatewayToolCallerIdentity({ agentId: "main", sessionKey }, run),
-              ),
-          ),
+        {
+          context,
+          resolveGatewayContext: () => context,
+          isWebchatConnect: () => false,
+          ...(outcome === "personal permission denied"
+            ? {
+                client: createOperatorClient({
+                  profileName: "reload-reader",
+                  scopes: ["operator.read"],
+                }),
+              }
+            : {}),
+        },
+        () => {
+          const start = () =>
+            exec.withExecRequestTurn(
+              { identity: { agentId: "main", sessionKey, sessionId, runId } },
+              () => withGatewayToolCallerIdentity({ agentId: "main", sessionKey }, run),
+            );
+          return outcome === "host system" || outcome === "personal permission denied"
+            ? start()
+            : withOperatorToolGatewayAuthority(
+                {
+                  scopes: outcome === "permission denied" ? ["operator.write"] : ["operator.admin"],
+                  operatorRoleActor: { kind: "system" },
+                },
+                start,
+              );
+        },
       );
-      if (outcome === "stop") {
-        expectNoHandoff();
-      }
     } finally {
       cleanup.resolve();
       operation.complete();
       other?.complete();
-      await consumer.close(() => undefined);
-      await plugin.dispose();
     }
   });
 });
@@ -297,53 +290,7 @@ it("refuses an unsupported caller without pretending to schedule a reload", asyn
   await expect(createPluginsTool().execute("unsupported", request)).rejects.toThrow(callerRequired);
 });
 
-async function configureEventState(
-  state: OpenClawTestState,
-  overrides: Partial<OpenClawConfig> = {},
-) {
-  const config: OpenClawConfig = {
-    agents: {
-      entries: { main: { workspace: state.workspaceDir } },
-      defaults: {
-        workspace: state.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: "mock-openai/gpt-5.6-luna" },
-        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-      },
-    },
-    plugins: { enabled: false },
-    skills: { load: { watch: false } },
-    ...overrides,
-  };
-  setRuntimeConfigSnapshot(config);
-  await state.writeConfig(config);
-  openOpenClawStateDatabase();
-  return config;
-}
-
-async function startEmbeddedTurn(params: RunEmbeddedAgentParams, label: string) {
-  const admission = expectDefined(params.preparedRunAdmission, label);
-  const context = await admission.admit("gateway", params.runId);
-  params.onExecutionPhase?.({ phase: "model_call_started" });
-  await params.onExecutionStarted?.();
-  await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
-  return context;
-}
-
 type EventReceipt = ReturnType<typeof events.enqueueSessionEventForHost>;
-
-function runEventFixture(
-  label: string,
-  onTestFinished: TestContext["onTestFinished"],
-  run: (state: OpenClawTestState) => Promise<void>,
-) {
-  const work = withOpenClawTestState({ label, env: { OPENCLAW_TEST_FAST: "0" } }, run);
-  // Cancellation must settle the state owner even when the test body times out.
-  onTestFinished(async () => {
-    await Promise.allSettled([work]);
-  });
-  return work;
-}
 
 it.for([
   "success",
@@ -411,6 +358,9 @@ it.for([
         const observer = vi
           .spyOn(events, "enqueueSessionEventForHost")
           .mockImplementation((text, options) => {
+            expect(text).toContain(
+              scenario === "reload failure" ? "fixture reload failed" : '"generation":2',
+            );
             const receipt = enqueue(text, options);
             enqueued.resolve(receipt);
             return receipt;
@@ -423,7 +373,7 @@ it.for([
             expect(input.ctx).toMatchObject({
               CommandAuthorized: false,
               InternalTurnSource: "event",
-              InputProvenance: { kind: "internal_system", sourceTool: "plugin" },
+              InputProvenance: { kind: "internal_system", sourceTool: "tool_handoff" },
             });
             expect(input.ctx.SenderId).toBeUndefined();
             return dispatch(input);
@@ -614,35 +564,6 @@ it.for([
                           expect(sourceAuthority?.profileId).toBe(
                             client?.authenticatedUserProfile?.profileId,
                           );
-                          if (isOwner) {
-                            const audience = await resolveAudience(true, () =>
-                              sourceAuthority!.assertCurrent(),
-                            );
-                            try {
-                              const tools = await resolveOpenClawPluginToolsForOptionsAsync({
-                                options: {
-                                  config,
-                                  runId: "reload-source",
-                                  agentSessionKey: sessionKey,
-                                  sessionId,
-                                  workspaceDir: state.workspaceDir,
-                                  senderIsOwner: true,
-                                  memoryAudience: audience.audience,
-                                  pluginToolAllowlist: ["owner_probe"],
-                                  assertInvocationCurrent: () => sourceAuthority!.assertCurrent(),
-                                },
-                              });
-                              const initialProbe = expectDefined(
-                                tools.find((tool) => tool.name === "owner_probe"),
-                                "initial owner-only plugin tool",
-                              );
-                              expect(await initialProbe.execute("initial-read", {})).toMatchObject({
-                                content: [{ text: "owner record" }],
-                              });
-                            } finally {
-                              audience.release();
-                            }
-                          }
                           const tool = createPluginsTool({
                             sessionId,
                             runId: "reload-source",
@@ -701,7 +622,7 @@ it.for([
             executionStarted: true,
           });
           expect(await fs.readFile(readsFile, "utf8").catch(() => "")).toBe(
-            !isOwner ? "" : invalidated ? "read\n" : "read\nread\n",
+            isOwner && !invalidated ? "read\n" : "",
           );
           expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
           expect(endpoint).toHaveBeenCalledOnce();

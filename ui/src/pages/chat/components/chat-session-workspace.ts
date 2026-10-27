@@ -1,4 +1,4 @@
-import { GatewayRequestError } from "../../../api/gateway.ts";
+import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
@@ -18,6 +18,7 @@ import {
   isCurrentSessionWorkspace,
   loadSessionWorkspace,
   refreshSessionWorkspaceState,
+  selectSessionWorkspacePreview,
   sessionWorkspaceForHost,
 } from "./chat-session-workspace-state.ts";
 import type {
@@ -198,37 +199,14 @@ export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: st
   workspace.browserPath = separator > 0 ? normalizedPath.slice(0, separator) : "";
   workspace.browserSearch = "";
   workspace.filter = "all";
+  workspace.tree!.treeVisible = true;
+  workspace.tree!.searchOpen = false;
+  // Selecting Files must restore the explicit reveal, not the previous catalog filter.
+  workspace.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
+  selectSessionWorkspacePreview(state, null);
   workspace.activeId = `file:${path}`;
   loadSessionWorkspace(state, workspace, true);
   sessionWorkspaceForHost(state).publish();
-}
-
-function openArtifact(
-  state: SessionWorkspaceHost,
-  workspace: SessionWorkspaceState,
-  artifactId: string,
-  disposition?: "pinned" | "preview",
-  intent?: "navigate",
-) {
-  void openWorkspaceItem(
-    state,
-    workspace,
-    `artifact:${artifactId}`,
-    () =>
-      readWorkspaceContent(state, workspace, (runtime) =>
-        runtime.loadSessionWorkspaceArtifactContent(state, workspace, artifactId),
-      ),
-    (result) => result.content,
-    `Failed to load artifact ${artifactId}`,
-    {
-      disposition,
-      intent,
-      label:
-        workspace.list?.artifacts?.find((artifact) => artifact.id === artifactId)?.title ||
-        t("chat.workspaceFiles.artifacts"),
-      resolveLabel: (result) => result.artifact?.title,
-    },
-  );
 }
 
 export function createSessionWorkspaceProps(
@@ -462,14 +440,30 @@ export function createSessionWorkspaceProps(
         loadSessionWorkspace(state, workspace);
       }, 160);
     },
-    onOpenArtifact: (artifactId: string, disposition?: "pinned" | "preview") =>
-      openArtifact(
+    onOpenArtifact: (artifactId: string, disposition?: "pinned" | "preview") => {
+      const artifactDisposition =
+        options?.presentation === "desktop" ? (disposition ?? "preview") : undefined;
+      const openIntent = options?.openIntent;
+      void openWorkspaceItem(
         state,
         workspace,
-        artifactId,
-        options?.presentation === "desktop" ? (disposition ?? "preview") : undefined,
-        options?.openIntent,
-      ),
+        `artifact:${artifactId}`,
+        (signal) =>
+          readWorkspaceContent(state, workspace, (runtime) =>
+            runtime.loadSessionWorkspaceArtifactContent(state, workspace, artifactId, signal),
+          ),
+        (result) => result.content,
+        `Failed to load artifact ${artifactId}`,
+        {
+          disposition: artifactDisposition,
+          intent: openIntent,
+          label:
+            workspace.list?.artifacts?.find((artifact) => artifact.id === artifactId)?.title ||
+            t("chat.workspaceFiles.artifacts"),
+          resolveLabel: (result) => result.artifact?.title,
+        },
+      );
+    },
     onOpenDiff: diffContent ? () => state.handleOpenSidebar(diffContent) : undefined,
   };
 }

@@ -287,6 +287,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   operatorSource?: SessionEntry["restartRecoveryOperatorSource"];
   requesterSource?: SessionEntry["restartRecoveryRequesterSource"];
   sourceIngress?: SessionEntry["restartRecoverySourceIngress"];
+  sourceMessageChannel?: SessionEntry["restartRecoverySourceMessageChannel"];
   sourceRunId?: string;
   sourceReplyDeliveryMode?: SessionEntry["restartRecoverySourceReplyDeliveryMode"];
 }): Pick<
@@ -301,6 +302,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   | "restartRecoveryOperatorSource"
   | "restartRecoveryRequesterSource"
   | "restartRecoverySourceIngress"
+  | "restartRecoverySourceMessageChannel"
   | "restartRecoverySourceReplyDeliveryMode"
   | "restartRecoverySuppressTextDelivery"
 > {
@@ -326,6 +328,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
       restartRecoveryOperatorSource: entry.restartRecoveryOperatorSource,
       restartRecoveryRequesterSource: entry.restartRecoveryRequesterSource,
       restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
+      restartRecoverySourceMessageChannel: entry.restartRecoverySourceMessageChannel,
       restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
       restartRecoveryForceSafeTools: entry.restartRecoveryForceSafeTools,
     };
@@ -350,6 +353,9 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
     restartRecoveryOperatorSource: createsScopedDeliveryClaim ? params.operatorSource : undefined,
     restartRecoveryRequesterSource: createsScopedDeliveryClaim ? params.requesterSource : undefined,
     restartRecoverySourceIngress: createsScopedDeliveryClaim ? params.sourceIngress : undefined,
+    restartRecoverySourceMessageChannel: createsScopedDeliveryClaim
+      ? params.sourceMessageChannel
+      : undefined,
     restartRecoverySourceReplyDeliveryMode: params.sourceRunId
       ? params.sourceReplyDeliveryMode
       : undefined,

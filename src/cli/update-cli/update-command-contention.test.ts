@@ -12,10 +12,11 @@ import {
   listUpdateRuns,
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
-import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../../shared/update-outcome-classification.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { VERSION } from "../../version.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import * as finalizationDoctor from "./update-command-fresh-doctor.js";
 import * as pluginUpdate from "./update-command-plugins.js";
@@ -42,11 +43,7 @@ vi.mock("./shared.js", async (importOriginal) => ({
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 function state() {
   fixture.serviceMutation.mockClear();

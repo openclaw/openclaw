@@ -510,10 +510,8 @@ describe("WhatsAppConnectionController", () => {
   it("aborts an indefinite login wait when guarded credential persistence fails", async () => {
     const guardError = new Error("verified inference route changed");
     let persistenceFailure: { error: unknown } | null = null;
-    let resolvePersistenceFailure = (_failure: { error: unknown }) => {};
-    const persistenceFailurePromise = new Promise<{ error: unknown }>((resolve) => {
-      resolvePersistenceFailure = resolve;
-    });
+    const { promise: persistenceFailurePromise, resolve: resolvePersistenceFailure } =
+      Promise.withResolvers<{ error: unknown }>();
     const pendingResult = createLoginResultHarness().run({
       waitForConnection: vi.fn(() => new Promise<void>(() => {})),
       credentialPersistenceFailure: persistenceFailurePromise,
@@ -658,12 +656,10 @@ describe("WhatsAppConnectionController", () => {
   });
 
   it("joins pending ownership acquisition before shutdown returns", async () => {
-    let resolveOwner = (_lease: { release: () => Promise<void> }) => {};
-    connectionOwnerMocks.acquire.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveOwner = resolve;
-      }),
-    );
+    const { promise: ownerPromise, resolve: resolveOwner } = Promise.withResolvers<{
+      release: () => Promise<void>;
+    }>();
+    connectionOwnerMocks.acquire.mockReturnValueOnce(ownerPromise);
     const openPromise = open("pending-owner");
     const shutdownPromise = controller.shutdown();
 
@@ -696,10 +692,8 @@ describe("WhatsAppConnectionController", () => {
   it("does not publish a listener that resolves after setup is cancelled", async () => {
     const sock = createSocketWithTransportEmitter();
     const lateListener = { ...createListenerStub(), close: vi.fn(async () => {}) };
-    let resolveListener = (_listener: ReturnType<typeof createListenerStub>) => {};
-    const listenerPromise = new Promise<ReturnType<typeof createListenerStub>>((resolve) => {
-      resolveListener = resolve;
-    });
+    const { promise: listenerPromise, resolve: resolveListener } =
+      Promise.withResolvers<ReturnType<typeof createListenerStub>>();
     createWaSocketMock.mockResolvedValueOnce(sock as never);
     waitForWaConnectionMock.mockResolvedValueOnce(undefined);
     const openPromise = controller.openConnection({

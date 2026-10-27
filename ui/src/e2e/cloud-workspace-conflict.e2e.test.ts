@@ -1,10 +1,13 @@
 import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cloud workspace conflict recovery",
+  // Native clipboard contents are shared across contexts in the same browser.
+  browserLaunchOptions: { headless: true },
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
@@ -23,12 +26,7 @@ const conflict = {
   totalCount: 2,
 };
 
-const pageOptions = {
-  colorScheme: "dark",
-  locale: "en-US",
-  serviceWorkers: "block",
-  viewport: { height: 900, width: 1440 },
-} as const;
+const pageOptions = createDarkDesktopControlUiContextOptions();
 function sessionList(label: string, placement: Record<string, unknown>, now = Date.now()) {
   const model = { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" };
   return {

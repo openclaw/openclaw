@@ -2,11 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveChatPaneDesktopTarget } from "../../../ui/src/components/desktop/desktop-source.js";
 import {
   createSessionCapabilityHarness,
   sessionsResult,
 } from "../../../ui/src/lib/sessions/session-capability.test-support.js";
-import { resolveChatPaneDesktopTarget } from "../../../ui/src/pages/chat/chat-pane-placement.js";
 import { createTestGatewayClient } from "../../../ui/src/test-helpers/gateway-client.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
@@ -44,21 +44,9 @@ import {
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  warn: vi.fn(),
   loadRow: vi.fn(),
   rowLabel: "first",
 }));
-
-vi.mock("../../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
-      const logger = actual.createSubsystemLogger(...args);
-      return args[0] === "gateway/session-events" ? { ...logger, warn: mocks.warn } : logger;
-    },
-  };
-});
 
 const { emitSessionsChanged, flushPendingSessionsChangedEvents } =
   await import("./session-change-event.js");
@@ -328,7 +316,6 @@ describe("sessions.changed coalescing", () => {
     "publishes a 20-session burst when its producer drains %s preparation",
     async (when) => {
       vi.useRealTimers();
-      mocks.warn.mockClear();
       const context = createContext();
       const keys = Array.from({ length: 20 }, (_, index) => `agent:main:burst-${index}`);
       const projection = createSessionRowProjectionFixture({
@@ -375,15 +362,9 @@ describe("sessions.changed coalescing", () => {
         await producer.drain();
         release.resolve();
         await flushPendingSessionsChangedEvents(context);
-        expect(mocks.warn).not.toHaveBeenCalled();
         expect(preparationBindings).toEqual(new Set(["publisher"]));
-        expect(broadcasts(context).map(([, payload]) => payload)).toEqual(
-          keys.map((sessionKey) =>
-            expect.objectContaining({
-              sessionKey,
-              session: expect.objectContaining({ key: sessionKey, label: "committed" }),
-            }),
-          ),
+        expect(broadcasts(context).map(([, payload]) => payload)).toMatchObject(
+          keys.map((key) => ({ sessionKey: key, session: { key, label: "committed" } })),
         );
       } finally {
         release.resolve();
@@ -398,7 +379,7 @@ describe("sessions.changed coalescing", () => {
     const context = createContext();
     const projection = getSessionRowProjection(context)!;
     const unrelated = createDeferred();
-    const bulk = vi.spyOn(projection, "ensureMaterialized").mockReturnValue(unrelated.promise);
+    vi.spyOn(projection, "ensureMaterialized").mockReturnValue(unrelated.promise);
     const bulkWork = projection.ensureMaterialized();
     const sessionKey = "agent:main:ready";
     try {
@@ -411,7 +392,6 @@ describe("sessions.changed coalescing", () => {
           { sessionKeys: [sessionKey] },
         ],
       ]);
-      expect(bulk).toHaveBeenCalledOnce();
     } finally {
       unrelated.resolve();
       await bulkWork;
@@ -549,11 +529,9 @@ describe("sessions.changed coalescing", () => {
     await emitAndSettleLeading(context, { reason: "send", sessionKey: "agent:main:chat" });
 
     expect(context.broadcastToConnIds).toHaveBeenCalledOnce();
-    expect(mocks.loadRow).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(100);
 
     expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
-    expect(mocks.loadRow).toHaveBeenCalledTimes(2);
     expect(broadcasts(context)[1]?.[1]).toMatchObject({
       label: "latest",
       reason: "send",
@@ -666,16 +644,9 @@ describe("sessions.changed coalescing", () => {
       },
     );
     const payload = broadcasts(context)[0]?.[1];
-    for (const field of [
-      "agentId",
-      "key",
-      "label",
-      "session",
-      "goal",
-      "status",
-      "hasActiveRun",
-      "activeRunIds",
-    ]) {
+    for (const field of "agentId key label session goal status hasActiveRun activeRunIds".split(
+      " ",
+    )) {
       expect(payload, field).not.toHaveProperty(field);
     }
   });

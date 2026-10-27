@@ -67,16 +67,8 @@ it("marks empty input unresolved", async () => {
   expect(result).toEqual({ input: "  ", resolved: false });
 });
 
-it("uses the selected named account for Graph user lookup credentials", async () => {
+it("looks up the selected account and keeps the first exact match for repeated user IDs", async () => {
   const cfg = { channels: { msteams: { defaultAccount: "default" } } };
-  findGraphUsersByExactIdentity.mockResolvedValueOnce(page([alice]));
-
-  await resolveMSTeamsUserAllowlist({ cfg, accountId: "support", entries: ["Alice"] });
-
-  expect(resolveGraphToken).toHaveBeenCalledWith(cfg, { accountId: "support" });
-});
-
-it("keeps the first exact identity match when Graph repeats a user ID", async () => {
   findGraphUsersByExactIdentity.mockResolvedValueOnce(
     page([
       { id: "user-1", displayName: "Another user" },
@@ -86,9 +78,13 @@ it("keeps the first exact identity match when Graph repeats a user ID", async ()
     ]),
   );
 
-  await expect(users(["Alice"])).resolves.toEqual([
-    { input: "Alice", resolved: true, id: " user-1 ", name: "Alice" },
-  ]);
+  const result = await resolveMSTeamsUserAllowlist({
+    cfg,
+    accountId: "support",
+    entries: ["Alice"],
+  });
+  expect(result).toEqual([{ input: "Alice", resolved: true, id: " user-1 ", name: "Alice" }]);
+  expect(resolveGraphToken).toHaveBeenCalledWith(cfg, { accountId: "support" });
 });
 
 it.each([
@@ -267,9 +263,7 @@ it("builds a Graph-keyed projection for action routing", async () => {
   const result = await resolveMSTeamsTeamsConfig({
     cfg: {},
     teamIdMode: "graph",
-    teams: {
-      "Product Team": team({ Roadmap: { requireMention: true } }),
-    },
+    teams: { "Product Team": team({ Roadmap: { requireMention: true } }) },
   });
 
   expect(result.mapping).toEqual([

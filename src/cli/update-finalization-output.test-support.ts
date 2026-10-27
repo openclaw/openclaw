@@ -5,15 +5,13 @@ import path from "node:path";
 import { mock } from "node:test";
 import { pathToFileURL } from "node:url";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { finalizationFixtureClockUrl as fixtureClockUrl } from "./update-finalization-clock.test-support.js";
 
 await import(fixtureClockUrl);
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
-await fs.writeFile(
-  path.join(root, "package.json"),
-  JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
-);
+await writeFixtureJson(path.join(root, "package.json"), { name: "openclaw", version: "2026.9.4" });
 const [runtimeProcessEntrypointsJson, scenario, ...args] = process.argv.slice(2);
 const borrowed = scenario?.startsWith("borrowed-");
 const repairDeadline = scenario?.startsWith("repair-deadline");
@@ -228,20 +226,21 @@ const blockedPhase = repairDeadline
   ? "plugins"
   : doctorDeadline
     ? "doctor"
-    : scenario === "phase-hang"
+    : scenario === "phase-hang" || scenario === "borrowed-phase"
       ? "configSnapshot"
       : scenario === "completion-hang"
         ? "completionCache"
         : undefined;
-if (blockedPhase || scenario === "borrowed-phase") {
-  // Keep real phase ownership; only the deliberately blocked phase gets a short budget.
+if (blockedPhase) {
+  // Doctor needs time for native admission; its output markers advance the deadline.
+  // Keep real phase ownership and the short budget for other blocked phases.
   stub(
     "./update-cli/update-finalization-lifecycle.ts",
     `import { once } from 'node:events';
 import { UpdateFinalizationLifecycle as RealLifecycle } from ${original("./update-cli/update-finalization-lifecycle.ts")};
 import { startFinalizationFixtureClock, restoreFinalizationFixtureClock } from ${JSON.stringify(fixtureClockUrl)};
 export class UpdateFinalizationLifecycle extends RealLifecycle {
-  budget(phase) { return phase === ${JSON.stringify(blockedPhase)} ? 1_000 : super.budget(phase); }
+  budget(phase) { return phase === ${JSON.stringify(blockedPhase)} ? ${doctorDeadline ? "30_000" : "1_000"} : super.budget(phase); }
   ${
     scenario === "phase-hang"
       ? `run(phase, operation, outcome, custody) {
@@ -288,7 +287,7 @@ export function captureUpdateFinalizationDoctorOutput(phase) {
         : "output.stdout.includes('Doctor complete.')"
     }) {
       ready = true;
-      ${doctorDeadline ? "advanceFinalizationFixtureClock(1_000);" : "restoreFinalizationFixtureClock();"}
+      ${doctorDeadline ? "advanceFinalizationFixtureClock(30_000);" : "restoreFinalizationFixtureClock();"}
     }
   });
 }`,

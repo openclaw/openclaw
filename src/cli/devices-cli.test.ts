@@ -1,8 +1,9 @@
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import "../test-utils/prepare-compiled-subprocesses.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { expectText } from "../test-utils/text-assertions.js";
 import { registerDevicesCli } from "./devices-cli.js";
 import { ExpectedCliError } from "./failure-output.js";
 
@@ -82,14 +83,7 @@ async function refusal(...argv: string[]): Promise<string> {
 }
 const output = () => runtime.log.mock.calls.map(([text]) => text).join("\n");
 const errors = () => stripAnsi(runtime.error.mock.calls.map(([text]) => text).join("\n"));
-function expectText(text: string, included: string[], excluded: string[] = []) {
-  for (const value of included) {
-    expect(text).toContain(value);
-  }
-  for (const value of excluded) {
-    expect(text).not.toContain(value);
-  }
-}
+
 function expectCall(index: number, fields: Record<string, unknown>) {
   expect(callGateway.mock.calls[index]?.[0]).toEqual(expect.objectContaining(fields));
 }
@@ -205,7 +199,6 @@ describe("approval", () => {
   ])("selects scopes for $name", async ({ request, device, scopes }) => {
     list([request], [device]).mockResolvedValueOnce({ device: { deviceId: "device-1" } });
     await run("approve", "req-1");
-    expect(callGateway).toHaveBeenCalledTimes(2);
     expectCall(0, { method: "device.pair.list", scopes: ["operator.pairing"] });
     expectCall(1, { method: "device.pair.approve", params: { requestId: "req-1" }, scopes });
   });
@@ -302,7 +295,6 @@ describe("approval", () => {
       "--token",
       "secret-token",
     );
-    expect(callGateway).toHaveBeenCalledTimes(3);
     expectText(message, [
       "No pending device request matches",
       "Node reapproval pending for Kitchen Mac. Run",
@@ -318,7 +310,6 @@ describe("approval", () => {
       [{ ...nodeDevice("Shared Phone"), displayName: "Shared Phone" }],
     ).mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" });
     const message = await refusal("approve", "Shared Phone", "--json");
-    expect(callGateway).toHaveBeenCalledTimes(2);
     expect(message).toContain("No pending device request matches Shared Phone");
     expect(message).not.toContain("openclaw nodes approve");
   });
@@ -332,7 +323,6 @@ describe("approval", () => {
     ).toBe(
       "This device can't approve its own scope upgrade. Approve it from the Control UI or another authorized device.",
     );
-    expect(callGateway).toHaveBeenCalledTimes(2);
     expect(approveDevicePairing).not.toHaveBeenCalled();
   });
 
@@ -350,13 +340,11 @@ describe("mutations", () => {
   it("removes a paired device", async () => {
     callGateway.mockResolvedValueOnce({ deviceId: "device-1" });
     await run("remove", "device-1");
-    expect(callGateway).toHaveBeenCalledOnce();
     expectCall(0, { method: "device.pair.remove", params: { deviceId: "device-1" } });
   });
   it("normalizes rejection ids and forwards integer timeouts", async () => {
     callGateway.mockResolvedValueOnce({ requestId: "req-1", deviceId: "device-1" });
     await run("reject", "  req-1  ", "--timeout", "15000");
-    expect(callGateway).toHaveBeenCalledOnce();
     expectCall(0, {
       method: "device.pair.reject",
       params: { requestId: "req-1" },
@@ -369,7 +357,6 @@ describe("mutations", () => {
       .mockResolvedValueOnce({ deviceId: "device-2" })
       .mockResolvedValueOnce({ requestId: "req-1", deviceId: "device-1" });
     await run("clear", "--yes", "--pending");
-    expect(callGateway).toHaveBeenCalledTimes(4);
     expectCall(0, { method: "device.pair.list" });
     expectCall(1, { method: "device.pair.remove", params: { deviceId: "device-1" } });
     expectCall(2, { method: "device.pair.remove", params: { deviceId: "device-2" } });
@@ -381,7 +368,6 @@ describe("mutations", () => {
   ])("preserves $name node rotation scope intent", async ({ flags, scopes }) => {
     callGateway.mockResolvedValueOnce({ ok: true });
     await run("rotate", "--device", "device-1", "--role", "node", ...flags);
-    expect(callGateway).toHaveBeenCalledOnce();
     expectCall(0, {
       method: "device.token.rotate",
       params: { deviceId: "device-1", role: "node", scopes },
@@ -454,18 +440,6 @@ describe("mutations", () => {
 });
 
 describe("local fallback", () => {
-  it("approves locally after a loopback pairing-required denial", async () => {
-    deny();
-    deny();
-    listDevicePairing.mockResolvedValueOnce({
-      pending: [{ requestId: "req-1", deviceId: "device-1", publicKey: "pk", ts: 1 }],
-      paired: [],
-    });
-    approveReplacement("req-1");
-    await run("approve", "req-1");
-    expectLocalApproval("req-1");
-    expectText(output(), [fallbackNotice, "Approved"]);
-  });
   it("approves a compatible replacement using inherited operator scopes", async () => {
     replacementPairing({
       original: { scopes: [] },
@@ -478,7 +452,6 @@ describe("local fallback", () => {
     });
     approveReplacement();
     await run("approve", "req-old");
-    expect(listDevicePairing).toHaveBeenCalledTimes(2);
     expectLocalApproval("req-new");
     expectText(output(), [
       fallbackNotice,

@@ -37,14 +37,12 @@ function SummaryStat(props: {
   value: string | number;
   sub: string;
   tone?: "good" | "warn" | "bad";
-  class?: string;
   compactValue?: boolean;
 }) {
   return (
     <div
       class={[
         "stat usage-summary-card",
-        props.class,
         props.tone ? `usage-summary-card--${props.tone}` : undefined,
       ]}
     >
@@ -181,7 +179,7 @@ function CostColumns(props: {
   days: NonNullable<ReturnType<typeof windowDailyCosts>>;
   label: string;
 }) {
-  const max = () => Math.max(0, ...props.days.map((day) => day.cost));
+  const max = createMemo(() => Math.max(0, ...props.days.map((day) => day.cost)));
   const [hover, setHover] = createSignal<number | null>(null);
   const active = () => {
     const index = hover();
@@ -240,6 +238,11 @@ function renderCostWindowComparison(
 
   const today = formatIsoDate(new Date(), timeZone);
   const costs = new Map(daily.map((day) => [day.date, day]));
+  const comparisons = windows.map((summary, index) => ({
+    index,
+    summary,
+    columns: windowDailyCosts(costs, summary.endDate, summary.days),
+  }));
 
   return (
     <SettingsSection
@@ -252,20 +255,20 @@ function renderCostWindowComparison(
       }
     >
       <div class="usage-summary-strip usage-summary-strip--windows">
-        <For each={Array.from(windows.entries())}>
-          {([index, summary]) => {
-            const label =
+        <For each={comparisons}>
+          {({ index, summary, columns }) => {
+            const label = createMemo(() =>
               index === 0
                 ? t("usage.costWindows.selectedRange")
                 : summary.days === 1
                   ? summary.endDate === today
                     ? t("usage.presets.today")
                     : formatDayLabel(summary.endDate)
-                  : t("usage.costWindows.lastDays", { count: String(summary.days) });
-            const columns = windowDailyCosts(costs, summary.endDate, summary.days);
+                  : t("usage.costWindows.lastDays", { count: String(summary.days) }),
+            );
             return (
               <div class={["cost-window", { "cost-window--range": index === 0 }]}>
-                <div class="cost-window__label">{label}</div>
+                <div class="cost-window__label">{label()}</div>
                 <div class="cost-window__value">
                   {formatAnalysisCost(summary.totals.totalCost, summary.totals.usageReport)}
                 </div>
@@ -276,7 +279,7 @@ function renderCostWindowComparison(
                     ? ` · ${formatAnalysisCost(summary.totals.totalCost / summary.days, summary.totals.usageReport)} ${t("usage.costWindows.perDay")}`
                     : undefined}
                 </div>
-                {columns ? <CostColumns days={columns} label={label} /> : undefined}
+                {columns ? <CostColumns days={columns} label={label()} /> : undefined}
               </div>
             );
           }}
@@ -293,7 +296,6 @@ function renderInsightList(
   items: InsightItem[],
   emptyLabel: string,
   options?: {
-    className?: string;
     listClassName?: string;
     error?: boolean;
   },
@@ -302,7 +304,7 @@ function renderInsightList(
   const max = Math.max(0, ...items.map((item) => item.weight));
   const share = (item: InsightItem) => (max > 0 ? (item.weight / max) * 100 : 0);
   return (
-    <div class={["usage-insight-card", options?.className]}>
+    <div class="usage-insight-card">
       <div class="usage-insight-title">{title}</div>
       {items.length === 0 ? (
         <div class="muted">{emptyLabel}</div>

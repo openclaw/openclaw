@@ -12,6 +12,7 @@ import { isSessionWorkStartInvalidatedError } from "../config/sessions/work-star
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
+import { isLocalStorageOutcomeError } from "../infra/sqlite-error-diagnostics.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
   classifyFailoverSignal,
@@ -27,7 +28,7 @@ import {
   readDirectErrorMessage,
   type CliTimeoutContext,
 } from "./failover/error.js";
-import { findLocalWorkerTaskTimeout } from "./failover/local-preparation-error.js";
+import { findLocalWorkerTaskFailure } from "./failover/local-preparation-error.js";
 import { resolveExecutionApprovalFailureMessage } from "./failover/message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
 import { renderRateLimitRetryExhaustion } from "./failover/user-copy.js";
@@ -303,7 +304,7 @@ function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
 }
 
 function hasRuntimeCoordinationFailure(err: unknown): boolean {
-  if (isChannelRunAuthorizationError(err)) {
+  if (isChannelRunAuthorizationError(err) || isLocalStorageOutcomeError(err)) {
     return true;
   }
   return collectErrorGraphCandidates(err, resolveNestedErrors).some(
@@ -483,7 +484,7 @@ export function resolveFailoverClassificationFromError(
 ): FailoverClassification | null {
   // A direct preflight owns the refusal; its cause is diagnostic, not a failed
   // provider attempt that may rotate credentials or replay the turn.
-  if (isAgentHarnessPreflightError(err) || findLocalWorkerTaskTimeout(err)) {
+  if (isAgentHarnessPreflightError(err) || findLocalWorkerTaskFailure(err)) {
     return null;
   }
   // Local coordination codes such as SQLite "overloaded" are not provider signals.
@@ -553,9 +554,9 @@ export function describeFailoverError(err: unknown): {
   sessionId?: string;
   lane?: string;
 } {
-  const localTimeout = findLocalWorkerTaskTimeout(err);
-  if (localTimeout) {
-    return { message: localTimeout.message };
+  const localFailure = findLocalWorkerTaskFailure(err);
+  if (localFailure) {
+    return { message: localFailure.message };
   }
   if (isAgentHarnessPreflightError(err)) {
     return { message: err.message };
@@ -610,7 +611,7 @@ export function coerceToFailoverError(
   context?: FailoverErrorContext,
 ): FailoverError | null {
   if (isFailoverError(err)) {
-    if (findLocalWorkerTaskTimeout(err)) {
+    if (findLocalWorkerTaskFailure(err)) {
       return null;
     }
     const status = normalizeFailoverStatus(err.status, err.code);
@@ -705,7 +706,7 @@ export function resolveModelFallbackError(
   }
   // Gateway admission can fail before any provider turn starts. Preserve that
   // identity through wrappers and aggregates so fallback cannot blame a model.
-  if (hasRuntimeCoordinationFailure(err) || findLocalWorkerTaskTimeout(err)) {
+  if (hasRuntimeCoordinationFailure(err) || findLocalWorkerTaskFailure(err)) {
     return { kind: "coordination", error: err };
   }
   const staleLifecycleFailure = hasStaleAgentRunLifecycleFailure(err);

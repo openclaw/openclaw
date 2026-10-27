@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { prepareHeadersForSimpleCompletion } from "@openclaw/ai/transports";
-import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber,
+  clampPositiveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import { extractEmbeddedAssistantText } from "../agents/embedded-agent-utils.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import { requireApiKey, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
@@ -18,10 +22,7 @@ import {
   unwrapSecretSentinelsForProviderEgress,
 } from "../agents/provider-secret-egress.js";
 import { registerProviderStreamForModel } from "../agents/provider-stream.js";
-import {
-  coerceImageAssistantText,
-  hasImageReasoningOnlyResponse,
-} from "../agents/tools/image-tool.helpers.js";
+import { createMediaAssistantTextCoercer } from "../agents/tools/media-tool-text.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { complete } from "../llm/stream.js";
@@ -37,15 +38,64 @@ import type {
   ImagesDescriptionResult,
 } from "./types.js";
 
-function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
-  if (
-    typeof modelMaxTokens !== "number" ||
-    !Number.isFinite(modelMaxTokens) ||
-    modelMaxTokens <= 0
-  ) {
-    return requestedMaxTokens;
+const coerceImageAssistantText = createMediaAssistantTextCoercer("Image");
+
+const IMAGE_REASONING_FALLBACK_SIGNATURES = new Set([
+  "reasoning_content",
+  "reasoning",
+  "reasoning_details",
+  "reasoning_text",
+]);
+const MAX_IMAGE_REASONING_FALLBACK_BLOCKS = 50;
+const MAX_IMAGE_REASONING_SIGNATURE_PARSE_CHARS = 2_048;
+const MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS = 65_536;
+
+function isImageReasoningFallbackSignature(value: unknown): boolean {
+  if (!value) {
+    return false;
   }
-  return Math.min(requestedMaxTokens, modelMaxTokens);
+  if (typeof value === "string") {
+    if (IMAGE_REASONING_FALLBACK_SIGNATURES.has(value)) {
+      return true;
+    }
+    const trimmed = value.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+      return false;
+    }
+    if (trimmed.length > MAX_IMAGE_REASONING_SIGNATURE_PARSE_CHARS) {
+      const scanned = trimmed.slice(0, MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS);
+      return /"id"\s*:\s*"rs_/.test(scanned) && /"type"\s*:\s*"reasoning(?:[."])/.test(scanned);
+    }
+    try {
+      return isImageReasoningFallbackSignature(JSON.parse(trimmed));
+    } catch {
+      return false;
+    }
+  }
+  const record = asOptionalObjectRecord(value);
+  if (!record) {
+    return false;
+  }
+  const id = typeof record.id === "string" ? record.id : "";
+  const type = typeof record.type === "string" ? record.type : "";
+  return id.startsWith("rs_") && (type === "reasoning" || type.startsWith("reasoning."));
+}
+
+function hasImageReasoningOnlyResponse(message: AssistantMessage): boolean {
+  if (extractEmbeddedAssistantText(message).trim() || !Array.isArray(message.content)) {
+    return false;
+  }
+  return message.content.slice(0, MAX_IMAGE_REASONING_FALLBACK_BLOCKS).some((block) => {
+    const record = asOptionalObjectRecord(block);
+    if (!record) {
+      return false;
+    }
+    return (
+      record.type === "thinking" &&
+      typeof record.thinking === "string" &&
+      isImageReasoningFallbackSignature(record.thinkingSignature)
+    );
+  });
 }
 
 function disableReasoningForImageRetryPayload(payload: unknown, model: Model): unknown {
@@ -223,10 +273,7 @@ function buildImageDescriptionTimeoutError(params: {
       `image description setup timed out after ${params.timeoutMs}ms before provider request started`,
     );
   }
-  const setupDurationMs =
-    typeof params.setupDurationMs === "number" && Number.isFinite(params.setupDurationMs)
-      ? Math.max(0, Math.floor(params.setupDurationMs))
-      : 0;
+  const setupDurationMs = params.setupDurationMs ?? 0;
   return new Error(
     setupDurationMs > 0
       ? `image description request timed out after ${params.timeoutMs}ms (setup took ${setupDurationMs}ms before provider request started)`
@@ -406,7 +453,10 @@ export async function describeImagesWithModelPayloadTransformCore(
       ],
     };
 
-    const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
+    const maxTokens = Math.min(
+      params.maxTokens ?? 4096,
+      asPositiveFiniteNumber(model.maxTokens) ?? Number.POSITIVE_INFINITY,
+    );
     // One image request carries one routing identity across the reasoning-only retry: re-rolling
     // it per attempt would split a single image request across two provider conversations. The
     // identity stays a routing header because a stream sessionId would also give unrelated
