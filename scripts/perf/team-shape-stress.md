@@ -7,8 +7,11 @@ connects to an existing Gateway, discovers credentials, or drives a real browser
 Both builds must support the database schemas written by the tooling checkout's
 fixture generator. A schema mismatch is a setup failure; the harness never
 downstamps databases or bypasses Gateway schema admission.
-The Gateway's instrumentation loader disables tsconfig aliases, so runtime
-package imports resolve through each build's own package exports. Keep each
+The Gateway's instrumentation loader uses native Node type stripping and resolves
+source-only `.js` imports to TypeScript without applying tsconfig aliases.
+Already-built JavaScript stays byte-for-byte native: a transforming loader can
+append inline source maps and inflate retained Script source bytes and import cost.
+Runtime package imports resolve through each build's own package exports. Keep each
 checkout's source, workspace package artifacts, and `dist` build consistent;
 rebasing source invalidates previously built artifacts.
 

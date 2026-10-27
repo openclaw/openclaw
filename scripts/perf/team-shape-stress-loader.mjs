@@ -1,13 +1,33 @@
-// Load TypeScript instrumentation without redirecting built Gateway package imports
-// through the controller checkout's tsconfig aliases. This must be the first loader.
+// Load erasable TypeScript instrumentation without transforming built Gateway code.
+// This must be the first loader; package imports use the measured build's exports.
 import { writeFileSync } from "node:fs";
 import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
-import { register } from "tsx/esm/api";
 
-register({ tsconfig: false });
+// Node strips types; only source instrumentation needs .js-to-.ts resolution.
+const sourceRoots = [
+  new URL("../../src/", import.meta.url).href,
+  new URL("../", import.meta.url).href,
+];
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    try {
+      return nextResolve(specifier, context);
+    } catch (error) {
+      if (
+        error?.code !== "ERR_MODULE_NOT_FOUND" ||
+        !specifier.startsWith(".") ||
+        !specifier.endsWith(".js") ||
+        !sourceRoots.some((root) => context.parentURL?.startsWith(root))
+      ) {
+        throw error;
+      }
+      return nextResolve(`${specifier.slice(0, -3)}.ts`, context);
+    }
+  },
+});
 
 if (isMainThread) {
   // Diagnostic allocation passes only: count owner work without changing production exports.

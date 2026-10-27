@@ -632,3 +632,75 @@ it("matches decorated V8 Script labels and keeps unnamed scripts separate", () =
     result.topScripts.filter((row: { identityHash: string | null }) => row.identityHash === null),
   ).toHaveLength(2);
 });
+
+it("unions flat and shared rope source strings without counting other script data", () => {
+  const script = (id: number, name: string, source: number): FixtureNode => [
+    id,
+    name,
+    10,
+    [
+      [3, source, "source"],
+      [3, 10, "name"],
+      [3, 11, "unrelated"],
+    ],
+    "code",
+  ];
+  const data = snapshot([
+    [1, "root", 0, refs(1, 2, 3, 4, 11, 12)],
+    script(3, "/product/a.mjs?private", 5),
+    script(5, "/product/a.mjs#private", 6),
+    script(7, "/private/b.mjs", 7),
+    script(9, "/product/flat.mjs", 13),
+    [
+      11,
+      "rope",
+      32,
+      [
+        [3, 6, "first"],
+        [3, 8, "second"],
+        [1, 12, "weak"],
+      ],
+      "concatenated string",
+    ],
+    [13, "slice", 24, [[3, 9, "parent"]], "sliced string"],
+    [15, "other slice", 24, [[3, 9, "parent"]], "sliced string"],
+    [17, "secret flat contents", 40, [], "string"],
+    [19, "secret backing contents", 100, [], "string"],
+    [21, "private script name", 500, [], "string"],
+    [23, "unrelated string", 1000, [], "string"],
+    [25, "weak string", 2000, [], "string"],
+    [27, "secret independent flat contents", 60, [], "string"],
+  ]);
+  const report = run(
+    [data],
+    ["--code-by-script", "--top", "2"],
+    [],
+    ["/product/a.mjs", "/product/flat.mjs"],
+  );
+  expect(report.codeByScript.sourceStrings).toEqual({
+    stringNodes: 6,
+    shallowBytes: 280,
+    topScripts: [
+      {
+        name: "/product/a.mjs",
+        identityHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        instanceCount: 2,
+        stringNodes: 4,
+        shallowBytes: 196,
+      },
+      {
+        name: "(redacted)",
+        identityHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        instanceCount: 1,
+        stringNodes: 2,
+        shallowBytes: 124,
+      },
+    ],
+  });
+  expect(report.codeByScript.sourceStrings.topScripts[0].identityHash).toBe(
+    report.codeByScript.duplicateScripts[0].identityHash,
+  );
+  for (const forbidden of ["private", "secret", "unrelated string", "weak string"]) {
+    expect(JSON.stringify(report)).not.toContain(forbidden);
+  }
+});
