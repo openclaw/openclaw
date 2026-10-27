@@ -223,7 +223,15 @@ uninstrumented. Attribute sampled bytes to the policy stacks in
 This opt-in scenario extends the same controller with real Gateway processes,
 throwaway Git workspaces, input receipts, metadata churn, and three restart legs
 (managed intent plus SIGTERM, raw SIGTERM, and deliberately injected SIGKILL).
-It is never run automatically by CI. Start with the mock setup check:
+It is never run automatically by CI.
+
+Every workload session is created through `sessions.create`; the controller waits
+for the returned key before sending turns or starting metadata churn, matching the
+Control UI. Read-marker and label patches still run concurrently with `chat.send`
+admission on those published sessions. Racing patches against an absent key tests
+implicit creation instead and can fail before any restart is injected.
+
+Start with the mock setup check:
 
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/team-shape-stress.ts \
