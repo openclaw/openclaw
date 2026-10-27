@@ -1,36 +1,16 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
+import { git, initializeGitFixture } from "./worktrees/git-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => __setFsSafeTestHooksForTest());
 
-function git(cwd: string, ...args: string[]) {
-  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
-}
-
-async function repository(parent: string, name: string) {
-  const root = path.join(parent, name);
-  await fs.mkdir(root);
-  git(root, "init", "--quiet");
-  git(
-    root,
-    "-c",
-    "user.name=Fixture",
-    "-c",
-    "user.email=fixture@example.test",
-    "commit",
-    "--quiet",
-    "--allow-empty",
-    "-m",
-    "fixture",
-  );
-  return root;
-}
+const repository = (parent: string, name: string) =>
+  initializeGitFixture(parent, name, "seed.txt", "fixture\n");
 
 function fileTools(root: string) {
   const tools = createCoreCodingTools({
@@ -56,7 +36,7 @@ it("uses newly registered linked worktrees for host file tools and observes unre
   const root = await repository(fixture, "repo");
   const execute = fileTools(root);
   const linked = path.join(fixture, "linked");
-  git(root, "worktree", "add", "--quiet", "--detach", linked);
+  await git(root, "worktree", "add", "--quiet", "--detach", linked);
   const target = path.join(linked, "nested", "note.txt");
 
   await execute("write", { path: target, content: "created\n" });
@@ -74,10 +54,10 @@ it("uses newly registered linked worktrees for host file tools and observes unre
 
   // A linked root must resolve the same common repository as the main checkout.
   const sibling = path.join(fixture, "sibling");
-  git(root, "worktree", "add", "--quiet", "--detach", sibling);
+  await git(root, "worktree", "add", "--quiet", "--detach", sibling);
   await fileTools(linked)("write", { path: path.join(sibling, "note.txt"), content: "created\n" });
 
-  const gitDir = git(linked, "rev-parse", "--absolute-git-dir");
+  const gitDir = await git(linked, "rev-parse", "--absolute-git-dir");
   let prepared = false;
   __setFsSafeTestHooksForTest({
     beforePinnedWriteParentAdmission: async (preparedPath) => {
@@ -102,13 +82,13 @@ it("refuses forged registrations, foreign worktrees, Git metadata, and linked-wo
   const fixture = await fs.realpath(tempDirs.make("openclaw-linked-worktree-denials-"));
   const root = await repository(fixture, "repo");
   const linked = path.join(fixture, "linked");
-  git(root, "worktree", "add", "--quiet", "--detach", linked);
+  await git(root, "worktree", "add", "--quiet", "--detach", linked);
   const forged = path.join(fixture, "forged");
   await fs.mkdir(forged);
   await fs.copyFile(path.join(linked, ".git"), path.join(forged, ".git"));
   const foreign = await repository(fixture, "foreign");
   const foreignLinked = path.join(fixture, "foreign-linked");
-  git(foreign, "worktree", "add", "--quiet", "--detach", foreignLinked);
+  await git(foreign, "worktree", "add", "--quiet", "--detach", foreignLinked);
   const outside = path.join(fixture, "outside");
   await fs.mkdir(outside);
   await fs.symlink(outside, path.join(linked, "escape"), "dir");

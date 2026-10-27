@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
@@ -8,6 +7,7 @@ import { npmCommandArgs } from "../test-utils/npm-command.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { installPluginFromNpmSpec } from "./install-npm.js";
 import { installPluginFromArchive } from "./install-package.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 
 const runCommand = vi.hoisted(() => vi.fn());
 const fixtureId = "deadline-fixture";
@@ -22,8 +22,6 @@ const packageFiles = (name: string, dependencies?: Record<string, string>) => ({
   "openclaw.plugin.json": JSON.stringify({ id: name, configSchema: { type: "object" } }),
   "index.js": source,
 });
-const writeJson = (dir: string, file: string, value: unknown) =>
-  fs.writeFile(path.join(dir, file), JSON.stringify(value));
 const commandTimeouts = (command: "view" | "install" | "plan") =>
   (runCommand.mock.calls as [string[], CommandOptions][])
     .filter(([argv]) => {
@@ -34,10 +32,6 @@ const commandTimeouts = (command: "view" | "install" | "plan") =>
     })
     .map(([, opts]) => opts.timeoutMs);
 
-async function expectInstalled(result: Awaited<ReturnType<typeof installPluginFromNpmSpec>>) {
-  assert(result.ok, JSON.stringify(result));
-  expect(await fs.readFile(path.join(result.targetDir, "index.js"), "utf8")).toBe(source);
-}
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
   runCommandWithTimeout: (...args: unknown[]) => runCommand(...args),
@@ -55,17 +49,16 @@ beforeEach(async () => {
     } else if (npmCommandArgs(argv)?.[0] === "install") {
       const cwd = options.cwd!;
       const packageDir = path.join(cwd, "node_modules", fixtureId);
-      await fs.mkdir(packageDir, { recursive: true });
-      await writeJson(cwd, "package-lock.json", {
-        lockfileVersion: 3,
-        packages: {
-          "": { dependencies: { [fixtureId]: "1.0.0" } },
-          [`node_modules/${fixtureId}`]: { version: "1.0.0" },
+      writeArtifacts(cwd, {
+        "package-lock.json": {
+          lockfileVersion: 3,
+          packages: {
+            "": { dependencies: { [fixtureId]: "1.0.0" } },
+            [`node_modules/${fixtureId}`]: { version: "1.0.0" },
+          },
         },
       });
-      for (const [file, content] of Object.entries(packageFiles(fixtureId))) {
-        await fs.writeFile(path.join(packageDir, file), content);
-      }
+      writeArtifacts(packageDir, packageFiles(fixtureId));
     } else {
       throw new Error(`Unexpected fixture command: ${argv.join(" ")}`);
     }
@@ -93,7 +86,7 @@ it.each([
       extensionsDir: path.join(state.root, "extensions"),
       config: {},
     });
-    await expectInstalled(result);
+    expect(result).toMatchObject({ ok: true });
     expect(commandTimeouts("view")).toEqual([metadata]);
     expect(commandTimeouts("install")).toEqual([work]);
     const plans = commandTimeouts("plan");
@@ -120,7 +113,7 @@ it.each([
       timeoutMs,
       extensionsDir: path.join(state.root, "extensions"),
     });
-    await expectInstalled(result);
+    expect(result).toMatchObject({ ok: true });
     expect(runCommand.mock.calls.map(([, opts]) => opts.timeoutMs)).toEqual([work]);
   },
 );

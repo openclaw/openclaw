@@ -258,6 +258,7 @@ export function createContext(
   const subscribe = () => () => undefined;
   return {
     basePath: "",
+    router: { getState: () => ({ matches: [] }) },
     gateway,
     navigation: createNavigationPreferencesFixture(),
     sessions,

@@ -89,7 +89,7 @@ it("recreates the custom snooze picker when the menu opens at another anchor", a
   const menu = await mountMenu({ snoozeAllowed: true });
   await openSubmenu(menu, "Snooze");
   await page.getByRole("menuitem", { name: "Choose another time", exact: true }).click();
-  const field = page.getByLabelText("Date and time", { exact: true });
+  const field = page.elementLocator(menu).getByLabelText("Date and time", { exact: true });
   await expect.element(field).toHaveFocus();
   const previous = menu.querySelector(".session-menu__snooze-picker");
   await page.getByRole("button", { name: "Cancel", exact: true }).click();

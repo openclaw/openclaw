@@ -14,7 +14,9 @@ export function createSqliteWorkerClientActor(): Actor {
     databasePath: "/fixture/state.sqlite",
     stateAccess: {
       canonicalPath: "/fixture/state.sqlite",
-      assertAccessAllowed() {},
+      async prepareAccess() {
+        return () => {};
+      },
       assertReadAllowed() {},
     },
     pathReferences: new Map([["/fixture/state.sqlite", 1]]),

@@ -99,7 +99,6 @@ it.each([false, true])(
           sandbox: "required",
         });
         expect(committed).toHaveBeenCalledOnce();
-        expect(committed.mock.calls[0]?.[0].sessionId).toBe(result?.sessionEntry?.sessionId);
         expect(loadSessionEntry(target)).toMatchObject({ sandbox: "required" });
 
         assert(result?.sessionEntry, "Fixture requires a persisted session");

@@ -1,10 +1,12 @@
 import { expect, test } from "vitest";
-import { getRuntimeConfig } from "../../config/io.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { setupSessionCreateHandlerTestHarness } from "../server.sessions.create.test-support.js";
+import {
+  createGuestSandboxSessionConfig,
+  setupSessionCreateHandlerTestHarness,
+} from "../server.sessions.create.test-support.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { directSessionReq } from "../test/server-sessions.test-helpers.js";
 import type { GatewayClient } from "./types.js";
@@ -15,24 +17,7 @@ test("dock creation retains human access and sandboxing through discovery and ex
   const { storePath } = await createSessionStoreDir();
   const profile = ensureProfileForEmail("dock-creator@example.test");
   setUserProfileRole(profile.id, "guest");
-  const cfg = {
-    ...getRuntimeConfig(),
-    session: { ...getRuntimeConfig().session, store: storePath },
-    gateway: {
-      ...getRuntimeConfig().gateway,
-      roles: {
-        default: "guest",
-        definitions: {
-          guest: {
-            sessions: { others: "none" as const },
-            agents: ["main"],
-            scopes: ["operator.read" as const, "operator.write" as const],
-            sandbox: "required" as const,
-          },
-        },
-      },
-    },
-  };
+  const cfg = createGuestSandboxSessionConfig(storePath, "none");
   setRuntimeConfigSnapshot(cfg);
   const client = sharingPolicyClient({ user: profile.id });
   delete client.authenticatedUserId;

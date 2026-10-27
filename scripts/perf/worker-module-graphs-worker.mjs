@@ -5,6 +5,7 @@ import path from "node:path";
 import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import {
+  GCProfiler,
   getHeapCodeStatistics,
   getHeapStatistics,
   setFlagsFromString,
@@ -68,6 +69,7 @@ if (!isMainThread) {
   let active = false;
   let cpuStart;
   let allocationStart;
+  const gcProfiler = workerData.captureGc ? new GCProfiler() : undefined;
   let measuredAfter = Infinity;
   let samples = [];
   const record = (entries) => {
@@ -108,6 +110,7 @@ if (!isMainThread) {
         samples = [];
         loop.reset();
         loop.enable();
+        gcProfiler?.start();
         cpuStart = process.threadCpuUsage();
         allocationStart = getHeapStatistics().total_allocated_bytes;
         if (!Number.isFinite(allocationStart)) {
@@ -126,7 +129,7 @@ if (!isMainThread) {
         if (workerData.traceGc) {
           setFlagsFromString("--trace-gc-nvp");
         }
-        value = { started: true };
+        value = { started: true, memory: process.memoryUsage() };
       } else if (operation === "end") {
         record(observer.takeRecords());
         active = false;
@@ -137,6 +140,7 @@ if (!isMainThread) {
         fs.writeSync(1, `WORKER_GC_END ${workerData.name}\n`);
         const cpu = process.threadCpuUsage(cpuStart);
         const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationStart;
+        const gcProfile = gcProfiler?.stop();
         if (workerData.sampleAllocation) {
           const { profile } = await inspector.post("HeapProfiler.stopSampling");
           fs.writeFileSync(workerData.sampleAllocation, JSON.stringify(profile));
@@ -144,6 +148,21 @@ if (!isMainThread) {
         value = {
           cpuMs: (cpu.user + cpu.system) / 1000,
           allocatedBytes,
+          memory: process.memoryUsage(),
+          ...(gcProfile
+            ? {
+                gcReclaimedBytes: gcProfile.statistics.reduce(
+                  (total, gc) =>
+                    total +
+                    Math.max(
+                      0,
+                      gc.beforeGC.heapStatistics.usedHeapSize -
+                        gc.afterGC.heapStatistics.usedHeapSize,
+                    ),
+                  0,
+                ),
+              }
+            : {}),
           gc: {
             all: distribution(samples.map((sample) => sample.ms)),
             minor: distribution(

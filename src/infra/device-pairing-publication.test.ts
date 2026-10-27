@@ -220,6 +220,7 @@ test.for([
   "retains only usable node authority during %s",
   async ([change, expected], { signal }) => {
     const snapshot = await readDevicePairingNodeSnapshot(baseDir);
+    const original = JSON.stringify(snapshot.paired);
     const generation = await generationFor();
     const binding = getPublishedPairedDeviceBinding("node", baseDir);
     if (change === "metadata after a failed read") {
@@ -257,11 +258,14 @@ test.for([
       );
       const committedBinding = change === "token revocation" ? null : binding;
       expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(committedBinding);
+      using read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
       const updated = await readDevicePairingNodeSnapshot(baseDir);
       expect(updated).not.toBe(snapshot);
       expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(updated);
       expect(updated.bindings.get("node") ?? null).toEqual(committedBinding);
       expect(updated.paired[0]).toMatchObject(expected);
+      expect(JSON.stringify(snapshot.paired)).toBe(original);
+      expect(read).not.toHaveBeenCalled();
     } finally {
       releaseMutation.resolve();
       await Promise.allSettled([mutation]);
@@ -393,10 +397,12 @@ test("keeps inspection snapshot bytes without republishing revoked node authorit
       await removePairedDevice("node", baseDir);
       expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
       expect(JSON.stringify(await listDevicePairingReadOnly(baseDir))).toBe(historical);
+      using read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
       const currentNodes = await readDevicePairingNodeSnapshot(baseDir);
       expect(currentNodes).not.toBe(nodes);
       expect(currentNodes.paired).toEqual([]);
       expect(currentNodes.bindings.size).toBe(0);
+      expect(read).not.toHaveBeenCalled();
       expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
       expect(await getPairedDevice("node", baseDir)).toBeNull();
       expect((await listDevicePairing(baseDir)).paired).toEqual([]);

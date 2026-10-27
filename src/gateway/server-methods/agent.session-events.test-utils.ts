@@ -18,7 +18,10 @@ import {
   waitForAssertion,
 } from "./agent.test-harness.js";
 import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
-import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
+import {
+  completedSubagentFollowupRun,
+  expectSubagentFollowupReactivation,
+} from "./subagent-followup.test-helpers.js";
 
 const mocks = getAgentTestMocks();
 
@@ -26,22 +29,7 @@ export function registerAgentSendEventTests(): void {
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
     const childSessionKey = "agent:main:subagent:followup";
     const updatedAt = Date.now() - 1_000;
-    const completedRun = {
-      runId: "run-old",
-      childSessionKey,
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "initial task",
-      cleanup: "keep" as const,
-      createdAt: 1,
-      execution: {
-        status: "terminal" as const,
-        startedAt: 2,
-        endedAt: 3,
-        outcome: { status: "ok" as const },
-      },
-    };
+    const completedRun = completedSubagentFollowupRun(childSessionKey);
 
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},

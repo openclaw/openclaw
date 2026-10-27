@@ -31,6 +31,13 @@ isolate). Both values are in MiB and are sampled when the phase finishes, so
 service journals can attribute startup memory growth before readiness. They are
 point-in-time readings, not peak memory measurements.
 
+Environment selection reports imports, config reading, recovery (including its
+config-health database read), guarding, and runtime-path pinning separately.
+These sub-phases appear during ordinary foreground Gateway startup without
+enabling full startup tracing. Parent timings include their nested sub-phases;
+do not add them together. Config-health timing includes any private database
+snapshot preparation and cleanup required by that read.
+
 The same lines include `workers` (live tracked worker isolates) and
 `workerHeapSamples` (sampled workers/live workers). When samples are available,
 `workerHeapMb` sums their total heap capacity in MiB; `workerHeapSource=cached`

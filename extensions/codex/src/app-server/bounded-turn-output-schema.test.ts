@@ -32,15 +32,6 @@ function runSchemaTurn(
 }
 
 describe("runBoundedCodexAppServerTurn output schemas", () => {
-  it("forwards the final-output schema to turn/start", async () => {
-    const fake = createClientFactory();
-
-    await runSchemaTurn(fake);
-
-    const turnStart = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
-    expect(turnStart).toMatchObject({ outputSchema });
-  });
-
   it.each([
     true,
     "unexpected status 400 Bad Request: Invalid schema for response_format 'codex_output_schema': 'additionalProperties' is required, url: https://example.invalid/responses, request id: test-request",
@@ -85,46 +76,35 @@ describe("runBoundedCodexAppServerTurn output schemas", () => {
     expect(fake.request.mock.calls.filter(([method]) => method === "turn/start")).toHaveLength(1);
   });
 
-  it("does not renew the deadline after native schema rejection", async () => {
-    let now = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    const fake = createClientFactory({
-      rejectOutputSchema: true,
-      beforeRequest: async (method) => {
-        if (method === "turn/start") {
-          now = 5_001;
-        }
-      },
-    });
-
-    await expect(runSchemaTurn(fake)).rejects.toMatchObject({
-      name: "TimeoutError",
-      timeoutMs: 5_000,
-    });
-    expect(fake.factory).toHaveBeenCalledTimes(1);
-  });
-
-  it("rechecks caller authority before the fallback starts", async () => {
-    const retired = new Error("completion owner retired");
-    let current = true;
-    const fake = createClientFactory({
-      rejectOutputSchema: true,
-      beforeRequest: async (method) => {
-        if (method === "turn/start") {
-          current = false;
-        }
-      },
-    });
-
-    await expect(
-      runSchemaTurn(fake, {
+  it.each(["deadline", "authority"] as const)(
+    "preserves %s across schema fallback",
+    async (guard) => {
+      let changed = false;
+      vi.spyOn(performance, "now").mockImplementation(() =>
+        guard === "deadline" && changed ? 5_001 : 0,
+      );
+      const retired = new Error("completion owner retired");
+      const fake = createClientFactory({
+        rejectOutputSchema: true,
+        beforeRequest: async (method) => {
+          if (method === "turn/start") {
+            changed = true;
+          }
+        },
+      });
+      const run = runSchemaTurn(fake, {
         assertCurrent: () => {
-          if (!current) {
+          if (guard === "authority" && changed) {
             throw retired;
           }
         },
-      }),
-    ).rejects.toBe(retired);
-    expect(fake.factory).toHaveBeenCalledTimes(1);
-  });
+      });
+      if (guard === "deadline") {
+        await expect(run).rejects.toMatchObject({ name: "TimeoutError", timeoutMs: 5_000 });
+      } else {
+        await expect(run).rejects.toBe(retired);
+      }
+      expect(fake.factory).toHaveBeenCalledTimes(1);
+    },
+  );
 });

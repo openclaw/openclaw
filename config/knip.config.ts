@@ -184,6 +184,8 @@ const repositoryScriptEntries = [
   // The performance guide and retained package-integrity rerun invoke these benchmarks by path.
   "scripts/bench-package-integrity.ts!",
   "scripts/perf/provider-request-prepare-measure.ts!",
+  // Invoked directly with Node as documented in its header.
+  "scripts/perf/attempt-stream-options-measure.ts!",
   "scripts/perf/session-profile-reference-measure.ts!",
   "scripts/perf/worker-task-metrics-measure.ts!",
   // scripts/perf/README.md invokes this worker protocol benchmark by path.
@@ -318,6 +320,7 @@ const repositoryScriptEntries = [
   "scripts/perf/gateway-snapshot-freeze-measure.mjs!",
   "scripts/perf/gateway-ui-rpc-measure.ts!",
   "scripts/perf/github-base-refresh-measure.ts!",
+  "scripts/perf/harness-tool-authority-measure.ts!",
   "scripts/perf/ingress-blocked-lanes.ts!",
   "scripts/perf/lease-main-thread-renewal.mjs!",
   "scripts/perf/media-selection-measure.ts!",
@@ -388,6 +391,7 @@ const repositoryScriptEntries = [
   "scripts/perf/transcript-resident-hydration-measure.ts!",
   "scripts/perf/worker-task-input-measure.mjs!",
   // Maintained source headers and a dedicated guide invoke these standalone commands by exact path.
+  "scripts/perf/attempt-tool-context-measure.ts!",
   "scripts/perf/catalog-retained-data-measure.ts!",
   "scripts/perf/disk-budget-scan.ts!",
   "scripts/perf/git-operation-allocation-measure.ts!",
@@ -417,6 +421,26 @@ const repositoryScriptEntries = [
   "scripts/perf/trajectory-tool-parameters-measure.ts!",
   "scripts/perf/transcript-projection-receipt-measure.ts!",
   "scripts/perf/ui-streaming-render-measure.ts!",
+  // Maintained source headers invoke these standalone commands by exact path.
+  "scripts/perf/archive-worker-startup-measure.mjs!",
+  "scripts/perf/attempt-stream-repair-measure.ts!",
+  "scripts/perf/config-health-read-measure.ts!",
+  "scripts/perf/context-engine-lifecycle-bench.ts!",
+  "scripts/perf/mcp-oauth-startup.ts!",
+  "scripts/perf/node-bootstrap-artifact-measure.ts!",
+  "scripts/perf/placement-identity-recovery-bench.ts!",
+  "scripts/perf/provider-tool-normalization-measure.ts!",
+  "scripts/perf/session-entry-patch-prepare-measure.ts!",
+  "scripts/perf/session-event-audience-measure.ts!",
+  "scripts/perf/transcript-snapshot-copy-measure.ts!",
+  "scripts/perf/turn-start-phases.ts!",
+  "scripts/perf/update-manager-measure.ts!",
+  "scripts/perf/worker-spawn-measure.mjs!",
+  "scripts/perf/worktree-size-measure.ts!",
+  // The dynamic-consumer compiler follows the computed child launches of these command roots.
+  "scripts/perf/archive-worker-churn-measure.ts!",
+  "scripts/perf/session-create-measure.ts!",
+  "scripts/perf/session-create-repository-measure.ts!",
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",
   "scripts/perf/agent-catalog-display-measure.ts!",

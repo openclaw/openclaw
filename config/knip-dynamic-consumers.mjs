@@ -238,6 +238,10 @@ function namedImport(names, targetFile, consumerFile, index) {
   return `import { ${bindings.join(", ")} } from ${JSON.stringify(relativeSpecifier(consumerFile, targetFile))};`;
 }
 
+function sideEffectImport(targetFile, consumerFile) {
+  return `import ${JSON.stringify(relativeSpecifier(consumerFile, targetFile))};`;
+}
+
 /**
  * Project named imports emitted into child modules or selected through module
  * hooks. Each edge is derived from the live producer and consumer sources so
@@ -397,6 +401,47 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
         ),
       );
     }
+  }
+
+  const archiveChurnPath = "scripts/perf/archive-worker-churn-measure.ts";
+  const archiveChurnSource = fs.readFileSync(archiveChurnPath, "utf8");
+  const archiveChurnLaunch =
+    archiveChurnSource.match(
+      /^if \(values\.allocations\) \{([\s\S]*?)^\}\nconst inspector = new Session\(\);/mu,
+    )?.[1] ?? "";
+  if (
+    /^\s*const\s+preload\s*=\s*pathToFileURL\(\s*path\.join\(\s*path\.dirname\(\s*fileURLToPath\(\s*import\.meta\.url\s*\)\s*\)\s*,\s*["']archive-worker-churn-preload\.mjs["']\s*\)\s*,\s*\)\.href\s*;/mu.test(
+      archiveChurnLaunch,
+    ) &&
+    /^\s*workerThreads\.Worker\s*=\s*class\s+extends\s+NativeWorker\s*\{[\s\S]*?\bsuper\(\s*filename\s*,\s*target\s*\?\s*\{[\s\S]*?^\s*execArgv:\s*\[\s*\.\.\.\(\s*options\.execArgv\s*\?\?\s*process\.execArgv\s*\)\s*,\s*["']--import["']\s*,\s*preload\s*\]\s*,[\s\S]*?\}\s*:\s*options\s*,?\s*\)\s*;/mu.test(
+      archiveChurnLaunch,
+    )
+  ) {
+    imports.push(
+      sideEffectImport(
+        path.resolve(path.dirname(archiveChurnPath), "archive-worker-churn-preload.mjs"),
+        filePath,
+      ),
+    );
+  }
+
+  const sessionCreatePath = "scripts/perf/session-create-measure.ts";
+  const sessionCreateSource = fs.readFileSync(sessionCreatePath, "utf8");
+  const sessionCreateChildArgs =
+    sessionCreateSource.match(
+      /\bgateway\s*=\s*spawn\(\s*process\.execPath\s*,\s*buildGatewayBenchChildArgs\(\s*entry\s*,\s*port\s*,\s*\[([\s\S]*?)^\s*\]\s*,?\s*\)\s*,\s*\{/mu,
+    )?.[1] ?? "";
+  if (
+    /^\s*["']--import["']\s*,\s*\n\s*new URL\(\s*["']\.\/session-create-measure-loader\.mjs["']\s*,\s*import\.meta\.url\s*\)\.pathname\s*,/mu.test(
+      sessionCreateChildArgs,
+    )
+  ) {
+    imports.push(
+      sideEffectImport(
+        path.resolve(path.dirname(sessionCreatePath), "session-create-measure-loader.mjs"),
+        filePath,
+      ),
+    );
   }
 
   const trajectoryFlushPreloadPath = "scripts/perf/trajectory-flush-preload.mts";

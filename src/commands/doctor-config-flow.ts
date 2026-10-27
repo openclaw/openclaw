@@ -195,9 +195,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     retainLegacyDefaultAgentId(state.cfg, legacyDefaultAgentId);
     retainLegacyDefaultAgentId(state.candidate, legacyDefaultAgentId);
   }
-  const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
   const persistCanonicalAgentRoster =
-    snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster;
+    snapshot.exists && rosterMigrationNeeded && !configIncludeOwnsAgentRoster(snapshot);
   if (persistCanonicalAgentRoster) {
     applyConfigMutation(
       {
@@ -500,7 +499,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     snapshot.authoredConfig?.agents?.defaults?.workspace ??
     (isRecord(parsedDefaults) ? parsedDefaults.workspace : undefined);
   const systemAgentWorkspaceOptions = {
-    includeOwnsRoster,
+    includeOwnsRoster: configIncludeOwnsAgentRoster(snapshot),
     authoredDefaultWorkspace:
       typeof authoredDefaultWorkspace === "string" ? authoredDefaultWorkspace : undefined,
   };
@@ -524,6 +523,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
           state,
           installedPluginIdRecovery: installedPluginRecovery.recovery,
           doctorFixCommand,
+          modelReplacements: params.options.modelReplacements,
           reportFindings: params.reportFindings,
           env: process.env,
           blockedCodexProviderPlan,

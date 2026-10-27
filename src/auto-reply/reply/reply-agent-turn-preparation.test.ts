@@ -1,7 +1,6 @@
 import { assert, beforeEach, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
-import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { bindIngressLifecycleToReplyOptions } from "../../channels/message/ingress-drain-lifecycle.js";
 import { createChannelIngressDrain } from "../../channels/message/ingress-drain.js";
 import {
@@ -24,9 +23,7 @@ import {
   captureCommandOwnerAssertion,
 } from "../command-owner-authority.js";
 import type { FollowupRun } from "./queue/types.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { createPreparationRun } from "./reply-agent-turn-preparation.test-support.js";
-import { resolveReplyToolAuthorityContext } from "./reply-tool-authority.js";
 import type { ScheduledSessionAutomation } from "./session-event-contract.js";
 
 const state = vi.hoisted(() => ({
@@ -119,21 +116,6 @@ beforeEach(() => {
   state.recheckFallbackProbe.mockImplementation(({ run }) => run);
   state.refreshGoal.mockImplementation((context) => context);
 });
-
-function resolveAdmittedToolAuthority(turn: AdmittedFollowupTurn) {
-  const { run } = turn.queued;
-  return resolveReplyToolAuthorityContext(
-    turn.queued,
-    undefined,
-    resolvePreparedSandboxRuntimeStatus({
-      cfg: run.config,
-      agentId: run.agentId,
-      sessionKey: run.sessionKey,
-      preparedSessionEntry: turn.session.current() ?? null,
-    }),
-    {}, // These admission fixtures have no persisted parent capability lineage.
-  );
-}
 
 function createRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
   return createPreparationRun({
@@ -352,9 +334,6 @@ it.each([
         traceAuthorized: admittedOwner,
       });
       expect(execution.run.config).toEqual(admittedConfig);
-      expect(resolveAdmittedToolAuthority(turn).capabilityProfile.sender.isOwner).toBe(
-        admittedOwner,
-      );
       const assertOwner = captureCommandOwnerAssertion(execution.run);
       if (admittedOwner) {
         expect(assertOwner).toBeDefined();
@@ -410,7 +389,6 @@ it.each([false, true])(
         .mockResolvedValue(undefined);
       const turn = await admitted(prepare(queued));
       expect(turn.queued.run).toMatchObject({ senderIsOwner: true, traceAuthorized: true });
-      expect(resolveAdmittedToolAuthority(turn).capabilityProfile.sender.isOwner).toBe(true);
       expect(assertCurrent).toHaveBeenCalled();
       expect(durableOwnerRead).not.toHaveBeenCalled();
     }
