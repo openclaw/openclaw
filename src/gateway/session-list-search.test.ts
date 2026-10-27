@@ -251,7 +251,11 @@ test("native models and prepared runtime labels outside the catalog retain their
     }
   }
   ownership.modelRef = undefined;
-  for (const search of ["gpt-4.1", "openai/gpt-4.1", "short"]) {
+  for (const [search, factReads] of [
+    ["gpt-4.1", 0],
+    ["openai/gpt-4.1", 0],
+    ["short", 1],
+  ] as const) {
     params.opts = { search };
     const expected = eagerSearch(params, key, entry);
     expect(expected, search).toBe(search !== "short");
@@ -260,7 +264,7 @@ test("native models and prepared runtime labels outside the catalog retain their
       filterSessionEntries(params).entries.map(([value]) => value),
       search,
     ).toEqual(expected ? [key] : []);
-    expect(getModelFacts).toHaveBeenCalledOnce();
+    expect(getModelFacts.mock.calls.length, search).toBe(factReads);
   }
   params.projectActiveRun = () => ({ active: true });
   params.opts = { search: "running" };

@@ -275,6 +275,21 @@ export function filterSessionEntries(
   let modelMatches: Map<string, boolean> | undefined;
   let runtimeMatches: Map<string, boolean> | undefined;
   let searchModels: boolean | undefined;
+  const matchesModelRefs = (
+    key: string,
+    read: () => Array<Parameters<typeof addSessionListSearchModelFields>[1]>,
+  ) => {
+    let modelMatch = modelMatches?.get(key);
+    if (modelMatch === undefined) {
+      const models: Array<string | undefined> = [];
+      for (const identity of read()) {
+        addSessionListSearchModelFields(models, identity);
+      }
+      modelMatch = matchesSessionListSearch(models, search);
+      (modelMatches ??= new Map()).set(key, modelMatch);
+    }
+    return modelMatch;
+  };
   const matchesSearch = search
     ? (
         key: string,
@@ -382,27 +397,19 @@ export function filterSessionEntries(
             entry.modelOverrideFallbackOriginProvider,
             entry.modelOverrideFallbackOriginModel,
           ]);
-          let modelMatch = modelMatches?.get(modelKey);
-          if (modelMatch === undefined) {
-            const resolvedModel = resolveSessionModelIdentityRef(
-              cfg,
-              entry,
-              agentId,
-              subagentRun?.model,
-              {
+          if (
+            matchesModelRefs(modelKey, () => [
+              resolveSessionModelIdentityRef(cfg, entry, agentId, subagentRun?.model, {
                 allowPluginNormalization: false,
                 manifestPlugins: readPreparedGatewayModelCatalogMetadata(
                   params.modelCatalog instanceof Map ? params.modelCatalog.get(agentId) : undefined,
                 ),
                 configuredDefaultModelByAgent: getRowContext().configuredDefaultModelByAgent,
-              },
-            );
-            const models: Array<string | undefined> = [];
-            addSessionListSearchModelFields(models, resolvedModel);
-            modelMatch = matchesSessionListSearch(models, search);
-            (modelMatches ??= new Map()).set(modelKey, modelMatch);
+              }),
+            ])
+          ) {
+            return true;
           }
-          if (modelMatch) return true;
         }
         const source = expectDefined(params.getModelFacts, "prepared search row model facts")(key);
         if (!search.startsWith("agent:")) {
@@ -414,15 +421,7 @@ export function filterSessionEntries(
             source.rowModelIdentity.provider,
             source.rowModelIdentity.model,
           ]);
-          let modelMatch = modelMatches?.get(modelKey);
-          if (modelMatch === undefined) {
-            const models: Array<string | undefined> = [];
-            addSessionListSearchModelFields(models, source.selectedModel);
-            addSessionListSearchModelFields(models, source.rowModelIdentity);
-            modelMatch = matchesSessionListSearch(models, search);
-            (modelMatches ??= new Map()).set(modelKey, modelMatch);
-          }
-          if (modelMatch) {
+          if (matchesModelRefs(modelKey, () => [source.selectedModel, source.rowModelIdentity])) {
             return true;
           }
         }
