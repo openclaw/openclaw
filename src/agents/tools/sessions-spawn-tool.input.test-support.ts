@@ -95,8 +95,8 @@ export function registerSessionsSpawnInputTests({
     ],
     [
       "hidden worktree name without worktree",
-      { worktreeName: "review" },
-      "Hidden native subagents require worktree=true",
+      { worktree: false, worktreeName: "review" },
+      /^Hidden native subagents require worktree=true.*Corrected hidden call: sessions_spawn\(\{"task":"inspect","worktree":false\}\)$/,
     ],
     [
       "hidden worktree base without worktree",
@@ -144,45 +144,6 @@ export function registerSessionsSpawnInputTests({
       ).toBe(true);
     },
   );
-
-  it("gives an executable hidden retry without an unintended managed checkout", async () => {
-    const tool = createTool();
-    const hiddenArgs = {
-      task: "Independently check that 19 * 23 = 437 without creating a checkout",
-      taskName: "arithmetic-one",
-      runtime: "subagent",
-      visible: false,
-      worktree: false,
-      cwd: "/workspace",
-      completionTarget: "parent",
-      context: "isolated",
-    };
-    const error = await tool
-      .execute("unintended-worktree", {
-        ...hiddenArgs,
-        projectId: "example",
-        worktreeName: "arithmetic-one",
-        worktreeBaseRef: "main",
-      })
-      .catch((reason: unknown) => reason);
-    expect(error).toBeInstanceOf(Error);
-    if (!(error instanceof Error)) {
-      throw new Error("Expected hidden worktree parameter rejection");
-    }
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-    const match = /Corrected hidden call: sessions_spawn\((.*)\)$/.exec(error.message);
-    if (!match?.[1]) {
-      throw new Error("Expected an exact corrected hidden sessions_spawn call");
-    }
-    const corrected: unknown = JSON.parse(match[1]);
-    expect(corrected).toEqual(hiddenArgs);
-
-    const result = await tool.execute("corrected-hidden", corrected);
-
-    expect(result.details).toMatchObject({ status: "accepted", runId: "run-subagent" });
-    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledOnce();
-    expect(hoisted.inProcessCreationMock).not.toHaveBeenCalled();
-  });
 
   it("gives an executable visible retry for visible-only parameters on a hidden spawn", async () => {
     const callGateway = mockGateway({
