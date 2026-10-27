@@ -288,7 +288,7 @@ export function buildPreparedCliRunContext(
     systemPrompt: overrides.systemPrompt ?? "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     authEpochVersion: 2,
-    claudeSkillsPluginArgs: [],
+    claudeSkillsPlugin: { args: [] },
     ...(overrides.mcpDeliveryCapture ? { mcpDeliveryCapture: true } : {}),
   };
 }
