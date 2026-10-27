@@ -36,6 +36,7 @@ import {
   listenProvider,
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
+import { productModelConfig } from "./server.chat-product.test-support.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -310,10 +311,7 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
     }
     const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
     const keyPath = await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM);
-    const modelConfig = () => ({
-      agentRuntime: { id: "openclaw" },
-      params: { transport: "sse", openaiWsWarmup: false },
-    });
+    const model = productModelConfig(state.workspaceDir, provider);
     const cfg = {
       agents: {
         ownership: "explicit",
@@ -322,22 +320,21 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
           forbidden: { model: { primary: provider.providerId + "/forbidden-effect" } },
         },
         defaults: {
-          workspace: state.workspaceDir,
-          skipBootstrap: true,
-          model: { primary: provider.modelRef },
+          ...model.defaults,
           models: {
-            [provider.modelRef]: modelConfig(),
-            [provider.providerId + "/forbidden-effect"]: modelConfig(),
+            ...model.defaults.models,
+            [provider.providerId + "/forbidden-effect"]: structuredClone(
+              model.defaults.models[provider.modelRef],
+            ),
           },
           subagents: { allowAgents: ["*"] },
         },
       },
       models: {
-        mode: "replace",
+        ...model.models,
         providers: {
           [provider.providerId]: {
-            ...provider.config,
-            request: { allowPrivateNetwork: true },
+            ...model.models.providers[provider.providerId],
             models: [
               provider.config.models[0],
               { ...provider.config.models[0], id: "forbidden-effect", name: "Forbidden effect" },

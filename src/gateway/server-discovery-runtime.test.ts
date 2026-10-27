@@ -243,7 +243,7 @@ describe("startGatewayDiscovery", () => {
     const stuck = makeDiscoveryService("stuck-discovery", {
       advertise: vi.fn(() => new Promise<void>(() => {})),
     });
-    const resultPromise = startDiscovery([stuck], { discovery: { mdns: { mode: "full" } } });
+    const resultPromise = startDiscovery([stuck]);
     await vi.advanceTimersByTimeAsync(10);
     expect(logs.warn).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(4_990);
@@ -266,9 +266,7 @@ describe("startGatewayDiscovery", () => {
       }),
     });
     const startedAt = Date.now();
-    const result = await startDiscovery([service], {
-      discovery: { mdns: { mode: "full" } },
-    });
+    const result = await startDiscovery([service]);
     const elapsedMs = Date.now() - startedAt;
 
     await result.stop();
@@ -282,9 +280,7 @@ describe("startGatewayDiscovery", () => {
     process.env.OPENCLAW_DISABLE_BONJOUR = "yes";
 
     const service = makeDiscoveryService("bonjour");
-    await startDiscovery([service], {
-      discovery: { mdns: { mode: "full" } },
-    });
+    await startDiscovery([service]);
 
     expect(service.advertise).not.toHaveBeenCalled();
   });

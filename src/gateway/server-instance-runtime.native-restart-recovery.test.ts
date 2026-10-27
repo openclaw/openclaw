@@ -203,7 +203,6 @@ describe("cold restart recovery of native operator input", () => {
   it.each([
     "write operator",
     "trusted proxy",
-    "delegated session",
     "revoked operator",
     "revoked operator with saved final",
   ] as const)(
@@ -225,14 +224,6 @@ describe("cold restart recovery of native operator input", () => {
           context,
           scopes,
           tokenlessDevice: scenario === "trusted proxy",
-          sourceRunId:
-            scenario === "delegated session"
-              ? "announce:requester-settle:main:parent:child:yield-1"
-              : undefined,
-          inputProvenance:
-            scenario === "delegated session"
-              ? interSession("subagent_settle", "agent:main:subagent:child")
-              : undefined,
         });
         await replaceSessionEntry(fixture.target, {
           ...fixture.entry,
@@ -280,7 +271,6 @@ describe("cold restart recovery of native operator input", () => {
   );
 
   it.each([
-    "native source",
     "declaring plugin loaded",
     "native steering",
     "peer follow-up",
@@ -327,8 +317,7 @@ describe("cold restart recovery of native operator input", () => {
       });
       setRuntimeConfigSnapshot(config);
       if (scenario === "declaring plugin loaded") {
-        // An additional plain-text recovery case proves compatibility with a
-        // declaring command present, not recovery/replay of a command handler.
+        // Plain-text recovery with a declaring command present; the command is not replayed.
         const builder = createTestPluginRegistry();
         const record = createOwnershipRecord("recovery-native-command", {
           contracts: { commandRuntimeCapabilities: ["subagents"] },

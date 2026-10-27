@@ -29,6 +29,7 @@ import {
   type RecoveryDiagnosticMarker,
   writeRecoveryDiagnosticProbe,
 } from "./gateway.sessions-send-recovery.diagnostics.test-support.js";
+import { productModelConfig } from "./server.chat-product.test-support.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const queuedChat = (sessionKey: string, message: string, idempotencyKey = randomUUID()) => ({
@@ -460,6 +461,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         const diagnosticPlugin = gateway.state.path("recovery-proof");
         await writeRecoveryDiagnosticProbe(diagnosticPlugin);
         const provider = buildMockOpenAiResponsesProvider(baseUrl);
+        const model = productModelConfig(gateway.state.workspaceDir, provider);
         const config = {
           diagnostics: { enabled: true },
           logging: { level: "debug", file: gateway.state.path("gateway.log") },
@@ -471,30 +473,15 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           agents: {
             ownership: "explicit",
             defaults: {
+              ...model.defaults,
               maxConcurrent: 8,
-              workspace: gateway.state.workspaceDir,
-              skipBootstrap: true,
               utilityModel: "",
               skills: [],
               model: { primary: provider.modelRef, fallbacks: [] },
-              models: {
-                [provider.modelRef]: {
-                  agentRuntime: { id: "openclaw" },
-                  params: { transport: "sse", openaiWsWarmup: false },
-                },
-              },
             },
             entries: { main: {} },
           },
-          models: {
-            mode: "replace",
-            providers: {
-              [provider.providerId]: {
-                ...provider.config,
-                request: { allowPrivateNetwork: true },
-              },
-            },
-          },
+          models: model.models,
           tools: {
             profile: "full",
             codeMode: false,
