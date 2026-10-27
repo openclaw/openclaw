@@ -24,6 +24,7 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
+import { createVisitorAccessPluginConfig } from "../test-utils/visitor-access-config.test-support.js";
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
@@ -196,7 +197,6 @@ async function createRequesterPolicySources(
     loadSessionEntryReadOnly({ agentId: "main", sessionKey: session.sessionKey }),
   ).toMatchObject({
     createdActor: { type: "human", source: "profile", id: guestProfile },
-    sandbox: "required",
   });
   const capture = (profileId: string, scopes: readonly string[]) =>
     createGitHubPublicationRequesterFixture({
@@ -392,20 +392,11 @@ export async function prepareVisitorPublicationFixture(f: {
   ]);
   const config: OpenClawConfig = {
     ...requireVisitorPublicationPolicy(f),
-    plugins: {
-      allow: ["visitor-access"],
-      slots: { memory: "none" },
-      entries: {
-        "visitor-access": {
-          enabled: true,
-          config: {
-            accountId: "publication-test",
-            appId: "publication-test",
-            apiToken: "synthetic-publication-policy-token",
-          },
-        },
-      },
-    },
+    plugins: createVisitorAccessPluginConfig(
+      "publication-test",
+      "publication-test",
+      "synthetic-publication-policy-token",
+    ),
   };
   setRuntimeConfigSnapshot(config);
   const env = {

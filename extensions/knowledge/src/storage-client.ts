@@ -1,7 +1,8 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import {
+  createCpuTrackedWorker,
   createPluginRuntimeProcessEntrypoint,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
@@ -23,7 +24,6 @@ type Call = {
 
 // SDK modules reachable from storage and registry code in the workers.
 const SDK_MODULES = [
-  "openclaw/plugin-sdk/database-engine-worker-runtime",
   "openclaw/plugin-sdk/feature-contract",
   "openclaw/plugin-sdk/routing",
   "openclaw/plugin-sdk/sqlite-worker-runtime",
@@ -95,7 +95,7 @@ export class StorageClient {
     if (this.worker) {
       return this.worker;
     }
-    const worker = new Worker(resolveRuntimeWorkerUrl(storageEntrypoint), {
+    const worker = createCpuTrackedWorker(resolveRuntimeWorkerUrl(storageEntrypoint), {
       workerData: {
         sdk: sdkUrls(),
         files: pluginFilesLocation(),

@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { beginModelCatalogRead, publishModelCatalogResult } from "../../lib/model-catalog-cache.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { createMediaQueryList } from "../../test-helpers/media-query.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "./chat-application-context.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -17,6 +18,14 @@ import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { setChatRunOwner } from "./history-merge.ts";
+import { cacheChatSessionSnapshot } from "./session-message-cache.ts";
+
+beforeEach(() => {
+  // jsdom has no Web Animations API; the browser suite owns motion proof.
+  vi.stubGlobal("matchMedia", (query: string) =>
+    createMediaQueryList(query, query === "(prefers-reduced-motion: reduce)"),
+  );
+});
 
 async function createControlsFixture(
   scope: string,
@@ -117,6 +126,28 @@ async function createControlsFixture(
 }
 
 describe("chat pane model-setting permissions", () => {
+  it("uses live permission facts while the model catalog is still unavailable", async () => {
+    const { state, selectedSession, access } =
+      await createControlsFixture("operator.sessions.write");
+    state.chatModelCatalogInitialized = false;
+    cacheChatSessionSnapshot(
+      state.chatMessagesBySession,
+      state,
+      { sessionKey: state.sessionKey },
+      {
+        messages: [],
+        pagination: { hasMore: false },
+        sessionId: selectedSession.sessionId,
+        composer: { id: "saved", provider: "openai", name: "Saved", permissionMode: "full" },
+      },
+    );
+    const controls = renderControls(state, {
+      selectedSession: { ...selectedSession, permissionMode: "workspace" },
+      permissionAccess: access.permission,
+    });
+    expect(controls.composerControls.model.snapshot).toBeDefined();
+    expect(controls.permissionPicker).toMatchObject({ mode: "workspace", disabled: false });
+  });
   it("persists an explicit Standard choice over inherited speed", async () => {
     const { state, selectedSession, container } =
       await createControlsFixture("operator.sessions.write");

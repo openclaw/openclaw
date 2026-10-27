@@ -44,13 +44,19 @@ answer that was never saved.
 
 Tool activity shows a tool-specific icon beside its purpose or details instead of
 repeating the tool name. When no distinct purpose or detail is available, the row
-shows the tool label instead of leaving the text blank. Hover the icon to see the
-exact tool name; screen readers retain that identity. Expanding an activity group keeps the individual tool details
+shows the tool label instead of leaving the text blank. Activity summaries stay
+dimmed until hover or keyboard focus brightens their text, without an icon tooltip;
+screen readers retain the exact tool identity. Expanding an activity group keeps the individual tool details
 and outcomes available. Completed group summaries retain their operation counts.
 Tool Search calls use the called tool's name, icon, and input details in tool rows
 and activity summaries. Built-in tools use semantic icons, including an envelope
 for messages, a calendar clock for scheduled jobs, and an image for image generation.
-Unknown tools use a puzzle icon unless their plugin supplies an activity icon.
+Shared tools keep their semantic icons regardless of the provider. Tools owned by
+installed third-party plugins may show the plugin logo when the Gateway has
+confirmed a non-OpenClaw ClawHub publisher. Bundled and OpenClaw-published plugins
+keep their monochrome activity icons. Missing or unreadable logos fall back to
+the plugin activity icon, then the normal tool glyph; unknown tools use a puzzle
+icon. Unknown publisher metadata does not enable branding.
 
 A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
@@ -400,17 +406,17 @@ model configuration, provider credentials, and session access rules still apply.
 Select **+** beside the chat composer to open attachments and session capabilities in one menu:
 
 - **Skills** enables or disables individual skills for this session.
-- **Plugins** enables or disables configured MCP servers for this session. A **session** tag marks values that differ from the inherited configuration.
+- **Plugins** enables or disables configured MCP servers for this session.
 - **Web search** enables or disables managed web search plus native OpenAI and Codex search for this session.
-- **Manage plugins** opens the Plugins page.
+- **Plugins → Manage plugins** opens the Plugins page.
 
-These controls are sparse session overrides, like the model and thinking settings in the chat header. A capability with no override inherits the current agent or global configuration, and OpenClaw applies the resolved values when the next run materializes its tools and skills. When overrides are set, open **+** and select **1 override** or **N overrides** at the bottom of the menu to clear all capability overrides for this session and return to inherited settings.
+These controls are sparse session overrides, like the model and thinking settings in the chat header. A capability with no override inherits the current agent or global configuration, and OpenClaw applies the resolved values when the next run materializes its tools and skills. When overrides are set, open **+** and select **Reset** at the bottom of the menu to clear all capability overrides for this session and return to inherited settings.
 
 When `tools.web.search.enabled` is `false`, **Web search** stays off in Chat and New Session. The disabled control explains the global setting. If a session has an older enable override, selecting the control clears that override while search stays off. An explicit session disable remains saved.
 
-Choose **Photos & videos** in Chat or New Session to select existing images and videos together where the browser supports mixed selection. Image-only composers keep their existing image-only picker and reject video attachments; on iPhone and iPad Safari its label remains **Attach…** rather than **Photo**. Selecting media stages it in the draft; it does not send the message.
+Choose **Media** in Chat or New Session to select existing images and videos together where the browser supports mixed selection. Image-only composers keep their existing image-only picker and reject video attachments; on iPhone and iPad Safari its label remains **Attach…** rather than **Photo**. Selecting media stages it in the draft; it does not send the message.
 
-Camera and general-file behavior are unchanged: Android Chrome, Edge, Firefox, and Samsung Internet send **Take photo** straight to the device capture input, without opening a web-camera preview first. Desktop browsers keep the preview, capture, and retake flow; iPhone and iPad Safari show **Photos & videos** beside the existing **Attach…** action, which retains native capture and general file access. Embedded native hosts keep their existing capture behavior. Canceling capture leaves the message draft unchanged.
+Camera and general-file behavior are unchanged: Android Chrome, Edge, Firefox, and Samsung Internet send **Camera** straight to the device capture input, without opening a web-camera preview first. Desktop browsers keep the preview, capture, and retake flow; iPhone and iPad Safari show **Media** beside the existing **Attach…** action, which retains native capture and general file access. Embedded native hosts keep their existing capture behavior. Canceling capture leaves the message draft unchanged.
 
 Video files selected in Chat or New Session show a small local frame preview with a play badge beside the filename. The slot keeps its size while loading. If the browser cannot decode the video promptly, the play icon remains. Removing the attachment releases its preview; generating the preview does not upload the video.
 
@@ -430,11 +436,11 @@ file, or try another browser if preparation still fails. See
 [Video preparation compatibility](/web/control-ui/chat#video-preparation-compatibility) for output
 formats, evidence, and remaining gaps.
 
-In **Plugins**, administrators can select **Add MCP server…** and choose a scope. **This session** saves the server definition globally but disabled by default, then enables it only for the current session. **Everywhere** saves the definition enabled globally. Transport, authentication, and other server-definition fields are always global. Session policy can override server enablement and deny individual tools through **Tool access**.
+In **Plugins**, administrators can select **Add MCP server** and choose a scope. **This session** saves the server definition globally but disabled by default, then enables it only for the current session. **Everywhere** saves the definition enabled globally. Transport, authentication, and other server-definition fields are always global. Session policy can override server enablement and deny individual tools.
 
-**Tool access** lists an MCP server's tools once a run has discovered them. Before that, it explains why the list is empty rather than reporting zero tools: a newly added server has not connected yet, a connected server has not finished listing its tools, or the runtime catalog predates a config change. Sessions that run on the Codex harness keep their MCP connections inside Codex, so their tools do not appear here.
+Select an MCP server's row to expand its tools inline; its switch enables or disables the server. Toggle individual tools in the expanded list once a run has discovered them. Before that, the list explains why it is empty rather than reporting zero tools: a newly added server has not connected yet, a connected server has not finished listing its tools, or the runtime catalog predates a config change. Sessions that run on the Codex harness keep their MCP connections inside Codex, so their tools do not appear here.
 
-If **Tool access** is already open, it refreshes when the current session's run finishes; you do not need to close and reopen it to see newly discovered tools.
+If a server's tools are already expanded, the list refreshes when the current session's run finishes; you do not need to collapse and expand it to see newly discovered tools.
 
 Capability toggles stay disabled until the Gateway, session, and runtime config are loaded, and read-only operators cannot change them. Adding a server requires administrator access. See [Connect MCP servers](/tools/mcp) for the Settings, CLI, and config paths.
 
@@ -720,6 +726,12 @@ Panes share outbox recovery for the same conversation. Activity in another
 conversation does not restart that recovery; reconnecting checks every saved outbox.
 Memory-only messages retained after a storage failure share that conversation queue
 and remain available when you leave and reopen the conversation in the same tab.
+They also hold automatic update reloads until sent, saved, or discarded. If Refresh
+is blocked, choose **Review pending input** to copy its text or download its
+attachments, even while the chat is locked for an update. **Keep in this tab**
+leaves the message protected. **Discard local copy and refresh** removes only
+the reviewed copy; other pending input still blocks refreshing. Manually closing or reloading the browser tab can still lose memory-only
+messages.
 
 Files remain in the composer while a submitted message waits for attachment
 storage. If you begin another draft during that wait, saving the first message

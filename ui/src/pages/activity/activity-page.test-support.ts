@@ -30,7 +30,7 @@ class UnavailableActivityCapabilities {
   connectionBootstrap!: never;
   agentSelection!: never;
   settingsAgentSelection!: never;
-  channels!: never;
+  acquireChannels!: never;
   config!: never;
   scopeUpgrade!: never;
   sidebarAttention!: never;

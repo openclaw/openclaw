@@ -126,7 +126,8 @@ vi.mock("../agents/git-coauthor-attribution.js", () => ({
   prepareGitCoauthorAttribution: mocks.prepareAttribution,
 }));
 
-vi.mock("../agents/worktrees/service.js", () => ({
+vi.mock("../agents/worktrees/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/worktrees/service.js")>()),
   managedWorktrees: {
     findLiveByOwner: mocks.findWorktree,
     findLiveById: mocks.findWorktreeById,

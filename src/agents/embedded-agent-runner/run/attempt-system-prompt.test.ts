@@ -6,10 +6,17 @@ import {
 } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import {
   clearMemoryPluginState,
   registerTestMemoryPromptBuilder,
 } from "../../../plugins/memory-state.test-fixtures.js";
+import {
+  registerMainSessionGroupWatch,
+  handleSessionStateSessionReset,
+} from "../../../sessions/session-state-events.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { expectText } from "../../../test-utils/text-assertions.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
@@ -86,7 +93,9 @@ async function preparePermissionPrompt({
   toolSearchCatalogRef,
   suppliedTools,
   setupOverrides,
+  additionalToolNames = [],
 }: {
+  additionalToolNames?: string[];
   isRawModelRun?: boolean;
   thinkLevel?: EmbeddedRunAttemptParams["thinkLevel"];
   requireExplicitMessageTarget?: boolean;
@@ -102,6 +111,7 @@ async function preparePermissionPrompt({
   const write = tool("write");
   const exec = tool("exec");
   const tools = suppliedTools ?? [
+    ...additionalToolNames.map(tool),
     read,
     write,
     exec,
@@ -174,6 +184,77 @@ async function preparePermissionPrompt({
 }
 
 describe("buildAttemptSystemPrompt", () => {
+  it("keeps watched membership and titles out of the system prefix across turns and refresh", async () => {
+    await withOpenClawTestState({ label: "watched-turn-context" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const sessionKey = "agent:main:main";
+      const groupKey = "agent:main:telegram:group:fixture";
+      const prepare = () =>
+        preparePermissionPrompt({
+          session: { sessionKey },
+          additionalToolNames: ["sessions_history", "sessions_list"],
+        });
+      const empty = await prepare();
+      const noWatches = [{ kind: "conversation-data", text: "## Watched Sessions\nnone" }];
+      expect(await registerMainSessionGroupWatch({ sessionKey: groupKey, agentId: "main" })).toBe(
+        true,
+      );
+      await upsertSessionEntryCore(
+        { sessionKey: groupKey },
+        {
+          sessionId: "watched-fixture",
+          displayName: "Original room",
+          updatedAt: 1,
+        },
+      );
+      const watched = await prepare();
+      expect(watched.prepared.systemPromptText).toBe(empty.prepared.systemPromptText);
+      expect(empty.prepared.runtimeContextFragments).toEqual(noWatches);
+      expect(watched.prepared.runtimeContextFragments).toEqual([
+        {
+          kind: "conversation-data",
+          text: expect.stringContaining(`${groupKey} — Original room`),
+        },
+      ]);
+      await upsertSessionEntryCore(
+        { sessionKey: groupKey },
+        {
+          sessionId: "watched-fixture",
+          displayName: "Renamed room",
+          updatedAt: 2,
+        },
+      );
+      const renamed = await prepare();
+      expect(renamed.prepared.systemPromptText).toBe(empty.prepared.systemPromptText);
+      expect(renamed.prepared.runtimeContextFragments?.[0]?.text).toContain("Renamed room");
+      // Permission/tool refresh must not reintroduce a volatile system section.
+      const refresh = await watched.prepared.prepareToolPrompt!([watched.read]);
+      expect(refresh(watched.prepared.systemPromptText)).not.toContain(groupKey);
+      expect(watched.prepared.runtimeContextFragments?.[0]?.text).toContain("Renamed room");
+      watched.capabilityToolNames.clear();
+      const revoke = await watched.prepared.prepareToolPrompt!([watched.read]);
+      revoke(watched.prepared.systemPromptText);
+      expect(watched.prepared.runtimeContextFragments).toEqual([]);
+      for (const options of [
+        { isRawModelRun: true },
+        { attemptOverrides: { promptMode: "minimal" as const } },
+        { skills: { prompt: "", toolsAllow: ["read"] } },
+      ]) {
+        const excluded = await preparePermissionPrompt({
+          ...options,
+          session: { sessionKey },
+          additionalToolNames: ["sessions_history"],
+        });
+        expect(excluded.prepared.systemPromptText).not.toContain(groupKey);
+        expect(excluded.prepared.runtimeContextFragments).toEqual([]);
+      }
+      await handleSessionStateSessionReset(sessionKey);
+      const removed = await prepare();
+      expect(removed.prepared.systemPromptText).toBe(empty.prepared.systemPromptText);
+      expect(removed.prepared.runtimeContextFragments).toEqual(noWatches);
+    });
+  });
+
   it("refreshes deferred reporting only when the prepared catalog is accepted", async () => {
     const deferred = tool("deferred");
     const catalogRef: ToolSearchCatalogRef = {

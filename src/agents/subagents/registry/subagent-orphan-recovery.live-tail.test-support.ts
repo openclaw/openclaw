@@ -2,7 +2,11 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { setGatewayDedupeEntry } from "../../../gateway/agent-turn/agent-job.js";
+import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../../../infra/agent-events.js";
 import {
   claimAgentRunContext,
   clearAgentRunContext,
@@ -139,6 +143,26 @@ export function registerRecoveredTerminalTests(
 
       releaseAgentRunContext(child.runId, claim);
       expect(getAgentRunContext(child.runId)).toBeDefined();
+      setGatewayDedupeEntry({
+        dedupe: new Map(),
+        key: `agent:${child.runId}`,
+        entry: {
+          ts: endedAt,
+          ok: true,
+          payload: {
+            status: "completed",
+            startedAt,
+            endedAt,
+            terminalReply: { disposition: "visible", text: "Completed mirrored child result." },
+          },
+        },
+        session: {
+          sessionKey: child.childSessionKey,
+          sessionId: child.sessionId,
+          agentId: "main",
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        },
+      });
       await testing.sweepOnceForTests();
       await fixture.settle();
 

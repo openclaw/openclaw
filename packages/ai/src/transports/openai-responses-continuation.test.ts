@@ -219,6 +219,30 @@ describe("OpenAI Responses continuation", () => {
     ).not.toBe(prefixHash);
   });
 
+  it("fingerprints mutable history without serializing the whole prefix", () => {
+    const text = "history payload".repeat(2_000);
+    const content = { type: "input_text", text };
+    const item = { type: "message", role: "user", content: [content] };
+    const input = [item];
+    const encodedText = JSON.stringify(text);
+    const expected = hash(
+      "sha256",
+      `[{"content":[{"text":${encodedText},"type":"input_text"}],"role":"user","type":"message"}]`,
+    );
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      expect(responsesContinuationPrefixFingerprint(input)).toBe(expected);
+      // The canonical writer encodes string leaves; no container needs another JSON encoding.
+      expect(
+        stringify.mock.calls.filter(([value]) => value !== null && typeof value === "object"),
+      ).toHaveLength(0);
+      content.text = `${text} edited`;
+      expect(responsesContinuationPrefixFingerprint(input)).not.toBe(expected);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
   it.each([
     {
       name: "omitted fields, sparse arrays, nonfinite numbers and signed zero",

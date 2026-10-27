@@ -92,7 +92,13 @@ it("carries preferences across a daily reset", async () => {
     },
   });
   const result = await resolve({ reset: { mode: "daily" } });
-  expectRotation(result, "daily-expired-session-id");
+  expect(result).toMatchObject({
+    isNewSession: true,
+    sessionId: "daily-expired-session-id",
+    automaticReset: { reason: "daily" },
+    persistedThinking: "high",
+    persistedVerbose: "full",
+  });
   expect(result.sessionEntry?.pendingTranscriptRepair).toBeUndefined();
   expect(result.sessionEntry?.lastRunId).toBeUndefined();
   expect(result.sessionEntry?.restartRecoveryRequesterSource).toBeUndefined();

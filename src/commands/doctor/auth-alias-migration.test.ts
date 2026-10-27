@@ -23,6 +23,7 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { writeFixtureJsonSync } from "../../cli/cli-fixtures.test-support.js";
 import type { AgentRuntimePolicyConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as sqliteSnapshot from "../../infra/sqlite-snapshot.js";
@@ -73,16 +74,13 @@ describe("Doctor stored auth alias migration", () => {
             }),
           );
           fs.mkdirSync(path.dirname(sidecar), { recursive: true });
-          fs.writeFileSync(
-            sidecar,
-            JSON.stringify({
-              version: 1,
-              profileId: "openai-codex:default",
-              provider: "openai-codex",
-              access: "synthetic-access",
-              refresh: "synthetic-refresh",
-            }),
-          );
+          writeFixtureJsonSync(sidecar, {
+            version: 1,
+            profileId: "openai-codex:default",
+            provider: "openai-codex",
+            access: "synthetic-access",
+            refresh: "synthetic-refresh",
+          });
           const sidecarBytes = fs.readFileSync(sidecar);
           const sourceBytes = fs.readFileSync(sourcePath);
           const cfg = {

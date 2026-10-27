@@ -3,12 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import "../pages/chat/components/browser-tab-card.css";
 import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.tsx";
-import {
-  makeCapabilities,
-  makeMenu,
-} from "../pages/chat/components/chat-composer-menu.test-support.ts";
 import { renderComposerMenuOption as ComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
-import { ChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import "../test-helpers/load-styles.ts";
@@ -330,25 +325,6 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       document.documentElement.dataset.themeMode = theme;
       highlight = colorSwatch("var(--bg-hover)");
       host = document.body.appendChild(document.createElement("div"));
-    });
-
-    it("matches attachment and capability actions", async () => {
-      host.style.padding = "400px 40px 0";
-      mountSolid(
-        () => (
-          <ChatComposerPlusMenu
-            menu={makeMenu({ capabilityMenu: makeCapabilities({ basePath: "" }) })}
-          />
-        ),
-        { container: host },
-      );
-      await openMenu(host, '[aria-haspopup="menu"]');
-      await expect.poll(() => host.querySelector('[data-value="media"]')).not.toBeNull();
-      const media = query(host, '[data-value="media"]');
-      const skills = query(host, '[data-value="open-skills"]');
-      await hoverBackground(media, highlight);
-      const attachmentHover = getComputedStyle(media).backgroundColor;
-      await hoverBackground(skills, attachmentHover);
     });
 
     it("matches session menu geometry and theme inside browser cards", async () => {

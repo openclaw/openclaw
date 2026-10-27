@@ -35,11 +35,7 @@ import {
   type PublicationView,
   type SessionRowView,
 } from "./session-row-publication.js";
-import {
-  registerSessionRowEncoding,
-  serializeSessionRow,
-  sessionRowEncodingBytes,
-} from "./session-row-serialization.js";
+import { serializeSessionRow, sessionRowEncodingBytes } from "./session-row-serialization.js";
 import {
   authorizeIncognitoSessionTarget,
   authorizeSessionAgentRun,
@@ -96,7 +92,7 @@ function toProjectedSessionSharingTarget(record: records.MaterializedRow): Sessi
 /** Immutable row identities own field preparation; fact indexes stay response-local. */
 function createSessionRowFactSharing<T extends GatewaySessionRow>() {
   type Fact = { encoded: string; fact: Partial<T>; rows: number | number[] };
-  const prepared = new WeakMap<T, { facts: Fact[]; bytes: number }>();
+  const prepared = new WeakMap<T, { facts: Fact[]; bytes: number; rawBytes: number }>();
   const share = (sessions: T[]) => {
     // Empty and single-row deltas cannot share facts; keep their prepared wire rows.
     if (sessions.length < 2) {
@@ -107,7 +103,8 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
     const rows: GatewaySessionRow[] = [];
     sessions.forEach((row, index) => {
       const { key, kind, updatedAt, sessionId, rowMode } = row;
-      rows.push({ key, kind, updatedAt, sessionId, rowMode });
+      const required = { key, kind, updatedAt, sessionId, rowMode };
+      rows.push(required);
       let facts = prepared.get(row)?.facts;
       if (!facts) {
         facts = [];
@@ -127,7 +124,10 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
           facts.push({ encoded, fact, rows: 0 });
           bytes += encoded.length * 2;
         }
-        prepared.set(row, { facts, bytes });
+        // Reserve a possible singleton delta without retaining its unused raw JSON.
+        // Each optional one-field object contributes its property and one comma.
+        const rawBytes = JSON.stringify(required).length * 2 + bytes - facts.length * 2;
+        prepared.set(row, { facts, bytes, rawBytes });
       }
       for (const fact of facts) {
         const candidate = candidates.get(fact.encoded);
@@ -172,7 +172,12 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
   };
   return {
     share,
-    encodingBytes: (row: T) => prepared.get(row)?.bytes ?? 0,
+    encodingBytes: (row: T) => {
+      const retained = prepared.get(row);
+      return retained
+        ? retained.bytes + Math.max(0, retained.rawBytes - sessionRowEncodingBytes(row))
+        : 0;
+    },
   };
 }
 
@@ -344,7 +349,8 @@ export function prepareProjectedSessionPresentation(
     return publicationState?.lists.get(key) ?? { key, refs: 0, bytes: 0, historyRefs: 0 };
   };
   const viewerFacts: Partial<GatewaySessionRow> = {};
-  const viewer = (value: SessionSharingTarget, sharingRole = sharing.roleForTarget(value)) => {
+  const viewer = (value: SessionSharingTarget, rowMode: PresentationOptions["rowMode"]) => {
+    const sharingRole = sharing.roleForTarget(value);
     viewerFacts.visibility = resolveSessionVisibility(value.entry);
     viewerFacts.hiddenFromInvolvingMe =
       profileId && !value.entry.incognito && !isIncognitoSessionKey(value.canonicalKey)
@@ -354,15 +360,18 @@ export function prepareProjectedSessionPresentation(
           ).get(profileId)?.hidden ?? false)
         : undefined;
     viewerFacts.sharingRole = sharingRole;
+    // Summary modes omit this diagnostic; their disclosure still uses current sharing facts.
     viewerFacts.sendDisabledReason =
-      authorizeSessionAgentRun(
-        { cfg: policyConfig, client: client ?? null, target: value },
-        { policy: sharing.policy },
-      )?.message ??
-      sharing.authorizeTarget(value, sharingRole)?.message ??
-      (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
-        ? "send blocked by session policy"
-        : null);
+      rowMode === "sidebar" || rowMode === "dashboard"
+        ? undefined
+        : (authorizeSessionAgentRun(
+            { cfg: policyConfig, client: client ?? null, target: value },
+            { policy: sharing.policy },
+          )?.message ??
+          sharing.authorizeTarget(value, sharingRole)?.message ??
+          (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
+            ? "send blocked by session policy"
+            : null));
     return viewerFacts;
   };
   const projectModels = (row: GatewaySessionRow, view?: SessionRowView) =>
@@ -500,7 +509,7 @@ export function prepareProjectedSessionPresentation(
     }
     const views = published?.views;
     const value = published?.target ?? toProjectedSessionSharingTarget(record);
-    const recipientView = client === undefined ? undefined : viewer(value);
+    const recipientView = client === undefined ? undefined : viewer(value, options.rowMode);
     const canEnsure =
       client !== undefined && preparedFacts?.activitySummary
         ? !authorizeIncognitoSessionTarget({
@@ -593,10 +602,8 @@ export function prepareProjectedSessionPresentation(
       }
     }
     if (signature !== undefined) {
-      // Publish the wire snapshot and its bytes together; mutable source aliases stay private.
-      const encoded = JSON.stringify(row);
+      // Shared-fact replies never send this raw row; encode only at the wire boundary.
       const snapshot = freezeTrustedJsonSnapshot(row);
-      registerSessionRowEncoding(snapshot, encoded);
       const view = { facts: recipientFacts, row: snapshot };
       if (variants) {
         variants.push(view);

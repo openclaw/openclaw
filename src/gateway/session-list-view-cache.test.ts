@@ -82,6 +82,25 @@ it("coalesces a turn of retention updates into one report with the final counter
   ]);
 });
 
+it("charges an encoding prepared after a shared row was admitted until its last view retires", async () => {
+  const lateRow = { ...row, label: "Late encoding" };
+  const other = { ...row, key: "other" };
+  const first = cache.get("first");
+  cache.setRows(first, [lateRow, other], true, 0, () => 30);
+  const encodedBytes = serializeSessionRow(lateRow).length * 2;
+  const singleton = cache.get("singleton");
+  cache.setRows(singleton, [lateRow], true);
+  await flushReports();
+  expect(reports.at(-1)?.estimatedBytes).toBe(first.bytes + singleton.bytes + 60 + encodedBytes);
+
+  cache.retireRows(singleton);
+  await flushReports();
+  expect(reports.at(-1)?.estimatedBytes).toBe(first.bytes + singleton.bytes + 60 + encodedBytes);
+  cache.retireRows(first);
+  await flushReports();
+  expect(reports.at(-1)?.estimatedBytes).toBe(first.bytes + singleton.bytes);
+});
+
 it("evicts least recently used views under byte pressure and releases all accounting", async () => {
   const evictionRow: GatewaySessionRow = { key: "one", kind: "direct", updatedAt: 1 };
   const rows = Array.from({ length: 1_000_000 }, () => evictionRow);

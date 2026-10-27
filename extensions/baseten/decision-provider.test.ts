@@ -27,6 +27,12 @@ const ids = [
   "decision-models/baseten-elephant-9b-latest",
   "decision-models/baseten-mammoth-27b-latest",
 ];
+const route = {
+  type: "choice",
+  choice: "billing",
+  probabilities: { billing: 0.9, support: 0.1 },
+  confidence: 0.8,
+};
 const batch: DecisionBatchV2 = {
   state: { type: "json", value: { ticket: "Refund the duplicate charge" } },
   questions: {
@@ -44,12 +50,7 @@ function reply() {
     model: "elephant-1",
     answers: {
       refund: { type: "noul", noul: 0.98 },
-      route: {
-        type: "choice",
-        choice: "billing",
-        probabilities: { billing: 0.9, support: 0.1 },
-        confidence: 0.8,
-      },
+      route,
       urgency: {
         type: "score",
         score: 0.2,
@@ -59,6 +60,13 @@ function reply() {
       },
     },
     usage: { input_tokens: 42, output_tokens: 3 },
+  };
+}
+function invalidAnswer(name: keyof ReturnType<typeof reply>["answers"], fields: object) {
+  const payload = reply();
+  return {
+    ...payload,
+    answers: { ...payload.answers, [name]: { ...payload.answers[name], ...fields } },
   };
 }
 function context(
@@ -89,24 +97,21 @@ function registered() {
   expect(decision, "Baseten must register native decisions, not chat completions").toBeDefined();
   return decision!;
 }
+function evaluateWithContext(extra: Partial<DecisionProviderContextV2>) {
+  return registered().evaluate(batch, context(undefined, extra));
+}
 beforeEach(() => {
   mocks.fetch.mockReset().mockImplementation(async () => Response.json(reply()));
   mocks.release.mockReset();
 });
 it.each(ids)("evaluates %s through registered System One transport", async (id) => {
-  const result = await registered().evaluate(batch, context(id));
-  expect(result).toEqual({
+  expect(await registered().evaluate(batch, context(id))).toEqual({
     status: "ok",
     result: {
       model: "elephant-1",
       answers: {
         refund: { type: "boolean", probabilityTrue: 0.98 },
-        route: {
-          type: "choice",
-          choice: "billing",
-          probabilities: { billing: 0.9, support: 0.1 },
-          confidence: 0.8,
-        },
+        route,
         urgency: { type: "score", score: 0.2, probabilities: [0.8, 0.2], confidence: 0.6 },
       },
       usage: { inputTokens: 42, outputTokens: 3 },
@@ -120,57 +125,34 @@ it.each(ids)("evaluates %s through registered System One transport", async (id) 
     state: '{"ticket":"Refund the duplicate charge"}',
     questions: {
       refund: { type: "noul", instructions: "Is a refund requested?" },
-      route: {
-        type: "choice",
-        instructions: "Choose a team",
-        criteria: { billing: "Payments", support: "Technical" },
-      },
-      urgency: { type: "score", instructions: "Rate urgency", criteria: ["Routine", "Emergency"] },
+      route: batch.questions.route,
+      urgency: batch.questions.urgency,
     },
+  });
+  expect(mocks.release).toHaveBeenCalledOnce();
+});
+
+it.each([
+  [401, { reason: "authentication" }],
+  [429, { reason: "rate-limited", retryAfterMs: 2000 }],
+  [422, { reason: "unsupported-input" }],
+  [503, { reason: "transport" }],
+] as const)("classifies HTTP %s without retries or leaked bodies", async (status, expected) => {
+  mocks.fetch.mockResolvedValue(
+    new Response("private provider error", { status, headers: { "retry-after": "2" } }),
+  );
+  expect(await registered().evaluate(batch, context())).toEqual({
+    status: "unavailable",
+    ...expected,
   });
   expect(mocks.fetch).toHaveBeenCalledOnce();
   expect(mocks.release).toHaveBeenCalledOnce();
 });
-
-it.each([401, 429, 422, 503])(
-  "classifies HTTP %s without retrying or exposing provider bodies",
-  async (status) => {
-    mocks.fetch.mockResolvedValue(
-      new Response("private provider error", { status, headers: { "retry-after": "2" } }),
-    );
-    expect(await registered().evaluate(batch, context())).toEqual({
-      status: "unavailable",
-      reason:
-        status === 401
-          ? "authentication"
-          : status === 429
-            ? "rate-limited"
-            : status === 422
-              ? "unsupported-input"
-              : "transport",
-      ...(status === 429 ? { retryAfterMs: 2000 } : {}),
-    });
-    expect(mocks.fetch).toHaveBeenCalledOnce();
-    expect(mocks.release).toHaveBeenCalledOnce();
-  },
-);
 it("rejects malformed distributions, usage, and reflected credentials", async () => {
   for (const payload of [
-    { ...reply(), answers: { ...reply().answers, refund: { type: "noul", noul: 2 } } },
-    {
-      ...reply(),
-      answers: {
-        ...reply().answers,
-        route: { ...reply().answers.route, probabilities: { billing: 1 } },
-      },
-    },
-    {
-      ...reply(),
-      answers: {
-        ...reply().answers,
-        urgency: { ...reply().answers.urgency, legend: { "0": "Wrong", "1": "Emergency" } },
-      },
-    },
+    invalidAnswer("refund", { noul: 2 }),
+    invalidAnswer("route", { probabilities: { billing: 1 } }),
+    invalidAnswer("urgency", { legend: { "0": "Wrong", "1": "Emergency" } }),
     { ...reply(), usage: { input_tokens: 42, output_tokens: 0 } },
     { ...reply(), model: "synthetic-baseten-key" },
   ]) {
@@ -194,24 +176,20 @@ it("does not dispatch unsupported model, input, reasoning, or missing credential
   expect(mocks.fetch).not.toHaveBeenCalled();
 });
 it("checks authority at dispatch and preserves cancellation and terminal authority errors", async () => {
-  expect(
-    await registered().evaluate(batch, context(undefined, { isAdmissible: () => false })),
-  ).toEqual({ status: "unavailable", reason: "transport" });
+  expect(await evaluateWithContext({ isAdmissible: () => false })).toEqual({
+    status: "unavailable",
+    reason: "transport",
+  });
   const authorityError = new Error("authority retired");
   await expect(
-    registered().evaluate(
-      batch,
-      context(undefined, {
-        isAdmissible: () => {
-          throw authorityError;
-        },
-      }),
-    ),
+    evaluateWithContext({
+      isAdmissible: () => {
+        throw authorityError;
+      },
+    }),
   ).rejects.toBe(authorityError);
   const controller = new AbortController();
   controller.abort(new Error("cancelled"));
-  await expect(
-    registered().evaluate(batch, context(undefined, { signal: controller.signal })),
-  ).rejects.toThrow("cancelled");
+  await expect(evaluateWithContext({ signal: controller.signal })).rejects.toThrow("cancelled");
   expect(mocks.fetch).not.toHaveBeenCalled();
 });

@@ -57,14 +57,7 @@ export async function inspectFaceTimeNativePackage(): Promise<boolean> {
   );
 }
 
-export async function inspectFaceTimeArtifacts(): Promise<{
-  nativeInstall: boolean;
-  stagedHelper: boolean;
-  helperKey: boolean;
-  helperBuildStamp: boolean;
-  stagedHelperDylibs: number;
-  cachedDriver: boolean;
-}> {
+export async function inspectFaceTimeArtifacts() {
   const readable = async (file: string, mode: number) => {
     try {
       await access(file, mode);

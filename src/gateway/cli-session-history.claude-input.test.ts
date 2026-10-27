@@ -39,6 +39,16 @@ const REQUESTER_HINT =
 const frame = (json: string) =>
   `Conversation info: ⟦openclaw:ctx⟧\n\`\`\`json\n${json}\n\`\`\`\n\n`;
 const execPrompt = LEGACY_EXEC_COMPLETION_PROMPT;
+// Saved transcripts keep the bytes the retired exec prompt builder wrote for runs without delivery.
+const SILENT_EXEC_OPENING =
+  "An async command completion event was triggered, but user delivery is disabled for this run. ";
+const SILENT_EXEC_CLOSING = " Do not mention, summarize, or reuse command output.";
+const silentExecPrompt =
+  `${SILENT_EXEC_OPENING}Handle the result internally and reply with exactly NO_REPLY as the entire final answer. ` +
+  `NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently.${SILENT_EXEC_CLOSING}`;
+const silentHeartbeatToolExecPrompt =
+  `${SILENT_EXEC_OPENING}Handle the result internally. Use heartbeat_respond to report the wake outcome. ` +
+  `Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.${SILENT_EXEC_CLOSING}`;
 const writeRows = (filePath: string, rows: readonly unknown[]) =>
   fs.writeFile(filePath, rows.map((row) => JSON.stringify(row)).join("\n"));
 
@@ -68,6 +78,12 @@ const internalInputs = [
   ],
   ["compact-output", "<local-command-stdout>Compacted </local-command-stdout>"],
   ["exec", execPrompt],
+  ["exec-silent", silentExecPrompt],
+  ["exec-silent-heartbeat-tool", silentHeartbeatToolExecPrompt],
+  [
+    "exec-silent-with-scratch",
+    `${silentExecPrompt}\n\nHeartbeat monitor scratch:\ncheck disk usage`,
+  ],
   [
     "exec-with-queued-system-event",
     `System: [2026-10-06 14:35:17 GMT+8] Control UI reaction added: 👍 by Alice on msg m1 from assistant\n\n${execPrompt}`,

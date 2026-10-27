@@ -4,6 +4,7 @@ import type { Page } from "playwright";
 export const TALK_READY_HISTORY_MESSAGE = {
   role: "assistant",
   content: "Talk history is ready.",
+  __openclaw: { id: "talk-ready" },
 };
 
 export async function waitForTalkReady(page: Page): Promise<void> {
