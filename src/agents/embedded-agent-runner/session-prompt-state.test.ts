@@ -197,7 +197,7 @@ describe("system prompt series", () => {
     "restarts on a new %s, but not when its payload enters or leaves a bounded window",
     (kind) => {
       const state = fixture.state;
-      const prepare = (entries: SessionEntry[], historyBoundaryCount: number) => {
+      const projectBoundary = (entries: SessionEntry[], historyBoundaryCount: number) => {
         const result = prepareSessionSystemPrompt({
           state,
           routeKey,
@@ -208,14 +208,14 @@ describe("system prompt series", () => {
         result.commit();
         return result;
       };
-      const first = prepare([], 1);
-      expect(prepare([historyEntry(kind, "old")], 1).systemPrompt).toBe(first.systemPrompt);
-      const compacted = prepare([historyEntry(kind, "new")], 2);
+      const first = projectBoundary([], 1);
+      expect(projectBoundary([historyEntry(kind, "old")], 1).systemPrompt).toBe(first.systemPrompt);
+      const compacted = projectBoundary([historyEntry(kind, "new")], 2);
       expect(compacted.restart).toBe(true);
       expect(compacted.systemPrompt).toBe(changed);
-      expect(prepare([], 2).systemPrompt).toBe(compacted.systemPrompt);
+      expect(projectBoundary([], 2).systemPrompt).toBe(compacted.systemPrompt);
       beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => [] });
-      expect(prepare([historyEntry(kind, "different-branch")], 2).restart).toBe(true);
+      expect(projectBoundary([historyEntry(kind, "different-branch")], 2).restart).toBe(true);
     },
   );
 
