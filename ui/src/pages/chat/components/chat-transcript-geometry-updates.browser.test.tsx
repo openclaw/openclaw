@@ -188,9 +188,13 @@ it("retains the accepted history-header space while a touch holds the older row 
   expect(Math.abs(retained.getBoundingClientRect().top - top)).toBeLessThanOrEqual(2);
 });
 
-it.each([null, 3600])(
-  "commits the cached initial viewport and overscan together at offset %s",
-  async (offset) => {
+it.each([
+  { offset: null, rowHeight: 120, cachedRows: 100, expected: [94, 95, 96, 97, 98, 99] },
+  { offset: 3600, rowHeight: 120, cachedRows: 100, expected: [27, 28, 29, 30, 31, 32, 33, 34, 35] },
+  { offset: null, rowHeight: 128, cachedRows: 3, expected: [97, 98, 99] },
+])(
+  "commits the cached initial window with $cachedRows footprints and $rowHeight px rows at $offset",
+  async ({ offset, rowHeight, cachedRows, expected }) => {
     const windows: number[][] = [];
     const observer = new MutationObserver((records) => {
       if (
@@ -213,9 +217,13 @@ it.each([null, 3600])(
     try {
       const { viewport } = await mountPane(
         offset === null,
-        120,
+        rowHeight,
         {
-          read: (key) => (key.startsWith("row:v1:") ? 120 : undefined),
+          read: (key) =>
+            key.startsWith("row:v1:") &&
+            Number(/geometry-row-(\d+):/.exec(key)?.[1]) >= 100 - cachedRows
+              ? rowHeight
+              : undefined,
           write: () => {},
           writeRows: () => {},
           invalidateRow: () => {},
@@ -226,12 +234,11 @@ it.each([null, 3600])(
         windows.filter((rows) => rows.length > 0).length,
         JSON.stringify(windows),
       ).toBeLessThanOrEqual(2);
+      expect(windows.at(-1)).toEqual(expected);
       if (offset === null) {
-        expect(windows.at(-1)).toEqual([94, 95, 96, 97, 98, 99]);
         expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBe(0);
       } else {
         expect(viewport.scrollTop).toBe(offset);
-        expect(windows.at(-1)).toEqual([27, 28, 29, 30, 31, 32, 33, 34, 35]);
       }
     } finally {
       observer.disconnect();

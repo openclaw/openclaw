@@ -26,11 +26,11 @@ export class TranscriptInitialRange {
   }
 
   extract(range: Range): number[] {
-    if (this.pending) {
+    const height = this.pending ? this.viewportRowHeight(this.virtualizer().scrollElement) : 0;
+    if (height > 0) {
       let startIndex = range.startIndex;
       if (this.tailRows) {
         const virtualizer = this.virtualizer();
-        const height = virtualizer.scrollRect?.height ?? virtualizer.options.initialRect.height;
         startIndex = range.count - 1;
         let covered = this.cachedRowSize(startIndex);
         while (startIndex > 0 && covered > 0 && covered < height) {
@@ -67,6 +67,13 @@ export class TranscriptInitialRange {
     return Array.from({ length: count }, (_, index) => range.count - count + index);
   }
 
+  private viewportRowHeight(element: HTMLDivElement | null): number {
+    // Bottom padding fills the same part of the viewport for cached and measured rows.
+    return element
+      ? element.clientHeight - (Number.parseFloat(getComputedStyle(element).paddingBottom) || 0)
+      : 0;
+  }
+
   private refresh(): void {
     const virtualizer = this.virtualizer();
     virtualizer.setOptions({
@@ -82,9 +89,8 @@ export class TranscriptInitialRange {
       !(
         this.tailRows > 0 &&
         this.tailRows < virtualizer.options.count &&
-        virtualizer.getVirtualItems().reduce((height, row) => height + row.size, 0) +
-          (Number.parseFloat(getComputedStyle(element).paddingBottom) || 0) <
-          element.clientHeight
+        virtualizer.getVirtualItems().reduce((height, row) => height + row.size, 0) <
+          this.viewportRowHeight(element)
       )
     ) {
       return false;
