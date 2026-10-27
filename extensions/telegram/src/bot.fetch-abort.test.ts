@@ -32,7 +32,7 @@ const clientFor = (options: Partial<Parameters<typeof createTelegramClientFetch>
   createTelegramClientFetch({ fetchImpl: asTelegramClientFetch(fetch), ...options });
 const responses = new Set<ServerResponse>();
 const requests: string[] = [];
-const observeResponse = (sending: Promise<Response>) =>
+const observeResponse = (sending: Promise<Pick<Response, "json">>) =>
   sending
     .then((response) => response.json())
     .then(
@@ -324,12 +324,13 @@ it.each(["headers", "body"] as const)(
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const headers = createDeferred<void>();
     const forceFallback = vi.fn(() => true);
+    const observedFetch: typeof fetch = async (input, init) => {
+      const response = await fetch(input, init);
+      headers.resolve();
+      return response;
+    };
     const client = clientFor({
-      fetchImpl: asTelegramClientFetch(async (input, init) => {
-        const response = await fetch(input, init);
-        headers.resolve();
-        return response;
-      }),
+      fetchImpl: asTelegramClientFetch(observedFetch),
       transport: { forceFallback },
     });
     const api = new Api("123:fixture", {

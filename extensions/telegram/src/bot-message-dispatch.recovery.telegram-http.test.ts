@@ -186,7 +186,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
     try {
       await Promise.race([firstArrived.promise, settledTooSoon]);
       expect(readQueuedDeliveryEntriesForTest(http.state.stateDir)).toMatchObject([
-        { retryAmbiguousFinalText: true, attemptCount: 1, maxRetries: 2 },
+        { retryAmbiguousFinalText: true, attemptCount: 1 },
       ]);
       http.holdNextCall = {
         predicate: isFinal,
@@ -198,7 +198,12 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       // The abandoned request must terminate without a later fixture acceptance.
       firstRelease.reject(new Error("discard the expired response"));
       expect(readQueuedDeliveryEntriesForTest(http.state.stateDir)).toMatchObject([
-        { retryAmbiguousFinalText: true, ambiguousTransportError: true, attemptCount: 2 },
+        {
+          retryAmbiguousFinalText: true,
+          ambiguousTransportError: true,
+          attemptCount: 2,
+          maxRetries: 2,
+        },
       ]);
       expect(modelRuns).toBe(1);
       expect(http.callsFor("sendMessage").map((call) => call.fields.text)).toEqual([
