@@ -275,15 +275,15 @@ describe("doctor config flow", () => {
 
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  it.each([false, true])(
-    "preserves explicit collaborative steering %s without a repair",
+  it.each([undefined, false, true])(
+    "does not pin or overwrite collaborative steering %s during repair",
     async (value) => {
       const config: OpenClawConfig = {
         agents: { entries: { main: {} } },
         gateway: { mode: "local" },
         messages: {
           responsePrefix: "keep-prefix",
-          queue: { allowCollaborativeSteering: value, cap: 8 },
+          queue: value === undefined ? { cap: 8 } : { allowCollaborativeSteering: value, cap: 8 },
         },
       };
 

@@ -27,7 +27,7 @@ type MessageCreatePayload = {
   member?: { roles?: string[] };
 };
 
-function createMessageDispatchData(client: Client, data: MessageCreatePayload) {
+export function createMessageDispatchData(client: Client, data: MessageCreatePayload) {
   const message = new Message(client, data as APIMessage);
   return {
     ...data,

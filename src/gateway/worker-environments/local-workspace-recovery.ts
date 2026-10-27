@@ -1,6 +1,8 @@
 import path from "node:path";
 import { resolveStateDir } from "../../config/state-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sha256File } from "../../infra/directory-durability.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { root, type Root } from "../../infra/fs-safe.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { shellEscape } from "../../shared/shell-quote.js";
@@ -159,7 +161,43 @@ export async function recoverLocalWorkspaceFile(params: {
       await stateRoot.mkdir(path.dirname(destination), { private: true });
       current();
       try {
-        await stateRoot.move(source, destination);
+        try {
+          await stateRoot.move(source, destination);
+        } catch (error) {
+          if (!hasErrnoCode(error, "EXDEV")) {
+            throw error;
+          }
+          await stateRoot.copyIn(
+            destination,
+            { root: stateRoot, relativePath: source },
+            {
+              overwrite: false,
+              maxBytes: file.stat.size,
+              preserveSourceMode: true,
+              signal: params.signal,
+            },
+          );
+          await using recovered = await stateRoot.open(destination);
+          await recovered.handle.sync();
+          const original = await sha256File(file.handle, {
+            maxBytes: file.stat.size,
+            signal: params.signal,
+          });
+          const copied = await sha256File(recovered.handle, {
+            maxBytes: file.stat.size,
+            signal: params.signal,
+          });
+          if (
+            original.bytes !== file.stat.size ||
+            copied.bytes !== original.bytes ||
+            copied.digest !== original.digest
+          ) {
+            throw new Error("Recovery copy does not match the retained file", { cause: error });
+          }
+          // A crash before source removal leaves both names; the existing both-names
+          // error surfaces those copies for operator inspection on retry.
+          await stateRoot.remove(source);
+        }
       } catch (error) {
         // Filesystem rejection after dispatch may have preserved either/both names.
         // Always disclose the stable recovery path, never infer non-publication.

@@ -107,6 +107,7 @@ function expectOwnershipCorrection(
   }
   expect(corrected.text).toBe(sanitizeAssistantVisibleStreamText(chunks.join(""), "final_answer"));
   expect(corrected.text.includes("[tool:read] {}")).toBe(!(options.visibleBefore ?? true));
+  return corrected.text;
 }
 
 it.each(["mixed", "leading", "repeated literal", "repeated hidden"])(
@@ -261,11 +262,26 @@ it.each([
   expect(markdownOwnershipWork.scannedCharacters - before).toBeLessThan(source.length * 16);
 });
 
-it("hides a completed tool call", () => {
-  const source = '[tool:write]\n{"path":"notes.txt","content":"safe"}\n\n';
-  const stream = createAssistantVisibleStreamText("final_answer");
-  streamChunks(source, 4, stream);
-  expect(stream.text).toBe("");
+it.each([
+  [
+    "an open image description when its inline destination closes",
+    "![example `x\n[tool:read] {}\nx` label",
+    "](/url)\n",
+  ],
+  [
+    "a multiline reference title when its closing quote arrives",
+    '[id]: /url\n"title\n`x\n[tool:read] {}\nx` trailing\n',
+    '"',
+  ],
+  [
+    "a reference image when its next-line destination arrives",
+    "![example `x\n[tool:read] {}\nx`][id]\n\n[id]:\n",
+    "/url\n",
+  ],
+])("recomputes final-answer ownership after %s", (_name, prefix, suffix) => {
+  expect(expectOwnershipCorrection([prefix, suffix], { replaces: true })).not.toContain(
+    "[tool:read]",
+  );
 });
 
 it.each([

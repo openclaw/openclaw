@@ -206,6 +206,16 @@ function isGatewayAuthRejection(reason: string): boolean {
   );
 }
 
+function isVerifiedUserRequiredResponse(error: unknown): boolean {
+  // The exact close-reason allowlist does not include this sentence. The
+  // structured code is the Gateway's correlated refusal, so the probe can stop.
+  return (
+    isGatewayProtocolResponseError(error) &&
+    readConnectErrorDetailCode(error.details) ===
+      ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED
+  );
+}
+
 function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] {
   const errors = asOptionalRecord(asOptionalRecord(health)?.plugins)?.errors;
   if (!Array.isArray(errors)) {
@@ -363,7 +373,11 @@ export async function confirmGatewayReachable(params: {
       : isGatewayTransportError(error) && error.code === 1008
         ? error.reason
         : undefined;
-    if ((reason && isGatewayAuthRejection(reason)) || isGatewayCredentialsRequiredError(error)) {
+    if (
+      (reason && isGatewayAuthRejection(reason)) ||
+      isGatewayCredentialsRequiredError(error) ||
+      isVerifiedUserRequiredResponse(error)
+    ) {
       result.authenticationError = formatGatewayRestartProbeError(reason ?? error);
     }
     // Updates verify with the previous package, so any protocol change between it and the

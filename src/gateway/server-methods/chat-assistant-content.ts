@@ -15,7 +15,7 @@ import { renderQrTerminal } from "../../media/qr-terminal.js";
 import {
   combineNonStreamingReplyParts,
   trimTextPreservingCode,
-} from "../../shared/text/text-projection.js";
+} from "../../shared/text/trim-code-text.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 import {
   buildManagedMediaFailureBlock,

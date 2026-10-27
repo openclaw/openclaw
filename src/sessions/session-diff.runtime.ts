@@ -413,15 +413,9 @@ export async function collectCheckoutDiff(
     unavailableReason: "unknown_commit",
   });
   const scope = params.scope ?? "all";
-  // Fresh status already inventoried both tracked and untracked changes. Reuse
-  // that read snapshot only for the same checkout/HEAD and uncommitted scope.
-  if (
-    scope === "uncommitted" &&
-    params.cleanWorktree?.root === realRoot &&
-    params.cleanWorktree.head === head
-  ) {
-    return { ...repositoryFields, files: [], additions: 0, deletions: 0 };
-  }
+  // Fresh status already inventoried tracked and untracked changes at this HEAD.
+  const cleanWorktree =
+    params.cleanWorktree?.root === realRoot && params.cleanWorktree.head === head;
   let revisions: readonly [string] | readonly [string, string] | undefined;
   if (scope === "commit") {
     if (!head || !branchBase || branchBase.base === "HEAD" || branchBase.base === head) {
@@ -458,12 +452,15 @@ export async function collectCheckoutDiff(
   } else {
     revisions = branchBase ? [branchBase.base] : undefined;
   }
+  if (cleanWorktree && revisions?.length === 1 && revisions[0] === head) {
+    return { ...repositoryFields, files: [], additions: 0, deletions: 0 };
+  }
   const budget: PatchBudget = { remaining: MAX_TOTAL_PATCH_BYTES };
   const tracked = revisions
     ? await collectTrackedFiles(root, realRoot, revisions, budget, params.summaryOnly === true)
     : { files: [], truncated: false };
   const untracked =
-    scope === "commit"
+    scope === "commit" || cleanWorktree
       ? { files: [], truncated: false }
       : await collectUntrackedFiles(root, realRoot, budget, params.summaryOnly === true);
   const files = [...tracked.files, ...untracked.files].toSorted((a, b) =>

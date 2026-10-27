@@ -553,16 +553,17 @@ export function projectionOperations(
         throw new Error("Workspace base refresh requires its own source result");
       }
       await settle();
-      // The host-produced current manifest includes unchanged inputs omitted by its delta tree.
-      // Its producer admits only selected source or already-admitted inputs under cache roots.
+      // The host snapshot admits selected source and retained cache inputs, including unchanged files.
       const snapshot = await readStagedWorkerWorkspaceResult(owner.worktree.path, stagedResultRef);
       const incoming = buildCacheInputPaths(snapshot.current.entries.map((entry) => entry.path));
-      const admitted = parseLocalWorkspaceSourcePaths(current().source_paths_json);
+      const selected = current();
+      const admitted = parseLocalWorkspaceSourcePaths(selected.source_paths_json);
+      const sourcePaths = JSON.stringify([...new Set([...admitted, ...incoming])]);
       // Admission and its pending fence settle together, including after a restart.
       await update({
         pending_ref: stagedResultRef,
         pending_target: "canonical",
-        source_paths_json: JSON.stringify([...new Set([...admitted, ...incoming])]),
+        ...(sourcePaths === selected.source_paths_json ? {} : { source_paths_json: sourcePaths }),
       });
       inputPaths = undefined;
       preparedInputPaths = undefined;
@@ -723,8 +724,6 @@ export function projectionOperations(
       await fs.rm(parent, { recursive: true, force: true });
       await store.delete(current(), owner.workerAuthority);
     },
-    rememberPaused: async (value: string | null) => {
-      await update({ paused_runtimes_json: value });
-    },
+    rememberPaused: (value: string | null) => update({ paused_runtimes_json: value }),
   };
 }

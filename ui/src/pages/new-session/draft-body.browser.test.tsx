@@ -28,8 +28,11 @@ it.each([
     const previous = root.getAttribute(name);
     root.setAttribute(name, "dark");
     onTestFinished(() => {
-      if (previous === null) root.removeAttribute(name);
-      else root.setAttribute(name, previous);
+      if (previous === null) {
+        root.removeAttribute(name);
+      } else {
+        root.setAttribute(name, previous);
+      }
     });
   }
   styles.textContent = baseStyles;
