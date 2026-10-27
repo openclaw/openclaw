@@ -14,7 +14,8 @@ import {
   selectIdleSqliteWorkerClients,
 } from "./sqlite-worker-broker-admission.js";
 import * as workerLifecycle from "./sqlite-worker-broker-lifecycle.js";
-import { resolveSqliteWorkerStoreCap, SqliteWorkerBroker } from "./sqlite-worker-broker.js";
+import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
+import { resolveSqliteWorkerStoreCap } from "./sqlite-worker-store-limits.js";
 import { createSqliteWorkerClient } from "./sqlite-worker-client.js";
 import { createSqliteWorkerClientActor } from "./sqlite-worker-client.test-support.js";
 import {
