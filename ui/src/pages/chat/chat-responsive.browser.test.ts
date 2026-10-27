@@ -1,8 +1,9 @@
 // @vitest-environment node
-// Control UI tests cover chat responsive behavior.
+
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { chromium, webkit, type Browser, type Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -60,11 +61,9 @@ async function readCornerScale(page: Page): Promise<number> {
 }
 
 function expectControlRect(rect: ControlRect | null, label: string): ControlRect {
-  if (rect === null) {
-    throw new Error(`Expected ${label} control rect`);
-  }
-  expectFiniteRect(rect);
-  return rect;
+  const defined = expectDefined(rect, `${label} control rect`);
+  expectFiniteRect(defined);
+  return defined;
 }
 
 function iconSvg() {
