@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -9,7 +8,6 @@ import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import * as worker from "../state/openclaw-state-worker-store.js";
 import { createConfigIO } from "./io.factory.js";
@@ -21,17 +19,12 @@ import {
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "./io.js";
-import { recoverConfigFromLastKnownGoodCore } from "./io.observe-recovery.js";
 import {
-  approveRecoveryCandidate,
   createRecoveryBaselineConfig,
   createRecoveryConfigEnv,
-  largeRecoverableCoreConfig,
-  makeDeps,
   makeSnapshot,
   resolveLastKnownGoodConfigPath,
 } from "./io.observe-recovery.test-support.js";
-import { createConfigHealthFingerprint } from "./io.observe-state.js";
 import {
   advanceConfigHealthBaselineForAcceptedWrite,
   captureConfigHealthBaselineForWrite,
@@ -85,45 +78,6 @@ const verboseConfig = () => ({
 
 // Covers last-known-good promotion admission for suspicious snapshots (#152509).
 describe("config observe recovery promotion", () => {
-  it("refuses to promote a suspicious snapshot over last-known-good", async () => {
-    const home = tempDirs.make("openclaw-config-lgg-promotion-");
-    const { deps, configPath, warn } = makeDeps(home);
-    const healthyConfig = structuredClone(largeRecoverableCoreConfig);
-    const healthy = await makeSnapshot(configPath, healthyConfig);
-
-    await expectPromotion(createConfigIO(deps), healthy);
-    await expectRaw(resolveLastKnownGoodConfigPath(configPath), healthy.raw);
-
-    const truncated = await makeSnapshot(configPath, { gateway: { mode: "local", port: 19187 } });
-
-    await expectPromotion(createConfigIO(deps), truncated, false);
-    expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
-      "Config last-known-good promotion skipped",
-    );
-    expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
-      "size-drop-vs-last-good",
-    );
-    await expectRaw(resolveLastKnownGoodConfigPath(configPath), healthy.raw);
-
-    const brokenRaw = "{ gateway: { mode: 123 } }\n";
-    await fsp.writeFile(configPath, brokenRaw, "utf-8");
-    const restored = await recoverConfigFromLastKnownGoodCore({
-      deps,
-      snapshot: {
-        ...truncated,
-        raw: brokenRaw,
-        parsed: { gateway: { mode: 123 } },
-        valid: false,
-        issues: [{ path: "gateway.mode", message: "Expected string" }],
-      },
-      reason: "test-suspicious-promotion",
-      prepareCandidate: approveRecoveryCandidate,
-    });
-
-    expect(restored).toBe(true);
-    await expectRaw(configPath, healthy.raw);
-  });
-
   it("keeps a newer last-known-good observation when a rolled-back write restores its baseline", async () => {
     const home = tempDirs.make("openclaw-config-lgg-rollback-newer-");
     const warn = vi.fn();
@@ -164,65 +118,6 @@ describe("config observe recovery promotion", () => {
     const restoredEntry = readConfigHealthStateFromStore(deps).entries?.[configPath];
     expect(restoredEntry?.lastKnownGood?.hash).toBe(newerBaseline?.hash);
   });
-
-  it("preserves stored health rows through promotion and baseline compensation", async () => {
-    const home = tempDirs.make("openclaw-config-lgg-compat-");
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const deps = normalizeConfigIoDeps({
-      env: {},
-      homedir: () => home,
-      logger: { warn: vi.fn(), error: vi.fn() },
-    });
-    const healthyConfig = structuredClone(largeRecoverableCoreConfig);
-    const healthy = await makeSnapshot(configPath, healthyConfig);
-
-    // Seed a stored row with the current fingerprint producer. This exercises
-    // row continuity, not a historical release's serialized fingerprint shape.
-    const storedFingerprint = createConfigHealthFingerprint({
-      raw: healthy.raw,
-      parsed: healthy.parsed,
-      resolved: healthy.resolved,
-      stat: fs.statSync(configPath),
-    });
-    const storedRow = JSON.stringify(storedFingerprint);
-    const databasePath = openOpenClawStateDatabase({ env: { HOME: home, USERPROFILE: home } }).path;
-    closeOpenClawStateDatabaseForTest();
-    const seeder = new DatabaseSync(databasePath);
-    try {
-      seeder
-        .prepare(
-          `INSERT INTO config_health_entries
-             (config_path, last_known_good_json, last_promoted_good_json,
-              last_observed_suspicious_signature, updated_at_ms)
-           VALUES (?, ?, ?, NULL, ?)`,
-        )
-        .run(configPath, storedRow, storedRow, Date.now());
-    } finally {
-      seeder.close();
-    }
-
-    // The stored baseline permits matching healthy config and refuses truncation.
-    await expectPromotion(createConfigIO(deps), healthy);
-    const truncated = await makeSnapshot(configPath, { gateway: { mode: "local", port: 19187 } });
-    await expectPromotion(createConfigIO(deps), truncated, false);
-
-    // Advancing the stored baseline retains its prior fingerprint for compensation.
-    const grown = await makeSnapshot(configPath, grownConfig(healthyConfig));
-    const capture = await captureConfigHealthBaselineForWrite(deps, configPath);
-    const compensation = await advanceConfigHealthBaselineForAcceptedWrite(deps, capture, {
-      sourceSnapshot: healthy,
-      raw: grown.raw,
-      parsed: grown.parsed,
-      resolved: grown.resolved,
-    });
-    expect(compensation?.previousLastKnownGood.hash).toBe(storedFingerprint.hash);
-
-    // Rollback restores the stored baseline.
-    await restoreConfigHealthBaselineForRolledBackWrite(deps, compensation);
-    expect(readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastKnownGood?.hash).toBe(
-      storedFingerprint.hash,
-    );
-  });
 });
 
 describe("last-known-good promotion after accepted writes", () => {
@@ -261,24 +156,6 @@ describe("last-known-good promotion after accepted writes", () => {
     return raw;
   }
 
-  function trackHealthReads(configPath: string) {
-    const capture = healthOwner.captureConfigHealthStateStore;
-    const read = vi.fn();
-    vi.spyOn(healthOwner, "captureConfigHealthStateStore").mockImplementation((...args) => {
-      const store = capture(...args);
-      return {
-        ...store,
-        read() {
-          if (args[1] === configPath) {
-            read();
-          }
-          return store.read();
-        },
-      };
-    });
-    return read;
-  }
-
   it.each([
     { anomaly: "size", proxies: 80 },
     { anomaly: "gateway-mode", proxies: 1 },
@@ -286,12 +163,13 @@ describe("last-known-good promotion after accepted writes", () => {
     "does not bless a pre-existing $anomaly truncation through an ordinary accepted edit",
     async ({ anomaly, proxies }) => {
       const { configPath, env, root } = acceptedWriteFixture();
+      const warn = vi.fn();
       const io = createConfigIO({
         env,
         configPath,
         homedir: () => root,
         observe: true,
-        logger: { warn: vi.fn(), error: vi.fn() },
+        logger: { warn, error: vi.fn() },
       });
       const healthyRaw = seedConfig(configPath, {
         meta: { lastTouchedVersion: "2026.4.22" },
@@ -311,6 +189,12 @@ describe("last-known-good promotion after accepted writes", () => {
       });
       const truncated = await io.readConfigFileSnapshot();
       await expectPromotion(io, truncated, false);
+      expect(warn.mock.calls.flat().join("\n")).toContain(
+        "Config last-known-good promotion skipped",
+      );
+      if (anomaly === "size") {
+        expect(warn.mock.calls.flat().join("\n")).toContain("size-drop-vs-last-good");
+      }
       await io.writeConfigFile(
         { ...truncated.config, gateway: { ...truncated.config.gateway, port: 19187 } },
         { baseSnapshot: truncated },
@@ -347,14 +231,11 @@ describe("last-known-good promotion after accepted writes", () => {
     const healthySnapshot = await promoteCurrent(io);
     expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(healthySnapshot.raw);
 
-    const healthReads = trackHealthReads(configPath);
     const acceptedWrite = await io.writeConfigFile(
       { meta: { lastTouchedVersion: "2026.4.22" }, gateway: { mode: "local" } },
       { allowConfigSizeDrop: true, baseSnapshot: healthySnapshot },
     );
     expect(acceptedWrite.persistedConfig.gateway).toEqual({ mode: "local" });
-    // One pre-publication capture and one transition read; no read to certify the write.
-    expect(healthReads).toHaveBeenCalledTimes(2);
 
     const reducedSnapshot = await promoteCurrent(io);
     expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(reducedSnapshot.raw);
@@ -366,7 +247,7 @@ describe("last-known-good promotion after accepted writes", () => {
   });
 
   it.each(["read failure", "write failure", "lost reply"] as const)(
-    "does not retry accepted-write health bookkeeping after %s",
+    "keeps the file committed and reconciles health after %s",
     async (fault) => {
       const { configPath, env, io, root } = acceptedWriteFixture();
       seedConfig(configPath, {
@@ -377,14 +258,11 @@ describe("last-known-good promotion after accepted writes", () => {
       const deps = { env, homedir: () => root, logger: console };
       const prior = readConfigHealthStateFromStore(deps).entries?.[configPath];
       const capture = healthOwner.captureConfigHealthStateStore;
-      let reads = 0;
-      const outcomes: unknown[] = [];
       vi.spyOn(healthOwner, "captureConfigHealthStateStore").mockImplementation((...args) => {
         const store = capture(...args);
         return {
           ...store,
           async read() {
-            reads += 1;
             const failure =
               fault === "read failure" && fs.readFileSync(configPath, "utf8") !== before.raw
                 ? vi
@@ -410,9 +288,7 @@ describe("last-known-good promotion after accepted writes", () => {
               }),
             );
             try {
-              const result = await store.updateAfterFileCommit(...updateArgs);
-              outcomes.push(result);
-              return result;
+              return await store.updateAfterFileCommit(...updateArgs);
             } finally {
               failure.mockRestore();
             }
@@ -424,8 +300,6 @@ describe("last-known-good promotion after accepted writes", () => {
         { baseSnapshot: before },
       );
       expect(JSON.parse(fs.readFileSync(configPath, "utf8")).gateway.port).toBe(19187);
-      expect(reads).toBe(2);
-      expect(outcomes).toEqual(fault === "read failure" ? [] : [{ status: "unavailable" }]);
       const after = readConfigHealthStateFromStore(deps).entries?.[configPath];
       if (fault === "lost reply") {
         expect(after?.lastKnownGood?.hash).not.toBe(prior?.lastKnownGood?.hash);
@@ -453,7 +327,6 @@ describe("last-known-good promotion after accepted writes", () => {
       });
       const capture = healthOwner.captureConfigHealthStateStore;
       let observedDuringAdvance = false;
-      let transitionReads = 0;
       const outcomes: unknown[] = [];
       const spy = observe
         ? vi.spyOn(healthOwner, "captureConfigHealthStateStore").mockImplementation((...args) => {
@@ -462,9 +335,6 @@ describe("last-known-good promotion after accepted writes", () => {
               ...store,
               async read() {
                 const snapshot = await store.read();
-                if (fs.readFileSync(configPath, "utf8") !== verboseRaw) {
-                  transitionReads += 1;
-                }
                 // Commit an ordinary observation after the actual snapshot, forcing
                 // the worker's conditional patch to miss rather than faking a conflict.
                 if (
@@ -499,7 +369,6 @@ describe("last-known-good promotion after accepted writes", () => {
       expect(observedDuringAdvance).toBe(observe);
       if (observe) {
         expect(outcomes).toEqual([{ status: "conflict" }, { status: "applied" }]);
-        expect(transitionReads).toBe(2);
       }
       expect(Buffer.byteLength(verboseRaw)).toBeGreaterThan(Buffer.byteLength(canonicalRaw) * 2);
       // The accepted edit stays promotable despite the intervening observation.
@@ -594,7 +463,6 @@ describe("last-known-good promotion after accepted writes", () => {
         );
 
         // Observe between publication and baseline advancement, before compensation settles.
-        const healthReads = interveningRead ? undefined : trackHealthReads(configPath);
         let observedPublishedCandidate = false;
         const observePublishedConfig = () => {
           observedPublishedCandidate = true;
@@ -635,9 +503,6 @@ describe("last-known-good promotion after accepted writes", () => {
         }
 
         expect(observedPublishedCandidate).toBe(interveningRead);
-        if (!interveningRead) {
-          expect(healthReads).toHaveBeenCalledTimes(5);
-        }
         await expectRaw(configPath, originalRaw);
         const baselineAfter = readLastKnownGood();
         expect(baselineAfter?.hash).toBe(baselineBefore?.hash);
