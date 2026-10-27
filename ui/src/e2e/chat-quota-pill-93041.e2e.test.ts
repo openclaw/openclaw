@@ -1,13 +1,10 @@
 // Regression #93041: provider usage stays in the desktop composer's context popover.
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { installControlUiMockBootstrapDocument } from "../test-helpers/control-ui-bootstrap-fixture.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
-  controlUiE2eWaitTimeoutMs,
   controlUiSessionUrl,
   createControlUiMockBootstrapConfig,
   installMockGateway,
@@ -25,9 +22,6 @@ const suite = createControlUiE2eSuite({
 
 const baseTime = Date.UTC(2026, 9, 21, 12);
 let artifactDir: string;
-const captureOwnershipProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const ownershipProofPhase = process.env.OPENCLAW_UI_PROOF_PHASE?.trim() || "candidate";
-let ownershipProofDir: string;
 
 function providerStatus<Usage>(
   provider: string,
@@ -194,13 +188,6 @@ function expectTextExcludes(text: string, ...excluded: string[]) {
 }
 
 const visiblePaneSelector = "openclaw-chat-pane.chat-pane-cache__pane--visible";
-const loadingWorkAuth = {
-  account: null,
-  agentId: "work",
-  displayName: null,
-  plan: null,
-  ts: null,
-};
 type ChatPane = HTMLElement & {
   state?: {
     assistantAgentId?: string | null;
@@ -213,22 +200,6 @@ type ChatPane = HTMLElement & {
     } | null;
   };
 };
-
-async function captureOwnership(
-  page: Page,
-  name: string,
-  target = page.locator(".shell"),
-  highlight?: Locator,
-) {
-  if (captureOwnershipProof) {
-    await writeFile(
-      path.join(ownershipProofDir, `${name}.png`),
-      await takeControlUiViewportScreenshot(page, target, [
-        highlight ?? page.locator(`${visiblePaneSelector} .context-ring`),
-      ]),
-    );
-  }
-}
 
 async function setSelectedAgent(page: Page, name: string): Promise<void> {
   const sidebar = page.locator("openclaw-app-sidebar");
@@ -272,6 +243,9 @@ async function visibleAuthState(page: Page) {
       displayName: provider?.displayName ?? null,
       plan: provider?.usage?.plan ?? null,
       ts: pane?.state?.modelAuthStatusResult?.ts ?? null,
+      name: pane?.state?.assistantName ?? null,
+      avatar: pane?.state?.assistantAvatar ?? null,
+      renderedAvatar: pane?.state?.chatAvatarUrl ?? null,
     };
   }, visiblePaneSelector);
 }
@@ -289,9 +263,6 @@ async function openVisibleQuotaPopover(page: Page) {
 suite.define(() => {
   beforeEach(() => {
     artifactDir = createControlUiE2eArtifactDir("chat-quota-pill-93041");
-    if (captureOwnershipProof) {
-      ownershipProofDir = path.join(artifactDir, "agent-quota-ownership", ownershipProofPhase);
-    }
   });
   it("shows high context pressure without a compact action", async () => {
     await withChat(authStatusWithUsage, highPressureSessions, async (page) => {
@@ -403,16 +374,17 @@ suite.define(() => {
   });
 
   it.each(["scoped", "unscoped"])("scopes auth, quota, and %s identity", async (bootstrapScope) => {
-    const context = await suite.browser.newContext({
-      ...createControlUiE2eContextOptions(),
-      ...(captureOwnershipProof
-        ? { recordVideo: { dir: ownershipProofDir, size: { height: 900, width: 1280 } } }
-        : {}),
-    });
-    const page = await context.newPage();
-    const video = page.video();
-    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
-    try {
+    const loadingWorkAuth = {
+      account: null,
+      agentId: "work",
+      displayName: null,
+      plan: null,
+      ts: null,
+      name: bootstrapScope === "unscoped" ? "OpenClaw" : "",
+      avatar: null,
+      renderedAvatar: null,
+    };
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         assistantAgentId: "main",
         defaultAgentId: "main",
@@ -428,19 +400,7 @@ suite.define(() => {
           },
         ],
         methodResponses: {
-          "agent.identity.get": {
-            cases: [
-              { match: { agentId: "main" }, response: { agentId: "main", name: "Main Agent" } },
-              { match: { agentId: "work" }, response: { agentId: "work", name: "Work Agent" } },
-            ],
-          },
           "agents.list": agentsList,
-          "models.authStatus": {
-            cases: [
-              { match: { agentId: "main" }, response: agentAuthStatus("main") },
-              { match: { agentId: "work" }, response: agentAuthStatus("work") },
-            ],
-          },
           "sessions.list": {
             // Static rows seed Main; response cases never seed canonical fixture state.
             ...selectedGlobalSessions,
@@ -502,25 +462,8 @@ suite.define(() => {
         }
       }, visiblePaneSelector);
       await setSelectedAgent(page, "Work");
-      await expect.poll(async () => (await visibleAuthState(page)).agentId).toBe("work");
       await gateway.waitForRequest("models.authStatus", { match: { agentId: "work" } });
       await expect.poll(() => visibleAuthState(page)).toEqual(loadingWorkAuth);
-      await expect
-        .poll(() =>
-          page.evaluate((selector) => {
-            const pane = document.querySelector<ChatPane>(selector);
-            return {
-              name: pane?.state?.assistantName ?? null,
-              avatar: pane?.state?.assistantAvatar ?? null,
-              renderedAvatar: pane?.state?.chatAvatarUrl ?? null,
-            };
-          }, visiblePaneSelector),
-        )
-        .toEqual({
-          name: bootstrapScope === "unscoped" ? "OpenClaw" : "",
-          avatar: null,
-          renderedAvatar: null,
-        });
       await gateway.emitGatewayEvent("presence", {
         presence: [
           {
@@ -531,21 +474,12 @@ suite.define(() => {
         ],
       });
       await expect.poll(() => visibleAuthState(page)).toEqual(loadingWorkAuth);
-      await captureOwnership(page, "01-work-loading");
 
       await replyToAgentMetadata(gateway, "main");
       await page.waitForTimeout(100);
-      const delayedMainState = await visibleAuthState(page);
-      expect(delayedMainState).toEqual(loadingWorkAuth);
-      expect(await visiblePane.evaluate((pane: ChatPane) => pane.state?.assistantName)).toBe(
-        bootstrapScope === "unscoped" ? "OpenClaw" : "",
-      );
-      await captureOwnership(page, "02-after-delayed-main");
+      expect(await visibleAuthState(page)).toEqual(loadingWorkAuth);
 
       await replyToAgentMetadata(gateway, "work");
-      await expect
-        .poll(() => visiblePane.evaluate((pane: ChatPane) => pane.state?.assistantName))
-        .toBe("Work Agent");
       await expect
         .poll(() => visibleAuthState(page))
         .toEqual({
@@ -554,8 +488,10 @@ suite.define(() => {
           displayName: "Work OpenAI",
           plan: "Work Team",
           ts: baseTime + 2,
+          name: "Work Agent",
+          avatar: null,
+          renderedAvatar: null,
         });
-      await captureOwnership(page, "03-work-settled");
       popover = await openVisibleQuotaPopover(page);
       expect(
         await page.locator(`${visiblePaneSelector} .context-ring`).getAttribute("aria-label"),
@@ -569,20 +505,6 @@ suite.define(() => {
       expect(settledText).toContain("work@example.test");
       expect(settledText).toContain("24%");
       expectTextExcludes(settledText, "Main Pro", "main@example.test");
-      await captureOwnership(
-        page,
-        "04-work-quota-popover",
-        popover,
-        popover.locator(".context-usage__limit").first(),
-      );
-    } finally {
-      await page.close().catch(() => {});
-      await context.close().catch(() => {});
-      if (captureOwnershipProof && video) {
-        await video
-          .saveAs(path.join(ownershipProofDir, `${ownershipProofPhase}.webm`))
-          .catch(() => {});
-      }
-    }
+    });
   });
 });

@@ -5,53 +5,29 @@ import { createPageState } from "./chat-state-page.ts";
 import { resolveChatAvatarUrl } from "./chat-state-route.ts";
 
 it.each([
-  { owner: "main", agentId: "main", name: "Observatory", avatar: "/avatar/main" },
-  { owner: "main", agentId: "other", name: "", avatar: null },
-  { owner: null, agentId: "other", name: "Observatory", avatar: null },
-  { owner: "main", agentId: "main", gatewayUrl: "wss://other.example", name: "", avatar: null },
-  {
-    owner: null,
-    agentId: "other",
-    gatewayUrl: "wss://other.example",
-    name: "Observatory",
-    avatar: null,
-  },
-])(
-  "scopes bootstrap identity from $owner to the $agentId chat",
-  ({ owner, agentId, gatewayUrl, name, avatar }) => {
-    const initial = createChatPageStateContext();
-    const context = {
-      ...initial,
-      gateway: {
-        ...initial.gateway,
-        connection: {
-          ...initial.gateway.connection,
-          gatewayUrl: gatewayUrl ?? window.location.origin.replace(/^http/u, "ws"),
-        },
-      },
-      agentSelection: {
-        ...initial.agentSelection,
-        state: { ...initial.agentSelection.state, selectedId: agentId },
-      },
-      config: {
-        ...initial.config,
-        current: {
-          ...initial.config.current,
-          assistantIdentity: normalizeAssistantIdentity({
-            agentId: owner,
-            name: "Observatory",
-            avatar: "/avatar/main",
-          }),
-        },
-      },
-    };
+  ["main", "main", undefined, "Observatory", "/avatar/main"],
+  ["main", "other", undefined, "", null],
+  [null, "other", undefined, "Observatory", null],
+  ["main", "main", "wss://other.example", "", null],
+  [null, "other", "wss://other.example", "Observatory", null],
+] as const)(
+  "scopes bootstrap identity from %s to %s over %s",
+  (owner, agentId, gatewayUrl, name, avatar) => {
+    const context = createChatPageStateContext();
+    Object.assign(context.gateway.connection, {
+      gatewayUrl: gatewayUrl ?? window.location.origin.replace(/^http/u, "ws"),
+    });
+    context.config.current.assistantIdentity = normalizeAssistantIdentity({
+      agentId: owner,
+      name: "Observatory",
+      avatar: "/avatar/main",
+    });
     const state = createPageState(
       context,
       { afterCommit: () => () => {} },
       {
         sessionKey: `agent:${agentId}:topic`,
         dispatchEvent: () => true,
-        getBoundingClientRect: () => new DOMRect(0, 0, 1440, 900),
       },
     );
     expect(state.assistantName).toBe(name);

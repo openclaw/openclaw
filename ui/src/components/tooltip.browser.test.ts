@@ -357,7 +357,7 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip browser ownership", 
   it("yields to typing outside a hover tooltip before the next Escape", async () => {
     const { userEvent } = await import("vitest/browser");
     const f = await fixture();
-    const input = element("textarea");
+    const input: HTMLTextAreaElement = document.createElement("textarea");
     f.host.append(input);
     input.focus();
     let escapes = 0;
