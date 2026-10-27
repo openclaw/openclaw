@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { setActiveEmbeddedRun as publishHarnessActiveEmbeddedRun } from "../../plugin-sdk/agent-harness-runtime.js";
+import { bindPluginGatewayAccessPolicy } from "../../plugins/gateway-access-policy-registration.js";
+import { createOwnedTestInstance } from "../../plugins/plugin-instance.test-support.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import {
   createReplyOperation,
@@ -13,6 +15,7 @@ import {
 } from "../../sessions/session-controller.message-injection.js";
 import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
+import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { createEmbeddedRunHandle, testing } from "../embedded-agent-runner/runs.test-support.js";
 import * as requesterOrigin from "../requester-origin.js";
 import {
@@ -184,6 +187,24 @@ describe("host-prepared embedded tool authority", () => {
   ] as const)(
     "allows direct harness execution only under current prepared authority (%s, %s)",
     async (authority, source) => {
+      let live = true;
+      const check = vi.fn(() => {
+        if (!live) {
+          throw new Error("Plugin grant revoked");
+        }
+      });
+      const operator = createAdmittedRunOperatorAuthority({
+        profileId: "watchdog-person",
+        scopes: ["operator.write"],
+        ...bindPluginGatewayAccessPolicy(
+          { authorize: () => ({ assertCurrent: check, signal: new AbortController().signal }) },
+          createOwnedTestInstance("watchdog-access"),
+        ).authorize({
+          config: {},
+          profile: { profileId: "watchdog-person", emails: [], assignedRole: null },
+          requiredByRole: true,
+        })!,
+      });
       await admitted(async ({ admittedRunContext, close }) => {
         const operation = source === "inherited" ? createDirectReplyOperation() : undefined;
         let observed: ReplyOperation | undefined;
@@ -201,11 +222,25 @@ describe("host-prepared embedded tool authority", () => {
               runId: attempt.runId,
               toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
             });
+            const watchdog = getGatewayToolCallerIdentity()!.watchdogAttempt!;
+            check.mockClear();
+            expect(watchdog.progressModel()).toBe(true);
+            watchdog.toolEvent({ phase: "start", toolCallId: "tool", toolName: "read" });
+            expect(watchdog.progressTool("tool", ["read"])).toBe(true);
+            watchdog.toolEvent({ phase: "end", toolCallId: "tool", toolName: "read" });
+            await observed!.watchdog.tick();
+            expect(check).not.toHaveBeenCalled();
             expect(() => withoutGatewayToolCallerIdentity(() => publish(handle))).toThrow(
               "host-admitted",
             );
             const cleanup = publish(handle);
-            cleanup?.();
+            try {
+              live = false; // No abort event: publication must consult the plugin.
+              expect(() => publish(handle)).toThrow("no longer active");
+              expect(watchdog.isCurrent()).toBe(false);
+            } finally {
+              cleanup?.();
+            }
             return "entered";
           },
         );
@@ -244,7 +279,7 @@ describe("host-prepared embedded tool authority", () => {
             "host-admitted",
           );
         }
-      });
+      }, operator);
     },
   );
 

@@ -120,6 +120,9 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   const admitted = internal.admittedRunContext;
   const instance = admitted.operationalRunInstance;
   const assertAdmitted = resolveAdmittedRunActiveAssertion(admitted, abortSignal);
+  if (!assertAdmitted) {
+    throw new Error("embedded tool authority is no longer active");
+  }
   const inherited = getGatewayToolCallerIdentity();
   const source = inherited?.operationalRunInstance === instance ? inherited : undefined;
   const { sessionId, sessionKey, sessionFile, agentId, runId } = attempt;
@@ -212,12 +215,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
     ? operation.personalToolParticipants
     : createReplyTurnParticipants(direct?.personalToolOwner);
   function assertActive() {
-    if (
-      !live ||
-      !assertAdmitted ||
-      admitted.operationalRunInstance !== instance ||
-      instance.runId !== runId
-    ) {
+    if (!live || admitted.operationalRunInstance !== instance || instance.runId !== runId) {
       throw new Error("embedded tool authority is no longer active");
     }
     assertAdmitted();
@@ -253,10 +251,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   const watchdogAttempt = turn
     ? turn.watchdog.attachAttempt({
         assertCurrent: () => {
-          if (!assertAdmitted) {
-            throw new Error("Attempt admission retired");
-          }
-          assertAdmitted();
+          assertAdmitted.assertScopeCurrent();
           assertSessionControllerOperation(turn);
         },
       })
