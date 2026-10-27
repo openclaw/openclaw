@@ -57,7 +57,8 @@ Reloading or leaving the app does not preserve this in-memory draft.
 
 New Dashboard conversations receive a title from their opening task. Later messages
 keep that title. Only an explicit rename by you or the agent through `sessions.patch`
-changes it.
+changes it. The open conversation URL updates when its name arrives or changes,
+without reloading the page or adding a browser-history entry.
 
 ## Temporary disconnections
 

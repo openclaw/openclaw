@@ -9,6 +9,7 @@ import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiSessionUrl, type ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import {
   startFixtureServer,
   stopFixtureServer,
@@ -31,23 +32,18 @@ function colorChannelToLinear(channel: number): number {
   return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
 }
 
-function colorLuminance(color: string): number {
-  const match = color.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/);
-  if (!match) {
-    throw new Error(`unsupported computed color: ${color}`);
+function colorLuminance(color: RenderedColor): number {
+  if (color.alpha !== 1) {
+    throw new Error(`transparent computed color requires compositing: ${JSON.stringify(color)}`);
   }
-  if (match[4] !== undefined && Number(match[4]) !== 1) {
-    throw new Error(`transparent computed color requires compositing: ${color}`);
-  }
-  const channels = match.slice(1, 4).map(Number);
   return (
-    0.2126 * colorChannelToLinear(channels[0]!) +
-    0.7152 * colorChannelToLinear(channels[1]!) +
-    0.0722 * colorChannelToLinear(channels[2]!)
+    0.2126 * colorChannelToLinear(color.red) +
+    0.7152 * colorChannelToLinear(color.green) +
+    0.0722 * colorChannelToLinear(color.blue)
   );
 }
 
-function colorContrast(foreground: string, background: string): number {
+function colorContrast(foreground: RenderedColor, background: RenderedColor): number {
   const lighter = Math.max(colorLuminance(foreground), colorLuminance(background));
   const darker = Math.min(colorLuminance(foreground), colorLuminance(background));
   return (lighter + 0.05) / (darker + 0.05);
@@ -729,8 +725,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
             iconSvg: true,
           });
         }
-        const colors = await readMenuColors(page);
-        expect(colorContrast(colors.foreground, colors.background)).toBeGreaterThanOrEqual(4.5);
+        const colors = await page.evaluate(resolveRenderedColors, await readMenuColors(page));
+        expect(colorContrast(colors.foreground!, colors.background!)).toBeGreaterThanOrEqual(4.5);
 
         const widgetBackgrounds = await page
           .locator('[data-test-id="board-widget"]')

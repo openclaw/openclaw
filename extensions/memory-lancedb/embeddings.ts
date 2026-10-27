@@ -367,7 +367,7 @@ export async function runWithTimeout<T>(params: {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   // Share one absolute deadline with native work so the outer race cannot
   // abandon a still-running operation after reporting a timeout.
-  const deadlineAtMs = Date.now() + timeoutMs;
+  const deadlineAtMs = performance.now() + timeoutMs;
   try {
     const result = await raceWithTimeout(
       () => params.task(deadlineAtMs),
@@ -375,12 +375,12 @@ export async function runWithTimeout<T>(params: {
       (): typeof TIMEOUT => TIMEOUT,
       { ref: false },
     );
-    if (result === TIMEOUT || Date.now() >= deadlineAtMs) {
+    if (result === TIMEOUT || performance.now() >= deadlineAtMs) {
       return { status: "timeout" };
     }
     return { status: "ok", value: result };
   } catch (error) {
-    if (Date.now() >= deadlineAtMs) {
+    if (performance.now() >= deadlineAtMs) {
       return { status: "timeout" };
     }
     throw error;

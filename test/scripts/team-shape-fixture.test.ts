@@ -231,6 +231,40 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
   });
 });
 
+it("keeps explicit session keys consistent across retained runs and automation targets", async () => {
+  const stateDir = path.join(temporary.make("team-shape-keys-"), "state");
+  const sessionKeys = [
+    "agent:main:24800000-0000-4000-8000-000000000001",
+    "agent:main:dashboard:24800001-0000-4000-8000-000000000001",
+  ];
+  await generateTeamShapeFixture({
+    ...options(
+      stateDir,
+      "--sessions 3 --runs 1 --settled-runs --approvals 0 --cron 1 --cron-announce-last --projects 0 --transcript-mib 0",
+    ),
+    sessionKeys,
+  });
+  using agent = openDb(path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite"));
+  using state = openDb(path.join(stateDir, "state/openclaw.sqlite"));
+  expect(
+    agent
+      .prepare("SELECT session_key FROM session_nodes WHERE entry_valid = 1 ORDER BY session_key")
+      .all(),
+  ).toEqual([
+    { session_key: sessionKeys[0] },
+    { session_key: sessionKeys[1] },
+    { session_key: "agent:main:team-shape-session-2" },
+  ]);
+  expect(
+    state.prepare("SELECT child_session_key, requester_session_key FROM subagent_runs").all(),
+  ).toEqual([{ child_session_key: sessionKeys[1], requester_session_key: sessionKeys[0] }]);
+  expect(
+    JSON.parse(String(state.prepare("SELECT job_json FROM cron_jobs").get()?.job_json)),
+  ).toMatchObject({
+    sessionKey: sessionKeys[1],
+  });
+});
+
 it("retains settled history and seeds disabled announce/last jobs without delivery routes", async () => {
   const stateDir = path.join(temporary.make("team-shape-settled-"), "state");
   const { summary } = await generateTeamShapeFixture(

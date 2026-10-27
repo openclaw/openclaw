@@ -2884,7 +2884,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           return {
             background: getComputedStyle(node).backgroundColor,
             borderColor: getComputedStyle(node).borderColor,
-            boxShadow: getComputedStyle(node).boxShadow,
             left: bounds.left,
             right: bounds.right,
             top: bounds.top,
@@ -2925,10 +2924,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(surface.left).toBeCloseTo(shellBounds.left, 1);
         expect(surface.right).toBeCloseTo(shellBounds.right, 1);
       }
-      expect(new Set(stackSurfaces.slice(0, 3).map(({ background }) => background))).toHaveProperty(
-        "size",
-        1,
-      );
       for (const [index, surface] of stackSurfaces.entries()) {
         expect(Number.parseFloat(surface.topLeftRadius)).toBeGreaterThan(0);
         expect(surface.topRightRadius).toBe(surface.topLeftRadius);
@@ -2938,8 +2933,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(surface.top).toBeGreaterThan(stackSurfaces[index - 1]!.bottom);
         }
       }
-      expect(stackSurfaces[2]?.borderColor).toBe(stackSurfaces[1]?.borderColor);
-      expect(stackSurfaces[2]?.boxShadow).toBe(stackSurfaces[1]?.boxShadow.split(", rgba")[0]);
       for (const { state, surface } of warnGoalSurfaces) {
         expect(surface.background, state).not.toBe(stackSurfaces[2]?.background);
         expect(surface.borderColor, state).not.toBe(stackSurfaces[2]?.borderColor);

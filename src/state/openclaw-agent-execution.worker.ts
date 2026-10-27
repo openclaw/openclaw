@@ -515,12 +515,23 @@ function openAgentDatabaseBackend(
         return domain.prepare(command);
       }
       const preparing = registry.prepare(command.type);
-      if (command.type === "session.turn.commit" && command.input.options.voiceTranscript) {
+      if (command.type === "session.turn.prepare" || command.type === "session.turn.commit") {
+        const predicate = command.input.options.sessionTurnMutation?.routingPredicate;
+        const voice =
+          command.type === "session.turn.commit" && command.input.options.voiceTranscript;
+        // Command preparation also runs after the registry is warm and before BEGIN.
         return Promise.all([
           preparing,
-          import("../config/sessions/session-turn.worker.js").then((turn) =>
-            turn.prepareVoiceTranscriptCommit(),
-          ),
+          predicate
+            ? import("../config/sessions/session-turn-predicate.js").then((turn) =>
+                turn.prepareSessionTurnRoutingDependencies(predicate),
+              )
+            : undefined,
+          voice
+            ? import("../config/sessions/session-turn.worker.js").then((turn) =>
+                turn.prepareVoiceTranscriptCommit(),
+              )
+            : undefined,
         ]).then(() => {});
       }
       const nativeBindings =

@@ -2,7 +2,32 @@ import { expect, it, vi } from "vitest";
 import {
   projectPreparedDiagnosticValue as projectPrepared,
   projectDiagnosticValue as project,
+  redactDiagnosticText,
 } from "./credential-redaction.js";
+
+it("redacts parsed diagnostic JSON without probing its records as foreign objects", () => {
+  const descriptors = vi.spyOn(Object, "getOwnPropertyDescriptor");
+  const headers = vi.spyOn(Headers.prototype, "has");
+  descriptors.mockClear();
+  let projected: string;
+  let descriptorReads: number;
+  let headerProbes: number;
+  try {
+    projected = redactDiagnosticText(
+      'payload {"error":{"code":"overloaded","details":[{"safe":"kept"}]},"type":"video","data":"QUJDRA=="}',
+    );
+    descriptorReads = descriptors.mock.calls.length;
+    headerProbes = headers.mock.calls.length;
+  } finally {
+    descriptors.mockRestore();
+    headers.mockRestore();
+  }
+  expect(projected).toBe(
+    'payload {"data":{"bytes":4,"redacted":"<redacted>"},"error":{"code":"overloaded","details":[{"safe":"kept"}]},"type":"video"}',
+  );
+  expect(descriptorReads).toBe(0);
+  expect(headerProbes).toBe(0);
+});
 
 it("projects prepared producer records exactly like the descriptor walk", () => {
   const plain = {

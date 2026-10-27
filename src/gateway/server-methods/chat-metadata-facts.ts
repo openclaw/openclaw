@@ -49,10 +49,16 @@ export function assertPreparedAgentCurrent(agent: ChatMetadataProjectionFacts) {
 }
 
 export function authStoresCurrent(facts: PreparedGenerationFacts) {
+  // Shared ownership cannot change within this synchronous scan; resolve it again next read.
+  let sharedRevision: number | undefined;
   return facts.agents.every(
     ({ owner, authStoreRevision }) =>
       authStoreRevision ===
-      `${getRuntimeAuthProfileStoreMetadataRevision(owner.agentDir)}:${getRuntimeAuthProfileStoreMetadataRevision(owner.inheritedAuthDir)}`,
+      `${getRuntimeAuthProfileStoreMetadataRevision(owner.agentDir)}:${
+        owner.inheritedAuthDir
+          ? getRuntimeAuthProfileStoreMetadataRevision(owner.inheritedAuthDir)
+          : (sharedRevision ??= getRuntimeAuthProfileStoreMetadataRevision())
+      }`,
   );
 }
 

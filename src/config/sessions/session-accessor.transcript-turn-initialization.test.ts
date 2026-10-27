@@ -8,7 +8,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { readSessionGoalOperationInDatabase } from "./goals-operations.js";
+import { readSessionGoalOperationInDatabase } from "./goals-operation-receipts.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,

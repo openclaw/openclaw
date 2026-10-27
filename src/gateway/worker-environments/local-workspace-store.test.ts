@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
+import { inflateRawSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
@@ -31,7 +32,11 @@ import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-leas
 import * as stateRead from "../../state/openclaw-state-read-operation.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
-import { encodeLocalWorkspaceTreePacks, localWorkspaceDigestBytes } from "./local-workspace-cas.js";
+import {
+  localWorkspaceDigestBytes,
+  prepareLocalWorkspaceTreePacks,
+  type LocalWorkspacePreparation,
+} from "./local-workspace-cas.js";
 import {
   prepareLocalWorkspaceContentInDatabase,
   readLocalWorkspaceTree,
@@ -78,6 +83,16 @@ function readManifestRows(db: EngineConnection, worktreeId: string) {
         .map((record) => ({ path: record.node.path, node_json: JSON.stringify(record) }))
         .toSorted((left, right) => left.path.localeCompare(right.path))
     : [];
+}
+
+function prepareTreePacks(
+  db: EngineConnection,
+  records: Parameters<typeof prepareLocalWorkspaceTreePacks>[0],
+) {
+  for (const batch of prepareLocalWorkspaceTreePacks(records)) {
+    const preparation = deserialize(inflateRawSync(batch)) as LocalWorkspacePreparation;
+    prepareLocalWorkspaceContentInDatabase(db, preparation);
+  }
 }
 
 it.each(["absent", "same", "distinct"] as const)(
@@ -267,9 +282,7 @@ it("materializes a manifest snapshot after its database closes", async () => {
         kind: "create",
         row: localWorkspaceProjectionFixture(worktreeId, root),
       });
-      prepareLocalWorkspaceContentInDatabase(database, {
-        packs: encodeLocalWorkspaceTreePacks(records),
-      });
+      prepareTreePacks(database, records);
       mutateProjection(database, worktreeId, {
         kind: "update",
         revision: 0,

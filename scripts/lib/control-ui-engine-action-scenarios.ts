@@ -2,13 +2,18 @@ import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
 import { interactionScenarios } from "./control-ui-interaction-scenarios.ts";
 
-/** Fixed work extends short actions beyond WebKit's coarse CPU sampling interval. */
+/** Fixed work spans WebKit's coarse CPU samples; probes also count hot-path operations. */
 export function createEngineActionScenarios(): readonly EngineScenario[] {
   const cron = interactionScenarios.find(({ id }) => id === "cron-search-typing-pending");
   if (!cron) {
     throw new Error("Missing shared held Cron scenario");
   }
   const cycles = 8;
+  const chatPicker = interactionScenarios.find(({ id }) => id === "model-picker-first-open-search");
+  const sessions = interactionScenarios.find(({ id }) => id === "sessions-sort");
+  if (!chatPicker || !sessions) {
+    throw new Error("Missing shared chat picker or Sessions scenario");
+  }
   const repeated = (
     [
       [
@@ -47,6 +52,74 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
   });
   return [
     ...repeated,
+    {
+      ...chatPicker,
+      id: "model-picker-navigation-cycles",
+      explicitOnly: true,
+      expected:
+        "Eighty keyboard moves advance the chat picker while retaining a visible active row.",
+      prepare: async (page, gateway) => {
+        await chatPicker.prepare(page, gateway);
+        const trigger = page.locator(".chat-pane-cache__pane--active [data-chat-model-select]");
+        if ((page.viewportSize()?.width ?? 1440) < 600) {
+          await trigger.tap();
+        } else {
+          await trigger.click();
+        }
+        const search = page.locator("[data-chat-model-search]");
+        await search.fill("Warm model");
+        await frames(page);
+      },
+      run: async (page) => {
+        const search = page.locator("[data-chat-model-search]");
+        const initial = await search.getAttribute("aria-activedescendant");
+        const value = initial
+          ? await page.locator(`[id="${initial}"]`).getAttribute("data-chat-model-option")
+          : null;
+        const index = Number(value?.replace("example/model-", ""));
+        for (let move = 0; move < 80; move++) {
+          await search.press("ArrowDown");
+        }
+        await page.waitForFunction(
+          (expected) => {
+            const id = document
+              .querySelector("[data-chat-model-search]")
+              ?.getAttribute("aria-activedescendant");
+            const row = id ? document.getElementById(id) : null;
+            const viewport = row?.closest("[data-chat-model-window]");
+            if (!row || !viewport || row.getAttribute("data-chat-model-option") !== expected) {
+              return false;
+            }
+            const bounds = row.getBoundingClientRect();
+            const clip = viewport.getBoundingClientRect();
+            return bounds.top >= clip.top - 1 && bounds.bottom <= clip.bottom + 1;
+          },
+          `example/model-${index + 80}`,
+        );
+        return { keyboardMoves: 80 };
+      },
+    },
+    {
+      ...sessions,
+      id: "sessions-sort-cycles",
+      explicitOnly: true,
+      expected: "Sixteen Updated sorts reverse the visible session order each time.",
+      run: async (page) => {
+        const first = page.locator(".sessions-table tbody .session-data-row").first();
+        for (let cycle = 0; cycle < 16; cycle++) {
+          const previous = await first.textContent();
+          await page
+            .locator(".sessions-table")
+            .getByRole("button", { name: "Updated", exact: true })
+            .click();
+          await page.waitForFunction((before) => {
+            const row = document.querySelector(".sessions-table tbody .session-data-row");
+            return row !== null && row.textContent !== before;
+          }, previous);
+        }
+        return { sorts: 16 };
+      },
+    },
     {
       ...cron,
       id: "cron-held-typing-cycles",

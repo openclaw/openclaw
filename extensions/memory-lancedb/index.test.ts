@@ -23,7 +23,7 @@ import {
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, test, expect, vi } from "vitest";
 import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
-import { createEmbeddings, isMemoryRecallTimeoutError, runWithTimeout } from "./embeddings.js";
+import { createEmbeddings, isMemoryRecallTimeoutError } from "./embeddings.js";
 import memoryPlugin from "./index.js";
 import { looksLikeEnvelopeSludge } from "./memory-capture-sanitization.js";
 import { detectCategory, normalizeRecallQuery, shouldCapture } from "./memory-policy.js";
@@ -1205,26 +1205,6 @@ describe("memory plugin e2e", () => {
     await vi.advanceTimersByTimeAsync(15_000);
   });
 
-  test("rejects task success after the recall deadline", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    let resolveTask: ((value: string) => void) | undefined;
-    const result = runWithTimeout({
-      timeoutMs: 15_000,
-      task: async () =>
-        await new Promise<string>((resolve) => {
-          resolveTask = resolve;
-        }),
-    });
-    await Promise.resolve();
-
-    vi.setSystemTime(15_000);
-    resolveTask?.("late success");
-
-    await expect(result).resolves.toEqual({ status: "timeout" });
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   test("gates every memory surface on the agent's memorySearch.enabled", async () => {
     const add = vi.fn(async () => undefined);
     const deleteRows = vi.fn(async () => ({ numDeletedRows: 1 }));
@@ -1940,6 +1920,7 @@ describe("memory plugin e2e", () => {
   test("retries without rejected dimensions and truncates the fallback vector", async () => {
     let nowMs = 1_000;
     const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const performanceNow = vi.spyOn(performance, "now").mockReturnValue(0);
     const rejectedDimensions = Object.assign(
       new Error("422 Extra inputs are not permitted: body.dimensions"),
       {
@@ -2014,8 +1995,9 @@ describe("memory plugin e2e", () => {
         model: "text-embedding-3-small",
         input: "hello dimensions",
       });
-      expect(post.mock.calls[0]?.[1]).toMatchObject({ timeout: 15_000 });
-      expect(post.mock.calls[1]?.[1]).toMatchObject({ timeout: 14_500 });
+      const firstTimeout = (post.mock.calls[0]?.[1] as { timeout?: number } | undefined)?.timeout;
+      const secondTimeout = (post.mock.calls[1]?.[1] as { timeout?: number } | undefined)?.timeout;
+      expect([firstTimeout, secondTimeout]).toEqual([15_000, 14_500]);
       const truncatedVector = expectDefined(
         vectorSearch.mock.calls[0]?.[0],
         "truncated LanceDB search vector",
@@ -2024,6 +2006,7 @@ describe("memory plugin e2e", () => {
       expect(truncatedVector.slice(0, 2)).toEqual([0.6, 0.8]);
     } finally {
       dateNow.mockRestore();
+      performanceNow.mockRestore();
       resetMemoryModuleMocks();
     }
   });

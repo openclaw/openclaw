@@ -4,7 +4,7 @@ import { deflateRawSync, zstdCompressSync, zstdDecompressSync } from "node:zlib"
 import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
 
 /** A directory's sibling treap is one immutable content-addressed pack. */
-export type LocalWorkspaceTreePack = {
+type LocalWorkspaceTreePack = {
   treeRef: string;
   records: LocalWorkspaceManifestRecord[];
   children: string[];
@@ -28,7 +28,7 @@ export function localWorkspaceDigestReference(bytes: Uint8Array): string {
   return `sha256:${Buffer.from(bytes).toString("hex")}`;
 }
 
-export function encodeLocalWorkspaceTreePacks(
+function encodeLocalWorkspaceTreePacks(
   records: ReadonlyMap<string, LocalWorkspaceManifestRecord>,
   selected?: Iterable<LocalWorkspaceManifestRecord>,
 ): LocalWorkspaceTreePack[] {

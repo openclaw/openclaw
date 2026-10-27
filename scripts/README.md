@@ -134,7 +134,9 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
 
 Use `--steps chat-typing,session-switch` for focused comparisons and `--trace`
 for separate Playwright/Inspector attribution runs. `--compare-bundle-dir` and
-`--control-bundle-dir` add candidate and A/A control builds. Reports retain the
+`--control-bundle-dir` add candidate and A/A control builds. Repeat the control
+option for interleaved base/head/base/head observations. For Workboard, repeat
+`--control-source-root` in the same order as the control bundles. Reports retain the
 metric time domain: WebKit Inspector durations are wall time, while Chromium
 CDP uses thread CPU. Untraced WebKit runs leave those counters null. `--cpu-only`
 collects WebKit's sampled process utilization without Timeline or ScriptProfiler;
@@ -156,6 +158,19 @@ do not measure a real Gateway's network latency.
 Mobile transcript-top uses a native scrollport jump because Playwright's mobile
 WebKit driver has no wheel input; it is not a wheel-latency measurement. Tracing
 omits DOM snapshots so snapshot traversal does not dominate attribution.
+
+Streaming coverage is selectable with `--steps streaming-645-deltas`,
+`streaming-645-deltas-slow`, `streaming-large-transcript`, `streaming-two-panes`,
+and `streaming-tool-code`. The slow case delivers the same 645 snapshots at
+15 Hz instead of 30 Hz; this throttles delivery, not CPU (WebKit has no matching
+Chromium CPU-throttling API). Every pane must retain native typing, render the
+complete reply, and follow its growing tail; the tool/code case keeps its tool
+output expanded. `large-transcript-fast-scroll` traverses 2,000 messages over
+120 animation frames and reports frame gaps, estimated dropped frames, mounted
+rows, and viewport-center blank samples. These are DOM geometry samples, not a
+paint filmstrip. `large-transcript-return-bottom` measures the native Scroll to
+latest action separately. WebKit lacks long-animation-frame entries; unsupported
+counters are reported explicitly rather than interpreted as zero work.
 
 Style/layout census can select the existing `settings-open`, `settings-sections`,
 and `data-*` actions together with `theme-switch-cycles` and

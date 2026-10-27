@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -370,9 +371,14 @@ describe("agent lifecycle registry", () => {
     const config = { agents: { entries: { main: {} } } };
     await setProvenance();
     const binding = await captureAgentLifecycleBinding(() => config, "main", options);
+    await readAgentDeletionJournalStatusInWorker("main", options);
+    let retainedGuard: (() => boolean) | undefined;
     await withOpenClawStateDatabaseReadSnapshot(async () => {
+      retainedGuard = AsyncLocalStorage.bind(blocked);
+      expect(blocked()).toBe(false);
       await withAgentDeletion(async (begin) => {
         const deletion = await begin(createEntry());
+        expect(blocked()).toBe(true);
         expect(await captureAgentLifecycleBinding(() => config, "main", options)).toBeUndefined();
         expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
         await withoutHostSql(() => deletion.assertCurrentAsync(), true);
@@ -380,8 +386,10 @@ describe("agent lifecycle registry", () => {
         expect(journal()).toBeUndefined();
         await expect(deletion.assertCurrentAsync()).rejects.toThrow("no longer owns");
         expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
+        expect(blocked()).toBe(false);
       });
     }, options);
+    expect(retainedGuard).toThrow("read scope is closing or closed");
   });
 
   it("uses committed journal authority for filesystem effects without host SQL", async () => {

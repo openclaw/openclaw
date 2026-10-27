@@ -296,7 +296,10 @@ the ordinary `prompt`. Saved notes are quoted reference data and may repeat on
 resumed turns; they do not assert that a native turn previously consumed them. Transport
 them through the native runtime's private context mechanism; never record them as
 operator-authored input. OpenClaw's policy and observation hooks still receive the
-complete logical prompt. Native tool actions must use the provided, run-bound
+complete logical prompt. `promptOrigin: "host"` marks a prompt OpenClaw
+generated, such as a background-command completion; mark it with the native
+runtime's non-user input marker, if it has one, so native history does not
+attribute it to the operator. Native tool actions must use the provided, run-bound
 `requestToolPermission` callback rather than creating independent approval
 authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
 grant ownership. Paired-node execution and

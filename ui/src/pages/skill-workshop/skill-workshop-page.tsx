@@ -134,12 +134,13 @@ class SkillWorkshopPageState {
     }
   }
 
-  private load(): Promise<void> {
+  private load(retry = false): Promise<void> {
     const scope = this.scope;
     if (!scope) {
       return Promise.resolve();
     }
-    void this.context.runtimeConfig.ensureLoaded();
+    // Retry is the user's explicit reread; ensure waits out a recent failed read.
+    void (retry ? this.context.runtimeConfig.refresh() : this.context.runtimeConfig.ensureLoaded());
     const result = loadWorkshopSnapshot(scope.client, scope.agentId).then((snapshot) => {
       if (this.scope !== scope) {
         return null;
@@ -484,7 +485,7 @@ class SkillWorkshopPageState {
       }),
       learningBusy: this.learningBusy,
       learningError: this.learningError,
-      onRetry: () => void this.load(),
+      onRetry: () => void this.load(true),
       onSelectSkill: this.selectSkill,
       onSelectDraft: this.selectDraft,
       onOpen: (target: WorkshopViewerTarget) => void this.open(target),
