@@ -68,15 +68,15 @@ const state = openOpenClawStateDatabase({ env });
 const options = { agentId: "inspection-close-benchmark", env };
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 const originalReaddir = fs.promises.readdir;
-// oxlint-disable-next-line typescript/unbound-method -- The wrapper below rebinds this to its database with call().
-const originalPrepare = DatabaseSync.prototype.prepare;
+const prepareDescriptor = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "prepare");
+assert(prepareDescriptor && typeof prepareDescriptor.value === "function");
 let counting = false;
 let integrityChecks = 0;
 DatabaseSync.prototype.prepare = function (sql, ...args) {
   if (counting && /^PRAGMA\s+(?:integrity_check|foreign_key_check)\b/i.test(sql.trim())) {
     integrityChecks++;
   }
-  return originalPrepare.call(this, sql, ...args);
+  return prepareDescriptor.value.call(this, sql, ...args);
 };
 const results = [];
 const hostLoadBefore = loadavg();
@@ -183,7 +183,7 @@ try {
 } finally {
   counting = false;
   fs.promises.readdir = originalReaddir;
-  DatabaseSync.prototype.prepare = originalPrepare;
+  Object.defineProperty(DatabaseSync.prototype, "prepare", prepareDescriptor);
   Object.defineProperty(process, "platform", originalPlatform);
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
