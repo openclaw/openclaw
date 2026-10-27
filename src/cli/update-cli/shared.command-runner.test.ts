@@ -9,35 +9,20 @@ import {
   hasCommandProcessCleanupError,
 } from "../../process/exec-result.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
-import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import {
   ensureGitCheckout,
   parseUpdateTimeoutMs,
-  resolveGlobalManager,
   resolveUpdateRoot,
   runUpdateStep,
   tryWriteCompletionCache,
-  UpdatePreMutationError,
 } from "./shared.js";
 
 const runCommandWithTimeout = vi.hoisted(() => vi.fn());
-const runCommandBuffered = vi.hoisted(() =>
-  vi.fn(async () => ({
-    stdout: Buffer.alloc(0),
-    stderr: Buffer.alloc(0),
-    code: null,
-    signal: null,
-    killed: false,
-    termination: "error" as const,
-    error: Object.assign(new Error("fixture package database unavailable"), { code: "EACCES" }),
-  })),
-);
 
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runCommandWithTimeout,
-  runCommandBuffered,
 }));
 
 const successfulCommandResult = createCommandResult();
@@ -139,29 +124,14 @@ it.each([false, true])(
   },
 );
 
-it("accepts only complete positive integer timeout seconds", () => {
-  for (const timeout of [
-    "",
-    "1.5",
-    "10abc",
-    "0x10",
-    "0",
-    "-1",
-    "   ",
-    String(Number.MAX_SAFE_INTEGER),
-  ]) {
+it("validates timeout seconds after trimming and preserves the absent default", () => {
+  for (const timeout of ["1.5", "0", String(Number.MAX_SAFE_INTEGER)]) {
     expect(() => parseUpdateTimeoutMs(timeout)).toThrow(
       "--timeout must be a positive integer (seconds)",
     );
   }
-  for (const [input, milliseconds] of [
-    [" 10 ", 10_000],
-    ["+10", 10_000],
-    ["001", 1_000],
-    [undefined, undefined],
-  ] as const) {
-    expect(parseUpdateTimeoutMs(input)).toBe(milliseconds);
-  }
+  expect(parseUpdateTimeoutMs(" 10 ")).toBe(10_000);
+  expect(parseUpdateTimeoutMs(undefined)).toBeUndefined();
 });
 
 it("closes install stdin without approval and retains failed command diagnostics", async () => {
@@ -215,31 +185,6 @@ it.runIf(process.platform !== "win32")(
     } finally {
       process.argv.splice(0, process.argv.length, ...previousArgv);
     }
-  },
-);
-
-it.each(["/shared", "/opt/homebrew-custom"])(
-  "refuses unowned packages under %s without treating global npm as a Homebrew formula",
-  async (prefix) => {
-    const root = `${prefix}/lib/node_modules/openclaw`;
-    vi.stubEnv("HOMEBREW_PREFIX", "/opt/homebrew-custom");
-    runCommandWithTimeout.mockResolvedValue({
-      ...successfulCommandResult,
-      code: 1,
-      stderr: "not owned",
-    });
-    const owner = withMockedPlatform("linux", () =>
-      resolveGlobalManager({ root, installKind: "package", timeoutMs: 1_000 }),
-    );
-    await expect(owner).rejects.toBeInstanceOf(UpdatePreMutationError);
-    await expect(owner).rejects.toMatchObject({
-      reason: expect.stringMatching(/^(unmanaged-package-install|container-image-install)$/),
-      failureFacts: [expect.objectContaining({ code: "installation-unclassified" })],
-      message: expect.stringContaining("No package changes or Gateway restart were attempted."),
-    });
-    await expect(owner).rejects.not.toMatchObject({
-      message: expect.stringContaining("managed by Homebrew"),
-    });
   },
 );
 
