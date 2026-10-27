@@ -210,7 +210,11 @@ try {
   };
   if (values.mode === "counts") {
     StatementSync.prototype.iterate = function (...bindings) {
-      const iterator = Reflect.apply(nativeIterate, this, bindings);
+      const iterator: ReturnType<typeof nativeIterate> = Reflect.apply(
+        nativeIterate,
+        this,
+        bindings,
+      );
       if (!measured || !this.sourceSQL.includes("trajectory_runtime_events")) {
         return iterator;
       }
