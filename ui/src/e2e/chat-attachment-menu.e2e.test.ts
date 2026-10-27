@@ -259,9 +259,15 @@ suite.define(() => {
                   .getAttribute("data-phase"),
               )
               .toBe("open");
-            const rowHeight = (await items.first().boundingBox())!.height;
-            expect(rowHeight).toBeGreaterThanOrEqual(44);
-            expect(rowHeight).toBeLessThan(64);
+            const standardRow = page.getByRole("menuitem", { name: "Skills", exact: true });
+            for (const column of [".oc-menu-item__icon", ".oc-menu-item__label"]) {
+              const expected = (await standardRow.locator(column).boundingBox())!;
+              const actual = (await items.first().locator(column).boundingBox())!;
+              expect(actual.x).toBeCloseTo(expected.x, 1);
+            }
+            expect((await items.first().boundingBox())!.height).toBe(
+              (await standardRow.boundingBox())!.height,
+            );
           }
           await page.keyboard.press("Escape");
           await attachmentOption(page, "file").waitFor({ state: "hidden" });
