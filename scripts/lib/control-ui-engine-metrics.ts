@@ -13,7 +13,12 @@ export type EngineMetrics = {
   styleCount: number | null;
   jsHeapUsedBytes: number | null;
   cpuMs: number | null;
-  sampledCpu?: { coveredMs: number; meanUsagePercent: number; sampleCount: number };
+  sampledCpu?: {
+    coveredMs: number;
+    meanUsagePercent: number;
+    sampleCount: number;
+    bracketedAction: boolean;
+  };
   notes: string[];
 };
 
@@ -85,6 +90,7 @@ async function startWebKitMeasurement(page: Page, trace: boolean) {
   const records: WebKitRecord[] = [];
   const scriptEvents: WebKitScriptEvent[] = [];
   const cpuSamples: WebKitCpuEvent[] = [];
+  let nextCpuSample: (() => void) | undefined;
   let samples: unknown;
   const record = ({ record: entry }: WebKitEvents["Timeline.eventRecorded"]) => records.push(entry);
   const script = ({ event }: WebKitEvents["ScriptProfiler.trackingUpdate"]) =>
@@ -92,7 +98,22 @@ async function startWebKitMeasurement(page: Page, trace: boolean) {
   const complete = (event: WebKitEvents["ScriptProfiler.trackingComplete"]) => {
     samples = event.samples;
   };
-  const cpu = ({ event }: WebKitEvents["CPUProfiler.trackingUpdate"]) => cpuSamples.push(event);
+  const cpu = ({ event }: WebKitEvents["CPUProfiler.trackingUpdate"]) => {
+    cpuSamples.push(event);
+    nextCpuSample?.();
+  };
+  const waitForCpuSample = () =>
+    new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        nextCpuSample = undefined;
+        reject(new Error("WebKit CPUProfiler did not deliver a boundary sample within 5 s"));
+      }, 5_000);
+      nextCpuSample = () => {
+        nextCpuSample = undefined;
+        clearTimeout(timeout);
+        resolve();
+      };
+    });
   session.on("Timeline.eventRecorded", record);
   session.on("ScriptProfiler.trackingUpdate", script);
   session.on("ScriptProfiler.trackingComplete", complete);
@@ -116,6 +137,9 @@ async function startWebKitMeasurement(page: Page, trace: boolean) {
     }
     await session.send("CPUProfiler.startTracking");
     started.push("CPUProfiler.stopTracking");
+    if (!trace && cpuSamples.length === 0) {
+      await waitForCpuSample();
+    }
   } catch (error) {
     await Promise.allSettled(started.map((method) => session.send(method)));
     if (timelineEnabled) {
@@ -128,6 +152,13 @@ async function startWebKitMeasurement(page: Page, trace: boolean) {
     async stop(): Promise<EngineMeasurement> {
       let stopped = false;
       try {
+        // Bracket the whole action and keep at least one second of samples;
+        // dropping its variable last interval can masquerade as a CPU win.
+        if (!trace) {
+          do {
+            await waitForCpuSample();
+          } while (cpuSamples.at(-1)!.timestamp - cpuSamples[0]!.timestamp < 1);
+        }
         // The local HTTP initial navigation/reload retains its target in the
         // pinned build. Fail on a process swap rather than report partial boot.
         // eslint-disable-next-line no-underscore-dangle -- A target swap invalidates this private-session measurement.
@@ -167,6 +198,7 @@ async function startWebKitMeasurement(page: Page, trace: boolean) {
                 coveredMs,
                 meanUsagePercent: (sampledCpuMs / coveredMs) * 100,
                 sampleCount: cpuSamples.length,
+                bracketedAction: !trace,
               }
             : undefined;
         return {
@@ -189,9 +221,9 @@ async function startWebKitMeasurement(page: Page, trace: boolean) {
                     "Timeline/ScriptProfiler and stack sampling add overhead. Compare timings in separate untraced runs.",
                   ]
                 : [
-                    "CPU-only collection omits Timeline and ScriptProfiler; their counters are null.",
+                    "CPU-only collection omits Timeline and ScriptProfiler; their counters are null. Samples bracket the action with at least one second of coverage. Short actions include idle time until that minimum; longer actions include up to one trailing sampling interval.",
                   ]),
-              "CPUProfiler samples are process/thread usage percentages, not cumulative CPU time. cpuMs is an estimate over sampledCpu.coveredMs only when that interior span is at least 1 s; boundary intervals are excluded. Short spans, task and heap counters are null. Do not compare WebKit wall durations with Chromium threadTicks as CPU ratios.",
+              "CPUProfiler samples are process/thread usage percentages, not cumulative CPU time. cpuMs is an estimate over sampledCpu.coveredMs only when that span is at least 1 s; the first sample's unknown preceding interval is excluded. Short spans, task and heap counters are null. Do not compare WebKit wall durations with Chromium threadTicks as CPU ratios.",
             ],
           },
           ...(trace ? { timeline: records, profile: { scriptEvents, samples, cpuSamples } } : {}),
