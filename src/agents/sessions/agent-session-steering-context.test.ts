@@ -1,14 +1,22 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readRuntimePromptMediaFacts } from "../../media/media-facts.js";
-import { buildInterSessionPromptContext } from "../../sessions/input-provenance.js";
+import {
+  annotateInterSessionPromptText,
+  buildInterSessionPromptContext,
+} from "../../sessions/input-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  sanitizeSessionHistory,
+  validateReplayTurns,
+} from "../embedded-agent-runner/replay-history.js";
 import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { installAttemptPermissionPrompt } from "../embedded-agent-runner/run/attempt-permission-prompt.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
@@ -362,6 +370,94 @@ it("persists retained steering context through session reopen", async () => {
   expect(replay).toContain("signature");
   expect(replay.indexOf("keep violet")).toBeLessThan(replay.lastIndexOf("signature"));
 });
+
+it.each(["sessions_send", "subagent_settle"] as const)(
+  "preserves the provider prefix after a steered %s delivery is replayed in a fresh run",
+  async (sourceTool) => {
+    const provenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:main:subagent:synthetic-child",
+      sourceChannel: "internal",
+      sourceTool,
+    };
+    const text = "The delegated task is complete.";
+    // sessions_send prepares its envelope before dispatch; completion steering supplies provenance.
+    const delivered =
+      sourceTool === "sessions_send" ? annotateInterSessionPromptText(text, provenance) : text;
+    const held = holdInitialRequest("Completion received");
+    const { session, sessionManager } = await createTestSession();
+    const registry = createUserTranscriptContextRegistry();
+    guardSessionManager(sessionManager, {
+      onUserMessagePersisted: (persisted, runtime) => {
+        if (runtime) {
+          registry.record(runtime, persisted);
+        }
+      },
+    });
+    const boundaryOptions = {
+      appendOnlyRuntimeContext: true,
+      inHistorySystemUpdates: true,
+      sessionVersion: 4,
+      timezone: "UTC",
+    };
+    setSteeringRuntimeContextRetention(session, true);
+    installBoundary(session, () => ({
+      ...boundaryOptions,
+      userTranscriptContexts: registry.list(),
+    }));
+    await withHeldPrompt(session, held, async (queue) => {
+      await queue(delivered, {
+        waitForTranscriptCommit: true,
+        userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+          input: {
+            text: delivered,
+            provenance,
+            idempotencyKey: "synthetic-completion:user",
+            timestamp: 1_700_000_000_000,
+          },
+          target: createTestUserTurnTranscriptTarget(),
+        }),
+      });
+    });
+    expect(held.requests).toHaveLength(2);
+    const first = held.requests[1]!;
+    session.dispose();
+
+    const replayRequests = captureResponses();
+    const { session: reopened } = await createTestSession({ sessionManager });
+    const sanitized = await sanitizeSessionHistory({
+      messages: reopened.messages,
+      modelApi: testModel.api,
+      sessionManager,
+      sessionId: sessionManager.getSessionId(),
+    });
+    reopened.agent.state.messages = await validateReplayTurns({
+      messages: sanitized,
+      modelApi: testModel.api,
+    });
+    installBoundary(reopened, () => boundaryOptions);
+    await reopened.prompt("Continue the discussion.");
+    expect(replayRequests).toHaveLength(1);
+
+    const captureInput = async (context: Context) => {
+      let input: unknown[] | undefined;
+      const stream = streamOpenAIResponses({ ...testModel, api: "openai-responses" }, context, {
+        apiKey: "fixture-transport-value",
+        onPayload(payload) {
+          input = (payload as { input: unknown[] }).input;
+          throw new Error("stop after payload capture");
+        },
+      });
+      expect((await stream.result()).stopReason).toBe("error");
+      expect(input).toBeDefined();
+      return input!;
+    };
+    const before = await captureInput(first);
+    const after = await captureInput(replayRequests[0]!);
+    expect(JSON.stringify(after.slice(0, before.length))).toBe(JSON.stringify(before));
+    expect(JSON.stringify(before)).toContain(`sourceTool=${sourceTool}`);
+  },
+);
 
 it.each(
   [3, 4].flatMap((sessionVersion) =>
