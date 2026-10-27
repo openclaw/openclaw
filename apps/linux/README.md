@@ -474,7 +474,7 @@ guard with `definition: null`, so it refuses if a service has appeared since
 setup observed no service. The app records an informational marker; it never uses
 that marker as permission to change a service automatically.
 
-On Linux and macOS, **Use bundled runtime…** appears in the tray whenever the existing Gateway uses
+On Linux, Windows, and macOS, **Use bundled runtime…** appears in the tray whenever the existing Gateway uses
 another runtime, including Node, an older bundled runtime, or an operator-selected
 runtime. The action shows the current runtime and asks for confirmation. It
 passes that observation's service definition and runtime pin to the CLI's

@@ -634,31 +634,6 @@ fn binding_does_not_follow_an_operator_launcher_symlink() {
     assert_eq!(fs::read(&target).unwrap(), original);
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-fn detached_runtime_action_delivers_the_complete_error_to_its_presenter() {
-    use crate::gateway_operation_queue::{GatewayOperationError, GatewayOperationQueue};
-    let fixture = Fixture::new();
-    let error = "The Gateway is paused. Start it before choosing Use bundled runtime.\nTo select the previous runtime manually, run:\nopenclaw gateway install --force --runtime node";
-    let (sender, receiver) = std::sync::mpsc::channel();
-    let queue = GatewayOperationQueue::new(
-        move |_, _| Err(error.to_string()),
-        move |failure| {
-            assert!(sender.send(failure).is_ok());
-        },
-    );
-    queue.submit_runtime(crate::RuntimeAction {
-        cli: fixture.cli(),
-        observation: Observation(fixture.healthy()),
-    });
-    match receiver.recv_timeout(Duration::from_secs(1)).unwrap() {
-        GatewayOperationError::Runtime(message) => assert_eq!(message, error),
-        GatewayOperationError::Action(_) => {
-            panic!("runtime guidance reached the generic error presenter")
-        }
-    }
-}
-
 #[test]
 fn healthy_activation_persists_previous_selection_and_failure_keeps_it() {
     const CHILD: &str = "OPENCLAW_RETENTION_ACTIVATION_CHILD";

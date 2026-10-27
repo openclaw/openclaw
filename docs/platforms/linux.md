@@ -185,7 +185,7 @@ separate from the native **OpenClaw** app.
 
 ### Use the bundled runtime
 
-On Linux, fresh local setup installs the Gateway on the selected bundled runtime
+On Linux, Windows, and macOS Tauri builds, fresh local setup installs the Gateway on the selected bundled runtime
 through the standard CLI. The install guard requires the service to still
 be absent. A service that appears during setup blocks that installation. The app's
 runtime marker is informational and never authorizes automatic service changes.
@@ -194,7 +194,7 @@ For any existing Gateway that uses another runtime, choose **Use bundled
 runtime…** in the tray menu. This includes Node, an older bundled Bun after an
 app update, and an operator-selected runtime. The confirmation shows the current
 runtime. The CLI install checks that the service definition and runtime pin still
-match what you confirmed before switching to the current bundled Bun. If either
+match what you confirmed before switching to the app's bundled runtime. If either
 changed, the action refuses. A paused or stopped Gateway stays stopped; choose
 **Start Gateway** before switching runtimes.
 
@@ -209,14 +209,16 @@ openclaw gateway install --force --runtime node
 
 To return to a particular previous executable, use
 `openclaw gateway install --force --runtime-path /absolute/path/to/node-or-bun`.
-The CLI owns service installation. Switching an existing Gateway's runtime
-leaves its CLI launcher unchanged.
+The CLI owns service installation. Successful activation also refreshes the
+app-managed CLI launcher; independently installed CLI launchers remain under
+their original owner.
 
 Startup and app updates never change an existing Gateway service or runtime pin.
 After an app update, the current service keeps its existing runtime until you
 choose **Use bundled runtime…** again. Immutable app runtime directories are
-retained, so updates never remove a runtime referenced by a service. These actions
-are Linux-only; macOS Tauri keeps its existing behavior, separate from the
+retained, so updates never remove a runtime referenced by a service. Windows
+Tauri uses this action to activate its updated JIT runtime too; Windows AOT is
+unsupported. The macOS Tauri app remains separate from the
 [native macOS app](/platforms/mac/bundled-gateway).
 
 ### Desktop sharing

@@ -27,7 +27,7 @@ const QUICKCHAT_SHORTCUT_ID: &str = "quickchat-shortcut";
 const START_ID: &str = "start-gateway";
 const STOP_ID: &str = "stop-gateway";
 const RESTART_ID: &str = "restart-gateway";
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 const ADOPT_RUNTIME_ID: &str = "adopt-bundled-runtime";
 const QUIT_ID: &str = "quit";
 
@@ -44,7 +44,7 @@ pub struct TrayHandles {
     start: MenuItem<tauri::Wry>,
     stop: MenuItem<tauri::Wry>,
     restart: MenuItem<tauri::Wry>,
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     runtime_action: MenuItem<tauri::Wry>,
 }
 
@@ -115,7 +115,7 @@ impl TrayHandles {
         }
         drop(status_line);
         self.refresh_status(self._tray.app_handle());
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         {
             let current = crate::bundled_runtime::expected_executable_path().ok();
             let enabled = !crate::test_profile::enabled()
@@ -248,9 +248,9 @@ pub fn build(
         menu_builder
     };
     let menu_builder = menu_builder.separator().items(&[&start, &stop, &restart]);
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     let runtime_action = disabled_item(ADOPT_RUNTIME_ID, "Use bundled runtime…")?;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     let menu_builder = menu_builder.item(&runtime_action);
     let menu = menu_builder
         .separator()
@@ -338,7 +338,7 @@ pub fn build(
         start,
         stop,
         restart,
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         runtime_action,
     })
 }
@@ -450,13 +450,13 @@ fn handle_menu(
             };
             app.state::<GatewayOperationQueue>().submit_action(action);
         }
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         ADOPT_RUNTIME_ID => confirm_runtime_action(app),
         _ => {}
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub(crate) fn show_runtime_error(app: &AppHandle, error: &str) {
     let current_app = app.clone();
     let error = error.to_owned();
@@ -474,7 +474,7 @@ pub(crate) fn show_runtime_error(app: &AppHandle, error: &str) {
     });
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 fn confirm_runtime_action(app: &AppHandle) {
     use tauri_plugin_dialog::MessageDialogButtons;
     let current_app = app.clone();

@@ -910,3 +910,41 @@ mod tests;
 #[cfg(all(test, target_os = "windows"))]
 #[path = "runtime_action_windows_tests.rs"]
 mod windows_tests;
+
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "windows", target_os = "macos")
+))]
+#[test]
+fn detached_runtime_action_delivers_the_complete_error_to_its_presenter() {
+    use crate::gateway_operation_queue::{
+        GatewayOperation, GatewayOperationError, GatewayOperationQueue,
+    };
+    let runtime = BundledRuntime {
+        executable: PathBuf::from("fixture-bun"),
+        sqlite: None,
+        flavor: RuntimeFlavor::Jit,
+        entry: None,
+    };
+    let error = "The Gateway is paused. Start it before choosing Use bundled runtime.\nTo select the previous runtime manually, run:\nopenclaw gateway install --force --runtime node";
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let queue = GatewayOperationQueue::new(
+        move |operation, _| {
+            assert!(matches!(operation, GatewayOperation::Runtime(_)));
+            Err(error.to_string())
+        },
+        move |failure| {
+            assert!(sender.send(failure).is_ok());
+        },
+    );
+    queue.submit_runtime(crate::RuntimeAction {
+        cli: OpenClawCli::from_bundled(&runtime, "fixture-entry.js".into(), "fixture-home".into()),
+        observation: Observation(Value::Null),
+    });
+    match receiver.recv_timeout(Duration::from_secs(1)).unwrap() {
+        GatewayOperationError::Runtime(message) => assert_eq!(message, error),
+        GatewayOperationError::Action(_) => {
+            panic!("runtime guidance reached the generic error presenter")
+        }
+    }
+}

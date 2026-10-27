@@ -67,7 +67,7 @@ use tauri_plugin_opener::OpenerExt;
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(3);
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub(crate) struct RuntimeAction {
     cli: OpenClawCli,
     observation: runtime_action::Observation,
@@ -1051,7 +1051,7 @@ impl DesktopState {
                 .selection_is_current(selection)
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     fn runtime_action(
         &self,
         app: &AppHandle,
@@ -3565,7 +3565,7 @@ fn main() {
                 GatewayOperation::Install(channel) => {
                     operation_state.install_cli(&operation_app, channel, selection)
                 }
-                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
                 GatewayOperation::Runtime(action) => {
                     operation_state.runtime_action(&operation_app, action, selection)
                 }
@@ -3578,7 +3578,7 @@ fn main() {
             },
             move |error| match error {
                 GatewayOperationError::Action(_) => error_state.show_error(&error_app),
-                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
                 GatewayOperationError::Runtime(error) => {
                     tray::show_runtime_error(&error_app, &error)
                 }
