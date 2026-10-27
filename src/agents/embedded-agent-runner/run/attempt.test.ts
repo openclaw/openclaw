@@ -42,6 +42,14 @@ async function drainStream(stream: FakeWrappedStream) {
   }
 }
 
+async function readStream(wrapped: StreamFn, drain = true) {
+  const stream = await wrapped({} as never, {} as never, {} as never);
+  if (drain) {
+    await drainStream(stream);
+  }
+  return (await stream.result()) as ToolStreamMessage;
+}
+
 function textUser(text: string) {
   return { role: "user", content: [{ type: "text", text }] };
 }
@@ -176,10 +184,9 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   ) {
     const finalMessage = sparseAssistant(Array.isArray(call) ? call : [call]);
     const baseFn = fakeBaseStream(finalMessage, events);
-    const wrapped = wrapStreamFnTrimToolCallNames(baseFn as never, allowed, guardOptions);
-    const stream = await wrapped({} as never, {} as never, {} as never);
-    await drainStream(stream);
-    const result = (await stream.result()) as ToolStreamMessage;
+    const result = await readStream(
+      wrapStreamFnTrimToolCallNames(baseFn as never, allowed, guardOptions),
+    );
     return { result, finalMessage };
   }
 
@@ -198,17 +205,12 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     ]);
     const message = calls(["exec' parameter='command' string='true", "allowedTool>suffix"]);
     const final = calls(["qualified/write<parameter=path"]);
-    const finalMessage = sparseAssistant(final);
-    const baseFn = fakeBaseStream(finalMessage, [
-      { ...toolDelta("partial", partial), message: sparseAssistant(message) },
-    ]);
-    const wrapped = wrapStreamFnTrimToolCallNames(
-      baseFn as never,
+    const { result, finalMessage } = await runCall(
+      final,
       new Set(["read", "write", "exec", "qualified.write", "allowedTool"]),
+      [{ ...toolDelta("partial", partial), message: sparseAssistant(message) }],
     );
-    const stream = await wrapped({} as never, {} as never, {} as never);
-    await drainStream(stream);
-    expect(await stream.result()).toBe(finalMessage);
+    expect(result).toBe(finalMessage);
     expect([...partial, ...message, ...final].map((call) => call.name)).toEqual([
       "read",
       'unknown" parameter="value" string="true',
@@ -246,15 +248,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(allowedTools), {
       unknownToolThreshold: 1,
     });
-    return () => Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-  }
-
-  async function nextResult(nextStream: () => Promise<FakeWrappedStream>, drain = false) {
-    const stream = await nextStream();
-    if (drain) {
-      await drainStream(stream);
-    }
-    return (await stream.result()) as ToolStreamMessage;
+    return (drain = false) => readStream(wrappedFn, drain);
   }
 
   function frame(resultMessage: unknown, ...messages: string[][]) {
@@ -302,9 +296,9 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   `("$name", async ({ tools, frames, drain, text, expected }: RetryCase) => {
     const next = sequenceStreams(tools, frames);
     for (const readEvents of drain.slice(0, -1)) {
-      await nextResult(next, readEvents);
+      await next(readEvents);
     }
-    const result = await nextResult(next, drain.at(-1));
+    const result = await next(drain.at(-1));
     expect(result.role).toBe("assistant");
     if (text) {
       expectSingleTextContent(result.content, expected);
