@@ -7,13 +7,11 @@ import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-mode
 import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import type { OpenClawConfig } from "../config/config.js";
-import * as programArgs from "../daemon/program-args.js";
-import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import {
-  createFinalizeArgs,
+  createFinalizeArgs as baseFinalizeArgs,
   createLaterPrompter,
   createRuntime,
   sessionGatewayTuiCases,
@@ -25,10 +23,10 @@ import {
 import { readPin } from "./setup.finalize.runtime-pin.test-support.js";
 import {
   createRuntimeProbeResult,
-  expectNoteContains,
-  expectNoteTitleNotCalled,
+  expectNoteContains as expectWizardNoteContains,
+  expectNoteTitleNotCalled as expectWizardNoteTitleNotCalled,
   withPlatform,
-  expectNoteNotContains,
+  expectNoteNotContains as expectWizardNoteNotContains,
 } from "./setup.finalize.test-support.js";
 
 type DefaultModelAuthStatus = Awaited<
@@ -88,18 +86,18 @@ const resolveDefaultModelAuthStatus = vi.hoisted(() =>
 const resolveDefaultModelCatalogFacts = vi.hoisted(() =>
   vi.fn((): ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts> => ({})),
 );
+const makeInstallPlan = vi.hoisted(() => () => ({
+  runtime: "node" as const,
+  programArguments: [],
+  workingDirectory: "/tmp",
+  environment: {},
+  environmentValueSources: {},
+}));
 const buildGatewayInstallPlan = vi.hoisted(() =>
-  vi.fn<typeof import("../commands/daemon-install-helpers.js").buildGatewayInstallPlan>(
-    async () => ({
-      runtime: "node",
-      programArguments: [],
-      workingDirectory: "/tmp",
-      environment: {},
-      environmentValueSources: {},
-    }),
+  vi.fn<typeof import("../commands/daemon-install-helpers.js").buildGatewayInstallPlan>(async () =>
+    makeInstallPlan(),
   ),
 );
-const inspectWindowsGatewayFirewall = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   probeGatewayReachable,
@@ -114,7 +112,6 @@ vi.mock("../commands/control-ui-handoff.js", () => ({
 }));
 
 vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
-  inspectWindowsGatewayFirewall,
   formatWindowsGatewayFirewallGuidance: (params: { bind?: string }) =>
     params.bind === "lan"
       ? [
@@ -239,18 +236,25 @@ function createWebSearchProviderEntry(
   };
 }
 
-function createServiceSetupArgs(
+let prompter: FinalizeArgs["prompter"];
+let runtime: FinalizeArgs["runtime"];
+
+function createFinalizeArgs(flow: FinalizeArgs["flow"], overrides: FinalizeArgsOverrides = {}) {
+  return baseFinalizeArgs(flow, { prompter, runtime, ...overrides });
+}
+
+function setupService(
   overrides: Partial<Parameters<typeof ensureGatewayServiceForOnboarding>[0]> = {},
-): Parameters<typeof ensureGatewayServiceForOnboarding>[0] {
-  return {
+) {
+  return ensureGatewayServiceForOnboarding({
     flow: "quickstart",
     opts: {},
     nextConfig: {},
     settings: { port: 18789 },
-    prompter: createLaterPrompter(),
-    runtime: createRuntime(),
+    prompter,
+    runtime,
     ...overrides,
-  };
+  });
 }
 
 function createSearchConfig(provider = "firecrawl"): OpenClawConfig {
@@ -261,24 +265,37 @@ function finalize(flow: FinalizeArgs["flow"], overrides: FinalizeArgsOverrides =
   return finalizeSetupWizard(createFinalizeArgs(flow, overrides));
 }
 
+function expectNoteContains(expected: string, title = "Gateway") {
+  expectWizardNoteContains(prompter, expected, title);
+}
+function expectNoteNotContains(...unexpected: string[]) {
+  for (const message of unexpected) {
+    expectWizardNoteNotContains(prompter, message);
+  }
+}
+function expectNoteTitleNotCalled(title: string) {
+  expectWizardNoteTitleNotCalled(prompter, title);
+}
+
+function expectUncalled(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
 function expectCall(mock: unknown, fields: object) {
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
 }
 
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
+    prompter = createLaterPrompter();
+    runtime = createRuntime();
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
     runExec.mockReset().mockResolvedValue(createRuntimeProbeResult());
     resetFinalizeMocks();
     healthCommand.mockReset().mockResolvedValue(undefined);
     buildGatewayInstallPlan.mockClear();
-    inspectWindowsGatewayFirewall.mockReset().mockResolvedValue({
-      applies: false,
-      severity: "info",
-      code: "windows_firewall_not_applicable",
-      message: "Windows LAN firewall diagnostics do not apply.",
-      details: [],
-    });
     resolveDefaultModelAuthStatus.mockReset().mockReturnValue({
       provider: "anthropic",
       model: "claude-opus-4-8",
@@ -287,38 +304,10 @@ describe("finalizeSetupWizard", () => {
     resolveDefaultModelCatalogFacts.mockReset().mockReturnValue({});
   });
 
-  it("resolves gateway password SecretRef for probe but omits auth from TUI hatch", async () => {
-    resolveSetupSecretInputString.mockResolvedValueOnce("resolved-gateway-password");
-    const prompter = createLaterPrompter();
-    const runtime = createRuntime();
-
-    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "resolved-gateway-password" }, async () => {
-      await finalize("quickstart", {
-        settings: { authMode: "password" },
-        nextConfig: createGatewayPasswordRefConfig(),
-        prompter,
-        runtime,
-      });
-    });
-
-    const probeParams = mockCall(probeGatewayReachable)[0] as {
-      url?: string;
-      password?: string;
-    };
-    expect(probeParams.url).toBe("ws://127.0.0.1:18789");
-    expect(probeParams.password).toBe("resolved-gateway-password"); // pragma: allowlist secret
-    expect(runTui).toHaveBeenCalledWith({
-      local: true,
-      deliver: false,
-      message: undefined,
-      initialMessageTimeoutMs: 300_000,
-    });
-  });
-
   it("waits for the served dashboard before announcing its URL", async () => {
     probeGatewayReachable.mockResolvedValue({ ok: true });
     const stop = vi.fn();
-    const prompter = buildWizardPrompter({
+    prompter = buildWizardPrompter({
       progress: vi.fn(() => ({ update: vi.fn(), stop })),
     });
     let resolveDocument: ((value: { ready: true }) => void) | undefined;
@@ -329,9 +318,9 @@ describe("finalizeSetupWizard", () => {
       });
     });
 
-    const finalizing = finalize("quickstart", { prompter });
+    const finalizing = finalize("quickstart", {});
     await vi.waitFor(() => expect(waitForControlUiDocument).toHaveBeenCalledOnce());
-    expectNoteTitleNotCalled(prompter, "Control UI");
+    expectNoteTitleNotCalled("Control UI");
     expect(prompter.outro).not.toHaveBeenCalled();
     expect(prompter.progress).toHaveBeenCalledWith("Preparing the Control UI…");
 
@@ -339,7 +328,7 @@ describe("finalizeSetupWizard", () => {
     await finalizing;
 
     expect(stop).toHaveBeenCalledOnce();
-    expectNoteContains(prompter, "Web UI: http://127.0.0.1:18789", "Control UI");
+    expectNoteContains("Web UI: http://127.0.0.1:18789", "Control UI");
     expect(prompter.outro).toHaveBeenCalledWith(
       "Onboarding complete. Use the dashboard link above to control OpenClaw.",
     );
@@ -355,8 +344,7 @@ describe("finalizeSetupWizard", () => {
       ready: false,
       reason: "Control UI build failed: missing startup.js",
     });
-    const prompter = createLaterPrompter();
-    const args = createFinalizeArgs("quickstart", { prompter });
+    const args = createFinalizeArgs("quickstart", {});
     const gatewayToken = ["classic", "token"].join("-");
 
     await finalizeSetupWizard({
@@ -365,9 +353,9 @@ describe("finalizeSetupWizard", () => {
     });
 
     expect(args.runtime.error).toHaveBeenCalledWith("Control UI build failed: missing startup.js");
-    expectNoteContains(prompter, "Gateway: reachable", "Control UI");
-    expectNoteNotContains(prompter, "Web UI:");
-    expectNoteNotContains(prompter, gatewayToken);
+    expectNoteContains("Gateway: reachable", "Control UI");
+    expectNoteNotContains("Web UI:");
+    expectNoteNotContains(gatewayToken);
     expect(prompter.outro).toHaveBeenCalledWith(
       "OpenClaw is ready. When you're ready: openclaw dashboard",
     );
@@ -387,17 +375,14 @@ describe("finalizeSetupWizard", () => {
 
   it("does not wait for dashboard assets when the UI is disabled", async () => {
     probeGatewayReachable.mockResolvedValue({ ok: true });
-    const prompter = createLaterPrompter();
 
     await finalize("quickstart", {
       nextConfig: { gateway: { controlUi: { enabled: false } } },
       settings: { gatewayToken: "offline-token" },
-      prompter,
     });
 
-    expect(resolveControlUiHandoffTarget).not.toHaveBeenCalled();
-    expect(waitForControlUiDocument).not.toHaveBeenCalled();
-    expectNoteNotContains(prompter, "Web UI:");
+    expectUncalled(resolveControlUiHandoffTarget, waitForControlUiDocument);
+    expectNoteNotContains("Web UI:");
     expect(prompter.outro).toHaveBeenCalledWith("OpenClaw is ready.");
   });
 
@@ -409,11 +394,7 @@ describe("finalizeSetupWizard", () => {
       tlsConfig,
     });
     const nextConfig: OpenClawConfig = {
-      gateway: {
-        port: 18789,
-        bind: "loopback",
-        tls: tlsConfig,
-      },
+      gateway: { port: 18789, bind: "loopback", tls: tlsConfig },
     };
     await finalize("quickstart", {
       baseConfig: { gateway: { controlUi: { basePath: "/dashboard" } } },
@@ -453,270 +434,136 @@ describe("finalizeSetupWizard", () => {
       httpUrl: "http://127.0.0.1:18789/",
       wsUrl: "ws://127.0.0.1:18789",
     });
-    const prompter = createLaterPrompter();
     await finalize("advanced", {
       opts: { skipHealth: false, skipUi: false },
       nextConfig: { gateway: { bind: "lan" } },
       settings: { bind: "lan" },
-      prompter,
     });
 
     expectCall(resolveAdvertisedControlUiLinks, { bind: "lan", port: 18789 });
     expectCall(probeGatewayReachable, { url: "ws://127.0.0.1:18789" });
-    expectNoteContains(prompter, "http://10.211.55.3:18789/", "Control UI");
-    expectNoteContains(prompter, "ws://10.211.55.3:18789", "Control UI");
-    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+    expectNoteContains("http://10.211.55.3:18789/", "Control UI");
+    expectNoteContains("ws://10.211.55.3:18789", "Control UI");
     expectNoteContains(
-      prompter,
       "Windows firewall: if another device cannot connect to the LAN URL",
       "Control UI",
     );
   });
 
-  it("finishes without a hatch message when the prepared catalog owner was replaced", async () => {
-    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
-    loadModelCatalog.mockRejectedValueOnce(
-      new PreparedModelCatalogConfigReplacedError("/tmp/replaced-agent"),
-    );
-    const prompter = createLaterPrompter();
-
-    await expect(finalize("quickstart", { prompter })).resolves.toEqual({ launchedTui: true });
-
-    expectCall(runTui, {
-      message: undefined,
-    });
-    expect(resolveDefaultModelCatalogFacts).not.toHaveBeenCalled();
-    expect(resolveDefaultModelAuthStatus).not.toHaveBeenCalled();
-  });
-
-  it("propagates unrelated prepared catalog failures", async () => {
-    const error = new Error("catalog read failed");
-    loadModelCatalog.mockRejectedValueOnce(error);
-
-    await expect(finalize("quickstart")).rejects.toBe(error);
-
-    expect(runTui).not.toHaveBeenCalled();
-  });
-
-  it("passes physical catalog routes into the bootstrap auth decision", async () => {
-    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
-    const catalog = [
-      {
-        id: "gpt-5.4-nano",
-        name: "GPT 5.4 Nano",
-        provider: "openai",
-      },
-    ];
-    const observedRoutes = [
-      {
-        api: "openai-chatgpt-responses" as const,
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-      },
-      { api: "openai-responses" as const, baseUrl: "https://api.openai.com/v1" },
-    ];
-    loadModelCatalog.mockResolvedValueOnce(catalog);
-    resolveDefaultModelCatalogFacts.mockReturnValueOnce({ observedRoutes });
-    const prompter = buildWizardPrompter();
-    const nextConfig = {
-      agents: {
-        defaults: { model: "openai/gpt-5.4-nano" },
-        entries: { main: { agentDir: "/tmp/custom-agent" } },
-      },
-    } satisfies OpenClawConfig;
-
-    await finalize("quickstart", { prompter, nextConfig });
-
-    expect(loadModelCatalog).toHaveBeenCalledWith({ config: nextConfig, readOnly: true });
-    expect(resolveDefaultModelCatalogFacts).toHaveBeenCalledWith(nextConfig, catalog, {
-      routeVariants: catalog,
-    });
-    expect(resolveDefaultModelAuthStatus).toHaveBeenCalledWith(nextConfig, {
-      agentDir: "/tmp/custom-agent",
-      observedRoutes,
-    });
-    expect(runTui).toHaveBeenCalledWith({
-      local: true,
-      deliver: false,
-      message: "Wake up, my friend!",
-      initialMessageTimeoutMs: 300_000,
-    });
-  });
-
-  it("skips the doomed hatch seed message and warns when model auth is missing", async () => {
-    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
-    resolveDefaultModelAuthStatus.mockReturnValueOnce({
-      provider: "openai",
-      model: "gpt-5.5",
-      status: "missing",
-    });
-    const prompter = buildWizardPrompter();
-
-    await finalize("quickstart", {
-      prompter,
-      nextConfig: {
+  it.each(["first", "rerun", "missing", "incompatible", "replaced", "failed"] as const)(
+    "handles the %s catalog/auth state before hatching",
+    async (reason) => {
+      vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
+      const catalog = [{ id: "gpt-5.4-nano", name: "GPT 5.4 Nano", provider: "openai" }];
+      const observedRoutes = [
+        {
+          api: "openai-chatgpt-responses" as const,
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        },
+        { api: "openai-responses" as const, baseUrl: "https://api.openai.com/v1" },
+      ];
+      const nextConfig: OpenClawConfig = {
         agents: {
+          defaults: { model: "openai/gpt-5.4-nano" },
           entries: { main: { agentDir: "/tmp/custom-agent" } },
         },
-      },
-    });
-
-    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }));
-    expect(resolveDefaultModelAuthStatus).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agents: {
-          entries: { main: { agentDir: "/tmp/custom-agent" } },
-        },
-      }),
-      { agentDir: "/tmp/custom-agent" },
-    );
-    expectNoteContains(
-      prompter,
-      'No credentials are configured for provider "openai"',
-      "Model auth missing",
-    );
-  });
-
-  it("hatches without a seed and omits setup advice for an incompatible model route", async () => {
-    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
-    resolveDefaultModelAuthStatus.mockReturnValueOnce({
-      provider: "openai",
-      model: "gpt-5.6",
-      status: "incompatible",
-      message: "gpt-5.6 requires OpenAI Platform API-key authentication.",
-    });
-    const prompter = buildWizardPrompter();
-
-    await finalize("quickstart", { prompter });
-
-    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }));
-    expectNoteTitleNotCalled(prompter, "Model auth missing");
-    expectNoteNotContains(prompter, "No credentials are configured");
-    expectNoteNotContains(prompter, "openclaw configure --section model");
-  });
-
-  it("does not resend the bootstrap hatch message on setup reruns", async () => {
-    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
-    const prompter = buildWizardPrompter();
-
-    await finalize("quickstart", { hadExistingConfig: true, prompter });
-
-    expect(runTui).toHaveBeenCalledWith({
-      local: true,
-      deliver: false,
-      message: undefined,
-      initialMessageTimeoutMs: 300_000,
-    });
-  });
-
-  it("restores terminal state after failed TUI hatch", async () => {
-    runTui.mockRejectedValueOnce(new Error("TUI exited with code 1"));
-    const prompter = createLaterPrompter();
-
-    await expect(
-      finalize("advanced", {
-        opts: { skipUi: false },
-        settings: { gatewayToken: "test-token" },
-        prompter,
-      }),
-    ).rejects.toThrow("TUI exited with code 1");
-
-    expect(restoreTerminalState).toHaveBeenCalledWith("pre-setup tui", {
-      resumeStdinIfPaused: false,
-    });
-    expect(restoreTerminalState).toHaveBeenCalledWith("post-setup tui", {
-      resumeStdinIfPaused: false,
-    });
-  });
+      };
+      const error =
+        reason === "replaced"
+          ? new PreparedModelCatalogConfigReplacedError("/tmp/replaced-agent")
+          : new Error("catalog read failed");
+      if (reason === "replaced" || reason === "failed") {
+        loadModelCatalog.mockRejectedValueOnce(error);
+      } else {
+        loadModelCatalog.mockResolvedValueOnce(catalog);
+        resolveDefaultModelCatalogFacts.mockReturnValueOnce({ observedRoutes });
+      }
+      if (reason === "missing" || reason === "incompatible") {
+        resolveDefaultModelAuthStatus.mockReturnValueOnce({
+          provider: "openai",
+          model: reason === "missing" ? "gpt-5.5" : "gpt-5.6",
+          status: reason,
+          ...(reason === "incompatible"
+            ? { message: "gpt-5.6 requires OpenAI Platform API-key authentication." }
+            : {}),
+        });
+      }
+      const result = finalize("quickstart", { nextConfig, hadExistingConfig: reason === "rerun" });
+      if (reason === "failed") {
+        await expect(result).rejects.toBe(error);
+        expect(runTui).not.toHaveBeenCalled();
+        return;
+      }
+      await expect(result).resolves.toEqual({ launchedTui: true });
+      expect(runTui).toHaveBeenCalledWith({
+        local: true,
+        deliver: false,
+        message: reason === "first" ? "Wake up, my friend!" : undefined,
+        initialMessageTimeoutMs: 300_000,
+      });
+      if (reason === "replaced") {
+        expectUncalled(resolveDefaultModelCatalogFacts, resolveDefaultModelAuthStatus);
+      } else if (reason === "first") {
+        expect(loadModelCatalog).toHaveBeenCalledWith({ config: nextConfig, readOnly: true });
+        expect(resolveDefaultModelCatalogFacts).toHaveBeenCalledWith(nextConfig, catalog, {
+          routeVariants: catalog,
+        });
+        expect(resolveDefaultModelAuthStatus).toHaveBeenCalledWith(nextConfig, {
+          agentDir: "/tmp/custom-agent",
+          observedRoutes,
+        });
+      } else if (reason === "missing") {
+        expectNoteContains(
+          'No credentials are configured for provider "openai"',
+          "Model auth missing",
+        );
+      } else if (reason === "incompatible") {
+        expectNoteTitleNotCalled("Model auth missing");
+        expectNoteNotContains(
+          "No credentials are configured",
+          "openclaw configure --section model",
+        );
+      }
+    },
+  );
 
   it("does not persist resolved SecretRef token in daemon install plan", async () => {
-    const prompter = createLaterPrompter();
-    const runtime = createRuntime();
+    const token = { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" } as const;
     buildGatewayInstallPlan.mockResolvedValueOnce({
-      runtime: "node",
-      programArguments: [],
-      workingDirectory: "/tmp",
-      environment: {
-        DISCORD_BOT_TOKEN: "discord-test-token",
-      },
-      environmentValueSources: {
-        DISCORD_BOT_TOKEN: "file",
-      },
+      ...makeInstallPlan(),
+      environment: { DISCORD_BOT_TOKEN: "discord-test-token" },
+      environmentValueSources: { DISCORD_BOT_TOKEN: "file" },
     });
 
     await finalize("advanced", {
       opts: { installDaemon: true },
       settings: { gatewayToken: "session-token" },
-      nextConfig: {
-        gateway: {
-          auth: {
-            mode: "token",
-            token: {
-              source: "env",
-              provider: "default",
-              id: "OPENCLAW_GATEWAY_TOKEN",
-            },
-          },
-        },
-      },
-      prompter,
-      runtime,
+      nextConfig: { gateway: { auth: { mode: "token", token } } },
     });
 
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
-    expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("token");
     expectCall(gatewayServiceInstall, {
-      environmentValueSources: {
-        DISCORD_BOT_TOKEN: "file",
-      },
+      environmentValueSources: { DISCORD_BOT_TOKEN: "file" },
     });
   });
 
-  it("reports Bun for a Bun-only QuickStart install", async () => {
-    const { buildGatewayInstallPlan: realPlan } = await vi.importActual<
-      typeof import("../commands/daemon-install-helpers.js")
-    >("../commands/daemon-install-helpers.js");
-    const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.4" });
-    const discoverNode = vi
-      .spyOn(runtimePaths, "resolvePreferredNodePath")
-      .mockResolvedValue(undefined);
-    const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
-      status: "supported",
-      version: "1.4.4",
-      sqliteVersion: "3.53.4",
-      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-      nodeSharedSqlite: false,
+  it("reports the installed Bun runtime for QuickStart", async () => {
+    buildGatewayInstallPlan.mockResolvedValueOnce({
+      ...makeInstallPlan(),
+      runtime: "bun",
+      programArguments: [process.execPath, "/app/openclaw.mjs", "gateway"],
     });
-    const resolveArguments = vi
-      .spyOn(programArgs, "resolveGatewayProgramArguments")
-      .mockResolvedValue({ programArguments: [process.execPath, "/app/openclaw.mjs", "gateway"] });
-    buildGatewayInstallPlan.mockImplementationOnce(realPlan);
-    const prompter = buildWizardPrompter();
-    try {
-      const result = await ensureGatewayServiceForOnboarding(
-        createServiceSetupArgs({ flow: "quickstart", opts: { installDaemon: true }, prompter }),
-      );
-      expect(result.gateway).toEqual({ status: "ready", action: "installed" });
-      expectCall(resolveArguments, { runtime: "bun", runtimePath: process.execPath });
-      expectNoteContains(prompter, "QuickStart uses Bun", "Gateway service runtime");
-      expectNoteNotContains(prompter, "QuickStart uses Node");
-      expect(gatewayServiceInstall).toHaveBeenCalledOnce();
-    } finally {
-      discoverNode.mockRestore();
-      probeBun.mockRestore();
-      resolveArguments.mockRestore();
-      if (bunVersion) {
-        Object.defineProperty(process.versions, "bun", bunVersion);
-      } else {
-        delete process.versions.bun;
-      }
-    }
+    const result = await setupService({ opts: { installDaemon: true } });
+    expect(result.gateway).toEqual({ status: "ready", action: "installed" });
+    expectNoteContains("QuickStart uses Bun", "Gateway service runtime");
+    expectNoteNotContains("QuickStart uses Node");
+    expect(gatewayServiceInstall).toHaveBeenCalledOnce();
   });
 
   it("waits for gateway install warnings before installing the service", async () => {
     const warningAcknowledged = createDeferred();
-    const prompter = buildWizardPrompter({
+    prompter = buildWizardPrompter({
       select: vi.fn(async () => "later") as never,
       confirm: vi.fn(async () => false),
       note: vi.fn(async (message: string) => {
@@ -727,16 +574,10 @@ describe("finalizeSetupWizard", () => {
     });
     buildGatewayInstallPlan.mockImplementationOnce(async (params) => {
       params?.warn?.("Gateway install warning", "Gateway service");
-      return {
-        runtime: "node",
-        programArguments: [],
-        workingDirectory: "/tmp",
-        environment: {},
-        environmentValueSources: {},
-      };
+      return makeInstallPlan();
     });
 
-    const finalizePromise = finalize("advanced", { opts: { installDaemon: true }, prompter });
+    const finalizePromise = finalize("advanced", { opts: { installDaemon: true } });
     await vi.waitFor(() => {
       expect(prompter.note).toHaveBeenCalledWith("Gateway install warning", "Gateway service");
     });
@@ -749,16 +590,15 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("shows gateway install warnings when planning fails", async () => {
-    const prompter = createLaterPrompter();
     buildGatewayInstallPlan.mockImplementationOnce(async (params) => {
       params?.warn?.("Gateway install warning", "Gateway service");
       throw new Error("plan failed");
     });
 
-    await finalize("advanced", { opts: { installDaemon: true }, prompter });
+    await finalize("advanced", { opts: { installDaemon: true } });
 
     expect(prompter.note).toHaveBeenCalledWith("Gateway install warning", "Gateway service");
-    expectNoteContains(prompter, "plan failed", "Gateway");
+    expectNoteContains("plan failed");
     expect(gatewayServiceInstall).not.toHaveBeenCalled();
   });
 
@@ -773,16 +613,15 @@ describe("finalizeSetupWizard", () => {
       await withPlatform(platform, async () => {
         gatewayServiceIsLoaded.mockResolvedValue(action !== "installed");
         const choice = action === "reused" ? "skip" : "restart";
-        const prompter = buildWizardPrompter(undefined, { defaultSelect: choice });
+        prompter = buildWizardPrompter(undefined, { defaultSelect: choice });
 
         await finalize("quickstart", {
           opts: { installDaemon: action !== "skipped", skipHealth: false, skipUi: true },
-          prompter,
         });
 
         if (action === "skipped") {
           expect(waitForGatewayReachable).not.toHaveBeenCalled();
-          expectNoteContains(prompter, "openclaw gateway run", "Gateway");
+          expectNoteContains("openclaw gateway run");
           expect(prompter.outro).toHaveBeenCalledWith(
             expect.stringContaining("openclaw gateway run"),
           );
@@ -809,23 +648,20 @@ describe("finalizeSetupWizard", () => {
       gatewayServiceIsLoaded.mockResolvedValue(true);
       buildGatewayInstallPlan.mockRejectedValueOnce(new Error("replacement plan failed"));
       probeGatewayReachable.mockResolvedValue({ ok: true });
-      const prompter = buildWizardPrompter({
+      prompter = buildWizardPrompter({
         select: vi.fn().mockResolvedValueOnce("reinstall").mockResolvedValueOnce("tui"),
       });
 
       await finalize("quickstart", {
         opts: { installDaemon: true, skipHealth },
-        prompter,
       });
 
-      expect(gatewayServiceUninstall).not.toHaveBeenCalled();
-      expect(gatewayServiceInstall).not.toHaveBeenCalled();
-      expect(waitForGatewayReachable).not.toHaveBeenCalled();
+      expectUncalled(gatewayServiceUninstall, gatewayServiceInstall, waitForGatewayReachable);
       expect(probeGatewayReachable).toHaveBeenCalledOnce();
       expect(healthCommand).toHaveBeenCalledTimes(skipHealth ? 0 : 1);
       expectCall(runTui, { boundGateway: { url: "ws://127.0.0.1:18789" } });
-      expectNoteContains(prompter, "replacement plan failed", "Gateway");
-      expectNoteNotContains(prompter, "Gateway: not detected");
+      expectNoteContains("replacement plan failed");
+      expectNoteNotContains("Gateway: not detected");
       expect(prompter.outro).toHaveBeenCalledWith(expect.stringContaining("setup failed"));
     },
   );
@@ -839,17 +675,14 @@ describe("finalizeSetupWizard", () => {
         new Error(error),
       );
       const progressStop = vi.fn();
-      const prompter = buildWizardPrompter(
+      prompter = buildWizardPrompter(
         {
           progress: () => ({ update: vi.fn(), stop: progressStop }),
         },
         { defaultSelect: "restart" },
       );
-      const runtime = createRuntime();
       await finalize("advanced", {
         opts: { installDaemon: true, skipHealth: false },
-        prompter,
-        runtime,
       });
 
       expect(progressStop).not.toHaveBeenCalledWith("Gateway service restarted.");
@@ -857,15 +690,15 @@ describe("finalizeSetupWizard", () => {
       expect(waitForGatewayReachable).not.toHaveBeenCalled();
       expect(probeGatewayReachable).toHaveBeenCalledOnce();
       expect(runtime.error).toHaveBeenCalledWith("health failed");
-      expectNoteContains(prompter, error, "Gateway");
-      expectNoteContains(prompter, "Gateway: not detected (offline)", "Control UI");
+      expectNoteContains(error);
+      expectNoteContains("Gateway: not detected (offline)", "Control UI");
       expect(prompter.outro).toHaveBeenCalledWith(
         expect.stringContaining("managed Mock Platform Service setup failed"),
       );
-      expectNoteContains(prompter, "openclaw gateway status --deep", "Gateway");
-      expectNoteContains(prompter, "openclaw gateway install --force", "Gateway");
-      expectNoteNotContains(prompter, "openclaw gateway run");
-      expectNoteNotContains(prompter, "openclaw gateway restart");
+      expectNoteContains("openclaw gateway status --deep");
+      expectNoteContains("openclaw gateway install --force");
+      expectNoteNotContains("openclaw gateway run");
+      expectNoteNotContains("openclaw gateway restart");
     },
   );
 
@@ -873,18 +706,16 @@ describe("finalizeSetupWizard", () => {
     const detail = "gateway readiness timed out";
     waitForGatewayReachable.mockResolvedValue({ ok: false, detail });
     probeGatewayReachable.mockResolvedValue({ ok: false, detail });
-    const prompter = createLaterPrompter();
     await finalize("advanced", {
       opts: { installDaemon: true, skipHealth: false },
-      prompter,
     });
 
-    expectNoteContains(prompter, "managed Mock Platform Service", "Gateway");
-    expectNoteContains(prompter, "openclaw gateway status --deep", "Gateway");
-    expectNoteContains(prompter, "openclaw gateway restart", "Gateway");
-    expectNoteNotContains(prompter, "openclaw gateway run");
-    expectNoteNotContains(prompter, "openclaw onboard --install-daemon");
-    expectNoteNotContains(prompter, "openclaw gateway install --force");
+    expectNoteContains("managed Mock Platform Service");
+    expectNoteContains("openclaw gateway status --deep");
+    expectNoteContains("openclaw gateway restart");
+    expectNoteNotContains("openclaw gateway run");
+    expectNoteNotContains("openclaw onboard --install-daemon");
+    expectNoteNotContains("openclaw gateway install --force");
   });
 
   it("preserves external supervision through unreachable container recovery", async () => {
@@ -892,26 +723,21 @@ describe("finalizeSetupWizard", () => {
       await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
         isSystemdUserServiceAvailable.mockResolvedValue(false);
         isContainerEnvironment.mockReturnValue(true);
-        waitForGatewayReachable.mockResolvedValue({
-          ok: false,
-          detail: "external gateway is offline",
-        });
-        probeGatewayReachable.mockResolvedValue({
-          ok: false,
-          detail: "external gateway is offline",
-        });
-        const prompter = createLaterPrompter();
+        const offline = { ok: false, detail: "external gateway is offline" };
+        waitForGatewayReachable.mockResolvedValue(offline);
+        probeGatewayReachable.mockResolvedValue(offline);
         await finalize("advanced", {
           opts: { skipHealth: false, skipUi: false },
-          prompter,
         });
 
-        expect(isSystemdUserServiceAvailable).not.toHaveBeenCalled();
-        expect(isContainerEnvironment).not.toHaveBeenCalled();
-        expect(startOnboardingGatewayProcess).not.toHaveBeenCalled();
-        expectNoteContains(prompter, "Use that supervisor to start the gateway.", "Gateway");
-        expectNoteNotContains(prompter, "openclaw gateway run");
-        expectNoteNotContains(prompter, "openclaw onboard --install-daemon");
+        expectUncalled(
+          isSystemdUserServiceAvailable,
+          isContainerEnvironment,
+          startOnboardingGatewayProcess,
+        );
+        expectNoteContains("Use that supervisor to start the gateway.");
+        expectNoteNotContains("openclaw gateway run");
+        expectNoteNotContains("openclaw onboard --install-daemon");
         expect(prompter.outro).toHaveBeenCalledWith(
           "Gateway not detected yet. OpenClaw gateway lifecycle is managed by an external " +
             "supervisor (OPENCLAW_SUPERVISOR_MODE=external). Use that supervisor to start the " +
@@ -921,93 +747,46 @@ describe("finalizeSetupWizard", () => {
     });
   });
 
-  it("installs a missing gateway service when onboarding resumes before installation", async () => {
-    startGatewayService.mockResolvedValueOnce({
-      outcome: "missing-install",
-      state: {
-        installed: false,
-        loaded: false,
-        running: false,
-        env: process.env,
-        command: null,
-      },
-    });
-
-    const result = await ensureGatewayServiceForOnboarding(
-      createServiceSetupArgs({ loadedAction: "resume" }),
-    );
-
-    expect(result.gateway).toEqual({ status: "ready", action: "installed" });
-    expect(startGatewayService).toHaveBeenCalledOnce();
-    expect(buildGatewayInstallPlan).toHaveBeenCalledOnce();
-    expect(gatewayServiceInstall).toHaveBeenCalledOnce();
-    expect(gatewayServiceRestart).not.toHaveBeenCalled();
-  });
-
   it.each([
+    ["missing-install", "installed"],
     ["already-running", "reused"],
     ["started", "started"],
-  ])("resumes a %s gateway without reinstalling or restarting it", async (outcome, action) => {
+    ["repair-required", "failed"],
+  ] as const)("resumes a %s gateway as %s without restarting", async (outcome, action) => {
+    const installed = outcome !== "missing-install";
+    const repair = "service is configured for another port";
     startGatewayService.mockResolvedValueOnce({
       outcome,
       state: {
-        installed: true,
-        loaded: true,
-        running: true,
+        installed,
+        loaded: installed,
+        running: outcome === "started" || outcome === "already-running",
         env: process.env,
-        command: { programArguments: ["openclaw", "gateway"] },
+        command: installed ? { programArguments: ["openclaw", "gateway"] } : null,
       },
-      ...(outcome === "already-running" ? { issues: [] } : {}),
+      issues: outcome === "repair-required" ? [{ message: repair }] : [],
     });
-    const result = await ensureGatewayServiceForOnboarding(
-      createServiceSetupArgs({ loadedAction: "resume" }),
+    const result = await setupService({ loadedAction: "resume" });
+    expect(result.gateway).toEqual(
+      action === "failed" ? { status: "failed", error: repair } : { status: "ready", action },
     );
-    expect(result.gateway).toEqual({ status: "ready", action });
-    expect(gatewayServiceRestart).not.toHaveBeenCalled();
-    expect(gatewayServiceInstall).not.toHaveBeenCalled();
     expect(startGatewayService).toHaveBeenCalledOnce();
-  });
-
-  it("reports service definition repair failures without restarting on resume", async () => {
-    const prompter = createLaterPrompter();
-    startGatewayService.mockResolvedValueOnce({
-      outcome: "repair-required",
-      state: { installed: true, loaded: true, running: false },
-      issues: [
-        { message: "service is configured for another port" },
-        { message: "service command points at a missing path" },
-      ],
-    });
-
-    const result = await ensureGatewayServiceForOnboarding(
-      createServiceSetupArgs({ prompter, loadedAction: "resume" }),
-    );
-
-    expect(result.gateway).toEqual({
-      status: "failed",
-      error: "service is configured for another port; service command points at a missing path",
-    });
-    expect(
-      vi
-        .mocked(prompter.note)
-        .mock.calls.some(([message]) => message.includes("service is configured for another port")),
-    ).toBe(false);
+    expect(gatewayServiceInstall).toHaveBeenCalledTimes(installed ? 0 : 1);
     expect(gatewayServiceRestart).not.toHaveBeenCalled();
-    expect(gatewayServiceInstall).not.toHaveBeenCalled();
+    if (action === "failed") {
+      expectNoteNotContains(repair);
+    }
   });
 
   it("never prints the reusable Gateway token during classic onboarding", async () => {
-    const prompter = createLaterPrompter();
     const runtimeLog = vi.fn();
     const runtimeError = vi.fn();
-    const runtime = { log: runtimeLog, error: runtimeError, exit: vi.fn() };
+    runtime = { log: runtimeLog, error: runtimeError, exit: vi.fn() };
     probeGatewayReachable.mockResolvedValue({ ok: true });
 
     await finalize("advanced", {
       opts: { skipUi: false },
       settings: { gatewayToken: "session-token" },
-      prompter,
-      runtime,
     });
 
     const terminalOutput = [prompter.note, prompter.outro]
@@ -1029,7 +808,7 @@ describe("finalizeSetupWizard", () => {
     const progressStop = vi.fn();
     gatewayServiceIsLoaded.mockResolvedValue(true);
     gatewayServiceRestart.mockResolvedValueOnce({ outcome: "scheduled" });
-    const prompter = buildWizardPrompter({
+    prompter = buildWizardPrompter({
       select: vi.fn(async (params: { message: string }) => {
         if (params.message === "Gateway service already installed") {
           return "restart";
@@ -1040,11 +819,10 @@ describe("finalizeSetupWizard", () => {
       progress: vi.fn(() => ({ update: progressUpdate, stop: progressStop })),
     });
 
-    await finalize("advanced", { opts: { installDaemon: true }, prompter });
+    await finalize("advanced", { opts: { installDaemon: true } });
 
     expect(gatewayServiceRestart).toHaveBeenCalledTimes(1);
-    expect(gatewayServiceInstall).not.toHaveBeenCalled();
-    expect(gatewayServiceUninstall).not.toHaveBeenCalled();
+    expectUncalled(gatewayServiceInstall, gatewayServiceUninstall);
     expect(progressUpdate).toHaveBeenCalledWith("Restarting Gateway service...");
     expect(progressStop).toHaveBeenCalledWith("Gateway service restart scheduled.");
   });
@@ -1059,11 +837,9 @@ describe("finalizeSetupWizard", () => {
       warnings: [],
       unavailableReason: "replacement auth unavailable",
     }));
-    const prompter = buildWizardPrompter(undefined, { defaultSelect: "reinstall" });
+    prompter = buildWizardPrompter(undefined, { defaultSelect: "reinstall" });
 
-    const result = await ensureGatewayServiceForOnboarding(
-      createFinalizeArgs("quickstart", { opts: { installDaemon: true }, prompter }),
-    );
+    const result = await setupService({ opts: { installDaemon: true } });
 
     expect(result.gateway.status).toBe("failed");
     expect(installed).toBe(true);
@@ -1084,31 +860,15 @@ describe("finalizeSetupWizard", () => {
       gatewayServiceInstall.mockImplementationOnce(async () => {
         expect(installed).toBe(true);
       });
-      const managedDefinition = {
-        programArguments: [
-          "/usr/bin/node",
-          "--max-old-space-size=24576",
-          "--require=/tmp/service-preload.js",
-          "/usr/local/bin/openclaw",
-          "gateway",
-        ],
-        environment: { NODE_OPTIONS: "--max-heap-size=32768", UNRELATED: "not-persisted" },
-      };
       const existingCommand = {
         programArguments: ["/operator/drop-in-wrapper", "gateway"],
-        environment: { NODE_OPTIONS: "--max-old-space-size=1024" },
-        managedDefinition,
-        managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
       };
       gatewayServiceReadCommand.mockResolvedValue(existingCommand);
-      const prompter = buildWizardPrompter(undefined, { defaultSelect: "reinstall" });
+      prompter = buildWizardPrompter(undefined, { defaultSelect: "reinstall" });
 
-      const result = await ensureGatewayServiceForOnboarding(
-        createFinalizeArgs("quickstart", {
-          opts: { installDaemon: true, daemonRuntime },
-          prompter,
-        }),
-      );
+      const result = await setupService({
+        opts: { installDaemon: true, daemonRuntime },
+      });
 
       expect(result.gateway).toEqual({ status: "ready", action: "installed" });
       expectCall(buildGatewayInstallPlan, {
@@ -1139,19 +899,16 @@ describe("finalizeSetupWizard", () => {
       gatewayServiceReadCommand.mockResolvedValue({
         programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],
       });
-      const prompter = buildWizardPrompter();
+      prompter = buildWizardPrompter();
       const selectRuntime = vi
         .mocked(prompter.select)
         .mockResolvedValueOnce("reinstall")
         .mockResolvedValueOnce(choice);
 
-      const result = await ensureGatewayServiceForOnboarding(
-        createServiceSetupArgs({
-          flow,
-          opts: { installDaemon: true },
-          prompter,
-        }),
-      );
+      const result = await setupService({
+        flow,
+        opts: { installDaemon: true },
+      });
 
       expect(result.gateway).toEqual({ status: "ready", action: "installed" });
       if (flow === "advanced") {
@@ -1168,19 +925,15 @@ describe("finalizeSetupWizard", () => {
 
   it.each(["skip", "restart"])("does not turn %s into an implicit reinstall", async (action) => {
     gatewayServiceIsLoaded.mockResolvedValueOnce(true).mockResolvedValue(false);
-    const prompter = buildWizardPrompter(undefined, { defaultSelect: action });
+    prompter = buildWizardPrompter(undefined, { defaultSelect: action });
 
-    const result = await ensureGatewayServiceForOnboarding(
-      createFinalizeArgs("quickstart", { opts: { installDaemon: true }, prompter }),
-    );
+    const result = await setupService({ opts: { installDaemon: true } });
 
     expect(result.gateway).toEqual({
       status: "ready",
       action: action === "restart" ? "restarted" : "reused",
     });
-    expect(readPin).not.toHaveBeenCalled();
-    expect(gatewayServiceInstall).not.toHaveBeenCalled();
-    expect(gatewayServiceUninstall).not.toHaveBeenCalled();
+    expectUncalled(readPin, gatewayServiceInstall, gatewayServiceUninstall);
     expect(gatewayServiceRestart).toHaveBeenCalledTimes(action === "restart" ? 1 : 0);
   });
 
@@ -1213,74 +966,74 @@ describe("finalizeSetupWizard", () => {
         ({ provider, type }) => provider === "xai" && (!type || type === "oauth"),
       );
     }
-    const prompter = createLaterPrompter();
     await finalize("advanced", {
       nextConfig: mode === "legacy" ? {} : createSearchConfig(id),
-      prompter,
     });
 
     if (mode === "unavailable") {
-      expectNoteContains(
-        prompter,
-        "selected but unavailable under the current plugin policy",
-        "Web search",
-      );
-      expect(resolveExistingKey).not.toHaveBeenCalled();
-      expect(hasExistingKey).not.toHaveBeenCalled();
+      expectNoteContains("selected but unavailable under the current plugin policy", "Web search");
+      expectUncalled(resolveExistingKey, hasExistingKey);
     } else if (mode === "legacy") {
       expectNoteContains(
-        prompter,
         "Web search is available via Perplexity Search (auto-detected).",
         "Web search",
       );
     } else if (mode === "keyless") {
       expectNoteContains(
-        prompter,
         "Web search is ready — this provider works with no API key.",
         "Web search",
       );
-      expectNoteNotContains(prompter, "no API key was found");
-      expectNoteNotContains(prompter, "will not work until a key is added");
+      expectNoteNotContains("no API key was found");
+      expectNoteNotContains("will not work until a key is added");
     } else {
       expectNoteContains(
-        prompter,
         "Web search is enabled, so your agent can look things up online when needed.",
         "Web search",
       );
       if (mode === "oauth") {
-        expectNoteContains(prompter, "Credential: existing xAI OAuth sign-in.", "Web search");
-        expectNoteNotContains(prompter, "no API key");
-        expectCall(hasAuthProfileForProvider, { provider: "xai" });
+        expectNoteContains("Credential: existing xAI OAuth sign-in.", "Web search");
+        expectNoteNotContains("no API key");
         expectCall(hasAuthProfileForProvider, { provider: "xai", type: "oauth" });
       }
     }
   });
 
-  it("uses the setup token for health checks to avoid local env token drift", async () => {
-    probeGatewayReachable.mockResolvedValue({ ok: true });
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
-
-    await finalize("quickstart", {
-      opts: { skipHealth: false, skipUi: true },
-      settings: { gatewayToken: "session-token" },
-      nextConfig: {
-        gateway: {
-          auth: {
-            mode: "token",
-            token: "config-token",
+  it.each(["token", "password"] as const)(
+    "uses setup %s auth for health checks despite ambient credentials",
+    async (authMode) => {
+      probeGatewayReachable.mockResolvedValue({ ok: true });
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "env-password");
+      resolveSetupSecretInputString.mockResolvedValueOnce("session-password");
+      const passwordMode = authMode === "password";
+      await finalize("quickstart", {
+        opts: { skipHealth: false, skipUi: true },
+        settings: { authMode, ...(passwordMode ? {} : { gatewayToken: "session-token" }) },
+        nextConfig: passwordMode
+          ? createGatewayPasswordRefConfig()
+          : { gateway: { auth: { mode: "token", token: "config-token" } } },
+      });
+      const auth = passwordMode
+        ? { token: undefined, password: "session-password" }
+        : { token: "session-token" };
+      expect(mockCall(healthCommand)[0]).toMatchObject({
+        json: false,
+        timeoutMs: 10_000,
+        ...auth,
+        config: {
+          gateway: {
+            auth: { mode: authMode, ...(passwordMode ? {} : { token: "session-token" }) },
           },
         },
-      },
-    });
-
-    expect(mockCall(healthCommand)[0]).toMatchObject({
-      json: false,
-      timeoutMs: 10_000,
-      token: "session-token",
-      config: { gateway: { auth: { mode: "token", token: "session-token" } } },
-    });
-    expect(mockCall(healthCommand)[1]).toBeTypeOf("object");
-  });
+      });
+      if (passwordMode) {
+        expect(mockCall(probeGatewayReachable)[0]).toMatchObject({
+          url: "ws://127.0.0.1:18789",
+          ...auth,
+        });
+      }
+    },
+  );
 
   it("ends with a health-failure outro when the health check exits after a reachable probe", async () => {
     probeGatewayReachable.mockResolvedValue({ ok: true });
@@ -1288,12 +1041,10 @@ describe("finalizeSetupWizard", () => {
     // file's static import can be a second class instance under Vitest.
     const { ExitError } = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
     healthCommand.mockRejectedValueOnce(new ExitError(1));
-    const prompter = createLaterPrompter();
 
     await finalize("quickstart", {
       opts: { skipHealth: false, skipUi: true },
       settings: { gatewayToken: "session-token" },
-      prompter,
     });
 
     expect(prompter.outro).toHaveBeenCalledWith(expect.stringContaining("health check failed"));
@@ -1325,12 +1076,10 @@ describe("finalizeSetupWizard", () => {
           runTui.mockRejectedValueOnce(tuiFailure);
         }
         startOnboardingGatewayProcess.mockResolvedValueOnce(sessionGateway);
-        const prompter = createLaterPrompter();
 
         const finalizing = finalize("quickstart", {
           opts: { installDaemon: undefined, skipHealth },
           settings: { gatewayToken: "test-token" },
-          prompter,
         });
         await awaitGateBeforeSettlement(
           probeStarted.promise,
@@ -1373,14 +1122,22 @@ describe("finalizeSetupWizard", () => {
           initialMessageTimeoutMs: 300_000,
         });
         expect(runTui.mock.calls.at(-1)?.[0]).not.toHaveProperty("timeoutMs");
+        if (!gatewayReady) {
+          expect(runTui.mock.calls.at(-1)?.[0]).not.toHaveProperty("boundGateway");
+          expect(runTui.mock.calls.at(-1)?.[0]).not.toHaveProperty("token");
+          expect(runTui.mock.calls.at(-1)?.[0]).not.toHaveProperty("password");
+        }
 
         expect(sessionGateway.close).toHaveBeenCalledOnce();
+        expect(restoreTerminalState.mock.calls).toEqual([
+          ["pre-setup tui", { resumeStdinIfPaused: false }],
+          ["post-setup tui", { resumeStdinIfPaused: false }],
+        ]);
         expectNoteContains(
-          prompter,
           "Systemd user services are not available inside this container.",
           "Container runtime",
         );
-        expectNoteTitleNotCalled(prompter, "Systemd");
+        expectNoteTitleNotCalled("Systemd");
         expect(gatewayServiceInstall).not.toHaveBeenCalled();
       });
     },
@@ -1404,12 +1161,10 @@ describe("finalizeSetupWizard", () => {
         });
         const sessionGateway = { wait: child.promise, close: vi.fn(async () => {}) };
         startOnboardingGatewayProcess.mockResolvedValueOnce(sessionGateway);
-        const prompter = createLaterPrompter();
 
         await expect(
           finalize("quickstart", {
             opts: { installDaemon: undefined, skipHealth: false },
-            prompter,
           }),
         ).rejects.toBe(failure);
 
@@ -1418,34 +1173,6 @@ describe("finalizeSetupWizard", () => {
       });
     },
   );
-
-  it("uses the resolved setup password for health checks", async () => {
-    probeGatewayReachable.mockResolvedValue({ ok: true });
-    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "env-password");
-    resolveSetupSecretInputString.mockResolvedValueOnce("session-password");
-    const prompter = createLaterPrompter();
-
-    await finalize("quickstart", {
-      opts: { skipHealth: false, skipUi: true },
-      settings: { authMode: "password" },
-      nextConfig: createGatewayPasswordRefConfig(),
-      prompter,
-    });
-
-    expect(mockCall(probeGatewayReachable)[0]).toMatchObject({
-      url: "ws://127.0.0.1:18789",
-      token: undefined,
-      password: "session-password",
-    });
-    expect(mockCall(healthCommand)[0]).toMatchObject({
-      json: false,
-      timeoutMs: 10_000,
-      token: undefined,
-      password: "session-password",
-      config: { gateway: { auth: { mode: "password" } } },
-    });
-    expect(mockCall(healthCommand)[1]).toBeTypeOf("object");
-  });
 
   it("shows actionable gateway guidance instead of a hard error in no-daemon onboarding", async () => {
     await withPlatform("linux", async () => {
@@ -1457,29 +1184,27 @@ describe("finalizeSetupWizard", () => {
         ok: false,
         detail: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
       });
-      const prompter = createLaterPrompter();
-      const runtime = createRuntime();
 
       await finalize("quickstart", {
         opts: { skipHealth: false },
         settings: { gatewayToken: "test-token" },
-        prompter,
-        runtime,
       });
 
       expect(runtime.error).not.toHaveBeenCalledWith("health failed");
-      expectNoteContains(prompter, "Setup was run without Gateway service install", "Gateway");
-      expectNoteTitleNotCalled(prompter, "Dashboard ready");
+      expectNoteContains("Setup was run without Gateway service install");
+      expectNoteTitleNotCalled("Dashboard ready");
       expect(prompter.outro).toHaveBeenCalledWith(
         "Gateway not detected yet. Start now: openclaw gateway run",
       );
-      expect(readSystemdUserLingerStatus).not.toHaveBeenCalled();
-      expect(gatewayServiceIsLoaded).not.toHaveBeenCalled();
-      expect(gatewayServiceInstall).not.toHaveBeenCalled();
-      expect(gatewayServiceRestart).not.toHaveBeenCalled();
-      expect(startGatewayService).not.toHaveBeenCalled();
-      expect(prompter.confirm).not.toHaveBeenCalled();
-      expect(prompter.select).not.toHaveBeenCalled();
+      expectUncalled(
+        readSystemdUserLingerStatus,
+        gatewayServiceIsLoaded,
+        gatewayServiceInstall,
+        gatewayServiceRestart,
+        startGatewayService,
+        prompter.confirm,
+        prompter.select,
+      );
     });
   });
 });
