@@ -22,6 +22,7 @@ import {
   emitSessionsChanged,
   emitSessionTitleChanged,
 } from "./server-methods/session-change-event.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import { setSessionActivitySummaryState } from "./session-activity-summary-state.js";
 import {
   invalidateSessionAutomationIndex,
@@ -157,7 +158,7 @@ it("refreshes 50 mention views without repeated warm preparation after viewer an
   const cfg: OpenClawConfig = {};
   await withMentionInbox(
     async (f) => {
-      const countCheckpoints = async (client = f.bobClient) => {
+      const countCheckpoints = async (client: GatewayClient = f.bobClient) => {
         let checkpoints = 0;
         let active = true;
         // Bun has no promise init hooks; a bounded pump lets unexpected I/O settle.
