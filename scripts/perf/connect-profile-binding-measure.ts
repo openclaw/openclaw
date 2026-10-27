@@ -69,7 +69,11 @@ function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
   return node.selfSize + node.children.reduce((total, child) => total + sampledBytes(child), 0);
 }
 try {
-  const users = [];
+  const users: Array<{
+    binding: { accountId: number; email: string };
+    profileId: string;
+    updatedAt: number;
+  }> = [];
   for (let index = 0; index < userCount; index++) {
     const accountId = index + 1;
     const email = `synthetic-${index}@example.test`;
