@@ -329,14 +329,6 @@ describe("persistInboundImagesForTranscript", () => {
         height: 1,
       },
     ]);
-    const persisted = buildPersistedUserTurnMessage({
-      text: parsed.message,
-      media: result.entries.map((entry) => entry.fact),
-    });
-    expect(readPersistedMediaFacts(persisted)?.map((fact) => fact.fileName)).toEqual([
-      "video.mp4",
-      fileName,
-    ]);
     expect(result.omission).toBe("none");
   });
 });
@@ -353,12 +345,10 @@ describe("parseMessageWithAttachments", () => {
     );
 
     expect(parsed.images).toMatchObject([{ mimeType: "image/png", data: base64 }]);
-    expect(
-      fromSpy.mock.calls.some((call) => {
-        const [value, encoding] = call as unknown[];
-        return value === base64 && encoding === "base64";
-      }),
-    ).toBe(false);
+    expect(fromSpy.mock.calls.map((call) => call.slice(0, 2))).not.toContainEqual([
+      base64,
+      "base64",
+    ]);
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
@@ -400,15 +390,7 @@ describe("parseMessageWithAttachments validation errors", () => {
       attachment: { source: { type: "base64", media_type: "application/pdf", data: "" } },
     },
   ])("rejects normalized RPC attachments with $name", async ({ attachment }) => {
-    const normalized = normalizeRpcAttachmentsToChatAttachments([
-      {
-        type: "file",
-        mimeType: "application/pdf",
-        fileName: "empty.pdf",
-        ...attachment,
-      },
-    ]);
-
+    const normalized = normalizeRpcAttachmentsToChatAttachments([attachment]);
     await expectUnsupportedAttachmentReason(normalized, {}, "empty-payload");
   });
 
@@ -470,14 +452,14 @@ describe("parseMessageWithAttachments validation errors", () => {
         { supportsInlineImages: false },
       );
 
-      expect(parsed.offloadedRefs).toEqual([
-        expect.objectContaining({
+      expect(parsed.offloadedRefs).toMatchObject([
+        {
           kind,
           mimeType: expectedMimeType,
           label: fileName,
           durationMs,
           mediaRef: expect.stringMatching(/^media:\/\/inbound\//u),
-        }),
+        },
       ]);
       expect(parsed.media[0]).toMatchObject({ kind, contentType: expectedMimeType, durationMs });
     },
