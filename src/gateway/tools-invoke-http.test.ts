@@ -6,6 +6,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
 import type { OpenClawToolsOptions } from "../agents/openclaw-tools.types.js";
+import { resolveToolLoopDetectionConfig as actualResolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
@@ -40,7 +41,7 @@ const hookMocks = vi.hoisted(() => ({
     content: [],
     details: {},
   })),
-  resolveToolLoopDetectionConfig: vi.fn(() => ({ warnAt: 3 })),
+  resolveToolLoopDetectionConfig: vi.fn<typeof actualResolveToolLoopDetectionConfig>(),
   runBeforeToolCallHook: vi.fn<typeof runBeforeToolCallHookType>(async (args) => ({
     blocked: false,
     params: args.params,
@@ -405,43 +406,38 @@ describe("POST /tools/invoke", () => {
     expectOkInvokeResponse,
   });
 
-  it("does not record Gateway tools.invoke calls in agent tool-loop history", async () => {
+  it.each(["http", "rpc"])("isolates enabled agent history from operator %s calls", async (via) => {
     setMainAllowedTools({ allow: ["session_status"], gatewayAllow: ["session_status"] });
-    const enabledLoopDetection = { enabled: true, warnAt: 3 };
+    const loopDetection = { enabled: true };
+    cfg = { ...cfg, tools: { loopDetection } };
+    hookMocks.resolveToolLoopDetectionConfig.mockImplementation(
+      actualResolveToolLoopDetectionConfig,
+    );
     hookMocks.runBeforeToolCallHook.mockImplementation(actualRunBeforeToolCallHook);
-
-    for (let index = 0; index < 10; index += 1) {
-      const response = await invokeTool({ tool: "session_status", sessionKey: "main" });
-      expect(response.status).toBe(200);
+    const sessionKey = `agent:main:invoke-history-${via}`;
+    for (let index = 0; index < 2; index += 1) {
+      if (via === "http") {
+        await expectOkInvokeResponse(await invokeTool({ tool: "session_status", sessionKey }));
+      } else {
+        const call = await invokeToolsRpc({
+          name: "session_status",
+          args: {},
+          sessionKey,
+          idempotencyKey: `history-${index}`,
+        });
+        expect(call?.[0]).toBe(true);
+        expect(call?.[1]).toMatchObject({ ok: true });
+      }
     }
-    for (let index = 0; index < 10; index += 1) {
-      const call = await invokeToolsRpc({
-        name: "session_status",
-        args: {},
-        sessionKey: "main",
-        idempotencyKey: `issue-186022-${index}`,
-      });
-      expect(call?.[0]).toBe(true);
-    }
-
-    const sessionKey = "agent:main:main";
-    expect(hookMocks.resolveToolLoopDetectionConfig).not.toHaveBeenCalled();
     expect(getDiagnosticSessionState({ sessionKey }).toolCallHistory ?? []).toHaveLength(0);
-
     await actualRunBeforeToolCallHook({
       toolName: "session_status",
       params: {},
-      toolCallId: "agent-run-tool-call",
-      ctx: {
-        agentId: "main",
-        config: cfg as never,
-        sessionKey,
-        runId: "agent-run-1",
-        loopDetection: enabledLoopDetection,
-      },
+      toolCallId: "agent-call",
+      ctx: { sessionKey, runId: "agent-run", loopDetection },
     });
     expect(getDiagnosticSessionState({ sessionKey }).toolCallHistory).toEqual([
-      expect.objectContaining({ toolName: "session_status", runId: "agent-run-1" }),
+      expect.objectContaining({ toolName: "session_status", runId: "agent-run" }),
     ]);
   });
 
