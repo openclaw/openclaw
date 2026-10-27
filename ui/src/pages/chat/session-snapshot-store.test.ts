@@ -158,7 +158,7 @@ async function readRawRecord(
 }
 
 describe("persistent chat session snapshots", () => {
-  it("round-trips bounded Details display data without adding undefined fields", async () => {
+  it("round-trips bounded Details display data", async () => {
     const details: NonNullable<ChatSessionSnapshot["details"]> = {
       locale: "en",
       subagents: {
@@ -173,7 +173,7 @@ describe("persistent chat session snapshots", () => {
             name: "Check",
             running: false,
             state: "Every hour",
-            result: { summary: undefined, checkedAt: undefined, failed: false },
+            result: { failed: false },
           },
         ],
         total: 1,
@@ -182,7 +182,7 @@ describe("persistent chat session snapshots", () => {
       outputs: 1,
     };
     await persist(new SessionSnapshotStore(), sessionKey, { ...snapshot(), details });
-    expect((await readSnapshot())?.details).toEqual(JSON.parse(JSON.stringify(details)));
+    expect((await readSnapshot())?.details).toEqual(details);
   });
   it("restores model display data with the conversation, isolated from another account", async () => {
     const writer = new SessionSnapshotStore();

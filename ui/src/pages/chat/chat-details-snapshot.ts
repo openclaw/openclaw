@@ -42,14 +42,16 @@ export function captureChatDetailsSnapshot(host: ChatPageHost) {
   const target = { sessionKey: host.sessionKey };
   const key = resolveChatSnapshotKey(host, target);
   const snapshot = readChatSessionSnapshot(host.chatMessagesBySession, host, target);
-  if (!snapshot?.sessionId || snapshot.sessionId !== host.currentSessionId) return undefined;
+  if (!snapshot?.sessionId || snapshot.sessionId !== host.currentSessionId) {
+    return undefined;
+  }
   const client = host.client;
   const epoch = host.connectionEpoch;
   const locale = i18n.getLocale();
   return {
     snapshot,
     details: snapshot.details?.locale === locale ? snapshot.details : undefined,
-    write(patch: DetailsSnapshotPatch) {
+    write: (patch: DetailsSnapshotPatch) => {
       if (
         !host.connected ||
         host.client !== client ||
@@ -58,16 +60,21 @@ export function captureChatDetailsSnapshot(host: ChatPageHost) {
         resolveChatSnapshotKey(host, target) !== key ||
         host.sessionKey !== target.sessionKey ||
         i18n.getLocale() !== locale
-      )
+      ) {
         return;
+      }
       const current = readChatSessionSnapshot(host.chatMessagesBySession, host, target);
-      if (!current || current.sessionId !== snapshot.sessionId) return;
+      if (!current || current.sessionId !== snapshot.sessionId) {
+        return;
+      }
       const details = {
         ...(current.details?.locale === locale ? current.details : {}),
         ...patch,
         locale,
       };
-      if (JSON.stringify(details) === JSON.stringify(current.details)) return;
+      if (JSON.stringify(details) === JSON.stringify(current.details)) {
+        return;
+      }
       cacheChatSessionSnapshot(host.chatMessagesBySession, host, target, { ...current, details });
     },
   };

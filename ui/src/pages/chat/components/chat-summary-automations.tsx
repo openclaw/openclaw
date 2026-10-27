@@ -405,9 +405,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
               job.runningAtMs !== undefined,
             state: jobState(job),
             result: automationResultData(job),
-            ...(job.schedule?.kind === "cron" && job.schedule.tz
-              ? { timezone: job.schedule.tz }
-              : {}),
+            timezone: job.schedule?.kind === "cron" ? job.schedule.tz : undefined,
           }),
         )
       : (cached()?.rows ?? []),

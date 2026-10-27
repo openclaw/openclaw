@@ -150,10 +150,15 @@ suite.define(() => {
         await waitForLayoutSettled(page, ".chat-details-desktop-body__content");
         expect(await geometry()).toEqual(before);
         for (const section of retained) {
-          const state = await section.evaluate((element) => ({
-            section: element.getAttribute("data-details-group") ?? "progress",
-            connected: element.isConnected,
-          }));
+          const state = await section.evaluate((element) => {
+            if (!(element instanceof Element)) {
+              throw new Error("Details section must be an element");
+            }
+            return {
+              section: element.getAttribute("data-details-group") ?? "progress",
+              connected: element.isConnected,
+            };
+          });
           expect(state.connected, state.section).toBe(true);
           await section.dispose();
         }
