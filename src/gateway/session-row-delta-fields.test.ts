@@ -104,3 +104,48 @@ it("recomputes mutable children shared by distinct shallow-frozen row snapshots"
     createSessionRowDeltaDiffer()(previous, prepareSessionRowDeltaFields(current), current),
   ).toEqual({ set: { usage: { input: 4, output: 5 } }, remove: [] });
 });
+
+it("reuses materialized field digests across clock samples without hiding viewer or source changes", () => {
+  let source = Object.freeze({
+    label: "Original label",
+    status: "running",
+    unread: false,
+    model: "original-model",
+    subagentCount: 2,
+  });
+  const initial = prepareSessionRowDeltaFields(source, source);
+  vi.mocked(hash).mockClear();
+  for (let snapshotAt = 0; snapshotAt < 20; snapshotAt++) {
+    const current = { ...source, snapshotAt };
+    expect(
+      createSessionRowDeltaDiffer()(
+        initial,
+        prepareSessionRowDeltaFields(current, source),
+        current,
+      ),
+    ).toEqual({ set: { snapshotAt }, remove: [] });
+  }
+  expect(hash).not.toHaveBeenCalled();
+  const overrides = {
+    label: "Viewer label",
+    status: "done",
+    unread: true,
+    model: "next-model",
+    subagentCount: 3,
+  };
+  for (const [field, value] of Object.entries(overrides)) {
+    const current = { ...source, [field]: value };
+    expect(
+      createSessionRowDeltaDiffer()(
+        initial,
+        prepareSessionRowDeltaFields(current, source),
+        current,
+      ),
+    ).toEqual({ set: { [field]: value }, remove: [] });
+  }
+  source = Object.freeze(overrides);
+  const current = { ...source };
+  expect(
+    createSessionRowDeltaDiffer()(initial, prepareSessionRowDeltaFields(current, source), current),
+  ).toEqual({ set: overrides, remove: [] });
+});
