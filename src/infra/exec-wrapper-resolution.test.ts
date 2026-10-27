@@ -304,10 +304,11 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     "blocks semantic or file-output wrapper %j despite a parseable inner shell",
     (argv, platform) => {
       const wrapper = argv[0];
+      const expectedArgv = [...argv];
       expect(resolveDispatchWrapperTrustPlan(argv, undefined, platform)).toEqual({
-        argv,
+        argv: expectedArgv,
         wrappers: [wrapper],
-        wrapperInvocations: [{ wrapper, sourceArgv: argv }],
+        wrapperInvocations: [{ wrapper, sourceArgv: expectedArgv }],
         policyBlocked: true,
         dispatchChainComplete: false,
         blockedWrapper: wrapper,
