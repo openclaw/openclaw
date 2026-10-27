@@ -9,7 +9,7 @@ import { bootstrapApplication } from "./bootstrap.ts";
 
 setupSidebarTest();
 
-it("recovers a deleted Chat through the shell's router subscription without recursive replacement", async () => {
+it.each([false, true])("recovers deleted Chat once (reconnect: %s)", async (reconnect) => {
   vi.stubGlobal("requestIdleCallback", vi.fn());
   const application = bootstrapApplication();
   const { context } = application;
@@ -61,6 +61,11 @@ it("recovers a deleted Chat through the shell's router subscription without recu
     await router.start(history, "", context);
     shell.connect();
     expect(shell.activeSessionKey).toBe(deletedKey);
+    if (reconnect) {
+      shell.disconnect();
+      shell.connect();
+    }
+    expect(shell.lastWorkspaceLocation?.pathname).toBe("/chat/main/deleted-thread");
 
     deletion.mockImplementation((key) => (key === deletedKey ? "confirmed" : undefined));
     shell.shellNavigation.recoverDeletedActiveSession();

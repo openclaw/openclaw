@@ -64,7 +64,6 @@ export function equalShellRouteState(previous: ShellRouteState, next: ShellRoute
     sameRouteLocation(previous.location, next.location) &&
     previous.committedRouteId === next.committedRouteId &&
     sameRouteLocation(previous.committedLocation, next.committedLocation) &&
-    previous.committedSessionKey === next.committedSessionKey &&
-    previous.sessionUrlPending === next.sessionUrlPending
+    previous.committedSessionKey === next.committedSessionKey
   );
 }
