@@ -314,8 +314,13 @@ try {
               },
             ],
           }));
+          // Let the mock's transcript owner serve this benchmark's media messages.
+          const methodResponses = { ...fixture.scenario.methodResponses };
+          delete methodResponses["chat.startup"];
+          delete methodResponses["chat.history"];
           await installMockGateway(page, {
             ...fixture.scenario,
+            methodResponses,
             serverBuildId: slot.build.buildId,
             serverVersion: slot.build.version,
             automaticallyFetchFavicons: true,
