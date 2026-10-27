@@ -3,13 +3,6 @@
 :root[data-theme="phosphor"] {
   /*
    * Accent — phosphor green on green-cast black
-   *
-   * WCAG 2.1 AA audit (bg = #0a0f0a, relative luminance ≈ 0.0045):
-   *   --accent #4ade80  contrast ≈ 11.1:1 AAA ✓
-   *   --primary-foreground #07120a on #4ade80 button: 11.0:1 ✓
-   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
-   *   worst text pairing --muted on --bg-muted: 6.69:1 ✓
-   *   inherited status label on own subtle tint, worst surface: 5.32:1 ✓
    */
   --ring: #4ade80;
   --accent: #4ade80;
@@ -29,23 +22,11 @@
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 75%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
-  --bg: #0a0f0a;
-  --bg-accent: #0e150e;
-  --bg-elevated: #121a12;
-  --bg-hover: #18221a;
-  --bg-muted: #18221a;
+  --bg-content: #0a0f0a;
 
-  --card: #0e150e;
   --card-foreground: #e8f5e9;
   --card-highlight: rgba(200, 255, 210, 0.04);
-  --popover: #121a12;
   --popover-foreground: #e8f5e9;
-
-  --panel: #0a0f0a;
-  --panel-strong: #121a12;
-  --panel-hover: #18221a;
-  --chrome: rgba(10, 15, 10, 0.96);
-  --chrome-strong: rgba(10, 15, 10, 0.98);
 
   --text: #cfe0cf;
   --text-strong: #e8f5e9;
@@ -54,21 +35,13 @@
   --muted-strong: #a4bba6;
   --muted-foreground: #93ac95;
 
-  --border: #1d291f;
-  --border-strong: #2c3d2f;
-  --border-hover: #3e5442;
-  --input: #1d291f;
-
-  --secondary: #0e150e;
   --secondary-foreground: #e8f5e9;
   --accent-2: #8fd6a5;
   --accent-2-muted: rgba(143, 214, 165, 0.7);
   --accent-2-subtle: rgba(143, 214, 165, 0.12);
 
   --shadow-sm: 0 1px 2px rgba(0, 6, 2, 0.4);
-  --shadow-md: 0 4px 16px rgba(0, 6, 2, 0.5);
   --shadow-lg: 0 12px 32px rgba(0, 6, 2, 0.6);
-  --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(200, 255, 210, 0.04);
 
@@ -85,11 +58,6 @@
 :root[data-theme="phosphor-light"] {
   /*
    * Accent — deep green on cool paper
-   *
-   * WCAG 2.1 AA audit (bg = #f4f7f4, relative luminance ≈ 0.897):
-   *   --accent #10693a  contrast ≈ 6.3:1  AA text ✓
-   *   --primary-foreground #ffffff on #10693a button: 6.8:1 AA ✓
-   *   worst text pairing --muted on --bg-muted: 4.76:1 ✓
    */
   --ring: #10693a;
   --accent: #10693a;
@@ -102,25 +70,12 @@
   --primary-foreground: #ffffff;
   --accent-foreground: #ffffff;
 
-  --bg: #f4f7f4;
-  --bg-accent: #ecf1ec;
-  --bg-elevated: #ffffff;
-  --bg-hover: #e4ebe5;
-  --bg-muted: #e4ebe5;
-  --bg-content: #ecf1ec;
+  --bg-content: #f1f4f1;
 
-  --card: #ffffff;
   --card-foreground: #16201a;
   --card-highlight: rgba(20, 50, 30, 0.02);
-  --popover: #ffffff;
   --popover-foreground: #16201a;
   --session-hovercard-surface: var(--card);
-
-  --panel: #f4f7f4;
-  --panel-strong: #ecf1ec;
-  --panel-hover: #dde6de;
-  --chrome: rgba(244, 247, 244, 0.96);
-  --chrome-strong: rgba(244, 247, 244, 0.98);
 
   --text: #2a352b;
   --text-strong: #16201a;
@@ -129,21 +84,13 @@
   --muted-strong: #455947;
   --muted-foreground: #566b58;
 
-  --border: #dbe4dc;
-  --border-strong: #bfcdc1;
-  --border-hover: #9aad9d;
-  --input: #dbe4dc;
-
-  --secondary: #ecf1ec;
   --secondary-foreground: #2a352b;
   --accent-2: #2f6b47;
   --accent-2-muted: rgba(47, 107, 71, 0.75);
   --accent-2-subtle: rgba(47, 107, 71, 0.1);
 
   --shadow-sm: 0 1px 2px rgba(20, 50, 30, 0.05);
-  --shadow-md: 0 4px 12px rgba(20, 50, 30, 0.07);
   --shadow-lg: 0 12px 28px rgba(20, 50, 30, 0.09);
-  --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(20, 50, 30, 0.04);
 
