@@ -123,6 +123,46 @@ describe("resolveAgentConfig", () => {
     ).toEqual({ kind: "none_configured", source: "inherited" });
   });
 
+  it("keeps configured fallbacks for saved user selections matching the effective primary", () => {
+    const cfg = agentConfig({
+      defaults: {
+        model: modelConfig("openai/gpt-5.4", ["anthropic/claude-sonnet-4-6"]),
+      },
+      entries: {
+        main: {},
+        worker: { model: modelConfig("anthropic/claude-sonnet-4-6", ["openai/gpt-5.4"]) },
+      },
+    });
+    const selection = {
+      cfg,
+      agentId: "main",
+      hasSessionModelOverride: true,
+      modelOverrideSource: "user" as const,
+      selectedModel: { provider: "openai", model: "gpt-5.4" },
+    };
+    expect(resolveModelFallbackAvailability(selection)).toEqual({
+      kind: "active",
+      models: ["anthropic/claude-sonnet-4-6"],
+      source: "inherited",
+    });
+    expect(resolveEffectiveModelFallbacks(selection)).toBeUndefined();
+    expect(
+      resolveEffectiveModelFallbacks({
+        ...selection,
+        agentId: "worker",
+        selectedModel: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      }),
+    ).toEqual(["openai/gpt-5.4"]);
+    expect(resolveEffectiveModelFallbacks({ ...selection, agentId: "worker" })).toEqual([]);
+    expect(resolveModelFallbackAvailability({ ...selection, modelSelectionLocked: true })).toEqual({
+      kind: "disabled_by_model_selection_lock",
+    });
+    expect(resolveModelFallbackAvailability({ ...selection, modelFallbacksOverride: [] })).toEqual({
+      kind: "none_configured",
+      source: "explicit",
+    });
+  });
+
   describe("modelFallbackOverrideFromAvailability", () => {
     const projectionRows: Array<[string, ModelFallbackAvailability]> = [
       [

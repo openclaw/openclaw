@@ -92,6 +92,7 @@ function chatSendPreparationConfig(
         cfg,
         agentId,
         sessionKey,
+        selectedModel: selected,
         hasSessionModelOverride: Boolean(entry?.modelOverride),
         modelOverrideSource:
           entry?.modelOverrideSource === "default" ? undefined : entry?.modelOverrideSource,

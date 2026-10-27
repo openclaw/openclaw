@@ -214,6 +214,7 @@ export function createChatSendMessageInjectionStarter(params: {
             cfg,
             agentId,
             sessionKey,
+            selectedModel: resolvedSessionModel,
             hasSessionModelOverride:
               entry?.modelOverrideSource !== "default" &&
               Boolean(entry?.modelOverride || entry?.providerOverride) &&

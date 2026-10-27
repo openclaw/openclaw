@@ -54,6 +54,7 @@ export function resolveModelFallbackOptions(
     cfg: config,
     agentId: run.agentId,
     sessionKey: run.sessionKey,
+    selectedModel: { provider: run.provider, model: run.model },
     modelSelectionLocked: run.modelSelectionLocked,
     ...(automation
       ? {
@@ -62,6 +63,7 @@ export function resolveModelFallbackOptions(
             cfg: config,
             job: automation.job,
             agentId: run.agentId,
+            selectedModel: { provider: run.provider, model: run.model },
             ...automation.modelFallbackPolicy,
           }),
         }
