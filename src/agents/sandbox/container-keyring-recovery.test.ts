@@ -52,7 +52,7 @@ it.each([false, true])(
     const start = execContainer(PODMAN_SANDBOX_ENGINE, ["start", id("c")]);
     if (failRetry) {
       await expect(start).rejects.toThrow(
-        /per-user kernel keyring quota is exhausted.*kernel\.keys\.maxkeys=2000.*kernel\.keys\.maxbytes=200000.*\/etc\/sysctl\.d.*reduce running sandboxes/u,
+        /per-user kernel keyring quota is exhausted.*kernel\.keys\.maxkeys.*kernel\.keys\.maxbytes above their current values.*\/etc\/sysctl\.d.*reduce running sandboxes/u,
       );
       await expect(start).rejects.not.toThrow("crun:");
     } else {
