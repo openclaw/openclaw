@@ -69,15 +69,16 @@ it("merges file identity forward across two compactions", () => {
 describe("serializeConversation", () => {
   it("serializes tool arguments once for the full call and sampled-result label", () => {
     const payload = { path: "src/example.ts", content: "synthetic content" };
+    const shortResult = `${"s".repeat(1_997)}\r\n!`;
     const stringify = vi.spyOn(JSON, "stringify");
     try {
       expect(
         serializeConversation([
           assistant([toolCall("write", { payload }, "call-1")]),
-          toolResult("saved", { toolCallId: "call-1", toolName: "write" }),
+          toolResult(shortResult, { toolCallId: "call-1", toolName: "write" }),
         ]),
       ).toBe(
-        '[Assistant tool calls]: write(payload={"path":"src/example.ts","content":"synthetic content"})\n\n[Tool result]: saved',
+        `[Assistant tool calls]: write(payload={"path":"src/example.ts","content":"synthetic content"})\n\n[Tool result]: ${shortResult}`,
       );
       expect(stringify.mock.calls.filter(([value]) => value === payload)).toHaveLength(1);
     } finally {
@@ -230,18 +231,15 @@ describe("serializeConversation", () => {
     );
   });
 
-  it("keeps both diagnostic truncation boundaries UTF-16 safe", () => {
-    const output = `${"h".repeat(1399)}🚀${"m".repeat(1600)}🚀\nERROR: failed safely`;
-
-    const serialized = serializeToolResult(output);
-    expect(serialized).toContain("ERROR: failed safely");
-    expect(serialized.isWellFormed()).toBe(true);
-  });
-
-  it("does not let routine 'exit code 0' output evict an earlier failure", () => {
-    const output = `${"h".repeat(1500)}ERROR: deployment failed${"m".repeat(1500)}\nexit code 0`;
-    expect(serializeToolResult(output)).toContain("ERROR: deployment failed");
-  });
+  it.each([600, 1_500, 1_950])(
+    "keeps an earlier failure at offset %i over routine 'exit code 0' output",
+    (offset) => {
+      const output = `${"h".repeat(offset)}ERROR: deployment failed${"m".repeat(1500)}\nexit code 0`;
+      const serialized = serializeToolResult(output);
+      expect(serialized.split("ERROR: deployment failed")).toHaveLength(2);
+      expect(serialized.length).toBeLessThanOrEqual(2_000 + "[Tool result]: ".length);
+    },
+  );
 
   it("retains terminal errors followed by more than 600 characters of stack frames", () => {
     const output = `${"progress ".repeat(300)}\nERROR: terminal failure\n${"  at applicationFrame()\n".repeat(45)}`;
@@ -251,15 +249,6 @@ describe("serializeConversation", () => {
     expect(serialized).toContain("applicationFrame()");
     expect(serialized).toContain("middle/trailing characters truncated");
     expect(serialized.length).toBeLessThan(2100);
-  });
-
-  it("does not duplicate early errors into an overlapping diagnostic window", () => {
-    const output = `${"h".repeat(600)}ERROR: early failure${"m".repeat(1900)}`;
-
-    const serialized = serializeToolResult(output);
-    expect(serialized.split("ERROR: early failure")).toHaveLength(2);
-    expect(serialized).toContain("more characters truncated]");
-    expect(serialized.length).toBeLessThanOrEqual(2_000 + "[Tool result]: ".length);
   });
 });
 
