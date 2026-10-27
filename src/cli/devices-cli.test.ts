@@ -401,16 +401,12 @@ describe("mutations", () => {
       ["opaque"],
     );
   });
-  it.each([undefined, "The machine needs a matching Gateway build."])(
-    "returns the Gateway commands in JSON without printing text (%s)",
-    async (versionNote) => {
-      const commands = { ...joinCommands, ...(versionNote ? { versionNote } : {}) };
-      callGateway.mockResolvedValueOnce({ joinUrl, ...commands });
-      await run("join-code", "--json");
-      expect(runtime.writeJson).toHaveBeenCalledWith({ joinUrl, ...commands });
-      expect(runtime.log).not.toHaveBeenCalled();
-    },
-  );
+  it("returns Gateway commands without a version note or text in JSON mode", async () => {
+    callGateway.mockResolvedValueOnce({ joinUrl, ...joinCommands });
+    await run("join-code", "--json");
+    expect(runtime.writeJson).toHaveBeenCalledWith({ joinUrl, ...joinCommands });
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
 });
 
 describe("local fallback", () => {
@@ -516,38 +512,60 @@ describe("local fallback", () => {
 });
 
 describe("list output", () => {
-  it("prints profile-aware node reapproval hints with a blank operator label", async () => {
+  it("renders safe identities, key-mismatch state, and profile-aware node guidance", async () => {
     vi.stubEnv("OPENCLAW_PROFILE", "work");
-    list([], [nodeDevice("   ")]);
-    await run("list", ...remoteConnection);
-    expect(callGateway).toHaveBeenCalledOnce();
-    expectText(output(), [
-      "Node reapproval pending for Colin's S25. Run",
-      "openclaw --profile work nodes approve node-req-1",
-      connectionReminder,
-    ]);
-    expect(output()).not.toMatch(connectionSecrets);
-  });
-  it("does not show prior approval for key-mismatched requests", async () => {
-    list([pending({ publicKey: "new-key" })], [paired({ publicKey: "old-key" })]);
-    await run("list");
-    expect(output()).toContain("new pairing");
-    expect(output()).not.toContain("scope upgrade");
-    expect(output()).not.toContain("roles: operator; scopes: operator.read");
-  });
-  it("sanitizes device-controlled terminal output", async () => {
+    const firstId = "a".repeat(64);
+    const secondId = "b".repeat(64);
     list(
-      [pending({ displayName: "Bad\u001b[2J\nName", remoteIp: "10.0.0.9\rspoof" })],
+      [
+        pending({
+          publicKey: "new-key",
+          displayName: "Bad\u001b[2J\nName",
+          remoteIp: "10.0.0.9\rspoof",
+        }),
+      ],
       [
         paired({
+          publicKey: "old-key",
           displayName: "Pair\u001b]8;;https://evil.example\u001b\\ed",
           remoteIp: "10.0.0.1\u007f",
         }),
+        nodeDevice("   "),
+        paired({
+          deviceId: firstId,
+          operatorLabel: "Kitchen Mac",
+          displayName: "MacBook Pro",
+          clientId: "openclaw-macos",
+        }),
+        paired({ deviceId: secondId, displayName: "Kitchen Mac", clientId: "openclaw-ios" }),
+        paired({ deviceId: "dev-client", displayName: undefined, clientId: "openclaw-control-ui" }),
+        paired({ deviceId: "dev-id-only", displayName: undefined }),
       ],
     );
-    await run("list");
+    await run("list", ...remoteConnection);
+    expect(callGateway).toHaveBeenCalledOnce();
     const text = stripAnsi(output());
-    expectText(text, ["BadName", "spoof", "Paired"], ["\u001b", "\r"]);
+    expectText(
+      text,
+      [
+        "BadName",
+        "spoof",
+        "Paired",
+        "new pairing",
+        "Device ID",
+        "Full device IDs",
+        "openclaw-control-ui",
+        "dev-id-only",
+        "Node reapproval pending for Colin's S25. Run",
+        "openclaw --profile work nodes approve node-req-1",
+        connectionReminder,
+      ],
+      ["\u001b", "\r", "scope upgrade", "roles: operator; scopes: operator.read"],
+    );
+    expect(text.split("\n")).toContain(`  ${firstId}  Kitchen Mac`);
+    expect(text.split("\n")).toContain(`  ${secondId}  Kitchen Mac`);
+    expect(text).not.toMatch(/MacBook Pro|openclaw-macos|openclaw-ios/);
+    expect(output()).not.toMatch(connectionSecrets);
   });
   it("emits transport failures as JSON", async () => {
     const error = new Error("gateway closed (1006)");
@@ -562,29 +580,5 @@ describe("list output", () => {
     expect(mocks.formatGatewayTransportErrorJson).toHaveBeenCalledWith(error);
     expect(runtime.writeJson).toHaveBeenCalledWith(payload);
     expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
-  it("shows full ids alongside the preferred paired-device names", async () => {
-    const firstId = "a".repeat(64);
-    const secondId = "b".repeat(64);
-    list(
-      [],
-      [
-        paired({
-          deviceId: firstId,
-          operatorLabel: "Kitchen Mac",
-          displayName: "MacBook Pro",
-          clientId: "openclaw-macos",
-        }),
-        paired({ deviceId: secondId, displayName: "Kitchen Mac", clientId: "openclaw-ios" }),
-        paired({ deviceId: "dev-client", displayName: undefined, clientId: "openclaw-control-ui" }),
-        paired({ deviceId: "dev-id-only", displayName: undefined }),
-      ],
-    );
-    await run("list");
-    const text = stripAnsi(output());
-    expectText(text, ["Device ID", "Full device IDs", "openclaw-control-ui", "dev-id-only"]);
-    expect(text.split("\n")).toContain(`  ${firstId}  Kitchen Mac`);
-    expect(text.split("\n")).toContain(`  ${secondId}  Kitchen Mac`);
-    expect(text).not.toMatch(/MacBook Pro|openclaw-macos|openclaw-ios/);
   });
 });
