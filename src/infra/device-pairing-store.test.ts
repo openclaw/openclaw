@@ -180,6 +180,8 @@ test.each([false, true])("keeps transaction-local reads uncached (rollback=%s)",
 });
 
 test.each([false, true])("isolates reused snapshots (rollback=%s)", (rollback) => {
+  const before = readSnapshot(database.db);
+  const encode = vi.spyOn(rowMapping, "toPairedRow");
   const execute = vi.spyOn(database.db, "exec");
   const reads = trackReads({ paired: /^\s*select\b.*\b(?:from|join) "device_pairing_paired"/iu });
   const tokens = {
@@ -195,6 +197,10 @@ test.each([false, true])("isolates reused snapshots (rollback=%s)", (rollback) =
         withDatabase(
           database,
           () => {
+            expect(updatePaired("node", () => ({ value: false }))).toBe(false);
+            expect(readSnapshot(database.db)).toEqual(before);
+            expect(encode).not.toHaveBeenCalled();
+            expect(reads.counts.paired).toBe(2);
             updatePaired("node", () => ({
               value: undefined,
               patch: { displayName: "Temporary name", tokens },
@@ -216,7 +222,7 @@ test.each([false, true])("isolates reused snapshots (rollback=%s)", (rollback) =
             expect(readState(database.db).pairedByDeviceId).toEqual(expected);
             expect(loadPaired(database.db, "constructor")).toBeNull();
             expect(loadPaired(database.db, "__proto__")).toBeNull();
-            expect(reads.counts.paired).toBe(1);
+            expect(reads.counts.paired).toBe(2);
             if (rollback) {
               throw new Error("rollback pairing snapshot");
             }
@@ -233,21 +239,4 @@ test.each([false, true])("isolates reused snapshots (rollback=%s)", (rollback) =
   ).toEqual([]);
   const committed = readState(database.db).pairedByDeviceId;
   expect(committed).toEqual(rollback ? initial.pairedByDeviceId : expected);
-});
-
-test("does not serialize a paired row when an update is rejected", () => {
-  const before = readSnapshot(database.db);
-  const encode = vi.spyOn(rowMapping, "toPairedRow");
-  const result = runWithSqliteWorkerStateContext({ environment: env }, () =>
-    write(() =>
-      withDatabase(
-        database,
-        () => updatePaired("node", () => ({ value: false })),
-        initial.pairedByDeviceId,
-      ),
-    ),
-  );
-  expect(result).toBe(false);
-  expect(readSnapshot(database.db)).toEqual(before);
-  expect(encode).not.toHaveBeenCalled();
 });
