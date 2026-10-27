@@ -6,13 +6,11 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { promptReport } from "../config/sessions/system-prompt-report.test-support.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   defaultPersistDigest,
-  defaultReadSession,
   normalizeSessionObserverModelOutput,
   synthesizeSessionObserverTerminalDigest,
   type SessionObserverState,
@@ -177,26 +175,4 @@ it("publishes terminal-digest synthesis through the same seam", () =>
     });
     expect(terminal?.health).toBe("done");
     expect(changes).toContainEqual(expect.objectContaining(scope));
-  }));
-
-it("reads observer lifecycle and digest without loading prompt snapshots", () =>
-  withStore(async ({ seed, read }) => {
-    const metadata = {
-      sessionId,
-      lifecycleRevision: "observer-lifecycle",
-      observerDigest: digest(3),
-    };
-    const skillsSnapshot = { prompt: "synthetic skill instructions".repeat(1200), skills: [] };
-    await seed({
-      ...metadata,
-      skillsSnapshot,
-      systemPromptReport: promptReport(1, 1, 0),
-      sessionDiffBaseline: { version: 1, sessionId, root: "/synthetic", files: [] },
-    });
-    const entry = await defaultReadSession(scope.sessionKey, scope.agentId);
-    expect(entry).toMatchObject(metadata);
-    expect(entry).not.toHaveProperty("skillsSnapshot");
-    expect(entry).not.toHaveProperty("systemPromptReport");
-    expect(entry).not.toHaveProperty("sessionDiffBaseline");
-    expect(read()?.skillsSnapshot).toEqual(skillsSnapshot);
   }));

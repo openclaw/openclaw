@@ -285,7 +285,6 @@ export function defaultReadSession(
     sessionKey,
     agentId,
     ...(storePath ? { storePath } : {}),
-    projection: "list",
   });
 }
 

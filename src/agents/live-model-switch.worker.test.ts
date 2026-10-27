@@ -131,6 +131,13 @@ describe("live model switch worker persistence", () => {
         modelOverride: initial.modelOverride,
       });
       expect(loadSessionEntry(scope)?.liveModelSwitchPending).toBeUndefined();
+      expect(
+        await shouldSwitchToLiveModel({
+          ...params,
+          currentProvider: selection.provider,
+          currentModel: "gpt-5.5",
+        }),
+      ).toBeUndefined();
 
       const withoutPendingSwitch = loadSessionEntry(scope);
       await apply();
