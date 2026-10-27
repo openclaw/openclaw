@@ -65,12 +65,20 @@ describe("worker placement restart continuity", () => {
       }
       await restarted.service.reconcile();
       if (outcome === "SSH") {
-        expect(restarted.environments.startTunnel).not.toHaveBeenCalled();
-        expect(restarted.placements.current()).toMatchObject({
-          state: "failed",
-          turnClaim: null,
-          recoveryError: "Active worker turn claim cannot be proven live after gateway restart",
+        expect(restarted.environments.startTunnel).toHaveBeenCalledWith({
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
         });
+        expect(restarted.placements.current()).toMatchObject({
+          state: "reclaimed",
+          turnClaim: null,
+          workspaceBaseManifestRef: restarted.reconciledManifestRef,
+        });
+        expect(restarted.log.indexOf("workspace:verify-local")).toBeLessThan(
+          restarted.log.indexOf("teardown:destroy"),
+        );
+        expect(restartedStore.validateTurnClaim(claim)).toBe(false);
+        expect(restartedStore.isWorkerTurnToolAuthorized(claim, "sessions_send")).toBe(false);
         expect(restarted.environments.destroy).toHaveBeenCalledWith(active.environmentId);
         return;
       }

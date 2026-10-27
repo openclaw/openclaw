@@ -46,7 +46,9 @@ export function createReplyInputAdmission(params: {
   };
   const bindSource = () => {
     assertCurrent();
-    if (params.sourceTurnId) bindSessionControllerSourceTurnId(replyOperation, params.sourceTurnId);
+    if (params.sourceTurnId) {
+      bindSessionControllerSourceTurnId(replyOperation, params.sourceTurnId);
+    }
   };
   const acquire = async () => {
     const actor = await acquireReplyOperationSessionActor(replyOperation);
@@ -59,7 +61,9 @@ export function createReplyInputAdmission(params: {
     return undefined;
   };
   const read = async () => {
-    if (!sessionKey) throw new Error("Reply input has no session target");
+    if (!sessionKey) {
+      throw new Error("Reply input has no session target");
+    }
     const acquired = await acquire();
     if (acquired) {
       const authority = { assertCurrent, authorize: assertCurrent };
@@ -75,7 +79,7 @@ export function createReplyInputAdmission(params: {
     );
   };
   return {
-    async admitUserTurn(recorder?: UserTurnTranscriptRecorder): Promise<void> {
+    async admitUserTurn(this: void, recorder?: UserTurnTranscriptRecorder): Promise<void> {
       assertCurrent();
       if (!recorder || recorder.hasPersisted()) {
         bindSource();
@@ -124,7 +128,7 @@ export function createReplyInputAdmission(params: {
       }
       bindSource();
     },
-    async recordPendingDelivery(delivery: PendingReplyDelivery): Promise<void> {
+    async recordPendingDelivery(this: void, delivery: PendingReplyDelivery): Promise<void> {
       const entry = await read();
       assertCurrent();
       if (!entry || entry.sessionId !== replyOperation.sessionId || !target) {
@@ -160,7 +164,9 @@ export function createReplyInputAdmission(params: {
           workerGuard: { assertCurrent },
         },
       );
-      if (updated) params.setEntry(updated);
+      if (updated) {
+        params.setEntry(updated);
+      }
     },
   };
 }

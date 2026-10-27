@@ -3,10 +3,11 @@ import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { makeRegistryRun as makeRunRecord, useSubagentRegistryFixture } from "./subagent-registry-live.test-support.js";
+import { useSubagentRegistryFixture } from "./subagent-registry-live.test-support.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { appendTranscriptMessage } from "../../../config/sessions/session-accessor.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -22,13 +23,13 @@ import {
 } from "../announce/subagent-announce.js";
 import { observeSubagentExecution } from "./subagent-execution-observation.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import {
-  addSubagentRunForTests,
-  initSubagentRegistry,
-  resetSubagentRegistryForTests,
+  registerSubagentRun,
+  startQueuedSubagentRun,
   testing,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -123,12 +124,6 @@ describe("yielded run settlement", () => {
     useRealCapture();
   };
   const persisted = (runId: string) => loadSubagentRegistryFromSqlite().get(runId);
-  const reloadRegistry = async () => {
-    await fixture.settle();
-    await resetSubagentRegistryForTests({ persist: false });
-    await initSubagentRegistry();
-    await fixture.activateGatewayRuntime();
-  };
   const waitSurface = async (runId: string) => {
     const tool = createAgentsWaitTool({ agentSessionKey: "agent:main:main", agentId: "main" });
     const result = await tool.execute("wait", { ids: [runId], timeoutSeconds: 0 });
@@ -139,156 +134,73 @@ describe("yielded run settlement", () => {
       pending: string[];
     };
   };
-  // #141474: preserve recorded outcomes; diagnose only yielded collectors with no outcome.
-  const DIAGNOSTIC = expect.stringContaining("no recorded collectorCompletion");
-  const collectorId = "legacy-yielded-collector";
-  const LEGACY_SHAPES = [
-    {
-      shape: "execution.outcome absent",
-      outcome: undefined,
-      settledOutcome: { status: "error", error: DIAGNOSTIC },
-      endedReason: "subagent-error",
-      waited: { status: "failed", error: DIAGNOSTIC, result: "" },
-      reason: "yielded_without_result",
-    },
-    {
-      shape: "execution.outcome ok with endedAt",
-      outcome: { status: "ok" as const },
-      settledOutcome: { status: "ok" },
-      endedReason: "subagent-complete",
-      waited: { status: "done", result: YIELDED_REPLY },
-      reason: undefined,
-    },
-    {
-      shape: "execution.outcome error with endedAt",
-      outcome: { status: "error" as const, error: "recorded failure" },
-      settledOutcome: { status: "error", error: "recorded failure" },
-      endedReason: "subagent-error",
-      waited: { status: "failed", error: "recorded failure", result: "" },
-      reason: undefined,
-    },
-  ];
-  const pausedRun = (overrides: Parameters<typeof makeRunRecord>[0]) =>
-    makeRunRecord({
-      pauseReason: "sessions_yield",
-      startedAt: T0 - 5 * MINUTE_MS,
-      endedAt: T0 - 4 * MINUTE_MS,
-      ...overrides,
-    });
-  const legacyYieldedCollector = (
-    outcome?: { status: "ok" | "timeout" } | { status: "error"; error: string },
-  ) =>
-    pausedRun({
+  const collectorId = "live-yielded-collector";
+  const registerYieldedCollector = async (
+    outcome?: SubagentRunRecord["execution"]["outcome"],
+    completion?: SubagentRunRecord["completion"],
+  ) => {
+    const gatewayContextResolver = getGatewayContextResolver(fixture.gatewayRuntime);
+    await registerSubagentRun({
       runId: collectorId,
       childSessionKey: COLLECTOR_KEY,
+      childAgentId: "main",
+      sessionEntry: {
+        sessionId: "sess-legacy-collector",
+        lifecycleRevision: "collector-incarnation",
+      },
+      requesterSessionKey: "agent:main:main",
       requesterAgentId: "main",
+      requesterDisplayKey: "main",
+      task: "Collect the findings",
+      cleanup: "keep",
       collect: true,
-      groupId: "group-legacy",
+      groupId: "group-live",
       swarmRequesterSessionKey: "agent:main:main",
       expectsCompletionMessage: false,
-      ...(outcome ? { outcome } : {}),
+      gatewayContextResolver,
     });
+    expect(
+      await startQueuedSubagentRun(collectorId, undefined, undefined, gatewayContextResolver),
+    ).toBe(true);
+    await fixture.settle();
+    // Keep the accepted run's current Gateway and generation while setting its yielded state.
+    await mutateSubagentRuns([collectorId], (rows) => {
+      const current = rows.get(collectorId);
+      if (!current) {
+        throw new Error("Live collector registration was not published");
+      }
+      const yielded: SubagentRunRecord = {
+        ...current,
+        pauseReason: "sessions_yield",
+        execution: {
+          ...current.execution,
+          status: "terminal",
+          startedAt: T0 - 5 * MINUTE_MS,
+          endedAt: T0 - 4 * MINUTE_MS,
+          outcome,
+        },
+        ...(completion ? { completion } : {}),
+      };
+      return { value: undefined, postimages: new Map([[collectorId, yielded]]) };
+    });
+  };
   const sweep = async () => {
     await testing.sweepOnceForTests();
     await fixture.settle();
   };
   const settleCollector = async (
-    outcome: Parameters<typeof legacyYieldedCollector>[0],
+    outcome: SubagentRunRecord["execution"]["outcome"],
     transcript: Parameters<typeof writeYieldedTranscript> = [],
   ) => {
     freezeTime();
     await writeYieldedTranscript(...transcript);
-    await addSubagentRunForTests(legacyYieldedCollector(outcome));
-    await reloadRegistry();
+    await registerYieldedCollector(outcome);
     await sweep();
   };
   const expectSilentResult = async (runId: string, expected: Record<string, unknown>) => {
     expect((await waitSurface(runId)).completed).toMatchObject([expected]);
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
   };
-
-  it.each(LEGACY_SHAPES)(
-    "settles a collector persisted yielded without a result after registry hydration ($shape)",
-    async ({ outcome, settledOutcome, endedReason, waited: expectedWait, reason }) => {
-      freezeTime();
-      await writeYieldedTranscript();
-      // Controls: yielded rows that a continuation can still reach stay untouched.
-      const legacyLeaf = pausedRun({
-        runId: "yielded-legacy-leaf",
-        childSessionKey: "agent:main:subagent:legacy-leaf",
-        expectsCompletionMessage: true,
-      });
-      // Controls: collectors the sweep must never settle, one with a recorded result and one
-      // whose stop is already claimed.
-      const frozenCollector = makeRunRecord({
-        ...legacyYieldedCollector(),
-        runId: "yielded-frozen-collector",
-        childSessionKey: "agent:main:subagent:frozen-collector",
-        outcome: { status: "ok" },
-        collectorCompletion: { status: "done" },
-      });
-      const killClaimedCollector = makeRunRecord({
-        ...legacyYieldedCollector(),
-        runId: "yielded-kill-claimed-collector",
-        childSessionKey: "agent:main:subagent:kill-claimed-collector",
-        killIntent: { requestedAt: T0 - 3 * MINUTE_MS, reason: "operator" },
-      });
-      for (const run of [
-        legacyYieldedCollector(outcome),
-        legacyLeaf,
-        frozenCollector,
-        killClaimedCollector,
-      ]) {
-        await addSubagentRunForTests(run);
-      }
-      expect(persisted(collectorId)?.execution.outcome?.status).toBe(outcome?.status);
-      const frozenBefore = persisted("yielded-frozen-collector");
-      await reloadRegistry();
-      expect(
-        await waitSurface(collectorId),
-        "before the sweep the waiter has no result",
-      ).toMatchObject({ completed: [], pending: [collectorId] });
-
-      await sweep();
-
-      const settled = persisted(collectorId);
-      expect(settled?.pauseReason).toBeUndefined();
-      // The yield time stays the end time for either stored shape, and a recorded outcome stays.
-      expect(settled?.execution).toMatchObject({
-        status: "terminal",
-        startedAt: T0 - 5 * MINUTE_MS,
-        endedAt: T0 - 4 * MINUTE_MS,
-        outcome: settledOutcome,
-      });
-      expect(settled?.endedReason).toBe(endedReason);
-      expect(settled?.collectorCompletion?.status).toBe(expectedWait.status);
-      expect(settled?.collectorCompletion?.reason).toBe(reason);
-      const waited = await waitSurface(collectorId);
-      expect(waited.pending).toEqual([]);
-      expect(waited.completed).toMatchObject([expectedWait]);
-      expect(waited.completed[0]?.reason).toBe(reason);
-      if (outcome?.status === "ok") {
-        expect(waited.completed[0]?.error).toBeUndefined();
-      }
-      for (const control of [legacyLeaf]) {
-        expect(persisted(control.runId), control.runId).toMatchObject({
-          pauseReason: "sessions_yield",
-          execution: { status: "terminal" },
-        });
-        expect(persisted(control.runId)?.execution.outcome).toBeUndefined();
-      }
-      const frozen = persisted("yielded-frozen-collector");
-      expect(frozen?.execution).toEqual(frozenBefore?.execution);
-      expect(frozen?.collectorCompletion).toEqual({ status: "done" });
-      expect(frozen?.endedReason).toBe(frozenBefore?.endedReason);
-      // The claimed stop owns the row: it completes as a cancellation, not as the sweep's failure.
-      expect(persisted("yielded-kill-claimed-collector")).toMatchObject({
-        endedReason: "subagent-killed",
-        collectorCompletion: { status: "killed" },
-        execution: { outcome: { status: "error", error: "operator" } },
-      });
-    },
-  );
 
   it("reads the yielded turn rather than unrelated later turns beyond the recent-message window", async () => {
     await settleCollector({ status: "ok" }, [YIELDED_REPLY, 65]);
@@ -337,16 +249,11 @@ describe("yielded run settlement", () => {
       });
       vi.setSystemTime(T0);
       await writeYieldedTranscript();
-      await addSubagentRunForTests({
-        ...legacyYieldedCollector({ status: "ok" }),
-        childSessionIdentity: {
-          sessionId: "sess-legacy-collector",
-          lifecycleRevision: "collector-incarnation",
-        },
-        // Isolate postcommit retry from transcript capture: this reply is already frozen.
-        completion: { required: false, resultText: YIELDED_REPLY, capturedAt: T0 - 4 * MINUTE_MS },
-      });
-      await reloadRegistry();
+      // Isolate postcommit retry from transcript capture: this reply is already frozen.
+      await registerYieldedCollector(
+        { status: "ok" },
+        { required: false, resultText: YIELDED_REPLY, capturedAt: T0 - 4 * MINUTE_MS },
+      );
       let injected = 0;
       let refusedFallback = false;
       using _ = probe.command(stateWorker, async (command, executeOptions, scope) => {
@@ -412,9 +319,10 @@ describe("yielded run settlement", () => {
       agentId: "main",
       sessionKey: COLLECTOR_KEY,
       sessionId: "sess-legacy-collector",
+      lifecycleRevision: "collector-incarnation",
       defaultSessionId: "sess-legacy-collector",
     });
-    await addSubagentRunForTests(legacyYieldedCollector());
+    await registerYieldedCollector();
     const surfaces = async () => {
       const entry = subagentRuns.get(collectorId) as SubagentRunRecord;
       const waiter = await waitSurface(collectorId);

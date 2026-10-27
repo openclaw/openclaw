@@ -256,7 +256,7 @@ describe("pending-final transport receipt safety", () => {
             { ...part, platformMessageId: "other-id", index: 1, raw: { roomId: "!other:example" } },
           ]
         : [part];
-    const receipt = {
+    const transportReceipt = {
       primaryPlatformMessageId: "first-id",
       platformMessageIds: parts.map((item) => item.platformMessageId),
       parts,
@@ -269,7 +269,7 @@ describe("pending-final transport receipt safety", () => {
     const send = vi.fn(async () =>
       variant === "metadata-omitted"
         ? sent
-        : { ...sent, target: { kind: "room", id: context.to }, receipt },
+        : { ...sent, target: { kind: "room", id: context.to }, receipt: transportReceipt },
     );
     const recover = recovery(send);
     await recover();

@@ -7,7 +7,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type * as BundledIds from "../channels/plugins/bundled-ids.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -36,7 +35,6 @@ import {
   runStateIntegrityText,
   stateIntegrityText,
   withMainAgentRoster,
-  writeSessionStore,
 } from "./doctor-state-integrity.test-support.js";
 import {
   detectLinuxSdBackedStateDir,

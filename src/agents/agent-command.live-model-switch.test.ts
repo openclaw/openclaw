@@ -8,7 +8,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
@@ -20,11 +20,8 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { startSessionControllerInterruption } from "../sessions/session-controller.lifecycle.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import type { SkillSnapshot } from "../skills/types.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
-import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { type AdmittedRunContext } from "./admitted-run-context.js";
 import {
   type CommandSessionEntryFixture,
   createChannelModelRuntimeConfig,
@@ -2360,17 +2357,28 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
       await runDiscordDelivery({ to: "channel:general" });
 
-      expect(sessionAccessor.loadSessionEntry(scope)?.pendingFinalDelivery).toMatchObject({
-        kind: "replayable",
-        text: "ok",
+      const entry = expectDefined(
+        sessionAccessor.loadSessionEntry(scope),
+        "current delivery session",
+      );
+      const pendingDelivery = expectDefined(
+        entry.pendingFinalDelivery,
+        "prepared delivery receipt",
+      );
+      expect(pendingDelivery).toMatchObject({
+        kind: "transport-only",
+        intentId: expect.any(String),
+        deliveries: [{ id: expect.any(String), state: "prepared" }],
         context: {
           channel: "discord",
           to: "channel:1524410080953634829",
           accountId: "main",
         },
       });
+      expect(pendingDelivery).not.toHaveProperty("text");
       expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
         expect.objectContaining({
+          payloads: [{ text: "ok" }],
           opts: expect.objectContaining({
             replyChannel: "discord",
             replyTo: "channel:1524410080953634829",
@@ -2379,6 +2387,19 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           }),
         }),
       );
+      const deliveredPayload = expectDefined(
+        state.deliverAgentCommandResultMock.mock.calls[0]?.[0]?.payloads?.[0],
+        "delivered payload",
+      );
+      expect(
+        getReplyPayloadMetadata(deliveredPayload)?.pendingFinalDeliveryCompletion,
+      ).toMatchObject({
+        deliveryId: expectDefined(pendingDelivery.deliveries?.[0], "prepared delivery").id,
+        intentId: pendingDelivery.intentId,
+        sessionId: entry.sessionId,
+        sessionKey: scope.sessionKey,
+        storePath: scope.storePath,
+      });
     });
   });
 

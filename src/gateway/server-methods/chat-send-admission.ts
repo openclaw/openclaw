@@ -7,7 +7,11 @@ import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  resolveProjectedAgentRunProgressState,
+} from "../../infra/agent-run-registry.js";
 import {
   isProgressCardRefreshInputProvenance,
   progressCardRefreshRunProjection,
@@ -43,7 +47,7 @@ import {
 } from "./chat-send-admission-context.js";
 import { respondChatSessionRoutingChanged } from "./chat-send-admission-errors.js";
 import {
-  isLocalGoalChatAdmission,
+  isLocalChatInputAdmission,
   isWorkerGoalChatAdmission,
   withGoalChatPlacement,
   type PreparedGoalChatPlacement,
@@ -164,6 +168,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let replyTargetsCaptured = false;
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   let localGoalAdmission = false;
+  let localInputAdmission = false;
   let workerGoalAdmission = false;
   let initialSessionEntry: InternalSessionEntry | undefined;
   let admittedSessionEntry: InternalSessionEntry | undefined;
@@ -251,11 +256,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     if (context.workerSessionPlacementService !== placementService) {
       throw new Error("Worker placement owner changed during chat admission; retry.");
     }
-    if (
-      request.goalOperation &&
-      placementService &&
-      preparedPlacement?.sessionId !== admittedSessionId
-    ) {
+    if (placementService && preparedPlacement?.sessionId !== admittedSessionId) {
       using placementPhase = diagnostics?.scope("detail.admission.placement_prepare");
       return await withGoalChatPlacement(placementService, admittedSessionId, (prepared) => {
         placementPhase?.finish();
@@ -268,7 +269,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       let pendingAcpRead: (() => ReturnType<typeof prepareChatSendAcpMetadata>) | undefined;
       using currentPhase = diagnostics?.scope("detail.admission.current_session");
       await withCurrentChatSendRetry(params, pendingAttemptId, (latestSession, comparison) => {
-        const readGoalPlacement = request.goalOperation !== undefined;
         retryComparison = comparison;
         params.assertCurrent?.();
         const retainedRequestConflict = resolveChatSendRequestConflict(
@@ -347,25 +347,33 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           throw new Error("Worker placement owner changed during chat admission; retry.");
         }
         const placementChanged = preparedPlacement?.sessionId !== admittedSessionId;
-        if (readGoalPlacement && placementService && placementChanged) {
-          // A fresh Goal needs placement facts outside this synchronous reader.
+        if (placementService && placementChanged) {
+          // Local input needs placement facts outside this synchronous reader.
           refreshPlacement = true;
           return;
         }
-        const preparedRead = readGoalPlacement ? preparedPlacement?.facts.prepareRead() : undefined;
+        const preparedRead = preparedPlacement?.facts.prepareRead();
         if (preparedRead) {
           pendingPlacementRead = observeChatSendWork(preparedRead);
           return;
         }
-        const placement = readGoalPlacement ? preparedPlacement?.facts.current() : undefined;
+        const placement = preparedPlacement?.facts.current();
         const acpMeta = acp?.meta ?? null;
-        localGoalAdmission = isLocalGoalChatAdmission(
-          params,
-          latestSession,
-          initialSessionEntry,
-          placement,
-          acpMeta,
-        );
+        localInputAdmission =
+          isLocalChatInputAdmission(
+            params,
+            latestSession,
+            initialSessionEntry,
+            placement,
+            acpMeta,
+          ) &&
+          expectedActiveReplyOperation === undefined &&
+          resolveProjectedAgentRunProgressState({
+            agentId,
+            sessionId: admittedSessionId,
+            sessionKeys: [sessionKey],
+          }) === undefined;
+        localGoalAdmission = Boolean(request.goalOperation && localInputAdmission);
         workerGoalAdmission = isWorkerGoalChatAdmission(params, latestSession, placement, acpMeta);
         if (request.goalOperation && !localGoalAdmission && !workerGoalAdmission) {
           throw new Error(
@@ -411,7 +419,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     });
     capturedOperator = preparedInterrupt.operator;
     releaseCapturedOperator = capturedOperator.release;
-    const acp = request.goalOperation ? await prepareChatSendAcpMetadata(params) : null;
+    const acp = await prepareChatSendAcpMetadata(params);
     admissionPhase?.mark("detail.admission.lifecycle_prepare");
     gatewayWorkAdmission = await beginSessionEffect({
       agentId,
@@ -657,6 +665,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           sourceRef,
         }),
       localGoalAdmission,
+      localInputAdmission,
       workerGoalAdmission,
       setDiscardAbandonedPreparedMedia: setDiscardPreparedMedia,
     },

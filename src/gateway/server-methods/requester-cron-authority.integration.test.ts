@@ -277,7 +277,7 @@ async function createStoredJob(
 }
 
 describe("requester continuation persisted automation management", () => {
-  it("keeps automation reads scoped and withholds a record when authority closes during its read", async ({
+  it("keeps scheduler notice reads scoped and withholds a record when authority closes during its read", async ({
     signal,
   }) => {
     const config: OpenClawConfig = { ...cfg, tools: { allow: [AUTOMATIONS_TOOL_NAME] } };
@@ -344,6 +344,8 @@ describe("requester continuation persisted automation management", () => {
           config,
           admitted,
           senderIsOwner: false,
+          trigger: "event",
+          inputProvenance: { kind: "internal_system", sourceTool: "cron" },
         });
         const inspect = (jobId: string) =>
           tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId });

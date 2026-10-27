@@ -1,6 +1,5 @@
 // Gateway maintenance tests cover periodic cleanup for media, dedupe records,
 // stale chat buffers, expired runs, health summaries, and timer disposal.
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";

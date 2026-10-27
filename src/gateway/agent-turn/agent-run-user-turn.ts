@@ -229,7 +229,7 @@ export async function prepareAgentRunUserTurn(params: {
     }
 
     let message = params.message;
-    let runtimeContextFragments = params.client?.internal?.runtimeContextFragments;
+    const runtimeContextFragments = params.client?.internal?.runtimeContextFragments;
     let effectiveTranscriptInputText = params.effectiveTranscriptInputText;
     let execApprovalContinuationPromptRange: ExecApprovalContinuationPromptRange | undefined;
     if (execApprovalFollowupRuntimeHandoff?.resultText !== undefined) {
@@ -403,6 +403,8 @@ export async function prepareAgentRunUserTurn(params: {
       if (
         !(await recorder.stageApproved!({
           runId: params.runId,
+          // This live, freshly authorized completion can retry; stored Stop/completed receipts win.
+          retryCancelled: trackRequesterCompletion,
           storageTarget: params.freshChildStorePath
             ? {
                 agentId: params.activeSessionAgentId,

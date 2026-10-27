@@ -9,8 +9,7 @@ import type { SystemPresence } from "../infra/system-presence.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js";
 
-// Health/presence coverage does not exercise post-restart delivery recovery.
-// Keep that auto-reply graph in the dedicated restart-sentinel suite.
+// mock-isolation: Health/presence coverage keeps the auto-reply graph in the dedicated restart-sentinel suite.
 vi.mock("./server-restart-sentinel.js", () => ({
   recoverPendingProducedSessionDeliveries: vi.fn(async () => undefined),
 }));

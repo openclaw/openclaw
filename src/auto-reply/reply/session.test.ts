@@ -56,7 +56,6 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
-import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";

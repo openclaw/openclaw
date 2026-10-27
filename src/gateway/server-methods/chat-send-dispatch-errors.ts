@@ -25,7 +25,6 @@ import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { chatAbortMarkerTimestampMs, type ChatAbortMarker } from "../server-chat-state.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatError, broadcastChatTerminal } from "./chat-broadcast.js";
@@ -41,7 +40,6 @@ import {
   type AcceptedChatSendFailureDisposition,
 } from "./chat-send-retry.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
-import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -125,6 +123,7 @@ type PendingDispatchLifecycleError = {
   error: string;
   errorKind?: "state_contention";
   sessionId: string;
+  lifecycleRevision?: string;
   startedAt: number;
 };
 
@@ -148,10 +147,12 @@ function formatChatSendError(error: unknown): string {
 type ChatSendJobAdmission = Pick<
   AdmittedChatSend,
   "activeRunAbort" | "cleanupAdmittedRun" | "lifecycleGeneration"
->;
+> &
+  Partial<Pick<AdmittedChatSend, "initialSessionEntry">>;
 
 export async function handleChatSendSetupError(params: {
   cacheResult?: boolean;
+  committedInput?: { sessionId: string; lifecycleRevision?: string };
   admission: ChatSendJobAdmission;
   context: GatewayRequestContext;
   error: unknown;
@@ -181,6 +182,38 @@ export async function handleChatSendSetupError(params: {
         error: params.error,
         phase: "pre-ack",
       });
+  if (
+    params.committedInput &&
+    failureDisposition !== "client-retry" &&
+    getAgentRunContext(clientRunId)?.projectSessionLifecycle !== false
+  ) {
+    const endedAt = Date.now();
+    try {
+      await persistGatewaySessionLifecycleEvent({
+        sessionKey,
+        agentId,
+        expectedWriter: { runId: clientRunId, ...params.committedInput },
+        event: {
+          runId: clientRunId,
+          sessionId: params.committedInput.sessionId,
+          lifecycleGeneration,
+          ts: endedAt,
+          data: {
+            phase: "error",
+            startedAt: getRpcSourceStartedAt(params.admission.activeRunAbort.entry),
+            endedAt,
+            error: errorMessage,
+            errorKind,
+          },
+        },
+      });
+      emitSessionsChanged(params.context, { sessionKey, agentId, reason: "chat.setup-error" });
+    } catch (persistError) {
+      params.context.logGateway.warn(
+        `webchat session lifecycle persist failed after setup error: ${formatForLog(persistError)}`,
+      );
+    }
+  }
   cleanupAdmittedRun();
   clearAgentRunContext(clientRunId, lifecycleGeneration);
   params.context.removeChatRun(clientRunId, clientRunId, sessionKey);
@@ -236,7 +269,8 @@ export function createChatSendDispatchErrorLifecycle(params: {
   session: Pick<
     PreparedChatSendSession,
     "agentId" | "cfg" | "clientRunId" | "now" | "rawSessionKey" | "sessionKey" | "storePath"
-  >;
+  > &
+    Partial<Pick<PreparedChatSendSession, "entry">>;
   userTurnRecorder: Pick<UserTurnTranscriptRecorder, "hasPersisted" | "isBlocked">;
 }) {
   const {
@@ -248,7 +282,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
     userTurnRecorder,
   } = params;
   const { activeRunAbort, cleanupAdmittedRun, lifecycleGeneration } = admission;
-  const { agentId, cfg, clientRunId, now, rawSessionKey, sessionKey, storePath } = session;
+  const { agentId, clientRunId, now, sessionKey } = session;
   const captureJobSession = () =>
     captureAgentJobSession({
       ...getRpcSourceIdentity(activeRunAbort.entry),
@@ -380,6 +414,8 @@ export function createChatSendDispatchErrorLifecycle(params: {
         error: errorMessage,
         errorKind,
         sessionId: getRpcSourceIdentity(activeRunAbort.entry).sessionId,
+        lifecycleRevision:
+          session.entry?.lifecycleRevision ?? admission.initialSessionEntry?.lifecycleRevision,
         startedAt: getRpcSourceStartedAt(activeRunAbort.entry) ?? now,
       };
     }
@@ -482,48 +518,39 @@ export function createChatSendDispatchErrorLifecycle(params: {
       clearAgentRunContext(clientRunId, lifecycleGeneration);
       context.removeChatRun(clientRunId, clientRunId, sessionKey);
       try {
-        const hasActiveRun = hasTrackedActiveSessionRun({
-          storePath,
-          resolveGatewayContext: context.resolveGatewayContext,
-          requestedKey: rawSessionKey,
-          canonicalKey: sessionKey,
+        // A yielded source can still hold its own controller claim. The
+        // exact writer gate permits its failure without ending a successor.
+        await persistGatewaySessionLifecycleEvent({
+          sessionKey,
           ...(agentId ? { agentId } : {}),
-          defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey),
+          expectedWriter: {
+            runId: clientRunId,
+            sessionId: dispatchError.sessionId,
+            lifecycleRevision: dispatchError.lifecycleRevision,
+          },
+          event: {
+            runId: clientRunId,
+            sessionId: dispatchError.sessionId,
+            lifecycleGeneration,
+            ts: dispatchError.endedAt,
+            data: {
+              phase: "error",
+              startedAt: dispatchError.startedAt,
+              endedAt: dispatchError.endedAt,
+              error: dispatchError.error,
+              errorKind: dispatchError.errorKind,
+              ...dispatchError.terminationFields,
+            },
+          },
         });
-        if (!hasActiveRun) {
-          try {
-            await persistGatewaySessionLifecycleEvent({
-              sessionKey,
-              ...(agentId ? { agentId } : {}),
-              event: {
-                runId: clientRunId,
-                sessionId: dispatchError.sessionId,
-                lifecycleGeneration,
-                ts: dispatchError.endedAt,
-                data: {
-                  phase: "error",
-                  startedAt: dispatchError.startedAt,
-                  endedAt: dispatchError.endedAt,
-                  error: dispatchError.error,
-                  errorKind: dispatchError.errorKind,
-                  ...dispatchError.terminationFields,
-                },
-              },
-            });
-            emitSessionsChanged(context, {
-              sessionKey,
-              ...(agentId ? { agentId } : {}),
-              reason: "chat.dispatch-error",
-            });
-          } catch (persistErr: unknown) {
-            context.logGateway.warn(
-              `webchat session lifecycle persist failed after error: ${formatForLog(persistErr)}`,
-            );
-          }
-        }
-      } catch (continuationErr: unknown) {
+        emitSessionsChanged(context, {
+          sessionKey,
+          ...(agentId ? { agentId } : {}),
+          reason: "chat.dispatch-error",
+        });
+      } catch (persistErr: unknown) {
         context.logGateway.warn(
-          `webchat session lifecycle continuation failed: ${formatForLog(continuationErr)}`,
+          `webchat session lifecycle persist failed after error: ${formatForLog(persistErr)}`,
         );
       }
     } finally {

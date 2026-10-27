@@ -37,6 +37,7 @@ import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-au
 import { acknowledgeWorkerGoal } from "./chat-send-goal-ack.js";
 import { createChatSendMessageInjectionStarter } from "./chat-send-message-injection.js";
 import type { ChatSendInternalOptions } from "./chat-send-options.js";
+import { readChatSendRetryComparison } from "./chat-send-retry-comparison.js";
 import { createChatSendSessionInitialization } from "./chat-send-session-binding.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
@@ -162,9 +163,10 @@ export async function handleChatSendWithStorage(
   const cronCreatorAuthority = externalAuthorityAdmission?.resolve(externalAdmissionParams);
 
   const admissionStartedAt = Date.now();
-  const commitFreshInput = admission.localGoalAdmission || req.method === "sessions.create";
   const commitInitialInput = req.method === "sessions.create";
+  const commitLocalInput = admission.localInputAdmission || commitInitialInput;
   let inputAdmissionAttempted = false;
+  let committedInput: { sessionId: string; lifecycleRevision?: string } | undefined;
   let releaseBeforeDispatch: void | (() => void) = undefined;
   let dashboardAuthority: Awaited<ReturnType<typeof createChatSendDashboardAuthority>> | undefined;
   try {
@@ -175,12 +177,20 @@ export async function handleChatSendWithStorage(
       }
     };
     let assertAcceptedInputCurrent: (() => void) | undefined;
+    const pendingAdmission = createChatSendPendingInputAdmission({
+      runId: clientRunId,
+      expectedProfileId: req.expectedProfileId,
+      sessionMutationAuthorization,
+      sessionMutationCommitGuard,
+      assertCustodyLifetimeCurrent,
+      assertClientUploadAllowed: admission.assertClientUploadAllowed,
+    });
     const assertUnacceptedInputCurrent = composeSessionSourceAssertion(
       [sessionMutationCommitGuard],
       (assertSource) => {
         admission.assertClientUploadAllowed?.();
         assertCustodyLifetimeCurrent();
-        if (commitFreshInput) {
+        if (commitLocalInput) {
           sessionMutationAuthorization?.assertCurrent();
         }
         assertSource();
@@ -228,23 +238,27 @@ export async function handleChatSendWithStorage(
     } = userTurn;
     let needsSessionCreationBinding = !entry;
     const withUserTurnInputPublication = <T>(run: () => Promise<T>) =>
-      admission.withInputCommitPublication(
-        run,
-        entry
-          ? undefined
-          : (source, committedEntry) => {
-              sessionMutationAuthorization?.recordCreatedSession?.({
-                agentId: session.agentId,
-                sessionKey,
-                storePath,
-                sessionId: admittedSessionId,
-                lifecycleRevision: committedEntry.lifecycleRevision,
-                readSource: source,
-                entry: committedEntry,
-              });
-              needsSessionCreationBinding = false;
-            },
-      );
+      admission.withInputCommitPublication(run, (source, committedEntry) => {
+        committedInput = {
+          sessionId: committedEntry.sessionId,
+          lifecycleRevision: committedEntry.lifecycleRevision,
+        };
+        if (!entry) {
+          sessionMutationAuthorization?.recordCreatedSession?.({
+            agentId: session.agentId,
+            sessionKey,
+            storePath,
+            sessionId: admittedSessionId,
+            lifecycleRevision: committedEntry.lifecycleRevision,
+            readSource: source,
+            entry: committedEntry,
+          });
+          needsSessionCreationBinding = false;
+        }
+        if (options?.stageCreatedInput) {
+          assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
+        }
+      });
     const persistGatewayUserTurnTranscript = (
       ...args: Parameters<typeof persistUserTurnTranscript>
     ) =>
@@ -266,6 +280,13 @@ export async function handleChatSendWithStorage(
       userTurn,
     });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
+    const commitFreshInput =
+      commitInitialInput ||
+      (admission.localInputAdmission &&
+        !messageInjectionTarget &&
+        !isInternalTextSlashCommandTurn &&
+        (userTurn.baseInput.display !== false || admission.localGoalAdmission) &&
+        (!systemInputProvenance || systemInputProvenance.kind === "external_user"));
     admission.setPendingInputCleanup(async () => {
       try {
         const pending =
@@ -310,20 +331,12 @@ export async function handleChatSendWithStorage(
           options?.stageCreatedInput === true) &&
         !isInternalTextSlashCommandTurn &&
         !request.goalOperation &&
-        !commitInitialInput,
+        !commitFreshInput,
       );
     if (stageInput) {
       // ACK transfers input custody. Persist approved source bytes before dispatch.
       inputAdmissionAttempted = true;
       using stagePhase = diagnostics.scope("detail.persist.stage");
-      const pendingAdmission = createChatSendPendingInputAdmission({
-        runId: clientRunId,
-        expectedProfileId: req.expectedProfileId,
-        sessionMutationAuthorization,
-        sessionMutationCommitGuard,
-        assertCustodyLifetimeCurrent,
-        assertClientUploadAllowed: admission.assertClientUploadAllowed,
-      });
       const staged = await withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
         userTurnRecorder.stageApproved?.({
           ...pendingAdmission,
@@ -331,12 +344,20 @@ export async function handleChatSendWithStorage(
       );
       stagePhase?.finish();
       if (userTurnRecorder.isPendingInputConsumed?.()) {
+        const comparison = await readChatSendRetryComparison(session);
+        assertInputAdmissionCurrent();
         admission.cleanupAdmittedRun();
         clearAgentRunContext(clientRunId, lifecycleGeneration);
-        respond(true, { runId: clientRunId, status: "ok" }, undefined, {
-          cached: true,
-          runId: clientRunId,
-        });
+        respond(
+          true,
+          {
+            runId: clientRunId,
+            status: "ok",
+            ...(comparison?.messageSeq !== undefined ? { messageSeq: comparison.messageSeq } : {}),
+          },
+          undefined,
+          { cached: true, runId: clientRunId },
+        );
         return;
       }
       if (!staged) {
@@ -361,9 +382,7 @@ export async function handleChatSendWithStorage(
       using transcriptPhase = diagnostics.scope("detail.persist.transcript");
       const persistedUserTurn = await persistGatewayUserTurnTranscript();
       transcriptPhase?.finish();
-      if (commitInitialInput) {
-        approvedInput = persistedUserTurn?.message;
-      }
+      approvedInput = persistedUserTurn?.message;
       const goalOperation = request.goalOperation;
       if (goalOperation) {
         const mutation = persistedUserTurn?.sessionTurnMutationResult;
@@ -624,6 +643,7 @@ export async function handleChatSendWithStorage(
       // Uncommitted Goal admissions may retry with their original identity. Committed
       // outcomes replay from the durable receipt instead of this transient error cache.
       cacheResult: request.goalOperation === undefined && !inputAdmissionAttempted,
+      committedInput,
       admission,
       context,
       error: err,

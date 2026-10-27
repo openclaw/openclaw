@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
@@ -21,13 +22,13 @@ import { setChannelSourceTurnId } from "./source-turn-id.js";
 setupAgentRunnerTestHooks();
 afterEach(() => vi.restoreAllMocks());
 
-it("queues non-steering input while recovery metadata is unavailable", async () => {
+it("queues non-steering input while session metadata is unavailable", async () => {
   const sessionEntry = { sessionId: "session", updatedAt: 1 };
   const storePath = path.join(rootDir, "sessions.json");
   await replaceSessionEntry({ storePath, sessionKey: "main" }, sessionEntry);
   const read = vi
     .spyOn(entryReads, "readSessionEntryInWorker")
-    .mockRejectedValueOnce(new Error("Recovery metadata is unavailable"));
+    .mockRejectedValueOnce(new Error("Session metadata is unavailable"));
   vi.mocked(enqueueFollowupRun).mockReturnValueOnce(true);
   const state: ReplyOperationRunState = {};
   const { run, resolvedQueue } = createBaseRun({
@@ -52,9 +53,9 @@ it("queues non-steering input while recovery metadata is unavailable", async () 
 });
 
 it.each(["source", "steer"] as const)(
-  "retires the captured source and typing when the %s recovery read fails",
+  "reports failure and retires the captured source and typing when the %s session read fails",
   async (reason) => {
-    const failure = new Error("synthetic recovery read failure");
+    const failure = new Error("synthetic session read failure");
     const read = vi.spyOn(entryReads, "readSessionEntryInWorker").mockRejectedValueOnce(failure);
     const storePath = path.join(rootDir, "sessions.json");
     const input = reserveSessionControllerSource("main", {
@@ -71,10 +72,13 @@ it.each(["source", "steer"] as const)(
       },
     });
     if (reason === "source") {
-      setChannelSourceTurnId(sessionCtx, "channel-user:recovery-source");
+      setChannelSourceTurnId(sessionCtx, "channel-user:read-failure-source");
     }
 
-    await expect(run()).rejects.toBe(failure);
+    await expect(run()).resolves.toEqual({
+      isError: true,
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    });
 
     await input.settlement.promise;
     expect(input.phase).toBe("consumed");

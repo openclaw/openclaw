@@ -14,11 +14,7 @@ import { createMockGatewayLifecycleRuntime } from "../../../gateway/server-lifec
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
-import {
-  markGatewayRestartDraining,
-  resetGatewayWorkAdmission,
-  runWithGatewayIndependentRootWorkAdmission,
-} from "../../../process/gateway-work-admission.js";
+import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockReset();
@@ -37,7 +33,6 @@ import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-
 import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
-  SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "./subagent-registry-helpers.js";
@@ -234,8 +229,6 @@ describe("subagent registry seam flow", () => {
     expect(run?.execution.endedAt).toBeUndefined();
     expect(run?.execution.outcome).toBeUndefined();
   };
-  const agentCalls = () =>
-    mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent");
   const sessionEntries = (entries: Record<string, [string, string]>, updatedAt = Date.now()) =>
     Object.fromEntries(
       Object.entries(entries).map(([key, [sessionId, lifecycleRevision]]) => [

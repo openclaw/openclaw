@@ -1,5 +1,6 @@
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import {
   retainPreparedSessionSharingFacts,
@@ -7,6 +8,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
 import { releaseSessionSourceAuthorities } from "../config/sessions/session-source-authority.js";
+import { sameSessionTranscriptStorePath } from "../config/sessions/transcript-store-identity.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { resolveMissingOperatorScope } from "../shared/operator-scope-compat.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
@@ -17,6 +19,7 @@ import {
 import { errorShapeFromError } from "./error-shape.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 import { sessionMethodDatabaseAdmission, isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -42,8 +45,34 @@ import {
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { prepareTalkSessionTarget } from "./talk/session-target.js";
 
+/** Admit a new input as a recorded person using only that person's current grants. */
+export async function prepareSessionPrincipalRunAuthority(
+  params: Parameters<typeof prepareSessionPrincipalRunAccess>[0] & {
+    context: Pick<
+      GatewayRequestContext,
+      "getRuntimeConfig" | "getCommittedRuntimeConfig" | "resolveGatewayContext"
+    >;
+  },
+): Promise<{ authority: AdmittedRunOperatorAuthority; release: () => void }> {
+  const source = await prepareSessionPrincipalRunAccess(params);
+  try {
+    const admitted = await captureGatewayOperatorRunAuthority({
+      client: source.client,
+      context: params.context,
+      sourceAuthority: source,
+    });
+    if (!admitted) {
+      throw new Error("Session principal has no current run authority.");
+    }
+    return admitted;
+  } catch (error) {
+    source.release();
+    throw error;
+  }
+}
+
 /** Resolve a recorded person against current grants and an existing exact session. */
-export async function prepareSessionPrincipalRunAccess(params: {
+async function prepareSessionPrincipalRunAccess(params: {
   context: Pick<GatewayRequestContext, "getRuntimeConfig" | "getCommittedRuntimeConfig">;
   profileId: string;
   agentId: string;
@@ -131,7 +160,9 @@ export async function prepareSessionPrincipalRunAccess(params: {
         target.agentId !== params.agentId ||
         target.entry.lifecycleRevision !== initialTarget.entry.lifecycleRevision ||
         target.entry.archivedAt !== undefined ||
-        (params.storePath !== undefined && target.storePath !== params.storePath)
+        (params.storePath !== undefined &&
+          target.storePath !== params.storePath &&
+          !sameSessionTranscriptStorePath(params.storePath, facts.readSource?.path))
       ) {
         throw new Error("Session is unavailable for this principal.");
       }

@@ -258,7 +258,9 @@ async function executePreparedReplyAgentRunWithCompletion(
         return true;
       },
       afterDispatch: async (hookResult) => {
-        if (!hookResult?.handled) return hookResult;
+        if (!hookResult?.handled) {
+          return hookResult;
+        }
         const hookReply = hookResult.reply ?? {};
         const hookFinalDeliveryText = buildRecoverablePendingFinalDeliveryText([hookReply]);
         const normalizedHookReplies = normalizePendingFinalDeliveryPayloads([hookReply]);

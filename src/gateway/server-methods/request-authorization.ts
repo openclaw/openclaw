@@ -29,6 +29,7 @@ import {
 } from "../../state/agent-database-admission.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import {
   prepareGatewaySessionAccessAuthority,
   type GatewaySessionAccessAuthority,
@@ -245,7 +246,14 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       details: { ...gatewayStartupUnavailableDetails(), method: params.method },
     });
   const startupError = () =>
-    params.context.unavailableGatewayMethods?.has(params.method)
+    params.context.unavailableGatewayMethods?.has(params.method) &&
+    // Only the queue owner's exact retained input may enter before external admission opens.
+    !(
+      params.method === "chat.send" &&
+      readQueuedChatInputAdmission(
+        readSessionSharingStringParam(params.requestParams, "idempotencyKey") ?? "",
+      )
+    )
       ? unavailableDuringStartup()
       : null;
   let assertChatRoutingCurrent: (() => void) | undefined;

@@ -34,6 +34,7 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MentionInbox } from "../mention-inbox.types.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-projection.js";
 import { captureWorkerTurnInputSource } from "../worker-environments/worker-turn-transcript-target.js";
 import { formatForLog } from "../ws-log.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
@@ -139,7 +140,9 @@ export function createGatewayChatUserTurnController(params: {
     ...(sender ? { sender } : {}),
     ...(sourceClients.length ? { transport: { clients: sourceClients } } : {}),
     ...(hasGatewayAdminScope(params.client) ? { senderIsOwner: true } : {}),
-    ...(request.systemInputProvenance ? { provenance: request.systemInputProvenance } : {}),
+    provenance:
+      request.systemInputProvenance ??
+      (params.client?.internal?.syntheticClient ? undefined : { kind: "external_user" }),
   };
   const replyContextFieldsPromise = request.p.replyToId
     ? resolveChatSendReplyContext({
@@ -240,6 +243,18 @@ export function createGatewayChatUserTurnController(params: {
         config: session.cfg,
       };
     },
+    ...(admission.localInputAdmission
+      ? {
+          sessionLifecyclePatch: {
+            ...deriveGatewaySessionLifecycleSnapshot({
+              event: { runId: session.clientRunId, ts: params.startedAt, data: { phase: "start" } },
+            }),
+            lifecycleRunId: session.clientRunId,
+            lastRunId: undefined,
+            ...(!progressRefresh ? { lastInteractionAt: params.startedAt } : {}),
+          },
+        }
+      : {}),
     errorContext: "gateway chat user turn transcript",
     assertOriginalInputCommit: composeSessionSourceAssertion([
       params.assertOriginalInputCommit,
@@ -255,6 +270,7 @@ export function createGatewayChatUserTurnController(params: {
         const userMessage: PersistedUserTurnMessage = next;
         const metadata = { ...asOptionalRecord(Reflect.get(next, "__openclaw")) };
         delete metadata.chatRequestIdentity;
+        delete metadata.suppressCommandInterpretation;
         delete metadata.modelSelection;
         const visibleHumanInput =
           !params.client?.internal?.syntheticClient &&
@@ -268,6 +284,9 @@ export function createGatewayChatUserTurnController(params: {
           __openclaw: {
             ...metadata,
             ...(request.requestIdentity ? { chatRequestIdentity: request.requestIdentity } : {}),
+            ...(request.suppressCommandInterpretation
+              ? { suppressCommandInterpretation: true }
+              : {}),
             ...(visibleHumanInput ? { modelSelection } : {}),
             ...(contextFreeCommand ? { contextFreeCommand: true } : {}),
           },
@@ -361,7 +380,7 @@ export function createGatewayChatUserTurnController(params: {
     getSessionInitializationOptions: () => ({
       requestedSessionId: session.requestedSessionId,
       resumeRequestedSession: request.reconnectResumeRequested,
-      ...(admission.workerGoalAdmission
+      ...(admission.localInputAdmission || admission.workerGoalAdmission
         ? {
             expectedExistingSessionId: admission.admittedSessionId,
             pinExpectedExistingSession: true,

@@ -521,6 +521,10 @@ async function runEmbeddedAttemptOwned(
     } catch (abortError) {
       error = abortError;
     }
+    // Preparation can fail before execution records a terminal outcome.
+    if (executionState.terminal.kind === "ok") {
+      executionState.terminal = { kind: "failed", source: "precheck", error };
+    }
     const terminalOutcome = buildAgentRunTerminalOutcomeFromAttempt({
       terminal: executionState.terminal,
       abortSignal: params.abortSignal,

@@ -15,6 +15,7 @@ import { getRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
   upsertSessionEntryCore,
@@ -32,9 +33,9 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
-import { prepareSessionPrincipalRunAuthority } from "../operator-run-authority.js";
 import { queuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
+import { prepareSessionPrincipalRunAuthority } from "../session-sharing-authorization-async.js";
 import { prepareTurn } from "./chat-send-user-turn-family.test-support.js";
 import { applyChatSendManagedMedia } from "./chat-send-user-turn.js";
 import { createClientInfo, createAttachments } from "./chat-send-user-turn.test-support.js";
@@ -109,7 +110,7 @@ describe("prepareChatSendUserTurn", () => {
   });
 
   it("binds a queued human input to its exact current principal admission", () =>
-    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {};
       setRuntimeConfigSnapshot(cfg);
       const profile = ensureGatewayOwnerProfile("Queued Ada");
@@ -117,7 +118,7 @@ describe("prepareChatSendUserTurn", () => {
         agentId: "main",
         sessionKey: "agent:main:queued-requester",
         sessionId: "queued-requester-session",
-        storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       };
       await upsertSessionEntryCore(target, {
         sessionId: target.sessionId,

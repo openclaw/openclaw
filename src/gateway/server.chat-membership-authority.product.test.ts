@@ -705,7 +705,9 @@ it(
       const operation = create.call(this, {
         ...params,
         onPromptReady: async (facts) => {
+          console.error("worktree readiness: publishing early prompt", gate.key);
           await onPromptReady(facts);
+          console.error("worktree readiness: early prompt published", gate.key);
           gate.entered.resolve(facts);
           await gate.release.promise;
           if (gate.failure) {
@@ -853,12 +855,14 @@ it(
         };
         activeGate = gate;
         nextCall = createDeferred<ProviderCall>();
+        console.error("worktree readiness: creating session", gate.key);
         const started = await createWorktree<{
           key: string;
           runId: string;
           sessionId: string;
           runStarted: boolean;
         }>(name, { message, displayName });
+        console.error("worktree readiness: session accepted", gate.key);
         const facts = await wait(gate.entered.promise);
         return { gate, started, facts, call: await wait(nextCall.promise) };
       };

@@ -11,6 +11,8 @@ import {
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "../../../config/sessions/session-accessor.js";
+import { createGatewayRequestContext } from "../../../gateway/server-request-context.js";
+import { makeContextParams } from "../../../gateway/server-request-context.test-support.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
@@ -187,7 +189,11 @@ describe("subagent registry cleanup scheduling", () => {
     "refuses cleanup when its %s changes before deletion dispatch",
     async (change) => {
       const { entry, runs, callGateway, sweeper } = createHarness(archivedRun());
-      bindGatewayContextResolver(runs, () => undefined);
+      const gateway = Object.assign(createGatewayRequestContext(makeContextParams()), {
+        localEmbedded: true,
+      });
+      gateway.resolveGatewayContext = () => gateway;
+      bindGatewayContextResolver(runs, gateway.resolveGatewayContext);
       const gate = createSweepGate();
       const deleteSession = vi.fn();
       callGateway.mockImplementationOnce(async (request) => {

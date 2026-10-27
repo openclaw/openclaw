@@ -11,7 +11,6 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
-import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";

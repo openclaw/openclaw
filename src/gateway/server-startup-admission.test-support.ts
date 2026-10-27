@@ -27,6 +27,42 @@ export function registerGatewayStartupAdmissionTests(params: {
   startupModuleRestorers: Array<() => void>;
   stopSidecar: (sidecar: GatewayPostReadySidecarHandle) => Promise<void>;
 }): void {
+  it("keeps external input closed until retained inputs have acquired queue custody", async () => {
+    const resume = createStartupGate();
+    const unlocked = createDeferred();
+    const tracked: Promise<unknown>[] = [];
+    const lifetime = new AbortController();
+    const owner = await import("./session-restart-resume.js");
+    const resumeSpy = vi.spyOn(owner, "resumeMarkedSessions").mockImplementation(resume.run);
+    const unlockStartupMethods = vi.fn(() => unlocked.resolve());
+    try {
+      const runtime = await params.start(
+        params.createParams({
+          sidecarStartup: "defer",
+          trackStartupWork: (run) => {
+            const work = run(lifetime.signal);
+            tracked.push(work);
+            return work;
+          },
+          isClosing: () => lifetime.signal.aborted,
+          unlockStartupMethods,
+        }),
+        params.createRuntimeDeps(),
+      );
+      await runtime.startupSettled;
+      await resume.entered;
+      expect(unlockStartupMethods).not.toHaveBeenCalled();
+      resume.release();
+      await unlocked.promise;
+      expect(unlockStartupMethods).toHaveBeenCalledOnce();
+    } finally {
+      lifetime.abort();
+      resume.release();
+      await Promise.allSettled(tracked);
+      resumeSpy.mockRestore();
+    }
+  });
+
   it.each(["loading", "hydrating"] as const)(
     "keeps input closed while registry %s is pending and the Gateway closes",
     async (stage) => {

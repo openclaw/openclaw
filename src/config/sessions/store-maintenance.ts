@@ -435,6 +435,7 @@ function shouldPreserveNonArchivedMaintenanceEntry(params: SessionMaintenanceEnt
   // configured retention limits while the lock remains.
   return (
     params.entry?.resumeAfterRestart !== undefined ||
+    params.entry?.pendingFinalDelivery?.kind === "transport-only" ||
     params.entry?.modelSelectionLocked === true ||
     params.preserveKeys?.has(params.key) === true ||
     isRecentSessionMaintenanceEntry(params) ||

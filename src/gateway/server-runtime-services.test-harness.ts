@@ -78,7 +78,8 @@ vi.mock("../infra/session-delivery-queue-runtime.js", () => ({
   schedulePendingSessionDeliveries: runtimeServiceMocks.schedulePendingSessionDeliveries,
 }));
 
-vi.mock("./server-restart-sentinel.js", () => ({
+vi.mock("./server-restart-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-restart-sentinel.js")>()),
   deliverQueuedSessionDelivery: runtimeServiceMocks.deliverQueuedSessionDelivery,
   recoverPendingProducedSessionDeliveries:
     runtimeServiceMocks.recoverPendingProducedSessionDeliveries,

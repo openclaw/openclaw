@@ -8,10 +8,11 @@ import {
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareSessionPrincipalRunAuthority } from "./operator-run-authority.js";
+import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 
 const scope = { agentId: "main", sessionKey: "agent:main:resume-principal" };
 const sessionId = "resume-principal-session";
@@ -49,11 +50,12 @@ function fixture() {
   return {
     profile,
     entry,
-    admit: () =>
+    admit: (storePath = resolveOpenClawAgentSqlitePath({ agentId: scope.agentId })) =>
       prepareSessionPrincipalRunAuthority({
         ...scope,
         profileId: profile.id,
         sessionId,
+        storePath,
         context: { getRuntimeConfig: () => config },
       }),
   };
@@ -68,6 +70,13 @@ it("admits a recorded person's current role and refuses revoked, demoted, archiv
     expect(accepted.authority.assertCurrent).not.toThrow();
     accepted.release();
     expect(accepted.authority.assertCurrent).toThrow();
+
+    const logical = await admit(resolveSessionStorePathCore(undefined, { agentId: scope.agentId }));
+    expect(logical.authority.assertCurrent).not.toThrow();
+    logical.release();
+    await expect(
+      admit(resolveOpenClawAgentSqlitePath({ agentId: "foreign-principal-store" })),
+    ).rejects.toThrow("Session is unavailable");
 
     setUserProfileRole(profile.id, "reader");
     await expect(admit()).rejects.toThrow("no current run authority");
@@ -153,7 +162,12 @@ it("admits the recorded Gateway owner without roles and never substitutes it for
       updatedAt: 1,
       createdActor: { type: "human", source: "profile", id: owner.id },
     });
-    const params = { ...scope, sessionId, context: { getRuntimeConfig: () => ({}) } };
+    const params = {
+      ...scope,
+      sessionId,
+      storePath: resolveOpenClawAgentSqlitePath({ agentId: scope.agentId }),
+      context: { getRuntimeConfig: () => ({}) },
+    };
     const accepted = await prepareSessionPrincipalRunAuthority({ ...params, profileId: owner.id });
     try {
       expect(accepted.authority.profileId).toBe(owner.id);

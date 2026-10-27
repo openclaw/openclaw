@@ -4,7 +4,7 @@ import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-de
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";

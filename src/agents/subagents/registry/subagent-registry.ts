@@ -1,7 +1,10 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { registerSystemEventStoreOwner } from "../../../infra/system-event-ownership.js";
-import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   runWithGatewayDetachedWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
@@ -545,6 +548,7 @@ async function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   const sweeperRetirement = subagentSweeper.reset();
   subagentRestorer.reset();
   activeGatewayContextResolver = undefined;
+  bindGatewayContextResolver(subagentRuns, undefined);
   subagentListener.reset();
   return sweeperRetirement;
 }
@@ -611,6 +615,7 @@ export function activateSubagentRegistry(
   // Reuse the instance's own fenced closure so late-restored siblings share one
   // authority across repeated activation; the raw holder can outlive that instance.
   activeGatewayContextResolver = resolveGatewayContext()?.resolveGatewayContext;
+  bindGatewayContextResolver(subagentRuns, activeGatewayContextResolver);
   return subagentRestorer.activate();
 }
 export const settleRequesterAfterSessionSpawns = publicApi.settleRequesterAfterSessionSpawns;

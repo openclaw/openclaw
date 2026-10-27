@@ -39,18 +39,21 @@ import {
 import { getSessionControllerEntryForOperation } from "../sessions/session-controller.identity.js";
 import { activeSessionOperations } from "../sessions/session-controller.state.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
-import { prepareSessionPrincipalRunAuthority } from "./operator-run-authority.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 
 export const GATEWAY_RESTART_RESUME_TEXT =
   "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
+const BACKGROUND_EXEC_STOPPED_TEXT =
+  "Background exec processes were stopped; rerun them if still needed.";
 
 type SessionIdentity = {
   agentId: string;
   sessionKey: string;
   storePath: string;
   sessionId?: string;
+  hadBackgroundExec?: true;
 };
 
 function canResumeSession(sessionKey: string, entry: InternalSessionEntry): boolean {
@@ -77,6 +80,7 @@ export async function persistRunningSessionsForRestart(params: {
     agentId?: string;
     storePath?: string;
     sessionId?: string;
+    hadBackgroundExec?: true;
   }) => {
     const root = resolveRootSubagentRequester(input.sessionKey, input.agentId);
     const agentId =
@@ -102,7 +106,10 @@ export async function persistRunningSessionsForRestart(params: {
         storePath,
         sessionKey: root.sessionKey,
         sessionId: root.sessionKey === input.sessionKey ? input.sessionId : undefined,
+        hadBackgroundExec: input.hadBackgroundExec,
       });
+    } else if (input.hadBackgroundExec) {
+      sessions.get(key)!.hadBackgroundExec = true;
     }
   };
   for (const operation of activeSessionOperations()) {
@@ -136,7 +143,7 @@ export async function persistRunningSessionsForRestart(params: {
     assertCurrent();
     const sessionKey = process.sessionKey ?? process.scopeKey;
     if (sessionKey) {
-      add({ sessionKey, agentId: process.agentId });
+      add({ sessionKey, agentId: process.agentId, hadBackgroundExec: true });
     }
   }
   const selectors = new Map<string, SessionIdentity[]>();
@@ -206,7 +213,13 @@ export async function persistRunningSessionsForRestart(params: {
           });
           replacements.push({
             sessionKey,
-            entry: { ...entry, resumeAfterRestart: { queuedInputIds: queued.queuedInputIds } },
+            entry: {
+              ...entry,
+              resumeAfterRestart: {
+                queuedInputIds: queued.queuedInputIds,
+                ...(session.hadBackgroundExec ? { hadBackgroundExec: true } : {}),
+              },
+            },
           });
           preserve.push(queued.preserve);
         }
@@ -256,7 +269,11 @@ export async function resumeMarkedSessions(params: {
       let authority: Awaited<ReturnType<typeof prepareSessionPrincipalRunAuthority>> | undefined;
       try {
         const resumed = await applySessionEntryReplacements<
-          { entry: InternalSessionEntry; queuedInputIds: string[] } | undefined
+          | {
+              entry: InternalSessionEntry;
+              marker: NonNullable<InternalSessionEntry["resumeAfterRestart"]>;
+            }
+          | undefined
         >({
           ...target,
           sessionKeys: [sessionKey],
@@ -267,10 +284,10 @@ export async function resumeMarkedSessions(params: {
             if (!selected?.resumeAfterRestart) {
               return { result: undefined };
             }
-            const queuedInputIds = selected.resumeAfterRestart.queuedInputIds;
+            const marker = selected.resumeAfterRestart;
             const entry = { ...selected, resumeAfterRestart: undefined };
             return {
-              result: { entry, queuedInputIds },
+              result: { entry, marker },
               replacements: [{ sessionKey, entry }],
             };
           },
@@ -278,7 +295,7 @@ export async function resumeMarkedSessions(params: {
         if (!resumed) {
           continue;
         }
-        const { entry, queuedInputIds } = resumed;
+        const { entry, marker } = resumed;
         const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
         if (!canResumeSession(sessionKey, entry)) {
           log.warn(
@@ -318,13 +335,18 @@ export async function resumeMarkedSessions(params: {
           const receipt = withPluginRuntimeGatewayContextResolver(
             context.resolveGatewayContext,
             () =>
-              enqueueSessionEventForHost(GATEWAY_RESTART_RESUME_TEXT, {
-                agentId,
-                sessionKey,
-                source: "restart",
-                expectedTarget: captured,
-                abortSignal: signal,
-              }),
+              enqueueSessionEventForHost(
+                marker.hadBackgroundExec
+                  ? `${GATEWAY_RESTART_RESUME_TEXT} ${BACKGROUND_EXEC_STOPPED_TEXT}`
+                  : GATEWAY_RESTART_RESUME_TEXT,
+                {
+                  agentId,
+                  sessionKey,
+                  source: "restart",
+                  expectedTarget: captured,
+                  abortSignal: signal,
+                },
+              ),
           );
           const retained = authority;
           authority = undefined;
@@ -354,7 +376,11 @@ export async function resumeMarkedSessions(params: {
         await continueSessionQueuedInputs(
           context,
           { ...target, agentId, sessionKey, sessionId: entry.sessionId },
-          { signal, queuedInputIds, assertCurrent: () => signal.throwIfAborted() },
+          {
+            signal,
+            queuedInputIds: marker.queuedInputIds,
+            assertCurrent: () => signal.throwIfAborted(),
+          },
         );
       } catch (error) {
         if (signal.aborted) {

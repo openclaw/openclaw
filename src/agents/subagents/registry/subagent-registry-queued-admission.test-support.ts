@@ -9,7 +9,7 @@ import * as swarm from "../swarm/swarm-scheduler.js";
 import { withQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
 
 export function registerQueuedRegistrationAdmissionCases() {
-  it("closes the composed queued collector under suspension after its parent releases", async () => {
+  it("preserves a suspended queued collector until committed close rolls back its resources", async () => {
     const { createCollectorLaunchCallbacks } = await import("../spawn/subagent-spawn-collector.js");
     await withQueuedRegistrationFixture(async (f) => {
       const groupId = "composed-suspended-collector";
@@ -30,12 +30,14 @@ export function registerQueuedRegistrationAdmissionCases() {
         throw new Error("removed collector dispatched");
       });
       const cleanup = vi.fn(async () => ({ attachmentsRemoved: false, sessionDeleted: false }));
-      const rollback = vi.fn(async () => {});
       const disposal = createDeferred();
       let disposalSignal: AbortSignal | undefined;
       const dispose = vi.fn(async () => {
         disposalSignal = getAsyncWorkSignal();
         await disposal.promise;
+      });
+      const rollback = vi.fn(async () => {
+        await dispose();
       });
       const callbacks = createCollectorLaunchCallbacks({
         childRunId: entry.runId,
@@ -74,20 +76,24 @@ export function registerQueuedRegistrationAdmissionCases() {
         await nextTurn();
         expect(state()).toMatchObject({ active: true, roots: 0 });
         expect(launch).not.toHaveBeenCalled();
+        expect(rollback).not.toHaveBeenCalled();
+        expect(dispose).not.toHaveBeenCalled();
+        expect(f.current()).toEqual(registeredSnapshot);
+        expect(f.writes).toBe(1);
+        expect(suspension.release()).toBe(true);
         closing = swarm.closeSwarmScheduler(lifecycleOwner).then(() => {
           closed = true;
         });
         await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
-        expect(state()).toMatchObject({ aborted: false, closed: false, phase: "prepared" });
+        expect(state()).toMatchObject({ aborted: true, closed: false, phase: "accepting" });
         disposal.resolve();
         await closing;
-        expect(state()).toMatchObject({ closed: true, phase: "prepared" });
+        expect(state()).toMatchObject({ closed: true, phase: "accepting" });
         expect(entry).toEqual(registeredSnapshot);
         expect(settle).not.toHaveBeenCalled();
         expect(cleanup).not.toHaveBeenCalled();
-        expect(rollback).not.toHaveBeenCalled();
+        expect(rollback).toHaveBeenCalledOnce();
         expect(f.writes).toBe(1);
-        expect(suspension.release()).toBe(true);
         await nextTurn();
         expect(launch).not.toHaveBeenCalled();
         expect(state()).toMatchObject({ active: false, roots: 0 });

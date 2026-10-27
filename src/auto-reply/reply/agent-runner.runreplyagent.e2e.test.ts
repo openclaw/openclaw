@@ -7,11 +7,6 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import {
-  emptySqliteCounts,
-  observeParentSqlite,
-  sqliteMethods,
-} from "../../../test/helpers/sqlite-parent-observer.js";
 import { sanitizeAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
@@ -31,12 +26,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
-import {
-  resolveSqliteScope,
-  toDatabaseOptions,
-} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig, TypingMode } from "../../config/types.js";
-import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
@@ -47,16 +37,10 @@ import {
   type ReplyOperation,
   getSessionControllerOperation,
 } from "../../sessions/session-controller.js";
-import { captureSessionControllerSettlement } from "../../sessions/session-controller.lifecycle.js";
 import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { clearReplyRunForResetBySessionId } from "../../sessions/session-controller.stop-runtime.js";
 import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.js";
-import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
 import { successfulPolicyRetryCases } from "./agent-runner.policy-retry.test-fixtures.js";
 import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallback.test-support.js";
@@ -709,7 +693,7 @@ describe("runReplyAgent active steering", () => {
     let replacement: ReplyOperation | undefined;
     try {
       await withinTest(committed.promise, signal);
-      expect(recorder.getPersistedMessage()?.idempotencyKey).toBe("source-first");
+      expect(recorder.getPersistedMessage?.()?.idempotencyKey).toBe("source-first");
       clearReplyRunForResetBySessionId("session");
       // The write has committed; only this fixture's response wrapper remains held.
       // Its manually created operation has no execution callback to release its owner.
@@ -2169,13 +2153,27 @@ describe("runReplyAgent pending final delivery capture", () => {
       storePath,
     });
 
-    await expect(run()).resolves.toEqual(expect.objectContaining({ text: "private hook reply" }));
-    expect(resolveReplyOperationAgentTurn(receipt)).toBe("ok");
-
-    expect(await readStoredMainSession(storePath)).toMatchObject({
-      status: "done",
-      abortedLastRun: false,
+    const terminalEvents: Record<string, unknown>[] = [];
+    const off = onAgentEvent((event) => {
+      if (
+        event.stream === "lifecycle" &&
+        (event.data.phase === "end" || event.data.phase === "error")
+      ) {
+        terminalEvents.push(event.data);
+      }
     });
+    try {
+      await expect(run()).resolves.toEqual(expect.objectContaining({ text: "private hook reply" }));
+    } finally {
+      off();
+    }
+    expect(resolveReplyOperationAgentTurn(receipt)).toBe("ok");
+    // The Gateway lifecycle observer owns durable status; this runner fixture
+    // proves the terminal facts it receives, without a delivery-driven writer.
+    expect(terminalEvents).toEqual([
+      expect.objectContaining({ phase: "end", providerStarted: false, executionSettled: true }),
+    ]);
+    expect((await readStoredMainSession(storePath)).pendingFinalDelivery).toBeUndefined();
   });
 
   it("runs the model when before_agent_reply leaves the turn unhandled", async () => {

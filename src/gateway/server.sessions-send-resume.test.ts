@@ -363,8 +363,8 @@ it("fences a cancelled successor after adoption before queued input consumption"
       ],
       expect.anything(),
     );
-    // Custody remains unconsumed even though execution cleanup records interruption.
-    await proof.expectInputs("interrupted");
+    // Custody remains unconsumed while cancellation records an ordinary failed send.
+    await proof.expectInputs("cancelled");
     await proof.expectReceipts([{ state: "pending" }]);
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();

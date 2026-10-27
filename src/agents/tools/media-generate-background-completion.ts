@@ -15,7 +15,7 @@ import {
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
-import { isMediaGenerationOperationCurrent } from "../media-generation-activity.js";
+import { findMediaGenerationOperation } from "../media-generation-activity.js";
 import { deliverSubagentAnnouncement } from "../subagents/announce/subagent-announce-delivery.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-completion");
@@ -33,9 +33,11 @@ export type MediaGenerationTaskHandle = {
 
 function isMediaGenerationSourceCurrent(handle: MediaGenerationTaskHandle): boolean {
   const target = handle.requesterTranscript;
+  const operation = findMediaGenerationOperation(handle.runId);
   return Boolean(
     target &&
-    isMediaGenerationOperationCurrent(handle.runId) &&
+    operation &&
+    operation.endedAt === undefined &&
     sameSessionTranscriptStorageEnvironment(
       target.env,
       captureSessionTranscriptStorageEnvironment(process.env),
@@ -198,6 +200,8 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     requesterAgentId: handle.requesterAgentId,
     targetRequesterSessionKey: target.sessionKey,
     preparedRequester: { binding: requesterBinding, entry: requesterEntry },
+    completionRequesterSessionId: target.sessionId,
+    completionRequesterLifecycleRevision: target.lifecycleRevision ?? undefined,
     triggerMessage,
     internalEvents,
     requesterSessionOrigin: handle.requesterOrigin,

@@ -314,7 +314,7 @@ describe("Code Mode agent-loop error recovery", () => {
 
   it("recovers a wrong shell wait without relaunching", async ({ onTestFinished, signal }) => {
     const { scopeKey, shell } = await nativeExecFixture("wrong-wait-recovery", onTestFinished);
-    const command = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdin.once('data', () => { process.stdout.write('same-process-recovered'); process.stdin.destroy(); })"`;
+    const command = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdin.once('data', () => process.stdout.write('same-process-recovered', () => process.stdin.destroy()))"`;
     const process = createProcessTool({ scopeKey });
     vi.spyOn(shell, "execute");
     vi.spyOn(process, "execute");

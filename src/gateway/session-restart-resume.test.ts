@@ -57,7 +57,9 @@ it("leaves running cron and external-harness sessions with their execution owner
         const entry = loadExactSessionEntry({ agentId: "main", sessionKey })?.entry;
         expect(entry).toBeDefined();
         expect(entry?.resumeAfterRestart, sessionKey).toEqual(
-          sessionKey === "agent:main:ordinary-running" ? { queuedInputIds: [] } : undefined,
+          sessionKey === "agent:main:ordinary-running"
+            ? { queuedInputIds: [], hadBackgroundExec: true }
+            : undefined,
         );
       }
     } finally {

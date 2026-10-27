@@ -34,7 +34,7 @@ vi.mock("./agent-runner-result.js", () => ({ finalizeReplyAgentRun: async () => 
 // mock-isolation: Verify admission even when no plugin hook is registered.
 vi.mock("../../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () => undefined }));
 
-it("keeps a cron context prefix readable when an inbound turn persists before queuing", async () => {
+it("keeps a cron context prefix readable while an inbound turn waits for actor admission", async () => {
   await withOpenClawTestState({ label: "cron-inbound-context-read" }, async (state) => {
     setRuntimeConfigSnapshot({});
     onTestFinished(() => clearRuntimeConfigSnapshot());
@@ -72,7 +72,12 @@ it("keeps a cron context prefix readable when an inbound turn persists before qu
     });
     const reading = createDeferred();
     const releaseRead = createDeferred();
-    const queued = createDeferred();
+    const admitting = createDeferred();
+    const admitUserTurn = inputAdmission.admitUserTurn;
+    vi.spyOn(inputAdmission, "admitUserTurn").mockImplementation(async (pending) => {
+      admitting.resolve();
+      await admitUserTurn(pending);
+    });
     const cron = withSessionTurn(target, () =>
       SessionManager.readSessionContextAsync(target, async (messages) => {
         const snapshot = [...messages];
@@ -110,7 +115,6 @@ it("keeps a cron context prefix readable when an inbound turn persists before qu
           };
         },
       );
-      queued.resolve();
       return pending;
     });
     const typing = createMockTypingController();
@@ -155,16 +159,22 @@ it("keeps a cron context prefix readable when an inbound turn persists before qu
       traceAgentPhase: async (_name, run) => await run(),
     });
     try {
-      await awaitGateBeforeSettlement(queued.promise, inbound, "inbound did not queue");
-      expect(recorder.hasPersisted()).toBe(true);
+      await awaitGateBeforeSettlement(
+        admitting.promise,
+        inbound,
+        "inbound did not request admission",
+      );
+      expect(recorder.hasPersisted()).toBe(false);
       expect(inboundStarted).not.toHaveBeenCalled();
       releaseRead.resolve();
       await expect(cron).resolves.toMatchObject([{ role: "user", content: "prior turn" }]);
       await inbound;
       expect(inboundStarted).toHaveBeenCalledOnce();
+      expect(adopted).toHaveBeenCalledOnce();
+      expect(recorder.hasPersisted()).toBe(true);
       const messages = await SessionManager.readSessionContextAsync(target, (rows) => [...rows]);
       expect(messages.filter((message) => message.role === "user")).toHaveLength(2);
-      expect(recorder.getPersistedMessage()?.idempotencyKey).toBe(sourceTurnId);
+      expect(recorder.getPersistedMessage?.()?.idempotencyKey).toBe(sourceTurnId);
     } finally {
       releaseRead.resolve();
       await Promise.allSettled([cron, inbound]);

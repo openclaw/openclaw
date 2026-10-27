@@ -1122,7 +1122,7 @@ src/agents/embedded-agent-runner/run/attempt-stream.ts	3
 src/agents/embedded-agent-runner/run/attempt-tool-call-replay-sanitization.ts	1
 src/agents/embedded-agent-runner/run/attempt-tool-call-stream-normalization.ts	2
 src/agents/embedded-agent-runner/run/attempt-tool-call-text-promotion.ts	2
-src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts	3
+src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts	2
 src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle.ts	1
 src/agents/embedded-agent-runner/run/attempt-user-transcript-context-registry.ts	1
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-observation.ts	1
@@ -1246,7 +1246,6 @@ src/agents/spawn-plan.ts	1
 src/agents/subagents/announce/subagent-announce-completion-delivery.ts	1
 src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
-src/agents/subagents/registry/subagent-registry-restore.ts	1
 src/agents/subagents/registry/subagent-registry.ts	1
 src/agents/subagents/registry/subagent-session-cleanup.ts	2
 src/agents/subagents/spawn/acp-spawn-parent-stream.ts	1
@@ -1625,7 +1624,7 @@ src/config/sessions/session-accessor.sqlite-visible-cursor.ts	1
 src/config/sessions/session-accessor.transcript-range.worker.ts	3
 src/config/sessions/session-accessor.transcript-turn.ts	1
 src/config/sessions/session-reset-boundary-event.ts	2
-src/config/sessions/session-snapshot-merge.ts	9
+src/config/sessions/session-snapshot-merge.ts	8
 src/config/sessions/session-sqlite-target.ts	2
 src/config/sessions/session-store-config.ts	1
 src/config/sessions/skill-prompt-blobs.ts	5
@@ -1690,7 +1689,6 @@ src/flows/doctor-removed-workspaces-state-check.ts	1
 src/flows/search-setup.ts	1
 src/gateway/agent-runtime-identity-token.ts	1
 src/gateway/agent-turn/agent-dedupe.ts	3
-src/gateway/agent-turn/agent-session-persist.ts	3
 src/gateway/agent-turn/internal-facade.ts	4
 src/gateway/board-host-tools.ts	1
 src/gateway/board-view-ticket.ts	1
@@ -1890,7 +1888,7 @@ src/infra/outbound/deliver-payload.ts	1
 src/infra/outbound/deliver-prepare.ts	1
 src/infra/outbound/delivery-queue-storage.ts	3
 src/infra/outbound/message-account-selection.ts	1
-src/infra/outbound/message-action-execution.ts	3
+src/infra/outbound/message-action-execution.ts	1
 src/infra/outbound/message-action-runner.ts	1
 src/infra/outbound/message-action-send.ts	1
 src/infra/outbound/reply-payload-normalize.ts	3

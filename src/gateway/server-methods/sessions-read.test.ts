@@ -521,6 +521,8 @@ test("searches rich displayed fields before selecting a page across visible agen
       agentHarnessId: "custom-harness",
       modelSelectionLocked: true,
       status: "done",
+      agentHarnessId: "custom-harness",
+      modelSelectionLocked: true,
       goal: createSessionGoalFixture("goal-target", "Map distant galaxies", {
         tokensUsed: 12000,
         tokenBudget: 50000,

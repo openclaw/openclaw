@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
@@ -7,7 +8,6 @@ import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as managedMedia from "./managed-image-attachments.js";
-import { createFixture } from "./managed-image-attachments.test-support.js";
 import { listManagedImageRecordEntries } from "./managed-image-record-store.js";
 import { deliverQueuedSessionDelivery } from "./server-restart-sentinel.js";
 import { createGeneratedMediaDeliveryEntry } from "./server-restart-sentinel.test-support.js";
@@ -29,14 +29,16 @@ it("promotes produced media before publishing its transcript message and settlin
       lifecycleRevision: null,
     };
     await replaceSessionEntry(binding, { sessionId, updatedAt: 1 });
-    const { attachmentId, originalPath } = await createFixture(state.stateDir, {
+    const originalPath = state.statePath("generated.png");
+    await fs.writeFile(originalPath, createSolidPngBuffer(1, 1, { r: 17, g: 34, b: 51 }));
+    const blocks = await managedMedia.createManagedOutgoingMediaBlocks({
       sessionKey,
       agentId: "main",
       messageId: null,
-      body: createSolidPngBuffer(1, 1, { r: 17, g: 34, b: 51 }),
+      stateDir: state.stateDir,
+      localRoots: [state.stateDir],
+      items: [{ url: originalPath, trustedLocal: true }],
     });
-    const url = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
-    const blocks = [{ type: "image", url, openUrl: url }];
     const promoting = createDeferred();
     const release = createDeferred();
     const attach = managedMedia.attachManagedOutgoingMediaToMessage;

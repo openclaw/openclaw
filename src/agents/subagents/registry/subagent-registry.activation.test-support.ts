@@ -6,7 +6,8 @@ import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-req
 import { trackAsyncWork } from "../../../shared/async-work-scope.js";
 import type { SubagentRegistryHarness } from "../../subagent-test-fixtures.test-helpers.js";
 
-vi.mock("../../../gateway/server-methods/sessions-delete.js", () => ({
+vi.mock("../../../gateway/server-methods/sessions-delete.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../gateway/server-methods/sessions-delete.js")>()),
   deleteGatewaySession: async ({
     params,
     context,

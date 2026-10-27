@@ -347,7 +347,7 @@ describe("transcript input order", () => {
     ({ state, timestamps }) => {
       const notice =
         state === "cancelled"
-          ? "This message was not sent to the agent. Copy it and send again."
+          ? "Cancelled before the agent started it. It will not run automatically; copy it and send again."
           : null;
       const expectedInputs = ["First accepted input", "Second accepted input"].flatMap((text) =>
         notice ? [text, notice] : [text],

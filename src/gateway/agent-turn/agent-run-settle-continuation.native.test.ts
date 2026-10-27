@@ -549,7 +549,7 @@ it.each(["Original requester", null])(
       },
       client: clientFor(original.displayName),
     });
-    const accepted = await withTurn(params, async (recorder) => {
+    await withTurn(params, async (recorder) => {
       const input = expectDefined(recorder.getPendingInputMessage?.(), "accepted input");
       expect(input["__openclaw"]).toMatchObject({ senderId: profile.id, senderIsOwner: false });
       if (originalName === null) {
@@ -557,47 +557,43 @@ it.each(["Original requester", null])(
       } else {
         expect(input["__openclaw"]).toHaveProperty("senderName", originalName);
       }
-      await recorder.completeProcessingAsync!(
-        buildAgentRunTerminalOutcome({ status: "error", stopReason: "restart" }),
-      );
-      return input;
+      const { profile: renamed } = await rename("Renamed requester");
+      const retryParams = { ...params, client: clientFor(renamed.displayName) };
+      expect(recorder.getPendingInputMessage?.()).toEqual(input);
+      const retained = await pendingInputs.listSessionPendingInputs(target);
+      expect(retained.items).toMatchObject([{ state: "queued", message: input }]);
+      const prepareAndRelease = (candidate: TurnParams) => withTurn(candidate, async () => {});
+      // A renamed connection still matches the accepted input, but cannot take its live custody.
+      await expect(prepareAndRelease(retryParams)).rejects.toThrow("already admitted");
+      for (const mismatch of [
+        { message: "Changed result", effectiveTranscriptInputText: "Changed result" },
+        { client: clientFor(original.displayName, "different-profile") },
+      ]) {
+        await expect(prepareAndRelease({ ...retryParams, ...mismatch })).rejects.toThrow(
+          "conflicts with the accepted input",
+        );
+      }
+      const readSubmitted = pendingInputs.readSessionSubmittedInput;
+      let current = true;
+      using _ = vi
+        .spyOn(pendingInputs, "readSessionSubmittedInput")
+        .mockImplementationOnce(async (...args) => {
+          const submitted = await readSubmitted(...args);
+          current = false;
+          return submitted;
+        });
+      await expect(
+        prepareAndRelease({
+          ...retryParams,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Private source revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("Private source revoked");
+      expect(await pendingInputs.listSessionPendingInputs(target)).toEqual(retained);
+      expect(await loadTranscriptEvents(target)).toEqual([]);
     });
-    const { profile: renamed } = await rename("Renamed requester");
-    const replayParams = { ...params, client: clientFor(renamed.displayName) };
-    await withTurn(replayParams, async (recorder) => {
-      expect(recorder.getPendingInputMessage?.()).toEqual(accepted);
-    });
-    const retained = await pendingInputs.listSessionPendingInputs(target);
-    expect(retained.items).toMatchObject([{ state: "interrupted", message: accepted }]);
-    const prepareAndRelease = (candidate: TurnParams) => withTurn(candidate, async () => {});
-    for (const mismatch of [
-      { message: "Changed result", effectiveTranscriptInputText: "Changed result" },
-      { client: clientFor(original.displayName, "different-profile") },
-    ]) {
-      await expect(prepareAndRelease({ ...replayParams, ...mismatch })).rejects.toThrow(
-        "conflicts with the accepted input",
-      );
-    }
-    const readSubmitted = pendingInputs.readSessionSubmittedInput;
-    let current = true;
-    using _ = vi
-      .spyOn(pendingInputs, "readSessionSubmittedInput")
-      .mockImplementationOnce(async (...args) => {
-        const submitted = await readSubmitted(...args);
-        current = false;
-        return submitted;
-      });
-    await expect(
-      prepareAndRelease({
-        ...replayParams,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Private source revoked");
-          }
-        },
-      }),
-    ).rejects.toThrow("Private source revoked");
-    expect(await pendingInputs.listSessionPendingInputs(target)).toEqual(retained);
-    expect(await loadTranscriptEvents(target)).toEqual([]);
   },
 );

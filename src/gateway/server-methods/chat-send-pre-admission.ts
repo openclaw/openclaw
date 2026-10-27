@@ -274,7 +274,6 @@ export async function runChatSendPreAdmission(
     }
     return true;
   };
-  let retryChecked = false;
   const consumeInitialDecision = () => {
     const sendPolicy = resolveSendPolicy({
       cfg,
@@ -294,7 +293,6 @@ export async function runChatSendPreAdmission(
     if (!request.goalOperation) {
       try {
         const handled = respondChatSendRetry(params);
-        retryChecked = true;
         if (handled) {
           return false;
         }
@@ -480,7 +478,9 @@ export async function runChatSendPreAdmission(
     return false;
   }
 
-  if (!retryChecked && (await respondPreparedChatSendRetry(params))) {
+  // A completed input can outlive its RAM receipt; compare stored bytes before
+  // admitting its ID as fresh work, without adopting the old input's custody.
+  if (!request.goalOperation && (await respondPreparedChatSendRetry(params, true))) {
     return false;
   }
 

@@ -144,7 +144,18 @@ export function registerYieldFollowupAdoptionTests({
     await observe(first === "lifecycle" ? "wait" : "lifecycle");
 
     const run = findRequesterRun(runId);
-    if (paused) {
+    if (ending === "restart after pause") {
+      // A later unyielded abort ends the child; its late yield cannot reopen it.
+      expectUnpausedKill(run, {
+        execution: {
+          status: "terminal",
+          endedAt: 222,
+          outcome: { status: "error", error: "subagent run terminated" },
+        },
+      });
+      expect(wakeRequester).toHaveBeenCalledTimes(first === "lifecycle" ? 1 : 0);
+      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    } else if (paused) {
       expect(run?.pauseReason).toBe("sessions_yield");
       expect([run?.execution.outcome, run?.endedReason]).toEqual([undefined, undefined]);
       expect(wakeRequester).toHaveBeenCalledOnce();

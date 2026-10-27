@@ -191,12 +191,8 @@ describe("registered correlated completion recovery custody", () => {
               successor = subagentRuns.get(child.runId);
               return;
             }
-            // Advance the source after its committed settlement, before finalization.
-            queueMicrotask(() =>
-              queueMicrotask(() => {
-                vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
-              }),
-            );
+            // Replace the source after the commit, before the callback releases custody.
+            vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
           },
         );
       }

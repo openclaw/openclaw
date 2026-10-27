@@ -594,13 +594,12 @@ async function agentCommandFromIngressInternal(
   const generation = runtimeContext?.pluginGeneration;
   const executeIngress = () =>
     withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
-      let preparedAgentDir: string | undefined;
       const prepared = await prepareAgentCommandExecution(
         { ...opts, lifecycleGeneration, senderIsOwner: opts.senderIsOwner === true },
         ingressRuntime,
         runtimeContext,
       );
-      preparedAgentDir = prepared.agentDir;
+      const preparedAgentDir = prepared.agentDir;
       const run = async () =>
         await agentCommandInternal(
           prepared,

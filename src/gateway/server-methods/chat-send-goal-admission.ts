@@ -84,8 +84,8 @@ export function isDirectChatGoalSession(params: {
   );
 }
 
-/** Goal input and its ordinary operation receipt commit before local execution. */
-export function isLocalGoalChatAdmission(
+/** Fresh local input commits before execution; other runtimes retain pending custody. */
+export function isLocalChatInputAdmission(
   params: ChatSendAdmissionParams,
   current: {
     entry?: SessionEntry;
@@ -101,7 +101,6 @@ export function isLocalGoalChatAdmission(
   const cfg = context.getRuntimeConfig();
   const entry = current.entry ?? initialEntry;
   if (
-    !request.goalOperation ||
     cfg.cloudWorkers?.requiredProfile ||
     (placement && placement.state !== "local") ||
     !entry ||
@@ -111,7 +110,7 @@ export function isLocalGoalChatAdmission(
       sessionKey: current.canonicalKey,
       requestedSessionId: session.requestedSessionId,
       allowAborted:
-        request.goalOperation.action === "resume" && request.goalOperation.preserveBudget === true,
+        request.goalOperation?.action === "resume" && request.goalOperation.preserveBudget === true,
     }) ||
     (entry.agentHarnessId !== undefined && entry.agentHarnessId !== OPENCLAW_AGENT_RUNTIME_ID)
   ) {
@@ -136,7 +135,7 @@ export function isLocalGoalChatAdmission(
     return resolveSessionEntryResetFreshness(freshnessScope).state === "fresh";
   }
   if (!current.lifecycleTimestamps) {
-    throw new Error("Goal session freshness was not prepared; retry.");
+    throw new Error("Chat session freshness was not prepared; retry.");
   }
   return (
     resolvePreparedSessionEntryResetFreshness(freshnessScope, entry, current.lifecycleTimestamps)

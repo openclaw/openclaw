@@ -134,7 +134,6 @@ export async function withCurrentChatSendRetry(
       getRuntimeConfig: params.context.getRuntimeConfig,
       includeMembership: Boolean(params.withPreparedCurrent),
       includeActivePath: params.request.p.queueMode !== "steer",
-      includeLifecycle: Boolean(params.session.restartSafeRequest),
       consume: (latest, membership, assertSourceCurrent) => {
         const consumeCurrent = () => read(latest);
         if (params.withPreparedCurrent) {

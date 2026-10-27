@@ -55,6 +55,7 @@ import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state
 import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
 import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
 import {
+  buildRestartLifecycleReplyText,
   isReplyOperationSuperseded,
   resolveReplyOperationAbortReason,
 } from "./reply-operation-abort.js";
@@ -367,8 +368,11 @@ export async function handleReplyAgentRunError(
     return returnWithQueuedFollowupDrain({});
   }
   if (error instanceof GatewayDrainingError) {
-    replyOperation.abortForRestart();
-    return returnWithQueuedFollowupDrain({});
+    replyOperation.fail("run_failed", error);
+    return returnWithQueuedFollowupDrain({
+      text: buildRestartLifecycleReplyText(),
+      isError: true,
+    });
   }
   const knownFailurePayload = buildKnownAgentRunFailureReplyPayload({
     err: error,

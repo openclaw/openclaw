@@ -34,6 +34,7 @@ const key = (cycle: number, name: Case) => `agent:${agent(name)}:restart-resume-
 const marker = (cycle: number, name: Case) => `RESTART_CASE_${cycle}_${name}`;
 const childMarker = (cycle: number) => `RESTART_CHILD_${cycle}`;
 const queued = (cycle: number, ordinal: number) => `QUEUED_BEFORE_RESTART_${cycle}_${ordinal}`;
+const LITERAL_QUEUED_COMMAND = "/stop";
 const fresh = (cycle: number) => `FRESH_AFTER_RESTART_${cycle}`;
 const CRASH_QUEUED = "QUEUED_BEFORE_SIGKILL_MUST_REMAIN_INERT";
 const AFTER_CRASH = "FRESH_AFTER_CRASH_WORKS";
@@ -213,7 +214,7 @@ async function providerFixture(signal: AbortSignal) {
               text(`RESUMED_${cycle}_${name}`);
             } else {
               text(
-                `HANDLED_${current.includes(AFTER_CRASH) ? AFTER_CRASH : current.includes(fresh(cycle)) ? fresh(cycle) : (/QUEUED_BEFORE_RESTART_\d+_\d+/.exec(current)?.[0] ?? "NEW_INPUT")}`,
+                `HANDLED_${current.includes(AFTER_CRASH) ? AFTER_CRASH : current.includes(fresh(cycle)) ? fresh(cycle) : current.includes(LITERAL_QUEUED_COMMAND) ? "LITERAL_STOP" : (/QUEUED_BEFORE_RESTART_\d+_\d+/.exec(current)?.[0] ?? "NEW_INPUT")}`,
               );
             }
             return;
@@ -428,7 +429,17 @@ it.skipIf(process.platform === "win32")(
               ...(cycle === 1 ? [provider.wait(`ready:${cycle}:compact`)] : []),
             ]),
           );
-          await send(key(cycle, "stream"), queued(cycle, 1), "followup");
+          await client.request(
+            "chat.send",
+            {
+              sessionKey: key(cycle, "stream"),
+              message: LITERAL_QUEUED_COMMAND,
+              idempotencyKey: randomUUID(),
+              queueMode: "followup",
+              suppressCommandInterpretation: true,
+            },
+            { expectFinal: false },
+          );
           await send(key(cycle, "stream"), queued(cycle, 2), "followup");
           await race(
             vi.waitFor(
@@ -438,7 +449,8 @@ it.skipIf(process.platform === "win32")(
                   pending.filter(
                     (item) =>
                       item.state === "queued" &&
-                      JSON.stringify(item.message).includes("QUEUED_BEFORE_RESTART"),
+                      (JSON.stringify(item.message).includes(LITERAL_QUEUED_COMMAND) ||
+                        JSON.stringify(item.message).includes("QUEUED_BEFORE_RESTART")),
                   ),
                 ).toHaveLength(2);
               },
@@ -506,13 +518,13 @@ it.skipIf(process.platform === "win32")(
           await client.stopAndWait();
           client = undefined;
           if (cycle === 1) {
-            const config = asRecord(JSON.parse(await readFile(instance.configPath, "utf8")));
-            const models = asRecord(config.models);
+            const restartConfig = asRecord(JSON.parse(await readFile(instance.configPath, "utf8")));
+            const models = asRecord(restartConfig.models);
             const providers = asRecord(models.providers);
             const configured = asRecord(providers[model.providerId]);
             const entries = Array.isArray(configured.models) ? configured.models : [];
             await instance.state.writeConfig({
-              ...config,
+              ...restartConfig,
               models: {
                 ...models,
                 providers: {
@@ -521,7 +533,7 @@ it.skipIf(process.platform === "win32")(
                     ...configured,
                     models: entries.map((entry) =>
                       isRecord(entry) && entry.id === model.modelId
-                        ? { ...entry, contextWindow: 16_000 }
+                        ? Object.assign({}, entry, { contextWindow: 16_000 })
                         : entry,
                     ),
                   },
@@ -553,6 +565,7 @@ it.skipIf(process.platform === "win32")(
             ...cases
               .filter((name) => name !== "stream" && name !== "idle")
               .map((name) => ({ name, text: `RESUMED_${cycle}_${name}` })),
+            { name: "stream", text: "HANDLED_LITERAL_STOP" },
             { name: "stream", text: `HANDLED_${queued(cycle, 2)}` },
             { name: "stream", text: `HANDLED_${fresh(cycle)}` },
           ];
@@ -572,7 +585,9 @@ it.skipIf(process.platform === "win32")(
           const streamInputs = provider.calls
             .filter((call) => call.cycle === cycle && call.name === "stream")
             .map((call) => call.current);
-          const firstQueued = streamInputs.findIndex((input) => input.includes(queued(cycle, 1)));
+          const firstQueued = streamInputs.findIndex((input) =>
+            input.includes(LITERAL_QUEUED_COMMAND),
+          );
           const secondQueued = streamInputs.findIndex((input) => input.includes(queued(cycle, 2)));
           expect
             .soft(firstQueued, "the first pre-restart queued input must follow resume")
@@ -581,11 +596,18 @@ it.skipIf(process.platform === "win32")(
             .soft(secondQueued, "the second pre-restart queued input must follow the first")
             .toBeGreaterThan(firstQueued);
           for (const name of cases) {
+            if (name === "background") {
+              expect(
+                provider.calls.find(
+                  (call) => call.cycle === cycle && call.name === name && call.resumeInput,
+                )?.current,
+              ).toContain("Background exec processes were stopped; rerun them if still needed.");
+            }
             expect(
               provider.calls.filter(
                 (call) => call.cycle === cycle && call.name === name && call.resumeInput,
               ),
-              `${name}: ${JSON.stringify(provider.calls.filter((call) => call.cycle === cycle && call.name === name).map(({ current, ...call }) => ({ ...call, current: current.slice(-4_000) })))}`,
+              `${name}: ${JSON.stringify(provider.calls.filter((call) => call.cycle === cycle && call.name === name).map((call) => call.current.slice(-4_000)))}`,
             ).toHaveLength(name === "idle" ? 0 : 1);
             const result = await history(key(cycle, name));
             expect(

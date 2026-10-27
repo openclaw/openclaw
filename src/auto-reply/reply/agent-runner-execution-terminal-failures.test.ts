@@ -28,11 +28,9 @@ import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { setupExecutionSuite } from "./agent-runner-execution-suite.test-support.js";
 import {
-  createRunResult,
   GENERIC_RUN_FAILURE_TEXT,
   createRunAgentTurnParams,
   createFollowupRun,
-  createMockReplyOperation,
   createMinimalRunAgentTurnParams,
   createTestFallbackSummaryError,
   type EmbeddedAgentParams,
@@ -201,15 +199,17 @@ it("keeps the provider reset hint when the chain summary exceeds the length guar
 
 it("ends quietly when fallback exhaustion wraps a drain error", async () => {
   const replyOperation = runningOperation("wrapped-drain-error");
-  state.runWithModelFallbackMock.mockRejectedValueOnce(
-    exhausted(new GatewayDrainingError(), "gateway draining"),
-  );
+  state.runWithModelFallbackMock.mockImplementationOnce(async () => {
+    markGatewayRestartDraining();
+    throw exhausted(new GatewayDrainingError(), "gateway draining");
+  });
 
   try {
     const result = await runRawTurn({ replyOperation });
     expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
     expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
   } finally {
+    resetGatewayWorkAdmission();
     replyOperation.complete();
   }
 });
@@ -233,7 +233,7 @@ it("preserves controller restart cancellation when fallback exhaustion wraps its
   }
 });
 
-it("retains automatic recovery when restart admission refuses an active turn", async () => {
+it("quietly cancels when restart admission refuses an active turn", async () => {
   const replyOperation = runningOperation("restart-refusal");
   state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
     await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
@@ -262,7 +262,12 @@ it("retains automatic recovery when restart admission refuses an active turn", a
         entry: { updatedAt: 1, startedAt: 1 },
         event: { ...terminals[0]!, ts: 2 },
       }),
-    ).toMatchObject({ status: "interrupted", abortedLastRun: true });
+    ).toMatchObject({
+      status: "killed",
+      abortedLastRun: true,
+      suppressErrorNotice: true,
+      lastRunError: undefined,
+    });
   } finally {
     resetGatewayWorkAdmission();
     replyOperation.complete();
@@ -442,43 +447,6 @@ it.for([false, true])(
     }
   },
 );
-
-it("settles a completed result after awaiting restart recovery", async () => {
-  const result = createRunResult("completed before the restart marker was observed");
-  const runId = "armed-restart-settled-result";
-  const { replyOperation, failMock } = createMockReplyOperation();
-  let operationResult: typeof replyOperation.result = null;
-  const abortForRestart = vi.fn(() => {
-    operationResult = { kind: "aborted", code: "aborted_for_restart" };
-    return true;
-  });
-  const complete = vi.fn(() => {
-    operationResult ??= { kind: "completed" };
-  });
-  const restartReplyOperation = {
-    ...replyOperation,
-    get result() {
-      return operationResult;
-    },
-    abortForRestart,
-    complete,
-  } satisfies typeof replyOperation;
-  state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
-
-  const execution = await runRawTurn({
-    replyOperation: restartReplyOperation,
-    opts: { runId },
-  });
-
-  expect(execution).toEqual({
-    runId,
-    outcome: { kind: "aborted", reason: "restart" },
-  });
-  expect(abortForRestart).toHaveBeenCalledOnce();
-  expect(complete).not.toHaveBeenCalled();
-  expect(restartReplyOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-  expect(failMock).not.toHaveBeenCalled();
-});
 
 it("surfaces CLI max-turn recovery context at normal verbosity", async () => {
   const recoveryText =

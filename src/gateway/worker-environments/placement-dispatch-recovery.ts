@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import { measureGatewayRestartTrace } from "../restart-trace.js";
@@ -16,7 +17,11 @@ import {
 } from "./placement-dispatch-orphan-cleanup.js";
 import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-results.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
-import { projectWorkerSessionTurnClaim } from "./placement-record.js";
+import {
+  placementTurnOwner,
+  projectPlacementTurnClaim,
+  projectWorkerSessionTurnClaim,
+} from "./placement-record.js";
 import type {
   PlacementRecoveryDeps,
   WorkerPlacementRecoveryAdmission,
@@ -62,6 +67,41 @@ export function createPlacementRecoveryActions(
   // Retire orphan refs in bounded post-start sweeps, never on readiness or targeted recovery.
   // Completed roots belong to this startup pass; settlement removes new refs itself.
   let orphanCleanupPending: PendingWorkspaceResultOrphanCleanup | undefined;
+
+  const retainDrainingWorkspace = async (
+    placement: Extract<WorkerDispatchPlacement, { state: "draining" }>,
+  ): Promise<boolean> => {
+    if (!isExactAttachedEnvironment(environments.get(placement.environmentId), placement)) {
+      return false;
+    }
+    const assertCurrent = () => {
+      if (
+        deps.isShuttingDown?.() ||
+        !isExactAttachedEnvironment(environments.get(placement.environmentId), placement)
+      ) {
+        throw new Error("Interrupted worker file handoff lost its attachment owner");
+      }
+    };
+    const claimId = `reclaim-${randomUUID()}`;
+    // A stopped placement still owns files. This claim grants only result settlement,
+    // never permission to resume the old execution or call its tools.
+    const claim =
+      projectPlacementTurnClaim(placement) ??
+      (await placements.claimReclaimWorkspaceResult(
+        {
+          sessionId: placement.sessionId,
+          sessionKey: placement.sessionKey,
+          agentId: placement.agentId,
+          claimId,
+          runId: claimId,
+          owner: placementTurnOwner(placement),
+        },
+        undefined,
+        assertCurrent,
+      ));
+    await placements.retainInterruptedTurnWorkspace(claim, assertCurrent);
+    return true;
+  };
 
   const reconcileActivePlacement = async (
     placement: WorkerActiveDispatchPlacement,
@@ -236,6 +276,13 @@ export function createPlacementRecoveryActions(
       }
       const error = new Error(`Worker dispatch interrupted in ${placement.state}`);
       if (placement.state === "draining") {
+        if (await retainDrainingWorkspace(placement)) {
+          await recoverPendingWorkspaceResults(
+            deps,
+            await placements.readProjection([sessionId], { current: true }),
+          );
+          continue;
+        }
         await failure.failDraining(placement, error, { forceClaimFence: true });
         continue;
       }
@@ -312,6 +359,9 @@ export function createPlacementRecoveryActions(
               abandonedEnvironmentId = environment.environmentId;
             });
             return;
+          }
+          if (placement.state === "draining" && !facts.pendingResults.has(sessionId)) {
+            await retainDrainingWorkspace(placement);
           }
         });
         const environmentId = abandonedEnvironmentId;

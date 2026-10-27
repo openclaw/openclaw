@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";

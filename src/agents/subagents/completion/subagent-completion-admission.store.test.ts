@@ -167,8 +167,9 @@ describe("native subagent completion worker admission", () => {
         }
         expect(await pending()).toEqual([]);
         expect(owner()?.delivery).toMatchObject({
-          status: receipt === "failed" ? "failed" : "delivered",
+          status: receipt === "failed" ? "suspended" : "delivered",
           disposition: receipt === "failed" ? "permanent_failure" : "delivered",
+          ...(receipt === "failed" ? { suspendedReason: "permanent_failure" } : {}),
         });
       });
     },

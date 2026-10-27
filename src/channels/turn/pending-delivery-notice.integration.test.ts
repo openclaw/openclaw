@@ -38,7 +38,8 @@ vi.mock("../session.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session.js")>()),
   recordInboundSession: vi.fn(async () => undefined),
 }));
-vi.mock("../../gateway/server-lifecycle-runtime-context.js", () => ({
+vi.mock("../../gateway/server-lifecycle-runtime-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/server-lifecycle-runtime-context.js")>()),
   getGatewayLifecycleRuntime: () => ({ sendNotice }),
 }));
 vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => ({

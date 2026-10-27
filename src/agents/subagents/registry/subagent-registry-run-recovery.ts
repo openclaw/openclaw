@@ -233,6 +233,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       // A paused row is terminal by construction; adoption is exactly the case the
       // ended-source gate exists to keep out of unrelated replacement callers.
       allowEndedSource: true,
+      refreshCompletionAuthority: true,
       // The original requester is idle behind its own yield, so its wake credential
       // is the only path back to it once this follow-up settles.
       preserveRequesterSettleWake: true,
@@ -311,6 +312,8 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     allowEndedSource?: boolean;
     /** Ordinary next turns retain the completed execution's independent delivery. */
     preserveCompletedRun?: boolean;
+    /** An explicitly admitted paused follow-up owns fresh completion authority. */
+    refreshCompletionAuthority?: true;
     /** Current admitted child identity for a new task, never a historical task rebind. */
     sessionEntry?: SubagentRunRecord["childSessionIdentity"];
     preserveFrozenResultFallback?: boolean;
@@ -352,7 +355,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       return false;
     }
     const preserveCompletedRun = replaceParams.preserveCompletedRun === true;
-    const authority = preserveCompletedRun
+    const refreshCompletionAuthority =
+      preserveCompletedRun || replaceParams.refreshCompletionAuthority === true;
+    const authority = refreshCompletionAuthority
       ? await captureOperatorToolGatewayContinuationContext()
       : undefined;
     let custodyTransferred = false;
@@ -575,13 +580,14 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             replaceParams.retainAdmission?.(
               this.captureAdmissionRejection(next, replaceParams.admissionSessionEffects),
             );
-            if (preserveCompletedRun) {
-              if (authority) {
-                subagentRuns.bindCompletionAuthority(next, authority);
-                custodyTransferred = true;
-              }
-            } else {
+            if (!preserveCompletedRun) {
               subagentRuns.transferCompletionAuthority(value.source, next);
+            }
+            if (refreshCompletionAuthority && authority) {
+              // The newly admitted caller replaces predecessor custody, including
+              // a retired legacy source; persisted rows alone never grant it.
+              subagentRuns.bindCompletionAuthority(next, authority);
+              custodyTransferred = true;
             }
             subagentRuns.commitOwnership(next);
             if (replaceParams.successor) {

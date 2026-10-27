@@ -12,7 +12,8 @@ const sendNotice = vi.hoisted(() => vi.fn());
 const appendAssistantMessageToSessionTranscript = vi.hoisted(() => vi.fn());
 const findDeliveryIntentOwner = vi.hoisted(() => vi.fn());
 
-vi.mock("../../gateway/server-lifecycle-runtime-context.js", () => ({
+vi.mock("../../gateway/server-lifecycle-runtime-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/server-lifecycle-runtime-context.js")>()),
   getGatewayLifecycleRuntime: () => ({ sendNotice }),
 }));
 vi.mock("../../config/sessions/transcript.js", async (importOriginal) => ({

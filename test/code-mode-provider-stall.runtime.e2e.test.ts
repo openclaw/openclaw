@@ -57,6 +57,8 @@ it(
   "continues a failed Code Mode result after a provider request stalls before headers",
   { timeout: 60_000 },
   async ({ signal }) => {
+    const testStartedAt = performance.now();
+    const phases: Record<string, number> = {};
     const fixture = await createFixture("openclaw-code-mode-stall-", TOKEN);
     const proxyEnv = captureEnv(["NO_PROXY", "no_proxy"]);
     const requests: ProviderRequest[] = [];
@@ -92,6 +94,20 @@ it(
     );
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     const events: Array<{ event?: string; payload?: unknown }> = [];
+    const recordPhase = (phase: string) => {
+      phases[phase] = performance.now() - testStartedAt;
+      console.error(
+        JSON.stringify({
+          proof: "stall-recovery-progress",
+          phase,
+          phases,
+          requests: requests.length,
+          closedAfterMs,
+          providerErrors: provider.errors.map(String),
+        }),
+      );
+    };
+    recordPhase("fixtureReadyMs");
     try {
       const baseUrl = await provider.listen();
       // Bypass an inherited outbound proxy only for this fixture endpoint, not the production guard.
@@ -108,6 +124,7 @@ it(
         },
         { tools: { profile: "full", codeMode: { enabled: true, timeoutMs: 10_000 } } },
       );
+      recordPhase("startupStartedMs");
       gateway = await startGatewayWithClient({
         cfg,
         configPath: fixture.configPath,
@@ -115,6 +132,7 @@ it(
         onEvent: (event) => events.push(event),
       });
       await gateway.server.startupSettled;
+      recordPhase("startupSettledMs");
       const sessionKey = "agent:main:code-mode-stall-recovery";
       const startedAt = performance.now();
       const started = await gateway.client.request<{ runId: string; status: string }>("chat.send", {
@@ -123,12 +141,14 @@ it(
         deliver: false,
         idempotencyKey: "code-mode-stall-recovery-run",
       });
+      recordPhase("chatAcceptedMs");
       expect(started.status).toBe("started");
       const waited = await gateway.client.request<{
         status: string;
         error?: string;
         terminalReply?: { text?: string };
       }>("agent.wait", { runId: started.runId, timeoutMs: 30_000 }, { timeoutMs: 35_000 });
+      recordPhase("agentWaitSettledMs");
       const elapsedMs = performance.now() - startedAt;
       expect(waited.status).toBe("ok");
       expect(elapsedMs).toBeLessThan(35_000);

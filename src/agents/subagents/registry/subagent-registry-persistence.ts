@@ -585,11 +585,11 @@ export async function restoreSubagentRunsFromDisk(params: {
           continue;
         }
         retainSubagentRunRuntimeOwner(params.runs.get(runId), entry);
-        const restored = compactSubagentRunForMemory(entry);
-        params.runs.set(runId, restored);
-        if (params.runs === subagentRuns && !getGatewayContextResolver(restored)?.()) {
+        const retained = compactSubagentRunForMemory(entry);
+        params.runs.set(runId, retained);
+        if (params.runs === subagentRuns && !getGatewayContextResolver(retained)?.()) {
           // Retained rows are history. Only a newly admitted live task may own completion.
-          subagentRuns.retireCompletionAuthority(restored);
+          subagentRuns.retireCompletionAuthority(retained);
         }
         rememberRestoredSubagentRunNotification(entry);
         added += 1;

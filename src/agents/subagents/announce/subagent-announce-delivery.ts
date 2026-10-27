@@ -183,10 +183,11 @@ async function deliverSubagentAnnouncementBound(
           "generated media session handoff was already dead-lettered",
         );
       }
-      if (queued.status === "completed") {
-        return { delivered: true, path: "queued", disposition: "delivered" };
+      // The queue owns produced files only. After its receipt, this live caller
+      // admits the ordinary completion input; startup delivery never starts inference.
+      if (queued.status !== "completed") {
+        durableQueue = { id: queued.id, claimed: queued.claimed, context: queueContext };
       }
-      durableQueue = { id: queued.id, claimed: queued.claimed, context: queueContext };
     } catch (error) {
       if (error instanceof SessionDeliveryDeadLetteredError) {
         return {

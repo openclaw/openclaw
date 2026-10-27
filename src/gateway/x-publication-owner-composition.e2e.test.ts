@@ -55,6 +55,7 @@ import { isPublicSessionShareActive } from "./control-ui-public-session-read.js"
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { AUTH_TOKEN, createTestGatewayServer, sendRequest } from "./server-http.test-harness.js";
+import { createMockGatewayLifecycleRuntime } from "./server-lifecycle-runtime.test-support.js";
 import { sessionCreateHandlers } from "./server-methods/sessions-create.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
@@ -306,9 +307,8 @@ describe("X publication production-owner composition", () => {
     });
     gateway.resolveGatewayContext = () => gateway;
     // Registry completion must observe the real child, not the direct fixture's empty wait result.
-    vi.mocked(
-      expectDefined(gateway.lifecycleRuntime, "Gateway recovery fixture").waitForAgent,
-    ).mockImplementation(
+    gateway.lifecycleRuntime = createMockGatewayLifecycleRuntime();
+    vi.mocked(gateway.lifecycleRuntime.waitForAgent).mockImplementation(
       async (params) => (await prepareAgentWaitForTurn(gateway, params).wait()).result,
     );
     gateway.readPreparedGatewayModelCatalog = async () => {

@@ -483,9 +483,12 @@ suite.define(() => {
       });
       await page.getByText(stopText, { exact: true }).waitFor();
       await page
-        .getByText("This message was not sent to the agent. Copy it and send again.", {
-          exact: true,
-        })
+        .getByText(
+          "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+          {
+            exact: true,
+          },
+        )
         .waitFor();
       expect(await page.getByText(cancelText, { exact: true }).count()).toBe(0);
       expect(await page.getByText(cancelPrompt, { exact: true }).count()).toBe(0);

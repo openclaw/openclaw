@@ -522,7 +522,9 @@ export async function runReplyAgent(
       storePath,
       setEntry: (entry) => {
         activeSessionEntry = entry;
-        if (activeSessionStore && sessionKey) activeSessionStore[sessionKey] = entry;
+        if (activeSessionStore && sessionKey) {
+          activeSessionStore[sessionKey] = entry;
+        }
       },
     });
     try {

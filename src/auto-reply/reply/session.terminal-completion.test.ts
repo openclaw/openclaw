@@ -30,11 +30,9 @@ describe("terminal completion session reuse", () => {
       const retained = {
         sessionId,
         lifecycleRevision: "completion-revision",
-        status,
-        abortedLastRun: true,
       };
       await writeSessionStoreFast(storePath, {
-        [sessionKey]: { ...retained, updatedAt: Date.now() },
+        [sessionKey]: { ...retained, status, abortedLastRun: true, updatedAt: Date.now() },
       });
       const scope = { agentId: "main", storePath, sessionId };
       await appendTranscriptMessage(
@@ -62,8 +60,11 @@ describe("terminal completion session reuse", () => {
       });
       const entry = readSessionStoreFast(storePath)[sessionKey];
       expect(result.isNewSession).toBe(false);
-      expect(result.abortedLastRun).toBe(true);
+      expect(result.sessionId).toBe(sessionId);
+      expect(result.abortedLastRun).toBe(false);
       expect(entry).toMatchObject(retained);
+      expect(entry?.status).toBeUndefined();
+      expect(entry?.abortedLastRun).toBeUndefined();
       expect(await loadTranscriptEvents(scope)).toEqual(transcriptBefore);
     },
   );

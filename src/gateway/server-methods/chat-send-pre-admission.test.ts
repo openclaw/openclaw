@@ -37,7 +37,6 @@ import { claimRpcSourceForTest, createRpcSourceForTest } from "../test-helpers.r
 import { writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
 import {
   prepareChatSendRetryComparison,
-  resolveChatSendRequestConflict,
   respondChatSendRetry,
   runChatSendPreAdmission,
 } from "./chat-send-pre-admission.js";

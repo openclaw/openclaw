@@ -215,7 +215,7 @@ it.each<
 });
 
 it.each([false, true])(
-  "refuses an archived native source before /new (send denied=%s)",
+  "restores an authorized archived native source before /new (send denied=%s)",
   async (sendDenied) => {
     if (sendDenied) {
       cfg.session = { sendPolicy: { default: "deny" } };
@@ -230,12 +230,15 @@ it.each([false, true])(
       archivedAt: 2,
     });
     await replaceSessionEntry(target, { sessionId: "active-target", updatedAt: Date.now() });
-    const originalSource = loadSessionEntry(source);
-    const originalTarget = loadSessionEntry(target);
-
-    await expect(send("owner", "/new")).rejects.toThrow(/is archived/i);
-    expect(loadSessionEntry(source)).toEqual(originalSource);
-    expect(loadSessionEntry(target)).toEqual(originalTarget);
+    const { result, texts } = await send("owner", "/new");
+    const restoredSource = loadSessionEntry(source);
+    const resetTarget = loadSessionEntry(target);
+    expect(restoredSource?.sessionId).toBe("archived-command-source");
+    expect(restoredSource?.archivedAt).toBeUndefined();
+    expect(resetTarget?.sessionId).toEqual(expect.any(String));
+    expect(resetTarget?.sessionId).not.toBe("active-target");
+    expect(texts).toEqual(sendDenied ? [] : [expect.stringMatching(/New session started/u)]);
+    expect(result.sendPolicyDenied).toBe(sendDenied ? true : undefined);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   },
 );

@@ -47,7 +47,6 @@ import {
   type OperatorRunRecoverySnapshot,
 } from "./operator-run-recovery-source.codec.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
-import { prepareSessionPrincipalRunAccess } from "./session-sharing-authorization-async.js";
 
 type OperatorSource = {
   owners: readonly [
@@ -272,32 +271,6 @@ export function captureChannelOperatorRunAuthority(input: {
       };
     },
   });
-}
-
-/** Admit a new input as a recorded person using only that person's current grants. */
-export async function prepareSessionPrincipalRunAuthority(
-  params: Parameters<typeof prepareSessionPrincipalRunAccess>[0] & {
-    context: Pick<
-      GatewayRequestContext,
-      "getRuntimeConfig" | "getCommittedRuntimeConfig" | "resolveGatewayContext"
-    >;
-  },
-): Promise<{ authority: AdmittedRunOperatorAuthority; release: () => void }> {
-  const source = await prepareSessionPrincipalRunAccess(params);
-  try {
-    const admitted = await captureGatewayOperatorRunAuthority({
-      client: source.client,
-      context: params.context,
-      sourceAuthority: source,
-    });
-    if (!admitted) {
-      throw new Error("Session principal has no current run authority.");
-    }
-    return admitted;
-  } catch (error) {
-    source.release();
-    throw error;
-  }
 }
 
 /** Transfers the original operator restriction into accepted work, independently of its request. */

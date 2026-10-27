@@ -16,7 +16,6 @@ import {
 } from "../../../context-engine/registry.js";
 import * as engineTest from "../../../context-engine/registry.test-support.js";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
-import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   claimAgentRunDelegatedAuthority,
   clearAgentRunContext,

@@ -137,6 +137,7 @@ describe("announce loop guard (#18264)", () => {
 
   async function activateCompletion(entry: SubagentRunRecord) {
     await registry.initSubagentRegistry();
+    await registry.addSubagentRunForTests(entry);
     const lifecycleRuntime = createMockGatewayLifecycleRuntime();
     vi.mocked(lifecycleRuntime.waitForAgent).mockResolvedValue({ status: "pending" });
     const gatewayContext = {
@@ -176,9 +177,6 @@ describe("announce loop guard (#18264)", () => {
       ...overrides,
     };
   };
-  const restoreRun = (entry: SubagentRunRecord) =>
-    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
-
   async function waitForRun(
     runId: string,
     predicate: (run: SubagentRunRecord) => boolean,
@@ -248,8 +246,6 @@ describe("announce loop guard (#18264)", () => {
         delivery: { status: "pending", attemptCount: 3, lastAttemptAt: now - 9 * 60_000 },
       },
     );
-    restoreRun(entry);
-
     // An explicit live cleanup attempt finalizes expired rows without another delivery.
     const beforeInit = Date.now();
     await activateCompletion(entry);
@@ -266,14 +262,14 @@ describe("announce loop guard (#18264)", () => {
     {
       name: "controller queue custody preserves the failure budget without timer replay",
       attemptCount: 3,
-      restoreDelayMs: 0,
+      retryDelayMs: 0,
     },
     {
-      name: "honors saved backoff before transferring delivery to the controller queue",
+      name: "honors retry backoff before transferring delivery to the controller queue",
       attemptCount: 3,
-      restoreDelayMs: 1_000,
+      retryDelayMs: 1_000,
     },
-  ])("$name", async ({ attemptCount, restoreDelayMs }) => {
+  ])("$name", async ({ attemptCount, retryDelayMs }) => {
     const busyRequester = reserveSessionControllerSource("agent:main:main", {
       sourceTurnId: "busy-requester",
       policy: { mode: "followup" },
@@ -328,18 +324,15 @@ describe("announce loop guard (#18264)", () => {
           lastAttemptAt: now - 30_000,
           windowStartedAt: now - 60_000,
           deadlineAt: now - 60_000 + 30 * 60_000,
-          ...(restoreDelayMs ? { nextAttemptAt: now + restoreDelayMs } : {}),
+          ...(retryDelayMs ? { nextAttemptAt: now + retryDelayMs } : {}),
         },
       },
     );
     await prepareSubagentRequesterFixture(entry, { entries: sessionStore });
-    restoreRun(entry);
-
     await activateCompletion(entry);
-    if (restoreDelayMs) {
-      await registry.initSubagentRegistry();
+    if (retryDelayMs) {
       expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(restoreDelayMs);
+      await vi.advanceTimersByTimeAsync(retryDelayMs);
     }
     const resumed = await waitForRun(
       entry.runId,
@@ -378,7 +371,6 @@ describe("announce loop guard (#18264)", () => {
       task: "rejection test",
       cleanupHandled: false,
     });
-    restoreRun(entry);
     await prepareSubagentRequesterFixture(entry, { entries: sessionStore });
 
     await activateCompletion(entry);

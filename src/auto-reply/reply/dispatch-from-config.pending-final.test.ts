@@ -106,14 +106,15 @@ describe("pending final transport settlement", () => {
 
     const entry = readEntry();
     expect(entry?.pendingFinalDelivery).toBeUndefined();
-    expect(entry?.lifecycleRunId).toBeUndefined();
     expect(entry).toMatchObject({
-      status: "done",
-      abortedLastRun: false,
-      endedAt: expect.any(Number),
+      lifecycleRunId: "active-run",
+      startedAt: 10,
       updatedAt: 1,
     });
-    expect(entry?.runtimeMs).toBeGreaterThanOrEqual(0);
+    expect(entry?.status).toBeUndefined();
+    expect(entry?.abortedLastRun).toBeUndefined();
+    expect(entry?.endedAt).toBeUndefined();
+    expect(entry?.runtimeMs).toBeUndefined();
   });
 
   it("clears a skipped turn only after every sendable final is suppressed", async () => {
@@ -176,12 +177,13 @@ describe("pending final transport settlement", () => {
         if ("label" in change) {
           expect(persisted.label).toBe("foreign metadata");
           expect(persisted.pendingFinalDelivery).toBeUndefined();
-          expect(persisted.status).toBe("done");
         } else {
           expect(persisted).toMatchObject(foreign);
           expect(persisted.pendingFinalDelivery).toEqual(foreign.pendingFinalDelivery);
-          expect(persisted.status).toBeUndefined();
         }
+        expect(persisted.status).toBeUndefined();
+        expect(persisted.lifecycleRunId).toBe("active-run");
+        expect(persisted.startedAt).toBe(10);
         expect(persisted.updatedAt).toBe(1);
       }
     } finally {

@@ -892,7 +892,6 @@ describe("agentCommand", () => {
   });
 
   it("strips private execution identity from runtime-shaped public ingress", async ({
-    store,
     cfg: _cfg,
   }) => {
     const prepare = vi.spyOn(executionIdentity, "prepare");

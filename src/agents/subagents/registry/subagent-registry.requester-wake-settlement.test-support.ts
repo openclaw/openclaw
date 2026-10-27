@@ -12,7 +12,7 @@ import {
   createRequesterYieldTool,
   visibleChild,
 } from "./subagent-registry.requester-wake-receipts.test-support.js";
-import { type RequesterWakeFixture } from "./subagent-registry.requester-wake-session.test-support.js";
+import type { RequesterWakeFixture } from "./subagent-registry.requester-wake-session.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 

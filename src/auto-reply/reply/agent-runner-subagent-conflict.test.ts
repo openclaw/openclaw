@@ -16,9 +16,9 @@ import { executePreparedReplyAgentRun } from "./agent-runner-execute.js";
 import {
   createFollowupRun,
   createMinimalRunAgentTurnParams,
-  createMockReplyOperation,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
+import { createReplyActorFixture } from "./reply-actor.test-support.js";
 import { createReplyInputAdmission } from "./reply-input-admission.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -87,10 +87,12 @@ it("settles a reply visibly when the reactivation cohort changes before replacem
     }
     return mutate(ids, plan, options);
   });
-  const { replyOperation, failMock } = createMockReplyOperation({
-    key: sessionKey,
-    sessionId: target.sessionId,
+  await using actor = createReplyActorFixture({
+    ...target,
+    getSessionId: () => target.sessionId,
   });
+  const { operation: replyOperation } = await actor.bind();
+  const failMock = vi.spyOn(replyOperation, "fail");
   const followupRun = createFollowupRun({
     config: getRuntimeConfig(),
     sessionKey,

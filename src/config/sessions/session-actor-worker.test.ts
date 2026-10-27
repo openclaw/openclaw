@@ -492,6 +492,7 @@ it.each([
         entry: { sessionId, ...lifecycle },
         pendingInputs: [],
       });
+      expect(f.read(target)?.entry?.status).toBeUndefined();
       expect(
         readTranscriptEventRows(f.database, sessionId).map((row) => JSON.parse(row.eventJson)),
       ).toMatchObject([

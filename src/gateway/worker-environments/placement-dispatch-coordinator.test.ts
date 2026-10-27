@@ -11,7 +11,6 @@ import {
   createCoordinatorTestService,
   LOCAL_PLACEMENT,
   MOVE_REQUEST,
-  preparedReclaim,
   REQUEST,
 } from "./placement-dispatch-coordinator.test-support.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";

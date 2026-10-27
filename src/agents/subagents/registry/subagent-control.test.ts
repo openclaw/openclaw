@@ -23,7 +23,6 @@ import { resolveContextEngine } from "../../../context-engine/registry.js";
 import * as controllerLifecycle from "../../../sessions/session-controller.lifecycle.js";
 import {
   consumeSessionEffectHandoff,
-  getSessionMutationCount,
   isSessionMutationActive,
   SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
 } from "../../../sessions/session-controller.lifecycle.js";
@@ -49,6 +48,7 @@ import {
   registerQueuedStopControlTests,
   registerRequestFrontierControlTests,
 } from "./subagent-control.stop-selection.test-support.js";
+import { registerSuccessorAdmissionControlTests } from "./subagent-control.successor-admission.test-support.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -56,7 +56,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
-import { replaceSubagentRunAfterSteerCore, startQueuedSubagentRun } from "./subagent-registry.js";
+import { startQueuedSubagentRun } from "./subagent-registry.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey as latestRun,
@@ -982,100 +982,15 @@ describe("controlled subagent cancellation races", () => {
     },
   );
 
-  it.each(["exact admin", "controlled"] as const)(
-    "interrupts selected admission without retargeting an exact admin kill (%s)",
-    async (mode) => {
-      const exact = mode === "exact admin";
-      const sessionId = "sess-live-admission";
-      const entry = await addRun(
-        runFixture("live-admission", {
-          childSessionIdentity: { sessionId },
-          createdAt: Date.now() - 2_000,
-          ...(exact
-            ? {
-                ...adminOwner,
-                completion: { required: false },
-                delivery: { status: "pending" },
-                generation: 1,
-              }
-            : { requesterSessionKey: "agent:main:main" }),
-          execution: {
-            status: "running",
-            startedAt: Date.now() - 1_000,
-          },
-        }),
-      );
-      const { childSessionKey } = entry;
-      const storePath = await writeSession("live-admission", childSessionKey, {
-        sessionId,
-        updatedAt: Date.now(),
-        abortedLastRun: true,
-      });
-      const interrupted = createDeferred();
-      const admission = await beginControlAdmission(
-        storePath,
-        childSessionKey,
-        sessionId,
-        () => {
-          interrupted.resolve();
-          return { runId: entry.runId };
-        },
-        entry.runId,
-      );
-      const handoffId = admission.createHandoff();
-      const successorInterrupted = vi.fn();
-      const abort = exact
-        ? startProducer(childSessionKey, sessionId, storePath, undefined, "live-successor").cancel
-        : undefined;
-      const pendingKill = exact
-        ? adminKill(childSessionKey, storePath, { expectedRunId: entry.runId })
-        : controlledKill([entry], storePath);
-      let adopted: ReturnType<typeof consumeSessionEffectHandoff>;
-      try {
-        await interrupted.promise;
-        expect(getSessionMutationCount()).toBeGreaterThan(0);
-        adopted = consumeSessionEffectHandoff({
-          handoffId,
-          scope: storePath,
-          identities: [childSessionKey, sessionId],
-          onInterrupt: successorInterrupted,
-        });
-        expect(adopted).toBeDefined();
-        if (exact) {
-          expect(
-            await replaceSubagentRunAfterSteerCore({
-              previousRunId: entry.runId,
-              nextRunId: "live-successor",
-              expected: entry,
-            }),
-          ).toBe(true);
-        } else {
-          expect(successorInterrupted).toHaveBeenCalledOnce();
-        }
-        adopted?.release();
-        if (exact) {
-          await expect(pendingKill).resolves.toMatchObject({
-            found: true,
-            killed: false,
-            runId: entry.runId,
-          });
-          await expectRunning(childSessionKey, { runId: "live-successor" });
-          expect(abort).not.toHaveBeenCalled();
-        } else {
-          await expect(pendingKill).resolves.toMatchObject({ status: "ok" });
-          await expect(admission.released).resolves.toBeUndefined();
-          expect(await latestRun(childSessionKey)).toMatchObject({
-            endedReason: SUBAGENT_ENDED_REASON_KILLED,
-            execution: { status: "terminal" },
-          });
-        }
-      } finally {
-        adopted?.release();
-        admission.release();
-        await pendingKill;
-      }
-    },
-  );
+  registerSuccessorAdmissionControlTests({
+    addRun,
+    runFixture,
+    writeSession,
+    adminKill,
+    controlledKill,
+    expectRunning,
+    adminOwner,
+  });
 
   registerAdmissionDrainControlTests(controlTestDeps);
 

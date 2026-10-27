@@ -5,7 +5,6 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../c
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
-import * as gatewayWorkAdmission from "../../../process/gateway-work-admission.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import {

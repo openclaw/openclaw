@@ -6,11 +6,11 @@ import type { SessionPendingInputRow } from "../config/sessions/session-pending-
 import { MEDIA_ONLY_USER_TEXT } from "../sessions/user-turn-media.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
-import { prepareSessionPrincipalRunAuthority } from "./operator-run-authority.js";
 import { queuedChatInputAdmission } from "./queued-chat-input-admission.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 
 type Target = { agentId: string; storePath: string; sessionKey: string; sessionId: string };
 
@@ -109,6 +109,9 @@ export async function continueSessionQueuedInputs(
                 message:
                   extractTextFromChatContent(message.content, { joinWith: "\n" }) ||
                   MEDIA_ONLY_USER_TEXT,
+                ...(message["__openclaw"]?.suppressCommandInterpretation === true
+                  ? { suppressCommandInterpretation: true }
+                  : {}),
                 queueMode: "followup",
               },
               {

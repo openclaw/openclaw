@@ -6,6 +6,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { withSessionControllerOwner } from "../sessions/session-controller.lifecycle.js";
+import { waitForSessionRunIdle } from "../sessions/session-controller.wait.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
@@ -172,6 +173,7 @@ it("retains command admission through Code Mode disposal, not detached external 
       });
       expect(events).not.toContain("raw:settled");
       expect(effect.execute).toHaveBeenCalledOnce();
+      expect(await withinTest(waitForSessionRunIdle(target.sessionKey), signal)).toBe(true);
       expect(createGatewayActiveWorkSnapshot().counts.sessionAdmissions).toBe(0);
       expect(events.indexOf("cleanup:settled")).toBeLessThan(events.indexOf("successor:effect"));
 

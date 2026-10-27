@@ -156,14 +156,14 @@ it.each(
       await enqueueDeliveryOnce(params, completion.deliveryId, tmpDir());
       await recover();
     }
-    const receipt = loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries?.[0]?.receipt;
+    const settledReceipt = loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries?.[0]?.receipt;
     if (eligible) {
-      expect(receipt).toMatchObject({
+      expect(settledReceipt).toMatchObject({
         resultCount: placement === "aggregate-complete" ? 2 : 1,
         platformMessageId: placement === "aggregate-complete" ? "first" : "m",
       });
     } else {
-      expect(receipt).toBeUndefined();
+      expect(settledReceipt).toBeUndefined();
     }
     expect(seen).toEqual(["m"]);
     expect(committed).toHaveBeenCalledTimes(legacy ? 0 : 1);

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { visibleCompletion } from "./subagent-announce-fixtures.test-support.js";
 import {
   registryRuntimeMock,
-  sessionStore,
   setSessionStore,
   wakeParams,
 } from "./subagent-announce.requester-settle-fixture.test-support.js";

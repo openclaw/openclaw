@@ -673,7 +673,7 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Written only by committed graceful shutdown, consumed by the next startup. */
-  resumeAfterRestart?: { queuedInputIds: string[] };
+  resumeAfterRestart?: { queuedInputIds: string[]; hadBackgroundExec?: true };
 };
 
 export interface InternalSessionEntry extends InternalSessionEntryCore {}

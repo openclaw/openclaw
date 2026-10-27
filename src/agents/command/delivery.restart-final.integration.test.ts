@@ -225,7 +225,6 @@ it.each(
       });
     }
     const marker = await persistMarker(target, entry, payloads, {
-      admittedRecoverySource: undefined,
       deliveryContext: { channel: "matrix", to: "!restart:example" },
       commandOwnerReference: assertOwnerCurrent.recoveryReference,
     });

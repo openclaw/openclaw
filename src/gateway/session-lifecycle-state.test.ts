@@ -354,6 +354,11 @@ describe("session lifecycle state", () => {
   });
 
   it.each([
+    terminalCase(
+      "hook-handled turn without provider dispatch",
+      { phase: "end", providerStarted: false },
+      "done",
+    ),
     terminalCase("aborted", { phase: "end", stopReason: "aborted" }, "killed", true),
     terminalCase("signal-only cancellation", { phase: "end", aborted: true }, "killed", true),
     terminalCase(

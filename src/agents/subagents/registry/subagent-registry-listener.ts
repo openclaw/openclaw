@@ -53,7 +53,7 @@ export function createSubagentRegistryListener(config: {
       // Own lifecycle writes before their first await.
       void runWithGatewayIndependentRootWorkContinuation(async () => {
         const phase = evt.data?.phase;
-        const entry = runs.get(evt.runId);
+        let entry = runs.get(evt.runId);
         if (!entry) {
           if (phase === "end" && typeof evt.sessionKey === "string") {
             const sessionKey = evt.sessionKey;
@@ -120,6 +120,22 @@ export function createSubagentRegistryListener(config: {
         if (phase !== "end" && phase !== "error") {
           return;
         }
+        // A retry's start may still be publishing when its terminal event arrives.
+        // Join the existing per-run mutation queue before selecting that attempt.
+        const observed = await mutateSubagentRuns([runId], (rows) => ({ value: rows.get(runId) }), {
+          runs,
+          context,
+          assertCurrent,
+        });
+        if (
+          !observed ||
+          (startedAt !== undefined &&
+            observed.execution.startedAt !== undefined &&
+            observed.execution.startedAt !== startedAt)
+        ) {
+          return;
+        }
+        entry = observed;
         const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : Date.now();
         const terminalReply = normalizeAgentRunTerminalReplySnapshot(evt.data?.terminalReply);
         const terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({

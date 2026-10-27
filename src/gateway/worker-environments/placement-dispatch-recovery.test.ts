@@ -86,6 +86,7 @@ describe("worker placement restart recovery", () => {
       });
       restarted.markEnvironmentNodeDeviceId("interrupted-worker-node");
       const tunnel = restarted.tunnelHandle(active.activeOwnerEpoch);
+      const launchTurn = vi.spyOn(tunnel, "launchTurn");
       vi.mocked(tunnel.reconcileWorkspace).mockImplementation(
         async ({ source, baseManifestRef }) => {
           assert(source.kind === "local");
@@ -139,7 +140,7 @@ describe("worker placement restart recovery", () => {
       expectPlacement(restartedStore, "active", { turnClaim: null });
       expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(restarted.environments.destroy).not.toHaveBeenCalled();
-      expect(tunnel.launchTurn).not.toHaveBeenCalled();
+      expect(launchTurn).not.toHaveBeenCalled();
     },
   );
 
