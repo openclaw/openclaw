@@ -1,17 +1,22 @@
 // Real built Gateway + synthetic durable state; never accepts an arbitrary live URL.
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
 import { chromium, type Browser, type CDPSession, type Page } from "playwright";
-import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import {
+  CONTROL_UI_TOKEN_SESSION_KEY_PREFIX,
+  DEVICE_AUTH_STORAGE_KEY_PREFIX,
+} from "../../src/shared/control-ui-storage.ts";
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
+import { waitForControlUiGatewayReady } from "../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
-import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { installWarmReloadBrowserProbe, proofRegions } from "./warm-reload-browser-probe.ts";
 import { seedWarmReloadFixture } from "./warm-reload-fixture.ts";
 import { analyzeReloadFrames, type ReloadFrame } from "./warm-reload-frames.ts";
@@ -54,6 +59,14 @@ if (!["both", "chat", "dashboard"].includes(values.route)) {
 const dist = path.resolve(values.dist);
 const uiRoot = path.resolve(values["ui-root"] ?? path.join(dist, "control-ui"));
 await Promise.all([access(path.join(dist, "entry.js")), access(path.join(uiRoot, "index.html"))]);
+const gatewayBuild: unknown = JSON.parse(
+  await readFile(path.join(dist, "build-info.json"), "utf8"),
+);
+const uiIndex = await readFile(path.join(uiRoot, "index.html"));
+const buildIdentity = {
+  gateway: gatewayBuild,
+  uiIndexSha256: createHash("sha256").update(uiIndex).digest("hex"),
+};
 const directory = createControlUiE2eArtifactDir("warm-reload", values.output);
 const stateDir = path.join(directory, "state");
 const viewport = { width: 1720, height: 1180 };
@@ -85,7 +98,7 @@ async function waitForGateway(url: string, child: ChildProcess) {
       throw new Error("Owned Gateway exited during startup; inspect gateway.log");
     }
     try {
-      const response = await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(1000) });
+      const response = await fetch(`${url}/readyz`, { signal: AbortSignal.timeout(1000) });
       if (response.ok) {
         return;
       }
@@ -140,6 +153,43 @@ async function regionBoxes(page: Page) {
   }, proofRegions);
 }
 
+async function readWarmCache(page: Page, sessionKey: string) {
+  return await page.evaluate(async (key) => {
+    // Inspect the existing disposable cache; never create or populate a database for proof.
+    const name = "openclaw-chat-snapshots";
+    if (!(await indexedDB.databases()).some((database) => database.name === name)) {
+      return { targetSnapshots: 0, snapshots: 0, sidebarSnapshots: 0 };
+    }
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(name);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    try {
+      const readKeys = (store: string) =>
+        new Promise<IDBValidKey[]>((resolve, reject) => {
+          const request = database.transaction(store, "readonly").objectStore(store).getAllKeys();
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+      const snapshots = await readKeys("snapshots");
+      const sidebar = await readKeys("sidebarSnapshots");
+      return {
+        targetSnapshots: snapshots.filter(
+          (value) =>
+            typeof value === "string" &&
+            value.startsWith("scope:[") &&
+            value.endsWith(`\u0000${key}`),
+        ).length,
+        snapshots: snapshots.length,
+        sidebarSnapshots: sidebar.length,
+      };
+    } finally {
+      database.close();
+    }
+  }, sessionKey);
+}
+
 type WireFrame = { file: string; epochMs: number };
 async function captureReload(
   page: Page,
@@ -147,11 +197,47 @@ async function captureReload(
   url: string,
   outputDir: string,
   warm: boolean,
+  route: string,
 ) {
   await mkdir(outputDir, { recursive: true });
   const frames: WireFrame[] = [];
   const writes: Promise<void>[] = [];
   const errors: string[] = [];
+  const tree: { frameTree: { frame: { id: string } } } = await cdp.send("Page.getFrameTree");
+  const documents: Array<{ path: string; epochMs: number; monotonicMs: number; loaderId: string }> =
+    [];
+  const onDocument = (event: {
+    type: string;
+    frameId: string;
+    wallTime: number;
+    timestamp: number;
+    loaderId: string;
+    request: { url: string };
+  }) => {
+    if (event.type === "Document" && event.frameId === tree.frameTree.frame.id) {
+      documents.push({
+        path: new URL(event.request.url).pathname,
+        epochMs: event.wallTime * 1000,
+        monotonicMs: event.timestamp * 1000,
+        loaderId: event.loaderId,
+      });
+    }
+  };
+  const paints: Array<{ name: string; monotonicMs: number; loaderId: string }> = [];
+  const onLifecycle = (event: {
+    frameId: string;
+    name: string;
+    timestamp: number;
+    loaderId: string;
+  }) => {
+    if (event.frameId === tree.frameTree.frame.id && event.name === "firstContentfulPaint") {
+      paints.push({
+        name: event.name,
+        monotonicMs: event.timestamp * 1000,
+        loaderId: event.loaderId,
+      });
+    }
+  };
   const http: Array<{ url: string; status: number; type: string; atMs: number }> = [];
   const requests = new Map<string, { method: string; atMs: number; bytes: number }>();
   const rpc: Array<{
@@ -207,6 +293,8 @@ async function captureReload(
     }
   };
   cdp.on("Page.screencastFrame", onFrame);
+  cdp.on("Network.requestWillBeSent", onDocument);
+  cdp.on("Page.lifecycleEvent", onLifecycle);
   cdp.on("Network.responseReceived", onHttp);
   cdp.on("Network.webSocketFrameSent", onSent);
   cdp.on("Network.webSocketFrameReceived", onReceived);
@@ -228,6 +316,37 @@ async function captureReload(
       timeout: captureMs + 60000,
     });
     const probe = await readProbe(page);
+    const finalDocumentTimeOrigin = probe.timeOrigin;
+    const navigationOrigin = documents[0]?.epochMs ?? finalDocumentTimeOrigin;
+    const documentOffsetMs = finalDocumentTimeOrigin - navigationOrigin;
+    for (const key of [
+      "firstAppDomMs",
+      "firstMainDomMs",
+      "firstDashboardContentDomMs",
+      "firstPaintedRowsMs",
+      "finalRowsDomMs",
+      "helloPublishedMs",
+      "helloHandledMs",
+      "fcpMs",
+    ] as const) {
+      const value = probe[key];
+      if (value !== null) {
+        probe[key] = value + documentOffsetMs;
+      }
+    }
+    for (const entry of [...probe.loaf, ...probe.shifts, ...probe.domStates]) {
+      entry.atMs += documentOffsetMs;
+    }
+    probe.capturedUntilMs += documentOffsetMs;
+    probe.timeOrigin = navigationOrigin;
+    const initialPaint = paints.find(
+      (paint) =>
+        documents.some((document) => document.loaderId === paint.loaderId) &&
+        paint.monotonicMs >= (documents[0]?.monotonicMs ?? 0),
+    );
+    if (initialPaint && documents[0]) {
+      probe.fcpMs = initialPaint.monotonicMs - documents[0].monotonicMs;
+    }
     for (const response of http) {
       response.atMs -= probe.timeOrigin;
     }
@@ -238,6 +357,17 @@ async function captureReload(
       }
     }
     const regions = await regionBoxes(page);
+    const requiredRegions = [
+      "sidebar",
+      "header",
+      "transcript",
+      "composer",
+      ...(warm && route === "chat" ? ["details"] : []),
+      ...(route === "dashboard" ? ["dashboard"] : []),
+    ];
+    const missingRegions = requiredRegions.filter(
+      (name) => !regions.some((region) => region.name === name),
+    );
     await page.screenshot({ path: path.join(outputDir, "final.png") });
     await cdp.send("Page.stopScreencast");
     await Promise.all(writes);
@@ -269,8 +399,19 @@ async function captureReload(
       probe,
       firstAppCapturedPaintMs: paintedAfter(probe.firstAppDomMs),
       firstMainCapturedPaintMs: paintedAfter(probe.firstMainDomMs),
+      firstDashboardCapturedPaintMs: paintedAfter(probe.firstDashboardContentDomMs),
       regions,
       visual,
+      missingRegions,
+      unmountedRegions: Object.keys(proofRegions).filter(
+        (name) => !regions.some((region) => region.name === name),
+      ),
+      documents,
+      paints,
+      finalDocumentTimeOrigin,
+      documentOffsetMs,
+      performanceEntryScope:
+        "LoAF and CLS cover the final app document; paint lifecycle and pixels include prior documents",
       observationCensored:
         visual.lastVisualChangeMs !== null &&
         probe.capturedUntilMs - visual.lastVisualChangeMs < 1000,
@@ -280,6 +421,11 @@ async function captureReload(
       outputDir,
     };
     await writeFile(path.join(outputDir, "reload.json"), JSON.stringify(report, null, 2));
+    if (missingRegions.length) {
+      throw new Error(
+        `Missing required final regions: ${missingRegions.join(", ")}; inspect ${outputDir}`,
+      );
+    }
     console.info(
       JSON.stringify({
         reload: outputDir,
@@ -292,6 +438,8 @@ async function captureReload(
   } finally {
     await cdp.send("Page.stopScreencast").catch(() => {});
     cdp.off("Page.screencastFrame", onFrame);
+    cdp.off("Network.requestWillBeSent", onDocument);
+    cdp.off("Page.lifecycleEvent", onLifecycle);
     cdp.off("Network.responseReceived", onHttp);
     cdp.off("Network.webSocketFrameSent", onSent);
     cdp.off("Network.webSocketFrameReceived", onReceived);
@@ -336,36 +484,34 @@ try {
       fixture.token,
       "--allow-unconfigured",
     ],
-    { env: fixture.env, stdio: ["ignore", "pipe", "pipe"], detached: true },
+    {
+      cwd: fixture.workspaceDir,
+      env: fixture.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+    },
   );
   gateway.stdout?.pipe(log);
   gateway.stderr?.pipe(log);
   gateway.once("error", (error) => console.error("Gateway spawn failed:", error.message));
   await waitForGateway(baseUrl, gateway);
-  const client = createGatewayWsClient({ url: baseUrl.replace("http", "ws"), origin: baseUrl });
-  try {
-    await client.waitOpen();
-    const connected = await client.request("connect", {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: { id: "cli", version: "warm-reload-proof", platform: process.platform, mode: "cli" },
-      role: "operator",
-      scopes: ["operator.admin"],
-      auth: { token: fixture.token },
-    });
-    if (!connected.ok) {
-      throw new Error(`Synthetic fixture RPC admission failed: ${JSON.stringify(connected.error)}`);
-    }
-    await fixture.prepareGateway(async (method, params) => {
-      const response = await client.request(method, params);
-      if (!response.ok) {
-        throw new Error(`${method}: ${JSON.stringify(response.error)}`);
-      }
-      return response.payload;
-    });
-  } finally {
-    client.close();
-  }
+  const runCli = async (args: string[]) => {
+    const result = await promisify(execFile)(
+      process.execPath,
+      [path.join(dist, "entry.js"), ...args],
+      {
+        cwd: fixture!.workspaceDir,
+        env: fixture!.env,
+        timeout: 120000,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    );
+    const value: unknown = JSON.parse(result.stdout);
+    return value;
+  };
+  await fixture.prepareGateway((method, params) =>
+    runCli(["gateway", "call", method, "--json", "--params", JSON.stringify(params)]),
+  );
   browser = await chromium.launch({ headless: true });
   if (interrupted) {
     throw new Error("Proof interrupted during browser launch");
@@ -383,15 +529,18 @@ try {
       deviceScaleFactor: 1,
       colorScheme: "dark",
     });
+    let diagnosticPage: Page | undefined;
     try {
       const page = await context.newPage();
+      diagnosticPage = page;
       page.setDefaultTimeout(60000);
       await page.addInitScript({
-        content: `const __name = (fn) => fn; (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)});`,
+        content: `globalThis.__name = (fn) => fn; (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)});`,
       });
       const cdp = await context.newCDPSession(page);
+      await cdp.send("Page.enable");
+      await cdp.send("Page.setLifecycleEventsEnabled", { enabled: true });
       await cdp.send("Network.enable");
-      await cdp.send("Network.clearBrowserCache");
       await cdp.send("Network.emulateNetworkConditions", {
         offline: false,
         latency: rttMs,
@@ -399,15 +548,61 @@ try {
         uploadThroughput: 10 * 1024 * 1024,
         connectionType: "wifi",
       });
-      const url = `${baseUrl}${routePath}#token=${encodeURIComponent(fixture.token)}`;
+      const handoff = await runCli(["dashboard", "--json"]);
+      if (
+        !isRecord(handoff) ||
+        typeof handoff.browserUrl !== "string" ||
+        new URL(handoff.browserUrl).origin !== baseUrl
+      ) {
+        throw new Error("CLI did not issue a browser handoff for the owned loopback Gateway");
+      }
+      const handoffUrl = new URL(handoff.browserUrl);
+      await page.goto(handoffUrl.href);
+      await waitForControlUiGatewayReady(page, 60000);
+      await page.waitForFunction(() => navigator.serviceWorker.controller !== null, undefined, {
+        timeout: 60000,
+      });
+      await page.goto(`${baseUrl}/healthz`);
+      const coldReset = await page.evaluate(
+        ({ devicePrefix, tokenPrefix }) => {
+          const localKeys = Object.keys(localStorage).filter(
+            (key) => key !== "openclaw-device-identity-v1" && !key.startsWith(devicePrefix),
+          );
+          const sessionKeys = Object.keys(sessionStorage).filter(
+            (key) => !key.startsWith(tokenPrefix),
+          );
+          localKeys.forEach((key) => localStorage.removeItem(key));
+          sessionKeys.forEach((key) => sessionStorage.removeItem(key));
+          return {
+            localKeys,
+            sessionKeys,
+            retained: "Signed-in device credentials and installed service worker registration",
+          };
+        },
+        {
+          devicePrefix: DEVICE_AUTH_STORAGE_KEY_PREFIX,
+          tokenPrefix: CONTROL_UI_TOKEN_SESSION_KEY_PREFIX,
+        },
+      );
+      await cdp.send("Storage.clearDataForOrigin", {
+        origin: baseUrl,
+        storageTypes: "indexeddb,cache_storage",
+      });
+      await cdp.send("Network.clearBrowserCache");
+      const url = `${baseUrl}${routePath}`;
       results.push({
         route,
-        runs: [await captureReload(page, cdp, url, path.join(directory, route, "cold"), false)],
+        coldReset,
+        warmCache: null as Awaited<ReturnType<typeof readWarmCache>> | null,
+        runs: [
+          await captureReload(page, cdp, url, path.join(directory, route, "cold"), false, route),
+        ],
       });
       const details = page.locator(".chat-details-toggle:visible");
       if (
+        route === "chat" &&
         (await details.count()) &&
-        (await details.first().getAttribute("aria-expanded")) !== "true"
+        !(await page.locator(".chat-details:visible").count())
       ) {
         await details.first().click();
       }
@@ -415,9 +610,31 @@ try {
       await page.waitForFunction(
         () =>
           document.fonts.status === "loaded" &&
-          [...document.images].every((image) => image.complete),
+          [...document.images].every((image) => {
+            const box = image.getBoundingClientRect();
+            const visible =
+              box.width > 0 &&
+              box.height > 0 &&
+              box.bottom > 0 &&
+              box.y < innerHeight &&
+              box.right > 0 &&
+              box.x < innerWidth;
+            return !visible || image.complete;
+          }),
       );
       await delay(2000);
+      const target = fixture.fixtureSummary.targets[route === "chat" ? 0 : 1]!;
+      const cache = await readWarmCache(page, target.key);
+      results.at(-1)!.warmCache = cache;
+      await writeFile(
+        path.join(directory, route, "warm-cache.json"),
+        JSON.stringify(cache, null, 2),
+      );
+      if (reloads > 0 && cache.targetSnapshots === 0) {
+        throw new Error(
+          "No owned transcript snapshot persisted for this route; warm proof would be invalid",
+        );
+      }
       for (let index = 1; index <= reloads; index++) {
         results
           .at(-1)!
@@ -428,10 +645,16 @@ try {
               url,
               path.join(directory, route, `warm-${String(index).padStart(2, "0")}`),
               true,
+              route,
             ),
           );
       }
       await cdp.detach();
+    } catch (error) {
+      await diagnosticPage
+        ?.screenshot({ path: path.join(directory, `${route}-failure.png`), timeout: 5000 })
+        .catch(() => {});
+      throw error;
     } finally {
       await context.close();
     }
@@ -441,6 +664,7 @@ try {
     JSON.stringify(
       {
         revision,
+        buildIdentity,
         dist,
         uiRoot,
         viewport,
@@ -455,7 +679,7 @@ try {
           chromium: browser.version(),
         },
         measurement:
-          "PNG screencast diagnostic; compositor frames Chromium delivers, everyNthFrame=1; no guarantee of display-vsync completeness. Paint bounds use first captured frame after DOM readiness/FCP. HTTP CDP latency does not delay individual WebSocket frames. No product performance change is compared.",
+          "PNG screencast diagnostic; compositor frames Chromium delivers, everyNthFrame=1; no guarantee of display-vsync completeness. Paint bounds use first captured frame after DOM readiness/FCP. CDP transport shaping is not a fixed-delay RPC wrapper; observed wire times are retained. No product performance change is compared.",
         results,
       },
       null,

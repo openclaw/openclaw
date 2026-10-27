@@ -35,11 +35,21 @@ child directory and retains failed attempts. Output must therefore be under
 For a small smoke run, use `--route chat --reloads 1`. `--route dashboard` selects
 the other route. Default coverage is **one cold navigation and eleven warm
 reloads per route**, each route in an independent initially empty browser context.
-The browser cache is cleared before each route's cold navigation. The first URL
-carries only the owned Gateway's synthetic token. After the cold capture, the tool
-opens Details and waits for image/font readiness and a two-second persistence
-window before starting warm reloads. Cold captures therefore show default Details
-visibility; warm captures show the last visit's Details state. No DOM snapshot or
+The built CLI mints a single-use browser handoff for the owned Gateway. Fixture
+RPC setup also uses the built CLI's authentication owner. The browser signs in at
+the app root first, then leaves the app for the health document, clears IndexedDB,
+Cache Storage, HTTP cache, and derived local/session storage. Device credentials
+and the installed service-worker registration remain, defining **signed-in,
+client-data-cold**, rather than a new unauthenticated browser or a cold V8 process.
+After the cold capture, the tool
+opens Details on chat and waits for image/font readiness and a two-second persistence
+window before starting warm reloads. A read-only cache inventory verifies that an
+owned transcript snapshot exists for the exact route; otherwise warm proof stops.
+Cold captures therefore show default Details
+visibility; warm chat captures show the last visit's Details state. Dashboard keeps
+its native closed Details state. The current router uses `/dashboard/...` for the
+dashboard face; the historical `/chat/.../dashboard/...` shape selects chat.
+No DOM snapshot or
 mock WebSocket replaces the real application, persistence, transport, or RPCs.
 
 To measure a candidate UI against the same built server and fixture definition,
@@ -64,11 +74,12 @@ exact shape; the rig does not claim to reproduce production traffic or authority
 ## Capture and metric definitions
 
 The viewport is **1720 × 1180 CSS pixels**, device scale factor one, dark theme,
-headless repo-pinned Chromium. CDP network shaping applies **80 ms HTTP latency**
-by default, 10 MiB/s throughput, and preserves HTTP caching. CDP HTTP emulation
-does not add per-message latency to established WebSocket frames. This limitation
-is explicit: it measures real local RPC handling plus shaped document/assets,
-not a full remote WebSocket round trip. No CPU throttling or CPU profiler runs.
+headless repo-pinned Chromium. CDP network shaping uses an **80 ms latency setting**
+by default, 10 MiB/s throughput, and preserves HTTP caching. Chrome supports
+[WebSocket throttling](https://developer.chrome.com/docs/devtools/network/reference/#throttle-websocket-connections).
+The browser transport emulator is not a fixed-delay wrapper around each RPC;
+use the recorded send/receive timings rather than assuming every RPC takes 80 ms.
+No CPU throttling or CPU profiler runs.
 
 `Page.startScreencast` requests PNG, native viewport size, `everyNthFrame: 1`.
 Every delivered frame is saved and acknowledged; analysis runs after capture.
@@ -83,8 +94,10 @@ The report distinguishes these boundaries:
 
 - `fcpMs`: Chromium Paint Timing first contentful paint.
 - `firstAppDomMs`: first sampled app shell presence; `firstMainDomMs`: first
-  visible nonempty transcript row on chat, or the synthetic dashboard content's
-  font-ready/two-animation-frame marker. These are DOM milestones.
+  visible nonempty transcript row in the main region, or the synthetic dashboard
+  content's font-ready/two-animation-frame marker when the board occupies main.
+  These are DOM milestones. Dashboard content also has a separate
+  `firstDashboardCapturedPaintMs` bound when its board is beside the transcript.
 - `firstAppCapturedPaintMs` and `firstMainCapturedPaintMs`: first delivered frame
   after the respective DOM milestone and FCP. These are **upper bounds**, not an
   assertion that every compositor frame was observed. Inspect dashboard sheets
@@ -133,6 +146,14 @@ build paths, browser version, host load/resources, shaping, fixture, masks, HTTP
 responses, RPC counts/bytes, errors, metrics, and region timelines. Contact sheets
 contain native-size tiles, up to six per page. Inspect all sheets for cold and
 warm samples on both routes before claiming a baseline.
+The rig records every top-level document request. Redirect/interstitial time stays
+in the pixel/RPC timeline: times are anchored to the original document request,
+with the final document offset recorded. Native LoAF and CLS cover the final app
+document; prior documents remain in the filmstrip and FCP lifecycle census.
+A final page missing required region bounds fails capture. Warm samples require
+visible Details on chat too. Dashboard reports closed Details as unmounted.
+Multiple documents are a recorded product outcome, not a
+reason to discard the baseline.
 
 This tooling lane's acceptance gate is delivery and inspection, not an improvement
 claim. Performance comparisons belong on a quiet fixed-instance Crabbox lease

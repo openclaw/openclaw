@@ -1,4 +1,5 @@
 // Offline synthetic state; the caller owns the new directory and Gateway lifecycle.
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -163,11 +164,16 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
     throw new Error("Warm-reload fixture requires at least 2000 sessions");
   }
   const stateDir = path.resolve(options.stateDir);
+  const workspaceDir = path.join(stateDir, "workspace");
   const worktreeLocal = path.resolve(".local");
   if (!stateDir.startsWith(`${worktreeLocal}${path.sep}`)) {
     throw new Error("Fixture state must be a new directory inside this worktree's .local/");
   }
   const now = Date.now();
+  const sessionKeys = [
+    "agent:main:24800000-0000-4000-8000-000000000001",
+    "agent:main:dashboard:24800001-0000-4000-8000-000000000001",
+  ];
   const baseOptions = parseTeamShapeOptions([
     "--state-dir",
     stateDir,
@@ -188,10 +194,19 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
     "--now",
     String(now),
   ]);
-  const fixture = await generateTeamShapeFixture({ ...baseOptions, port: options.port });
+  const fixture = await generateTeamShapeFixture({
+    ...baseOptions,
+    port: options.port,
+    sessionKeys,
+  });
   const configPath = path.join(stateDir, "openclaw.json");
   const token = randomUUID();
-  const env = { ...fixture.env, OPENAI_API_KEY: "synthetic-loopback-provider-key" };
+  const env = {
+    ...fixture.env,
+    USER: "synthetic-fixture",
+    LOGNAME: "synthetic-fixture",
+    OPENAI_API_KEY: "synthetic-loopback-provider-key",
+  };
   const previousEnv = process.env;
   let stopMock: (() => Promise<void>) | undefined;
   try {
@@ -225,7 +240,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       entries: {
         main: {
           ...config.agents?.entries?.main,
-          workspace: path.join(stateDir, "workspace"),
+          workspace: workspaceDir,
           identity: { name: "Harbor proof assistant", emoji: "⚓", avatar: "avatar.png" },
         },
       },
@@ -244,6 +259,8 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       cronLoad,
       cronSave,
       cronKey,
+      profileWrites,
+      owners,
     ] = await Promise.all([
       import("../../src/state/openclaw-agent-db.js"),
       import("../../src/state/openclaw-state-db.js"),
@@ -257,17 +274,42 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       import("../../src/cron/store/load.kernel.js"),
       import("../../src/cron/store/save.kernel.js"),
       import("../../src/cron/store/key.js"),
+      import("../../src/state/user-profile-writes.js"),
+      import("../../src/config/sessions/session-accessor.sqlite-owner.js"),
     ]);
     const database = { agentId: "main", env };
-    const avatar = png.createSolidPngBuffer(96, 96, { r: 33, g: 108, b: 140 });
-    writeFileSync(path.join(stateDir, "workspace", "avatar.png"), avatar);
-    profiles.ensureGatewayOwnerProfile("Synthetic proof operator", { env });
     const targets = [0, 1].map((index) => ({
-      key: `agent:main:team-shape-session-${index}`,
+      key: sessionKeys[index]!,
       id: `team-shape-session-${index}`,
       label: index === 0 ? "Warm reload verification" : "Reload proof dashboard",
     }));
+    let assignedToOperator = 0;
+    let activeAssignedToOperator = 0;
     try {
+      const avatar = png.createSolidPngBuffer(96, 96, { r: 33, g: 108, b: 140 });
+      writeFileSync(path.join(workspaceDir, "avatar.png"), avatar);
+      writeFileSync(
+        path.join(workspaceDir, "README.md"),
+        "# Synthetic reload-proof workspace\n\nOnly generated fixture data is retained here.\n",
+      );
+      const gitEnv = {
+        ...env,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_AUTHOR_NAME: "Synthetic Fixture",
+        GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+        GIT_COMMITTER_NAME: "Synthetic Fixture",
+        GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+        GIT_AUTHOR_DATE: new Date(now).toISOString(),
+        GIT_COMMITTER_DATE: new Date(now).toISOString(),
+      };
+      const git = (...args: string[]) =>
+        execFileSync("git", ["-C", workspaceDir, ...args], { env: gitEnv, stdio: "ignore" });
+      git("init", "--initial-branch=main");
+      git("add", "README.md", "avatar.png");
+      git("-c", "commit.gpgSign=false", "commit", "-m", "test: seed synthetic reload workspace");
+      const viewer = profiles.ensureGatewayOwnerProfile("Synthetic proof operator", { env });
+      await profileWrites.setCanonicalUserProfileAvatar(viewer.id, avatar, "image/png", { env });
       stateDb.runOpenClawStateWriteTransaction(
         (owner) => {
           const storeKey = cronKey.cronStoreKey(path.join(stateDir, "cron", "jobs.json"));
@@ -341,6 +383,29 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
           });
         }, database);
       }
+      const targetKeys = new Set(targets.map((target) => target.key));
+      const inventory = Object.entries(
+        entries.readSessionEntryStore(agentDb.openOpenClawAgentDatabase(database)),
+      );
+      for (let offset = 0; offset < inventory.length; offset += 100) {
+        agentDb.runOpenClawAgentWriteTransaction((owner) => {
+          for (let index = offset; index < Math.min(offset + 100, inventory.length); index++) {
+            const [key, entry] = inventory[index]!;
+            if (index % 10 === 0 && !targetKeys.has(key)) {
+              continue;
+            }
+            owners.replaceSessionOwnerInTransaction(owner, key, {
+              actor: { type: "human", id: viewer.id },
+              assignedBy: { type: "human", id: viewer.id },
+              assignedAt: now,
+            });
+            assignedToOperator++;
+            if (!entry.archivedAt) {
+              activeAssignedToOperator++;
+            }
+          }
+        }, database);
+      }
     } finally {
       await agentDb.closeOpenClawAgentDatabasesAsync();
       await stateDb.closeOpenClawStateDatabaseAsync();
@@ -349,6 +414,9 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       ...fixture.summary,
       format: "openclaw-warm-reload-fixture-v1",
       sessions,
+      assignedToOperator,
+      activeAssignedToOperator,
+      workspaceGitBranch: "main",
       assistantRowsPerRoute: 9,
       largestTableRows: 42,
       largestCodeLines: 28,
@@ -365,6 +433,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
     return {
       env,
       configPath,
+      workspaceDir,
       token,
       chatPath: buildControlUiSessionPath({
         namespace: "chat",
@@ -372,7 +441,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
         exactKey: true,
       })!,
       dashboardPath: buildControlUiSessionPath({
-        namespace: "chat",
+        namespace: "dashboard",
         sessionKey: targets[1]!.key,
         exactKey: true,
       })!,

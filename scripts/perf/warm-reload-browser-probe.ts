@@ -1,11 +1,11 @@
 import type { ApplicationContext } from "../../ui/src/app/context.ts";
 
 export const proofRegions = {
-  sidebar: "openclaw-app-sidebar",
+  sidebar: "aside.sidebar",
   header: ".chat-pane__header",
   transcript: ".chat-thread-viewport, .chat-thread",
   details: ".chat-details",
-  composer: "openclaw-chat-composer, .agent-chat__composer, .chat-composer",
+  composer: ".agent-chat__input",
   dashboard: "openclaw-board-view",
 };
 
@@ -52,7 +52,13 @@ export function installWarmReloadBrowserProbe(route: string) {
       event.data.type === "warm-reload-proof:dashboard-content-ready"
     ) {
       data.firstDashboardContentDomMs ??= performance.now();
-      if (route === "dashboard") {
+      if (
+        route === "dashboard" &&
+        document
+          .querySelector("openclaw-board-view")
+          ?.closest("[data-region]")
+          ?.getAttribute("data-region") === "main"
+      ) {
         data.firstMainDomMs ??= data.firstDashboardContentDomMs;
       }
     }
@@ -86,7 +92,11 @@ export function installWarmReloadBrowserProbe(route: string) {
     }
     const value = Number(Reflect.get(entry, "value"));
     data.shifts.push({ atMs: entry.startTime, value });
-    if (entry.startTime - firstShift >= 5000 || entry.startTime - lastShift >= 1000) {
+    if (
+      lastShift === 0 ||
+      entry.startTime - firstShift >= 5000 ||
+      entry.startTime - lastShift >= 1000
+    ) {
       firstShift = entry.startTime;
       shiftValue = 0;
     }
@@ -188,17 +198,20 @@ export function installWarmReloadBrowserProbe(route: string) {
     }
     const rowElements = [...document.querySelectorAll(".chat-virtual-row")];
     const rows = rowElements.length;
-    const sidebarRows = document.querySelectorAll(".sidebar-session-item").length;
+    const sidebarRows = document.querySelectorAll("openclaw-app-sidebar [data-session-key]").length;
     const board = Boolean(document.querySelector("openclaw-board-view iframe"));
     if (document.querySelector("openclaw-app-shell")) {
       data.firstAppDomMs ??= performance.now();
     }
     if (
-      route === "chat" &&
       rowElements.some((row) => {
         const box = row.getBoundingClientRect();
         return (
-          box.bottom > 0 && box.y < innerHeight && box.width > 0 && Boolean(row.textContent?.trim())
+          box.bottom > 0 &&
+          box.y < innerHeight &&
+          box.width > 0 &&
+          row.closest("[data-region]")?.getAttribute("data-region") === "main" &&
+          Boolean(row.querySelector(".chat-text")?.textContent?.trim())
         );
       })
     ) {
@@ -259,7 +272,12 @@ export function installWarmReloadBrowserProbe(route: string) {
         selection?.isCollapsed && selection.rangeCount ? selection.getRangeAt(0) : undefined;
       const rect = range?.getBoundingClientRect();
       if (rect && rect.height > 0 && rect.height <= 40 && rect.width <= 2) {
-        addMask("caret", "Collapsed editable selection", { ...rect.toJSON(), width: 2 });
+        addMask("caret", "Collapsed editable selection", {
+          x: rect.x,
+          y: rect.y,
+          width: 2,
+          height: rect.height,
+        });
       } else if (
         !active.textContent &&
         (!(active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) ||
