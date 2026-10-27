@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
@@ -19,7 +18,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
 import { collectUntil } from "../../packages/sdk/src/client.test-support.js";
 import { GatewayClientTransport, OpenClaw } from "../../packages/sdk/src/index.js";
-import { startSdkWebSocketServer } from "../../packages/sdk/src/transport.websocket.test-support.js";
+import { createSdkWebSocketServer } from "../../packages/sdk/src/transport.websocket.test-support.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.entry.js";
@@ -71,7 +70,7 @@ function assertSchema(schema: TSchema, value: unknown, label: string): void {
 // Retain this real handler composition for the worker-create schema and projection.
 async function proveWorkerCreation(): Promise<void> {
   const dateNow = vi.spyOn(Date, "now").mockReturnValue(10_000);
-  const gateway = await startSdkWebSocketServer();
+  const gateway = await createSdkWebSocketServer();
   let oc: OpenClaw | undefined;
   try {
     const record: WorkerEnvironmentServiceRecord = {
@@ -95,50 +94,35 @@ async function proveWorkerCreation(): Promise<void> {
         create: async () => record,
       } satisfies Pick<WorkerEnvironmentServiceContract, "create">,
     } as unknown as GatewayRequestHandlerOptions["context"];
-    gateway.server.on("connection", (socket) => {
-      socket.send(
-        JSON.stringify({
-          type: "event",
-          event: "connect.challenge",
-          payload: { nonce: "sdk-a2-nonce", ts: 1_000 },
-        }),
-      );
-      socket.on("message", (raw) => {
-        const frame = JSON.parse(rawDataToString(raw)) as {
-          id: string;
-          method: string;
-          params: Record<string, unknown>;
+    gateway.setRequestHandler((socket, frame) => {
+      void (async () => {
+        expect(frame.method).toBe("environments.create");
+        assertSchema(EnvironmentsCreateParamsSchema, frame.params, "environments.create params");
+        const respond: RespondFn = (ok, payload, error) => {
+          if (ok) {
+            assertSchema(EnvironmentsCreateResultSchema, payload, "environments.create result");
+          }
+          gateway.reply(socket, frame.id, ok ? payload : error, ok);
         };
-        const reply = (ok: boolean, payload: unknown, error?: unknown) =>
-          socket.send(JSON.stringify({ type: "res", id: frame.id, ok, payload, error }));
-        if (frame.method === "connect") {
-          reply(true, { type: "hello-ok", protocol: 1, policy: { tickIntervalMs: 30000 } });
-          return;
-        }
-        void (async () => {
-          expect(frame.method).toBe("environments.create");
-          assertSchema(EnvironmentsCreateParamsSchema, frame.params, "environments.create params");
-          const respond: RespondFn = (ok, payload, error) => {
-            if (ok) {
-              assertSchema(EnvironmentsCreateResultSchema, payload, "environments.create result");
-            }
-            reply(ok, payload, error);
-          };
-          await environmentsHandlers["environments.create"]!({
-            req: { type: "req", ...frame },
-            params: frame.params,
-            client: null,
-            isWebchatConnect: () => false,
-            respond,
-            context,
-          });
-        })().catch((error: unknown) =>
-          reply(false, undefined, {
+        await environmentsHandlers["environments.create"]!({
+          req: { type: "req", ...frame },
+          params: frame.params,
+          client: null,
+          isWebchatConnect: () => false,
+          respond,
+          context,
+        });
+      })().catch((error: unknown) =>
+        gateway.reply(
+          socket,
+          frame.id,
+          {
             code: "TEST_ASSERTION_FAILED",
             message: String(error),
-          }),
-        );
-      });
+          },
+          false,
+        ),
+      );
     });
     oc = new OpenClaw({
       transport: new GatewayClientTransport({
