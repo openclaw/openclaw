@@ -5,6 +5,11 @@ import { createHarness } from "./gateway.mjs";
 const harness = await createHarness();
 const requests = () =>
   fs.readFileSync(process.env.MUSE_REQUEST_LOG, "utf8").trim().split("\n").filter(Boolean);
+// Consent means unrestricted: Muse must not prompt for approval it cannot route.
+const lastApprovalMode = () =>
+  requests()
+    .map((line) => JSON.parse(line))
+    .findLast((request) => request.method === "session/start")?.params.approvalMode;
 try {
   await harness.start();
   // Remembered setup consent under a tool policy Muse cannot enforce: an owner's unset-mode
@@ -16,7 +21,8 @@ try {
   await harness.start();
   const owned = await harness.turn("hello owner", { key: "agent:main:consent-owner" });
   assert.match(owned.text, /^started: /);
-  console.log("PASS owner turn with unset modes dispatches under remembered consent");
+  assert.equal(lastApprovalMode(), "allowAll");
+  console.log("PASS owner turn with unset modes dispatches in full mode under remembered consent");
   const guest = await harness.connect(["operator.read", "operator.write"]);
   try {
     const count = requests().length;

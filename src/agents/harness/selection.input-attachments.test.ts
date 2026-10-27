@@ -126,6 +126,41 @@ it("refuses remembered consent revoked after admission before native dispatch", 
   expect(nativeStart).not.toHaveBeenCalled();
 });
 
+it("runs a native harness in full mode under remembered owner consent", async () => {
+  const storePath = path.join(trajectoryTempDirs.make("harness-native-consent-"), "sessions.json");
+  const config: OpenClawConfig = {
+    session: { store: storePath },
+    agents: { entries: { main: { nativeRuntimeConsent: ["codex"] } } },
+    tools: { fs: { workspaceOnly: true } },
+  };
+  const attempt = createAttemptParams(config);
+  attempt.agentId = "main";
+  attempt.sessionKey = "agent:main:remembered-owner";
+  attempt.senderIsOwner = true;
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: attempt.sessionKey, storePath },
+    { sessionId: attempt.sessionId, updatedAt: 1 },
+  );
+  const nativeStart = vi.fn<AgentHarness["runAttempt"]>(async () =>
+    makeEmbeddedRunnerAttempt({ agentHarnessId: "codex" }),
+  );
+  registerAgentHarness(
+    {
+      id: "codex",
+      label: "Codex",
+      executionEnvironment: "host-only",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: nativeStart,
+    },
+    { ownerPluginId: "codex" },
+  );
+
+  await runAgentHarnessAttempt(attempt);
+
+  // Native harnesses choose their own approval mode from this field.
+  expect(nativeStart.mock.calls[0]?.[0].permissionMode).toBe("full");
+});
+
 function createAttributionRecorder(registered = true) {
   const beforeWrite = vi.fn(() => undefined);
   initializeGlobalHookRunner(
