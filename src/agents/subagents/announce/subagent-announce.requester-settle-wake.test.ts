@@ -114,7 +114,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     const message = (children: Child[]) =>
       buildRequesterSettleWakeMessage({
         children,
-        recoveryChildren: [],
         findings: "worker-hydrated child findings",
         requireVisibleReply: true,
         requesterOrigin: { channel: "discord", to: "channel:shared" },

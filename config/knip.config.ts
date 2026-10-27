@@ -846,7 +846,6 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-generation-retention.ts!",
   "scripts/perf/placement-startup-wake-measure.ts!",
   "scripts/perf/startup-agent-preparation-measure.ts!",
-  "scripts/perf/startup-recovery-admission-measure.ts!",
   "scripts/perf/response-decode-measure.mts!",
   "scripts/perf/text-projection-append-measure.ts!",
   "scripts/perf/text-projection-rope-measure.mjs!",

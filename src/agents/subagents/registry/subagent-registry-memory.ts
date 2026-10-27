@@ -85,7 +85,6 @@ export function compactSubagentRunForMemory(entry: SubagentRunRecord): SubagentR
   if (compact.delivery) {
     delete compact.delivery.payload;
   }
-  delete compact.operatorRecoverySource;
   bindGatewayContextResolver(compact, getGatewayContextResolver(entry));
   recordSubagentRunPayloadEviction(compact, entry);
   return immutableSubagentRun(compact);
@@ -102,7 +101,6 @@ export function restoreSubagentRunPayload(
   const restored = copySubagentRunRuntimeOwner(resident, {
     ...resident,
     task: full.task,
-    operatorRecoverySource: full.operatorRecoverySource,
     ...(resident.delivery
       ? { delivery: { ...resident.delivery, payload: full.delivery?.payload } }
       : {}),
