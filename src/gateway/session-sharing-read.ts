@@ -343,6 +343,7 @@ const projectedSharingKeys = new WeakMap<
   object,
   WeakMap<object, { facts: readonly unknown[]; key: string }>
 >();
+const emptyProfileAliases: ReadonlySet<string> = new Set();
 
 export function prepareProjectedSessionSharing(params: {
   cfg: OpenClawConfig;
@@ -376,7 +377,7 @@ export function prepareProjectedSessionSharing(params: {
   let cacheKey: string | undefined;
   return {
     ...prepareSessionSharing(params, {
-      aliases: profile?.aliases ?? new Set(),
+      aliases: profile?.aliases ?? emptyProfileAliases,
       sessionCap: policy?.sessions.others,
       isMember,
     }),

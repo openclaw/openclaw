@@ -23,15 +23,16 @@ import {
 import type {
   LocalWorkspaceBaselineDocument,
   LocalWorkspaceManifestAction,
-  LocalWorkspaceManifestValue,
 } from "./local-workspace-manifest-scan.js";
 import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceManifestMutation,
+  LocalWorkspaceManifestValue,
   LocalWorkspaceMutation,
   LocalWorkspacePreparedUpdate,
   LocalWorkspaceProjection,
 } from "./local-workspace-store.types.js";
+import { computeWorkspaceManifest } from "./workspace-manifest-worker.js";
 
 export type { LocalWorkspaceProjection } from "./local-workspace-store.types.js";
 
@@ -322,7 +323,11 @@ export function withLocalWorkspaceStore<T>(
                   if (!result) {
                     throw new Error("Local workspace manifest is unavailable");
                   }
-                  const value = result.value;
+                  const value = await computeWorkspaceManifest(
+                    { type: "workspace.manifest.local", input: { snapshot: result.snapshot } },
+                    lease.signal,
+                  );
+                  assertCurrent();
                   if (value.kind === "scan") {
                     await prepare(value.preparations ?? []);
                     const { preparations: _preparations, ...checkpoint } = value;

@@ -53,6 +53,11 @@ provide local byte conversion, not filesystem, module, or network access.
 Returned values still use the JSON-only bridge; emit decoded text or an array of
 byte values rather than a binary attachment.
 
+Module loading is unavailable. Direct `import()` and `require()` calls are
+rejected before execution. In the Node executor, dynamic imports constructed
+through `eval` or `Function` reject with the same module-access guidance and
+can be caught inside the cell. Uncaught rejections fail the owning cell.
+
 `console.log`, `console.info`, `console.warn`, `console.error`, and
 `console.debug` emit diagnostic text through the same ordered output channel as
 `text` and `json`, not through host logs. They return `undefined`;

@@ -1,15 +1,7 @@
 /** Gateway writes behind the Scribes controls: start, run now, pause, turn off and repair. */
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  defaultOptions,
-  repairMessage,
-  scribeLabel,
-  scribeSetup,
-  setupIdempotencyKey,
-  setupMessage,
-  type ScribeSetup,
-} from "./scribes-catalog.js";
+import { repairPrompt, scribeLabel, setupIdempotencyKey } from "./scribes-catalog.js";
 import type { ScribeJob, ScribeSnapshot } from "./scribes-state.js";
 
 type ScribeHost = Pick<ControlUiHost, "request" | "sessions">;
@@ -47,52 +39,50 @@ async function conversation(host: ScribeHost, snapshot: ScribeSnapshot, agentId:
 }
 
 /**
- * Start a scribe: find or create its conversation, then send the fixed setup message.
- * `attempt` identifies one start attempt so a retried send is not delivered twice.
+ * Start a scribe: find or create its conversation, then send the prompt the start dialog shows,
+ * as generated or as the operator edited it. `attempt` identifies one start attempt so a
+ * retried send is not delivered twice.
  */
 export async function startScribe(
   host: ScribeHost,
   snapshot: ScribeSnapshot,
-  setup: ScribeSetup,
+  agentId: string,
+  prompt: string,
   attempt: string,
 ) {
-  const sessionKey = await conversation(host, snapshot, setup.agentId);
-  await host.request("chat.send", {
-    sessionKey,
-    agentId: setup.agentId,
-    message: setupMessage(setup),
-    idempotencyKey: setupIdempotencyKey(setup.scribe, sessionKey, attempt),
-  });
-  return sessionKey;
-}
-
-/**
- * Ask the scribe's conversation to re-check its setup and recreate its automation. Uses the
- * options of its latest setup message, or the defaults when the transcript no longer shows one.
- */
-export async function repairScribe(host: ScribeHost, snapshot: ScribeSnapshot, agentId: string) {
-  const { scribe } = snapshot;
-  const setup =
-    snapshot.setup ?? scribeSetup(scribe.id, scribe.modes[0]!, defaultOptions(scribe.id), agentId);
   const sessionKey = await conversation(host, snapshot, agentId);
   await host.request("chat.send", {
     sessionKey,
     agentId,
-    message: repairMessage(setup),
-    idempotencyKey: `knowledge:scribe:${scribe.id}:repair:${crypto.randomUUID()}`,
+    message: prompt,
+    idempotencyKey: setupIdempotencyKey(snapshot.scribe.id, sessionKey, attempt),
   });
   return sessionKey;
 }
 
 /**
- * Send a one-time scribe's setup message again in its conversation, as a new start attempt. Uses
- * the options of its latest setup message, or the defaults when the transcript no longer shows one.
+ * Ask the scribe's conversation to re-check its setup and take over its automation, keeping the
+ * automation's schedule and run message.
  */
-export function retryScribe(host: ScribeHost, snapshot: ScribeSnapshot, agentId: string) {
+export async function repairScribe(
+  host: ScribeHost,
+  snapshot: ScribeSnapshot,
+  job: ScribeJob,
+  agentId: string,
+) {
   const { scribe } = snapshot;
-  const setup =
-    snapshot.setup ?? scribeSetup(scribe.id, "once", defaultOptions(scribe.id), agentId);
-  return startScribe(host, snapshot, setup, crypto.randomUUID());
+  const prompt = repairPrompt(scribe.id, {
+    schedule: job.schedule,
+    ...(job.payload?.message ? { runMessage: job.payload.message } : {}),
+  });
+  const sessionKey = await conversation(host, snapshot, agentId);
+  await host.request("chat.send", {
+    sessionKey,
+    agentId,
+    message: prompt,
+    idempotencyKey: `knowledge:scribe:${scribe.id}:repair:${crypto.randomUUID()}`,
+  });
+  return sessionKey;
 }
 
 // What a refused run means for the operator, by the scheduler's reason.
