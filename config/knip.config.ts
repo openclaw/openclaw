@@ -601,6 +601,7 @@ const repositoryScriptEntries = [
   "scripts/perf/subagent-registration-retention.ts!",
   "scripts/perf/system-prompt-request-measure.ts!",
   "scripts/perf/worktree-index-metadata-measure.ts!",
+  "scripts/perf/worktree-preparation-index-measure.ts!",
   // Maintained source headers invoke these standalone commands by exact path.
   "scripts/perf/archive-worker-startup-measure.mjs!",
   "scripts/perf/archive-canonical-worker-measure.ts!",

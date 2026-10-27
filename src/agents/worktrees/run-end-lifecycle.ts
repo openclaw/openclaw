@@ -9,6 +9,7 @@ import { GatewayRetainedWorkScope, trackAsyncWork } from "../../shared/async-wor
 import { registerOpenClawStatePathAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import { createPreparedWorktreePathIndex } from "./gc-dependencies.js";
 
 type RunEndOperation = {
   context: OpenClawStateWorkerContext;
@@ -72,6 +73,7 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
     return [...selected];
   };
   const owner = {
+    prepareSourcePaths: createPreparedWorktreePathIndex(),
     assertRegistryAdmission(settlement = false) {
       const operation = current.getStore();
       if (
@@ -196,6 +198,14 @@ export function captureWorktreeRegistryAuthority(
   changes: readonly WorktreeRegistryChange[],
 ): () => void {
   return lifetime(context).captureRegistry(changes);
+}
+
+export function prepareWorktreeSourcePaths(
+  context: OpenClawStateWorkerContext,
+  records: Parameters<ReturnType<typeof createPreparedWorktreePathIndex>>[0],
+) {
+  context.admission.assertCurrent();
+  return lifetime(context).prepareSourcePaths(records);
 }
 
 export function captureWorktreeRegistryMutation(

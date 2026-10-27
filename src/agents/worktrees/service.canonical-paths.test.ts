@@ -19,6 +19,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import * as allocation from "./allocation.js";
+import * as dependencies from "./gc-dependencies.js";
 import { git } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
 import { listGitWorktrees } from "./git.js";
@@ -26,11 +27,58 @@ import * as registryRead from "./registry-read.js";
 import * as registry from "./registry.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
-import { resolveRepositoryPaths } from "./repository-paths.js";
+import { resolveRepository, resolveRepositoryPaths } from "./repository-paths.js";
+import { withWorktreeSources } from "./service-preparation.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
+
+it("reuses path normalization and preserves ancestry snapshots across inventory revisions", () => {
+  const root = path.resolve("prepared-worktree-paths");
+  const nested = path.join(root, "Nested");
+  const target = path.join(nested, "deep", "file");
+  const records = [
+    { id: "outer", path: root },
+    { id: "nested", path: nested },
+    { id: "duplicate", path: `${root}${path.sep}unused${path.sep}..${path.sep}Nested` },
+    { id: "sibling", path: path.join(root, "Nested-sibling") },
+  ];
+  const added = { id: "added", path: path.join(nested, "deep") };
+  const relocated = path.join(root, "elsewhere");
+  const prepare = dependencies.createPreparedWorktreePathIndex();
+  const resolve = vi.spyOn(path, "resolve");
+  try {
+    const original = prepare(records);
+    expect(resolve).toHaveBeenCalledTimes(4);
+    resolve.mockClear();
+    for (let iteration = 0; iteration < 5; iteration++) {
+      expect(prepare(records.map((record) => ({ ...record })))).toBe(original);
+    }
+    expect(resolve).not.toHaveBeenCalled();
+    const allocated = [...records.slice(0, 3), added, records[3]!];
+    const allocatedIndex = prepare(allocated);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect([...allocatedIndex(target)]).toEqual(["added", "nested", "duplicate", "outer"]);
+    expect([...original(target)]).toEqual(["nested", "duplicate", "outer"]);
+    resolve.mockClear();
+    const released = prepare(
+      allocated
+        .filter((record) => record.id !== "nested")
+        .map((record) => (record.id === "duplicate" ? { id: record.id, path: relocated } : record)),
+    );
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect([...released(target)]).toEqual(["added", "outer"]);
+    expect([...released(relocated)]).toEqual(["duplicate", "outer"]);
+    expect([...allocatedIndex(target)]).toEqual(["added", "nested", "duplicate", "outer"]);
+    expect([...original(records[3]!.path)]).toEqual(["sibling", "outer"]);
+    expect([...original(path.join(root, "nested", "file"))]).toEqual(
+      process.platform === "win32" ? ["nested", "duplicate", "outer"] : ["outer"],
+    );
+  } finally {
+    resolve.mockRestore();
+  }
+});
 
 describe("ManagedWorktreeService canonical paths", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
@@ -71,6 +119,20 @@ describe("ManagedWorktreeService canonical paths", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("prepares unchanged source inventories without rebuilding the full ancestry index", async () => {
+    await service.create({ repoRoot: repo, name: "inventory-owner", baseRef: "HEAD" });
+    const repository = await resolveRepository(repo);
+    const prepare = () =>
+      withWorktreeSources(env, async (retainRepository) => {
+        await retainRepository({ repository, commitGuard: () => {} });
+      });
+    await prepare();
+    const builds = vi.spyOn(dependencies, "indexWorktreePaths");
+    await prepare();
+    await prepare();
+    expect(builds).not.toHaveBeenCalled();
   });
 
   it("preserves an absent origin but does not report failed origin reads as absence", async () => {
