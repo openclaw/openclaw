@@ -53,11 +53,8 @@ it.each(["loading", "open"] as const)(
         onCheckStatus: () => overlays.refreshUpdateStatus(),
       }),
     );
-    const updateButton = () => {
-      const button = mounted.getByRole<HTMLButtonElement>("button", { name: "Update Gateway…" });
-      expect(button).toMatchObject({ disabled: false });
-      return button;
-    };
+    const updateButton = () =>
+      mounted.getByRole<HTMLButtonElement>("button", { name: "Update Gateway…" });
     const confirmButton = () =>
       document.body.querySelector<HTMLButtonElement>(
         "openclaw-modal-dialog .exec-approval-actions .btn.danger",
@@ -70,6 +67,7 @@ it.each(["loading", "open"] as const)(
       updateButton().click();
       if (stage === "open") {
         await dialog.waitFor(() => expect(confirmButton()).not.toBeNull());
+        expect(updateButton().disabled).toBe(true);
       }
       // No await in the loading case: retire A before the lazy import can resume.
       harness.gateway.connection.gatewayUrl = "ws://other-gateway.test";

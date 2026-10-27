@@ -6,6 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import {
   formatCliProcessFailure,
   runCliProcessChild,
@@ -89,13 +90,10 @@ module.exports = {
   for (const [name, contents] of Object.entries(files)) {
     fs.writeFileSync(path.join(pluginDir, name), contents);
   }
-  fs.writeFileSync(
-    configPath,
-    JSON.stringify({
-      agents: { defaults: { workspace: path.join(root, "workspace") } },
-      plugins: { allow: ["cli-native-resource"], load: { paths: [pluginDir] } },
-    }),
-  );
+  writeFixtureJsonSync(configPath, {
+    agents: { defaults: { workspace: path.join(root, "workspace") } },
+    plugins: { allow: ["cli-native-resource"], load: { paths: [pluginDir] } },
+  });
   const readEvents = () => fs.readFileSync(eventsPath, "utf8").trim().split("\n");
 
   const result = await runCliProcessChild({

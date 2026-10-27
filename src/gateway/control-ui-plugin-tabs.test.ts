@@ -146,6 +146,14 @@ it("merges the read-scoped core kind into deterministic plugin ordering", () => 
   );
 
   expect(listControlUiPluginWidgetKinds([])).toEqual([]);
+  for (const scope of ["operator.sessions.read", "operator.sessions.write"]) {
+    expect(listControlUiPluginWidgetKinds([scope])).toEqual([
+      { pluginId: "session", kind: "session:report", label: "Report" },
+      { pluginId: "session", kind: "session:progress", label: "Session progress" },
+      { pluginId: "session", kind: "session:website", label: "Website" },
+    ]);
+    expect(listControlUiPluginTabAuthGrants([scope])).toEqual([]);
+  }
   const widgets = listControlUiPluginWidgetKinds(["operator.read"]);
   expect(widgets.map(({ kind }) => kind)).toEqual([
     "session:report",

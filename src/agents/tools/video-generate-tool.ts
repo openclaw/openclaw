@@ -505,6 +505,8 @@ export function createVideoGenerateTool(
                   videoGenerationTaskLifecycle.recordTaskProgress({
                     handle: taskHandle,
                     progressSummary: "Saving generated video",
+                    provider: result.provider,
+                    model: result.model,
                   });
                   const remoteAttachment = (url: string, video: GeneratedVideoAsset) =>
                     ({

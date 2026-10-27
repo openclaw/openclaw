@@ -14,10 +14,10 @@ import type {
   SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
 import { mutateSqliteSessionAtMessage } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
-  withSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";

@@ -16,6 +16,39 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
+it("reuses interleaved audience keys and copies scope snapshots without iteration", () => {
+  const cfg = rolePolicyConfig();
+  let revision = {};
+  const clients = ["alice", "bob"].map((user) => sharingPolicyClient({ user }));
+  const key = (client: (typeof clients)[number]) =>
+    prepareProjectedSessionSharing({ cfg, client, isMember: () => false }).getCacheKey(revision);
+  const initial = clients.map(key);
+  const scopes = clients[0]!.connect.scopes!;
+  const iterate = vi.spyOn(scopes, Symbol.iterator);
+  const sets = vi.spyOn(globalThis, "Set");
+  const reused = clients.map(key);
+  const allocations = sets.mock.calls.length;
+  sets.mockRestore();
+  expect(reused).toEqual(initial);
+  expect(allocations).toBe(0);
+  // A publication retires the keys; native array copying avoids iterable expansion.
+  revision = {};
+  expect(clients.map(key)).toEqual(initial);
+  expect(iterate).not.toHaveBeenCalled();
+  iterate.mockRestore();
+
+  // Scope values, not the array identity, remain live authorization inputs.
+  scopes[0] = "operator.admin";
+  expect(key(clients[0]!)).not.toBe(initial[0]);
+  expect(key(clients[1]!)).toBe(initial[1]);
+  scopes[0] = "operator.read";
+  expect(key(clients[0]!)).toBe(initial[0]);
+  clients[0]!.connect.scopes = [];
+  const empty = key(clients[0]!);
+  clients[0]!.connect.scopes = undefined;
+  expect(key(clients[0]!)).not.toBe(empty);
+});
+
 it("refreshes retained sharing facts on profile changes and clears them when identity detaches", async () => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const source = ensureProfileForEmail("source@example.test");
@@ -86,13 +119,15 @@ it("uses fresh prepared caller, alias, role, and membership facts without queryi
       [new Set([owner.id]), undefined, true, "member", true],
       [new Set([owner.id]), "write", false, "member", true],
       [new Set([owner.id]), "none", true, "viewer", false],
+      [new Set([owner.id]), "invited", false, "viewer", false],
+      [new Set([owner.id]), "invited", true, "member", true],
     ] as const) {
       const sharing = prepareSessionSharing(
         { cfg, client },
         { aliases, sessionCap, isMember: () => member },
       );
       expect(sharing.roleForTarget(target)).toBe(expectedRole);
-      expect(sharing.entryFilter?.(target.canonicalKey, target.entry)).toBe(visible);
+      expect(sharing.canReadTarget(target)).toBe(visible);
       expect(sharing.authorizeTarget(target) === null).toBe(visible);
     }
     client.authenticatedUserProfile!.profileId = oldOwner.id;

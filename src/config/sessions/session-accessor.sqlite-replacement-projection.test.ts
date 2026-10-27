@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import {
@@ -14,13 +14,17 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import * as entryReads from "./session-accessor.sqlite-entry-read.js";
 import {
   readSessionEntrySelectionSnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import {
+  commitSessionEntryReplacementsInDatabase,
+  prepareSessionEntryReplacementPublication,
+} from "./session-accessor.sqlite-replacement-state.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 
 describe("session entry replacement compare-and-swap", () => {
@@ -103,6 +107,154 @@ describe("session entry replacement compare-and-swap", () => {
     ).rejects.toThrow("changed before replacement");
     expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toBeUndefined();
   });
+
+  it("copies saved snapshots only for persisted publication and detached output", () => {
+    const options = { agentId: "main", path: storePath };
+    const prompt = "synthetic saved context ".repeat(2048);
+    runOpenClawAgentWriteTransaction((database) => {
+      writeSessionEntry(database, scope.sessionKey, {
+        sessionId: "replacement-row",
+        updatedAt: 10,
+        skillsSnapshot: { prompt, skills: [] },
+        pluginExtensions: { synthetic: { value: "persisted" } },
+      });
+      const { expectedRows, entries } = readSessionEntryReplacementState(database, {
+        sessionKeys: [scope.sessionKey],
+      });
+      const entry = { ...entries[0]!.entry, updatedAt: 20 };
+      const original = structuredClone(entry);
+      const statements = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["entries", "nodes", "windows"],
+        (sql) =>
+          /\bfrom\s+"session_nodes"/iu.test(sql)
+            ? "entries"
+            : /\binsert into "session_nodes"/iu.test(sql)
+              ? "nodes"
+              : /\binsert into "session_windows"/iu.test(sql)
+                ? "windows"
+                : null,
+      );
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      try {
+        const result = commitSessionEntryReplacementsInDatabase(
+          database,
+          {
+            expectedRows,
+            validationKeys: [scope.sessionKey],
+            labelOwnerKeys: [],
+            replacements: [{ sessionKey: scope.sessionKey, entry }],
+          },
+          () => {},
+        );
+        expect(statements.counts).toEqual({ entries: 1, nodes: 1, windows: 1 });
+        expect(statements.rowCounts.entries).toBe(1);
+        const copiedPromptBytes = clone.mock.calls.reduce((bytes, [value]) => {
+          const copied = value as { skillsSnapshot?: { prompt?: string } };
+          return (
+            bytes + (copied?.skillsSnapshot?.prompt === prompt ? Buffer.byteLength(prompt) : 0)
+          );
+        }, 0);
+        expect(copiedPromptBytes).toBe(Buffer.byteLength(prompt) * 2);
+        expect(entry).toEqual(original);
+        expect(Object.isFrozen(entry.skillsSnapshot)).toBe(false);
+        entry.skillsSnapshot!.prompt = "caller mutation after commit";
+        expect(result.current.get(scope.sessionKey)?.skillsSnapshot?.prompt).toBe(prompt);
+      } finally {
+        clone.mockRestore();
+        statements.restore();
+      }
+    }, options);
+    expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject({
+      updatedAt: 20,
+      skillsSnapshot: { prompt },
+      pluginExtensions: { synthetic: { value: "persisted" } },
+    });
+  });
+
+  it.each(["ordinary", "self-alias"] as const)(
+    "reads one validation cohort without revisiting unrelated rows during %s replacements",
+    (mode) => {
+      const options = { agentId: "main", path: storePath };
+      const unrelatedKeys = Array.from(
+        { length: 4 },
+        (_, index) => `agent:main:unrelated-${index}`,
+      );
+      let unrelatedReads = 0;
+      runOpenClawAgentWriteTransaction((database) => {
+        for (const [index, sessionKey] of unrelatedKeys.entries()) {
+          writeSessionEntry(database, sessionKey, {
+            sessionId: `unrelated-${index}`,
+            updatedAt: 10,
+          });
+        }
+        const validationKeys = [scope.sessionKey, ...unrelatedKeys, "agent:main:absent"];
+        const { expectedRows } = readSessionEntryReplacementState(database, {
+          sessionKeys: validationKeys,
+        });
+        const previous = expectedRows.get(scope.sessionKey)!.entry;
+        const reads = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(database.db),
+          ["entries"],
+          (sql) => (/\bfrom\s+"session_nodes"/iu.test(sql) ? "entries" : null),
+        );
+        const prepare = entryReads.prepareExactSessionEntryRowReads;
+        const observe = vi
+          .spyOn(entryReads, "prepareExactSessionEntryRowReads")
+          .mockImplementation((...args) => {
+            const read = prepare(...args);
+            return (sessionKey) => {
+              const selected = read(sessionKey);
+              if (selected && unrelatedKeys.includes(sessionKey)) {
+                const entry = selected.entry;
+                Object.defineProperty(selected, "entry", {
+                  get() {
+                    unrelatedReads++;
+                    return entry;
+                  },
+                });
+              }
+              return selected;
+            };
+          });
+        try {
+          commitSessionEntryReplacementsInDatabase(
+            database,
+            {
+              expectedRows,
+              validationKeys,
+              labelOwnerKeys: [],
+              replacements: ["first", "second"].map((label) => ({
+                sessionKey: scope.sessionKey,
+                entry: { ...previous, label },
+                previousSessionKeys: mode === "self-alias" ? [scope.sessionKey] : undefined,
+              })),
+            },
+            () => {
+              expect(reads.counts.entries).toBe(1);
+              expect(reads.rowCounts.entries).toBe(5);
+              unrelatedReads = 0;
+            },
+          );
+          expect(reads.counts.entries).toBe(1);
+          expect(unrelatedReads).toBe(0);
+        } finally {
+          observe.mockRestore();
+          reads.restore();
+        }
+      }, options);
+      expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject({
+        label: "second",
+        model: "base",
+      });
+      for (const [index, sessionKey] of unrelatedKeys.entries()) {
+        expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+          sessionId: `unrelated-${index}`,
+          updatedAt: 10,
+        });
+      }
+    },
+  );
 
   it("publishes detached persisted bytes and participant facts without rereading the writer", () => {
     recordSessionParticipant(scope, {

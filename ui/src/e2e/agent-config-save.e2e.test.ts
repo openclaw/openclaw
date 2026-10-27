@@ -133,7 +133,7 @@ suite.define(() => {
       });
       await expect.poll(() => pickerValue(primary)).toBe("openai/after-reload");
       expect(await pickerValue(decision)).toBe("__openclaw_inherit_decision__");
-      await expect.poll(() => indicator.textContent()).toContain("Saved");
+      await expect.poll(() => indicator.textContent()).toContain("Apply changes");
     });
   });
 

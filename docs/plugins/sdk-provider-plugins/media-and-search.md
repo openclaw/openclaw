@@ -112,11 +112,13 @@ merging a nested value such as voice settings.
     unavailable response as incomplete usage. The shared remote factory reports
     OpenAI-style usage; vector return values and existing plugins stay unchanged.
 
-    Memory search applies an explicit `memory.search.queryInstruction` before
-    calling `embed` and sets the `queryInstructionApplied` call option. For queries
-    carrying this flag, preserve the supplied text and skip provider-owned query
-    templates. Without the flag, retain existing formatting behavior. Document
-    calls do not carry this flag.
+    Memory search applies an explicit `memory.search.queryInstruction` or
+    `memory.search.inputFormat.query` before calling `embed` and sets the
+    `queryInstructionApplied` call option. Explicit `inputFormat.document` sets
+    `documentFormatApplied` on document calls and asynchronous batch options.
+    Preserve supplied text and skip the corresponding provider-owned template
+    when its flag is set, including when the configured prefix is empty.
+    Without the corresponding flag, retain existing formatting behavior.
 
     Providers that accept model aliases can expose
     `normalizeModel(options): string`. Memory uses this synchronous hook for

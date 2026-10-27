@@ -109,6 +109,7 @@ export function wrapStreamObjectEvents(
     });
   };
   stream[Symbol.asyncIterator] = iterator;
-  eventTransforms.set(stream, { iterator, transforms });
+  // Plugin streams expose a managed callback rather than the function assigned above.
+  eventTransforms.set(stream, { iterator: stream[Symbol.asyncIterator], transforms });
   return stream;
 }

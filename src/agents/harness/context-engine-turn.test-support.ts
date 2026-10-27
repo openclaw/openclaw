@@ -95,6 +95,8 @@ export const createTurnLease = (engine: ContextEngine) =>
     selectForHost: vi.fn(),
     degradeBeforeStart: vi.fn(),
     begin: vi.fn(),
+    handOver: vi.fn(async () => undefined),
+    rebind: vi.fn(async () => undefined),
     onDispose: vi.fn(),
     deferDisposalUntil: vi.fn(),
     dispose: vi.fn(async () => undefined),

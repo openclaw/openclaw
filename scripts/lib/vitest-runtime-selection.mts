@@ -14,6 +14,8 @@ export const TUI_PTY_BUILT_CLI_CANARY_PATTERN =
 // These built-CLI proofs still read source owners, but their only compiled
 // declarations belong to the production runtime registry.
 const runtimeOnlyBuiltCliFiles = new Set([
+  "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
+  "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
   "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
   "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
 ]);

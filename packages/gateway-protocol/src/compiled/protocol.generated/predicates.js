@@ -795,7 +795,7 @@ var External = [
     /(^slug$|^version$)/u,
     /(^agentId$)/u,
     /(^agentId$|^limit$|^beforeMs$)/u,
-    /(^agentId$|^name$|^filePath$|^versionId$)/u,
+    /(^agentId$|^name$|^filePath$|^versionId$|^draftId$)/u,
     /(^agentId$|^name$|^reason$)/u,
     /(^agentId$|^name$|^versionId$)/u,
     /(^agentId$|^runId$)/u,
@@ -1377,7 +1377,7 @@ var External = [
     /(^type$|^actorType$|^source$|^id$)/u,
     /(^emoji$|^count$|^identities$)/u,
     /(^id$|^label$)/u,
-    /(^key$|^idempotencyKey$|^agentId$|^surface$|^label$|^displayName$|^displayNameGenerated$|^titleSource$|^category$|^model$|^agentRuntime$|^contextWindow$|^thinkingLevel$|^cyberAccessProgram$|^fastMode$|^permissionMode$|^communication$|^toolOverrides$|^incognito$|^visibility$|^catalogId$|^parentSessionKey$|^spawnDepth$|^fork$|^forkFrom$|^emitCommandHooks$|^succeedsParent$|^timeoutMs$|^task$|^message$|^mentions$|^attachments$|^projectId$|^projectGitUrl$|^repository$|^deviceFolder$|^worktree$|^worktreeSource$|^worktreeBaseRef$|^worktreeName$|^execNode$|^cwd$)/u,
+    /(^key$|^idempotencyKey$|^agentId$|^surface$|^label$|^displayName$|^titleSource$|^category$|^model$|^agentRuntime$|^contextWindow$|^thinkingLevel$|^cyberAccessProgram$|^fastMode$|^permissionMode$|^communication$|^toolOverrides$|^incognito$|^visibility$|^catalogId$|^parentSessionKey$|^spawnDepth$|^fork$|^forkFrom$|^emitCommandHooks$|^succeedsParent$|^timeoutMs$|^task$|^message$|^mentions$|^attachments$|^projectId$|^projectGitUrl$|^repository$|^deviceFolder$|^worktree$|^worktreeSource$|^worktreeBaseRef$|^worktreeName$|^execNode$|^cwd$)/u,
     /(^send$|^receive$)/u,
     /(^mcpServers$|^mcpToolsDeny$|^skills$|^webSearch$)/u,
     /(^url$|^ref$)/u,
@@ -1436,7 +1436,7 @@ var External = [
     /^UTC[+-]\d{1,2}(?::[0-5]\d)?$/u,
     /^\d{4}-\d{2}-\d{2}$/u,
     /(^state$|^embedUrl$|^openUrl$)/u,
-    /(^sessionKey$|^agentId$|^idempotencyKey$|^title$|^body$|^draft$|^selection$)/u,
+    /(^sessionKey$|^agentId$|^idempotencyKey$|^workspacePath$|^title$|^body$|^draft$|^selection$)/u,
     /^[^\r\n]*\S[^\r\n]*$/u,
     /(^source$|^expected$)/u,
     /(^source$|^accountId$|^login$)/u,
@@ -5093,7 +5093,8 @@ var External = [
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
     check_6(value.name) &&
     (value.filePath === void 0 || !("filePath" in value) || check_63(value.filePath)) &&
-    (value.versionId === void 0 || !("versionId" in value) || check_63(value.versionId)),
+    (value.versionId === void 0 || !("versionId" in value) || check_63(value.versionId)) &&
+    (value.draftId === void 0 || !("draftId" in value) || check_63(value.draftId)),
   check_643 = (value) => check_644(value),
   check_644 = (value) =>
     typeof value == "object" &&
@@ -15212,9 +15213,6 @@ var External = [
     (value.surface === void 0 || !("surface" in value) || check_2287(value.surface)) &&
     (value.label === void 0 || !("label" in value) || check_94(value.label)) &&
     (value.displayName === void 0 || !("displayName" in value) || check_2288(value.displayName)) &&
-    (value.displayNameGenerated === void 0 ||
-      !("displayNameGenerated" in value) ||
-      check_181(value.displayNameGenerated)) &&
     (value.titleSource === void 0 || !("titleSource" in value) || check_2289(value.titleSource)) &&
     (value.category === void 0 || !("category" in value) || check_94(value.category)) &&
     (value.model === void 0 || !("model" in value) || check_63(value.model)) &&
@@ -16496,6 +16494,9 @@ var External = [
     (value.sessionKey === void 0 || !("sessionKey" in value) || check_63(value.sessionKey)) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
     check_6(value.idempotencyKey) &&
+    (value.workspacePath === void 0 ||
+      !("workspacePath" in value) ||
+      check_619(value.workspacePath)) &&
     (value.title === void 0 || !("title" in value) || check_2483(value.title)) &&
     (value.body === void 0 || !("body" in value) || check_1736(value.body)) &&
     (value.draft === void 0 || !("draft" in value) || check_181(value.draft)) &&

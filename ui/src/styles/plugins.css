@@ -1,5 +1,3 @@
-@import "./carapace-control-ui.css";
-
 /* Plugins and Skills presentation layered on the settings design language:
  * art tiles, row messages, catalog details, and install/consent dialogs.
  * Structural layout comes from .settings-page/.settings-row. */
@@ -310,11 +308,15 @@
   gap: var(--space-3);
 }
 
+.plugin-catalog-window-item {
+  display: grid;
+  min-width: 0;
+}
+
 .plugin-catalog-card {
   position: relative;
   min-width: 0;
   display: grid;
-  grid-template-rows: auto auto;
   align-content: start;
   gap: var(--space-2);
   padding: var(--space-3);
@@ -326,6 +328,12 @@
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease,
     transform var(--duration-fast) ease;
+}
+
+.plugin-catalog-card__content {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
 }
 
 .plugin-catalog-card:hover {
@@ -347,10 +355,6 @@
 }
 
 .plugin-catalog-card__head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--space-2);
   min-width: 0;
 }
 
@@ -358,8 +362,10 @@
   position: relative;
   z-index: 3;
   display: flex;
-  min-height: 30px;
+  height: 1lh;
+  flex: 0 0 auto;
   align-items: center;
+  margin-inline-start: auto;
 }
 
 .plugin-catalog-card__install,
@@ -638,15 +644,11 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.plugin-catalog-card > .plugins-row-message {
+.plugin-catalog-card__content > .plugins-row-message {
   position: relative;
   z-index: 3;
 }
@@ -655,9 +657,8 @@
   flex: 1 1 100%;
 }
 
-.plugins-row-message--error {
-  background: var(--danger-subtle);
-  color: var(--danger);
+.plugin-catalog-detail__panel > .plugins-row-message {
+  margin-bottom: var(--space-4);
 }
 
 .plugins-row-message--info {
@@ -666,6 +667,8 @@
   border: 0;
   background: transparent;
   color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.45;
   white-space: normal;
 }
 

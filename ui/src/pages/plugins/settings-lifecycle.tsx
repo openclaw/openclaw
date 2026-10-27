@@ -1,3 +1,4 @@
+import { Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
@@ -16,6 +17,10 @@ type PluginLifecycleProps = {
   settingsHref: string;
   onUninstall: (pluginId: string, rowKey: string) => void;
   onAskPlugin?: () => void;
+  /** First account the operator can still sign in to; it owns the primary action. */
+  signInServer?: string;
+  mcpLoginBusy?: boolean;
+  onMcpLogin?: (serverName: string) => void;
 };
 export function PluginLifecycle(props: PluginLifecycleProps & { plugin: PluginCatalogItem }) {
   const key = () => pluginRowKey(props.plugin.id);
@@ -59,9 +64,24 @@ export function PluginLifecycle(props: PluginLifecycleProps & { plugin: PluginCa
     );
   }
   // Keep the primary action first in visual and keyboard navigation order.
-  const askAction = () => renderPluginAskAction(props.onAskPlugin, props.enabled);
+  const askAction = () =>
+    renderPluginAskAction(props.onAskPlugin, props.enabled && !props.signInServer);
   return (
     <>
+      {/* After installation, sign-in takes the slot the Install action used. */}
+      <Show when={props.signInServer}>
+        {(serverName) => (
+          <button
+            type="button"
+            class="btn primary oc-action oc-action-primary plugin-catalog-detail__sign-in"
+            aria-label={t("pluginsPage.auth.connectAccount", { name: serverName() })}
+            disabled={props.mcpLoginBusy}
+            onClick={() => props.onMcpLogin?.(serverName())}
+          >
+            {t("pluginsPage.auth.connect")}
+          </button>
+        )}
+      </Show>
       {props.enabled ? askAction() : null}
       <Action
         kind={enableAction()}

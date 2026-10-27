@@ -10,6 +10,7 @@ import { defineToolPlugin, getToolPluginMetadata } from "../plugin-sdk/tool-plug
 import { defaultRuntime } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import {
   loadToolPlugin,
   runPluginsBuildCommand,
@@ -187,7 +188,7 @@ describe("plugin authoring commands", () => {
       extensions: ["./src/a/index.ts", "./src/b/index.ts"],
       runtimeExtensions: runtimeEntries,
     };
-    fs.writeFileSync(packagePath, JSON.stringify(packageManifest));
+    writeFixtureJsonSync(packagePath, packageManifest);
     const { installPluginFromPath } = await import("../plugins/install-package.js");
 
     await runPluginsBuildCommand({ root: tmpDir, entry: runtimeEntries[0] });
@@ -278,7 +279,7 @@ describe("plugin authoring commands", () => {
     const packagePath = path.join(rootDir, "package.json");
     const packageJson = readJson(rootDir, "package.json");
     packageJson.openclaw.controlUi = "./browser.ts";
-    fs.writeFileSync(packagePath, JSON.stringify(packageJson));
+    writeFixtureJsonSync(packagePath, packageJson);
     fs.writeFileSync(path.join(rootDir, "browser.ts"), 'export const label = "current";');
     fs.mkdirSync(path.join(rootDir, "node_modules"));
     fs.symlinkSync(
@@ -297,10 +298,7 @@ describe("plugin authoring commands", () => {
     await runPluginsBuildCommand({ root: rootDir, entry: entryPath });
     await runPluginsBuildCommand({ root: rootDir, entry: entryPath, check: true });
     const generatedPath = path.join(rootDir, "dist/openclaw.plugin.json");
-    fs.writeFileSync(
-      generatedPath,
-      JSON.stringify({ controlUi: { entry: "dist/control-ui/stale/index.js" } }),
-    );
+    writeFixtureJsonSync(generatedPath, { controlUi: { entry: "dist/control-ui/stale/index.js" } });
     interceptExit();
     silenceRuntime("error");
     await expect(
@@ -621,7 +619,7 @@ describe("plugin authoring commands", () => {
     const manifestPath = path.join(tmpDir, "openclaw.plugin.json");
     const packageManifest = readJson(tmpDir, "package.json");
     packageManifest.openclaw.extensions = [];
-    fs.writeFileSync(packagePath, JSON.stringify(packageManifest));
+    writeFixtureJsonSync(packagePath, packageManifest);
     const packageBefore = fs.readFileSync(packagePath);
     const manifestBefore = '{\n  "id": "previous"\n}\n';
     fs.writeFileSync(manifestPath, manifestBefore);

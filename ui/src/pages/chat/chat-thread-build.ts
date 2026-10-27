@@ -44,7 +44,10 @@ import {
   pendingSessionsYield,
   projectSessionsYieldItems,
 } from "./chat-sessions-yield.ts";
-import { projectChatSystemNotice } from "./chat-system-notice.ts";
+import {
+  createSubmittedModelNoticeProjector,
+  projectChatSystemNotice,
+} from "./chat-system-notice.ts";
 import {
   canvasAssistantItemKey,
   collectCanvasTurns,
@@ -211,11 +214,16 @@ export function buildChatItems(
     ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`
     : undefined;
   let hasPersistedCompaction = false;
+  const projectSubmittedModel = createSubmittedModelNoticeProjector();
   for (const [i, item] of historyItems.entries()) {
     const msg = item.message;
     const itemKey = item.key;
     const raw = asRecord(msg) ?? {};
     const marker = asRecord(raw["__openclaw"]);
+    const modelNotice = projectSubmittedModel(item);
+    if (modelNotice) {
+      items.push(modelNotice);
+    }
     const fallback = readModelFallbackNotice(msg);
     if (fallback) {
       items.push({

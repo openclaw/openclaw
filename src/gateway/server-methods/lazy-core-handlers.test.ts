@@ -30,7 +30,7 @@ vi.mock("../../agents/sandbox/context.js", () => {
   optionalMediaRuntimesLoaded("sandbox-context");
   return {
     resolveSandboxContext: unavailable,
-    ensureSandboxWorkspaceForSession: unavailable,
+    prepareSandboxWorkspaceForSession: unavailable,
   };
 });
 

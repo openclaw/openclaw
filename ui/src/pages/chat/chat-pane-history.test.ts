@@ -39,6 +39,8 @@ import {
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { agentEvent } from "./tool-stream.test-helpers.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 type HistoryPageOverrides = {
   totalMessages?: number;
@@ -286,6 +288,24 @@ it("keeps the accepted steer and live tail visible while pane refresh is pending
     activeRunId: "run-refresh",
   });
   delta("Saved. Working.");
+  handleAgentEvent(
+    state,
+    agentEvent(
+      "run-refresh",
+      1,
+      "item",
+      {
+        itemId: "tool:build",
+        toolCallId: "build",
+        kind: "tool",
+        name: "exec",
+        title: "Build the workspace",
+        phase: "start",
+        status: "running",
+      },
+      state.sessionKey,
+    ),
+  );
   const liveExpected = ["Start.", "Steer.", "Saved. Working."];
 
   try {
@@ -293,6 +313,12 @@ it("keeps the accepted steer and live tail visible while pane refresh is pending
     pane.render();
     pane.chatProps!.onRefresh();
     expect(renderedText(state)).toEqual(liveExpected);
+    expect([...state.toolStreamById.values()]).toMatchObject([
+      {
+        toolCallId: "build",
+        activity: [{ status: "running" }],
+      },
+    ]);
   } finally {
     state.connected = false;
     history.resolve({ messages: [] });
@@ -384,6 +410,7 @@ it("reveals a final catalog page even when its cursor is exhausted", async () =>
   expect(request).toHaveBeenCalledWith(
     "sessions.catalog.read",
     expect.objectContaining({ cursor: "final-page" }),
+    { signal: expect.any(AbortSignal) },
   );
   expect(pane.history.catalogMessages).toHaveLength(1);
   expect(pane.history.catalogCursor).toBeUndefined();
@@ -481,7 +508,9 @@ it("prefetches older history from upward intent well before the top edge", async
   Object.defineProperty(event, "target", { value: thread });
   pane.handleTranscriptScroll(event);
   await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-  expect(request).toHaveBeenCalledWith("chat.history", olderRequest(state.sessionKey));
+  expect(request).toHaveBeenCalledWith("chat.history", olderRequest(state.sessionKey), {
+    signal: expect.any(AbortSignal),
+  });
   expect(observer.rootMargin()).toBe("1200px 0px 0px");
 });
 
@@ -529,6 +558,7 @@ it.each([
   expect(request).toHaveBeenLastCalledWith(
     "chat.history",
     olderRequest(state.sessionKey, row.offset),
+    { signal: expect.any(AbortSignal) },
   );
   expect(reads).toBe(row.reset ? 2 : 1);
   const expectedTail = row.reset ? [] : historyPage([5, 6, 7, 8]).messages;
@@ -596,7 +626,9 @@ it("prepends a strictly older page and exhausts", async () => {
   expect(pane.hasOlderMessages()).toBe(false);
 
   await pane.loadOlderMessages();
-  expect(request).toHaveBeenCalledExactlyOnceWith("chat.history", olderRequest(state.sessionKey));
+  expect(request).toHaveBeenCalledExactlyOnceWith("chat.history", olderRequest(state.sessionKey), {
+    signal: expect.any(AbortSignal),
+  });
 });
 
 it("replaces cached source groups during a zero-offset refill without losing live rows", async () => {
@@ -632,6 +664,7 @@ it("replaces cached source groups during a zero-offset refill without losing liv
   expect(request).toHaveBeenCalledExactlyOnceWith(
     "chat.history",
     olderRequest(state.sessionKey, 0),
+    { signal: expect.any(AbortSignal) },
   );
 });
 
@@ -662,7 +695,9 @@ it("refreshes the tail instead of mixing an older page from a replacement sessio
 
   await pane.loadOlderMessages();
 
-  expect(request).toHaveBeenNthCalledWith(1, "chat.history", olderRequest(state.sessionKey));
+  expect(request).toHaveBeenNthCalledWith(1, "chat.history", olderRequest(state.sessionKey), {
+    signal: expect.any(AbortSignal),
+  });
   expect(request).toHaveBeenNthCalledWith(
     2,
     "chat.history",

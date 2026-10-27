@@ -11,6 +11,7 @@ import {
   isPathInside,
 } from "openclaw/plugin-sdk/file-access-runtime";
 import { withFileLock, type FileLockOptions } from "openclaw/plugin-sdk/file-lock";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   archiveLegacyStateSource,
@@ -35,6 +36,17 @@ import {
   tryResolveLegacyBindingOwnerAgentId,
   type LegacyBindingOwner,
 } from "./session-binding-owners.js";
+
+const loadSessionBinding = createLazyRuntimeModule(
+  () => import("../app-server/session-binding.js"),
+);
+const loadConversationBindingData = createLazyRuntimeModule(
+  () => import("../conversation-binding-data.js"),
+);
+const loadSessionStoreRuntime = createLazyRuntimeModule(async () => {
+  const { prepareSessionEntryPatch } = await import("openclaw/plugin-sdk/session-store-runtime");
+  return { prepareSessionEntryPatch };
+});
 
 const LEGACY_BINDING_SUFFIX = ".codex-app-server.json";
 const CODEX_AGENT_HARNESS_ID = "codex";
@@ -273,10 +285,7 @@ async function migrateSource(
           readStoredCodexAppServerBinding,
         },
         { legacyCodexConversationBindingId },
-      ] = await Promise.all([
-        import("../app-server/session-binding.js"),
-        import("../conversation-binding-data.js"),
-      ]);
+      ] = await Promise.all([loadSessionBinding(), loadConversationBindingData()]);
       const agentId =
         owner?.agentId ?? (source.agentIds.size === 1 ? [...source.agentIds][0] : undefined);
       const baseStored = await createStoredCodexAppServerBinding(raw, {
@@ -501,7 +510,7 @@ async function recordSessionOwner(
     readEvidence: MigrationParams["context"]["readSessionIdentityEvidenceBatch"];
   },
 ): Promise<string | { deleted: true } | undefined> {
-  const { prepareSessionEntryPatch } = await import("openclaw/plugin-sdk/session-store-runtime");
+  const { prepareSessionEntryPatch } = await loadSessionStoreRuntime();
   // Legacy indexes are offline inputs; only the canonical session can change ownership now.
   let ownershipRefusal: string | undefined;
   let observedCanonicalEntry = false;

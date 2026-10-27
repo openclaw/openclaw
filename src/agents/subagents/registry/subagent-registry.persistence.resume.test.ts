@@ -143,6 +143,7 @@ describe("subagent registry persistence resume", () => {
 
   it("retries pending timed-out child delivery after restart", async () => {
     const status = "timeout" as const;
+    const resultText = "pending result: ".repeat(2_048);
     await withRegistryState(async (stateDir) => {
       const runId = "run-pending-timed-out-delivery";
       const childSessionKey = "agent:main:subagent:pending-timed-out-delivery";
@@ -158,7 +159,12 @@ describe("subagent registry persistence resume", () => {
         endedAt: 200,
         outcome: { status },
         expectsCompletionMessage: true,
-        completion: { required: true, resultText: "done", capturedAt: 200 },
+        completion: {
+          required: true,
+          resultText,
+          terminalReply: { disposition: "visible", text: resultText.slice(0, 4_096).trim() },
+          capturedAt: 200,
+        },
         delivery: {
           status: "pending",
           payload: {
@@ -178,7 +184,9 @@ describe("subagent registry persistence resume", () => {
       await seedRecovery(stateDir, run);
       await writeChildSession(stateDir, run.childSessionKey, "sess-pending-timed-out-delivery");
 
-      await restoreRegistry();
+      await mod.initSubagentRegistry();
+      expect(mod.getSubagentRunByRunId(runId)?.completion).toEqual(run.completion);
+      await activateRegistry();
 
       await settleWork();
       expect(announceSpy).toHaveBeenCalled();
@@ -610,12 +618,19 @@ describe("subagent registry persistence resume", () => {
   ])("retains $status required delivery with its owner after restart", async (expected) => {
     await withRegistryState(async (stateDir) => {
       const run = createOrphanedRequiredDelivery(expected.status);
+      run.completion = {
+        ...run.completion,
+        required: true,
+        resultText: "retained result ".repeat(2_048),
+      };
       await seedRecovery(stateDir, run);
 
       await restoreRegistry();
       await nextTask();
 
       expect(announceSpy).not.toHaveBeenCalled();
+      expect(mod.getSubagentRunByRunId(run.runId)?.completion).toEqual(run.completion);
+      expect(readPersistedRun(run.runId)?.completion).toEqual(run.completion);
       expect(readPersistedRun(run.runId)?.delivery).toMatchObject({
         status: expected.status,
         ...(expected.disposition ? { disposition: expected.disposition } : {}),
@@ -837,6 +852,13 @@ describe("subagent registry persistence resume", () => {
     await withRegistryState(async (stateDir) => {
       const endedAt = Date.now();
       const restoredRuns = createRestoredRequesterWakeRuns(endedAt);
+      for (const run of restoredRuns) {
+        run.completion = {
+          required: true,
+          resultText: "awaiting parent ".repeat(2_048),
+          terminalReply: { disposition: "visible", text: `Final reply for ${run.runId}` },
+        };
+      }
       saveRuns(...restoredRuns);
 
       await Promise.all(
@@ -875,6 +897,14 @@ describe("subagent registry persistence resume", () => {
       await mod.testing.runSweeperTickForTests();
       await settleWork();
       expect(wakeRequester).toHaveBeenCalledTimes(3);
+      expect(
+        wakeRequester.mock.calls.map(([params]) => params.settledEntry.runId).toSorted(),
+      ).toEqual(restoredRuns.map((run) => run.runId).toSorted());
+      for (const [params] of wakeRequester.mock.calls) {
+        expect(params.settledEntry.completion).toEqual(
+          restoredRuns.find((run) => run.runId === params.settledEntry.runId)?.completion,
+        );
+      }
     });
   });
 

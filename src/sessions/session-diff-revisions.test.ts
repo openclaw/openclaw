@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runGit, type GitResult } from "../agents/worktrees/git.js";
 import { onTrustedInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import type { DiffReadTiming } from "../infra/diff-read-timing.js";
+import { runGitWorkerOperation } from "../infra/git-worker.js";
 import * as execRunner from "../process/exec-runner.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -113,14 +114,19 @@ describe("branch base resolution", () => {
     ).resolves.toEqual({ base: `${refs[0]}-base`, baseRef });
   });
 
-  it.each([undefined, "main", "master"])(
-    "keeps HEAD for branch %s even when remote defaults exist",
-    async (branch) => {
+  it.each([
+    [undefined, true],
+    ["main", true],
+    ["master", true],
+    ["feature", false],
+  ] as const)(
+    "keeps HEAD for branch %s (remote defaults: %s)",
+    async (branch, hasRemoteDefaults) => {
       const gitOut = async (_root: string, args: string[]) => {
         if (args[0] === "symbolic-ref") {
           return null;
         }
-        if (args[0] === "merge-base" && args[1]?.startsWith("origin/")) {
+        if (hasRemoteDefaults && args[0] === "merge-base" && args[1]?.startsWith("origin/")) {
           return "remote-base\n";
         }
         return null;
@@ -134,17 +140,6 @@ describe("branch base resolution", () => {
       });
     },
   );
-
-  it("keeps HEAD when no default ref resolves", async () => {
-    await expect(
-      resolveSessionDiffBase({
-        branch: "feature",
-        gitOut: async () => null,
-        head: "captured-head",
-        root: "/repo",
-      }),
-    ).resolves.toEqual({ base: "captured-head", baseRef: "HEAD" });
-  });
 });
 
 describe("captured session history", () => {
@@ -173,6 +168,80 @@ describe("captured session history", () => {
     expect(metadata.mergeBase?.subject).toBe("base");
   });
 });
+
+it.skipIf(process.platform === "win32")(
+  "reuses a clean status inventory and still observes later edits",
+  () =>
+    withCheckout("openclaw-diff-index-refresh-", async ({ root, git, write }) => {
+      await git("init", "-b", "main");
+      await write("file.txt", "original\n");
+      await git("add", "file.txt");
+      await git("commit", "-m", "base");
+      const indexPath = path.join(root, ".git", "index");
+      const originalIndex = await fs.readFile(indexPath);
+      await fs.utimes(path.join(root, "file.txt"), new Date(0), new Date(0));
+      const read = () =>
+        loadCheckoutDiff({ cwd: root, sessionKey: "fixture", scope: "uncommitted" });
+
+      const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+      expect(await read()).toMatchObject({ files: [], additions: 0, deletions: 0 });
+      expect(commands.mock.calls.filter(([argv]) => argv.includes("status"))).toHaveLength(1);
+      expect(
+        commands.mock.calls.filter(([argv]) => argv.includes("diff") || argv.includes("ls-files")),
+      ).toHaveLength(0);
+      expect(await fs.readFile(indexPath)).toEqual(originalIndex);
+
+      await write("file.txt", "changed\n");
+      await write("new.txt", "new\n");
+      const changed = await read();
+      expect(changed.files).toEqual([
+        expect.objectContaining({
+          path: "file.txt",
+          status: "modified",
+          additions: 1,
+          deletions: 1,
+        }),
+        expect.objectContaining({ path: "new.txt", untracked: true, additions: 1 }),
+      ]);
+    }),
+);
+
+it("binds a clean inventory to its checkout, HEAD, and uncommitted scope", () =>
+  withCheckout("openclaw-clean-diff-scope-", async ({ root, git, write }) => {
+    await git("init", "-b", "main");
+    await write("file.txt", "base\n");
+    await git("add", "file.txt");
+    await git("commit", "-m", "base");
+    const base = (await git("rev-parse", "HEAD")).trim();
+    await git("checkout", "-b", "feature");
+    await write("file.txt", "feature\n");
+    await git("commit", "-am", "feature");
+    const head = (await git("rev-parse", "HEAD")).trim();
+    const cleanWorktree = { root, head };
+    const clean = await runGitWorkerOperation({
+      type: "checkout.diff",
+      input: { cwd: root, scope: "uncommitted", cleanWorktree },
+    });
+    expect(clean).toMatchObject({ files: [], aheadCount: 1, commits: [{ subject: "feature" }] });
+    for (const input of [{ scope: "all" as const }, { scope: "commit" as const, commit: head }]) {
+      const diff = await runGitWorkerOperation({
+        type: "checkout.diff",
+        input: { cwd: root, cleanWorktree, ...input },
+      });
+      expect(diff.files[0]).toMatchObject({ path: "file.txt", additions: 1, deletions: 1 });
+    }
+    await write("file.txt", "unstaged\n");
+    for (const stale of [
+      { root, head: base },
+      { root: path.join(root, "other"), head },
+    ]) {
+      const diff = await runGitWorkerOperation({
+        type: "checkout.diff",
+        input: { cwd: root, scope: "uncommitted", cleanWorktree: stale },
+      });
+      expect(diff.files[0]?.patch).toContain("+unstaged");
+    }
+  }));
 
 it.skipIf(process.platform === "win32")(
   "briefly reuses missing checkout results and observes a recreated checkout after expiry",
@@ -220,11 +289,15 @@ it.skipIf(process.platform === "win32")(
       await fs.symlink(checkout, path.join(root, "alias"));
       await fs.appendFile(path.join(checkout, "tracked.txt"), "after\n");
       await fs.writeFile(path.join(origin, ".git/worktrees/checkout/index.lock"), "writer\n");
+      const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
       for (const cwd of [path.join(checkout, "nested"), path.join(root, "alias")]) {
         const timing: DiffReadTiming = { durations: {} };
         const read = () => loadCheckoutDiff({ cwd, sessionKey: "fixture" }, timing);
         const first = await read();
         expect(first.files[0]?.patch).toContain("+after");
+        expect(commands.mock.calls.filter(([argv]) => argv.includes("symbolic-ref"))).toHaveLength(
+          0,
+        );
         await fs.writeFile(path.join(checkout, "ignored/build.txt"), "rebuilt\n");
         expect(await read()).toEqual(first);
         expect(timing.outcome).toBe("cache-hit");

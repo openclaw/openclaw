@@ -204,6 +204,9 @@ When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep,
 Startup reconciles that job in the background so Gateway connections do not wait
 for the cron store. Failures are logged and retried by runtime reconciliation.
 Stopping or replacing the plugin waits for pending reconciliation to settle.
+Reconciliation preserves a job paused by the operator or auto-disabled by cron,
+including its failure history. Use `openclaw cron enable <job-id>` to resume it;
+schedule and payload repairs still apply while it is stopped.
 
 Plugin reloads preserve the managed schedule. The previous instance stops its
 background callbacks and settles pending diary publication before its replacement

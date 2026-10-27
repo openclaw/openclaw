@@ -29,6 +29,8 @@ import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
+import { getPluginRegistryState, getPluginRegistryVersion } from "./runtime-state.js";
+import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 import {
   buildPluginRuntimeLoadOptions,
   setPluginRuntimeLoadContext,
@@ -212,6 +214,81 @@ type PluginToolResolutionParams = {
 
 type PluginToolLoadState = NonNullable<ReturnType<typeof resolvePluginToolLoadState>>;
 
+type PluginToolRegistryFacts = {
+  registrations: Map<string, PluginToolRegistration[]>;
+  findOwner: ReturnType<typeof createRuntimePluginManifestLookup>;
+  settledOutcomes: Set<string>;
+};
+
+const registryToolFacts = new WeakMap<
+  PluginRegistry,
+  {
+    version: number | undefined;
+    loaderIdentity: object | undefined;
+    snapshots: WeakMap<
+      PluginMetadataManifestView["plugins"],
+      WeakMap<PluginMetadataManifestView["byPluginId"], PluginToolRegistryFacts>
+    >;
+  }
+>();
+
+function preparePluginToolRegistry(registry: PluginRegistry, snapshot: PluginMetadataManifestView) {
+  const version = getPluginRegistryVersion(registry);
+  const loaderIdentity = getPluginRuntimeLoadContextState(registry)?.loaderCacheIdentity;
+  // Registration is mutable until publication or loader completion. Metadata views can
+  // differ within a generation; neither their source precedence nor turn authority is shared.
+  const cacheable =
+    !getPluginRegistryState()?.registrationContext &&
+    (version !== undefined || loaderIdentity !== undefined);
+  let generation = cacheable ? registryToolFacts.get(registry) : undefined;
+  if (
+    cacheable &&
+    (!generation || generation.version !== version || generation.loaderIdentity !== loaderIdentity)
+  ) {
+    generation = { version, loaderIdentity, snapshots: new WeakMap() };
+    registryToolFacts.set(registry, generation);
+  }
+  // Contract readers can project a fresh view around the same immutable metadata.
+  let snapshots = generation?.snapshots.get(snapshot.plugins);
+  if (generation && !snapshots) {
+    snapshots = new WeakMap();
+    generation.snapshots.set(snapshot.plugins, snapshots);
+  }
+  const cached = snapshots?.get(snapshot.byPluginId);
+  if (cached) {
+    return cached;
+  }
+  const registrations = new Map<string, PluginToolRegistration[]>();
+  for (const entry of registry.tools) {
+    const entries = registrations.get(entry.pluginId);
+    if (entries) {
+      entries.push(entry);
+    } else {
+      registrations.set(entry.pluginId, [entry]);
+    }
+  }
+  const facts: PluginToolRegistryFacts = {
+    registrations,
+    findOwner: createRuntimePluginManifestLookup(registry, snapshot.plugins),
+    settledOutcomes: new Set(
+      registry.plugins
+        .filter((record) => {
+          const manifest = snapshot.byPluginId.get(record.id);
+          return (
+            (record.status === "disabled" || record.status === "error") &&
+            manifest !== undefined &&
+            record.origin === manifest.origin &&
+            record.rootDir === manifest.rootDir &&
+            record.source === manifest.source
+          );
+        })
+        .map((record) => record.id),
+    ),
+  };
+  snapshots?.set(snapshot.byPluginId, facts);
+  return facts;
+}
+
 function recordToolDiagnostic(
   registry: PluginRegistry,
   diagnostic: PluginRegistry["diagnostics"][number],
@@ -374,42 +451,31 @@ function* resolvePluginToolsFromRegistry(
     string,
     { registry: PluginRegistry; tools: PluginToolRegistration[] }
   >();
-  const findRuntimeOwner = runtimeRegistry
-    ? createRuntimePluginManifestLookup(runtimeRegistry, snapshot.plugins)
+  const runtimeFacts = runtimeRegistry
+    ? preparePluginToolRegistry(runtimeRegistry, snapshot)
     : undefined;
   for (const pluginId of onlyPluginIds) {
-    const record = findRuntimeOwner?.(pluginId);
+    const record = runtimeFacts?.findOwner(pluginId);
     const instance = record && getPluginInstance(record);
     if (
       runtimeRegistry &&
       instance &&
-      (instance.toolRegistrationComplete ||
-        runtimeRegistry.tools.some((entry) => entry.pluginId === pluginId))
+      (instance.toolRegistrationComplete || runtimeFacts?.registrations.has(pluginId))
     ) {
-      toolOwners.set(pluginId, { registry: runtimeRegistry, tools: [] });
+      toolOwners.set(pluginId, {
+        registry: runtimeRegistry,
+        tools: runtimeFacts?.registrations.get(pluginId) ?? [],
+      });
     }
   }
   // A prepared generation already decided disabled and failed owners; reloading them would only
   // repeat that outcome synchronously on the caller's thread.
-  const settledPreparedOutcomes = new Set(
-    preparedRegistry?.plugins
-      .filter((record) => {
-        const manifest = snapshot.byPluginId.get(record.id);
-        return (
-          (record.status === "disabled" || record.status === "error") &&
-          manifest !== undefined &&
-          record.origin === manifest.origin &&
-          record.rootDir === manifest.rootDir &&
-          record.source === manifest.source
-        );
-      })
-      .map((record) => record.id),
-  );
+  const settledPreparedOutcomes = preparedRegistry ? runtimeFacts?.settledOutcomes : undefined;
   // Failed registrations are settled facts of this inspection, not new cold-load requests.
   const missingPluginIds = onlyPluginIds.filter(
     (pluginId) =>
       !toolOwners.has(pluginId) &&
-      !settledPreparedOutcomes.has(pluginId) &&
+      !settledPreparedOutcomes?.has(pluginId) &&
       !samePluginToolSource(inspection?.manifests.get(pluginId), snapshot.byPluginId.get(pluginId)),
   );
   if (missingPluginIds.length > 0) {
@@ -417,16 +483,9 @@ function* resolvePluginToolsFromRegistry(
       ...loadState.loadOptions,
       onlyPluginIds: missingPluginIds,
     });
+    const registrations = preparePluginToolRegistry(registry, snapshot).registrations;
     for (const pluginId of missingPluginIds) {
-      toolOwners.set(pluginId, { registry, tools: [] });
-    }
-  }
-  for (const registry of new Set(Array.from(toolOwners.values(), (owner) => owner.registry))) {
-    for (const entry of registry.tools) {
-      const owner = toolOwners.get(entry.pluginId);
-      if (owner?.registry === registry) {
-        owner.tools.push(entry);
-      }
+      toolOwners.set(pluginId, { registry, tools: registrations.get(pluginId) ?? [] });
     }
   }
   const blockedPlugins = new Set<string>();

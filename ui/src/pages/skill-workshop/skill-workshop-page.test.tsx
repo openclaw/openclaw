@@ -232,7 +232,10 @@ it("compares saved metadata against today's", async () => {
   expect(diffText("add")).toContain(`description: ${skill.description}`);
 });
 
-it.each([true, false])("sets learning mode (accepted: %s)", async (accepted) => {
+it.each([
+  { accepted: true, label: "Propose", mode: "propose" },
+  { accepted: false, label: "Off", mode: "off" },
+])("sets learning mode $mode (accepted: $accepted)", async ({ accepted, label, mode }) => {
   const patch = createDeferredCore<boolean>();
   const runtimeConfig = createRuntimeConfigStub({
     sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
@@ -243,11 +246,11 @@ it.each([true, false])("sets learning mode (accepted: %s)", async (accepted) => 
     methods: ["config.patch"],
     runtimeConfig,
   });
-  button(page, "Off")!.click();
+  button(page, label)!.click();
   await waitForSolid(() =>
-    expect(button(page, "Off", true)?.getAttribute("aria-disabled")).toBe("true"),
+    expect(button(page, label, true)?.getAttribute("aria-disabled")).toBe("true"),
   );
-  expect(runtimeConfig.patch.mock.lastCall?.[0].raw.skills.workshop.autonomous.mode).toBe("off");
+  expect(runtimeConfig.patch.mock.lastCall?.[0].raw.skills.workshop.autonomous.mode).toBe(mode);
   patch.resolve(accepted);
   if (accepted) {
     await waitForSolid(() => expect(runtimeConfig.refresh).toHaveBeenCalled());
@@ -257,4 +260,91 @@ it.each([true, false])("sets learning mode (accepted: %s)", async (accepted) => 
       expect(page.textContent).toContain("Mode update refused");
     });
   }
+});
+
+const draftAccess = {
+  methods: [
+    ...mutationAccess.methods,
+    "skills.workshop.applyDraft",
+    "skills.workshop.discardDraft",
+  ],
+};
+const draftFor = (skillName: string) => ({
+  id: `${skillName}-1a2b3c4d`,
+  skillName,
+  summary: "match transfers before categorizing",
+  createdAtMs: 1,
+});
+
+it("reviews a draft as a diff against the live skill, applies it, and follows the skill", async () => {
+  const draft = draftFor(SKILL);
+  let drafts = [draft];
+  const request = gateway({
+    list: () => ({ ...list, drafts }),
+    read: (params: RequestParams & { draftId?: string }) =>
+      params.draftId
+        ? { ...skillRead, content: "Synthetic procedure\nMatch transfers first." }
+        : skillRead,
+    applyDraft: () => {
+      drafts = [];
+      return { changes: [] };
+    },
+  });
+  const page = await mount(request, draftAccess);
+  await click(page, "Drafts 1");
+  await waitForSolid(() => {
+    expect(text(page, ".sw-list__rows .sw-row__uses")).toBe("Update");
+    expect(text(page, ".sw-diff__key--remove")).toBe("Live skill");
+    expect(text(page, ".sw-diff__line--add")).toContain("Match transfers first.");
+  });
+  expect(text(page, ".sw-detail__desc")).toBe(draft.summary);
+  await click(page, "Apply");
+
+  await waitForSolid(() =>
+    expect(request).toHaveBeenCalledWith("skills.workshop.applyDraft", {
+      agentId: "research",
+      name: SKILL,
+      draftId: draft.id,
+    }),
+  );
+  await waitForSolid(() => {
+    expect(text(page, ".sw-detail__title")).toBe(SKILL);
+    expect(button(page, "Apply")).toBeNull();
+    expect(button(page, "Active 1", true)).not.toBeNull();
+  });
+});
+
+it("shows only the drafts list on the Drafts tab of an agent with no learned skills", async () => {
+  const request = gateway({
+    list: { ...list, skills: [], archived: [], drafts: [draftFor("new-skill")] },
+    read: { ...skillRead, name: "new-skill" },
+  });
+  const page = await mount(request);
+  await click(page, "Drafts 1");
+
+  await waitForSolid(() => expect(text(page, ".sw-list__rows .sw-row__uses")).toBe("New skill"));
+  expect(text(page, ".sw-list__rows")).not.toMatch(/Nothing archived|No active skills/);
+});
+
+it.each([
+  { label: "with learned skills", skills: [skill], archived: list.archived },
+  { label: "in an otherwise empty Workshop", skills: [], archived: [] },
+])("keeps the Drafts list open after discarding its last draft $label", async (fixture) => {
+  let drafts = [draftFor(SKILL)];
+  const request = gateway({
+    list: () => ({ ...list, ...fixture, drafts }),
+    read: skillRead,
+    discardDraft: () => {
+      drafts = [];
+      return { changes: [] };
+    },
+  });
+  const page = await mount(request, draftAccess);
+  await click(page, "Drafts 1");
+  await click(page, "Discard");
+
+  await waitForSolid(() => {
+    expect(button(page, "Drafts 0", true)).not.toBeNull();
+    expect(text(page, ".sw-list__rows")).toContain("No drafts waiting.");
+  });
 });

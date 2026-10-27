@@ -264,7 +264,11 @@ function createMemoryEmbeddingOwner(generation: MemorySemanticProviderGeneration
     settings: { sync: {} },
     markLocalEmbeddingProviderDegraded: () => {},
   }) as {
-    settings: { sync: object; queryInstruction?: string };
+    settings: {
+      sync: object;
+      queryInstruction?: string;
+      inputFormat?: { query: string; document: string };
+    };
     embedQueryWithRetry: (text: string) => Promise<number[]>;
     embedBatchWithRetry: (texts: string[]) => Promise<number[][]>;
     embedChunksInBatches: (
@@ -335,6 +339,57 @@ function distinctCandidates(
 }
 
 describe("memory query instructions over real transport", () => {
+  it.each([
+    { model: "nvidia/Nemotron-3-Embed-8B-BF16" },
+    { model: "hf.co/maternion/Nemotron-3.5-Embed-8B-GGUF:Q8_0" },
+    { model: "generic-embedding-alias", inputFormat: { query: "query: ", document: "passage: " } },
+  ])("formats both retrieval roles for $model", async ({ model, inputFormat }) => {
+    const server = await startEmbeddingServer();
+    const database = new DatabaseSync(":memory:");
+    try {
+      const { owner } = await createMemoryEmbeddingOwnerForServer(server.baseUrl, database, {
+        model,
+      });
+      owner.settings.inputFormat = inputFormat;
+      await owner.embedBatchWithRetry(["remember this"]);
+      await owner.embedQueryWithRetry("find this");
+      owner.settings.queryInstruction = "custom: ";
+      await owner.embedQueryWithRetry("find this");
+      expect(server.requests.map(({ body }) => body.input)).toEqual([
+        ["passage: remember this"],
+        ["query: find this"],
+        ["custom: find this"],
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps other Nemotron families raw and supports explicit empty prefixes", async () => {
+    const server = await startEmbeddingServer();
+    const database = new DatabaseSync(":memory:");
+    try {
+      const { owner } = await createMemoryEmbeddingOwnerForServer(server.baseUrl, database, {
+        model: "nvidia/llama-embed-nemotron-8b",
+      });
+      await owner.embedBatchWithRetry(["remember this"]);
+      await owner.embedQueryWithRetry("find this");
+      owner.settings.inputFormat = { query: "", document: "" };
+      await owner.embedBatchWithRetry(["remember this"]);
+      await owner.embedQueryWithRetry("find this");
+      expect(server.requests[0]?.rawBody).toBe(server.requests[2]?.rawBody);
+      expect(server.requests[1]?.rawBody).toBe(server.requests[3]?.rawBody);
+      expect(server.requests.map(({ body }) => body.input)).toEqual([
+        ["remember this"],
+        ["find this"],
+        ["remember this"],
+        ["find this"],
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
   it("changes generic query bytes and vectors while preserving document requests", async () => {
     const server = await startEmbeddingServer();
     const database = new DatabaseSync(":memory:");

@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   collectSecretInputAssignment,
   createChannelSecretTargetRegistryEntries,
@@ -6,7 +7,6 @@ import {
   type ResolverContext,
   type SecretDefaults,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/setup";
 
 export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
   channelKey: "msteams",

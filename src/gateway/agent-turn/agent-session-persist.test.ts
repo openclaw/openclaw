@@ -1,15 +1,24 @@
 import assert from "node:assert/strict";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import {
   isSessionEntryDataSql,
   observeHostDataSql,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { resolveSessionResetPolicy } from "../../config/sessions/reset-policy.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
 import { withSessionSendDelivery } from "../session-send-delivery.js";
 import { persistAgentSessionPhase } from "./agent-session-persist.js";
 
@@ -186,4 +195,97 @@ it.each([false, true])(
       },
     );
   },
+);
+
+it.each([
+  { mode: "idle", rejection: undefined },
+  { mode: "daily", rejection: undefined },
+  { mode: "idle", rejection: "superseded" },
+  { mode: "idle", rejection: "denied" },
+] as const)("handles a $mode Gateway reset (rejection: $rejection)", ({ mode, rejection }) =>
+  withPersistFixture(
+    { sessions: { others: "view" }, agents: ["main"], scopes: [] },
+    async (params) => {
+      const now = new Date(2026, 9, 20, 12).getTime();
+      const expiredAt = new Date(2026, 9, 19, 12).getTime();
+      const target = {
+        agentId: "main",
+        sessionKey: params.canonicalSessionKey,
+        sessionId: "durable-transcript",
+        storePath: params.storePath,
+      };
+      const entry = {
+        sessionId: target.sessionId,
+        lifecycleRevision: "before-expiry",
+        updatedAt: expiredAt,
+        sessionStartedAt: expiredAt,
+        lastInteractionAt: expiredAt,
+      };
+      await replaceSessionEntry(target, entry);
+      await appendTranscriptMessage(target, {
+        message: makeUserMessage("Before: AMBER731", expiredAt),
+      });
+      await replaceSessionEntry(target, entry);
+      params.entry = entry;
+      params.buildSessionPatch = (freshEntry) =>
+        buildAgentSessionPatch({
+          ...params,
+          freshEntry,
+          initialEntry: entry,
+          normalizedSpawned: {},
+          requestDeliveryHint: undefined,
+          hasRestoredCronContinuation: false,
+          resetPolicy: resolveSessionResetPolicy({
+            sessionCfg: { reset: mode === "idle" ? { mode, idleMinutes: 1 } : { mode, atHour: 4 } },
+            resetType: "direct",
+          }),
+          now,
+          isSystemGatewayRun: false,
+          visibleRequest: true,
+          touchInteraction: true,
+        });
+      params.initialPatchBuild = await params.buildSessionPatch(entry);
+      if (rejection === "superseded") {
+        await replaceSessionEntry(target, { ...entry, lifecycleRevision: "newer-reset" });
+      } else if (rejection === "denied") {
+        params.request.deliver = true;
+        params.cfg.session = { sendPolicy: { default: "deny" } };
+      }
+      const result = await persistAgentSessionPhase(params);
+      if (rejection) {
+        expect(result).toBeUndefined();
+        expect(params.respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: rejection === "superseded" ? "UNAVAILABLE" : "INVALID_REQUEST",
+          }),
+        );
+        expect(
+          (await loadTranscriptEvents(target)).filter(
+            (event) => isRecord(event) && event.type === "reset",
+          ),
+        ).toEqual([]);
+        return;
+      }
+      expect(result?.sessionEntry).toMatchObject({
+        sessionId: target.sessionId,
+        sessionStartedAt: now,
+      });
+      expect(result?.sessionEntry?.lifecycleRevision).not.toBe(entry.lifecycleRevision);
+      await appendTranscriptMessage(target, { message: makeUserMessage("After: COBALT942", now) });
+      const events = await loadTranscriptEvents(target);
+      expect(events.filter((event) => isRecord(event) && event.type === "reset")).toEqual([
+        expect.objectContaining({ reason: mode }),
+      ]);
+      expect(events.filter((event) => isRecord(event) && event.type === "message")).toEqual([
+        expect.objectContaining({
+          message: expect.objectContaining({ content: "Before: AMBER731" }),
+        }),
+        expect.objectContaining({
+          message: expect.objectContaining({ content: "After: COBALT942" }),
+        }),
+      ]);
+    },
+  ),
 );

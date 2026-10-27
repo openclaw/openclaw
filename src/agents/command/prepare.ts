@@ -251,6 +251,7 @@ export async function prepareAgentCommandExecution(
     storePath,
     isNewSession,
     previousSessionId,
+    automaticReset,
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
@@ -474,6 +475,7 @@ export async function prepareAgentCommandExecution(
       storePath,
       isNewSession,
       previousSessionId,
+      ...(automaticReset ? { automaticReset } : {}),
       persistedThinking,
       persistedVerbose,
       sessionAgentId,

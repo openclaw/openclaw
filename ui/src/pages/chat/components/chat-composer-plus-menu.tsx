@@ -122,6 +122,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
           >
             <Content
               menu={props.menu}
+              controls={controls}
               view={view()}
               readMenu={() => handle}
               onReady={(next) => {
@@ -147,6 +148,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
     >
       <Menu
         lazy
+        class="agent-chat__attach-control"
         id={`chat-composer-plus-${id}`}
         panelClass="agent-chat__capability-menu-panel"
         placement="top-start"

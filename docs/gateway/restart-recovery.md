@@ -22,6 +22,14 @@ tomorrow, without a new user message. Shutdown uses the same interruption and
 recovery marking as a managed restart, with the existing drain deadlines.
 Explicit session Stop/cancel remains terminal. The crash-loop breaker, recovery
 retry budgets, current-authority checks, and archived/reset exclusions still apply.
+Startup prepares and reconciles interrupted sessions independently of its FIFO
+dispatch queue. A session waiting for execution capacity or execution start does
+not block reconciliation of later sessions or already-delivered replies. Recovery
+uses `agents.defaults.maxConcurrent` for its separate execution lane, leaving
+interactive reply slots available. Queued recovery does not charge an attempt
+before capacity is available. Stopping the Gateway cancels and joins the dispatch
+queue while preserving unfinished claims for the next process.
+
 Ordinary session interruptions and timeouts retain their original cancellation
 cause; they do not create Gateway-restart recovery custody. Chat admission uses
 the cancellation owner's recorded cause, including when interrupted before execution.
@@ -60,8 +68,9 @@ internal inputs: recovery does not inherit a sender's channel delivery rights,
 and a follow-up without an authenticated operator source cannot reconstruct
 authority from its transcript.
 
-Automatic goal continuations retain that same authenticated operator source,
-including continuations after subagent announcements or requester-settle yields.
+Automatic goal continuations and tool-result handoffs retain that same authenticated
+operator source, including continuations after subagent announcements or
+requester-settle yields.
 If interrupted mid-tool, they resume through normal startup recovery under current
 permissions. The saved goal and its transcript do not grant authority on their own.
 
@@ -95,13 +104,22 @@ agents continue loading. Startup preparation failures still report an error.
 
 Startup orphan marking runs after plugin loading and startup completion. It uses
 the existing active-session index to exclude archived rows before inspecting
-recovery metadata, without reading full transcripts. Client connections, channels,
-startup-gated RPCs, startup hooks, and saved-input replay still wait for marking; chat readiness stays
-gated until saved-input recovery finishes. Marking failures produce a warning
-without aborting startup,
-and the existing recovery sweep retries failed stores. Main-session recovery and
-queued deliveries still wait for subagent source restoration before resuming
-interrupted work.
+recovery metadata, without reading full transcripts. Authenticated clients can
+connect and read available sessions once the request runtime is ready, while
+orphan marking and database preparation continue. Pending database preparation
+remains recorded in agent admission and health diagnostics; affected session reads
+report a retryable recovery condition. The Control UI keeps the selected chat in
+its existing **Restoring** state while those reads retry; sessions in an unreadable
+database appear after that database becomes available. Channel transports can start independently,
+but incoming turns still wait for their agent's database and saved-input recovery.
+Startup-gated RPCs, startup hooks, and saved-input replay wait for marking; chat
+readiness stays gated until saved-input recovery finishes. Health probes continue
+to report pending recovery even while client connections are available. Marking
+failures produce a warning without aborting startup, and the existing recovery
+sweep retries failed stores. Main-session recovery waits for the initial input
+restoration pass, then resumes healthy agents independently. A pending agent or
+cross-agent recovery group still waits for its own saved-input and subagent source
+restoration before interrupted work resumes.
 
 ## What survives a restart
 
@@ -116,6 +134,10 @@ interrupted work.
 | Restart continuation          | SQLite restart sentinel                                      | One-shot follow-up dispatched to the session that asked for the restart         |
 | Background exec processes     | Process memory; notification obligation in session row       | Processes end; eligible owning sessions wake once with an unknown outcome       |
 | Gateway terminal PTYs         | Process memory                                               | End with the old process; terminal sessions are not recovered                   |
+
+Outbound recovery keeps checking queued deliveries when the Gateway restarts
+before a platform-send lease expires. It waits for the lease before inspecting
+the send and still reconciles uncertain outcomes before any replay.
 
 The Gateway resumes eligible accepted `chat.send` inputs from SQLite at startup,
 in acceptance order within each session. This includes queued inputs left by a
@@ -351,6 +373,11 @@ a restart, or a gateway update) does not kill in-flight work immediately. The
 gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
+
+A plain stop (`SIGTERM` or `SIGINT`, such as a service stop) that arrives while
+a restart drains turns that restart into a stop: the Gateway exits after the
+drain instead of starting again. Managed update handoffs keep their own stop
+handling.
 
 A confirmed unavailable child Node runtime follows this same graceful drain when
 the effective native service command's Node can still start. The lifecycle owner
@@ -1207,6 +1234,10 @@ source still resumes under the original operator's permissions, regardless of
 who created the session.
 When no other recovery or delivery custody remains, send a new authenticated
 message to continue; `sessions.recover` does not revive that retired input.
+Child sessions retain a recovery tombstone instead, and the parent receives an
+interruption notice with instructions to use **Resume**. An authorized operator can use
+**Resume** or `sessions.recover` on the child to continue under current authority.
+Later Gateway restarts do not automatically replay the denied input.
 
 Cancelling a recovery reservation after foreground work finishes clears an empty,
 uncharged recovery record. Recovery reconciliation and foreground admission also

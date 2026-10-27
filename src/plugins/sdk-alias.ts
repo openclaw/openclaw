@@ -25,6 +25,7 @@ import {
 } from "./plugin-cache-files.js";
 import type { PluginDirectoryEntry } from "./plugin-cache-files.types.js";
 import {
+  cachePluginSdkAliases,
   getPluginSdkAliasFacts,
   getPluginSdkHostFacts,
   type PluginRuntimeModuleResolution,
@@ -947,8 +948,7 @@ export function preparePluginLoaderAliases(
       });
     },
   };
-  cache.sdk.contexts.set(cacheKey, prepared);
-  return prepared;
+  return cachePluginSdkAliases(cache.sdk, prepared);
 }
 
 // SDK and workspace namespaces are canonical above. Bundled package names are

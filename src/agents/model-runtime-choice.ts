@@ -7,6 +7,7 @@ import {
   CLAUDE_CLI_SETUP_GUIDANCE,
   resolveModelRuntimeRoute,
 } from "../shared/model-runtime-route.js";
+import { resolveNativeOwnedRuntimeModel } from "./defaults.js";
 import { FailoverError } from "./failover/error.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { AgentHarness } from "./harness/types.js";
@@ -222,6 +223,21 @@ export async function prepareModelChoice(params: {
             evaluation: auth,
             pluginRegistry: owner.pluginRegistry,
           })?.id;
+          // Same ownership rule as the turn path: a harness-listed model has no host transport.
+          const nativeModel = resolveNativeOwnedRuntimeModel({
+            catalog: decisions.snapshot,
+            provider: ref.provider,
+            modelId: ref.model,
+            runtimeId: selectedRuntime,
+          });
+          if (nativeModel) {
+            return decisions.isCurrent()
+              ? { kind: "resolved", ref, model: nativeModel }
+              : {
+                  kind: "unavailable",
+                  error: "Model configuration changed during selection. Retry the request.",
+                };
+          }
           const config = auth.selectedRoute
             ? projectProviderModelRouteConfig({
                 provider: ref.provider,

@@ -96,10 +96,13 @@ async function setupResetWorktree(prefix: string, model?: { primary: string }) {
   testState.sessionConfig = { dmScope: "main" };
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-reset-parent") } });
+  const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
   let worktreeId: string | undefined;
   return {
     workspace,
     storePath,
+    scope,
+    readEntry: () => loadSessionEntry(scope),
     async createWorktree(params: Record<string, unknown> = {}) {
       const created = await mainSession({ worktree: true, ...params });
       expect(created).toMatchObject({ ok: true, payload: { key: "agent:main:main" } });
@@ -386,7 +389,6 @@ test.each([
   "sessions.create reset-in-place reports cleanup truth for $name",
   async ({ outcome }) => {
     await using fixture = await setupResetWorktree("openclaw-reset-retained-worktree-");
-    const { storePath } = fixture;
     using warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
     const originalRemoveIfLossless = captureMethodCall("removeIfLossless")(
       ManagedWorktreeService.prototype,
@@ -411,9 +413,7 @@ test.each([
 
     const reset = await mainSession({}, "operator.write");
     expectDetached(reset);
-    expect(
-      loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.worktree,
-    ).toBeUndefined();
+    expect(fixture.readEntry()?.worktree).toBeUndefined();
     if (outcome === "dirty") {
       expect(getRegistryWorktree(process.env, worktree.id)).toMatchObject({
         runEndCleanup: { outcome: "retained-dirty" },
@@ -444,7 +444,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
   await using fixture = await setupResetWorktree("openclaw-reset-session-worktree-", {
     primary: "openai/current-model",
   });
-  const { workspace, storePath } = fixture;
+  const { workspace, storePath, scope } = fixture;
   using warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
   const resolved = { modelProvider: "openai", model: "current-model" };
   const created = await fixture.createWorktree({ permissionMode: "workspace" });
@@ -455,11 +455,8 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     sessionRoot: worktree.path,
     permissionMode: "workspace",
   });
-  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.spawnedCwd).toBe(
-    worktree?.path,
-  );
+  expect(fixture.readEntry()?.spawnedCwd).toBe(worktree.path);
 
-  const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
   const priorWorkspace = {
     worktreeId: worktree!.id,
     sessionId: created.entry.sessionId,
@@ -467,13 +464,13 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     fileRoot: workspace,
     through: { generation: "before-adoption", maxSeq: 1 },
   };
-  await upsertSessionEntryCore(scope, { ...loadSessionEntry(scope)!, priorWorkspace });
+  await upsertSessionEntryCore(scope, { ...fixture.readEntry()!, priorWorkspace });
   const ordinaryReset = await directSessionReq("sessions.reset", {
     key: scope.sessionKey,
     reason: "reset",
   });
   expect(ordinaryReset.ok).toBe(true);
-  expect(loadSessionEntry(scope)?.priorWorkspace).toEqual(priorWorkspace);
+  expect(fixture.readEntry()?.priorWorkspace).toEqual(priorWorkspace);
 
   // Pause the exact old-binding removal before destructive work. A same-key
   // worktree reset must remain fenced until that prior generation is gone.
@@ -524,7 +521,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
   expect(successorWorktree.id).not.toBe(worktree?.id);
   fixture.track(successorWorktree.id);
   await fs.access(successorWorktree.path);
-  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+  expect(fixture.readEntry()).toMatchObject({
     spawnedCwd: successorWorktree.path,
     worktree: {
       id: successorWorktree.id,
@@ -533,7 +530,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     },
   });
   expect(getRegistryWorktree(process.env, successorWorktree.id)?.removedAt).toBeUndefined();
-  expect(loadSessionEntry(scope)?.priorWorkspace).toBeUndefined();
+  expect(fixture.readEntry()?.priorWorkspace).toBeUndefined();
 });
 
 test("an open Files editor cannot save into a replacement managed workspace", async () => {

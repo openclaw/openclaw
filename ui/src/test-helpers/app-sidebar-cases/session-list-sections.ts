@@ -84,7 +84,7 @@ describe("AppSidebar session section visibility", () => {
     );
     const filter = toolbar?.querySelector<HTMLButtonElement>(".sidebar-session-sort");
     expect(filter).not.toBeNull();
-    expect(filter?.getAttribute("aria-label")).toBe("Filter & sort");
+    expect(filter?.getAttribute("aria-label")).toBe("Filter & sort · Active");
     expect(sidebar.querySelector('.sidebar-rail [aria-label="New conversation"]')).not.toBeNull();
     filter?.click();
     await sidebar.updateComplete;
@@ -115,7 +115,7 @@ describe("AppSidebar session section visibility", () => {
     const filter = sidebar.querySelector<HTMLButtonElement>(
       ".sidebar-session-toolbar .sidebar-session-sort",
     );
-    expect(filter?.getAttribute("aria-label")).toBe("Filter & sort");
+    expect(filter?.getAttribute("aria-label")).toBe("Filter & sort · Active");
     expect(filter?.classList.contains("sidebar-session-sort--filtered")).toBe(false);
 
     await activateSessionMenuValue(sidebar, "status:all");

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import fs, { type FileHandle } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
@@ -42,14 +42,12 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
-function createGateRelease(gate: FileHandle, newline = false) {
+async function gateRelease(gatePath: string, newline = false) {
+  expect((await runCommandWithTimeout(["mkfifo", gatePath], { timeoutMs: 10_000 })).code).toBe(0);
+  const gate = await fs.open(gatePath, "r+");
   let releasing: Promise<void> | undefined;
   return (message = "release") =>
     (releasing ??= gate.write(message + (newline ? "\n" : "")).then(() => gate.close()));
-}
-async function gateRelease(gate: string, newline = false) {
-  expect((await runCommandWithTimeout(["mkfifo", gate], { timeoutMs: 10_000 })).code).toBe(0);
-  return createGateRelease(await fs.open(gate, "r+"), newline);
 }
 async function seedWorkspace(local: string, workspace: string) {
   await Promise.all([
@@ -156,14 +154,6 @@ function remoteManifestResult(command: WorkerWorkspaceCommand) {
 const resultContents = (directory: string) =>
   fs.readFile(path.join(directory, "result.txt"), "utf8");
 
-function commitCase(
-  name: string,
-  outcome: "committed" | "applied" | "begun",
-  expected: "success" | "pending" | "rollback",
-  secondCommit = result(),
-) {
-  return { name, outcome, expected, secondCommit, retry: outcome === "applied" };
-}
 type TransactionCall = { action: string; nonce: string } & Partial<
   Pick<WorkerWorkspaceCommand, "transportRetry">
 >;
@@ -346,7 +336,6 @@ Atomics.wait = function(waitArray, index, value, timeout) {
   });
 
   return {
-    root,
     local,
     workspace,
     settleStarted,
@@ -369,11 +358,8 @@ Atomics.wait = function(waitArray, index, value, timeout) {
         stderr: "",
       });
     },
-    async expectNoTransactionArtifacts() {
-      expect(
-        (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
-      ).toEqual([]);
-    },
+    transactionArtifacts: async () =>
+      (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
     get applyExited() {
       return applyExited;
     },
@@ -538,7 +524,6 @@ describe("accepted workspace publication", () => {
       lifetime.run(async () => {
         const fixture = await gatedApplyFixture(signal, deadline);
         const {
-          root,
           local,
           workspace,
           settleStarted,
@@ -560,7 +545,7 @@ describe("accepted workspace publication", () => {
               awaitGateBeforeSettlement(
                 settleStarted.promise,
                 publishing,
-                `timeout waiting for ${path.join(root, "apply-started")}`,
+                "publication ended before settlement started",
               ),
               signal,
             );
@@ -593,7 +578,7 @@ describe("accepted workspace publication", () => {
             ]);
             expect(transactionCalls.at(-1)?.transportRetry).toBe("never");
           }
-          await fixture.expectNoTransactionArtifacts();
+          expect(await fixture.transactionArtifacts()).toEqual([]);
         } finally {
           await releaseApply().catch(() => undefined);
           await fixture.applyExited?.catch(() => undefined);
@@ -616,11 +601,8 @@ describe("accepted workspace publication", () => {
     const thrown = await publishing.catch((error: unknown) => error);
     expect(thrown).toBeInstanceOf(AcceptedWorkspacePublicationIndeterminateError);
     expect(thrown).toMatchObject({
-      message: "Accepted workspace publication is indeterminate and requires recovery",
       operation: "apply",
-      cause: expect.objectContaining({
-        message: "Worker workspace sync failed: apply transport lost",
-      }),
+      cause: { message: "Worker workspace sync failed: apply transport lost" },
     });
     expect(actions()).toEqual(["begin", "apply", "settle"]);
   });
@@ -648,14 +630,14 @@ describe("accepted workspace publication", () => {
   });
 
   it.each([
-    commitCase("committed phase", "committed", "success"),
-    commitCase("applied phase; retry succeeds", "applied", "success"),
-    commitCase("retry is unobservable", "applied", "pending", commandFailure("retry")),
-    commitCase("begun phase", "begun", "rollback"),
-    commitCase("retry is rejected", "applied", "rollback", commandFailure("retry", 1)),
-  ])(
-    "handles an ambiguous commit when $name",
-    async ({ outcome, retry, secondCommit, expected }) => {
+    ["committed", "success", result()],
+    ["applied", "success", result()],
+    ["applied", "pending", commandFailure("retry")],
+    ["begun", "rollback", result()],
+    ["applied", "rollback", commandFailure("retry", 1)],
+  ] as const)(
+    "handles an ambiguous commit in %s as %s (%j)",
+    async (outcome, expected, secondCommit) => {
       const { transactionCalls, publishing } = mockPublication(
         {
           commit: [commandFailure("commit"), secondCommit],
@@ -678,7 +660,7 @@ describe("accepted workspace publication", () => {
         "apply",
         "commit",
         "settle",
-        ...(retry ? ["commit"] : []),
+        ...(outcome === "applied" ? ["commit"] : []),
         ...(expected === "rollback" ? ["rollback"] : []),
       ]);
     },

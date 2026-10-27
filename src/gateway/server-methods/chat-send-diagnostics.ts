@@ -53,10 +53,16 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
     const now = performance.now();
     timing.flush(now);
     const elapsedMs = now - startedAt;
-    const endedAt = Date.now();
+    const slow = elapsedMs >= 1_000;
+    if (!slow && !emit) {
+      totals.clear();
+      startedAt = now;
+      return elapsedMs;
+    }
+    const endedAt = emit ? Date.now() : 0;
     try {
-      let message = `slow chat send ${Math.round(elapsedMs)}ms stage=${stage}`;
-      if (acknowledgedMs !== undefined) {
+      let message = slow ? `slow chat send ${Math.round(elapsedMs)}ms stage=${stage}` : "";
+      if (slow && acknowledgedMs !== undefined) {
         message += ` ack=${Math.round(acknowledgedMs)}ms`;
       }
       for (const phase of [
@@ -74,9 +80,11 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
           durationMs,
           details: { stage },
         });
-        message += ` ${phase}=${Math.round(durationMs)}ms`;
+        if (slow) {
+          message += ` ${phase}=${Math.round(durationMs)}ms`;
+        }
       }
-      if (elapsedMs >= 1_000) {
+      if (slow) {
         log.info(message);
       }
     } catch {

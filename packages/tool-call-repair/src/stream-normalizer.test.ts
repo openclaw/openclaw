@@ -88,6 +88,39 @@ function chunksOf(text: string, size: number) {
 }
 
 describe("normalizePlainTextToolCallStreamEvents", () => {
+  it("adds only one async iterator boundary for ordinary streamed text", async () => {
+    const events = Array.from({ length: 128 }, () => textEvent("ordinary prose "));
+    async function* source() {
+      for (const event of events) {
+        yield event;
+      }
+    }
+    async function countTicks(stream: AsyncIterable<unknown>) {
+      let ticks = 0;
+      let running = true;
+      const tick = () => {
+        if (running) {
+          ticks++;
+          queueMicrotask(tick);
+        }
+      };
+      const output: unknown[] = [];
+      queueMicrotask(tick);
+      try {
+        for await (const event of stream) {
+          output.push(event);
+        }
+      } finally {
+        running = false;
+      }
+      expect(output).toEqual(events);
+      return ticks;
+    }
+    const direct = await countTicks(source());
+    const normalized = await countTicks(normalizeStream(source(), streamOptions));
+    // One async-generator hop adds two microtask turns per event, plus completion.
+    expect(normalized - direct).toBeLessThanOrEqual(2 * (events.length + 1));
+  });
   const falseMarker = cumulativeDeltas(aggregate + "[tool:re", " nope");
   const optionalWhitespace = streamDeltas(
     `[tool:read] {"path":"${oversized}`,
@@ -270,6 +303,28 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     const deltas = events.filter((event) => event.type === "thinking_delta");
     expect(deltas.map((event) => event.delta)).toEqual([chunk + chunk, chunk]);
     expectHidden(events, "SECRET");
+  });
+
+  it("snapshots only retained events while coalescing buffered deltas", async () => {
+    let snapshots = 0;
+    const first = { ...queuedReasoning, delta: "first", partial: { marker: 1 } };
+    const last = { ...queuedReasoning, delta: "last", partial: { marker: 2 } };
+    const source = [first, last].map(
+      (event) =>
+        new Proxy(event, {
+          ownKeys(target) {
+            snapshots++;
+            return Reflect.ownKeys(target);
+          },
+        }),
+    );
+    const events = await collect([textEvent("[tool:re"), ...source], streamOptions);
+
+    expect(events).toEqual([{ ...first, delta: "firstlast", partial: last.partial }]);
+    expect(first.delta).toBe("first");
+    expect(first.partial).toEqual({ marker: 1 });
+    expect(last.delta).toBe("last");
+    expect(snapshots).toBe(1);
   });
 
   it("preserves fence protection after replaying a false prefix at the auxiliary queue cap", async () => {

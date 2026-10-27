@@ -80,6 +80,8 @@ export type SqliteWorkerNativeSettlementOwner = {
 /** The broker resolves this only from the executing owner's settlement evidence. */
 export type RetainedWorkerTransactionAdmission = {
   readonly settled: Promise<SqliteWorkerOperationSettlement>;
+  /** Actual native retirement, including failed-close recovery after an unknown outcome. */
+  readonly nativeStopped?: Promise<void>;
 };
 
 /** Observe each finish after the previously installed handler, including failure. */
@@ -114,7 +116,7 @@ export function captureSqliteWorkerCommitReceipt(
   return { kind: "inline", facts: structuredClone(facts), payloadBytes };
 }
 
-export function deferSqliteWorkerNativeCommitReceipt(
+function deferSqliteWorkerNativeCommitReceipt(
   owner: SqliteWorkerOperationContext,
   database: DatabaseSync | PostgresSqlConnection,
   captured: CapturedSqliteWorkerCommitReceipt,

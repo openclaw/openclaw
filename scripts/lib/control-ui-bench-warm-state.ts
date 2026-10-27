@@ -83,6 +83,7 @@ export async function persistColdLoadWarmState(input: {
       projectionVersion: record.projectionVersion,
       sidebarView: sidebar.model.navigationView,
       sidebarPeople: sidebar.model.onlineUsers.length,
+      sidebarBytes: new TextEncoder().encode(JSON.stringify(sidebar.model)).byteLength,
     };
   } finally {
     database.close();

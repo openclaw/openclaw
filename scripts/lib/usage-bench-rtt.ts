@@ -113,7 +113,7 @@ export async function startUsageRttProxy(
       closed: new Promise<void>((resolve) => {
         resolveClosed = resolve;
       }),
-      stop() {
+      stop(this: void) {
         if (stopped) {
           return;
         }

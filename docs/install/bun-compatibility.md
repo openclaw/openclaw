@@ -14,7 +14,9 @@ Plugin resolution stays with Bun's native/Jiti loader and `Bun.plugin` on Bun, e
 
 Node fallback and build processes require Node **24.22.1+ or 26.12.1+** for the eMudhra compromised-key rejection fix. Updating Node does not change Bun's independent TLS verifier or its release qualification.
 
-OpenClaw supports only the **latest stable Bun release (currently 1.4.3)** and the **pinned OpenClaw Bun fork**. Older stock releases are rejected before CLI or Gateway work, even if their SQLite checks pass. Both supported runtimes require an available **`node:sqlite`** API and the same [WAL-safe SQLite floor as Node](/install/node-compatibility#why-the-floors-exist).
+OpenClaw supports only the **latest stable Bun release (currently 1.4.4)** and the **pinned OpenClaw Bun fork**. Older stock releases are rejected before CLI or Gateway work, even if their SQLite checks pass. Both supported runtimes require an available **`node:sqlite`** API and the same [WAL-safe SQLite floor as Node](/install/node-compatibility#why-the-floors-exist).
+
+Stock Bun 1.4.4 adds the eMudhra compromised-key blocklist for full handshakes, but this is partial remediation: saved TLS sessions can retain earlier authorization, and QUIC early data can bypass changed trust policy. Use a supported patched Node runtime when current compromised-key rejection is required. The pinned fork remains a separately qualified artifact; changing the stock floor does not update its pin, publish its pending session repair, or establish downstream adoption.
 
 | Platform | SQLite library Bun uses                       | Extension loading              | What OpenClaw does                                 |
 | -------- | --------------------------------------------- | ------------------------------ | -------------------------------------------------- |
@@ -155,7 +157,7 @@ the selected Bun even when PATH has no Bun or contains a different build.
 When an owned managed Bun Gateway serves a different package root from the CLI,
 `openclaw update` advances the Gateway installation in place and leaves the
 invoking CLI installation unchanged. The updater validates that service's actual
-Bun for Bun 1.4.3+ and WAL-safe `node:sqlite`, without comparing its emulated Node
+Bun for Bun 1.4.4+ and WAL-safe `node:sqlite`, without comparing its emulated Node
 version to `engines.node`. If the updater runs on Node, that Node must also meet
 the target package's Node and SQLite requirements because finalization uses it.
 The existing service install/restart path retains the recorded Bun pin. Node split-root routing is unchanged, and a path under
@@ -168,7 +170,7 @@ refuses maintenance before stopping the service. Use
 `<bun> <service-root>/openclaw.mjs doctor --fix` for repair from the service's
 installation.
 
-First installs and updater staging without a persistent Node require `OPENCLAW_PACKAGE_BUN_LAUNCHER` set to the absolute Bun executable that launches the CLI. The updater sets it automatically when running under Bun; an app must set it for its first `bun add -g --trust openclaw@<version>`. Preinstall validates that launcher as Bun 1.4.3+ without spawning absent or nonexecutable Node candidates. Without the marker, preinstall still requires a persistent Node; a Node found on PATH must satisfy the package's Node requirements even when the marker is set.
+First installs and updater staging without a persistent Node require `OPENCLAW_PACKAGE_BUN_LAUNCHER` set to the absolute Bun executable that launches the CLI. The updater sets it automatically when running under Bun; an app must set it for its first `bun add -g --trust openclaw@<version>`. Preinstall validates that launcher as Bun 1.4.4+ without spawning absent or nonexecutable Node candidates. Without the marker, preinstall still requires a persistent Node; a Node found on PATH must satisfy the package's Node requirements even when the marker is set.
 
 The trusted package lifecycle creates the launcher only when Bun's existing global
 bin points to that package and no persistent Node is present. Updates create it in
@@ -299,39 +301,39 @@ See [Bun](/install/bun) for the workflow and lifecycle trust commands.
 
 ## History across releases
 
-| Release                            | Change                                                                                                                                                                                                |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Unreleased (main)                  | Requires Bun 1.4.3+ at startup and package preinstall, retaining the pinned OpenClaw fork; removes the fixed JSC segment lookup workaround.                                                           |
-| Unreleased (main)                  | Refuses Apple's system SQLite on macOS when discovery finds no supported library, naming unloadable candidates such as an arm64 Homebrew library under x64 Rosetta Bun.                               |
-| Unreleased (main)                  | Reuses SQLite workers after a native-close check passes on macOS or Linux. Stock Bun 1.4.2, Windows, and inconclusive checks retain conservative cleanup.                                             |
-| Unreleased (main)                  | Runs the macOS app's private worker and Chrome setup on the OpenClaw Bun fork, bundling the full package and signed extension-capable SQLite in one shared runtime. Gateway hosting remains external. |
-| Unreleased (main)                  | Headless node updates on macOS and Linux fetch and verify registry archives in-process and prepare private runtimes with Bun, without Node or npm. Windows preparation still requires npm. #160575    |
-| Unreleased (main)                  | Updates owned split-root Bun Gateway installations in place, retains their runtime pins, and uses explicit Bun executables for package-manager checks and installs.                                   |
-| Unreleased (main)                  | Keeps Bun maintenance children and service runtime selection, and adds `OPENCLAW_PACKAGE_BUN_LAUNCHER` for preinstall validation of Bun-only installs and updater staging.                            |
-| Unreleased (main)                  | Headless node update checks read the npm registry in-process under Bun instead of running `npm view`. #160154                                                                                         |
-| Unreleased (main)                  | Runs the bundled npm 12.1.0 CLI under Bun for npm-sourced plugin installs, updates, and removal without a separate Node or npm installation.                                                          |
-| Unreleased (main)                  | Implicit Gateway and managed node host reinstalls, update refresh, and Doctor's unloaded-service reinstall retain a supported recorded Bun executable without creating a runtime pin.                 |
-| Unreleased (main)                  | Tool Search code mode (`tool_search_code`) is retired; structured Tool Search needs no Node under Bun.                                                                                                |
-| Unreleased (main)                  | Starts the packaged Chrome DevTools MCP server with the current runtime, so existing-session browser profiles no longer require a Node installation under Bun.                                        |
-| Unreleased (main)                  | Gateway computer control runs its host worker on the Gateway's own runtime, so a Bun Gateway controls its managed desktop without an installed Node.                                                  |
-| Unreleased (main)                  | Uses native PTYs without Node on macOS/Linux with `Terminal.pause()`/`resume()` (OpenClaw fork with macOS exit fix); other Bun builds keep the Node helper. Windows keeps `node-pty`.                 |
-| Unreleased (main)                  | Expands Bun SQLite storage from four databases to up to 64 dedicated workers within the existing 64-client cap while retaining worker-exit cleanup.                                                   |
-| Unreleased (main)                  | Managed Bun services on macOS persist OPENCLAW_SQLITE_LIBRARY and HOMEBREW_PREFIX from the installing shell.                                                                                          |
-| Unreleased (main)                  | Daemon install, repair, doctor, and service audits check Bun executables through the same SQLite library selection as Gateway startup, with a minimal check environment. #142186                      |
-| Unreleased (main)                  | Automatically selects a WAL-safe, extension-capable macOS SQLite library and propagates it to the memory KNN child. Adds `OPENCLAW_SQLITE_LIBRARY`. #141854                                           |
-| Unreleased (main)                  | Documents Bun 1.4.2 retaining native statements and WAL/shared-memory files after close or disposal, with Node advised when prompt file release matters. #141846                                      |
-| Unreleased (main)                  | Adds batched embedding-scan fallback when the KNN child cannot load extensions, preserving provider/source filters and cancellation between batches. #141104                                          |
-| Unreleased (main)                  | Allows ordinary agent databases on SQLite builds without extension loading. Native vector search still needs an extension-capable library. #139487                                                    |
-| v2026.8.2                          | Repairs Bun 1.4 authenticated Gateway WebSocket compatibility with the installed npm receiver, preserving payload limits and request scheduling. #134282                                              |
-| v2026.8.1                          | Restores explicit managed-service selection for the CLI, Gateway, and managed node host, requiring Bun 1.4.0+, `node:sqlite`, and WAL-safe SQLite. #129593                                            |
-| v2026.7.2-beta.5; stable v2026.8.1 | Restores experimental CLI/Gateway support for builds providing `node:sqlite`, documented as 1.4.0 canary and later; the guard uses an API check without a numeric Bun minimum at this stage. #114256  |
-| v2026.7.2-beta.5; stable v2026.8.1 | Documents `bun install` failing on the pnpm workspace layout and changes dependency instructions to `pnpm install`; Bun remains a script runner. #114256                                              |
-| v2026.7.1; main v2026.7.2-beta.1   | Rejects Bun CLI/Gateway use because `node:sqlite` is unavailable, makes managed runtime selection Node-only, and directs legacy Bun services to Node. Package-script use remains available. #106065   |
-| v2026.1.12                         | Labels Bun Gateway use experimental and not recommended because of WhatsApp/Telegram bugs; recommends Node for production.                                                                            |
-| v2026.1.9                          | Removes Bun from the interactive daemon-runtime picker while the explicit validator still accepts Bun.                                                                                                |
-| v2026.1.8                          | Documents Bun as an optional package-script runner for local builds/tests, with optional dependency installation at that time. pnpm remains primary.                                                  |
-| v2026.1.8                          | Documents ignored pnpm lockfiles, a historical postinstall patch bridge, lifecycle trust, and scripts that invoke pnpm internally. The patch bridge is not a current install recommendation.          |
-| v2026.1.8                          | Introduces optional `--daemon-runtime bun` when WhatsApp is disabled because the Baileys WebSocket reconnect path could corrupt memory under Bun. Node remains the default and recommendation.        |
+| Release                            | Change                                                                                                                                                                                                        |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unreleased (main)                  | Requires stock Bun 1.4.4+ at startup and package preinstall, and refreshes stock acquisition pins. Full-handshake rejection improves; saved-session and QUIC gaps remain. The OpenClaw fork pin is unchanged. |
+| Unreleased (main)                  | Refuses Apple's system SQLite on macOS when discovery finds no supported library, naming unloadable candidates such as an arm64 Homebrew library under x64 Rosetta Bun.                                       |
+| Unreleased (main)                  | Reuses SQLite workers after a native-close check passes on macOS or Linux. Stock Bun 1.4.2, Windows, and inconclusive checks retain conservative cleanup.                                                     |
+| Unreleased (main)                  | Runs the macOS app's private worker and Chrome setup on the OpenClaw Bun fork, bundling the full package and signed extension-capable SQLite in one shared runtime. Gateway hosting remains external.         |
+| Unreleased (main)                  | Headless node updates on macOS and Linux fetch and verify registry archives in-process and prepare private runtimes with Bun, without Node or npm. Windows preparation still requires npm. #160575            |
+| Unreleased (main)                  | Updates owned split-root Bun Gateway installations in place, retains their runtime pins, and uses explicit Bun executables for package-manager checks and installs.                                           |
+| Unreleased (main)                  | Keeps Bun maintenance children and service runtime selection, and adds `OPENCLAW_PACKAGE_BUN_LAUNCHER` for preinstall validation of Bun-only installs and updater staging.                                    |
+| Unreleased (main)                  | Headless node update checks read the npm registry in-process under Bun instead of running `npm view`. #160154                                                                                                 |
+| Unreleased (main)                  | Runs the bundled npm 12.1.0 CLI under Bun for npm-sourced plugin installs, updates, and removal without a separate Node or npm installation.                                                                  |
+| Unreleased (main)                  | Implicit Gateway and managed node host reinstalls, update refresh, and Doctor's unloaded-service reinstall retain a supported recorded Bun executable without creating a runtime pin.                         |
+| Unreleased (main)                  | Tool Search code mode (`tool_search_code`) is retired; structured Tool Search needs no Node under Bun.                                                                                                        |
+| Unreleased (main)                  | Starts the packaged Chrome DevTools MCP server with the current runtime, so existing-session browser profiles no longer require a Node installation under Bun.                                                |
+| Unreleased (main)                  | Gateway computer control runs its host worker on the Gateway's own runtime, so a Bun Gateway controls its managed desktop without an installed Node.                                                          |
+| Unreleased (main)                  | Uses native PTYs without Node on macOS/Linux with `Terminal.pause()`/`resume()` (OpenClaw fork with macOS exit fix); other Bun builds keep the Node helper. Windows keeps `node-pty`.                         |
+| Unreleased (main)                  | Expands Bun SQLite storage from four databases to up to 64 dedicated workers within the existing 64-client cap while retaining worker-exit cleanup.                                                           |
+| Unreleased (main)                  | Managed Bun services on macOS persist OPENCLAW_SQLITE_LIBRARY and HOMEBREW_PREFIX from the installing shell.                                                                                                  |
+| Unreleased (main)                  | Daemon install, repair, doctor, and service audits check Bun executables through the same SQLite library selection as Gateway startup, with a minimal check environment. #142186                              |
+| Unreleased (main)                  | Automatically selects a WAL-safe, extension-capable macOS SQLite library and propagates it to the memory KNN child. Adds `OPENCLAW_SQLITE_LIBRARY`. #141854                                                   |
+| Unreleased (main)                  | Documents Bun 1.4.2 retaining native statements and WAL/shared-memory files after close or disposal, with Node advised when prompt file release matters. #141846                                              |
+| Unreleased (main)                  | Adds batched embedding-scan fallback when the KNN child cannot load extensions, preserving provider/source filters and cancellation between batches. #141104                                                  |
+| Unreleased (main)                  | Allows ordinary agent databases on SQLite builds without extension loading. Native vector search still needs an extension-capable library. #139487                                                            |
+| v2026.8.2                          | Repairs Bun 1.4 authenticated Gateway WebSocket compatibility with the installed npm receiver, preserving payload limits and request scheduling. #134282                                                      |
+| v2026.8.1                          | Restores explicit managed-service selection for the CLI, Gateway, and managed node host, requiring Bun 1.4.0+, `node:sqlite`, and WAL-safe SQLite. #129593                                                    |
+| v2026.7.2-beta.5; stable v2026.8.1 | Restores experimental CLI/Gateway support for builds providing `node:sqlite`, documented as 1.4.0 canary and later; the guard uses an API check without a numeric Bun minimum at this stage. #114256          |
+| v2026.7.2-beta.5; stable v2026.8.1 | Documents `bun install` failing on the pnpm workspace layout and changes dependency instructions to `pnpm install`; Bun remains a script runner. #114256                                                      |
+| v2026.7.1; main v2026.7.2-beta.1   | Rejects Bun CLI/Gateway use because `node:sqlite` is unavailable, makes managed runtime selection Node-only, and directs legacy Bun services to Node. Package-script use remains available. #106065           |
+| v2026.1.12                         | Labels Bun Gateway use experimental and not recommended because of WhatsApp/Telegram bugs; recommends Node for production.                                                                                    |
+| v2026.1.9                          | Removes Bun from the interactive daemon-runtime picker while the explicit validator still accepts Bun.                                                                                                        |
+| v2026.1.8                          | Documents Bun as an optional package-script runner for local builds/tests, with optional dependency installation at that time. pnpm remains primary.                                                          |
+| v2026.1.8                          | Documents ignored pnpm lockfiles, a historical postinstall patch bridge, lifecycle trust, and scripts that invoke pnpm internally. The patch bridge is not a current install recommendation.                  |
+| v2026.1.8                          | Introduces optional `--daemon-runtime bun` when WhatsApp is disabled because the Baileys WebSocket reconnect path could corrupt memory under Bun. Node remains the default and recommendation.                |
 
 ## Related
 

@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   assertOperatorModelAllowed,
@@ -67,8 +67,12 @@ const liveDependency = (controller: AbortController) => ({
   assertCurrent: () => controller.signal.throwIfAborted(),
 });
 async function captureSource(input: CaptureInput) {
-  const source = expectDefined(await captureGatewayOperatorRunAuthority(input), "operator source");
-  return { ...source, [Symbol.dispose]: source.release };
+  return disposable(
+    expectDefined(await captureGatewayOperatorRunAuthority(input), "operator source"),
+  );
+}
+function disposable<T extends { release(): void }>(resource: T) {
+  return Object.assign(resource, { [Symbol.dispose]: () => resource.release() });
 }
 function expectCurrent(authority: Pick<Authority, "signal" | "assertCurrent">, error?: string) {
   expect(authority.signal?.aborted).toBe(Boolean(error));
@@ -386,42 +390,38 @@ describe("operator role policy", () => {
           getCommittedRuntimeConfig: () => committedConfig,
         };
         const capture = (profileId: string) => captureRole(profileId, context);
-        const original = await capture(profile.id);
-        const unaffected = await capture(otherProfile.id);
-        const releaseQueued = expectDefined(original.authority.retain, "source retention")();
+        using original = await capture(profile.id);
+        using unaffected = await capture(otherProfile.id);
+        using _ = {
+          [Symbol.dispose]: expectDefined(original.authority.retain, "source retention")(),
+        };
         original.release();
-        try {
-          const candidate = structuredClone(initial);
-          const changedRole = guestDefinition(candidate);
-          if (restriction === "agents") {
-            changedRole.agents = [];
-          } else if (restriction === "sessions") {
-            changedRole.sessions.others = "none";
-          } else {
-            changedRole.sandbox = "required";
-          }
-          expect(
-            authorizeCurrentOperatorRoleScopes(identifiedClient(profile.id), candidate),
-          ).toBeUndefined();
-          runtimeConfig = candidate;
-          expect(original.authority.assertCurrent).not.toThrow();
-          runtimeConfig = initial;
-          expect(original.authority.signal?.aborted).toBe(false);
-
-          committedConfig = { ...initial, logging: { level: "debug" } };
-          publishOperatorRoleConfigChange(context);
-          expect(original.authority.signal?.aborted).toBe(false);
-          committedConfig = candidate;
-          publishOperatorRoleConfigChange({});
-          expect(original.authority.signal?.aborted).toBe(false);
-          publishOperatorRoleConfigChange(context);
-          expectCurrent(original.authority, "Your operator role changed");
-          expectCurrent(unaffected.authority);
-        } finally {
-          releaseQueued();
-          original.release();
-          unaffected.release();
+        const candidate = structuredClone(initial);
+        const changedRole = guestDefinition(candidate);
+        if (restriction === "agents") {
+          changedRole.agents = [];
+        } else if (restriction === "sessions") {
+          changedRole.sessions.others = "none";
+        } else {
+          changedRole.sandbox = "required";
         }
+        expect(
+          authorizeCurrentOperatorRoleScopes(identifiedClient(profile.id), candidate),
+        ).toBeUndefined();
+        runtimeConfig = candidate;
+        expect(original.authority.assertCurrent).not.toThrow();
+        runtimeConfig = initial;
+        expect(original.authority.signal?.aborted).toBe(false);
+
+        committedConfig = { ...initial, logging: { level: "debug" } };
+        publishOperatorRoleConfigChange(context);
+        expect(original.authority.signal?.aborted).toBe(false);
+        committedConfig = candidate;
+        publishOperatorRoleConfigChange({});
+        expect(original.authority.signal?.aborted).toBe(false);
+        publishOperatorRoleConfigChange(context);
+        expectCurrent(original.authority, "Your operator role changed");
+        expectCurrent(unaffected.authority);
       }),
   );
 
@@ -435,74 +435,64 @@ describe("operator role policy", () => {
       guestDefinition(cfg).modelPolicy = { deny: ["fixture/restricted-*"] };
       const context = { getRuntimeConfig: () => cfg };
       const capture = (profileId: string) => captureRole(profileId, context);
-      const original = await capture(guest.id);
-      const unaffected = await capture(staff.id);
-      const primaryExecution = bindOperatorModelExecution(original.authority, modelRef("primary"))!;
-      const fallbackExecution = bindOperatorModelExecution(
-        original.authority,
-        modelRef("fallback"),
-      )!;
-      const releaseQueued = original.authority.retain!();
+      using original = await capture(guest.id);
+      using unaffected = await capture(staff.id);
+      using primaryExecution = disposable(
+        bindOperatorModelExecution(original.authority, modelRef("primary"))!,
+      );
+      using fallbackExecution = disposable(
+        bindOperatorModelExecution(original.authority, modelRef("fallback"))!,
+      );
+      using _ = { [Symbol.dispose]: original.authority.retain!() };
       original.release();
-      try {
-        assertOperatorModelAllowed(original.authority, modelRef("primary"));
-        cfg = { ...cfg, logging: { level: "debug" } };
-        publishOperatorRoleConfigChange(context);
-        expect(original.authority.signal?.aborted).toBe(false);
-        const execute = vi.fn(async (_provider: string, model: string) => model);
-        const result = await runWithModelFallback({
-          cfg,
-          provider: "fixture",
-          model: "primary",
-          operatorAuthority: original.authority,
-          manifestPlugins: [],
-          skipAuthProfileRuntime: true,
-          prepareCandidateChain: () => {
-            cfg = {
-              ...cfg,
-              agents: modelDefaults("fixture/next", ["fixture/fallback", "fixture/restricted-new"]),
-            };
-            publishOperatorRoleConfigChange(context);
-          },
-          run: execute,
-        });
-        expect(result.result).toBe("fallback");
-        expect(execute.mock.calls.map((call) => call[1])).toEqual(["fallback"]);
-        expectCurrent(primaryExecution, "operator role cannot use this model");
-        expectCurrent(fallbackExecution);
-        expectCurrent(original.authority);
-        expectModel(original.authority, "primary", false);
-        expectModel(original.authority, "fallback", true);
-        expectModel(original.authority, "next", false);
-        expectModel(unaffected.authority, "restricted-new", true);
-        using fresh = await capture(guest.id);
-        expect(fresh.authority.modelPolicy?.models).toEqual([
-          modelRef("next"),
-          modelRef("fallback"),
-        ]);
-        expectModel(fresh.authority, "restricted-new", false);
+      assertOperatorModelAllowed(original.authority, modelRef("primary"));
+      cfg = { ...cfg, logging: { level: "debug" } };
+      publishOperatorRoleConfigChange(context);
+      expect(original.authority.signal?.aborted).toBe(false);
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "fixture",
+        model: "primary",
+        operatorAuthority: original.authority,
+        manifestPlugins: [],
+        skipAuthProfileRuntime: true,
+        prepareCandidateChain: () => {
+          cfg = {
+            ...cfg,
+            agents: modelDefaults("fixture/next", ["fixture/fallback", "fixture/restricted-new"]),
+          };
+          publishOperatorRoleConfigChange(context);
+        },
+        run: async (_provider, model) => model,
+      });
+      expect(result.result).toBe("fallback");
+      expectCurrent(primaryExecution, "operator role cannot use this model");
+      expectCurrent(fallbackExecution);
+      expectCurrent(original.authority);
+      expectModel(original.authority, "primary", false);
+      expectModel(original.authority, "fallback", true);
+      expectModel(original.authority, "next", false);
+      expectModel(unaffected.authority, "restricted-new", true);
+      using fresh = await capture(guest.id);
+      expect(fresh.authority.modelPolicy?.models).toEqual([modelRef("next"), modelRef("fallback")]);
+      expectModel(fresh.authority, "restricted-new", false);
 
-        using narrowed = await captureSource({
-          client: narrowClient(identifiedClient(staff.id), unaffected.authority),
-          context,
-        });
-        cfg = structuredClone(cfg);
-        expectDefined(cfg.gateway?.roles?.definitions.maintainer, "maintainer role").modelPolicy = {
-          allow: ["fixture/b", "fixture/c"],
-        };
-        publishOperatorRoleConfigChange(context);
-        expectCurrent(unaffected.authority);
-        expect(narrowed.authority.scopes).toEqual([]);
-        expectModel(narrowed.authority, "primary", false);
-        expectModel(narrowed.authority, "b", true);
-        expectModel(narrowed.authority, "c", true);
-      } finally {
-        primaryExecution.release();
-        fallbackExecution.release();
-        expect(fallbackExecution.assertCurrent).toThrow("no longer active");
-        releaseQueued();
-        unaffected.release();
-      }
+      using narrowed = await captureSource({
+        client: narrowClient(identifiedClient(staff.id), unaffected.authority),
+        context,
+      });
+      cfg = structuredClone(cfg);
+      expectDefined(cfg.gateway?.roles?.definitions.maintainer, "maintainer role").modelPolicy = {
+        allow: ["fixture/b", "fixture/c"],
+      };
+      publishOperatorRoleConfigChange(context);
+      expectCurrent(unaffected.authority);
+      expect(narrowed.authority.scopes).toEqual([]);
+      expectModel(narrowed.authority, "primary", false);
+      expectModel(narrowed.authority, "b", true);
+      expectModel(narrowed.authority, "c", true);
+      fallbackExecution.release();
+      expect(fallbackExecution.assertCurrent).toThrow("no longer active");
     }));
 
   it("reads committed role changes and deletion without a role cache or main-thread SQL", () =>

@@ -77,3 +77,23 @@ it.runIf(process.platform === "darwin")(
     }
   },
 );
+
+it.runIf(
+  process.platform === "darwin" &&
+    !(process.arch === "x64" && os.cpus()[0]?.model.includes("Apple")),
+)("reads a system command whose argument image may omit its environment", async () => {
+  // macOS 27 drops envp from hardened executables, even with an inherited marker.
+  const child = spawn("/bin/sleep", ["30"], {
+    env: { ...process.env, OPENCLAW_SERVICE_MARKER: "fixture" },
+    stdio: "ignore",
+  });
+  try {
+    await once(child, "spawn");
+    expect(readDarwinProcessCommand(child.pid!, "same")).toMatchObject({
+      argv: ["/bin/sleep", "30"],
+      executable: "/bin/sleep",
+    });
+  } finally {
+    child.kill("SIGKILL");
+  }
+});

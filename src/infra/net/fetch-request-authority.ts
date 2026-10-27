@@ -1,12 +1,17 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { AsyncContext } from "../../shared/async-context.js";
 
-type RequestAuthority = { assertCurrent: () => void; beforeRequest: () => void };
+type RequestAuthority = { assertCurrent: () => void; beforeRequest?: () => void };
 
 // Host runtime and plugin SDK chunks must retain the same request-owned fence.
 const requestAuthority = new AsyncContext<RequestAuthority>(
   Symbol.for("openclaw.guardedFetchRequestAuthority"),
 );
+
+/** Egress-only checks require managed fetch; lifetime assertions may also guard native transports. */
+export function hasGuardedFetchBeforeRequest(): boolean {
+  return requestAuthority.getStore()?.beforeRequest !== undefined;
+}
 
 /** Capture before transport preparation so redirects retain the original caller. */
 export function captureGuardedFetchRequestAuthority(): (() => void) | undefined {
@@ -14,7 +19,7 @@ export function captureGuardedFetchRequestAuthority(): (() => void) | undefined 
   return authority
     ? () => {
         authority.assertCurrent();
-        authority.beforeRequest();
+        authority.beforeRequest?.();
       }
     : undefined;
 }
@@ -43,7 +48,7 @@ export function withGuardedFetchBeforeRequest<T>(
     {
       assertCurrent: () => inherited?.assertCurrent(),
       beforeRequest: () => {
-        inherited?.beforeRequest();
+        inherited?.beforeRequest?.();
         invokeSynchronousGuard(beforeRequest);
       },
     },
@@ -74,10 +79,13 @@ export async function withGuardedFetchRequestAuthority<T>(
     return await requestAuthority.run(
       {
         assertCurrent: assertAuthority,
-        beforeRequest: () => {
-          inherited?.beforeRequest();
-          invokeSynchronousGuard(beforeRequest);
-        },
+        beforeRequest:
+          beforeRequest || inherited?.beforeRequest
+            ? () => {
+                inherited?.beforeRequest?.();
+                invokeSynchronousGuard(beforeRequest);
+              }
+            : undefined,
       },
       () => run(assertAuthority),
     );

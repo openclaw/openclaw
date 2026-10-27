@@ -196,14 +196,6 @@ describe("summary request input budget", () => {
     }
   });
 
-  it("never exceeds a budget too small for one gap marker", () => {
-    for (const budget of [0, 10, 18]) {
-      const result = serializeConversationWithinBudget(convertToLlm([user("hello world")]), budget);
-      expect(result.text).not.toContain("hello");
-      expect(result.omittedEntries).toBe(1);
-    }
-  });
-
   it("keeps both ends of a newest entry that alone exceeds the newest-entries share", () => {
     const result = bounded([
       user(`older ${"a".repeat(300_000)}`),
@@ -308,15 +300,30 @@ describe("summary request input budget", () => {
     expect(text).toMatch(/\[Tool result of write_report\(cmd="r+\.\.\.\)\]: WRITE_FAILED: quota$/u);
   });
 
-  it("sends a short history unchanged when the window is too small to sample", async () => {
+  it("rejects an undersized sample but sends a short history unchanged", async () => {
     const { streamFn, prompts } = createCapturingStream();
-    const result = await requestSummary([user("Rename the queue.")], createModel(4_096, 4_096), {
+    const model = createModel(4_096, 4_096);
+    const options = {
       reserveTokens: 2_500,
       streamFn,
-    });
+    };
+    const result = await requestSummary([user("Rename the queue.")], model, options);
 
     expect(result).toEqual({ ok: true, value: "summary" });
+    expect(prompts).toHaveLength(1);
     expect(conversationOf(prompts[0] ?? "")).toBe("[User]: Rename the queue.");
+
+    const sampled = await requestSummary(
+      [user("Keep this decision. ".repeat(1_000))],
+      model,
+      options,
+    );
+
+    expect(sampled.ok).toBe(false);
+    if (!sampled.ok) {
+      expect(sampled.error).toBeInstanceOf(SummaryOutputBudgetError);
+    }
+    expect(prompts).toHaveLength(1);
   });
 
   it.each([

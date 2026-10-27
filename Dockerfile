@@ -18,7 +18,7 @@ ARG OPENCLAW_NODE_TRIXIE_SLIM_IMAGE="docker.io/library/node:24.22.1-trixie-slim@
 ARG OPENCLAW_NODE_TRIXIE_SLIM_DIGEST="sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea"
 # Keep in sync with .github/actions/setup-node-env/action.yml and seed-bun-from-image.mjs.
 # To update: docker buildx imagetools inspect docker.io/oven/bun:<version> and use the manifest-list digest.
-ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.3@sha256:ec06c3b6cea04192ae6770c434f668ca41d343ad19fa6472216c7b48be39c598"
+ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d"
 
 # Base images are pinned to SHA256 digests for reproducible builds.
 # Dependabot refreshes these reviewed base snapshots; runtime stages apply

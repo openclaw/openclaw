@@ -163,7 +163,7 @@ function resolveConfigRestartRequirement(params: {
  * offline write's outcomes. Stable Gateways close the request schema, so the connection
  * identity carries this rather than a request field.
  */
-export function isCliRoutedConfigPatch(
+function isCliRoutedConfigPatch(
   mode: string,
   client: Parameters<typeof resolveControlPlaneActor>[0],
 ): boolean {
@@ -234,13 +234,7 @@ export async function commitGatewayConfigWrite(params: {
   disconnectSharedAuthClients?: boolean;
   awaitRuntimeApplication?: boolean;
   respond?: RespondFn;
-}): Promise<{
-  path: string;
-  config: OpenClawConfig;
-  hash: string | null;
-  application?: Promise<RuntimeConfigWriteApplicationStatus>;
-  queueFollowUp: () => void;
-}> {
+}) {
   const previousRuntimeConfig =
     params.context?.getCommittedRuntimeConfig?.() ?? params.snapshot.config;
   const application = params.awaitRuntimeApplication

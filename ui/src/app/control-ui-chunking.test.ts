@@ -22,11 +22,12 @@ describe("Control UI build chunking", () => {
       .pathname;
     const entities = new URL("../../node_modules/entities/dist/index.js", import.meta.url).pathname;
     const motion = new URL("../components/mascot-animator.ts", import.meta.url).pathname;
+    const channels = new URL("../lib/channels/index.ts", import.meta.url).pathname;
     const entry = "\0config-parser-fixture";
     const sources = new Map([
       [
         entry,
-        `export { validate } from ${JSON.stringify(zod)}; export { canCall } from ${JSON.stringify(gatewayMethods)}; export { signal } from ${JSON.stringify(solid)}; export { pending } from ${JSON.stringify(verdict)}; export const warm = () => import(${JSON.stringify(json5)}); export const sign = () => import(${JSON.stringify(signer)}); export const render = () => import(${JSON.stringify(markdown)}); export const animate = () => import(${JSON.stringify(motion)});`,
+        `export { validate } from ${JSON.stringify(zod)}; export { canCall } from ${JSON.stringify(gatewayMethods)}; export { signal } from ${JSON.stringify(solid)}; export { pending } from ${JSON.stringify(verdict)}; export const warm = () => import(${JSON.stringify(json5)}); export const sign = () => import(${JSON.stringify(signer)}); export const render = () => import(${JSON.stringify(markdown)}); export const animate = () => import(${JSON.stringify(motion)}); export const openChannels = () => import(${JSON.stringify(channels)});`,
       ],
       [zod, "export const validate = () => true;"],
       [json5, "export const parse = () => ({});"],
@@ -35,6 +36,7 @@ describe("Control UI build chunking", () => {
       [verdict, "export const pending = () => false;"],
       [signer, "export const sign = () => 'signature';"],
       [motion, "export class MascotAnimator {}"],
+      [channels, "export const createChannelCapability = () => ({});"],
       [markdown, `export { decode as render } from ${JSON.stringify(entities)};`],
       [entities, "export const decode = () => 'decoded';"],
     ]);
@@ -84,6 +86,10 @@ describe("Control UI build chunking", () => {
     expect(dependencies.has(motionChunk.fileName)).toBe(false);
     expect(entryChunk.dynamicImports).toContain(motionChunk.fileName);
     expect(motionChunk.fileName).toContain("mascot-motion-runtime");
+    const channelsChunk = chunks.find((chunk) => channels in chunk.modules)!;
+    expect(dependencies.has(channelsChunk.fileName)).toBe(false);
+    expect(entryChunk.dynamicImports).toContain(channelsChunk.fileName);
+    expect(channelsChunk.fileName).toContain("channels-runtime");
     const markdownChunk = chunks.find((chunk) => markdown in chunk.modules)!;
     expect(dependencies.has(markdownChunk.fileName)).toBe(false);
     expect(entryChunk.dynamicImports).toContain(markdownChunk.fileName);
@@ -383,7 +389,10 @@ describe("Control UI build chunking", () => {
   it("lets snapshot prewarming load independently of the measured boot groups", () => {
     const database = new URL("../pages/chat/session-snapshot-database.ts", import.meta.url)
       .pathname;
-    const stableGroup = controlUiCodeSplitting.groups[0];
+    const stableGroup = controlUiCodeSplitting.groups.find(
+      (group) =>
+        typeof group.name === "function" && group.name(database) === "session-snapshot-database",
+    );
     const bootGroup = controlUiCodeSplitting.groups.find(
       (group) =>
         typeof group.name === "string" &&

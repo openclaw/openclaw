@@ -7,7 +7,7 @@ import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 let container: HTMLDivElement;
 afterEach(() => container?.remove());
 
-function mount(initiallyExpanded: boolean) {
+function mount(initiallyExpanded: boolean, height = 80) {
   container = document.body.appendChild(document.createElement("div"));
   function Section(props: { height: number; presented: boolean }) {
     const [expanded, setExpanded] = createSignal(initiallyExpanded);
@@ -25,7 +25,7 @@ function mount(initiallyExpanded: boolean) {
       </ChatDetailsDesktopSection>
     );
   }
-  const view = mountSolid(Section, { height: 80, presented: true }, container);
+  const view = mountSolid(Section, { height, presented: true }, container);
   const disclosure = container.querySelector("details")!;
   const summary = container.querySelector("summary")!;
   return {
@@ -134,4 +134,31 @@ it("opens from the collapsed height and reverses from the visible height", async
   await finished;
   expect(disclosure.open).toBe(false);
   expect(body.style.height).toBe("");
+});
+
+it("reveals content that arrives after an initially empty opening", async () => {
+  const { view, disclosure, summary } = mount(false, 0);
+  await userEvent.click(summary);
+  await settleAnimations(disclosure);
+  const body = disclosure.querySelector<HTMLElement>(".chat-details-desktop-section__body")!;
+  const animate = body.animate.bind(body);
+  const animationSpy = vi.spyOn(body, "animate").mockImplementation((frames, options) => {
+    const animation = animate(frames, options);
+    animation.pause();
+    return animation;
+  });
+  onTestFinished(() => animationSpy.mockRestore());
+  view.update({ height: 80, presented: true });
+  flush();
+  // Keep async content clipped before its resize observer can start the reveal.
+  expect(body.getBoundingClientRect().height).toBe(0);
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+  // Async section content starts at the retained empty geometry instead of flashing full size.
+  expect(body.getBoundingClientRect().height).toBe(0);
+  const reveal = body.getAnimations()[0]!;
+  reveal.finish();
+  await settleAnimations(disclosure);
+  expect(body.getBoundingClientRect().height).toBe(80);
 });

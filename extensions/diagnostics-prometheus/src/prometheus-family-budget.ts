@@ -90,6 +90,8 @@ export const PROMETHEUS_FAMILY_RESERVES = {
   openclaw_session_recovery_age_seconds: 4,
   openclaw_session_recovery_total: 4,
   openclaw_session_row_selection_resets_total: 4,
+  openclaw_session_row_partition_cache_total: 32,
+  openclaw_session_row_partition_revisions_total: 8,
   openclaw_session_row_selection_rows_total: 64,
   openclaw_session_row_selections_total: 64,
   openclaw_session_state_total: 4,

@@ -1,4 +1,3 @@
-import { jsonPathValue } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -142,10 +141,13 @@ export class StorageJournal extends StorageBase {
       this.flushGit(access);
     }
     access.assertCurrent();
-    return this.store.withDatabase(
+    return this.store.withDatabase((db) => {
+      const row = db
+        .prepare("SELECT receipt FROM mutations WHERE scope=? AND request=?")
+        .get(scopeKey(access.scope), requestId)!;
       // SAFETY: receipts are serialized Receipt values written by this storage layer.
-      (db) => JSON.parse(this.row(db, scopeKey(access.scope), requestId)!.receipt) as Receipt,
-    );
+      return JSON.parse(String(row.receipt)) as Receipt;
+    });
   }
   history(access: VaultAccess, input: { offset?: number; limit?: number; id?: string }) {
     access.assertCurrent();
@@ -191,8 +193,12 @@ export class StorageJournal extends StorageBase {
       if (id !== undefined) {
         query = query.where((eb) =>
           eb.or([
-            eb(jsonPathValue(db, eb.ref("receipt"), eb.val("$.id")), "=", id),
-            eb(jsonPathValue(db, eb.ref("receipt"), eb.val("$.targetId")), "=", id),
+            eb(eb.fn<string | null>("json_extract", [eb.ref("receipt"), eb.val("$.id")]), "=", id),
+            eb(
+              eb.fn<string | null>("json_extract", [eb.ref("receipt"), eb.val("$.targetId")]),
+              "=",
+              id,
+            ),
           ]),
         );
       }

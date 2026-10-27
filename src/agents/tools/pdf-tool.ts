@@ -52,6 +52,7 @@ import {
   resolveMediaAnalysisParams,
   type MediaToolSandbox,
 } from "./media-tool-shared.js";
+import { createMediaAssistantTextCoercer } from "./media-tool-text.js";
 import {
   applyAgentDefaultModelConfig,
   hasToolModelConfig,
@@ -60,13 +61,14 @@ import {
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
   buildPdfExtractionContext,
-  coercePdfAssistantText,
   coercePdfModelConfig,
   parsePageRange,
   resolvePdfInputs,
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
 import { type PdfToolActiveModel, resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
+
+const coercePdfAssistantText = createMediaAssistantTextCoercer("PDF");
 
 const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;

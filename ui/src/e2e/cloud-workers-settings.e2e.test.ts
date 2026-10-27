@@ -226,8 +226,8 @@ suite.define(() => {
       );
       expect(await machineClass.getAttribute("list")).toBeNull();
       const saveButton = exactButton(page, "Save");
-      // Saved temporarily hides Apply changes; wait for the applied revision so
-      // its background config.get cannot consume the notification refresh gate.
+      // Wait for the applied revision so its background config.get cannot
+      // consume the notification refresh gate.
       await expect
         .poll(() =>
           evaluateControlUiContext(

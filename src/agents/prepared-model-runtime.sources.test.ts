@@ -447,6 +447,7 @@ describe("prepared catalog source composition", () => {
         catalogFacts,
         {
           initialAuth: { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
+          readUsage: (store) => store,
           isCurrent: () => true,
           withRefreshStatus: (catalog) => catalog,
           readFullModelCatalog: () => undefined,

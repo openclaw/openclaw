@@ -90,7 +90,7 @@ function probeInput(cfg: OpenClawConfig, options: Partial<ProbeParams["options"]
   };
 }
 
-it("maps failover reasons to probe statuses", () => {
+it("reports failover reasons through probe results", async () => {
   for (const [reason, expected] of [
     ["auth_permanent", "auth"],
     ["auth", "auth"],
@@ -104,7 +104,9 @@ it("maps failover reasons to probe statuses", () => {
     [null, "unknown"],
     ["something_else", "unknown"],
   ]) {
-    expect(probe.mapFailoverReasonToProbeStatus(reason)).toBe(expected);
+    mocks.runner.mockRejectedValueOnce({ name: "FailoverError", reason, message: "probe failed" });
+    const report = await probe.runAuthProbes(probeInput({}, { profileIds: ["openai:profile"] }));
+    expect(report.results).toMatchObject([{ status: expected, error: "probe failed" }]);
   }
 });
 
@@ -181,11 +183,7 @@ it.each([false, true])("reports request-only timing (provider config: %s)", asyn
     new Error(configured ? "LLM request timed out." : "Credential preparation failed"),
   );
   const failed = (await probe.runAuthProbes(input)).results[0];
-  if (configured) {
-    expect(failed).toMatchObject({ status: "timeout" });
-  } else {
-    expect(failed?.status).not.toBe("ok");
-  }
+  expect(failed).toMatchObject({ status: configured ? "timeout" : "unknown" });
   expect(failed?.latencyMs).toBeUndefined();
 });
 

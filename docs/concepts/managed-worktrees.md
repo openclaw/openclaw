@@ -103,11 +103,19 @@ retaining its HEAD and commit
 history; use the returned local/base Auto Review target before publishing. The host retains the integrated base ancestry; guest Git metadata,
 host credentials, and unrelated ignored host files remain separate.
 
-The projection binding and pending reconciliation journal are additive SQLite
-state. They do not change the database version. Before downgrading, let pending
-workspace operations settle. Older versions do not reconcile these projections;
-they leave their additive state and private files intact. Return to a supporting
-version to recover pending changes rather than deleting a projection directory.
+Local sandbox baselines share immutable directory packs and compressed source path
+sets in the existing shared-state database. Sessions on the same source tree
+reuse those records. Compact file fingerprints let a restarted Gateway reuse
+unchanged hashes while detecting same-size edits and files moved by directory
+renames. Filesystem discovery still checks for additions and deletions on every
+scan. Existing projections convert one at a time during reconciliation; database
+open does not rewrite their inventories.
+
+This storage format requires [shared-state schema 35](/reference/database-schemas/state-schema-history#state-schema-35).
+Let pending workspace operations settle before downgrading. Older builds refuse
+the newer schema; rollback requires the verified pre-upgrade backup and its
+matching build. Keep private projection files and pending recovery data intact
+when returning to a supporting version.
 Versions that support projections but predate `refresh_base` reject a retained
 result from an interrupted base transfer. After both copies accept, that result is
 cleaned and native merge state owns any remaining conflict resolution. Complete
@@ -155,7 +163,7 @@ operations retain their existing execution deadlines.
 
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 
-If a registered project's checkout is busy, creation releases allocation before waiting for that project. Other repositories can continue reserving and creating workspaces. Once project access is available, creation releases it and retries the reservation with current source, owner, name, and capacity checks. This reservation retry retains the existing 30-second project-access wait budget and remains cancellable.
+If a registered project's checkout is busy, creation releases allocation before waiting for that project. Other repositories can continue reserving and creating workspaces. Once project access is available, creation releases it and retries the reservation with current source, owner, name, and capacity checks. Registered-source waits share the existing 30-minute creation contention budget, including source checks before checkout and before final session binding. The accepted request stays pending and cancellable while waiting; it continues when access becomes available without another request. Source contention after checkout or setup waits at that stage without repeating completed work.
 
 Source custody inspects managed checkout and Git storage ownership once per operation. Destination protection reuses that inventory while reserving a slot, so ordinary repository creation does not rescan every managed repository under the allocation lease. The inventory ends with the operation; cleanup still checks live dependencies before deleting a checkout.
 
@@ -358,7 +366,7 @@ Add `.worktreeinclude` at the source repository root to copy selected ignored, u
 fixtures/generated/**
 ```
 
-Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite or change destination files that already exist, does not follow symlinked directories, and preserves copied file modes. It records only paths it actually creates, so later manifest edits cannot make those files disappear from cleanup protection.
+Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite or change destination files that already exist, does not follow symlinked directories, and preserves copied file modes and access/modification times at the filesystem’s supported precision. This keeps the timestamp ordering of prepared build inputs and outputs instead of making every copied file look newly written. It records only paths it actually creates, so later manifest edits cannot make those files disappear from cleanup protection.
 
 ## Run repository setup
 

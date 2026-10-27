@@ -1,5 +1,6 @@
 import type { KeyId } from "@earendil-works/pi-tui";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { cloneTranscriptView } from "../../../config/sessions/transcript-snapshot.js";
 import type { ImageContent, Model } from "../../../llm/types.js";
 import { registerListener } from "../../../shared/listeners.js";
 import { rethrowIncognitoSessionError } from "../../../state/incognito-session-error.js";
@@ -691,20 +692,17 @@ export class ExtensionRunner {
   }
 
   async emitContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
-    // Cloning the full session history is expensive (it can carry image
-    // payloads) and runs every turn, so skip it unless a context handler
-    // is actually registered. Handlers still receive an isolated clone.
+    // Hooks need writable containers, even for frozen resident messages,
+    // but immutable transcript strings can stay shared.
     if (!this.hasHandlers("context")) {
       return messages;
     }
-    let currentMessages = structuredClone(messages);
+    let currentMessages = cloneTranscriptView(messages, { shareImmutablePayloads: false });
 
     await this.dispatchHandlers("context", async (handler, ctx) => {
       const event: ContextEvent = { type: "context", messages: currentMessages };
       const handlerResult = (await handler(event, ctx)) as ContextEventResult | undefined;
-      if (handlerResult?.messages) {
-        currentMessages = handlerResult.messages;
-      }
+      currentMessages = handlerResult?.messages || currentMessages;
     });
 
     return currentMessages;

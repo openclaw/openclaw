@@ -36,6 +36,7 @@ import {
   AGENT_RUN_RESTART_ABORT_ERROR,
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
 } from "../../run-termination.js";
+import type { AgentSession } from "../../sessions/index.js";
 import { sessionManagerReloadTranscriptCohort } from "../../sessions/session-manager-core.js";
 import {
   sessionManagerPrepareCurrentTurnReplay,
@@ -497,7 +498,18 @@ type ForeignPendingUserTurns = {
   omitInput: (messages: AgentMessage[]) => AgentMessage[];
 };
 
-type ForeignPendingUserTurnSession = { agent: { state: { messages: AgentMessage[] } } };
+type ForeignPendingUserTurnSession = {
+  agent: { state: { messages: AgentMessage[] } };
+  subscribe: AgentSession["subscribe"];
+};
+
+function readUserIdempotencyKey(message: AgentMessage): string | undefined {
+  return message.role === "user" &&
+    "idempotencyKey" in message &&
+    typeof message.idempotencyKey === "string"
+    ? message.idempotencyKey
+    : undefined;
+}
 
 /** Resolve physical ownership before append admission, then sample live custody at preparation. */
 export async function prepareForeignPendingUserTurns(
@@ -526,6 +538,8 @@ export async function prepareForeignPendingUserTurns(
   const readEntries = await prepareForeignLiveSessionPendingInputEntries(target, signal);
   assertPrepared();
   const entries = new Map<string, string>();
+  const adopted = new Set<string>();
+  let observing = false;
   return (activeSession, currentUserIdempotencyKey) => {
     assertPrepared();
     // Preserve the first sample through transcript reload even if a source finishes meanwhile.
@@ -535,17 +549,24 @@ export async function prepareForeignPendingUserTurns(
     if (!entries.size) {
       return undefined;
     }
+    if (!observing) {
+      observing = true;
+      // Steering can accept a sampled input after preparation. Once this attempt
+      // commits it, the input is its own and later model calls must keep it.
+      activeSession.subscribe((event) => {
+        const key =
+          event.type === "message_end" ? readUserIdempotencyKey(event.message) : undefined;
+        if (key) {
+          adopted.add(key);
+        }
+      });
+    }
     const keys = new Set([...entries.values()].filter((key) => key !== currentUserIdempotencyKey));
     const omitInput = (messages: AgentMessage[]) =>
-      messages.filter(
-        (message) =>
-          !(
-            message.role === "user" &&
-            "idempotencyKey" in message &&
-            typeof message.idempotencyKey === "string" &&
-            keys.has(message.idempotencyKey)
-          ),
-      );
+      messages.filter((message) => {
+        const key = readUserIdempotencyKey(message);
+        return !key || !keys.has(key) || adopted.has(key);
+      });
     activeSession.agent.state.messages = omitInput(activeSession.agent.state.messages);
     return { ownsEntry: (entryId) => entries.has(entryId), omitInput };
   };

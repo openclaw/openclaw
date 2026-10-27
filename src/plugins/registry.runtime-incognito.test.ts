@@ -10,8 +10,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   runWithSessionActorStorage,
   type SelectedSessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";

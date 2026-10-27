@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import { configResponse } from "./appearance-prefs.test-support.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -61,6 +62,48 @@ async function inspectSurfaces(page: Page) {
 }
 
 suite.define(() => {
+  it.each(["light", "dark"] as const)(
+    "shows the shared theme canvas through both desktop headers in %s mode",
+    async (mode) => {
+      const { page } = await openThemedChat("absolutely", mode, {
+        historyMessages: [{ role: "assistant", content: assistantText }],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByText(assistantText, { exact: true }).waitFor();
+      await openChatPanels(page, "desktop");
+      await page.locator(".chat-pane__header").waitFor();
+      await page.locator(".side-panel__header").waitFor();
+      for (const occupied of [false, true]) {
+        if (occupied) {
+          await page.locator(".side-panel-launcher__card").filter({ hasText: "Files" }).click();
+          await page.locator(".side-panel__header--occupied").waitFor();
+        }
+        const headers = page.locator(".chat-pane__header, .side-panel__header");
+        expect(
+          await headers.evaluateAll((elements) =>
+            elements.map((element) => getComputedStyle(element).backgroundColor),
+          ),
+        ).toEqual(["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"]);
+        const covered = await headers.evaluateAll((elements) => {
+          const painted: string[] = [];
+          for (const header of elements) {
+            for (
+              let element: Element | null = header;
+              element && !element.matches(".shell");
+              element = element.parentElement
+            ) {
+              if (getComputedStyle(element).backgroundColor !== "rgba(0, 0, 0, 0)") {
+                painted.push(element.className);
+              }
+            }
+          }
+          return painted;
+        });
+        expect(covered, "Both headers must expose the same uninterrupted shell canvas").toEqual([]);
+      }
+    },
+  );
+
   it.each([
     ["claw", "light"],
     ["claw", "dark"],

@@ -168,6 +168,13 @@ AOT-only options apply to either input mode:
   `=strict` also denies VM string execution. The strict option breaks host NodeVM
   execution. These settings do not prohibit every guest interpreter.
 - `--explain[=<report>]` writes compiler diagnostics. It can be repeated.
+- `--aot-disable <name,...>` forwards Bun's supported compiler-step opt-outs and
+  can be repeated. For large graphs whose whole-program analysis exceeds the
+  build's memory budget, `--aot-disable=flow-results` skips that analysis and its
+  optimizations. Code still compiles ahead of time, with the same runtime behavior
+  and hardening options; the executable can be larger or slower. Bun validates
+  the names. Qualify the resulting artifact and record this option in build
+  comparisons.
 - `--aot-log-type-mismatches` inventories mismatches and changes generated code;
   rebuild without it for performance measurements.
 

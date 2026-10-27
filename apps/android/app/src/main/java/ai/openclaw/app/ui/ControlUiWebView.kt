@@ -2,7 +2,6 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.R
-import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawScaffold
@@ -67,7 +66,6 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import okio.ByteString.Companion.toByteString
 
 @Composable
 internal fun ControlUiScreenFrame(
@@ -175,9 +173,8 @@ internal fun ControlUiWebView(
           WebSettingsCompat.setAlgorithmicDarkeningAllowed(webSettings, false)
         }
         webView.overScrollMode = View.OVER_SCROLL_NEVER
-        // The native gateway connection already established this route's trust.
-        // Reuse only that exact accepted fingerprint; every other SSL error cancels.
-        // The same client protects both terminal and dashboard pages.
+        // The same client protects both terminal and dashboard pages. A pinned
+        // gateway never admits embedded pages; see the refusal in installAuth.
         val client =
           ControlUiWebViewClient(
             page = page,
@@ -194,7 +191,14 @@ internal fun ControlUiWebView(
           webView.loadUrl(client.authenticatedUrl(currentUrl))
         } else {
           // Never silently create a separately paired browser identity for an invalid route.
-          webView.loadData("Reconnect the app to reopen this gateway page.", "text/plain", "UTF-8")
+          // A pinned connection is an intentional restriction, so reconnecting cannot clear it.
+          val message =
+            if (client.refusesPinnedGateway) {
+              nativeString("Embedded pages are unavailable on certificate-pinned gateways. Use the native screens instead.")
+            } else {
+              "Reconnect the app to reopen this gateway page."
+            }
+          webView.loadData(message, "text/plain", "UTF-8")
         }
         webView
       },
@@ -293,8 +297,6 @@ internal fun controlUiStartupAuth(page: NodeRuntime.GatewayControlPage): JsonObj
     if (legacy?.containsKey("password") == true) put("token", JsonNull)
   }
 
-private const val X509_CERTIFICATE_BUNDLE_KEY = "x509-certificate"
-
 // WebKit 1.17's lint detector reports Kotlin WebViewClient constructors even when this callback exists.
 @SuppressLint("MissingOnRenderProcessGone")
 private class ControlUiWebViewClient(
@@ -338,7 +340,17 @@ private class ControlUiWebViewClient(
       .toString()
   }
 
+  /** True when the native connection enforces a TLS pin that this WebView cannot honor. */
+  val refusesPinnedGateway: Boolean
+    get() = page.tlsFingerprintSha256 != null
+
   fun installAuth(view: WebView): Boolean {
+    // Successful platform-CA-trusted handshakes and the page's own WebSockets
+    // never invoke onReceivedSslError, so a WebView cannot enforce the native
+    // pin across every document and connection. Refuse to install embedded
+    // auth, evaluate credentials, or load any remote page while the native
+    // connection actually enforces that pin.
+    if (refusesPinnedGateway) return false
     val origin = controlUiOriginRule(page.baseUrl) ?: return false
     val root = basePath ?: return false
     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
@@ -508,71 +520,4 @@ private class ControlUiWebViewClient(
     onRendererGone()
     return true
   }
-
-  // Android lint cannot infer the exact pin and origin checks below; every other path cancels.
-  // WebView exposes no pre-document certificate hook for successful CA-trusted handshakes;
-  // this callback extends native pin trust only to recoverable self-signed errors.
-  @SuppressLint("WebViewClientOnReceivedSslError")
-  override fun onReceivedSslError(
-    view: WebView,
-    handler: android.webkit.SslErrorHandler,
-    error: android.net.http.SslError,
-  ) {
-    // SslCertificate exposes the encoded leaf only through its AOSP saveState bundle.
-    val encodedCertificate =
-      android.net.http.SslCertificate
-        .saveState(error.certificate)
-        ?.getByteArray(X509_CERTIFICATE_BUNDLE_KEY)
-    if (
-      shouldProceedForPinnedControlUiSslError(
-        pageBaseUrl = page.baseUrl,
-        expectedFingerprint = page.tlsFingerprintSha256,
-        errorUrl = error.url,
-        encodedCertificate = encodedCertificate,
-      )
-    ) {
-      // The native gateway connection already accepted this exact certificate.
-      // Never extend the exception to another origin or a different certificate.
-      handler.proceed()
-    } else {
-      handler.cancel()
-    }
-  }
-}
-
-internal fun shouldProceedForPinnedControlUiSslError(
-  pageBaseUrl: String,
-  expectedFingerprint: String?,
-  errorUrl: String?,
-  encodedCertificate: ByteArray?,
-): Boolean {
-  val expected =
-    expectedFingerprint
-      ?.let(::normalizeGatewayTlsFingerprintInput)
-      ?: return false
-  val certificate = encodedCertificate ?: return false
-  if (!sameHttpsOrigin(pageBaseUrl, errorUrl)) return false
-  return certificate.toByteString().sha256().hex() == expected
-}
-
-private fun sameHttpsOrigin(
-  pageBaseUrl: String,
-  errorUrl: String?,
-): Boolean {
-  val pageOrigin = parsedHttpsOrigin(pageBaseUrl) ?: return false
-  val errorOrigin = errorUrl?.let(::parsedHttpsOrigin) ?: return false
-  return pageOrigin == errorOrigin
-}
-
-private data class HttpsOrigin(
-  val host: String,
-  val port: Int,
-)
-
-private fun parsedHttpsOrigin(rawUrl: String): HttpsOrigin? {
-  val uri = rawUrl.toUri()
-  if (!uri.scheme.equals("https", ignoreCase = true)) return null
-  val host = uri.host?.lowercase(java.util.Locale.US) ?: return null
-  val port = uri.port.takeIf { it >= 0 } ?: 443
-  return HttpsOrigin(host = host, port = port)
 }

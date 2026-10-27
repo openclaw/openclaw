@@ -5,7 +5,10 @@
  */
 import type { AgentMessage } from "@openclaw/agent-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { collectCompletedToolCallBlocks } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import {
+  type classifyToolUseResultPairing,
+  collectCompletedToolCallBlocks,
+} from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { normalizeLowercaseStringSet } from "../shared/normalized-string-set.js";
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
@@ -39,8 +42,11 @@ export function isAllowedToolCallName(
 }
 
 /** Completed replay facts survive capability removal without granting live tool authority. */
-export function createCompletedToolCallPredicate(messages: readonly AgentMessage[]) {
-  const completed = collectCompletedToolCallBlocks(messages);
+export function createCompletedToolCallPredicate(
+  messages: readonly AgentMessage[],
+  pairing?: ReturnType<typeof classifyToolUseResultPairing>,
+) {
+  const completed = collectCompletedToolCallBlocks(messages, pairing);
   return (block: { name?: unknown }): boolean =>
     completed.has(block) && isAllowedToolCallName(block.name, null);
 }

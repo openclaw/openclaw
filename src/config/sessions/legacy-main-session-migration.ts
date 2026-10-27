@@ -23,6 +23,7 @@ import {
   readClaimsFromStores,
   prepareComparisonClaimsFromStores,
   storesHaveLegacyAgentSessionKey,
+  readDeferredLegacyMainSessionInspection,
 } from "./legacy-main-session-key-scan.js";
 import { claimsMatch } from "./legacy-main-session-migration-claims.js";
 import {
@@ -379,6 +380,17 @@ async function migrateLegacyMainSessionKeysInternal(
     mainKey,
     warnings: [] as string[],
   };
+  if (mode === "detect" && (arming.armed || arming.reason === "owner-unresolved")) {
+    const deferred = readDeferredLegacyMainSessionInspection({
+      env,
+      legacyAgentId,
+      mainKey,
+      ...(arming.armed ? { ownerAgentId: arming.ownerAgentId } : {}),
+    });
+    if (deferred) {
+      return deferred;
+    }
+  }
   if (!arming.armed) {
     if (arming.reason === "owner-unresolved") {
       // Owner guidance is useful only when legacy rows may exist; unreadable or JSON

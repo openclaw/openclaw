@@ -610,6 +610,57 @@ it("keeps the model selected at admission when preferences change during source 
   expect(queued.run.model).toBe("next-turn-model");
 });
 
+it.each([
+  { kind: "queued_followup", saved: "standard", expected: "standard", provided: false },
+  { kind: "queued_followup", saved: undefined, expected: undefined, provided: false },
+  { kind: "visible", saved: "standard", expected: "daybreak_blue", provided: false },
+  { kind: "visible", saved: "standard", expected: "daybreak_blue", provided: true },
+] as const)(
+  "binds $kind Access at admission (saved=$saved, provided=$provided)",
+  async ({ kind, saved, expected, provided }) => {
+    const replyOperation = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "queued-session",
+      turnKind: kind,
+      resetTriggered: false,
+    });
+    const queued = createRun();
+    queued.run.cyberAccessProgram = "daybreak_blue";
+    const initialEntry = makeEntry({
+      cyberAccessProgram: provided ? saved : "daybreak_blue",
+    });
+    const admittedEntry = makeEntry({ cyberAccessProgram: saved });
+    state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
+      // The preference committed before this source entered the queue, so no queue refresh saw it.
+      captureRunSelection();
+      return { status: "owned", operation: replyOperation, sessionEntry: admittedEntry };
+    });
+
+    try {
+      const turn = await admitted(
+        prepare(
+          queued,
+          {
+            sessionEntry: initialEntry,
+            sessionStore: { main: initialEntry },
+            opts: {
+              onQueuedFollowupAdmitted: async () => {
+                admittedEntry.cyberAccessProgram = "daybreak_red";
+                queued.run.cyberAccessProgram = "daybreak_red";
+              },
+            },
+          },
+          { kind, ...(provided ? { providedReplyOperation: replyOperation } : {}) },
+        ),
+      );
+
+      expect(turn.queued.run.cyberAccessProgram).toBe(expected);
+    } finally {
+      replyOperation.complete();
+    }
+  },
+);
+
 it("takes only the scheduled fallback policy selected at admission", async () => {
   const policy = (sessionModelOverrideSource?: "user") => ({
     useSubagentFallbacks: false,

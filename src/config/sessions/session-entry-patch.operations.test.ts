@@ -16,6 +16,7 @@ import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.
 import {
   applySessionEntryOperation,
   patchSessionEntryCore,
+  patchSessionEntryTarget,
   recordInboundSessionMeta,
   replaceSessionEntrySync,
   updateSessionLastRouteInScope,
@@ -33,6 +34,66 @@ const { getSessionEntryPatchDelivery } =
 const delivery = getSessionEntryPatchDelivery();
 const withFixture = (run: (f: ReturnType<typeof fixture>) => Promise<void>) =>
   withOpenClawTestState({ scenario: "minimal" }, () => run(fixture()));
+
+it.each(["entry", "target"] as const)(
+  "prepares %s callback patches from complete current owner facts without another entry reply",
+  async (selection) => {
+    await withFixture(async (f) => {
+      const prompt = "synthetic retained instructions ".repeat(1024);
+      replaceSessionEntrySync(f.scope, {
+        ...f.read()!,
+        skillsSnapshot: { prompt, skills: [] },
+      });
+      await readSessionEntryInWorker(f.scope);
+      delivery.commands.length = 0;
+      const update = (entry: SessionEntry) => {
+        expect(entry.skillsSnapshot?.prompt).toBe(prompt);
+        return { label: "prepared from published facts" };
+      };
+      const result =
+        selection === "entry"
+          ? await patchSessionEntryCore(f.scope, update, { workerGuard: {} })
+          : await patchSessionEntryTarget({ ...f.scope, target: f.target }, update, {
+              workerGuard: {},
+            });
+      expect(result).toMatchObject({
+        label: "prepared from published facts",
+        skillsSnapshot: { prompt },
+      });
+      expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
+      expect(f.read()).toEqual(result);
+    });
+  },
+);
+
+it("keeps multi-key target selection in the worker even when canonical facts are warm", async () => {
+  await withFixture(async (f) => {
+    const otherKey = "agent:main:other-worker";
+    replaceSessionEntrySync(
+      { ...f.scope, sessionKey: otherKey },
+      {
+        sessionId: "other",
+        updatedAt: 1,
+      },
+    );
+    await readSessionEntryInWorker(f.scope);
+    delivery.commands.length = 0;
+    const update = vi.fn(() => ({ label: "must not run" }));
+    await expect(
+      patchSessionEntryTarget(
+        {
+          ...f.scope,
+          target: { canonicalKey: f.scope.sessionKey, storeKeys: [f.scope.sessionKey, otherKey] },
+        },
+        update,
+        { workerGuard: {} },
+      ),
+    ).rejects.toThrow("duplicate rows resolve to canonical session key");
+    expect(update).not.toHaveBeenCalled();
+    expect(delivery.commands).toEqual(["session.entry.patch.prepare"]);
+    expect(f.read()?.label).toBe("initial");
+  });
+});
 
 it("accepts hydrated owner ordering but rejects a changed owner during callback patches", async () => {
   await withFixture(async (f) => {
@@ -345,10 +406,14 @@ it("reuses unchanged resident entry fields across patches without losing result 
     expect(result).toMatchObject({ label: "changed", skillsSnapshot: { prompt, skills } });
     expect(result?.pinnedAt).toBeUndefined();
     expect(deliveredBytes.at(-1)).toBeLessThan(prompt.length / 4);
-    result!.skillsSnapshot!.prompt = "caller-owned";
-    result!.skillsSnapshot!.skills[0]!.name = "caller-mutated";
-    result!.skillsSnapshot!.skills[0]!.requiredEnv!.push("CALLER_ADDED");
-    result!.skillsSnapshot!.skills.push({ name: "caller-added" });
+    const resident = await readSessionEntryInWorker(f.scope);
+    expect(result!.skillsSnapshot).toBe(resident!.skillsSnapshot);
+    result!.label = "caller-owned";
+    expect(Reflect.set(result!.skillsSnapshot!, "prompt", "caller-owned")).toBe(false);
+    expect(Reflect.set(result!.skillsSnapshot!.skills[0]!, "name", "caller-mutated")).toBe(false);
+    expect(() => result!.skillsSnapshot!.skills[0]!.requiredEnv!.push("CALLER_ADDED")).toThrow();
+    expect(() => result!.skillsSnapshot!.skills.push({ name: "caller-added" })).toThrow();
+    expect((await readSessionEntryInWorker(f.scope))?.label).toBe("changed");
     const next = await applySessionEntryOperation(
       f.scope,
       { kind: "fields", patch: { label: "next" } },

@@ -33,6 +33,12 @@ function outboxSession(key: string, displayName: string) {
   return { key, displayName, kind: "direct" as const };
 }
 
+async function expectReservedInbox(page: Page) {
+  await expectCount(page.locator(".sidebar-issues-button:enabled"), 0);
+  expect(await page.locator(".sidebar-issues-button").count()).toBe(1);
+  expect(await page.locator(".sidebar-issues-button__count").count()).toBe(0);
+}
+
 async function expectCompactRow(incident: Locator) {
   const geometry = await incident.locator(".sidebar-outbox-row").evaluate((element) => {
     const row = element.getBoundingClientRect();
@@ -111,7 +117,7 @@ suite.define(() => {
       await gateway.setOnline(false);
       await incident.locator(".sidebar-outbox-row__offline").waitFor();
       await expectCompactRow(incident);
-      await page.locator(".sidebar-shell__footer .gateway-status--reconnecting").waitFor();
+      await page.locator(".sidebar-shell__connection .gateway-status--reconnecting").waitFor();
       expect(
         await page
           .locator('[data-attention-kind="scopeUpgrade"], [data-attention-kind="updateAvailable"]')
@@ -121,10 +127,10 @@ suite.define(() => {
       await delivery.waitFor();
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       // Review clears the notification but preserves the draft for explicit recovery.
-      await expectCount(page.locator(".sidebar-issues-button"), 0);
+      await expectReservedInbox(page);
       await delivery.getByRole("button", { name: "Discard", exact: true }).click();
       await delivery.waitFor({ state: "detached" });
-      await expectCount(page.locator(".sidebar-issues-button"), 0);
+      await expectReservedInbox(page);
       expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
       await gateway.setOnline(true);
@@ -133,13 +139,16 @@ suite.define(() => {
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       await page.locator(".chat-queue__item").waitFor();
       await page
-        .locator(".sidebar-shell__footer .gateway-status")
+        .locator(".sidebar-shell__connection .gateway-status")
         .getByText("Reconnecting… · 1 queued", { exact: true })
         .waitFor();
       expect(
-        await page.locator(".sidebar-shell__footer .gateway-status").getByRole("button").count(),
+        await page
+          .locator(".sidebar-shell__connection .gateway-status")
+          .getByRole("button")
+          .count(),
       ).toBe(0);
-      expect(await page.locator(".sidebar-issues-button").count()).toBe(0);
+      await expectReservedInbox(page);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
     });
   });
@@ -204,7 +213,7 @@ suite.define(() => {
       await gateway.setOnline(false);
       const pending = page.locator('.chat-send-status[data-send-state="waiting-reconnect"]');
       await pending.getByText("Waiting for reconnect", { exact: true }).waitFor();
-      await expectCount(page.locator(".sidebar-issues-button"), 0);
+      await expectReservedInbox(page);
       await gateway.setOnline(true);
       const replay = await gateway.waitForRequest("chat.send", { after: 1 });
       expect(replay.params).toEqual({
@@ -217,18 +226,20 @@ suite.define(() => {
       await expectCount(page.locator('[data-attention-kind="outbox"]'), 0);
       await page.keyboard.press("Escape");
       await gateway.resolveDeferred("chat.send", { runId, status: "queued" });
-      await page.locator(".chat-send-status").waitFor({ state: "detached" });
+      await expect
+        .poll(() =>
+          page.evaluate(
+            (id) =>
+              Object.entries(sessionStorage).some(
+                ([key, value]) =>
+                  key.startsWith("openclaw.control.chatComposer.") && value.includes(id),
+              ),
+            runId,
+          ),
+        )
+        .toBe(false);
+      expect(await page.locator(".chat-send-status").count()).toBe(0);
       await expectCount(page.locator(".sidebar-issues-button__count"), 0);
-      expect(
-        await page.evaluate(
-          (id) =>
-            Object.entries(sessionStorage).some(
-              ([key, value]) =>
-                key.startsWith("openclaw.control.chatComposer.") && value.includes(id),
-            ),
-          runId,
-        ),
-      ).toBe(false);
       expect(await gateway.getRequests("chat.send")).toHaveLength(2);
     });
   });

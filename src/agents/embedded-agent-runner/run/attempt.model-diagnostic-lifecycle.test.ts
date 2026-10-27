@@ -1,5 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { notifyProviderStreamOpened } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
@@ -20,6 +23,7 @@ import {
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { registerDiagnosticTracePropagationBridge } from "../../../infra/diagnostic-trace-propagation.js";
 import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
+import { getModelTransportContext } from "../../../llm/model-transport-context.js";
 import {
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
@@ -159,6 +163,51 @@ async function completeSuppressedReasoning(params: {
 }
 
 describe("model diagnostic lifecycle", () => {
+  it.each(["completed", "failed"] as const)(
+    "releases request callbacks from retained transport frames after %s requests",
+    async (outcome) => {
+      async function settleRequest() {
+        const owner = { callId: "retention:1" };
+        let retainedFrame: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
+        const failure = new Error("provider failed");
+        const response = await wrap(
+          () => {
+            retainedFrame = AsyncLocalStorage.snapshot();
+            return {
+              async *[Symbol.asyncIterator]() {},
+              async result() {
+                if (outcome === "failed") {
+                  throw failure;
+                }
+                return makeAssistantMessageFixture();
+              },
+            };
+          },
+          { nextCallId: () => owner.callId },
+        )({} as never, { messages: [] });
+        const context = retainedFrame!(getModelTransportContext)!;
+        expect(context.onRateLimitWait).toBeTypeOf("function");
+        context.onRateLimitWait!(Date.now() + 1_000)();
+        if (outcome === "failed") {
+          await expect(response.result()).rejects.toBe(failure);
+        } else {
+          await response.result();
+        }
+        return { frame: retainedFrame!, owner: new WeakRef(owner) };
+      }
+      const completed = await Promise.all(Array.from({ length: 20 }, settleRequest));
+      const control = new WeakRef({});
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(control.deref()).toBeUndefined();
+      expect(completed.filter(({ owner }) => owner.deref())).toHaveLength(0);
+      expect(completed[0]!.frame(getModelTransportContext)).toMatchObject({
+        requestId: "retention:1",
+        onRateLimitWait: undefined,
+      });
+    },
+  );
+
   beforeEach(() => {
     resetDiagnosticEventsForTest();
     resetDiagnosticSessionStateForTest();

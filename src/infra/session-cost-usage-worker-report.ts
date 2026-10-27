@@ -62,51 +62,6 @@ export function prepareUsageCostReportEntry(params: {
   return { valueJson: params.row.valueJson, blob, envelope, selected };
 }
 
-function createUsageCostReportSource(
-  params: Omit<Parameters<typeof readUsageCostReportEntry>[0], "prepared" | "file"> & {
-    rows: ReadonlyMap<string, SessionCostUsageRollupRow>;
-    entries: ReadonlyMap<string, ReturnType<typeof prepareUsageCostReportEntry>>;
-    files: ReadonlyMap<string, UsageCostTranscriptFile>;
-    deferredPaths: ReadonlySet<string>;
-    deferredMetadata: ReadonlyMap<string, SessionCostUsageDeferredMetadata>;
-  },
-) {
-  const consumed = new Set<string>();
-  const invalidRows = new Map<string, SessionCostUsageRollupRow>();
-  return {
-    invalidRows,
-    source: {
-      deferredPaths: params.deferredPaths,
-      deferredMetadata: params.deferredMetadata,
-      readRow(filePath: string) {
-        consumed.add(filePath);
-        return params.rows.get(filePath);
-      },
-      readBody: (row: SessionCostUsageRollupRow) => params.entries.get(row.key)?.blob ?? null,
-      async readEntry(row: SessionCostUsageRollupRow) {
-        return readUsageCostReportEntry({
-          ...params,
-          prepared: params.entries.get(row.key)!,
-          file: params.files.get(row.key),
-        });
-      },
-      onInvalidBody(key: string) {
-        const row = params.rows.get(key);
-        if (row) {
-          invalidRows.set(key, row);
-        }
-      },
-      remainingRows: (function* () {
-        for (const row of params.rows.values()) {
-          if (!consumed.has(row.key)) {
-            yield row;
-          }
-        }
-      })(),
-    },
-  };
-}
-
 /** Project captured cache inputs; replay opens its own bounded transcript reads. */
 export async function readUsageCostReportEntry(params: {
   prepared: ReturnType<typeof prepareUsageCostReportEntry>;
@@ -304,31 +259,56 @@ export async function projectUsageCostSessionsInWorker(params: {
     const filesByPath = new Map(
       reportFiles.flatMap((file) => (file ? [[file.filePath, file] as const] : [])),
     );
-    const report = createUsageCostReportSource({
-      rows: byPath,
-      entries,
-      files: filesByPath,
+    const { startMs, endMs, dayBucket } = operation;
+    const scan = params.scan;
+    const consumed = new Set<string>();
+    const invalidRows = new Map<string, SessionCostUsageRollupRow>();
+    const source = {
       deferredPaths: cacheBudget.deferredPaths,
       deferredMetadata: cacheBudget.deferredMetadata,
-      startMs: operation.startMs,
-      endMs: operation.endMs,
-      dayBucket: operation.dayBucket,
-      throwIfCancelled,
-      replayBudget,
-      cacheBudget,
-      scan: params.scan,
-    });
+      readRow(filePath: string) {
+        consumed.add(filePath);
+        return byPath.get(filePath);
+      },
+      readBody: (row: SessionCostUsageRollupRow) => entries.get(row.key)?.blob ?? null,
+      async readEntry(row: SessionCostUsageRollupRow) {
+        return readUsageCostReportEntry({
+          startMs,
+          endMs,
+          dayBucket,
+          throwIfCancelled,
+          replayBudget,
+          cacheBudget,
+          scan,
+          prepared: entries.get(row.key)!,
+          file: filesByPath.get(row.key),
+        });
+      },
+      onInvalidBody(key: string) {
+        const row = byPath.get(key);
+        if (row) {
+          invalidRows.set(key, row);
+        }
+      },
+      remainingRows: (function* () {
+        for (const row of byPath.values()) {
+          if (!consumed.has(row.key)) {
+            yield row;
+          }
+        }
+      })(),
+    };
     const result = {
       kind: "sessions" as const,
       ...(await projectSessionCostSummaries({
-        ...report.source,
+        ...source,
         ...operation,
         files: sessionPaths.map((filePath) => filesByPath.get(filePath ?? "")),
       })),
       remainingReportBytes: Math.max(0, cacheBudget.remainingBytes),
     };
     throwIfCancelled();
-    return { ...result, invalidRows: [...report.invalidRows.values()] };
+    return { ...result, invalidRows: [...invalidRows.values()] };
   };
   const empty = (): {
     rows: SessionCostUsageRollupRow[];

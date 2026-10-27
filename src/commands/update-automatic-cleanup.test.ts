@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { automaticallyCleanUpdateRecovery } from "../cli/update-cli/automatic-cleanup.js";
 import { prepareUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
 import { finalizeRestartUpdateRun } from "../gateway/server-restart-update-run.js";
@@ -24,8 +25,14 @@ import {
   UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
 } from "../infra/update-capture-privacy-marker.js";
 import { createRetainedUpdateRecovery } from "../infra/update-retained-recovery.test-support.js";
-import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
-import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunPhase,
+  recordUpdateRunStep,
+} from "../infra/update-run-ledger.js";
+import type { UpdateRunPhase, UpdateRunRecord } from "../infra/update-run-record.js";
 import * as updateRunWrites from "../infra/update-run-write.async.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { defaultRuntime } from "../runtime.js";
@@ -80,19 +87,17 @@ function capture(runId: string, doctor = false, age = 0) {
     UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
   );
   fs.writeFileSync(path.join(directory, "payload"), "preserved rollback bytes");
-  fs.writeFileSync(
+  writeFixtureJsonSync(
     path.join(directory, "manifest.json"),
-    JSON.stringify(
-      doctor
-        ? createMissingConfigRecoveryManifest({
-            runId,
-            installRoot: stateDir,
-            stateDir,
-            configPath: env.OPENCLAW_CONFIG_PATH,
-            createdAt: new Date(now - age * 86_400_000).toISOString(),
-          })
-        : {},
-    ),
+    doctor
+      ? createMissingConfigRecoveryManifest({
+          runId,
+          installRoot: stateDir,
+          stateDir,
+          configPath: env.OPENCLAW_CONFIG_PATH,
+          createdAt: new Date(now - age * 86_400_000).toISOString(),
+        })
+      : {},
   );
   return directory;
 }
@@ -108,6 +113,27 @@ function capturedRun(at: number, status?: Parameters<typeof finishUpdateRun>[1][
     finishUpdateRun(runId, { status }, { env });
   }
   return { runId, directory };
+}
+function failedRun(at: number, phases: readonly UpdateRunPhase[]) {
+  const runId = start(at);
+  recordUpdateRunStep(runId, { step: "original-state-capture", status: "completed" }, { env });
+  for (const phase of phases) {
+    recordUpdateRunPhase(runId, phase, {}, { env });
+  }
+  return { runId, directory: capture(runId) };
+}
+async function fail(runId: string, at: number) {
+  using clock = vi.spyOn(Date, "now");
+  clock.mockReturnValue(at);
+  const emit = await prepareUpdateCommandTerminalResult(
+    { opts: { json: true, run: { runId, env } } },
+    { status: "error", mode: "git", reason: "update-failed", steps: [], durationMs: 1 },
+    { rolledBack: false },
+  );
+  const result = await emit();
+  expect(result.status).toBe("error");
+  expect(getUpdateRun(runId, { env })?.status).toBe("failed");
+  return result;
 }
 async function recoveryFixture() {
   const fixture = await createVerifiedRecoveryStore();
@@ -169,9 +195,12 @@ async function migrationOriginal() {
 }
 
 it("retires the previous successful generation and migration originals, but retains current and protected recovery", async () => {
-  const failed = start(now - 240_000);
+  const { runId: failed, directory: failedCapture } = failedRun(now - 240_000, [
+    "staging",
+    "validating",
+    "activating",
+  ]);
   finishUpdateRun(failed, { status: "failed" }, { env });
-  const failedCapture = capture(failed);
   const { runId: first, directory: firstCapture } = capturedRun(now - 120_000);
   const backup = await migrationOriginal();
   await complete(first, now + 1_000);
@@ -418,6 +447,27 @@ it.each(["legacy-store", "transcript"] as const)(
     expectOriginals(originals);
   },
 );
+
+it("retires a failed update's own capture only when it never activated", async () => {
+  const { runId: succeeded, directory: succeededCapture } = capturedRun(now - 120_000);
+  await complete(succeeded, now - 60_000);
+  const activated = failedRun(now, ["staging", "validating", "activating"]);
+  const activatedResult = await fail(activated.runId, now + 1_000);
+  expect(activatedResult.steps.map((step) => step.name)).not.toContain("recovery-artifact-cleanup");
+  const unactivated = failedRun(now + 2_000, ["staging", "validating"]);
+  const result = await fail(unactivated.runId, now + 3_000);
+  expect(fs.existsSync(unactivated.directory)).toBe(false);
+  // Neither the earlier activated failure nor the latest success becomes superseded.
+  expect([activated.directory, succeededCapture].map(fs.existsSync)).toEqual([true, true]);
+  const cleanup = result.steps.find((step) => step.name === "recovery-artifact-cleanup");
+  expect(cleanup).toMatchObject({ exitCode: 0 });
+  expect(cleanup?.advisory).toBeUndefined();
+  const recorded = getUpdateRun(unactivated.runId, { env });
+  expect(recorded?.status).toBe("failed");
+  expect(recorded?.steps).toContainEqual(
+    expect.objectContaining({ step: "recovery-artifact-cleanup", status: "completed" }),
+  );
+});
 
 it("keeps the triggering update's capture when the wall clock moves backward", async () => {
   const { runId, directory: current } = capturedRun(now + 60_000);

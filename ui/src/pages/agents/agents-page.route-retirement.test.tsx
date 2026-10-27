@@ -192,6 +192,7 @@ it("keeps Tools Save active through the real owner's roster refresh", async () =
     </ApplicationProvider>
   ));
   try {
+    await vi.dynamicImportSettled();
     const save = await waitForSolid(() =>
       mounted.getByRole<HTMLButtonElement>("button", { name: "Save" }),
     );
@@ -593,9 +594,9 @@ it("keeps the Skills filter reactive across clearing and retained panel/agent ro
     );
   });
   const titles = () =>
-    [...mounted.container.querySelectorAll(".agent-skill-row .settings-row__title")].map((node) =>
-      node.textContent?.trim(),
-    );
+    [
+      ...mounted.container.querySelectorAll(".agent-skill-row:not([hidden]) .settings-row__title"),
+    ].map((node) => node.textContent?.trim());
   const filter = () => mounted.getByRole<HTMLInputElement>("textbox", { name: "Filter" });
   const enter = (value: string) => {
     const control = filter();

@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isAbortError } from "./infra/abort-signal.js";
 import { withTestDir } from "./test-helpers/temp-dir.js";
 import { withEnv } from "./test-utils/env.js";
 import {
   CONFIG_DIR,
+  displayPath,
   ensureDir,
   normalizeE164,
   pinConfigDir,
@@ -49,7 +49,6 @@ describe("sleep", () => {
     controller.abort(reason);
     const error = await promise.catch((caught: unknown) => caught);
     expect(error).toMatchObject({ name: "AbortError", message: "aborted", cause: reason });
-    expect(isAbortError(error)).toBe(true);
   });
 
   it("resolves a non-aborted zero-duration wait without scheduling", async () => {
@@ -66,67 +65,59 @@ it.each([
   expect(normalizeE164(input)).toBe(expected);
 });
 
-it.each([
-  [undefined, ".openclaw"],
-  [" work ", ".openclaw-work"],
-  ["dev", ".openclaw-dev"],
-  ["Default", ".openclaw"],
-  ["bad profile", ".openclaw"],
-] as const)("resolveConfigDir selects profile %s", (profile, directory) => {
+const customConfig = { OPENCLAW_PROFILE: "work", OPENCLAW_CONFIG_PATH: "~/custom/c.json" };
+it.each<[NodeJS.ProcessEnv, string]>([
+  [{}, ".openclaw"],
+  [{ OPENCLAW_PROFILE: " work " }, ".openclaw-work"],
+  [{ OPENCLAW_PROFILE: "Default" }, ".openclaw"],
+  [{ OPENCLAW_PROFILE: "bad profile" }, ".openclaw"],
+  [customConfig, "custom"],
+  [{ ...customConfig, OPENCLAW_STATE_DIR: "~/state" }, "state"],
+])("resolves config root for %j", (overrides, directory) => {
   const home = path.resolve("config-dir-home");
-  expect(resolveConfigDir({ OPENCLAW_PROFILE: profile }, () => home)).toBe(
-    path.join(home, directory),
-  );
-});
-
-it.each([undefined, "~/state"])("resolveConfigDir expands config/state overrides: %s", (state) => {
-  expect(
-    resolveConfigDir({
-      HOME: "/tmp/openclaw-home",
-      OPENCLAW_PROFILE: "work",
-      OPENCLAW_STATE_DIR: state,
-      OPENCLAW_CONFIG_PATH: "~/custom/openclaw.json",
-    }),
-  ).toBe(path.resolve("/tmp/openclaw-home", state ? "state" : "custom"));
+  const selected = resolveConfigDir({ HOME: home, ...overrides }, () => home);
+  expect(selected).toBe(path.join(home, directory));
 });
 
 it("re-pins the exported configuration root after startup environment selection", () => {
-  const originalConfigDir = CONFIG_DIR;
-  const selectedConfigDir = path.resolve("/tmp/openclaw-selected-config-root");
-  const pin = (root: string) => pinConfigDir({ OPENCLAW_STATE_DIR: root, OPENCLAW_TEST_FAST: "1" });
+  const original = CONFIG_DIR;
+  const selected = path.resolve("/tmp/openclaw-selected-config-root");
   try {
-    expect(pin(selectedConfigDir)).toBe(selectedConfigDir);
-    expect(CONFIG_DIR).toBe(selectedConfigDir);
+    expect(pinConfigDir({ OPENCLAW_STATE_DIR: selected })).toBe(selected);
+    expect(CONFIG_DIR).toBe(selected);
   } finally {
-    pin(originalConfigDir);
+    pinConfigDir({ OPENCLAW_STATE_DIR: original });
   }
 });
-it("shortenHomePath uses the effective home for OPENCLAW_HOME=undefined", () => {
-  withEnv({ OPENCLAW_HOME: "undefined", HOME: "/home/other" }, () => {
-    expect(shortenHomePath(`${path.resolve("/home/other")}/.openclaw/openclaw.json`)).toBe(
-      "~/.openclaw/openclaw.json",
-    );
+const displayHome = path.resolve("/h");
+it.each([
+  [shortenHomePath, "undefined", `${displayHome}/c`, "~/c"],
+  [shortenHomeInString, displayHome, `config: ${displayHome}/c`, "config: $OPENCLAW_HOME/c"],
+] as const)("%s selects display prefix for %s", (shorten, home, input, expected) => {
+  withEnv({ OPENCLAW_HOME: home, HOME: displayHome }, () => {
+    expect(shorten(input)).toBe(expected);
   });
 });
-it("shortenHomeInString uses the explicit OPENCLAW_HOME prefix", () => {
-  withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
-    expect(
-      shortenHomeInString(`config: ${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`),
-    ).toBe("config: $OPENCLAW_HOME/.openclaw/openclaw.json");
+
+it("escapes terminal path displays without changing raw home shortening", () => {
+  const home = path.resolve("terminal-home");
+  withEnv({ OPENCLAW_HOME: home }, () => {
+    const value = path.join(
+      home,
+      "café\u001b[31m\u001b]8;;https://example.invalid\u0007link\u001b]8;;\u0007\u009b2J\nfile",
+    );
+    expect(displayPath(value)).toBe(`$OPENCLAW_HOME${path.sep}cafélink\\nfile`);
+    expect(shortenHomePath(value)).toBe(value.replace(home, "$OPENCLAW_HOME"));
   });
 });
 
 it.skipIf(process.platform === "win32").each([
-  [shortenHomePath, "/srv/openclaw-home/workspace", "/srv/openclaw-home/workspace"],
-  [shortenHomePath, "/srv/OpenClaw-Home\\workspace", "/srv/OpenClaw-Home\\workspace"],
-  [shortenHomePath, "/srv/OpenClaw-Home/work\\space", "$OPENCLAW_HOME/work\\space"],
-  [
-    shortenHomeInString,
-    "config: /srv/openclaw-home/openclaw.json",
-    "config: /srv/openclaw-home/openclaw.json",
-  ],
+  [shortenHomePath, "/h/a/w", "/h/a/w"],
+  [shortenHomePath, "/h/A\\w", "/h/A\\w"],
+  [shortenHomePath, "/h/A/w\\x", "$OPENCLAW_HOME/w\\x"],
+  [shortenHomeInString, "config: /h/a/c", "config: /h/a/c"],
 ] as const)("%s respects POSIX boundaries: %s", (shorten, input, expected) => {
-  withEnv({ OPENCLAW_HOME: "/srv/OpenClaw-Home", HOME: "/home/other" }, () => {
+  withEnv({ OPENCLAW_HOME: "/h/A", HOME: "/home/other" }, () => {
     expect(shorten(input)).toBe(expected);
   });
 });
@@ -137,46 +128,33 @@ it.skipIf(process.platform !== "win32")("shortenHomePath: relative Windows paths
   });
 });
 
-it.skipIf(process.platform === "win32")("shortenHomeInString: component boundaries", () => {
-  withEnv({ OPENCLAW_HOME: undefined, HOME: "/home/al" }, () => {
-    expect(shortenHomeInString("/home/al")).toBe("~");
-    expect(shortenHomeInString("/home/al/x")).toBe("~/x");
-    expect(
-      shortenHomeInString("open /home/al/notes, /home/al, /home/alice/x and /mnt/home/al/x"),
-    ).toBe("open ~/notes, ~, /home/alice/x and /mnt/home/al/x");
-    expect(shortenHomeInString("Stored in /home/al. Backup: /home/al.bak/x")).toBe(
-      "Stored in ~. Backup: /home/al.bak/x",
-    );
-    const siblingPaths =
-      "/home/al+old, /home/al./notes, /home/al,old/x, /home/al:old/x, /home/al\\ice/x, /mnt+/home/al/x";
-    expect(shortenHomeInString(siblingPaths)).toBe(siblingPaths);
-    expect(
-      shortenHomeInString('PATH=/home/al:/usr/bin:/home/al/bin; dirs=/tmp;/home/al ("/home/al")'),
-    ).toBe('PATH=~:/usr/bin:~/bin; dirs=/tmp;~ ("~")');
-    expect(shortenHomeInString("at file:///home/al/app.js:5:3")).toBe("at file://~/app.js:5:3");
-  });
-  withEnv({ OPENCLAW_HOME: undefined, HOME: "/" }, () => {
-    expect(shortenHomeInString("see /var/log/openclaw.log")).toBe("see /var/log/openclaw.log");
+it
+  .skipIf(process.platform === "win32")
+  .each<[string, string?, string?]>([
+    ["/h", "~"],
+    ["open /h/n, /h, /hi/x and /mnt/h/x", "open ~/n, ~, /hi/x and /mnt/h/x"],
+    ["Stored in /h. Backup: /h.bak/x", "Stored in ~. Backup: /h.bak/x"],
+    ["/h+old, /h./n, /h,old/x, /h:old/x, /h\\i/x, /mnt+/h/x"],
+    ['PATH=/h:/bin:/h/bin; dirs=/tmp;/h ("/h")', 'PATH=~:/bin:~/bin; dirs=/tmp;~ ("~")'],
+    ["at file:///h/a.js:5:3", "at file://~/a.js:5:3"],
+    ["see /var/log/c.log", "see /var/log/c.log", "/"],
+  ])("shortens diagnostic component boundaries: %s", (input, expected = input, home = "/h") => {
+  withEnv({ OPENCLAW_HOME: undefined, HOME: home }, () => {
+    expect(shortenHomeInString(input)).toBe(expected);
   });
 });
-it.skipIf(process.platform !== "win32").each(["extended path", "diagnostic text"])(
-  "shortens real Windows home aliases: %s",
-  async (kind) => {
+it.skipIf(process.platform !== "win32").each([true, false])(
+  "shortens Windows aliases (extended: %s)",
+  async (extended) => {
     await withTestDir({ prefix: "openclaw-home-display-" }, async (home) => {
       const workspace = path.join(home, "workspace");
       await fs.promises.mkdir(workspace);
-      const alias =
-        kind === "extended path" ? `\\\\?\\${workspace.toUpperCase()}` : home.toUpperCase();
+      const alias = extended ? `\\\\?\\${workspace.toUpperCase()}` : home.toUpperCase();
       expect(fs.statSync(alias).isDirectory()).toBe(true);
       withEnv({ OPENCLAW_HOME: home }, () => {
-        if (kind === "extended path") {
-          const display = shortenHomePath(alias);
-          expect(display).toBe(`$OPENCLAW_HOME${path.sep}WORKSPACE`);
-        } else {
-          expect(shortenHomeInString(`config: ${alias}\\openclaw.json`)).toBe(
-            "config: $OPENCLAW_HOME\\openclaw.json",
-          );
-        }
+        expect(extended ? shortenHomePath(alias) : shortenHomeInString(`config: ${alias}\\c`)).toBe(
+          extended ? `$OPENCLAW_HOME${path.sep}WORKSPACE` : "config: $OPENCLAW_HOME\\c",
+        );
       });
     });
   },

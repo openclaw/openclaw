@@ -85,6 +85,13 @@ describe("CommandPalette platform shortcuts", () => {
       expect(editQuery.defaultPrevented).toBe(false);
       expect(palette.isOpen).toBe(true);
 
+      const repeated = chord({ ...primary, repeat: true });
+      input.dispatchEvent(repeated);
+      await palette.updateComplete;
+      expect(repeated.defaultPrevented).toBe(true);
+      expect(palette.isOpen).toBe(true);
+      expect(palette.querySelector(".cmd-palette__input")).toBe(input);
+
       const close = chord(primary);
       input.dispatchEvent(close);
       await palette.updateComplete;

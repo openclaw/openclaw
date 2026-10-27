@@ -1,4 +1,7 @@
+import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
@@ -43,6 +46,33 @@ afterEach(() => {
   replyTesting.resetSessionControllerForTest();
   clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
+});
+
+it("retained authority assertions release settled V8 attempt continuations", async ({ signal }) => {
+  const fixture = createFixtureLifetime();
+  const root = fixture.createTempDir("openclaw-authority-retention-");
+  try {
+    const result = await runNodeScript(
+      [
+        "--expose-gc",
+        "--import",
+        "./scripts/tsx.mjs",
+        fileURLToPath(
+          new URL("./tool-authority.runtime.retention.test-support.ts", import.meta.url),
+        ),
+      ],
+      { ...process.env, HOME: root, OPENCLAW_STATE_DIR: root, NODE_OPTIONS: "" },
+      undefined,
+      { cwd: fileURLToPath(new URL("../../../", import.meta.url)), signal },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(
+      '"attemptsReleased":true,"internalInputsReleased":true,"closed":true',
+    );
+  } finally {
+    await fixture.cleanup();
+  }
 });
 
 it.each(["matching attempt", "different tools", "different model", "revoked source"] as const)(

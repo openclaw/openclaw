@@ -1,4 +1,5 @@
 import type { TimelineInput } from "./chronicle-contract.js";
+import { button, el } from "./page-dom.js";
 import { validTemporalDate } from "./temporal-query.js";
 
 export type TemporalSelection = {
@@ -12,22 +13,6 @@ const fields = {
   updated_at: "Updated",
   due_at: "Due",
 } as const;
-const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string) => {
-  const node = document.createElement(tag);
-  if (text !== undefined) {
-    node.textContent = text;
-  }
-  if (className) {
-    node.className = className;
-  }
-  return node;
-};
-const button = (text: string, run: () => void, className = "knowledge-button") => {
-  const node = el("button", text, className);
-  node.type = "button";
-  node.addEventListener("click", run);
-  return node;
-};
 
 /** Validate explicit dates without silently widening an invalid query. */
 export function temporalSelectionError(value: TemporalSelection): string {

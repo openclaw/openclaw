@@ -14,7 +14,7 @@ import {
   type ResolveModulePreloadDependenciesFn,
   type UserConfig,
 } from "vite";
-import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
+import { peleClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";
 import {
   CONTROL_UI_BUILD_ID_ATTRIBUTE,
@@ -437,6 +437,7 @@ export async function refreshControlUiBuildOutput(
   buildInfo: ControlUiBuildInfo = resolveControlUiBuildInfo(),
   bootAssets?: string[],
   publicDir: string | false = path.join(here, "public"),
+  consumedInputs?: Set<string>,
 ) {
   const publicContent = publicDir ? collectControlUiPublicAssets(publicDir) : undefined;
   const publicAssets = publicContent?.paths ?? [];
@@ -490,10 +491,13 @@ export async function refreshControlUiBuildOutput(
   // Embed only build-owned HTML, never a fetched Gateway document (which may
   // contain identity, route metadata, or an HTTP login response). The measured
   // route graph also warms assets loaded before the first worker controls a tab.
-  const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(
-    path.join(here, "src/app-route-paths.ts"),
-    { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } },
-  );
+  const routePath = path.join(here, "src/app-route-paths.ts");
+  const { module: routes, dependencies: routeDependencies } = await runnerImport<
+    typeof import("./src/app-route-paths.ts")
+  >(routePath, { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } });
+  for (const file of [routePath, ...routeDependencies]) {
+    consumedInputs?.add(file);
+  }
   const offlineShell = {
     routes: routes.APP_ROUTE_PATHS,
     routePrefixes: routes.APP_ROUTE_OFFLINE_PREFIXES,
@@ -542,10 +546,13 @@ export async function refreshControlUiBuildOutput(
       };
     });
   // Same-commit source rebuilds must not pair a new document with an old shell.
-  const { module: csp } = await runnerImport<typeof import("../src/gateway/control-ui-csp.ts")>(
-    path.join(repoRoot, "src/gateway/control-ui-csp.ts"),
-    { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } },
-  );
+  const cspPath = path.join(repoRoot, "src/gateway/control-ui-csp.ts");
+  const { module: csp, dependencies: cspDependencies } = await runnerImport<
+    typeof import("../src/gateway/control-ui-csp.ts")
+  >(cspPath, { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } });
+  for (const file of [cspPath, ...cspDependencies]) {
+    consumedInputs?.add(file);
+  }
   const offlineBuild = {
     ...offlineShell,
     deferredAssets,
@@ -679,6 +686,14 @@ function controlUiBuildOutputPlugin(
         if (!buildOutDir) {
           this.error("Control UI build requires an output directory");
         }
+        const bootAssets = collectControlUiBootAssets(bundle);
+        const deferred = await refreshControlUiBuildOutput(
+          buildOutDir,
+          buildInfo,
+          [...bootAssets.chat, ...bootAssets.new, ...bootAssets.login],
+          publicDir,
+          copiedInputs,
+        );
         const inputs = [...new Set([...this.getModuleIds(), ...copiedInputs])]
           .map((file) => file.split("?")[0])
           .filter((file): file is string => Boolean(file && path.isAbsolute(file)))
@@ -691,13 +706,6 @@ function controlUiBuildOutputPlugin(
           )
           .toSorted();
         fs.writeFileSync(path.join(buildOutDir, ".build-inputs.json"), JSON.stringify(inputs));
-        const bootAssets = collectControlUiBootAssets(bundle);
-        const deferred = await refreshControlUiBuildOutput(
-          buildOutDir,
-          buildInfo,
-          [...bootAssets.chat, ...bootAssets.new, ...bootAssets.login],
-          publicDir,
-        );
         this.environment.logger.info(
           `Control UI deferred offline inventory: ${deferred.count} assets, ${deferred.rawBytes} B raw, ${deferred.gzipBytes} B gzip`,
         );
@@ -791,7 +799,7 @@ export default function controlUiViteConfig(
     base,
     worker: {
       format: "iife",
-      plugins: () => [mermaidClassicBundlePlugin()],
+      plugins: () => [peleClassicBundlePlugin()],
       rolldownOptions: {
         output: { codeSplitting: false },
       },
@@ -855,7 +863,7 @@ export default function controlUiViteConfig(
     },
     plugins: [
       controlUiSolidPlugin(),
-      mermaidClassicBundlePlugin(),
+      peleClassicBundlePlugin(),
       controlUiIsolatedDesktopRuntimePlugin(),
       {
         name: "control-ui-static-import-preloads",
@@ -869,7 +877,7 @@ export default function controlUiViteConfig(
         },
       },
       controlUiSocialCardPlugin(),
-      controlUiLocaleModulesPlugin(),
+      controlUiLocaleModulesPlugin(copiedInputs),
       controlUiPluginDistributionsPlugin(repoRoot, copiedInputs),
       controlUiBootPreloadsPlugin(),
       controlUiNavigationPreloadsPlugin(),

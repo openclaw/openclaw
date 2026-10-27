@@ -3,6 +3,7 @@ import { createMemo, createSignal, Errored, For, isPending, latest, Loading, Sho
 import type { CronJob } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isCronJobRunning, resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
+import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { loadCronJobsPage } from "../lib/cron/jobs-full.ts";
 import { createInitialCronState } from "../lib/cron/state.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
@@ -10,6 +11,7 @@ import { createGatewayConnectionLifecycle } from "../lib/gateway-connection-life
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { formatCronPayload, formatCronSchedule } from "../lib/presenter.ts";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";
 import { Icon } from "./solid/icon.tsx";
@@ -88,7 +90,8 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
           next.cronSessionFilter = { sessionKey, sessionAgentId: agentId };
           next.cronJobsLimit = 20;
           next.cronJobsSortBy = "name";
-          next.canRefresh = () => active && current === next;
+          next.canRefresh = () =>
+            active && current === next && document.visibilityState !== "hidden";
           current = next;
           notify();
         };
@@ -101,8 +104,13 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
           }
         });
         const stopEvents = gateway?.subscribeEvents((event) => {
-          if (event.event === "cron") {
-            void load(false, event.payload);
+          if (event.event === "cron" || isCronInventoryInvalidation(event, gateway.snapshot)) {
+            void load(false, event.event === "cron" ? event.payload : undefined);
+          }
+        });
+        const stopVisibility = listen(document, "visibilitychange", () => {
+          if (document.visibilityState !== "hidden") {
+            void load();
           }
         });
         void load();
@@ -112,6 +120,7 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
           notify = () => {};
           stopConnection?.();
           stopEvents?.();
+          stopVisibility();
           lifecycle?.dispose();
         };
       },

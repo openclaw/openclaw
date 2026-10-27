@@ -3,6 +3,7 @@
 // Add --unowned-history to cover callers without transcript-owner sealing.
 // Combine --unowned-history --projected-history for already-sanitized mutable worker model context.
 // Add --no-result to measure hooks that observe inputs without returning modifications.
+// Use --messages 200 --calls 1000 for the 0/1/3-hook prompt-envelope workload.
 // Counts, unprofiled CPU, and sampled allocations are separate passes; use built Gateway stress too.
 import assert from "node:assert/strict";
 import type { HeapProfiler } from "node:inspector";
@@ -19,6 +20,7 @@ import { projectModelContextMessages } from "../../src/shared/model-context-mess
 const { values } = parseArgs({
   options: {
     calls: { type: "string", default: "40" },
+    messages: { type: "string" },
     "prompt-chars": { type: "string", default: "16" },
     "unowned-history": { type: "boolean", default: false },
     "projected-history": { type: "boolean", default: false },
@@ -101,7 +103,9 @@ function fixture(size: number) {
   );
 }
 
-const cells = [64, 200, 1_000].flatMap((size) => {
+const sizes = values.messages ? [Number(values.messages)] : [64, 200, 1_000];
+assert.ok(sizes.every((size) => Number.isSafeInteger(size) && size > 0));
+const cells = sizes.flatMap((size) => {
   const fixtureMessages = fixture(size);
   const source = values["projected-history"]
     ? projectModelContextMessages(fixtureMessages)
@@ -124,7 +128,7 @@ const cells = [64, 200, 1_000].flatMap((size) => {
     assert.equal(Object.isFrozen(message.content), !values["unowned-history"]);
     assert.ok(!isOwnedTranscriptPayload(message.content));
   }
-  return [0, 1, 2].map((handlers) => {
+  return [0, 1, 3].map((handlers) => {
     const registry = createEmptyPluginRegistry();
     let handlerCalls = 0;
     let verifyHistory = false;

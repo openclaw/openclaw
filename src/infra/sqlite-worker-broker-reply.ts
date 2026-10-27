@@ -12,7 +12,6 @@ import {
 } from "../state/openclaw-state-worker-error.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
-import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
 import {
   acquireStateDatabaseSchemaLease,
@@ -117,7 +116,10 @@ export async function dispatchSqliteWorkerJob(
       const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
       job.settleNative = settlement.resolve;
       const retained: ReturnType<SqliteWorkerAdmissionFactory> = job.createAdmission
-        ? job.createAdmission({ settled: settlement.promise })
+        ? job.createAdmission({
+            settled: settlement.promise,
+            nativeStopped: actor?.nativeStopped ?? slot.exit,
+          })
         : {
             admission: createSqliteWorkerOperationAdmission(() => {
               throw new SqliteWorkerError(
@@ -246,7 +248,7 @@ export async function dispatchSqliteWorkerJob(
     const selection = request.stateContext?.databaseEngineSelection;
     if (!slot.postgresPoolSent && selection) {
       // A carrier can be created before boot selects its database engines.
-      request.postgresPool = withDatabaseEngineSelection(selection, createPostgresPoolEndpoints);
+      request.postgresPool = createPostgresPoolEndpoints(selection);
     }
     assertStateAccess?.();
     job.custody.accept();
@@ -428,7 +430,7 @@ export function receiveSqliteWorkerReply(
   let value: unknown;
   try {
     const continuation = runWithMainThreadTask(
-      "worker:sqlite:reply-decode",
+      "worker:sqlite",
       (): Extract<SqliteWorkerRequest, { type: "result-next" | "execute-frame" }> | undefined => {
         if (reply.input === "next") {
           const transfer = job.inputTransfer;
@@ -499,6 +501,7 @@ export function receiveSqliteWorkerReply(
         }
         return undefined;
       },
+      "reply-decode",
     );
     if (continuation) {
       // Continuations retain the current job and its reserved transport credits through drain.

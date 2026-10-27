@@ -7,10 +7,10 @@ import type { createSubagentRegistryCompletionRuntime } from "./subagent-registr
 import { resolveYieldedRunContinuation } from "./subagent-registry-run-pause.js";
 import type { createSubagentSweepReadScope } from "./subagent-registry-sweep-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isYieldedSubagentRun } from "./subagent-run-liveness.js";
+import { isStaleUnendedSubagentRun, isYieldedSubagentRun } from "./subagent-run-liveness.js";
 import {
   loadSubagentSessionEntry,
-  resolveCompletionFromSessionEntry,
+  resolveCompletionForSubagentRun,
   resolveSubagentRunOrphanReason,
 } from "./subagent-session-reconciliation.js";
 
@@ -41,6 +41,7 @@ export async function settleStaleActiveSubagentRun(params: {
     }
   };
   let observation;
+  let completion;
   try {
     assertActiveReadCurrent();
     const classification = resolveSubagentRunOrphanReason({ entry });
@@ -56,16 +57,23 @@ export async function settleStaleActiveSubagentRun(params: {
             }),
           };
     assertActiveReadCurrent();
+    completion = await resolveCompletionForSubagentRun(
+      entry,
+      observation.sessionEntry,
+      assertActiveReadCurrent,
+    );
   } catch (error) {
     if (error === readScope.retiredRead) {
       return;
     }
     throw error;
   }
-  const { orphanReason, sessionEntry } = observation;
-  const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
-    notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
-  });
+  const { orphanReason } = observation;
+  // Unknown execution identity is not completion evidence. Keep the existing
+  // wait/recovery owners until orphanhood or the bounded stale-run cutoff.
+  if (!completion && !orphanReason && !isStaleUnendedSubagentRun(entry, now)) {
+    return;
+  }
   await complete(
     {
       runId,

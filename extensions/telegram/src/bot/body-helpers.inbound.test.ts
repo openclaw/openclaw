@@ -13,65 +13,44 @@ function span(type: "bold" | "code" | "blockquote", text: string, content = text
   return { type, offset: text.indexOf(content), length: content.length };
 }
 
-function pollText(poll: Partial<NonNullable<Message["poll"]>>) {
-  return getTelegramTextParts({
+it.each<"regular" | "quiz">(["regular", "quiz"])("renders %s polls with escaped links", (type) => {
+  const quiz = type === "quiz";
+  const label = "docs]more";
+  const url = "https://example.com/report)final";
+  const result = getTelegramTextParts({
     poll: {
       id: "poll-1",
       question: "Ship the release?",
-      options: [{ persistent_id: "yes", text: "Yes", voter_count: 1 }],
-      total_voter_count: 1,
+      options: [
+        { persistent_id: "yes", text: "Yes", voter_count: 2 },
+        { persistent_id: "no", text: "No", voter_count: 1 },
+      ],
+      total_voter_count: 3,
       is_closed: false,
-      is_anonymous: true,
-      type: "regular",
+      is_anonymous: !quiz,
+      type,
       allows_multiple_answers: false,
       allows_revoting: false,
       members_only: false,
-      ...poll,
+      correct_option_ids: quiz ? [0] : undefined,
+      description: `Read ${label}`,
+      description_entities: [{ type: "text_link", offset: 5, length: label.length, url }],
+      explanation: quiz ? "All checks passed." : undefined,
+      explanation_entities: [{ type: "bold", offset: 0, length: 3 }],
     },
   });
-}
-
-it("projects native Telegram polls into bounded, accurate inbound text", () => {
-  const result = pollText({
-    options: [
-      { persistent_id: "yes", text: "Yes", voter_count: 2 },
-      { persistent_id: "no", text: "No", voter_count: 1 },
-    ],
-    total_voter_count: 3,
-    is_anonymous: false,
-    type: "quiz",
-    correct_option_ids: [0],
-    description: "Read docs",
-    description_entities: [
-      { type: "text_link", offset: 5, length: 4, url: "https://docs.example" },
-    ],
-    explanation: "All checks passed.",
-    explanation_entities: [{ type: "bold", offset: 0, length: 3 }],
-  });
-
   expect(result).toEqual({
     text: `[Poll] Ship the release?
-Read [docs](https://docs.example)
-1. Yes — 2 votes (correct)
+Read [docs\\]more](https://example.com/report\\)final)
+1. Yes — 2 votes${quiz ? " (correct)" : ""}
 2. No — 1 vote
 Total voters: 3
-Type: quiz
-Visibility: public
+Type: ${type}
+Visibility: ${quiz ? "public" : "anonymous"}
 Selection: single answer
-Status: open
-Explanation: **All** checks passed.`,
+Status: open${quiz ? "\nExplanation: **All** checks passed." : ""}`,
     entities: [],
   });
-});
-
-it("preserves native poll links with Markdown-sensitive labels and destinations", () => {
-  const label = "docs]more";
-  const url = "https://example.com/report)final";
-  const result = pollText({
-    description: `Read ${label}`,
-    description_entities: [{ type: "text_link", offset: 5, length: label.length, url }],
-  });
-
   const parsed = markdownToIR(result.text);
   expect(parsed.text).toContain(`Read ${label}`);
   expect(parsed.links.map((link) => link.href)).toEqual([url]);

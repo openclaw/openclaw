@@ -72,7 +72,6 @@ extensions/buzz/src/message-event.ts	2
 extensions/buzz/src/qa/adapter.runtime.ts	2
 extensions/buzz/src/room-membership.ts	2
 extensions/buzz/src/setup-verify.ts	2
-extensions/buzz/src/types.ts	2
 extensions/canvas/src/cli.ts	2
 extensions/canvas/src/config-migration.ts	2
 extensions/canvas/src/tool.ts	1
@@ -250,7 +249,6 @@ extensions/fal/video-generation-provider.ts	3
 extensions/feishu/src/accounts.ts	2
 extensions/feishu/src/bitable.ts	1
 extensions/feishu/src/bot-content.ts	1
-extensions/feishu/src/bot-identity-cache.ts	1
 extensions/feishu/src/bot.ts	7
 extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
@@ -889,7 +887,6 @@ packages/acp-core/src/runtime/errors.ts	5
 packages/agent-core/src/agent-loop.ts	1
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
 packages/agent-core/src/harness/compaction/compaction.ts	1
-packages/agent-core/src/harness/session/tool-result-pairing.ts	2
 packages/agent-core/src/harness/session/uuid.ts	1
 packages/agent-core/src/harness/utils/truncate.ts	1
 packages/agent-core/src/turn-interruption.ts	1
@@ -1146,7 +1143,7 @@ src/agents/embedded-agent-runner/thinking.ts	6
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	3
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	7
 src/agents/embedded-agent-runner/tool-result-context-guard.ts	5
-src/agents/embedded-agent-runner/tool-result-truncation.ts	7
+src/agents/embedded-agent-runner/tool-result-truncation.ts	6
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	1
@@ -1156,7 +1153,7 @@ src/agents/embedded-agent-subscribe.handlers.tools.results.ts	1
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	2
 src/agents/embedded-agent-tool-media.ts	5
 src/agents/embedded-agent-tool-results.ts	6
-src/agents/embedded-agent-utils.ts	3
+src/agents/embedded-agent-utils.ts	2
 src/agents/exec-auto-reviewer.ts	1
 src/agents/exec-defaults.ts	2
 src/agents/execution-auth-binding.ts	1
@@ -1170,7 +1167,7 @@ src/agents/harness/gateway-question.ts	4
 src/agents/harness/hook-helpers.ts	1
 src/agents/harness/native-hook-relay-client.ts	2
 src/agents/harness/native-hook-relay-codec.ts	2
-src/agents/harness/selection.ts	3
+src/agents/harness/selection.ts	2
 src/agents/harness/support.ts	1
 src/agents/identity.ts	5
 src/agents/internal-runtime-context.ts	1
@@ -1290,7 +1287,6 @@ src/agents/tools/dashboard-tool.ts	1
 src/agents/tools/embedded-gateway-stub.ts	7
 src/agents/tools/gateway-tool.ts	2
 src/agents/tools/goal-tools.ts	2
-src/agents/tools/image-tool.helpers.ts	2
 src/agents/tools/in-process-gateway.ts	1
 src/agents/tools/message-tool-discovery.ts	2
 src/agents/tools/message-tool-execution.ts	3
@@ -1352,7 +1348,6 @@ src/auto-reply/reply/directives.ts	2
 src/auto-reply/reply/dispatch-acp.ts	1
 src/auto-reply/reply/dispatch-from-config.events.ts	1
 src/auto-reply/reply/dispatch-from-config.prepare-execution.ts	1
-src/auto-reply/reply/elevated-allowlist-matcher.ts	2
 src/auto-reply/reply/followup-delivery-payloads.ts	1
 src/auto-reply/reply/get-reply-directives.ts	4
 src/auto-reply/reply/get-reply-exec-overrides.ts	1
@@ -1515,7 +1510,6 @@ src/commands/channel-test-registry.ts	2
 src/commands/channels/add-wizard.ts	1
 src/commands/channels/add.ts	1
 src/commands/channels/capabilities.ts	4
-src/commands/channels/list.ts	1
 src/commands/channels/status.runtime.ts	8
 src/commands/configure.wizard.ts	1
 src/commands/daemon-install-helpers.ts	3
@@ -1566,7 +1560,6 @@ src/commands/gateway-health-auth-diagnostic.ts	1
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11
 src/commands/message-format.ts	15
-src/commands/models/list.probe.ts	1
 src/commands/onboard-agent.ts	1
 src/commands/onboard-config.ts	2
 src/commands/onboard-helpers.ts	2

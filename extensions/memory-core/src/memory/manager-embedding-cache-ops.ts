@@ -72,12 +72,21 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     generation: MemorySemanticProviderGeneration,
   ) {
     const hashes = candidates.map((candidate) => candidate.chunk.hash);
+    const meta = generation.database.facts.meta;
+    // Only the published index can bind an alias to this vector space.
+    const providerIdentities = generation.identities.filter(
+      (identity, index) =>
+        index === 0 ||
+        (identity.provider === meta?.provider &&
+          identity.model === meta.model &&
+          identity.providerKey === meta.providerKey),
+    );
     const cached = this.cache.enabled
       ? await generation.database.read(
           {
             type: "cache.read",
             input: {
-              providerIdentities: generation.identities,
+              providerIdentities,
               hashes,
               ...(this.reindexProgress
                 ? {

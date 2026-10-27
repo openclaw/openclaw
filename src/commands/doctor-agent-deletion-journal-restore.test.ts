@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { recordLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
 import {
@@ -59,13 +60,10 @@ async function withFixture(
     PI_CODING_AGENT_DIR: undefined,
   };
   await withEnvAsync(env, async () => {
-    fs.writeFileSync(
-      env.OPENCLAW_CONFIG_PATH,
-      JSON.stringify({
-        agents: { entries: { main: { workspace: path.join(root, "workspace") } } },
-        plugins: { enabled: false },
-      }),
-    );
+    writeFixtureJsonSync(env.OPENCLAW_CONFIG_PATH, {
+      agents: { entries: { main: { workspace: path.join(root, "workspace") } } },
+      plugins: { enabled: false },
+    });
     const sharedPath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();
     const agentPath = path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite");
@@ -263,7 +261,7 @@ it.each(["first-upgrade", "already-held", "upgraded-producer"])(
           config.agents.entries.ops = {
             workspace: path.join(root, "workspace-ops"),
           };
-          fs.writeFileSync(configPath, JSON.stringify(config));
+          writeFixtureJsonSync(configPath, config);
           agentPaths.push(otherPath);
           const preview = await repairDoctorAgentDeletionJournal({
             preflight: await prepareDoctorDatabasePreflight(),
@@ -336,13 +334,10 @@ it.each(["present-incomplete", "different-owner", "unconfigured"])("keeps %s sto
     if (kind === "different-owner") {
       exec(agentPath, "UPDATE schema_meta SET agent_id = 'other'");
     } else if (kind === "unconfigured") {
-      fs.writeFileSync(
-        env.OPENCLAW_CONFIG_PATH!,
-        JSON.stringify({
-          agents: { ownership: "explicit", entries: { other: {} } },
-          plugins: { enabled: false },
-        }),
-      );
+      writeFixtureJsonSync(env.OPENCLAW_CONFIG_PATH!, {
+        agents: { ownership: "explicit", entries: { other: {} } },
+        plugins: { enabled: false },
+      });
     }
     const bytes = fs.readFileSync(agentPath);
     const result = await repair(env);
@@ -376,7 +371,7 @@ it.each(["root", "included"])(
       const changedPath = source === "root" ? configPath : path.join(root, "roster.json");
       if (source === "included") {
         fs.writeFileSync(changedPath, originalConfig);
-        fs.writeFileSync(configPath, JSON.stringify({ $include: "./roster.json" }));
+        writeFixtureJsonSync(configPath, { $include: "./roster.json" });
       }
       const newerConfig = JSON.stringify({
         agents: { entries: { ops: {} } },

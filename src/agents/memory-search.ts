@@ -43,6 +43,7 @@ export type ResolvedMemorySearchConfig = Omit<
   ProducedMemorySearchConfig,
   | "cache"
   | "documentInputType"
+  | "inputFormat"
   | "inputType"
   | "local"
   | "outputDimensionality"
@@ -52,6 +53,7 @@ export type ResolvedMemorySearchConfig = Omit<
   | "store"
   | "sync"
 > & {
+  inputFormat?: { query: string; document: string };
   inputType?: string;
   queryInputType?: string;
   queryInstruction?: string;
@@ -93,6 +95,15 @@ const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 export function resolveMemorySearchProviderId(provider?: string): string {
   const configured = provider?.trim();
   return configured && configured !== "auto" ? configured : DEFAULT_MEMORY_EMBEDDING_PROVIDER;
+}
+
+/** Compare provider identities without collapsing distinct configured tenants into their adapter. */
+export function isSameMemorySearchProvider(left?: string, right?: string): boolean {
+  const canonical = (id?: string) => {
+    const normalized = resolveMemorySearchProviderId(normalizeProviderId(id ?? ""));
+    return normalized === "google" ? "gemini" : normalized;
+  };
+  return canonical(left) === canonical(right);
 }
 
 function getConfiguredMemoryEmbeddingProvider(providerId: string, cfg: OpenClawConfig) {
@@ -169,6 +180,12 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
   const primaryAdapter = getConfiguredMemoryEmbeddingProvider(provider, cfg);
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
+  // Auth can follow another adapter only when the shared destination follows it too.
+  const inheritedRemote =
+    isSameMemorySearchProvider(provider, defaults?.provider) ||
+    (overrideRemote?.baseUrl === undefined && defaultRemote?.baseUrl?.trim())
+      ? defaultRemote
+      : undefined;
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
   const fallbackAdapter =
     normalizeProviderId(provider) !== "none" && fallback && fallback !== "none"
@@ -183,9 +200,9 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
     fallbackAdapter?.transport === "remote";
   const remote = includeRemote
     ? {
-        baseUrl: overrideRemote?.baseUrl ?? defaultRemote?.baseUrl,
-        apiKey: overrideRemote?.apiKey ?? defaultRemote?.apiKey,
-        headers: overrideRemote?.headers ?? defaultRemote?.headers,
+        baseUrl: overrideRemote?.baseUrl ?? inheritedRemote?.baseUrl,
+        apiKey: overrideRemote?.apiKey ?? inheritedRemote?.apiKey,
+        headers: overrideRemote?.headers ?? inheritedRemote?.headers,
         batch: {
           enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? false,
           wait: true,
@@ -214,6 +231,7 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
     remote,
     fallback,
     model,
+    inputFormat: overrides?.inputFormat ?? defaults?.inputFormat,
     inputType,
     queryInputType,
     queryInstruction: (overrides?.queryInstruction ?? defaults?.queryInstruction) || undefined,
