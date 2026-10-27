@@ -179,8 +179,9 @@ export function createSnapshotRecord(
   let snapshot: ChatSessionSnapshot;
   let weight: number;
   try {
-    let projected = { ...pending.snapshot };
-    const messages = projected.messages;
+    const source = pending.snapshot;
+    const changes: Partial<ChatSessionSnapshot> = {};
+    const messages = source.messages;
     let start = Math.max(0, messages.length - CHAT_SNAPSHOT_MESSAGE_LIMIT);
     // A history entry can project multiple rows; retain its whole sequence group.
     while (start > 0) {
@@ -194,23 +195,28 @@ export function createSnapshotRecord(
       // Display rows are not Gateway page boundaries. Refill from zero on the
       // first upward scroll; the history owner deduplicates the overlap and
       // returns the next authoritative offset, including merged CLI histories.
-      projected.messages = messages.slice(start);
-      projected.pagination = {
+      changes.messages = messages.slice(start);
+      changes.pagination = {
         hasMore: true,
         nextOffset: 0,
-        ...(projected.pagination.totalMessages !== undefined
-          ? { totalMessages: projected.pagination.totalMessages }
+        ...(source.pagination.totalMessages !== undefined
+          ? { totalMessages: source.pagination.totalMessages }
           : {}),
       };
     }
-    if (projected.messageReactions) {
-      projected.messageReactions = projectChatMessageReactions(
-        projected.messages,
-        new Map(Object.entries(projected.messageReactions)),
+    if (source.messageReactions) {
+      changes.messageReactions = projectChatMessageReactions(
+        changes.messages ?? messages,
+        new Map(Object.entries(source.messageReactions)),
       );
     }
-    projected.rowDisplay = projectChatRowDisplay(projected);
-    projected = boundChatThumbnails(projected);
+    const rowDisplay = projectChatRowDisplay(source, start);
+    if (rowDisplay !== source.rowDisplay) {
+      changes.rowDisplay = rowDisplay;
+    }
+    const projected = boundChatThumbnails(
+      Object.keys(changes).length ? { ...source, ...changes } : source,
+    );
     // Pairing credentials stay in the live projection, never the browser's disk cache.
     let redacted = false;
     const serialized = JSON.stringify(projected, (_key, value: unknown) => {
