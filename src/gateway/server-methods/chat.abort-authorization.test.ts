@@ -176,20 +176,10 @@ describe("chat.abort authorization", () => {
     }
   });
 
-  it.each([
-    { requester: "other client", invoke: abortAsOther, allowed: false },
-    { requester: "operator.admin", invoke: abortAsAdmin, allowed: true },
-  ])("applies exact-run ownership to $requester", async ({ invoke, allowed }) => {
-    const respond = await invoke({ context: singleContext(), runId: "run-1" });
-    const [ok, payload, error] = requireLastRespondCall(respond);
-    expect(ok).toBe(allowed);
-    if (allowed) {
-      expectAbortPayload(payload, { aborted: true, runIds: ["run-1"] });
-    } else {
-      expect(payload).toBeUndefined();
-      expect(error).toMatchObject({ code: "INVALID_REQUEST", message: "unauthorized" });
-      expect(rpcSourceTesting.has("run-1")).toBe(true);
-    }
+  it("allows an administrator to stop another owner's exact run", async () => {
+    const respond = await abortAsAdmin({ context: singleContext(), runId: "run-1" });
+    expect(requireLastRespondCall(respond)[0]).toBe(true);
+    expectResult(respond, ["run-1"]);
   });
 
   it("does not reveal a foreign hidden run to ordinary session aborts", async () => {
@@ -258,6 +248,9 @@ describe("chat.abort queued-turn contract", () => {
     expect(call[0]).toBe(false);
     if (sessionKey) {
       expect(call[2]?.message).toBe("runId does not match sessionKey");
+    } else {
+      expect(call[1]).toBeUndefined();
+      expect(call[2]).toMatchObject({ code: "INVALID_REQUEST", message: "unauthorized" });
     }
     expect(queued.input.abortSignal.aborted).toBe(false);
     expect(rpcSourceTesting.has("queued-1")).toBe(true);
