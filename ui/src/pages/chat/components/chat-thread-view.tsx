@@ -16,14 +16,19 @@ import { handleMarkdownTableInteraction } from "../../../components/markdown-tab
 import { LoadingState } from "../../../components/solid/loading-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import {
   anchorFromNavigationEvent,
   shouldHandleNavigationClick,
 } from "../../../lib/navigation-click.ts";
+import { projectGateway } from "../../../lib/reactive/application.ts";
+import { projectCallbackOwner } from "../../../lib/reactive/callback-owner.ts";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
+import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
 import {
   getExpandedToolCards,
@@ -32,6 +37,7 @@ import {
   subscribeExpansionState,
 } from "../chat-thread.ts";
 import { retainLinkFaviconCache } from "../link-favicon-cache.ts";
+import { ProcessesPanelData } from "../processes-panel-data.ts";
 import { ChatCommentPins } from "./chat-comment-pins.tsx";
 import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
@@ -69,6 +75,71 @@ export function ChatThread(input: {
   bindViewport?: (element: HTMLDivElement) => () => void;
 }) {
   const mobile = useContext(ChatConversationMobile);
+  const application = useOptionalApplication();
+  const processGateway = createMemo(() => {
+    const context = input.props.applicationContext ?? application;
+    return context ? projectGateway(context.gateway) : undefined;
+  });
+  const processVisibility = createMemo(() =>
+    projectPresentation(input.props.transcriptVisible ?? input.props.presented ?? true),
+  );
+  const processScope = createMemo(
+    () => {
+      const context = input.props.applicationContext ?? application;
+      const sessionKey = input.props.sessionKey;
+      const agentId = input.props.currentAgentId ?? "main";
+      const gateway = processGateway()?.read().snapshot;
+      return context &&
+        processVisibility().read() &&
+        input.props.onOpenProcesses &&
+        sessionKey &&
+        (gateway?.phase !== "connected" ||
+          canCallGatewayMethod(gateway, "sessions.processes.list", "operator.read"))
+        ? { context, sessionKey, agentId }
+        : null;
+    },
+    {
+      equals: (a, b) =>
+        a?.context === b?.context && a?.sessionKey === b?.sessionKey && a?.agentId === b?.agentId,
+    },
+  );
+  // Observe the visible conversation even with zero commands or an idle parent.
+  // Processes and Details share the same owner; no panel needs to be open.
+  const processes = createMemo(() => {
+    const scope = processScope();
+    if (!scope) {
+      return undefined;
+    }
+    const { context, sessionKey, agentId } = scope;
+    const { owner, view } = projectCallbackOwner(
+      (changed) => new ProcessesPanelData(context, changed),
+      (data) => data.snapshot,
+    );
+    onSettled(() => {
+      owner.sync({ sessionKey, agentId, presented: true });
+      return () => owner.dispose();
+    });
+    return view;
+  });
+  const processWork = createMemo(() => {
+    const snapshot = processes()?.read();
+    if (!snapshot) {
+      return null;
+    }
+    // Retirement clears retained rows, not the fact that work is unconfirmed.
+    const unavailable = !snapshot.hasResult || Boolean(snapshot.readError);
+    const running = snapshot.rows.filter(
+      (row) => row.status === "running" && row.taskOwned === true,
+    );
+    return running.length || unavailable
+      ? {
+          count: unavailable ? 0 : running.length,
+          unavailable,
+          startedAt: running.length ? Math.min(...running.map((row) => row.startedAt)) : 0,
+          truncated: snapshot.truncated,
+        }
+      : null;
+  });
   let root: HTMLDivElement | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
   const paneId = createMemo(() => input.props.paneId);
@@ -114,7 +185,7 @@ export function ChatThread(input: {
   const current = createMemo(() => {
     const searchState = search().read();
     const { session } = presentation();
-    const projection = projectChatTranscript(input.props, session, searchState);
+    const projection = projectChatTranscript(input.props, session, searchState, processWork());
     expansionVersions();
     // Empty shells establish the baseline for first-submission animation.
     if (projection.isEmpty || projection.showLoadingSkeleton) {

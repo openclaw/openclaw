@@ -187,7 +187,9 @@ describe("composer run status", () => {
         );
         expect(container.querySelector(".agent-chat__composer-combobox")).toBeNull();
       }
-      expect(container.querySelector(".chat-working-indicator .chat-reading-indicator")).toBeNull();
+      expect(
+        container.querySelector(".chat-working-indicator .chat-reading-indicator"),
+      ).not.toBeNull();
       expect(container.querySelector(".chat-subagent-activity")).toBeNull();
       expect(container.querySelector("openclaw-working-phrase")).toBeNull();
       expect(container.textContent).not.toContain("Backend implementation");

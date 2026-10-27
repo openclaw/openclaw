@@ -1,14 +1,36 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { withExecRequestTurn } from "../infra/exec-request-context.js";
 import { readBackgroundProcesses, stopBackgroundProcess } from "./bash-process-observation.js";
-import { addSession, appendOutput, deleteSession, markExited } from "./bash-process-registry.js";
+import {
+  addSession,
+  appendOutput,
+  deleteSession,
+  markExited,
+  waitForExecScope,
+} from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
+import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
+import { runningSession } from "./bash-tools.lifecycle.test-support.js";
 
-const { cancel } = vi.hoisted(() => ({ cancel: vi.fn(() => true) }));
-vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: () => ({ cancel }) }));
+const { cancel, spawn } = vi.hoisted(() => ({
+  cancel: vi.fn(() => true),
+  spawn: vi.fn(),
+}));
+// mock-isolation: Only process I/O and approval setup are fixed; request ownership and observation are real.
+vi.mock("../process/supervisor/index.js", () => ({
+  getProcessSupervisor: () => ({ cancel, spawn }),
+}));
+vi.mock("./bash-tools.exec-host-gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bash-tools.exec-host-gateway.js")>()),
+  processGatewayAllowlist: vi.fn(async () => ({})),
+}));
 afterEach(() => {
   resetProcessRegistryForTests();
   cancel.mockClear();
+  spawn.mockReset();
+  vi.useRealTimers();
 });
 const scope = { scopeKeys: ["agent:main:owner"], agentId: "main" };
 const seed = (id: string, scopeKey = scope.scopeKeys[0]) => {
@@ -19,6 +41,64 @@ const seed = (id: string, scopeKey = scope.scopeKeys[0]) => {
   addSession(session);
   return session;
 };
+
+it("observes retained task ownership without mistaking detached or unknown commands for task work", async () => {
+  vi.useFakeTimers();
+  const completion = Promise.withResolvers<ReturnType<typeof createRunExit>>();
+  const launched = Promise.withResolvers<void>();
+  spawn.mockImplementation(async (input: { runId: string }) => {
+    launched.resolve();
+    return {
+      runId: input.runId,
+      activity: { resultSettled: false, lastOutputAtMs: 1 },
+      wait: () => completion.promise,
+    };
+  });
+  const identity = { runId: "task-run", sessionId: "task-session" };
+  const launch = (background: boolean) =>
+    withExecRequestTurn({ identity }, () =>
+      createExecTool({
+        ...identity,
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        scopeKey: scope.scopeKeys[0],
+        agentId: scope.agentId,
+        allowBackground: true,
+        notifyOnExit: false,
+      }).execute("exec", { command: "fixture-command", background, yieldMs: 10 }),
+    );
+  const unknown = seed("unknown");
+  try {
+    const owned = launch(false);
+    await Promise.race([
+      launched.promise,
+      owned.then((result) => {
+        throw new Error(`Exec did not start: ${JSON.stringify(result.details)}`);
+      }),
+    ]);
+    await vi.advanceTimersByTimeAsync(10);
+    const ownedId = runningSession((await owned).details).sessionId;
+    const serviceId = runningSession((await launch(true)).details).sessionId;
+    const running = readBackgroundProcesses(scope).processes;
+    expect(
+      Object.fromEntries(
+        running.map(({ processId, taskOwned, status }) => [processId, { taskOwned, status }]),
+      ),
+    ).toEqual({
+      [unknown.id]: { taskOwned: false, status: "running" },
+      [serviceId]: { taskOwned: false, status: "running" },
+      [ownedId]: { taskOwned: true, status: "running" },
+    });
+  } finally {
+    markExited(unknown, 0, null, "completed");
+    completion.resolve(createRunExit());
+    await waitForExecScope(scope.scopeKeys[0]!);
+  }
+  expect(readBackgroundProcesses(scope).processes.filter((row) => row.taskOwned)).toMatchObject([
+    { status: "completed", taskOwned: true, canStop: false },
+  ]);
+});
 
 it("keeps the observed incarnation through completion and refuses a same-slug successor", () => {
   const first = seed("same-slug");

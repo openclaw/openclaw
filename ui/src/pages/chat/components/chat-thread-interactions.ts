@@ -183,6 +183,8 @@ export type ChatThreadProps = Omit<
     onOpenSubagent?: (sessionKey: string) => void;
     /** Shows the session's subagents; absent where the pane has no list of them to show. */
     onOpenSubagents?: (focus?: boolean) => void;
+    /** Opens the existing session-scoped command collection. */
+    onOpenProcesses?: (instanceId?: string) => void;
   };
 
 type TranscriptInteractionProps = Pick<

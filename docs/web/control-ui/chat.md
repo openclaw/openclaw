@@ -63,39 +63,41 @@ finish. Selecting the count opens the **Subagents** panel on its list. Starting
 or discovering subagents does not open the panel automatically or change your
 selected panel. Child sessions that are not subagents are not part of that count.
 
-Under the reply, each unfinished subagent has its own row
-showing its name and current activity headline. Rows stay in launch order as
-activity changes and disappear when the subagent finishes. Until a current-run
-headline is available, the row shows **Running**, **Queued**, or **Waiting on
-subagents** when that child has delegated work of its own. Select a row to open
-that subagent in the **Subagents** panel, or its session when the panel does not
-list it. The rows reuse the chat's loaded subagent list; they do not load each
-child's transcript.
+The compact working footer keeps its claw and elapsed time visible while the
+parent waits on subagents. It shows separate counts for subagents and task-owned
+background commands; select a count to open **Subagents** or **Processes**.
+There is no separate per-worker activity list or delegation tracker in the
+transcript. Counts remain visible in bubble mode without opening a disclosure.
 
-When a turn hands off with `sessions_yield` and its subagents are still active,
-their live rows stay under that reply without a separate **Waiting on…** line.
-One muted timer at the far right of those rows shows the total time since your
-message, including subagent waits—not the sum of worker runtimes. It stays on
-the same clock across handoffs and resumes. If the loaded history cannot identify
-the complete request, the timer is omitted instead of estimating a total.
-Child activity also stays visible when a turn ends without a handoff. Until the
-subagent list is available, or when only ordinary child sessions remain, the
-existing working indicator remains as a fallback. Its wait clock measures the
-current idle interval from the parent’s latest recorded run end, even if the
-handoff is outside loaded history. A later parent update starts a new idle
-interval; this is not the original request duration or a child’s runtime. Child
-activity without a completed parent turn does not invent a parent wait.
-The parent’s own working indicator remains visible while the parent is actively
-working. There is no additional waiting-status line above the composer. Once
-everything it waited on has finished, the activity rows disappear until the agent resumes. Tool rows you opened stay open through the handoff. A
+Background commands are the reconnectable exec processes observed by the
+**Processes** panel, not every foreground tool call or OS process. Only positive
+retained request ownership makes a command unfinished task work. Explicitly
+detached services and processes whose task ownership is unavailable do not keep
+the footer working. Older workers that do not report ownership stay available
+in **Processes** without an inferred work indicator. A truncated process list
+shows the known command count with **+**, rather than claiming an exact total.
+An unavailable process observation reads **Commands unavailable**, not zero.
+
+Task-owned commands can keep the compact footer visible after the model turn
+ends, without marking the model as thinking. A command-only footer measures
+time since the oldest observed task-owned command started; an existing turn or
+subagent-wait footer retains its own clock. The wait clock spans the original
+request when loaded history identifies it, otherwise it measures the current
+idle interval from the parent’s latest recorded run end. It never adds worker
+runtimes or estimates a request duration. Finished work removes its count.
+
+The visible conversation shares the existing process observation with Details
+and Processes, so a command can appear without either panel being open. Hidden
+conversations release that demand; reconnect and scope changes use the same
+observation owner. Tool rows you opened stay open through a handoff. A
 successful `sessions_yield` waiting for an incoming message shows its public
 acknowledgment, or **Waiting for a message** when none was recorded. Child handoffs
-keep their existing activity rows. Private continuation context stays hidden.
+keep the compact footer. Private continuation context stays hidden.
 Turns with only tool calls use the usual activity rows; entries with nothing
 displayable do not leave an empty assistant reply.
 
-When the last subagent finishes, its activity row disappears and the block stays as it
-is, without a working indicator, until the turn resumes. Its answer then
+When the last subagent finishes, its wait indicator disappears unless task-owned
+commands are still running. The block stays in place until the turn resumes. Its answer then
 continues in that same block, with one footer at the end. Tool activity that
 resumes with nothing written in between joins the activity row from before the
 handoff. In dashboard sessions, tool activity recorded after the resumed

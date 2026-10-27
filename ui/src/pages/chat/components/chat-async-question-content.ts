@@ -1,7 +1,18 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { QuestionDraft } from "../../../app/question-prompt.ts";
+import type { QuestionDraft, QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { AsyncQuestions } from "./chat-async-question.types.ts";
+import { createTranscriptMemo } from "./chat-transcript-memo.ts";
+
+const questionIndexes = createTranscriptMemo<ReadonlyMap<string, QuestionPrompt>>();
+const emptyQuestions: ReadonlyMap<string, QuestionPrompt> = new Map();
+
+/** Transcript prompt indexes follow the exact immutable prompt inventory. */
+export function indexQuestionPrompts(prompts: readonly QuestionPrompt[] | undefined) {
+  return prompts
+    ? questionIndexes(prompts, [], () => new Map(prompts.map((prompt) => [prompt.id, prompt])))
+    : emptyQuestions;
+}
 
 function boundedText(value: unknown, limit: number): value is string {
   return typeof value === "string" && value.length <= limit && value.trim().length > 0;

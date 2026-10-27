@@ -4,6 +4,14 @@ import type { ApplicationGatewaySnapshot } from "../../../app/gateway.ts";
 import { canPresentGatewayMethod } from "../../../lib/gateway-methods.ts";
 import type { ProcessesPanelData } from "../processes-panel-data.ts";
 
+/** Compact task-work facts derived from the shared process observation. */
+export type ProcessWorkSummary = {
+  count: number;
+  startedAt: number;
+  truncated: boolean;
+  unavailable: boolean;
+};
+
 /** Unknown acquisition is pending; a known unavailable capability is a settled outcome. */
 export function isProcessesPresentationReady(
   owner: ProcessesPanelData | undefined,

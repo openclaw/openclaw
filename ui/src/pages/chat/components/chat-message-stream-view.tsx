@@ -13,6 +13,7 @@ import {
   resolveMessageActionDetails,
 } from "./chat-message-markdown-view.tsx";
 import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
+import type { ProcessWorkSummary } from "./chat-processes-presentation.ts";
 import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
 import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
 import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
@@ -49,7 +50,10 @@ export type StreamGroupOptions = MessageRenderOptions & {
   waitingApproval?: boolean;
   waitingSubagents?: ChatSubagentWait;
   runningSubagents?: number;
+  processWork?: ProcessWorkSummary | null;
+  waitingProcesses?: boolean;
   onOpenSubagents?: () => void;
+  onOpenProcesses?: () => void;
   runOutputTokens?: number | null;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
 };
@@ -107,6 +111,27 @@ export function StreamPartView(props: {
   );
 }
 
+/** Task-owned commands outlive their model turn without inventing model activity. */
+export function BackgroundProcessWork(props: {
+  sessionKey: string;
+  startedAt: number;
+  options: StreamGroupOptions;
+}) {
+  const parts = createMemo<StreamGroupPart[]>(() => [
+    {
+      kind: "reading-indicator",
+      key: "running-processes:" + props.sessionKey,
+      startedAt: props.startedAt,
+    },
+  ]);
+  return (
+    <StreamGroup
+      parts={parts()}
+      options={{ ...props.options, waitingProcesses: true, runOutputTokens: null }}
+    />
+  );
+}
+
 function NonstreamPart(props: {
   part: StreamGroupPart;
   options: StreamGroupOptions;
@@ -143,7 +168,10 @@ function NonstreamPart(props: {
             waitingSubagents:
               part().waitingOn === "subagents" ? props.options.waitingSubagents : undefined,
             runningSubagents: props.options.runningSubagents,
+            processWork: props.options.processWork,
+            waitingProcesses: props.options.waitingProcesses,
             onOpenSubagents: props.options.onOpenSubagents,
+            onOpenProcesses: props.options.onOpenProcesses,
             startupLabel: props.options.startupLabel,
             retryAt: props.options.retryAt,
             outputTokens: props.options.runOutputTokens,

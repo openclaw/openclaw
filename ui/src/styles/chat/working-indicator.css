@@ -88,7 +88,8 @@
 }
 
 /* Running subagent counts lead to their panel while the parent works. */
-button.chat-working-indicator__subagents {
+button.chat-working-indicator__subagents,
+button.chat-working-indicator__processes {
   padding: 0;
   border: 0;
   background: none;
@@ -96,7 +97,8 @@ button.chat-working-indicator__subagents {
   font: inherit;
 }
 
-button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
+button.chat-working-indicator__subagents:is(:hover, :focus-visible),
+button.chat-working-indicator__processes:is(:hover, :focus-visible) {
   text-decoration: underline;
 }
 
@@ -104,6 +106,10 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   gap: 6px;
   min-height: 0;
   margin-top: 4px;
+}
+
+.chat-group.assistant .chat-working-indicator--background .chat-bubble.chat-reading-indicator {
+  padding: 0;
 }
 
 .chat-turn-recap {

@@ -479,7 +479,7 @@ suite.define(() => {
         };
         await runningCount.waitFor();
         expect(await indicator.count()).toBe(1);
-        expect(await indicator.locator(".chat-reading-indicator").count()).toBe(0);
+        expect(await indicator.locator(".chat-reading-indicator").count()).toBe(1);
         expect(await indicator.locator("openclaw-working-phrase").count()).toBe(0);
         expect(await indicator.textContent()).not.toContain("Backend implementation");
         expect(await activePane.locator(".agent-chat__composer-run-status--waiting").count()).toBe(

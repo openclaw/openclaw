@@ -4,8 +4,6 @@ import { i18n } from "../../../i18n/index.ts";
 import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-avatar.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
-import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
-import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
 import { resolveTurnRecap, shouldRenderQueuedSendInThread } from "../chat-progress.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
@@ -20,11 +18,12 @@ import {
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
-import { readAsyncQuestions } from "./chat-async-question-content.ts";
+import { indexQuestionPrompts } from "./chat-async-question-content.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
+import type { ProcessWorkSummary } from "./chat-processes-presentation.ts";
 import { projectRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -34,7 +33,6 @@ import {
   resolveTranscriptAvatarPlacement,
   resolveTranscriptParticipants,
 } from "./chat-transcript-identity.ts";
-import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 import {
   expandReplyTargetWork,
   projectTranscriptChain,
@@ -48,6 +46,7 @@ import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
   transcriptReplyDependencies,
+  transcriptContentDependencies,
 } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
@@ -55,13 +54,11 @@ import { createTranscriptStreamSource } from "./chat-transcript-stream-source.ts
 import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
-const questionIndexes = createTranscriptMemo<NonNullable<StreamGroupOptions["questionPrompts"]>>();
-const emptyQuestions: NonNullable<StreamGroupOptions["questionPrompts"]> = new Map();
-
 export function projectChatTranscript(
   props: ChatThreadProps,
   transcript: ChatTranscriptSession,
   search = getTranscriptState(props.paneId).search.snapshot,
+  processWork: ProcessWorkSummary | null = null,
 ) {
   const state = getTranscriptState(props.paneId);
   const realtimeConversation = projectRealtimeTalkConversation(props);
@@ -186,13 +183,6 @@ export function projectChatTranscript(
     latestBrowserTabs: props.latestBrowserTabs,
     bubbleMode: props.chatBubbleMode,
   });
-  const questionPrompts = props.questionPrompts
-    ? questionIndexes(
-        props.questionPrompts,
-        [],
-        () => new Map(props.questionPrompts!.map((prompt) => [prompt.id, prompt])),
-      )
-    : emptyQuestions;
   const toggleToolCardExpanded = (toolCardId: string, expanded?: boolean) => {
     setExpansionState(
       expandedToolCards,
@@ -201,9 +191,8 @@ export function projectChatTranscript(
     );
   };
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
-  const hasLiveContent = Boolean(
-    subagents.wait || hasTypingActors || realtimeConversation.hasEntries(),
-  );
+  const hasLiveContent =
+    subagents.wait || processWork || hasTypingActors || realtimeConversation.hasEntries();
   // An empty page is not an empty conversation. Keep the transcript mounted
   // while older history exists so the reader can request the next page.
   const isEmpty =
@@ -327,9 +316,11 @@ export function projectChatTranscript(
         }
       : undefined,
     runningSubagents: subagents.running,
+    processWork,
     onOpenSubagents: subagents.listed ? props.onOpenSubagents : undefined,
+    onOpenProcesses: props.onOpenProcesses,
     runOutputTokens,
-    questionPrompts,
+    questionPrompts: indexQuestionPrompts(props.questionPrompts),
   } satisfies StreamGroupOptions;
   const renderGroupOptions = (item: MessageGroup) => {
     const continuation = continuations.get(item.key);
@@ -402,6 +393,7 @@ export function projectChatTranscript(
   const workingUsageKey = JSON.stringify([
     runOutputTokens,
     subagents.statusKey,
+    processWork,
     presented,
     bubbleActivityGroupKey,
   ]);
@@ -523,23 +515,17 @@ export function projectChatTranscript(
   const renderItem = guardChatRenderItems(
     state.transcriptRenderDependencies,
     (item) => {
-      const groups = chatItemGroups(item);
-      const hasTools = groups.some((group) =>
-        group.messages.some(({ message }) => extractToolCardsCached(message).length > 0),
-      );
-      const hasQuestions =
-        asyncQuestions &&
-        groups.some((group) => group.messages.some(({ message }) => readAsyncQuestions(message)));
       return [
         liveStatusSignature(item),
         item.key === liveItem?.key ? resolveLiveStream : undefined,
         ...transcriptReplyDependencies(item, loadedReplySources),
-        // Durable drafts can restore the same map under a new callback generation.
-        hasQuestions ? asyncQuestions.drafts : undefined,
-        hasQuestions ? asyncQuestionGeneration : undefined,
-        // Tool plugins own foreground activity; launch cards also read the child roster.
-        hasTools ? presented : undefined,
-        hasTools ? subagents.rowsKey : undefined,
+        ...transcriptContentDependencies(
+          item,
+          asyncQuestions,
+          asyncQuestionGeneration,
+          presented,
+          subagents.rowsKey,
+        ),
         item.kind === "notice" ? props.onRetryRun : undefined,
         item.kind === "notice" ? props.failureActionsRunId : undefined,
       ];
@@ -553,7 +539,11 @@ export function projectChatTranscript(
       }
       if (item.kind === "stream-run" || item.kind === "question") {
         return item.kind === "question"
-          ? { kind: "stream", parts: [item], options: { questionPrompts } }
+          ? {
+              kind: "stream",
+              parts: [item],
+              options: { questionPrompts: streamGroupOptions.questionPrompts },
+            }
           : { kind: "stream", parts: item.parts, options: streamGroupOptions };
       }
       if (item.kind === "work-group") {
@@ -638,6 +628,14 @@ export function projectChatTranscript(
       kind: "wait",
       sessionKey: props.sessionKey,
       wait: subagents.wait,
+      options: streamGroupOptions,
+    });
+  }
+  if (processWork && !workingIndicator && !subagents.wait && !searchFiltering) {
+    appendContent("running-processes", {
+      kind: "processes",
+      sessionKey: props.sessionKey,
+      startedAt: processWork.startedAt,
       options: streamGroupOptions,
     });
   }

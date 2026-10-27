@@ -7,6 +7,7 @@ import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-scr
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
+  defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
@@ -16,6 +17,129 @@ const suite = createControlUiE2eSuite({ name: "Subagent presentation" });
 const now = 1_800_000_000_000;
 
 suite.define(() => {
+  it("keeps owned background commands visible without making detached services busy", async () => {
+    await suite.withPage(
+      { locale: "en-US", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        await page.clock.setFixedTime(now);
+        const key = "agent:main:background-command-footer";
+        const parent = {
+          key,
+          sessionId: "command-footer-parent",
+          kind: "direct",
+          label: "Verify the change",
+          hasActiveRun: false,
+          status: "done",
+          startedAt: now - 60_000,
+          endedAt: now - 45_000,
+        } satisfies GatewaySessionRow;
+        const service = {
+          processId: "preview",
+          instanceId: "preview-1",
+          name: "Preview server",
+          status: "running",
+          startedAt: now - 60_000,
+          taskOwned: false,
+          tail: "Preview available",
+          truncated: false,
+          canStop: true,
+        } as const;
+        const command = {
+          ...service,
+          processId: "tests",
+          instanceId: "tests-1",
+          name: "Targeted tests",
+          startedAt: now - 30_000,
+          taskOwned: true,
+          tail: "Running targeted tests",
+        };
+        const result = (processes: readonly (typeof service | typeof command)[]) => ({
+          sessionId: parent.sessionId,
+          processes,
+          truncated: false,
+        });
+        const gateway = await installMockGateway(page, {
+          sessionKey: key,
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "sessions.processes.list",
+            "sessions.processes.stop",
+          ],
+          sessions: [parent],
+          historyMessages: [
+            {
+              role: "user",
+              content: "Verify the change and leave the preview available.",
+              timestamp: now - 60_000,
+            },
+            {
+              role: "assistant",
+              content: "The preview is available. I started the targeted checks.",
+              stopReason: "stop",
+              timestamp: now - 45_000,
+            },
+          ],
+          methodResponses: { "sessions.processes.list": result([service]) },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+        const pane = page.locator(".chat-pane-cache__pane--active");
+        await gateway.waitForRequest("sessions.processes.list", {
+          match: { key, agentId: "main" },
+        });
+        await pane
+          .getByText("The preview is available. I started the targeted checks.", { exact: true })
+          .waitFor();
+        expect(await pane.locator(".chat-working-indicator").count()).toBe(0);
+        await gateway.setMethodResponse("sessions.processes.list", result([service, command]));
+        await gateway.emitGatewayEvent("sessions.processes.changed", {
+          sessionKey: key,
+          agentId: "main",
+        });
+        const footer = pane.locator(".chat-working-indicator");
+        const count = footer.getByRole("button", { name: "1 command running", exact: true });
+        await count.waitFor();
+        await gateway.setOnline(false);
+        await footer.getByRole("button", { name: "Commands unavailable", exact: true }).waitFor();
+        expect(await footer.locator(".chat-reading-indicator, openclaw-elapsed-time").count()).toBe(
+          0,
+        );
+        await gateway.setOnline(true);
+        await count.waitFor();
+        expect(await footer.locator(".chat-reading-indicator svg").count()).toBe(1);
+        expect(await footer.locator("openclaw-working-phrase").count()).toBe(0);
+        const artifactDir = createControlUiE2eArtifactDir("command-footer");
+        const frame = await takeControlUiScreenshotFrame(page, pane, [footer], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(artifactDir, "owned-command.png"), frame.png);
+        await count.click();
+        const panel = pane.locator("openclaw-chat-processes-panel");
+        await panel.waitFor();
+        await panel.getByText("Targeted tests", { exact: true }).waitFor();
+        await panel.getByText("Preview server", { exact: true }).waitFor();
+        await pane.getByRole("button", { name: "Close Processes", exact: true }).click();
+        await gateway.setMethodResponse("sessions.processes.list", {
+          __mockError: { code: "UNAVAILABLE", message: "The execution worker is reconnecting." },
+        });
+        await gateway.emitGatewayEvent("sessions.processes.changed", {
+          sessionKey: key,
+          agentId: "main",
+        });
+        await footer.getByRole("button", { name: "Commands unavailable", exact: true }).waitFor();
+        expect(await footer.locator(".chat-reading-indicator, openclaw-elapsed-time").count()).toBe(
+          0,
+        );
+        await gateway.setMethodResponse("sessions.processes.list", result([service]));
+        await gateway.emitGatewayEvent("sessions.processes.changed", {
+          sessionKey: key,
+          agentId: "main",
+        });
+        await footer.waitFor({ state: "detached" });
+        expect(await pane.locator(".chat-reading-indicator").count()).toBe(0);
+      },
+    );
+  });
+
   it.each([
     { name: "ordinary", count: 1, grouped: false },
     { name: "swarm", count: 12, grouped: true },

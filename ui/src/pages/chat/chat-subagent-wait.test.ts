@@ -402,7 +402,7 @@ describe("chat waiting on subagents", () => {
   });
 
   it.each([false, true])(
-    "keeps idle waits quiet and the footer count navigable (bubble mode: %s)",
+    "keeps delegated work visible and the footer count navigable (bubble mode: %s)",
     (bubbleMode) => {
       const now = 66_500;
       vi.spyOn(Date, "now").mockReturnValue(now);
@@ -424,9 +424,8 @@ describe("chat waiting on subagents", () => {
           workingPhrases: ["Building"],
         },
       );
-      expect(
-        container.querySelector(".chat-reading-indicator, .chat-bubble-dots--working"),
-      ).toBeNull();
+      expect(container.querySelector(".chat-reading-indicator svg")).not.toBeNull();
+      expect(container.querySelector(".chat-bubble-dots--working")).toBeNull();
       expect(
         container.querySelector("openclaw-working-phrase, details, .chat-subagent-activity"),
       ).toBeNull();

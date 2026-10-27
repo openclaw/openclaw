@@ -12,6 +12,7 @@ import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { themeBrandingProjection } from "../../../lib/reactive/theme-branding.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
+import type { ProcessWorkSummary } from "./chat-processes-presentation.ts";
 import { ChatRetryStatus } from "./chat-retry-status.tsx";
 import { outputTokensLabel, WorkingBrandGlyph } from "./chat-working-indicator-branding.tsx";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
@@ -27,8 +28,11 @@ type ChatWorkingIndicatorOptions = {
   workingPhrases?: readonly string[];
   waitingApproval?: boolean;
   waitingSubagents?: ChatSubagentWait;
+  waitingProcesses?: boolean;
   runningSubagents?: number;
+  processWork?: ProcessWorkSummary | null;
   onOpenSubagents?: () => void;
+  onOpenProcesses?: () => void;
   startupLabel?: string;
   retryAt?: number;
   outputTokens?: number | null;
@@ -50,7 +54,13 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
   });
   const waitingApproval = () => props.options.waitingApproval === true;
   const waitingSubagents = () => (props.options.waitingSubagents?.runningCount ?? 0) > 0;
-  const working = () => !waitingApproval() && !waitingSubagents() && !props.options.startupLabel;
+  const working = () =>
+    !waitingApproval() &&
+    !waitingSubagents() &&
+    !props.options.waitingProcesses &&
+    !props.options.startupLabel;
+  const backgroundWork = () =>
+    (props.options.runningSubagents ?? 0) > 0 || (props.options.processWork?.count ?? 0) > 0;
   const continuation = () => props.options.presentation === "continuation";
   const indicator = () =>
     props.options.workingIndicator ??
@@ -64,12 +74,28 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
     runningSubagents() === 1
       ? t("chat.subagentsRunningOne")
       : t("chat.subagentsRunning", { count: String(runningSubagents()) });
+  const processLabel = () =>
+    props.options.processWork?.unavailable
+      ? t("chat.commandsUnavailable")
+      : props.options.processWork?.count === 1 && !props.options.processWork?.truncated
+        ? t("chat.commandsRunningOne")
+        : t("chat.commandsRunning", {
+            count:
+              String(props.options.processWork?.count ?? 0) +
+              (props.options.processWork?.truncated ? "+" : ""),
+          });
   const statusLabel = () =>
     waitingApproval()
       ? t("chat.waitingForApproval")
       : waitingSubagents()
         ? t("chat.waitingOnSubagents")
-        : props.options.startupLabel || t("common.working");
+        : props.options.waitingProcesses
+          ? t(
+              props.options.processWork?.unavailable
+                ? "chat.commandsUnavailable"
+                : "chat.commandsWorking",
+            )
+          : props.options.startupLabel || t("common.working");
   return (
     <div
       class={[
@@ -77,6 +103,7 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
         {
           "chat-working-indicator--continued": continued,
           "chat-working-indicator--continuation": continuation(),
+          "chat-working-indicator--background": backgroundWork(),
         },
       ]}
       role="status"
@@ -84,9 +111,9 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
     >
       <Show
         when={
-          !props.options.bubbleMode &&
-          !continuation() &&
-          !waitingSubagents() &&
+          (!props.options.bubbleMode || backgroundWork()) &&
+          (!continuation() || backgroundWork()) &&
+          (!props.options.waitingProcesses || !props.options.processWork?.unavailable) &&
           indicator() !== "none"
         }
       >
@@ -121,7 +148,9 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
         <span
           class={{
             "sr-only":
-              waitingSubagents() || (working() && !continuation() && indicator() !== "none"),
+              waitingSubagents() ||
+              props.options.waitingProcesses ||
+              (working() && !continuation() && indicator() !== "none"),
           }}
         >
           <Show
@@ -143,7 +172,12 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
             {outputTokensLabel(props.options.outputTokens!)}
           </span>
         </Show>
-        <Show when={!waitingApproval()}>
+        <Show
+          when={
+            !waitingApproval() &&
+            !(props.options.waitingProcesses && props.options.processWork?.unavailable)
+          }
+        >
           <Show when={props.options.startupLabel || props.options.outputTokens != null}>
             <span aria-hidden="true">·</span>
           </Show>
@@ -175,6 +209,27 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
             </button>
           </Show>
         </Show>
+        <Show
+          when={
+            (props.options.processWork?.count ?? 0) > 0 || props.options.processWork?.unavailable
+          }
+        >
+          <Show when={!props.options.waitingProcesses || !props.options.processWork?.unavailable}>
+            <span aria-hidden="true">·</span>
+          </Show>
+          <Show
+            when={props.options.onOpenProcesses}
+            fallback={<span class="chat-working-indicator__processes">{processLabel()}</span>}
+          >
+            <button
+              class="chat-working-indicator__processes"
+              type="button"
+              onClick={() => props.options.onOpenProcesses?.()}
+            >
+              {processLabel()}
+            </button>
+          </Show>
+        </Show>
       </span>
     </div>
   );
@@ -185,7 +240,13 @@ export function ChatWorkingIndicator(props: WorkingProps) {
   const attention = () => props.options.waitingApproval || props.options.retryAt !== undefined;
   return (
     <Show
-      when={props.options.bubbleMode && !props.options.waitingSubagents?.runningCount}
+      when={
+        props.options.bubbleMode &&
+        !props.options.waitingSubagents?.runningCount &&
+        !props.options.runningSubagents &&
+        !props.options.processWork?.count &&
+        !props.options.processWork?.unavailable
+      }
       fallback={<WorkingStatus {...props} branding={branding.read()} />}
     >
       <Show when={!props.options.bubbleActivityActive}>

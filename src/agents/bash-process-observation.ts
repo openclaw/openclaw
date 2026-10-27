@@ -6,6 +6,7 @@ import {
   SESSION_PROCESSES_MAX_ROWS,
   type SessionProcessSummary,
 } from "../../packages/gateway-protocol/src/schema/session-processes.js";
+import { readExecRequestOwners } from "../infra/exec-request-context.js";
 import {
   cancelBackgroundExecSession,
   isBackgroundExecCancellable,
@@ -55,6 +56,7 @@ export function readBackgroundProcesses(scope: ProcessObservationScope): {
         SESSION_PROCESS_NAME_MAX_CHARS,
       ),
       status: isConfirmedRequestedStop(session) ? "killed" : (session.terminalStatus ?? "running"),
+      taskOwned: Boolean(readExecRequestOwners(session)?.length),
       startedAt: session.startedAt,
       ...(session.endedAt !== undefined ? { endedAt: session.endedAt } : {}),
       tail: output,

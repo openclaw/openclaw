@@ -1,7 +1,9 @@
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
+import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
-import type { ChatThreadState } from "./chat-thread-interactions.ts";
+import type { ChatThreadProps, ChatThreadState } from "./chat-thread-interactions.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 
@@ -56,6 +58,29 @@ export function transcriptReplyDependencies(
     }
   }
   return dependencies;
+}
+
+/** Content-owned dependencies invalidate only rows that consume those facts. */
+export function transcriptContentDependencies(
+  item: ChatRenderItem,
+  questions: ChatThreadProps["asyncQuestions"],
+  questionGeneration: ChatThreadState["asyncQuestionGeneration"],
+  presented: boolean,
+  subagentRowsKey: string,
+): readonly unknown[] {
+  const groups = chatItemGroups(item);
+  const hasTools = groups.some((group) =>
+    group.messages.some(({ message }) => extractToolCardsCached(message).length > 0),
+  );
+  const hasQuestions =
+    questions &&
+    groups.some((group) => group.messages.some(({ message }) => readAsyncQuestions(message)));
+  return [
+    hasQuestions ? questions.drafts : undefined,
+    hasQuestions ? questionGeneration : undefined,
+    hasTools ? presented : undefined,
+    hasTools ? subagentRowsKey : undefined,
+  ];
 }
 
 export function trackTranscriptRenderDependencies(

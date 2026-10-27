@@ -15,6 +15,8 @@ export const SessionProcessSummarySchema = closedObject({
   instanceId: NonEmptyString,
   name: Type.String({ maxLength: SESSION_PROCESS_NAME_MAX_CHARS }),
   status: stringLiteralUnion(["running", "completed", "failed", "killed"]),
+  /** Positive retained request ownership; false or absent does not identify a service. */
+  taskOwned: Type.Optional(Type.Boolean()),
   startedAt: Type.Number(),
   endedAt: Type.Optional(Type.Number()),
   tail: Type.String({ maxLength: SESSION_PROCESS_TAIL_MAX_CHARS }),
