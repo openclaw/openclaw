@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
@@ -169,8 +170,9 @@ export function registerSecretsCli(program: Command): void {
           `Secrets audit: ${report.status}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, storeResidue=${report.summary.storeResidueCount}, legacy=${report.summary.legacyResidueCount}.`,
         );
         for (const finding of report.findings.slice(0, 20)) {
+          // Config paths and finding text are untrusted; keep human lines from controlling the terminal.
           defaultRuntime.log(
-            `- [${finding.code}] ${finding.file}:${finding.jsonPath} ${finding.message}`,
+            `- [${sanitizeTerminalText(finding.code)}] ${sanitizeTerminalText(finding.file)}:${sanitizeTerminalText(finding.jsonPath)} ${sanitizeTerminalText(finding.message)}`,
           );
         }
         if (report.findings.length > 20) {
@@ -242,7 +244,7 @@ export function registerSecretsCli(program: Command): void {
               );
               if (configured.preflight.warningCount > 0) {
                 for (const warning of configured.preflight.warnings) {
-                  defaultRuntime.log(`- warning: ${warning}`);
+                  defaultRuntime.log(`- warning: ${sanitizeTerminalText(warning)}`);
                 }
               }
               if (
@@ -259,7 +261,7 @@ export function registerSecretsCli(program: Command): void {
                 `Plan: targets=${configured.plan.targets.length}, providerUpserts=${providerUpserts}, providerDeletes=${providerDeletes}.`,
               );
               if (opts.planOut) {
-                defaultRuntime.log(`Plan written to ${opts.planOut}`);
+                defaultRuntime.log(`Plan written to ${sanitizeTerminalText(opts.planOut)}`);
               }
             }
 
