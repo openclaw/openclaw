@@ -108,6 +108,7 @@ export function ChatGoalActions(props: GoalPresentationProps) {
                   type="button"
                   aria-label={t(`chat.goals.${action}`)}
                   disabled={action === "resume" && props.resumeBusy}
+                  style={{ opacity: action === "resume" && props.resumeBusy ? 0.5 : undefined }}
                   onClick={() => {
                     if (action === "edit") {
                       props.onGoalEdit?.(props.goal);

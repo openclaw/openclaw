@@ -271,9 +271,11 @@ input or recreate authority after a Gateway restart.
 
 The web Control UI shows the goal as a compact pill above the chat composer:
 a status icon, the status label (for example `Pursuing goal`), the truncated
-objective, and a live elapsed timer. Durations of a day or more use days and
-hours (for example `2d 1h`); durations of a week or more use weeks and days
-(for example `1wk 5d`) so long-running goals stay compact.
+objective, and a live elapsed timer. Seconds appear only below one minute;
+longer durations use whole minutes (`4m`) or hours and minutes (`2h 5m`).
+Day and week durations retain the remaining hours and minutes, including zeros
+(for example `1d 0h 0m` or `1wk 5d 17h 15m`), so long-running goals stay precise
+without a seconds counter.
 
 Active goals use a green target icon. Paused goals use a neutral pause icon,
 the normal card surface, and a frozen elapsed timer. Blocked or limited goals

@@ -286,8 +286,7 @@ export function createEngineBootScenarios(baseUrl: string): readonly EngineScena
         const draft = await composer.inputValue();
         await page.evaluate((input) => Reflect.get(window, "__streamingReply").start(input), {
           ...reply,
-          sessionKey,
-          runId,
+          streams: [{ sessionKey, runId }],
           burstSize: 1,
           observeTextVisibility: false,
         });

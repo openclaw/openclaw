@@ -8,7 +8,7 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
-import { appendTranscriptMessageSnapshotSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSnapshotSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readTranscriptMessageIdempotencyKey } from "../session-transcript-entry-message.js";

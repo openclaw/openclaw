@@ -208,7 +208,7 @@
   justify-content: center;
   width: var(--sidebar-rail-control-size);
   padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--sidebar-rail-divider-color, var(--border));
 }
 
 .sidebar-rail__create .sidebar-new-session {
@@ -393,9 +393,11 @@
   user-select: none;
 }
 
-/* The entry, not its link, paints hover/current fills so the trailing pin sits
-   inside the same highlight. Inset shadows keep row heights unchanged. */
+/* Page entries paint around the link and pin. Session rows extend their own
+   surface across the pin slot so tags and multi-selection keep one owner. */
 .sidebar-pages__entry {
+  --sidebar-pages-pin-width: 28px;
+
   display: flex;
   align-items: center;
   border-radius: var(--radius-md);
@@ -410,19 +412,18 @@
   margin-block-start: 2px;
 }
 
-.sidebar-pages__entry:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+.sidebar-pages__entry:has(.nav-item):where(:hover) {
+  background: var(--surface-hover);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .sidebar-pages__entry:has(.nav-item--active) {
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+  background: var(--surface-selected);
+  box-shadow: inset 0 0 0 1px var(--navigation-selected-border);
 }
 
-.sidebar-pages__entry:has(.sidebar-recent-session--active) {
-  background: color-mix(in srgb, var(--text) 10%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+.sidebar-pages__entry:has(.nav-item--active):hover {
+  background: var(--surface-selected-hover);
 }
 
 .sidebar-pages__entry .nav-item {
@@ -433,7 +434,7 @@
 .sidebar-pages__entry:hover
   :is(
     .nav-item:not(.nav-item--active),
-    .sidebar-recent-session:not(.sidebar-recent-session--active)
+    .sidebar-recent-session:not(.sidebar-recent-session--active, .sidebar-recent-session--selected)
   ) {
   color: var(--text);
 }
@@ -442,24 +443,34 @@
   opacity: 1;
 }
 
-.sidebar-pages__entry
-  .sidebar-recent-session:is(:hover, .sidebar-recent-session--active):not(
-    .sidebar-recent-session--selected
-  ) {
-  --session-row-bg: var(--session-row-tint, transparent);
-  --session-row-border: transparent;
-}
-
 .sidebar-pages__entry > .sidebar-zone-entry {
   flex: 1;
   min-width: 0;
+}
+
+.sidebar-pages__entry .sidebar-recent-session::after {
+  inset-inline-end: calc(-1px - var(--sidebar-pages-pin-width));
+}
+
+.sidebar-pages__entry:hover .sidebar-recent-session {
+  --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
+  --session-row-border: color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.sidebar-pages__entry:hover .sidebar-recent-session--active {
+  --session-row-bg: var(--surface-selected-hover);
+  --session-row-border: var(--navigation-selected-border);
+}
+
+.sidebar-pages__entry:hover .sidebar-recent-session--selected {
+  --session-row-bg: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .sidebar-pages__pin {
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 28px;
+  flex: 0 0 var(--sidebar-pages-pin-width, 28px);
   height: 28px;
   border: 0;
   border-radius: var(--radius-md);

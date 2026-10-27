@@ -104,11 +104,7 @@
   height: var(--chat-stack-trailing-control-size, 24px);
 }
 
-.agent-chat__goal-action:disabled {
-  opacity: 0.5;
-}
-
-.composer-context-strip__dismiss:hover,
+.composer-context-strip__dismiss:hover:not(:disabled),
 .agent-chat__goal-action:hover:not(:disabled) {
   color: var(--text);
   background: var(--surface-hover);

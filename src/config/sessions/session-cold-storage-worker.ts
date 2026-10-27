@@ -15,7 +15,7 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { readSessionGoalOperationInDatabase } from "./goals-operations.js";
+import { readSessionGoalOperationInDatabase } from "./goals-operation-receipts.js";
 import type {
   SessionColdArchive,
   SessionColdExternalization,

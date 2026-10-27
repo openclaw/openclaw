@@ -48,6 +48,7 @@ async function copyProvisionedFile(params: {
         overwrite: false,
         maxBytes: Infinity,
         preserveSourceMode: true,
+        preserveMetadata: true,
         sourceHardlinks: "allow",
         mutationSymlinks: "reject",
         durable: false,

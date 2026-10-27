@@ -84,12 +84,12 @@ it("keeps Resume progress and its saved retry in the goal pill", () => {
 it("replaces a live tick with the authoritative stop time and resumes ticking", () => {
   const view = mountGoal(goal);
   advanceTime(1_000);
-  expect(view.elapsed()).toBe("2m 01s");
+  expect(view.elapsed()).toBe("2m");
 
   for (const [next, immediate, afterMinute] of [
     [{ ...goal, status: "paused", pausedAt: 46_000 }, "45s", "45s"],
-    [goal, "3m 01s", "4m 01s"],
-    [{ ...goal, status: "complete", completedAt: 151_000 }, "2m 30s", "2m 30s"],
+    [goal, "3m", "4m"],
+    [{ ...goal, status: "complete", completedAt: 151_000 }, "2m", "2m"],
   ] satisfies [SessionGoal, string, string][]) {
     view.draw(next);
     expect(view.elapsed()).toBe(immediate);
@@ -112,7 +112,7 @@ it.each(["remove", "unmount"])(
     expect(vi.getTimerCount()).toBe(0);
     advanceTime(60_000);
     view = mountGoal(goal);
-    expect(view.elapsed()).toBe("3m 00s");
+    expect(view.elapsed()).toBe("3m");
     expect(vi.getTimerCount()).toBe(1);
   },
 );
