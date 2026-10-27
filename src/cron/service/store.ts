@@ -499,16 +499,16 @@ export async function persistCronJobMutation(params: {
         for (const entry of logs) {
           state.deps.log[entry.level](entry.fields, entry.message);
         }
+        const unchanged = getCronJobsStoreRevision(source.storeKey) === observedRevision;
         if (changed) {
           markCommitted?.();
+          noteCronJobsStoreCommit(source.storeKey);
+          // Mutations can cancel queued requests even when every execution slot is occupied.
+          // Wake their transient owners only after this store operation releases its lock.
+          void state.op.then(() => {
+            wakeCronRunQueues(state);
+          });
         }
-        const unchanged = getCronJobsStoreRevision(source.storeKey) === observedRevision;
-        noteCronJobsStoreCommit(source.storeKey);
-        // Mutations can cancel queued requests even when every execution slot is occupied.
-        // Wake their transient owners only after this store operation releases its lock.
-        void state.op.then(() => {
-          wakeCronRunQueues(state);
-        });
         if (unchanged) {
           publishCronJobNames(source.storeKey, source.context, names);
         }

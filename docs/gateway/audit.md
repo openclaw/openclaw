@@ -492,8 +492,11 @@ what was recorded, not as proof of what happened:
   A rejected metadata record does not stop the queue from accepting later records.
 - Shutdown drops waiting metadata at its existing deadline but joins submitted
   worker operations before releasing the writer.
-  The writer commits up to 32 already-queued items in one transaction, preserving
-  FIFO order. Per-item savepoints isolate rejected records; successful items are
+  Idle arrivals and lone queued items dispatch immediately. After an in-flight write
+  settles, a partial batch of at least two items can wait one fixed 5 ms window before submitting
+  up to 32 queued items in one transaction, preserving FIFO order. Later arrivals do
+  not extend that window. A full batch, maintenance, or shutdown flushes it immediately.
+  Per-item savepoints isolate rejected records; successful items are
   acknowledged to the queue only after the shared commit. Queue acceptance itself
   still does not acknowledge persistence. Lock contention retains the unprocessed suffix;
   a failed batch commit retains the whole batch for a contention retry;
