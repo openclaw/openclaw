@@ -7,7 +7,6 @@ import { deriveSessionMetaPatch } from "../config/sessions/metadata.js";
 import { patchSessionEntryCore, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveChatSendCallerContext } from "../gateway/server-methods/gateway-client-identity.js";
 import { createSessionMutationTestClient } from "../gateway/server-methods/sessions-mutations.owner.test-support.js";
-import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { inspectOpenDictionaryToolSchemas } from "../plugins/tool-schema-diagnostics.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
@@ -19,7 +18,6 @@ import {
   buildCodeModeCatalogPrompt,
   createCodeModeTools,
 } from "./code-mode.js";
-import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
@@ -63,54 +61,6 @@ function surface(tools: ReturnType<typeof createOpenClawCodingTools>) {
     JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters }),
   );
 }
-
-it("keeps the computer definition across connected desktop capabilities and availability", () => {
-  const render = (pairedNodeComputerUse?: PreparedPairedComputerUse) =>
-    surface(createOpenClawCodingTools({ ...userTurn, pairedNodeComputerUse }));
-  const expected = render();
-  for (const actions of [["screenshot"], ["list_windows", "screenshot"]] as const) {
-    const computerUse: ComputerUseCapabilityDescriptor = {
-      contractVersion: 2,
-      provider: { id: "fixture", label: "Fixture", generation: "generation-2" },
-      actions: [...actions],
-      targets: ["screen"],
-      deliveryModes: ["foreground"],
-      observations: ["image"],
-      features: { recording: false, agentCursor: false, multiDisplay: true },
-    };
-    for (const available of [false, true]) {
-      expect(
-        render({
-          actions,
-          guidanceCapabilities: computerUse,
-          gateway: { configured: true, available, computerUse },
-        }),
-      ).toEqual(expected);
-    }
-  }
-  expect(render({ actions: [], gateway: { configured: false, available: false } })).toEqual(
-    expected,
-  );
-});
-
-it("keeps an unavailable session desktop listed while gating its execution", async () => {
-  const create = (computerTransport: ToolOptions["computerTransport"]) =>
-    createOpenClawCodingTools({ ...userTurn, computerTransport });
-  const unavailable = create(null);
-  const desktop = unavailable.find((tool) => tool.name === "computer");
-  expect(desktop).toBeDefined();
-  expect((await desktop!.execute("unavailable", { action: "screenshot" })).details).toMatchObject({
-    gated: true,
-  });
-  expect(surface(unavailable)).toEqual(
-    surface(
-      create({
-        resolveNode: async () => ({ nodeId: "session-desktop" }),
-        invoke: async () => undefined,
-      }),
-    ),
-  );
-});
 
 async function webchatSession(clientKind: "browser" | "cli" = "browser") {
   const sessionKey = "agent:main:dashboard:prefix-proof";

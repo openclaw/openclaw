@@ -92,7 +92,6 @@ async function fixture(
   session.setActiveToolsByName(
     mode === "structured" ? tools.map((t) => t.name) : [...controls, "message"],
   );
-  const offeredToolNames = session.getActiveToolNames();
   const catalogRef = mode === "structured" ? undefined : createToolSearchCatalogRef();
   if (catalogRef) {
     registerHeadlessToolSearchCatalog({
@@ -173,19 +172,7 @@ async function fixture(
       persistToolResultProjections,
       promptActiveSession: (prompt, options) => session.prompt(prompt, options),
     });
-  return {
-    call,
-    assemble,
-    submit,
-    session,
-    policy,
-    catalogRef,
-    controller,
-    owner,
-    attempt,
-    tools,
-    offeredToolNames,
-  };
+  return { call, assemble, submit, session, policy, catalogRef, controller, owner, attempt, tools };
 }
 
 describe("prompt assembly with registered Decision runtime", () => {
@@ -226,8 +213,9 @@ describe("prompt assembly with registered Decision runtime", () => {
       const cfg = config();
       setRuntimeConfigSnapshot(cfg);
       const f = await fixture(cfg, mode);
+      const offeredToolNames = f.session.getActiveToolNames();
       const assembly = await f.assemble();
-      expect(f.session.getActiveToolNames()).toEqual(f.offeredToolNames);
+      expect(f.session.getActiveToolNames()).toEqual(offeredToolNames);
       expect(f.policy.current.callableToolNames).toEqual(["message"]);
       const entered = createDeferredCore();
       const barrier = createDeferredCore();
@@ -245,7 +233,7 @@ describe("prompt assembly with registered Decision runtime", () => {
       setRuntimeConfigSnapshot(next);
       barrier.resolve();
       await pending;
-      expect(captured).toEqual([f.offeredToolNames]);
+      expect(captured).toEqual([offeredToolNames]);
       expect(f.policy.current.callableToolNames).not.toContain("denied");
       if (f.catalogRef) {
         expect(f.catalogRef.current?.entries).toEqual([]);

@@ -223,6 +223,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     stableStringify([
       attempt.config?.tools,
       attempt.config?.agents?.entries?.[sessionAgentId]?.tools,
+      attempt.config?.plugins,
+      attempt.config?.desktop,
     ]),
   );
   const pinTools = usesSystemPromptSeries

@@ -41,12 +41,15 @@ necessarily delete the provider's older cache entry before its normal expiry.
 
 ## Stable tools between turns
 
-Computer definitions describe the protocol independently of connected desktops,
-provider capabilities, display geometry, and readiness. Selecting or refreshing a
-desktop reports its current capabilities in a tool result; it never rewrites the
-description or action schema. An unavailable session desktop retains its definition
-with execution gated. Current target capabilities, observation references, and
-authorization still determine whether a call can execute.
+Computer definitions capture the capabilities and target scope present when the
+session's tool surface is established, using the provider-specific guidance and
+action schema. The session checkpoint retains those description and schema bytes
+across later discovery and reconnects. Selecting or refreshing a desktop reports
+its current capabilities in a tool result; it never rewrites that definition.
+An unavailable action returns a structured refusal naming the currently available
+actions. Current observation references and authorization still govern execution.
+Provider configuration changes invalidate the tool pin; device readiness does not.
+The existing route and history-boundary refresh contracts remain in effect.
 
 The `sessions_yield` description does not change with sibling tool availability.
 Per-turn prompt-hook tool restrictions gate execution while retaining the session's

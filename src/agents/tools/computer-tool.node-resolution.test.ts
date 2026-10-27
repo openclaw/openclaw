@@ -202,7 +202,7 @@ describe("createComputerTool node resolution", () => {
     const selectors = ["target", "node", "gatewayUrl", "gatewayToken", "timeoutMs"];
     const schema = tool.parameters as { properties: Record<string, unknown> };
     expect(schema.properties.action).toMatchObject({
-      enum: expect.arrayContaining([...computerUse.actions, "wait", "take_control"]),
+      enum: [...computerUse.actions, "wait", "take_control"],
     });
     for (const selector of selectors) {
       expect(schema.properties).not.toHaveProperty(selector);
