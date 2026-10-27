@@ -3,7 +3,11 @@ import {
   GatewayClient,
   GatewayClientRequestTimeoutError,
 } from "../../packages/gateway-client/src/client.js";
-import type { GatewayProtocolSocket } from "../../packages/gateway-client/src/protocol-client.js";
+import {
+  GatewayProtocolClient,
+  type GatewayProtocolSocket,
+  type GatewayProtocolSocketHandlers,
+} from "../../packages/gateway-client/src/protocol-client.js";
 import type { RequestFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -15,10 +19,6 @@ import {
 import { authorizationClient } from "./server-methods.authorization.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-
-type ProtocolHarness = {
-  handleMessage(socket: GatewayProtocolSocket, generation: number, raw: string): void;
-};
 
 const methods = ["sessions.create", "agent", "chat.send", "sessions.send"] as const;
 
@@ -51,7 +51,21 @@ function createFixture(method: (typeof methods)[number]) {
   };
   const writes: RequestFrame[] = [];
   const client = new GatewayClient({});
-  const protocol = (client as unknown as { protocol: ProtocolHarness }).protocol;
+  let handlers: GatewayProtocolSocketHandlers | undefined;
+  const protocol = new GatewayProtocolClient({
+    createSocket: (next) => {
+      handlers = next;
+      return socket;
+    },
+    createRequestId: () => "startup-request",
+    createRequestTimeoutError: (method, timeoutMs, requestSent) =>
+      new GatewayClientRequestTimeoutError({ method, timeoutMs, requestSent }),
+    buildConnectPlan: () => ({}),
+    buildConnectParams: (plan) => plan,
+    resolveClose: () => ({ retry: false, notify: false }),
+    handshake: { mode: "require-challenge", timeoutMs: 100 },
+    reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
+  });
   const sent: string[] = [];
   const active: Promise<void>[] = [];
   const errors: unknown[] = [];
@@ -59,8 +73,14 @@ function createFixture(method: (typeof methods)[number]) {
     isOpen: () => true,
     close: () => {},
     send: (raw) => {
-      sent.push(raw);
       const req = JSON.parse(raw) as RequestFrame;
+      if (req.method === "connect") {
+        handlers?.message(
+          JSON.stringify({ type: "res", id: req.id, ok: true, payload: { type: "hello-ok" } }),
+        );
+        return;
+      }
+      sent.push(raw);
       active.push(
         handleGatewayRequest({
           req,
@@ -81,11 +101,7 @@ function createFixture(method: (typeof methods)[number]) {
           },
           respond: (ok, payload, error) => {
             reachedAdmission.resolve();
-            protocol.handleMessage(
-              socket,
-              1,
-              JSON.stringify({ type: "res", id: req.id, ok, payload, error }),
-            );
+            handlers?.message(JSON.stringify({ type: "res", id: req.id, ok, payload, error }));
           },
         }).catch((error: unknown) => {
           errors.push(error);
@@ -93,7 +109,14 @@ function createFixture(method: (typeof methods)[number]) {
       );
     },
   };
-  Object.assign(protocol, { socket, stopped: false, generation: 1 });
+  Object.assign(client, { protocol });
+  protocol.start();
+  void Promise.resolve().then(() => {
+    handlers?.open();
+    handlers?.message(
+      JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "fixture" } }),
+    );
+  });
   const fixture = {
     client,
     sent,

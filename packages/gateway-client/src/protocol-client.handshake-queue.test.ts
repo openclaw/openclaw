@@ -80,9 +80,11 @@ it("queues opening and signing requests until hello publishes, with connect firs
   const frames = () =>
     send.mock.calls.map(([data]) => JSON.parse(data) as { id: string; method: string });
   expect(frames().map((frame) => frame.method)).toEqual(["connect"]);
+  const connect = frames()[0];
+  assert(connect);
   receive(connection, {
     type: "res",
-    id: frames()[0]!.id,
+    id: connect.id,
     ok: true,
     payload: { type: "hello-ok" },
   });
@@ -190,7 +192,7 @@ it.each(["stop", "close"])("does not carry a pre-hello request across %s", async
   expect(onSent).not.toHaveBeenCalled();
 });
 it("does not release held requests when async hello acceptance retires its socket", async () => {
-  const accepted = createDeferred<void>();
+  const accepted = createDeferred();
   const onHello = vi.fn();
   const { client, connection, connections } = startProtocolHarness({
     onConnectHello: () => accepted.promise,
