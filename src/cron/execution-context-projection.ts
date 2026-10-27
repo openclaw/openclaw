@@ -5,6 +5,7 @@
  */
 import { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
+import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { resolveScheduledSenderBit } from "./execution-context-registry.js";
 import type {
   ScheduledAdmissionFacts,
@@ -27,12 +28,17 @@ type ScheduledDecisionField =
   | "ownerEmbedded"
   | "ownerCli"
   | "automations"
+  | "automationsCli"
+  | "requesterYield"
   | "board"
   | "eventTarget"
   | "memory"
   | "workspace"
   | "sandbox"
   | "parentState";
+
+/** Decision fields plus the bound inference runtime, which the replay supplies separately. */
+type ScheduledLabeledField = ScheduledDecisionField | "inference";
 
 /**
  * The owner-only surface a run's tools get: `owner` (no sender bit), `non-owner`
@@ -45,6 +51,9 @@ type ScheduledDecisionVector = Readonly<{
   ownerEmbedded: ScheduledOwnerSurface;
   ownerCli: ScheduledOwnerSurface;
   automations: "none" | "self" | "self-and-parent-wake";
+  /** The CLI loopback's automations tool; `session-turn` is the turn's owner-only rule. */
+  automationsCli: "none" | "self" | "self-and-parent-wake" | "session-turn";
+  requesterYield: "offered" | "refused";
   board: string;
   eventTarget: string;
   /** The parent's memory as the owner's private memory, or only its conversation. */
@@ -76,6 +85,10 @@ function projectLegacyDecisions(
     ownerCli: sessionTurn ? "session-turn" : "non-owner",
     // Scheduled and ingress turns are both limited to their own automation.
     automations: !automationsAllowed ? "none" : "self",
+    // The loopback denied automations to child and detached runs; in-session turns
+    // kept the grant's owner-only rule.
+    automationsCli: sessionTurn ? "session-turn" : "none",
+    requesterYield: isCronSessionKey(facts.runSessionKey) ? "refused" : "offered",
     board: facts.runSessionKey,
     eventTarget: inSession ? facts.runSessionKey : facts.agentMainSessionKey,
     memory: "run-session",
@@ -106,7 +119,7 @@ function projectContextDecisions(
       ? { admissionSource: facts.authority.admissionSource }
       : {}),
     ...projectContextOwner(result, legacy),
-    automations: facts.toolPolicy.automations.scope,
+    ...projectContextAutomations(result, legacy),
     board: facts.resources.boardSessionKey,
     eventTarget: facts.resources.eventTargetSessionKey,
     memory:
@@ -132,6 +145,25 @@ function projectContextOwner(
   }
   const surface = bit.senderIsOwner === false ? "non-owner" : "owner";
   return { ownerEmbedded: surface, ownerCli: surface };
+}
+
+// The automations tool and requester yield a run's tools get. The parent wake is
+// not offered yet, so a `self-and-parent-wake` scope offers the self actions.
+// Ingress turns keep their legacy CLI surface and yield.
+function projectContextAutomations(
+  result: Extract<ScheduledExecutionContextResult, { status: "ready" }>,
+  legacy: ScheduledDecisionVector,
+): Pick<ScheduledDecisionVector, "automations" | "automationsCli" | "requesterYield"> {
+  const { facts } = result;
+  const offered = facts.toolPolicy.automations.scope === "none" ? "none" : "self";
+  if (facts.principal.kind === "ingress") {
+    return {
+      automations: offered,
+      automationsCli: legacy.automationsCli,
+      requesterYield: legacy.requesterYield,
+    };
+  }
+  return { automations: offered, automationsCli: offered, requesterYield: "refused" };
 }
 
 const AUTOMATIONS_RANK: Record<ScheduledDecisionVector["automations"], number> = {
@@ -175,19 +207,56 @@ function labelField(
       ? "gain-intended"
       : "loss";
   }
+  if (field === "automationsCli") {
+    // The CLI taking the embedded run's scope is the parity fix; an in-session
+    // turn's unscoped owner tool narrowing to its own job is a loss.
+    if (before === "session-turn" || after === "none") {
+      return "loss";
+    }
+    return after === legacy.automations ? "gain-intended" : "gain-unexpected";
+  }
+  if (field === "requesterYield") {
+    return after === "refused" ? "loss" : "gain-unexpected";
+  }
   if (field === "admissionSource") {
     return after === "operator-schedule" ? "gain-unexpected" : "loss";
   }
   return INTENDED_GAINS.has(field) ? "gain-intended" : "gain-unexpected";
 }
 
+/**
+ * The runtime the existing run picks for a bound job from its copied cron session entry,
+ * read from the rows and config the run reads.
+ */
+export type ScheduledInferenceRuntimeFacts = Readonly<{ legacy: string }>;
+
+// A recorded runtime replaces the legacy pick; a binding without one keeps the legacy pick.
+function labelInference(
+  result: Extract<ScheduledExecutionContextResult, { status: "ready" }>,
+  runtimes: ScheduledInferenceRuntimeFacts,
+): Readonly<{ label: ScheduledDivergenceLabel; legacy: string; context: string }> | undefined {
+  const { inference } = result.facts;
+  if (inference.kind !== "bound") {
+    return undefined;
+  }
+  const recorded = inference.binding.runtime;
+  if (recorded) {
+    return {
+      label: recorded === runtimes.legacy ? "equal" : "retarget",
+      legacy: runtimes.legacy,
+      context: recorded,
+    };
+  }
+  return { label: "equal", legacy: runtimes.legacy, context: runtimes.legacy };
+}
+
 export type ScheduledDivergence = Readonly<{
   status: "ready" | "pause" | "fail";
-  labels: Readonly<Partial<Record<ScheduledDecisionField, ScheduledDivergenceLabel>>>;
+  labels: Readonly<Partial<Record<ScheduledLabeledField, ScheduledDivergenceLabel>>>;
   /** Only fields that differ, with both values. */
   changes: ReadonlyArray<
     Readonly<{
-      field: ScheduledDecisionField;
+      field: ScheduledLabeledField;
       legacy: unknown;
       context: unknown;
       label: ScheduledDivergenceLabel;
@@ -201,6 +270,8 @@ const FIELDS: readonly ScheduledDecisionField[] = [
   "ownerEmbedded",
   "ownerCli",
   "automations",
+  "automationsCli",
+  "requesterYield",
   "board",
   "eventTarget",
   "memory",
@@ -213,6 +284,7 @@ export function compareScheduledDecisions(
   job: ProjectionJob,
   facts: ScheduledAdmissionFacts,
   result: ScheduledExecutionContextResult,
+  inferenceRuntimes?: ScheduledInferenceRuntimeFacts,
 ): ScheduledDivergence {
   const legacy = projectLegacyDecisions(job, facts);
   const context = projectContextDecisions(result, legacy);
@@ -228,13 +300,23 @@ export function compareScheduledDecisions(
           : {}),
     };
   }
-  const labels: Partial<Record<ScheduledDecisionField, ScheduledDivergenceLabel>> = {};
+  const labels: Partial<Record<ScheduledLabeledField, ScheduledDivergenceLabel>> = {};
   const changes: Array<ScheduledDivergence["changes"][number]> = [];
   for (const field of FIELDS) {
     const label = labelField(field, legacy, context);
     labels[field] = label;
     if (label !== "equal") {
       changes.push({ field, legacy: legacy[field], context: context[field], label });
+    }
+  }
+  const inference =
+    result.status === "ready" && inferenceRuntimes
+      ? labelInference(result, inferenceRuntimes)
+      : undefined;
+  if (inference) {
+    labels.inference = inference.label;
+    if (inference.label !== "equal") {
+      changes.push({ field: "inference", ...inference });
     }
   }
   return { status: "ready", labels, changes };

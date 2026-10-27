@@ -141,12 +141,9 @@ async function withRelativeStore(
     };
     await writeOpenClawConfig(home, cfg);
     await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-      const cwd = vi.spyOn(process, "cwd").mockReturnValue(home);
-      try {
-        await run({ home, cfg, canonical: agentDatabase(stateDir), legacy: agentDatabase(home) });
-      } finally {
-        cwd.mockRestore();
-      }
+      using _ = vi.spyOn(process, "cwd").mockReturnValue(home);
+
+      await run({ home, cfg, canonical: agentDatabase(stateDir), legacy: agentDatabase(home) });
     });
   });
 }

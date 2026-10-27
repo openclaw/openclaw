@@ -415,59 +415,48 @@ describe("prepared fleet batches", () => {
   it("rebinds inherited auth when shared-store ownership moves before first capture", async () => {
     mocks.configuredAgentIds = ["first"];
     const config = {};
-    const inherited = vi.spyOn(legacyAuth, "resolveLegacyInheritedAuthDir");
+    using inherited = vi.spyOn(legacyAuth, "resolveLegacyInheritedAuthDir");
     inherited.mockReturnValue(fixture.state.agentDir("default"));
     mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
       inherited.mockReturnValue(undefined);
       mocks.mutationListener?.({ affectsInheritedStores: true });
       return { entries: [] };
     });
-    try {
-      await refresh(config);
-      const snapshot = getPreparedModelRuntimeSnapshot({
-        config,
-        agentId: "first",
-        agentDir: fixture.state.agentDir("first"),
-        workspaceDir: "/tmp/workspace-first",
-      });
-      expect(snapshot).toBeDefined();
-      expect(snapshot?.inheritedAuthDir).toBeUndefined();
-      expect(mocks.discoverAuthStorage.mock.calls.at(-1)?.[1]).not.toHaveProperty(
-        "inheritedAuthDir",
-      );
-    } finally {
-      inherited.mockRestore();
-    }
+
+    await refresh(config);
+    const snapshot = getPreparedModelRuntimeSnapshot({
+      config,
+      agentId: "first",
+      agentDir: fixture.state.agentDir("first"),
+      workspaceDir: "/tmp/workspace-first",
+    });
+    expect(snapshot).toBeDefined();
+    expect(snapshot?.inheritedAuthDir).toBeUndefined();
+    expect(mocks.discoverAuthStorage.mock.calls.at(-1)?.[1]).not.toHaveProperty("inheritedAuthDir");
   });
 });
 
 describe("prepared catalog source sharing", () => {
   it("keeps full-roster digest work constant as the fleet grows", async () => {
     const marker = "synthetic-roster-hash-boundary";
-    const digests = vi.spyOn(cryptoDigest, "sha256Base64Url");
-    try {
-      const counts: number[] = [];
-      for (const size of [8, 16]) {
-        mocks.configuredAgentIds = Array.from({ length: size }, (_, index) => `agent-${index}`);
-        const config: OpenClawConfig = {
-          agents: {
-            entries: Object.fromEntries(
-              mocks.configuredAgentIds.map((id) => [id, { name: marker }]),
-            ),
-          },
-        };
-        digests.mockClear();
-        await refresh(config);
-        counts.push(
-          digests.mock.calls.filter(
-            ([value]) => typeof value === "string" && value.includes(marker),
-          ).length,
-        );
-      }
-      expect(counts[0]).toBeGreaterThan(0);
-      expect(counts[1]).toBe(counts[0]);
-    } finally {
-      digests.mockRestore();
+    using digests = vi.spyOn(cryptoDigest, "sha256Base64Url");
+
+    const counts: number[] = [];
+    for (const size of [8, 16]) {
+      mocks.configuredAgentIds = Array.from({ length: size }, (_, index) => `agent-${index}`);
+      const config: OpenClawConfig = {
+        agents: {
+          entries: Object.fromEntries(mocks.configuredAgentIds.map((id) => [id, { name: marker }])),
+        },
+      };
+      digests.mockClear();
+      await refresh(config);
+      counts.push(
+        digests.mock.calls.filter(([value]) => typeof value === "string" && value.includes(marker))
+          .length,
+      );
     }
+    expect(counts[0]).toBeGreaterThan(0);
+    expect(counts[1]).toBe(counts[0]);
   });
 });

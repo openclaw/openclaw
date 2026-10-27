@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -591,7 +591,9 @@ suite.define(() => {
     await page.waitForTimeout(300);
     const recording = page.video()!;
     await suite.closeBrowserContext(context);
-    const videoBytes = await readFile(await recording.path());
+    const recordingPath = path.join(proofDir, "finalized-recording.webm");
+    await recording.saveAs(recordingPath);
+    const videoBytes = await readFile(recordingPath);
     // Decode the finalized WebM in a separate, non-recording context. Seeking twice
     // per 25fps recorder frame catches short corruption without depending on host ffmpeg.
     const decoder = await createPageWithoutRecording();
@@ -792,12 +794,18 @@ suite.define(() => {
     }
 
     await regions[1]!.evaluate((element) => element.setAttribute("style", "visibility: hidden"));
-    await expect(
-      takeControlUiScreenshotFrame(page, page.locator("body"), [regions[0]!], {
-        elements: [regions[1]!],
-        animations: "disabled",
-      }),
-    ).rejects.toThrow("Proof frame did not reach visible, settled targets");
+    // This target stays hidden; only the rejection needs a short readiness window.
+    vi.setConfig({ expect: { poll: { interval: 100, timeout: 1_000 } } });
+    try {
+      await expect(
+        takeControlUiScreenshotFrame(page, page.locator("body"), [regions[0]!], {
+          elements: [regions[1]!],
+          animations: "disabled",
+        }),
+      ).rejects.toThrow("Proof frame did not reach visible, settled targets");
+    } finally {
+      vi.resetConfig();
+    }
 
     await pauseVirtualClock(page);
     const captureTime = await page.evaluate(() => Date.now());

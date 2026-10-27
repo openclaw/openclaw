@@ -5,7 +5,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { z } from "zod";
 import { resolveSessionArtifactDirectory } from "./paths.js";
-import type { SessionColdArchive } from "./session-cold-storage-state.js";
+import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 
 export const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
 

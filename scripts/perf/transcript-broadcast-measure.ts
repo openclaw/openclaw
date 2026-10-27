@@ -37,12 +37,23 @@
 // Stream custom syntax with --answer-chunk $'```json\n{"ok":true}\n```\nprose\n'.
 // Add --final-answer-phase to exercise the visible projection during each delta.
 // Add --list-filter-churn to --scenario memory-soak --mixed-rpc to rotate sidebar/search filters.
+// --operator-access-policy --operator-access-policies 40 enables one identified operator
+// and 40 policy plugins (one applicable retained grant). Combine memory-soak with
+// --stress-tools --stress-subagents for native child authority. A separate counting
+// pass can use --gateway-preload scripts/perf/plugin-access-authority-census.mjs.
+// --auth-availability-storm requires the matching fixture flag; alternate primary HTTP 429/success
+// through a real shared auth profile. Tool continuations stay successful. Writes mock counts even on failure.
 // --gateway-preload <file> imports benchmark instrumentation after tsx for source or dist entries;
 // result.json records its resolved path and SHA-256. Use the same instrumentation on both arms.
+// --chat-active-after-tool with --chat-active-hold-ms waits for the first text delta
+// after a committed tool result before sending queued/steering inputs. Requires --runs 1;
+// the stream continues during admission and holds completion for the requested interval.
 // Add --worktree-tool-churn to memory-soak --stress-tools --mixed-rpc to give each
 // foreground session its own managed worktree, read/grep its README, and cycle list searches.
 // This mode keeps a fixed viewer set instead of adding reconnect churn.
 // --stress-tool-search adds a verified catalog search before each --stress-tools execution.
+// --stress-network-tool adds a verified loopback HTTP tool inside each Code Mode cell.
+// Fixed N/2N retention usage: transcript-broadcast-run-retention.md.
 // --poll-between-rounds keeps list/mixed-RPC polling active between memory-soak cohorts.
 // On a fresh team-shape fixture, exercise sidebar/search and usage refresh with:
 // node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
@@ -61,7 +72,7 @@
 // before post-window collection or teardown; give each arm fresh, distinct paths.
 // --node-policy-churn adds a paired synthetic node and node list/describe/invoke traffic;
 // use memory-soak --mixed-rpc --plugins 40 --list-interval-ms 500 for policy load.
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import {
@@ -167,11 +178,18 @@ const { values } = parseArgs({
     "stress-tools": { type: "boolean", default: false },
     "worktree-tool-churn": { type: "boolean", default: false },
     "stress-tool-search": { type: "boolean", default: false },
+    "stress-network-tool": { type: "boolean", default: false },
     "attempt-setup-image": { type: "string" },
+    "sandbox-image": { type: "string" },
     "cold-session-rounds": { type: "string", default: "0" },
+    "turn-start-phases": { type: "boolean", default: false },
+    "turn-start-advance-origin": { type: "boolean", default: false },
+    "git-trace": { type: "boolean", default: false },
+    "provider-delay-ms": { type: "string", default: "0" },
     "stress-session-store": { type: "boolean", default: false },
     "transcript-hydration-counts": { type: "boolean", default: false },
     "operator-access-policy": { type: "boolean", default: false },
+    "operator-access-policies": { type: "string", default: "1" },
     "session-event-wake": { type: "boolean", default: false },
     "cron-operator-turn": { type: "boolean", default: false },
     "authority-counts": { type: "boolean", default: false },
@@ -184,10 +202,12 @@ const { values } = parseArgs({
     "usage-rpc": { type: "boolean", default: false },
     "node-policy-churn": { type: "boolean", default: false },
     "team-stress": { type: "boolean", default: false },
+    "auth-availability-storm": { type: "boolean", default: false },
     "operator-model-policy": { type: "boolean", default: false },
     "team-stress-churn-ms": { type: "string", default: "1000" },
     "team-stress-list-weight": { type: "string", default: "2" },
     "team-stress-allocation-sampling": { type: "boolean", default: false },
+    "team-stress-retention-sampling": { type: "boolean", default: false },
     "dashboard-rpc": { type: "boolean", default: false },
     "github-options-connected": { type: "boolean", default: false },
     "github-options-observe": { type: "boolean", default: false },
@@ -245,6 +265,7 @@ const { values } = parseArgs({
     "prompt-kib": { type: "string", default: "128" },
     "chat-attachment-kib": { type: "string", default: "0" },
     "chat-active-hold-ms": { type: "string", default: "0" },
+    "chat-active-after-tool": { type: "boolean", default: false },
     "heap-snapshot": { type: "boolean", default: false },
     "session-census": { type: "boolean", default: false },
     "fingerprint-retention": { type: "boolean", default: false },
@@ -302,12 +323,20 @@ if (values["dashboard-rpc"] && mockPort === port + 1) {
 }
 const scenario = values.scenario;
 const pluginCount = integer(values.plugins, "--plugins", 0);
+const operatorAccessPolicyCount = integer(
+  values["operator-access-policies"],
+  "--operator-access-policies",
+);
+if (operatorAccessPolicyCount !== 1 && !values["operator-access-policy"]) {
+  throw new Error("--operator-access-policies requires --operator-access-policy");
+}
 if (values["team-stress"] && (pluginCount < 4 || pluginCount > TEAM_STRESS_PLUGIN_IDS.length)) {
   throw new Error(
     `--team-stress requires --plugins between 4 and ${TEAM_STRESS_PLUGIN_IDS.length}`,
   );
 }
-const syntheticPluginCount = values["team-stress"] ? 0 : pluginCount;
+const teamPluginCatalog = values["team-stress"] || values["turn-start-phases"];
+const syntheticPluginCount = teamPluginCatalog ? 0 : pluginCount;
 const teamStressPlugins = TEAM_STRESS_PLUGIN_IDS.slice(0, pluginCount);
 if (values["plugin-update"] && scenario !== "plugins.reload") {
   throw new Error("--plugin-update requires --scenario plugins.reload");
@@ -367,7 +396,12 @@ const gatewayPreload = values["gateway-preload"]
     }
   : undefined;
 const retentionScenario = scenario === "attempt-retention";
-if (values["list-filter-churn"] && scenario !== "sessions.list" && scenario !== "memory-soak") {
+if (
+  values["list-filter-churn"] &&
+  scenario !== "sessions.list" &&
+  scenario !== "memory-soak" &&
+  !values["turn-start-phases"]
+) {
   throw new Error("--list-filter-churn requires --scenario sessions.list or memory-soak");
 }
 const idleScenario = scenario === "session-idle-retention";
@@ -423,6 +457,9 @@ if (
 const toolScenario = scenario === "chat.send" || reasoningScenario;
 if (values["stress-tool-search"] && !values["stress-tools"]) {
   throw new Error("--stress-tool-search requires --stress-tools");
+}
+if (values["stress-network-tool"] && !values["stress-tools"]) {
+  throw new Error("--stress-network-tool requires --stress-tools");
 }
 const chatActiveHoldMs = integer(values["chat-active-hold-ms"], "--chat-active-hold-ms", 0);
 if (
@@ -487,7 +524,9 @@ if (!["compact", "sidebar", "dashboard"].includes(rowMode)) {
   throw new Error("--row-mode must be compact, sidebar, or dashboard");
 }
 const clientCount =
-  scenario === "chat.send" || idleScenario ? 1 : integer(values.clients, "--clients");
+  (scenario === "chat.send" && !values["turn-start-phases"]) || idleScenario
+    ? 1
+    : integer(values.clients, "--clients");
 const rpcConcurrency = integer(values["rpc-concurrency"], "--rpc-concurrency");
 if (values["plugin-update"] && rpcConcurrency !== 1) {
   throw new Error("--plugin-update requires --rpc-concurrency 1");
@@ -564,6 +603,9 @@ if (
   );
 }
 const runCount = integer(values.runs ?? (scenario === "chat.send" ? "1" : "20"), "--runs");
+if (values["chat-active-after-tool"] && (!chatActiveHoldMs || runCount !== 1)) {
+  throw new Error("--chat-active-after-tool requires --chat-active-hold-ms and --runs 1");
+}
 const sessionCount = idleScenario ? integer(values.sessions, "--sessions") : runCount;
 const historyBytesPerTurn = 16 * 1024;
 const historyReasoningBytes = 4 * 1024;
@@ -596,7 +638,7 @@ const coldSessionRounds = integer(values["cold-session-rounds"], "--cold-session
 if (
   (coldSessionRounds || values["attempt-setup-image"]) &&
   (scenario !== "chat.send" ||
-    values["stress-tools"] ||
+    (values["stress-tools"] && !values["turn-start-phases"]) ||
     values["session-event-wake"] ||
     historyTurns)
 ) {
@@ -637,6 +679,12 @@ if (
 }
 const chunkCount = integer(values.chunks, "--chunks");
 const chunkIntervalMs = integer(values["chunk-interval-ms"], "--chunk-interval-ms", 0);
+const providerDelayMs = integer(values["provider-delay-ms"], "--provider-delay-ms", 0);
+if (values["turn-start-phases"] && scenario !== "chat.send") {
+  throw new Error("--turn-start-phases requires --scenario chat.send");
+}
+let measuredPhaseRound: number | undefined;
+const turnStartPhases: Array<Record<string, unknown>> = [];
 const listIntervalMs = integer(values["list-interval-ms"], "--list-interval-ms", 0);
 if (soakScenario && values["list-filter-churn"] && !listIntervalMs) {
   throw new Error("memory-soak --list-filter-churn requires --list-interval-ms");
@@ -679,10 +727,12 @@ if (
 }
 if (
   values["operator-access-policy"] &&
-  (scenario !== "chat.send" || !values["stress-tools"] || runCount !== 1 || listIntervalMs !== 0)
+  ((scenario !== "chat.send" && !soakScenario) ||
+    !values["stress-tools"] ||
+    (!soakScenario && (runCount !== 1 || listIntervalMs !== 0)))
 ) {
   throw new Error(
-    "--operator-access-policy requires --scenario chat.send --stress-tools --runs 1 and no polling",
+    "--operator-access-policy requires --stress-tools and either memory-soak or chat.send with --runs 1 and no polling",
   );
 }
 if (values["session-event-wake"] && !values["operator-access-policy"]) {
@@ -774,7 +824,10 @@ if (values["mixed-rpc"] && (!listIntervalMs || !turnScenario || clientCount < 4)
     "--mixed-rpc requires a turn scenario, --list-interval-ms, and at least four clients",
   );
 }
-if (values["poll-between-rounds"] && (!soakScenario || !listIntervalMs)) {
+if (
+  values["poll-between-rounds"] &&
+  ((!soakScenario && !values["turn-start-phases"]) || !listIntervalMs)
+) {
   throw new Error("--poll-between-rounds requires memory-soak and --list-interval-ms");
 }
 const teamStressChurnMs = integer(values["team-stress-churn-ms"], "--team-stress-churn-ms");
@@ -788,6 +841,9 @@ if (teamStressListWeight > 64) {
 }
 if (values["team-stress"] && (!soakScenario || !values["mixed-rpc"])) {
   throw new Error("--team-stress requires memory-soak and --mixed-rpc");
+}
+if (values["team-stress-retention-sampling"] && !values["team-stress-allocation-sampling"]) {
+  throw new Error("--team-stress-retention-sampling requires --team-stress-allocation-sampling");
 }
 if (
   values["team-stress-allocation-sampling"] &&
@@ -1026,7 +1082,7 @@ async function workerHeapCommand(worker: WorkerHeapEvidence, operation: string) 
   }
 }
 const targetWorkerScript = (script: string) =>
-  /^(sqlite-store|prepared-model-catalog)\.worker\.[cm]?[jt]s$/.test(script);
+  /^(sqlite-store|prepared-model-catalog|git-operation)\.worker\.[cm]?[jt]s$/.test(script);
 const project = Array.isArray(fixture.projectWorktrees) ? fixture.projectWorktrees[0] : undefined;
 const coldBaseRefs =
   isRecord(project) && Array.isArray(project.coldBaseRefs)
@@ -1039,7 +1095,7 @@ if (values["attempt-setup-image"] && coldBaseRefs.length < coldSessionRounds * r
 }
 const fixtureSessionCount = typeof fixture.sessionCount === "number" ? fixture.sessionCount : 0;
 const teamStressTargets =
-  values["team-stress"] && Array.isArray(fixture.stressTargets)
+  teamPluginCatalog && Array.isArray(fixture.stressTargets)
     ? fixture.stressTargets.map((target: unknown) => {
         if (
           !isRecord(target) ||
@@ -1162,7 +1218,12 @@ let stressWorktree: string | undefined;
 const worktreeToolRoots = new Map<number, string>();
 const worktreeToolSearches = new Map<string, number>();
 let diffControlOriginal: string | undefined;
-if (values["stress-tools"] || values["mixed-rpc"] || values["attempt-setup-image"]) {
+if (
+  values["stress-tools"] ||
+  values["mixed-rpc"] ||
+  values["attempt-setup-image"] ||
+  values["turn-start-phases"]
+) {
   if (!isRecord(project) || typeof project.path !== "string") {
     throw new Error("stress tools and mixed RPCs require a fixture generated with --projects >= 1");
   }
@@ -1220,6 +1281,9 @@ applyMockOpenAiModelConfig(cfg, {
   modelRef: "openai/gpt-4.1",
   ...(scenario === "sessions.patch" ? { utilityModelRef: "openai/gpt-4.1-mini" } : {}),
 });
+if (values["auth-availability-storm"]) {
+  cfg.models.providers.openai.apiKey = "openai:auth-availability-storm";
+}
 if (verifyHistoryReplay) {
   for (const model of cfg.models.providers.openai.models) {
     // The synthetic provider must fit the seed plus turns accumulated across restarts.
@@ -1264,6 +1328,27 @@ cfg.tools = {
   codeMode: values["stress-tools"],
   ...(values["stress-tools"] ? { exec: { host: "gateway", mode: "full" } } : {}),
 };
+if (values["sandbox-image"]) {
+  if (!values["turn-start-phases"] || values["attempt-setup-image"]) {
+    throw new Error("--sandbox-image requires --turn-start-phases without --attempt-setup-image");
+  }
+  cfg.tools.exec = { host: "sandbox", mode: "full" };
+  cfg.tools.sandbox = { tools: { allow: ["*"] } };
+  cfg.agents.defaults.sandbox = {
+    mode: "all",
+    backend: "docker",
+    scope: "session",
+    workspaceAccess: "rw",
+    workspaceRoot: path.join(root, "sandboxes"),
+    docker: {
+      image: values["sandbox-image"],
+      containerPrefix: `bench-turn-${port}-`,
+      network: "none",
+      cpus: 1,
+      memory: "512m",
+    },
+  };
+}
 if (values["cron-operator-turn"]) {
   cfg.cron = { ...cfg.cron, enabled: true };
 }
@@ -1299,7 +1384,7 @@ if (soakScenario) {
     cfg.cron = { ...cfg.cron, enabled: true };
   }
 }
-if (values["team-stress"]) {
+if (teamPluginCatalog) {
   const bundled = teamStressPlugins;
   cfg.plugins.enabled = true;
   cfg.plugins.allow = [...new Set([...(cfg.plugins.allow ?? []), ...bundled])];
@@ -1341,6 +1426,22 @@ const githubOptionsObservations: Array<{
 const dashboardPreload = path.join(output, "dashboard-preload.mjs");
 const startupObserverPreload = path.join(output, "startup-observer-preload.mjs");
 const teamStressPreload = path.join(output, "team-stress-preload.mjs");
+const turnStartPreload = path.join(output, "turn-start-preload.mjs");
+if (values["turn-start-phases"]) {
+  writeFileSync(
+    turnStartPreload,
+    `import { isMainThread } from "node:worker_threads";
+import { onTrustedInternalDiagnosticEvent } from ${JSON.stringify(new URL("../../src/infra/diagnostic-events.ts", import.meta.url).href)};
+if (isMainThread) onTrustedInternalDiagnosticEvent(event => {
+  if (event.type === "diagnostic.phase.completed" &&
+      (event.name.startsWith("chat.send.") || event.name === "worktree.preparation")) {
+    process.send?.({ turnStartPhase: { name: event.name, durationMs: event.durationMs,
+      startedAt: event.startedAt, endedAt: event.endedAt, details: event.details } });
+  }
+}, { include: ["diagnostic.phase.completed"] });
+`,
+  );
+}
 if (values["team-stress"]) {
   writeFileSync(
     teamStressPreload,
@@ -1437,7 +1538,12 @@ let reloadPluginId: string | undefined;
 let scopePluginId: string | undefined;
 let updateReloadPlugin: (() => number) | undefined;
 const pluginUpdateLatenciesMs: number[] = [];
-if (scenario === "plugins.reload" || scenario === "plugin.scope" || syntheticPluginCount > 0) {
+if (
+  scenario === "plugins.reload" ||
+  scenario === "plugin.scope" ||
+  syntheticPluginCount > 0 ||
+  values["stress-network-tool"]
+) {
   const plugin = writePluginFixtures(output, {
     count: Math.max(1, syntheticPluginCount),
     activationOnStartup: true,
@@ -1486,6 +1592,28 @@ module.exports = { id, register(api) {
   }, { scope: "operator.read" });
 } };\n`,
     );
+  } else if (values["stress-network-tool"]) {
+    const id = plugin.pluginIds[0]!;
+    const pluginDir = path.join(plugin.pluginsDir, id);
+    writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `module.exports = { id: ${JSON.stringify(id)}, register(api) {
+  api.registerTool(() => ({ name: "benchmark_network", label: "Synthetic HTTP probe",
+    description: "Fetch a synthetic note from the isolated benchmark server.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    execute: async (_id, _params, signal) => {
+      const response = await fetch(${JSON.stringify(`http://127.0.0.1:${mockPort}/network-tool`)}, { signal });
+      if (!response.ok) throw new Error("Synthetic HTTP probe failed");
+      const text = await response.text();
+      return { content: [{ type: "text", text }], details: { text } };
+    }
+  }), { name: "benchmark_network" });
+} };\n`,
+    );
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.contracts = { tools: ["benchmark_network"] };
+    writeFileSync(manifestPath, JSON.stringify(manifest));
   }
   cfg.plugins = {
     ...cfg.plugins,
@@ -1674,7 +1802,9 @@ if (values["operator-access-policy"]) {
 module.exports = { id: ${JSON.stringify(id)}, register(api) {
   const channel = ${JSON.stringify(authorityChannel)};
   let active = false, profileId, unsubscribe;
-  const counts = { authorize: 0, resume: 0, assert: 0, tools: 0, transcriptUpdates: 0, messageAppends: 0 };
+  const census = globalThis[Symbol.for("openclaw.benchmark.accessPolicyFixture")] = { active: false, policies: new Set(),
+    counts: { authorize: 0, resume: 0, assert: 0, tools: 0, transcriptUpdates: 0, messageAppends: 0 } };
+  const counts = census.counts;
   const messages = new Set();
   const controller = new AbortController();
   const grant = { grantId: "00000000-0000-4000-8000-000000000001", signal: controller.signal,
@@ -1686,7 +1816,8 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     profileId = context.profile.profileId;
   }
   api.registerGatewayAccessPolicy({
-    authorize(context) { checkProfile(context); if (active) counts.authorize++; return grant; },
+    authorize(context) { checkProfile(context); census.policies.add(${JSON.stringify(id)});
+      if (active) counts.authorize++; return grant; },
     resume(context) { checkProfile(context); if (active) counts.resume++;
       if (context.grantId !== grant.grantId) throw new Error("Synthetic grant mismatch"); return grant; }
   });
@@ -1694,12 +1825,15 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   function control(message) {
     if (message?.channel !== channel || typeof message.id !== "string" ||
         !["start", "stop"].includes(message.action)) return;
-    active = message.action === "start";
+    if (census.policies.size !== ${operatorAccessPolicyCount})
+      throw new Error("Synthetic access policy inventory was not fully authorized");
+    active = census.active = message.action === "start";
     if (active) { for (const key of Object.keys(counts)) counts[key] = 0; messages.clear(); }
     const host = globalThis[Symbol.for("openclaw.benchmark.authorityCounts")];
     if (host) { host.active = active; if (active) { host.counts = {}; host.callers = {}; host.firstAuthPolicyStacks = []; } }
     process.send?.({ channel, id: message.id, counts: { ...counts }, profileId,
       sourceOverlay: globalThis[Symbol.for("openclaw.benchmark.sourceOverlay")],
+      scopeCounts: globalThis[Symbol.for("openclaw.benchmark.accessAuthorityCensus")]?.snapshot(),
       ...(host ? { hostCounts: host.counts, hostCallers: host.callers, installed: host.installed, firstAuthPolicyStacks: host.firstAuthPolicyStacks } : {}) });
   }
   api.registerService({ id: "synthetic-authority-counters",
@@ -1727,6 +1861,39 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     cfg.plugins.allow.push(id);
   }
   cfg.plugins.entries[id] = { enabled: true };
+  // Only one grant is applicable: persisted child recovery records one original grant.
+  for (let index = 1; index < operatorAccessPolicyCount; index++) {
+    const otherId = `${id}-${index}`;
+    const otherDir = path.join(output, otherId);
+    mkdirSync(otherDir);
+    writeFileSync(
+      path.join(otherDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: otherId,
+        activation: { onStartup: true },
+        configSchema: { type: "object", additionalProperties: false },
+      }),
+    );
+    writeFileSync(
+      path.join(otherDir, "index.cjs"),
+      `
+module.exports = { id: ${JSON.stringify(otherId)}, register(api) {
+  api.registerGatewayAccessPolicy({ authorize(context) {
+    const census = globalThis[Symbol.for("openclaw.benchmark.accessPolicyFixture")];
+    if (!census) throw new Error("Synthetic access policy census is unavailable");
+    census.policies.add(${JSON.stringify(otherId)});
+    if (census.active) census.counts.authorize++;
+    if (context.requiredByRole) throw new Error("Unselected synthetic policy was required");
+    return undefined;
+  } });
+} };\n`,
+    );
+    cfg.plugins.load.paths.push(otherDir);
+    if (cfg.plugins.allow?.length) {
+      cfg.plugins.allow.push(otherId);
+    }
+    cfg.plugins.entries[otherId] = { enabled: true };
+  }
 }
 if (trustedProxyScenario) {
   cfg.gateway = {
@@ -1768,7 +1935,7 @@ if (trustedProxyScenario) {
   };
 }
 const toolPaths = Array.from({ length: retentionScenario ? 3 : 1 }, (_, index) => {
-  if (values["attempt-setup-image"]) {
+  if (values["attempt-setup-image"] || values["sandbox-image"]) {
     return "README.md";
   }
   const file = path.join(root, "workspace", `synthetic-tool-input-${index}.txt`);
@@ -1992,6 +2159,7 @@ let activePrimaryStreams = 0;
 let peakPrimaryStreams = 0;
 let toolCalls = 0;
 let toolResults = 0;
+let networkToolRequests = 0;
 let outputLimitResponses = 0;
 let recoveredResponses = 0;
 let imageRequests = 0;
@@ -2078,6 +2246,8 @@ let cohort:
       incompleteReasoningSignatures: Map<string, string>;
       phases: StreamStartPhases;
       beforeRelease?: () => Promise<void>;
+      afterToolStreamStart?: () => Promise<void>;
+      activeInputAdmission?: Promise<void>;
       ready: Promise<void>;
       release: () => void;
       reject: (error: Error) => void;
@@ -2104,7 +2274,15 @@ const expectedHistoricalReasoning =
       )
     : [];
 const attemptSetupCatalog = new Set<string>();
+const authAvailabilityMock = { requests: 0, rateLimits: 0, successes: 0 };
+const authAvailabilityStartedAt = Date.now();
+const authAvailabilityMinutes = new Map<number, typeof authAvailabilityMock>();
 const mock = createServer((req, res) => {
+  if (values["stress-network-tool"] && req.url === "/network-tool") {
+    networkToolRequests++;
+    res.end("synthetic-network-tool-verified");
+    return;
+  }
   if (req.url === "/health") {
     res.end("ok");
     return;
@@ -2236,6 +2414,31 @@ const mock = createServer((req, res) => {
               .split("\n")
               .some((line) => stripInboundMetadata(line).trim() === primaryMessage)
           : stripInboundMetadata(lastUser).trim().split("\n")[0] === primaryMessage);
+    if (primary && values["auth-availability-storm"]) {
+      const minute = Math.floor((Date.now() - authAvailabilityStartedAt) / 60_000);
+      let counts = authAvailabilityMinutes.get(minute);
+      if (!counts) {
+        counts = { requests: 0, rateLimits: 0, successes: 0 };
+        authAvailabilityMinutes.set(minute, counts);
+      }
+      counts.requests++;
+      if (++authAvailabilityMock.requests % 2 === 1) {
+        counts.rateLimits++;
+        authAvailabilityMock.rateLimits++;
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
+        res.end(
+          JSON.stringify({
+            error: {
+              type: "rate_limit_error",
+              message: "Synthetic capacity rate limit; retry shortly.",
+            },
+          }),
+        );
+        return;
+      }
+      counts.successes++;
+      authAvailabilityMock.successes++;
+    }
     if (primary && values["attempt-setup-image"]) {
       const tools = isRecord(body) && Array.isArray(body.tools) ? body.tools : [];
       const names = new Set(
@@ -2292,6 +2495,7 @@ const mock = createServer((req, res) => {
             typeof toolResult.output !== "string" ||
             !toolResult.output.includes(
               values["attempt-setup-image"] ||
+                values["sandbox-image"] ||
                 values["worktree-tool-churn"] ||
                 values["stress-worktree-fanout"]
                 ? "# Synthetic project "
@@ -2399,8 +2603,9 @@ const mock = createServer((req, res) => {
       let reasoningReplayKey = toolOutput?.call_id;
       if (primary && toolScenario && cohort) {
         const currentCohort = cohort;
-        const toolWorktree =
-          values["worktree-tool-churn"] || values["stress-worktree-fanout"]
+        const toolWorktree = values["sandbox-image"]
+          ? "/workspace"
+          : values["worktree-tool-churn"] || values["stress-worktree-fanout"]
             ? worktreeToolRoots.get(index)
             : stressWorktree;
         if ((values["worktree-tool-churn"] || values["stress-worktree-fanout"]) && !toolWorktree) {
@@ -2432,6 +2637,9 @@ const mock = createServer((req, res) => {
                       storeCode +
                       (values["stress-tool-search"]
                         ? 'if (!(await catalog.search("read file content", { limit: 5 })).some(tool => tool.name === "read")) throw new Error("Synthetic tool search omitted read");\n'
+                        : "") +
+                      (values["stress-network-tool"]
+                        ? 'const network = await benchmark_network({}); if (network.text !== "synthetic-network-tool-verified") throw new Error("Synthetic network tool result mismatch");\n'
                         : "") +
                       `json(await read({ path: ${JSON.stringify((values["worktree-tool-churn"] || values["stress-worktree-fanout"]) && toolWorktree ? path.join(toolWorktree, "README.md") : toolPath)} }));\n` +
                       `const shell = await exec({ command: ${JSON.stringify(stressShellCommand)}, workdir: ${JSON.stringify(toolWorktree)} });\n` +
@@ -2499,9 +2707,15 @@ const mock = createServer((req, res) => {
           recoveredResponses++;
         }
       }
+      if (providerDelayMs > 0) {
+        await delay(providerDelayMs);
+      }
       for (const event of answer) {
         if (res.destroyed) {
           break;
+        }
+        if (continuation && event.type === "response.completed") {
+          await cohort?.activeInputAdmission;
         }
         if (primary && cohort) {
           cohort.phases.firstPrimarySseWrittenAtEpochMs ??= epochNow();
@@ -2548,6 +2762,16 @@ const mock = createServer((req, res) => {
           );
         } else {
           res.write(`data: ${JSON.stringify(event)}\n\n`);
+        }
+        if (
+          continuation &&
+          event.type === "response.output_text.delta" &&
+          cohort?.afterToolStreamStart
+        ) {
+          const beginActiveInputs = cohort.afterToolStreamStart;
+          cohort.afterToolStreamStart = undefined;
+          cohort.activeInputAdmission = beginActiveInputs();
+          void cohort.activeInputAdmission.catch(cohort.reject);
         }
         if ((primary || continuation) && event.type === "response.output_text.delta") {
           await delay(chunkIntervalMs);
@@ -2953,7 +3177,8 @@ async function assertPortAvailable(targetPort: number) {
   });
 }
 async function ready(targetPort: number, endpoint: string, owned?: ChildProcess) {
-  for (let attempt = 0; attempt < 300; attempt++) {
+  // Loaded hosts can need several minutes for plugin startup; measurement starts after readiness.
+  for (let attempt = 0; attempt < 1200; attempt++) {
     if (owned) {
       assertGatewayAlive();
       // Preflight is best effort; the owned bind-success log handles another process taking the port.
@@ -3057,7 +3282,9 @@ const stressParentKey = "agent:main:transcript-broadcast-measure-native-parent";
 const keys = Array.from({ length: sessionCount }, (_, index) =>
   verifyHistoryReplay
     ? `agent:main:memory-soak-history-child-${index}`
-    : `agent:main:transcript-broadcast-measure-child-${index}`,
+    : values["turn-start-phases"]
+      ? `agent:main:transcript-broadcast-measure-${port}-child-${index}`
+      : `agent:main:transcript-broadcast-measure-child-${index}`,
 );
 const historyNamespace = verifyHistoryReplay ? "memory-soak-history" : "reopen-history";
 const historySeedPath = path.join(root, `${historyNamespace}.json`);
@@ -3377,6 +3604,7 @@ async function controlAuthorityCounters(child: ChildProcess, action: "start" | "
           }
         : {}),
       sourceOverlay: isRecord(message.sourceOverlay) ? message.sourceOverlay : undefined,
+      scopeCounts: isRecord(message.scopeCounts) ? message.scopeCounts : undefined,
       profileId: message.profileId,
       authorize: count("authorize"),
       resume: count("resume"),
@@ -3420,7 +3648,7 @@ async function controlTeamStressTelemetry(child: ChildProcess, action: "start" |
     const onExit = () => finish(new Error(`Gateway exited during Team stress telemetry ${action}`));
     const timeout = setTimeout(
       () => finish(new Error(`Team stress telemetry ${action} timed out`)),
-      60_000,
+      action === "stop" && values["team-stress-retention-sampling"] ? 600_000 : 60_000,
     );
     child.on("message", onMessage);
     child.once("exit", onExit);
@@ -3431,6 +3659,7 @@ async function controlTeamStressTelemetry(child: ChildProcess, action: "start" |
         action,
         output,
         allocations: values["team-stress-allocation-sampling"],
+        retention: values["team-stress-retention-sampling"],
       },
       (error) => {
         if (error) {
@@ -3996,11 +4225,11 @@ async function runRound(
   };
   const activeAckLatenciesMs: number[] = [];
   let activeAcksBeforeRelease = 0;
+  let activeHoldEnded = false;
   let activeInputWork: Promise<void>[] = [];
   if (chatActiveHoldMs) {
     const beforeRelease = current.beforeRelease;
-    current.beforeRelease = async () => {
-      await beforeRelease?.();
+    const admitActiveInputs = async () => {
       // An older queued input must own custody before later steering attempts arrive.
       await Promise.all(
         roundKeys.map(async (sessionKey) => {
@@ -4018,7 +4247,19 @@ async function runRound(
               queueMode: "followup",
               deliver: false,
             });
-            await Promise.race([queued.promise, current.ready]);
+            if (values["chat-active-after-tool"]) {
+              const queuedTimeout = setTimeout(
+                () => queued.reject(new Error("active predecessor was not queued within 170s")),
+                170_000,
+              );
+              try {
+                await queued.promise;
+              } finally {
+                clearTimeout(queuedTimeout);
+              }
+            } else {
+              await Promise.race([queued.promise, current.ready]);
+            }
           } finally {
             queuedChatInputs.delete(input.runId);
           }
@@ -4039,7 +4280,7 @@ async function runRound(
             deliver: false,
           });
           activeAckLatenciesMs.push(performance.now() - started);
-          if (current.phases.streamsReleasedAtEpochMs === undefined) {
+          if (!activeHoldEnded) {
             activeAcksBeforeRelease++;
           }
         }),
@@ -4049,7 +4290,16 @@ async function runRound(
       }
       // Release independently of ACKs: a blocked baseline reports the held-turn delay.
       await delay(chatActiveHoldMs);
+      activeHoldEnded = true;
     };
+    if (values["chat-active-after-tool"]) {
+      current.afterToolStreamStart = admitActiveInputs;
+    } else {
+      current.beforeRelease = async () => {
+        await beforeRelease?.();
+        await admitActiveInputs();
+      };
+    }
   }
   // Include the first response processing after the mock releases the whole cohort.
   const captureWork =
@@ -4077,7 +4327,9 @@ async function runRound(
         })()
       : undefined;
   const providerTimeoutMs =
-    values["attempt-setup-image"] || values["stress-worktree-fanout"] ? 170_000 : 45_000;
+    values["attempt-setup-image"] || values["sandbox-image"] || values["stress-worktree-fanout"]
+      ? 170_000
+      : 45_000;
   const timeout = setTimeout(
     () =>
       current.reject(
@@ -4161,6 +4413,26 @@ async function runRound(
             clearTimeout(timer);
             sessionEventRuns.delete(sessionKey);
           }
+        } else if (
+          values["turn-start-phases"] &&
+          measuredRound !== undefined &&
+          measuredRound < coldSessionRounds
+        ) {
+          const created = await rpc(client, "sessions.create", {
+            key: sessionKey,
+            cwd: stressWorktree,
+            worktree: true,
+            message,
+            fork: false,
+            visibility: "shared",
+            displayName: "Synthetic cold turn",
+            ...(sessionEventAncestors === 0 ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
+          });
+          if (!isRecord(created) || typeof created.runId !== "string" || created.runError) {
+            throw new Error(`Fresh turn admission failed: ${JSON.stringify(created)}`);
+          }
+          runId = created.runId;
+          current.turns.get(index + 1)!.runId = runId;
         } else {
           await rpc(client, scenario === "chat.send" ? "chat.send" : "agent", {
             sessionKey,
@@ -4213,6 +4485,11 @@ async function runRound(
       : undefined;
     await Promise.all([cohortReady, captureWork, turns, subagentCompletion]);
     if (chatActiveHoldMs) {
+      if (values["chat-active-after-tool"] && activeInputs.length !== roundKeys.length * 3) {
+        throw new Error(
+          "after-tool streaming did not admit the expected queued and steering inputs",
+        );
+      }
       await Promise.all(activeInputWork);
       // agent.wait reports queued custody immediately; wait for each public terminal event first.
       const terminalDeadline = Promise.withResolvers<never>();
@@ -4331,9 +4608,9 @@ async function drainEvents(requireSubscriberQuiet = true) {
     assertGatewayAlive();
     if (
       activeStreams === 0 &&
-      (!requireSubscriberQuiet ||
-        (performance.now() - lastSubscriberEventAt >= 1000 &&
-          !teamStressFanout?.pendingInjections().length))
+      (teamStressFanout
+        ? teamStressFanout.isDrained(requireSubscriberQuiet)
+        : !requireSubscriberQuiet || performance.now() - lastSubscriberEventAt >= 1000)
     ) {
       return;
     }
@@ -4785,7 +5062,7 @@ try {
         ? ["--trace-gc-nvp"]
         : []),
       "--import",
-      values["team-stress"]
+      teamPluginCatalog || !/\.[cm]?ts$/.test(values.entry)
         ? new URL("./team-shape-stress-loader.mjs", import.meta.url).href
         : "./scripts/tsx.mjs",
       ...(gatewayPreload ? ["--import", gatewayPreload.path] : []),
@@ -4804,6 +5081,7 @@ try {
       "--import",
       "./scripts/lib/gateway-bench-profile-preload.ts",
       ...(values["team-stress"] ? ["--import", teamStressPreload] : []),
+      ...(values["turn-start-phases"] ? ["--import", turnStartPreload] : []),
       ...(values["transport-counts"]
         ? ["--import", "./scripts/lib/gateway-bench-transport-preload.ts"]
         : []),
@@ -4823,11 +5101,17 @@ try {
     ],
     proxyViewers || trustedProxyScenario ? "trusted-proxy" : "none",
   );
+  const gitTraceDirectory = path.join(output, "git-trace");
+  if (values["git-trace"]) {
+    mkdirSync(gitTraceDirectory);
+  }
   const gatewayStartedAt = performance.now();
   gateway = launch(
     gatewayArgs,
     "gateway",
     {
+      ...(values["git-trace"] ? { GIT_TRACE2_EVENT: gitTraceDirectory } : {}),
+      ...(process.env.DEVELOPER_DIR ? { DEVELOPER_DIR: process.env.DEVELOPER_DIR } : {}),
       ...(values["transport-counts"]
         ? { OPENCLAW_BENCH_TRANSPORT_COUNTS_PATH: path.join(output, "transport-counts.json") }
         : {}),
@@ -4837,6 +5121,17 @@ try {
     },
     true,
   );
+  if (values["turn-start-phases"]) {
+    gateway.on("message", (message: unknown) => {
+      if (
+        isRecord(message) &&
+        isRecord(message.turnStartPhase) &&
+        measuredPhaseRound !== undefined
+      ) {
+        turnStartPhases.push({ round: measuredPhaseRound, ...message.turnStartPhase });
+      }
+    });
+  }
   await ready(port, "/readyz", gateway);
   const gatewayReadyMs = performance.now() - gatewayStartedAt;
   await readGatewayCpuUsage(gateway);
@@ -4858,7 +5153,10 @@ try {
           ...(sessionEventAncestors === 2 ? { parentSessionKey: "agent:main:main" } : {}),
           ...(stressWorktree ? { cwd: stressWorktree } : {}),
           ...(values["github-options-connected"]
-            ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
+            ? {
+                worktree: true,
+                ...(values["turn-start-phases"] ? {} : { worktreeBaseRef: "refs/heads/main" }),
+              }
             : {}),
           visibility: "shared",
           displayName: "Synthetic broadcast parent",
@@ -4897,8 +5195,13 @@ try {
             ? {}
             : { parentSessionKey: parentKey, spawnDepth: 1 }),
           fork: false,
-          ...(values["attempt-setup-image"] || values["worktree-tool-churn"]
-            ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
+          ...(values["attempt-setup-image"] ||
+          values["worktree-tool-churn"] ||
+          values["turn-start-phases"]
+            ? {
+                worktree: true,
+                ...(values["turn-start-phases"] ? {} : { worktreeBaseRef: "refs/heads/main" }),
+              }
             : {}),
           visibility: "shared",
           displayName: "Synthetic broadcast child",
@@ -5055,7 +5358,10 @@ try {
         key: target.sessionKey,
         cwd: target.worktree,
         ...(values["github-options-connected"]
-          ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
+          ? {
+              worktree: true,
+              ...(values["turn-start-phases"] ? {} : { worktreeBaseRef: "refs/heads/main" }),
+            }
           : {}),
         visibility: "shared",
         displayName: "Synthetic dashboard diff",
@@ -5163,10 +5469,10 @@ try {
     }
     writeFileSync(path.join(output, "operator-model-policy.json"), JSON.stringify(catalog));
   }
-  if (reloadPluginId || scopePluginId || values["team-stress"]) {
+  if (reloadPluginId || scopePluginId || teamPluginCatalog) {
     const inventory = await rpc(sender, "plugins.list", {});
     writeFileSync(path.join(output, "plugin-inventory.json"), JSON.stringify(inventory, null, 2));
-    if (values["team-stress"]) {
+    if (teamPluginCatalog) {
       const plugins =
         isRecord(inventory) && Array.isArray(inventory.plugins) ? inventory.plugins : [];
       // Provider catalog entries deliberately stay lazy; workload capabilities must be live.
@@ -5261,7 +5567,7 @@ try {
     {},
     { archived: false },
     { archived: true },
-    { search: values["team-stress"] ? "Synthetic" : "team-shape" },
+    { search: teamPluginCatalog ? "Synthetic" : "team-shape" },
     { agentId: "main" },
     { excludeSubagents: true },
     { excludeSystem: true, excludeCron: true },
@@ -5723,9 +6029,10 @@ try {
       startedHeapWorkers.push(worker);
     }
   }
-  const wholeSoakResourcesBefore = soakScenario
-    ? await readGatewayResources(gateway, { includeWorkers: true })
-    : undefined;
+  const wholeSoakResourcesBefore =
+    soakScenario || values["turn-start-phases"]
+      ? await readGatewayResources(gateway, { includeWorkers: true })
+      : undefined;
   const measurementStartedAt = Date.now();
   const wholeSoakCpuBefore = soakScenario ? await readGatewayCpuUsage(gateway) : undefined;
   const measuredGateway = gateway;
@@ -5853,22 +6160,73 @@ try {
       : round < (idleScenario ? 2 : rounds);
     round++
   ) {
+    if (values["turn-start-phases"] && round < coldSessionRounds) {
+      await delay(roundIntervalMs);
+    }
+    if (values["turn-start-advance-origin"] && round < coldSessionRounds) {
+      if (
+        !values["turn-start-phases"] ||
+        !isRecord(project) ||
+        typeof project.repoRoot !== "string"
+      ) {
+        throw new Error("Advancing an origin requires the turn-start fixture");
+      }
+      const git = (args: string[], input?: string) => {
+        const result = spawnSync("git", args, {
+          input,
+          encoding: "utf8",
+          env: {
+            ...env,
+            DEVELOPER_DIR: process.env.DEVELOPER_DIR,
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_AUTHOR_NAME: "Synthetic fixture",
+            GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+            GIT_COMMITTER_NAME: "Synthetic fixture",
+            GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+          },
+        });
+        if (result.status !== 0) {
+          throw new Error(`Synthetic origin update failed: ${result.stderr}`);
+        }
+        return result.stdout.trim();
+      };
+      const origin = realpathSync(git(["-C", project.repoRoot, "remote", "get-url", "origin"]));
+      if (!origin.startsWith(`${realpathSync(root)}${path.sep}`)) {
+        throw new Error("Origin must remain inside the synthetic fixture");
+      }
+      const atOrigin = (...args: string[]) => ["--git-dir", origin, ...args];
+      git(atOrigin("read-tree", "HEAD"));
+      const blob = git(
+        atOrigin("hash-object", "-w", "--stdin"),
+        `# Synthetic project base revision ${port}-${round}\n`,
+      );
+      git(atOrigin("update-index", "--add", "--cacheinfo", `100644,${blob},README.md`));
+      const tree = git(atOrigin("write-tree"));
+      const commit = git(
+        atOrigin("commit-tree", tree, "-p", "HEAD", "-m", `Synthetic base revision ${round}`),
+      );
+      git(atOrigin("update-ref", "refs/heads/main", commit));
+    }
+    measuredPhaseRound = round;
     if (scenario === "chat.send" && round < coldSessionRounds) {
       for (const [index, previous] of keys.entries()) {
         const key = `agent:main:transcript-broadcast-cold-${port}-${round}-${index}`;
-        await rpc(sender, "sessions.create", {
-          key,
-          ...(stressWorktree ? { cwd: stressWorktree } : {}),
-          ...(values["attempt-setup-image"]
-            ? { worktree: true, worktreeBaseRef: coldBaseRefs[round * runCount + index] }
-            : {}),
-          ...(sessionEventAncestors === 0 ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
-          fork: false,
-          visibility: "shared",
-          displayName: "Synthetic cold setup",
-        });
-        if (sessionEventAncestors !== undefined) {
-          await verifySessionEventLineage(key);
+        if (!values["turn-start-phases"]) {
+          await rpc(sender, "sessions.create", {
+            key,
+            ...(stressWorktree ? { cwd: stressWorktree } : {}),
+            ...(values["attempt-setup-image"]
+              ? { worktree: true, worktreeBaseRef: coldBaseRefs[round * runCount + index] }
+              : {}),
+            ...(sessionEventAncestors === 0 ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
+            fork: false,
+            visibility: "shared",
+            displayName: "Synthetic cold setup",
+          });
+          if (sessionEventAncestors !== undefined) {
+            await verifySessionEventLineage(key);
+          }
         }
         for (const client of clients.slice(0, exactClients)) {
           await rpc(client, "sessions.messages.unsubscribe", {
@@ -5909,6 +6267,7 @@ try {
     primaryStreamRequests = 0;
     toolCalls = 0;
     toolResults = 0;
+    networkToolRequests = 0;
     outputLimitResponses = 0;
     recoveredResponses = 0;
     imageRequests = 0;
@@ -6167,7 +6526,7 @@ try {
                       throw new Error("node.invoke did not return the synthetic node's echo");
                     }
                   } else if (method === "chat.history" || method === "chat.startup") {
-                    const stressTarget = values["team-stress"]
+                    const stressTarget = teamPluginCatalog
                       ? teamStressTargets[(clientIndex + round) % teamStressTargets.length]
                       : undefined;
                     const history = await rpc(
@@ -6312,7 +6671,7 @@ try {
         : undefined;
       try {
         streamStart = await runScenario(round);
-        if (values["dashboard-rpc"] || pollBetweenRounds) {
+        if ((values["dashboard-rpc"] || pollBetweenRounds) && !values["turn-start-phases"]) {
           // Keep polling between bursts of agent work.
           const pacedUntil = Math.min(
             roundStartedAt + roundIntervalMs,
@@ -6345,8 +6704,8 @@ try {
         }
         measuring = true;
         await workload();
-        // Polling has stopped and in-flight RPCs have completed; drain their
-        // remaining events before freezing measured counters.
+        // Polling has stopped and in-flight RPCs have completed. Team receipts
+        // drain their workload while unrelated background metadata stays active.
         if (turnScenario || !values["dashboard-rpc"]) {
           const beforeDrain = perClientCounters.map((counts) => Object.fromEntries(counts));
           const drainStarted = performance.now();
@@ -6480,6 +6839,11 @@ try {
         `incomplete synthetic reasoning replay: ${JSON.stringify({ reasoningResponses, reasoningReplayRequests })}`,
       );
     }
+    if (values["stress-network-tool"] && networkToolRequests !== toolCalls) {
+      throw new Error(
+        `expected one HTTP request per Code Mode cell: ${networkToolRequests}/${toolCalls}`,
+      );
+    }
     if (verifyHistoryReplay && historicalReplayRequests !== sessionCount) {
       throw new Error(
         `Deep history reached only ${historicalReplayRequests}/${sessionCount} foreground turns`,
@@ -6536,6 +6900,7 @@ try {
     const sample = {
       round,
       scenario,
+      ...(values["stress-network-tool"] ? { networkToolRequests } : {}),
       allocation,
       ...(values["config-capture-counts"]
         ? {
@@ -6551,7 +6916,13 @@ try {
               ...authorityCounts,
               scope:
                 "plugin callbacks in the measured turn window; not all host authority invocations",
+              primaryTurns: sessionCount,
+              sourceEvents,
+              policyCount: operatorAccessPolicyCount,
               assertionsPerTurn: authorityCounts.assert / sessionCount,
+              assertionsPerSourceEvent: sourceEvents
+                ? authorityCounts.assert / sourceEvents
+                : undefined,
               assertionsPerToolCompletion: authorityCounts.assert / authorityCounts.tools,
               assertionsPerMessageAppend: authorityCounts.assert / authorityCounts.messageAppends,
               workloadAllocatedBytesPerAssertion: allocation
@@ -6843,9 +7214,10 @@ try {
     // Keep equal work counts without shortening the continuous GC/allocation window.
     await delay(Math.max(0, durationMs - (Date.now() - measurementStartedAt)));
   }
-  const wholeSoakResourcesAfter = soakScenario
-    ? await readGatewayResources(gateway, { includeWorkers: true })
-    : undefined;
+  const wholeSoakResourcesAfter =
+    soakScenario || values["turn-start-phases"]
+      ? await readGatewayResources(gateway, { includeWorkers: true })
+      : undefined;
   const wholeWorkloadDiagnostics = await finishWholeWorkloadDiagnostics?.();
   const wholeSoakCpu = wholeSoakCpuBefore
     ? measureGatewayCpuUsage(wholeSoakCpuBefore, await readGatewayCpuUsage(gateway))
@@ -7034,7 +7406,11 @@ try {
       isRecord(worker.after?.memory) && typeof worker.after.memory.heapUsed === "number"
         ? worker.after.memory.heapUsed
         : -1;
-    for (const script of ["sqlite-store.worker.js", "prepared-model-catalog.worker.js"]) {
+    for (const script of [
+      "sqlite-store.worker.js",
+      "prepared-model-catalog.worker.js",
+      "git-operation.worker.js",
+    ]) {
       const largest = startedHeapWorkers
         .filter((worker) => worker.script === script && worker.after?.ok === true)
         .toSorted((a, b) => heapBytes(b) - heapBytes(a))[0];
@@ -7280,8 +7656,10 @@ try {
       : {}),
     stressSessionStore: values["stress-session-store"],
     stressToolSearch: values["stress-tool-search"],
+    stressNetworkTool: values["stress-network-tool"],
     transcriptHydrationCounts: values["transcript-hydration-counts"],
     operatorAccessPolicy: values["operator-access-policy"],
+    operatorAccessPolicyCount,
     cronOperatorTurn: values["cron-operator-turn"],
     sessionEventWake: values["session-event-wake"],
     authorityCounts: values["authority-counts"],
@@ -7333,6 +7711,9 @@ try {
     ...(wholeChatDiagnosticsEnabled
       ? { wholeChatDiagnostics: wholeWorkloadDiagnostics, wholeChatGc }
       : {}),
+    ...(values["turn-start-phases"]
+      ? { turnStartResources: { before: wholeSoakResourcesBefore, after: wholeSoakResourcesAfter } }
+      : {}),
     initialFullFrame,
     clientCount,
     exactClients,
@@ -7350,6 +7731,7 @@ try {
           ...(chatActiveHoldMs
             ? {
                 chatActiveHoldMs,
+                chatActiveAfterTool: values["chat-active-after-tool"],
                 activeChatSendAck: {
                   ...latencySummary(
                     samples.flatMap(
@@ -7538,6 +7920,12 @@ try {
       }),
     ),
   };
+  if (values["turn-start-phases"]) {
+    writeFileSync(
+      path.join(output, "turn-start-phases.json"),
+      JSON.stringify({ providerDelayMs, coldSessionRounds, phases: turnStartPhases }, null, 2),
+    );
+  }
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));
   console.log(`RESULT ${path.join(output, "result.json")}`);
 } catch (error) {
@@ -7553,5 +7941,24 @@ try {
   }
   throw error;
 } finally {
+  if (values["auth-availability-storm"]) {
+    writeFileSync(
+      path.join(output, "auth-availability-mock.json"),
+      JSON.stringify(
+        {
+          ...authAvailabilityMock,
+          startedAt: authAvailabilityStartedAt,
+          minutes: [...authAvailabilityMinutes].map(([minute, counts]) => ({
+            minute,
+            requests: counts.requests,
+            rateLimits: counts.rateLimits,
+            successes: counts.successes,
+          })),
+        },
+        null,
+        2,
+      ),
+    );
+  }
   await cleanup();
 }

@@ -53,14 +53,6 @@ type GitHubOAuthRequestOptions = {
   assertCurrent?: () => void | Promise<void>;
 };
 
-type GitHubOAuthDeviceAuthorization = {
-  deviceCode: string;
-  userCode: string;
-  verificationUri: typeof GITHUB_OAUTH_VERIFICATION_URL;
-  expiresInSeconds: number;
-  intervalSeconds: number;
-};
-
 export type GitHubOAuthTokenPair = {
   accessToken: string;
   tokenType: "bearer";
@@ -85,24 +77,6 @@ const GITHUB_OAUTH_ERROR_CODES = [
 ] as const;
 type GitHubOAuthErrorCode = (typeof GITHUB_OAUTH_ERROR_CODES)[number];
 const GITHUB_OAUTH_ERROR_CODE_SET: ReadonlySet<string> = new Set(GITHUB_OAUTH_ERROR_CODES);
-
-type GitHubOAuthDevicePollResult =
-  | { status: "authorized"; tokens: GitHubOAuthTokenPair }
-  | { status: "authorization_pending" }
-  | { status: "slow_down"; intervalSeconds?: number }
-  | { status: "expired_token" }
-  | { status: "access_denied" }
-  | {
-      status: "error";
-      code: Exclude<
-        GitHubOAuthErrorCode,
-        "authorization_pending" | "slow_down" | "expired_token" | "access_denied"
-      >;
-    };
-
-type GitHubOAuthRefreshResult =
-  | { status: "refreshed"; tokens: GitHubOAuthTokenPair }
-  | { status: "error"; code: GitHubOAuthErrorCode; failure?: Error };
 
 function githubOAuthProtocolError(surface: string): Error {
   return new Error(`GitHub OAuth ${surface} response was invalid`);
@@ -405,7 +379,13 @@ async function exchangeGitHubOAuthToken(
 
 export async function requestGitHubOAuthDeviceCode(
   options: GitHubOAuthRequestOptions = {},
-): Promise<GitHubOAuthDeviceAuthorization> {
+): Promise<{
+  deviceCode: string;
+  userCode: string;
+  verificationUri: typeof GITHUB_OAUTH_VERIFICATION_URL;
+  expiresInSeconds: number;
+  intervalSeconds: number;
+}> {
   const { response, body } = await postGitHubOAuthForm(
     GITHUB_OAUTH_DEVICE_CODE_URL,
     new URLSearchParams({
@@ -447,7 +427,20 @@ export async function requestGitHubOAuthDeviceCode(
 // applies GitHub's cumulative slow_down floor using the returned interval.
 export async function pollGitHubOAuthDeviceToken(
   params: GitHubOAuthRequestOptions & { deviceCode: string },
-): Promise<GitHubOAuthDevicePollResult> {
+): Promise<
+  | { status: "authorized"; tokens: GitHubOAuthTokenPair }
+  | { status: "authorization_pending" }
+  | { status: "slow_down"; intervalSeconds?: number }
+  | { status: "expired_token" }
+  | { status: "access_denied" }
+  | {
+      status: "error";
+      code: Exclude<
+        GitHubOAuthErrorCode,
+        "authorization_pending" | "slow_down" | "expired_token" | "access_denied"
+      >;
+    }
+> {
   const deviceCode = readBoundedString(params.deviceCode, "device token");
   if (!/^[A-Za-z0-9_-]{40}$/u.test(deviceCode)) {
     throw githubOAuthProtocolError("device token");
@@ -481,7 +474,10 @@ export async function pollGitHubOAuthDeviceToken(
 
 export async function refreshGitHubOAuthToken(
   params: GitHubOAuthRequestOptions & { refreshToken: string },
-): Promise<GitHubOAuthRefreshResult> {
+): Promise<
+  | { status: "refreshed"; tokens: GitHubOAuthTokenPair }
+  | { status: "error"; code: GitHubOAuthErrorCode; failure?: Error }
+> {
   const refreshToken = readBoundedString(params.refreshToken, "token refresh");
   // Device-flow refresh is a public-client exchange. Sending a bundled client
   // secret would not make it confidential and is not required by GitHub.

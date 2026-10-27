@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { readSessionMessageIdentity as readBrowserSessionMessageIdentity } from "./browser.js";
 import { readSessionMessageIdentity as readNodeSessionMessageIdentity } from "./index.js";
 import {
@@ -696,6 +696,27 @@ it("retains a newly completed live stream ahead of older terminal diagnostics", 
   expect(state.runs["active-first"]?.status).toBe("completed");
   expect(state.runs.newest?.status).toBe("completed");
 });
+it("does not re-enumerate retained runs while an existing stream advances", () => {
+  let state = delta(projection(), "active", reply("First"), 1);
+  for (let index = 0; index < 199; index += 1) {
+    state = terminal(state, { runId: `older-${index}` });
+  }
+  const retained = state.runs["older-0"];
+  const entries = vi.spyOn(Object, "entries");
+  onTestFinished(() => entries.mockRestore());
+  for (let seq = 2; seq <= 4; seq += 1) {
+    const message = reply(`Revision ${seq}`);
+    state = delta(state, "active", message, seq);
+    expect(state.runs.active).toMatchObject({ message, seq, status: "streaming" });
+    expect(state.runs["older-0"]).toBe(retained);
+    expect(entries.mock.calls.filter(([value]) => value === state.runs)).toHaveLength(0);
+  }
+  state = delta(state, "new-active", reply("New stream"), 1);
+  expect(Object.keys(state.runs)).toHaveLength(150);
+  expect(state.runs["older-0"]).toBeUndefined();
+  expect(state.runs.active?.status).toBe("streaming");
+  expect(state.runs["new-active"]?.status).toBe("streaming");
+});
 it("protects every concurrent active stream when terminal retention reaches its soft cap", () => {
   let state = projection();
   for (let index = 0; index < 205; index += 1) {
@@ -703,5 +724,9 @@ it("protects every concurrent active stream when terminal retention reaches its 
   }
   expect(Object.keys(state.runs)).toHaveLength(205);
   expect(state.runs["active-0"]?.status).toBe("streaming");
+  expect(state.runs["active-204"]?.status).toBe("streaming");
+  state = terminal(state, { runId: "active-0" });
+  expect(Object.keys(state.runs)).toHaveLength(204);
+  expect(state.runs["active-0"]).toBeUndefined();
   expect(state.runs["active-204"]?.status).toBe("streaming");
 });

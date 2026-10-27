@@ -18,7 +18,6 @@ import { createPluginStateRuntimeStores } from "../../plugin-state/plugin-state-
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
-  getActivePluginRegistry,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
@@ -26,10 +25,7 @@ import type { OpenClawPluginDefinition, OpenClawPluginService } from "../../plug
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { createEmptyAgentDiscoveryStores } from "../embedded-agent-runner/model.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
@@ -117,11 +113,6 @@ export async function registerNative(
       assert(registered.apiVersion !== 2, "Expected ACPX service API version 1");
       service = registered;
     },
-    registerReload: (registration) => {
-      const registry = getActivePluginRegistry();
-      assert(registry, "Native process test registry missing");
-      registry.reloads.push({ pluginId: "acpx", pluginName: "ACPX", source: "test", registration });
-    },
   });
   assert(plugin.register, "ACPX registration missing");
   plugin.register(api);
@@ -150,15 +141,7 @@ export async function attemptFor(
   const entry = { sessionId: target.sessionId, updatedAt: Date.now() };
   await upsertSessionEntry({ ...target, entry });
   const runId = randomUUID();
-  const admission = prepareAgentRunAdmission({
-    cfg: config,
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "native-execution-test", state: "present" },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-  });
+  const admission = prepareSystemAgentRunAdmission(config, runId, "main", "native-execution-test");
   const admittedRunContext = await admission.admit("plugin-harness", "acpx");
   const provider = `acp-${agent}`;
   const prompt = "Record the requested native effect.";

@@ -27,13 +27,17 @@ import {
 import type { CodexNativeSubagentPendingAssignment } from "./native-subagent-pending-assignments.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import { createParams, tempDir } from "./run-attempt-test-harness.js";
+import { matchesCodexNativeSubagentSubmissionBinding } from "./session-binding-record.js";
+import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import {
+  CODEX_APP_SERVER_BINDING_NAMESPACE,
+  CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   createCodexAppServerBindingStore,
   createCodexTestBindingStateStore,
   type CodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
 
-export async function fixture() {
+export async function fixture(fixtureOptions: { sqlite?: boolean } = {}) {
   const identity = {
     kind: "session" as const,
     agentId: "main",
@@ -57,7 +61,14 @@ export async function fixture() {
     cwd: tempDir,
     appServerRuntimeFingerprint: "connection-A",
   };
-  const state = createCodexTestBindingStateStore();
+  const state = fixtureOptions.sqlite
+    ? createCodexSqliteTestBindingStateStore({
+        namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+      })
+    : createCodexTestBindingStateStore();
   const store = createCodexAppServerBindingStore(state);
   await store.mutate(identity, { kind: "set", binding });
   const deliver = vi.fn(defaultNativeSubagentMonitorRuntime.deliverAgentHarnessCompletion);
@@ -98,9 +109,23 @@ export async function fixture() {
       storePath: resolveStorePath(undefined, { agentId: identity.agentId }),
     });
     const authority = createNativeSubagentSessionAuthority(parent);
+    const prepared = fixtureOptions.sqlite
+      ? await registrationStore.prepareNativeSubagentGuard(identity, owner)
+      : undefined;
+    if (fixtureOptions.sqlite) {
+      assert(prepared);
+      onTestFinished(() => prepared.release());
+    }
     const storeOptions = {
       bindingStore: registrationStore,
-      readBinding: () => registrationStore.read(identity),
+      assertBindingCurrent:
+        prepared?.assertCurrent ??
+        (() => {
+          const current = registrationStore.read(identity);
+          if (!current || !matchesCodexNativeSubagentSubmissionBinding(current, owner)) {
+            throw new Error("Native subagent binding is no longer current.");
+          }
+        }),
       identity,
       owner,
       assertLifecycleCurrentAsync: parent.assertCurrent,
@@ -145,6 +170,7 @@ export async function fixture() {
     assert(registration.value);
     return {
       ...registration.value,
+      bindingAuthority: authority,
       closeGateway: host.closeGateway,
       closeCaller: () => {
         host.closeHost();

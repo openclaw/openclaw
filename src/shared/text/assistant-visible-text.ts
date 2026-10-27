@@ -1,5 +1,8 @@
 // Assistant visible text helpers strip hidden reasoning and control marker text.
-import { projectPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/payload.js";
+import {
+  createPlainTextToolCallBraceProbe,
+  projectPlainTextToolCallBlocks,
+} from "../../../packages/tool-call-repair/src/payload.js";
 import { escapeRegExp } from "../regexp.js";
 import {
   stripMinimaxToolCallXml,
@@ -206,7 +209,7 @@ export const assistantTraceTextFilter: TextFilter = {
   },
 };
 
-const plainToolCallActivationTokens = ["{", "<parameter=", "<function=", "to="] as const;
+const plainToolCallActivationTokens = ["<parameter=", "<function=", "to="] as const;
 function createPlainToolCallTextProjector() {
   const checkpoint: NonNullable<TextFilter["checkpoint"]> = (text, settleBefore, context) =>
     projectPlainTextToolCallBlocks(text, {
@@ -215,6 +218,7 @@ function createPlainToolCallTextProjector() {
     });
   const activation = new RegExp(plainToolCallActivationTokens.map(escapeRegExp).join("|"), "i");
   const overlap = Math.max(...plainToolCallActivationTokens.map((token) => token.length - 1));
+  const braceProbe = createPlainTextToolCallBraceProbe();
   let active = false;
   let tail = "";
   return createConditionalTextProjector(
@@ -222,7 +226,7 @@ function createPlainToolCallTextProjector() {
     (input) => {
       if (!active) {
         const appended = tail + (input.delta ?? input.text);
-        active = activation.test(appended);
+        active = activation.test(appended) || braceProbe(input.delta ?? input.text);
         tail = !active && overlap ? appended.slice(-overlap) : "";
       }
       return active;

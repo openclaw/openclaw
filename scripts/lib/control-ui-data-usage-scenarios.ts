@@ -21,7 +21,7 @@ const query = "Data usage 11999";
 const dayMs = 86_400_000;
 
 /** The Gateway owns population filtering and paging; the browser receives at most 50 rows. */
-export function createDataUsagePopulation(now = Date.now()): SessionUsageEntry[] {
+function createDataUsagePopulation(now = Date.now()): SessionUsageEntry[] {
   const end = Date.parse(new Date(now).toISOString().slice(0, 10));
   return Array.from({ length: sessionCount }, (_, index) => {
     const timestamp = end - (index % dayCount) * dayMs + (index % 24) * 3_600_000;
@@ -100,7 +100,7 @@ function overviewOptions(raw: Record<string, unknown>): UsageOverviewOptions {
   };
 }
 
-export function createDataUsageHandler() {
+function createDataUsageHandler() {
   const rows = createDataUsagePopulation();
   return (raw: unknown): SessionsUsageResult => {
     if (!isRecord(raw)) {
@@ -124,7 +124,7 @@ export function createDataUsageHandler() {
   };
 }
 
-export function createDataUsageFixture(): InteractionFixtureOverrides {
+function createDataUsageFixture(): InteractionFixtureOverrides {
   return { featureMethods: ["sessions.usage", "usage.status"] };
 }
 
@@ -162,7 +162,7 @@ const fixture = {
   createRequestHandlers: () => ({ "sessions.usage": createDataUsageHandler() }),
 };
 
-export const dataUsageScenarios: readonly InteractionScenario[] = [
+const usageScenarios: readonly InteractionScenario[] = [
   {
     ...fixture,
     id: "data-usage-first-render",
@@ -280,3 +280,44 @@ export const dataUsageScenarios: readonly InteractionScenario[] = [
     },
   },
 ];
+
+function usageRoundTripScenario(
+  scenario: InteractionScenario,
+  roundTripMs: 0 | 100,
+): InteractionScenario {
+  return {
+    ...scenario,
+    id: `${scenario.id}${roundTripMs ? "-100ms" : ""}`,
+    createRequestHandlers: () => {
+      const read = createDataUsageHandler();
+      return {
+        "sessions.usage": roundTripMs
+          ? async (params: unknown) => {
+              // Delay this RPC response, not assets, status reads, or browser timers.
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, roundTripMs);
+              });
+              return read(params);
+            }
+          : read,
+      };
+    },
+    run: async (page, gateway) => {
+      const before = (await gateway.getRequests("sessions.usage")).length;
+      const evidence = await scenario.run(page, gateway);
+      await ready(page);
+      const requests = (await gateway.getRequests("sessions.usage")).length - before;
+      if (requests === 0) {
+        throw new Error(`Usage action ${scenario.id} completed without a sessions.usage request`);
+      }
+      return { ...evidence, usageRequests: requests, usageRoundTripMs: roundTripMs };
+    },
+  };
+}
+
+export const dataUsageScenarios: readonly InteractionScenario[] = usageScenarios.flatMap(
+  (scenario) =>
+    scenario.id === "data-usage-scroll"
+      ? [scenario]
+      : [usageRoundTripScenario(scenario, 0), usageRoundTripScenario(scenario, 100)],
+);

@@ -264,6 +264,10 @@ describe("cold transcript storage workers", () => {
     const baselineLeases = leases();
     const before = archiveStarts();
     expect(before).toBeGreaterThan(0);
+    for (let sweep = 0; sweep < 3; sweep++) {
+      await expectCounts(maintain(fixture), 0);
+    }
+    expect(archiveStarts()).toBe(before);
     const first = await loadTranscriptEvents(fixture.scope);
     expect(first).toHaveLength(3);
     expect(leases()).toEqual(baselineLeases);
@@ -563,17 +567,12 @@ describe("cold transcript storage workers", () => {
     const fixture = await createBatchFixture();
     const entered = createDeferred();
     const release = createDeferred();
-    const originalWorker = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
+    const originalWorker = archiveWorkers.prepareSqliteColdArchiveBatch;
     let held = false;
-    vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
-      async (params) => {
-        const result = await originalWorker(params);
-        if (
-          !held &&
-          params.expectedMessageType === "done" &&
-          "operation" in params.workerData &&
-          params.workerData.operation === "cold-prepare"
-        ) {
+    vi.spyOn(archiveWorkers, "prepareSqliteColdArchiveBatch").mockImplementation(
+      async (...args) => {
+        const result = await originalWorker(...args);
+        if (!held) {
           held = true;
           entered.resolve();
           await release.promise;
@@ -621,17 +620,16 @@ describe("cold transcript storage workers", () => {
       let prepared = false;
       let revoked = false;
       let closeElapsedMs = 0;
+      const prepare = archiveWorkers.prepareSqliteColdArchiveBatch;
+      vi.spyOn(archiveWorkers, "prepareSqliteColdArchiveBatch").mockImplementation(
+        async (...args) => {
+          const result = await prepare(...args);
+          prepared = true;
+          return result;
+        },
+      );
       vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
         async (params) => {
-          if (
-            params.expectedMessageType === "done" &&
-            "operation" in params.workerData &&
-            params.workerData.operation === "cold-prepare"
-          ) {
-            const result = await originalWorker(params);
-            prepared = true;
-            return result;
-          }
           if (prepared && params.expectedMessageType === "reclaimed") {
             if (params.diagnostics) {
               archiveDiagnostics.push(params.diagnostics);

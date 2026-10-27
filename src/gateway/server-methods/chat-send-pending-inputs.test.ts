@@ -53,6 +53,7 @@ import {
   setClientProfile,
   useBrowserFollowupFixture,
 } from "./chat-send-pending-inputs.test-support.js";
+import { createSessionMutationCatalog } from "./sessions-mutations.native-consent.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 installGatewayTestHooks();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
@@ -452,18 +453,69 @@ describe("ordinary chat input admission", () => {
     { id: "openclaw-macos", mode: "ui", displayName: "macOS", storage: "durable" },
     { id: "gateway-client", mode: "backend", displayName: "Automation", storage: "durable" },
     { id: "openclaw-control-ui", mode: "webchat", displayName: "Web", storage: "memory" },
+    {
+      id: "openclaw-control-ui",
+      mode: "webchat",
+      displayName: "Web fallback",
+      storage: "durable",
+      autoFallback: true,
+    },
   ] satisfies Array<
     Pick<GatewayClientInfo, "id" | "mode" | "displayName"> & {
       storage: "durable" | "memory";
+      autoFallback?: boolean;
     }
   >)(
-    "stages the approved $id $storage follow-up and its source before ACK without changing the active transcript",
-    async ({ storage, ...clientInfo }) => {
+    "stages the approved $displayName $storage follow-up and its source before ACK without changing the active transcript",
+    async ({ storage, autoFallback = false, ...clientInfo }) => {
       await using fixture = await createBrowserFollowupFixture({ storage });
       fixture.client.connect.client = { ...fixture.client.connect.client, ...clientInfo };
       fixture.params.queueMode = "followup";
       const profile = ensureProfileForEmail("alice@example.test");
       setClientProfile(fixture.client, { ...profile, updatedAt: 1 }, "Alice");
+      await patchSessionEntryCore(fixture.scope, () => ({
+        modelProvider: "openai",
+        model: autoFallback ? "fallback-model" : "previous-model",
+        providerOverride: "openai",
+        modelOverride: autoFallback ? "fallback-model" : "previous-model",
+        ...(autoFallback
+          ? {
+              modelOverrideSource: "auto" as const,
+              modelOverrideFallbackOriginProvider: "openai",
+              modelOverrideFallbackOriginModel: "selected-model",
+              fallbackNotice: {
+                kind: "active" as const,
+                selectedModel: "openai/selected-model",
+                activeModel: "openai/fallback-model",
+                reason: "timeout",
+              },
+            }
+          : {}),
+      }));
+      const selected = { provider: "openai", model: "selected-model" };
+      if (!autoFallback) {
+        fixture.context.loadGatewayModelCatalogSnapshot = async () =>
+          createSessionMutationCatalog(
+            getRuntimeConfig(),
+            { agentDir: () => "/fixture/agent", workspaceDir: "/fixture/workspace" },
+            ["previous-model", selected.model].map((id) => ({ provider: "openai", id, name: id })),
+          );
+        const patchResponse = vi.fn<RespondFn>();
+        const patch = { key: fixture.scope.sessionKey, model: "openai/selected-model" };
+        await handleGatewayRequest({
+          req: { type: "req", id: "select-model", method: "sessions.patch", params: patch },
+          client: fixture.client,
+          context: fixture.context,
+          isWebchatConnect: () => true,
+          respond: patchResponse,
+        });
+        expect(patchResponse.mock.calls[0]?.[0]).toBe(true);
+        expect(loadSessionEntry(fixture.scope)).not.toHaveProperty("model");
+      }
+      const modelSelection = {
+        ...selected,
+        previous: { provider: "openai", model: autoFallback ? "selected-model" : "previous-model" },
+      };
       const clone = vi.spyOn(globalThis, "structuredClone");
       const { scope, params, context, approvedContent, activeTranscript } = fixture;
       const readPending = () =>
@@ -501,7 +553,7 @@ describe("ordinary chat input admission", () => {
             role: "user",
             content: approvedContent,
             idempotencyKey: `${params.idempotencyKey}:user`,
-            __openclaw: { senderId: profile.id, ...provenance },
+            __openclaw: { senderId: profile.id, ...provenance, modelSelection },
           },
         };
         expect(await pendingAtAck).toMatchObject({
@@ -510,8 +562,12 @@ describe("ordinary chat input admission", () => {
         });
         expect(await pendingAtNotification).toEqual(await pendingAtAck);
         const recorder = await fixture.dispatchedRecorder;
+        expect(loadSessionEntry(scope)?.lastSubmittedModel).toEqual(
+          autoFallback ? undefined : modelSelection.previous,
+        );
         const committed = await recorder.persistApproved();
-        expect(committed?.message["__openclaw"]).toMatchObject(provenance);
+        expect(committed?.message["__openclaw"]).toMatchObject({ ...provenance, modelSelection });
+        expect(loadSessionEntry(scope)?.lastSubmittedModel).toEqual(selected);
         // Initial resolution detaches the store; custody needs only the current target binding.
         expect(
           clone.mock.calls.filter(
@@ -683,6 +739,8 @@ describe("ordinary chat input admission", () => {
     "revalidates %s after message approval before committing custody",
     async (change) => {
       await using fixture = await createBrowserFollowupFixture();
+      const baseline = { provider: "openai", model: "previous-model" };
+      await patchSessionEntryCore(fixture.scope, () => ({ lastSubmittedModel: baseline }));
       if (change === "session access") {
         setClientProfile(
           fixture.client,
@@ -734,6 +792,9 @@ describe("ordinary chat input admission", () => {
       expectNotStarted(respond);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       await expectUncommitted(fixture);
+      if (change !== "session replacement") {
+        expect(loadSessionEntry(fixture.scope)?.lastSubmittedModel).toEqual(baseline);
+      }
       if (change === "session replacement") {
         expect(loadSessionEntry(fixture.scope)?.sessionId).toBe("successor-session");
         expect(

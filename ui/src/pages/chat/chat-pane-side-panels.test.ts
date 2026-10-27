@@ -8,10 +8,10 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { renderPanelFixture } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import {
   connectPaneTestView,
-  createGatewayBrowserClientFixture,
   createTestChatPane,
   getPaneTestRuntime,
 } from "./chat-pane.test-support.ts";

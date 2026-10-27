@@ -41,7 +41,6 @@ import {
 } from "./attempt-sessions-yield.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
 import {
-  sanitizeOpenAIResponsesReplayForStream,
   sanitizeReplayToolCallIdsForStream,
   shouldApplyReplayToolCallIdSanitizer,
   wrapStreamFnSanitizeMalformedToolCalls,
@@ -101,7 +100,7 @@ function wrapStreamFnWithCompactionReplayRepair(
       await joinRepairs();
       throw error;
     }
-    return wrapStreamObjectSettlement(response, joinRepairs);
+    return wrapStreamObjectSettlement(response, joinRepairs, () => repairs.length > 0);
   };
 }
 
@@ -309,9 +308,6 @@ export function installEmbeddedAttemptStreamGuards(
     installStreamWrapper(wrapStreamFnWithCompactionReplayRepair, (checkpoint) =>
       repairRejectedReplay("compaction", checkpoint),
     );
-  }
-  if (isOpenAIResponsesApi) {
-    installStreamWrapper(wrapStreamFnWithMessageTransform, sanitizeOpenAIResponsesReplayForStream);
   }
 
   const innerStreamFn = session.agent.streamFn;

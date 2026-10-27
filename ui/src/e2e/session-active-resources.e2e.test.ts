@@ -14,7 +14,6 @@ import {
   waitForControlUiRoute,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
@@ -75,7 +74,23 @@ const desktop = {
   control: false,
 };
 const withPage = (run: (fixture: { page: Page }) => Promise<void>, width = 1280) =>
-  suite.withPage({ serviceWorkers: "block", viewport: { width, height: 900 } }, run);
+  suite.withPage({ serviceWorkers: "block", viewport: { width, height: 900 } }, async (fixture) => {
+    await fixture.page.clock.install();
+    await run(fixture);
+  });
+
+async function expectDesktopObservationCountStable(
+  page: Page,
+  gateway: MockGatewayControls,
+  count: number,
+) {
+  expect(await gateway.getRequests("desktop.observe")).toHaveLength(count);
+  // Observe every 50 ms across the full negative window, including due browser timers.
+  for (let elapsed = 0; elapsed < 500; elapsed += 50) {
+    await page.clock.runFor(50);
+    expect(await gateway.getRequests("desktop.observe")).toHaveLength(count);
+  }
+}
 async function openResources(page: Page, options: Parameters<typeof installMockGateway>[1]) {
   const gateway = await installMockGateway(page, {
     sessionKey: key,
@@ -203,7 +218,7 @@ suite.define(() => {
           await openChatSidePanelType(page, "Browser");
           const reads = (await gateway.getRequests("desktop.observe")).length;
           await pane(page).getByRole("button", { name: "Close Browser", exact: true }).click();
-          await expectRequestCountStable(gateway, "desktop.observe", reads);
+          await expectDesktopObservationCountStable(page, gateway, reads);
           expect(await pane(page).locator(".desktop-surface canvas").isVisible()).toBe(true);
           expect(await pane(page).getByRole("tab", { name: "Browser", exact: true }).count()).toBe(
             0,
@@ -228,11 +243,13 @@ suite.define(() => {
             nodeId: "worker-desktop",
           });
           await gateway.waitForRequest("environments.status", { after: statusReads });
-          await page.waitForLoadState("networkidle");
-          const frame = await takeControlUiScreenshotFrame(page, pane(page), [], {
-            animations: "disabled",
-          });
-          await writeFile(path.join(suite.artifactDir, "desktop-unavailable.png"), frame.png);
+          await pane(page).locator("openclaw-desktop-panel").waitFor({ state: "detached" });
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            const frame = await takeControlUiScreenshotFrame(page, pane(page), [], {
+              animations: "disabled",
+            });
+            await writeFile(path.join(suite.artifactDir, "desktop-unavailable.png"), frame.png);
+          }
           expect(await desktopTab(page).count()).toBe(0);
           expect(await pane(page).locator("openclaw-desktop-panel").count()).toBe(0);
           expect(
@@ -255,7 +272,17 @@ suite.define(() => {
           await page.reload();
           await ready(page);
           await gateway.waitForRequest("sessions.describe");
-          await page.waitForLoadState("networkidle");
+          await expect
+            .poll(() =>
+              pane(page).evaluate((element, sessionKey) => {
+                // SAFETY: The native chat pane exposes its public state host.
+                const state = (element as HTMLElement & { state: ChatPageHost }).state;
+                return state.sessionsResult?.sessions.find((session) => session.key === sessionKey)
+                  ?.placement?.state;
+              }, key),
+            )
+            .toBe("local");
+          await expectDesktopObservationCountStable(page, gateway, 0);
           expect(await desktopTab(page).count()).toBe(0);
           expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
           return;
@@ -331,12 +358,12 @@ suite.define(() => {
         await gateway.emitGatewayEvent("node.runnerInventory.changed", {
           nodeId: "worker-desktop",
         });
-        await expectRequestCountStable(gateway, "desktop.observe", observationCount);
+        await expectDesktopObservationCountStable(page, gateway, observationCount);
         expect(await rfb.events()).not.toContain("closed:1");
         await page.goBack();
         await desktopTab(page).waitFor();
         await pane(page).locator(".desktop-surface canvas").waitFor();
-        await expectRequestCountStable(gateway, "desktop.observe", observationCount);
+        await expectDesktopObservationCountStable(page, gateway, observationCount);
         expect(await rfb.events()).not.toContain("closed:1");
         expect(await desktopTab(page).count()).toBe(1);
         await assertNoProvisioning(gateway);
@@ -389,7 +416,7 @@ suite.define(() => {
         );
         await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
         await gateway.resolveDeferred("environments.status", environment);
-        await expectRequestCountStable(gateway, "desktop.observe", 0);
+        await expectDesktopObservationCountStable(page, gateway, 0);
         expect(await ownerPane.getByRole("tab", { name: "Desktop", exact: true }).count()).toBe(0);
         await gateway.waitForRequest("sessions.describe", { after: descriptorReads });
         await gateway.resolveDeferred("sessions.describe");
@@ -402,7 +429,7 @@ suite.define(() => {
             }, key),
           )
           .toBe(filtered ? undefined : "local");
-        await expectRequestCountStable(gateway, "desktop.observe", 0);
+        await expectDesktopObservationCountStable(page, gateway, 0);
         expect(await ownerPane.getByRole("tab", { name: "Desktop", exact: true }).count()).toBe(0);
         await assertNoProvisioning(gateway);
       });
@@ -498,11 +525,16 @@ suite.define(() => {
           const card = pane(page).locator("openclaw-browser-tab-card");
           await card.locator(".shot img").waitFor({ state: "attached" });
           const panel = pane(page).locator("openclaw-browser-panel[embedded]");
-          const shown = (await panel.isVisible()) ? panel.locator(".bp-shot") : card;
-          const initial = await takeControlUiScreenshotFrame(page, pane(page), [shown], {
-            animations: "disabled",
-          });
-          await writeFile(path.join(suite.artifactDir, `browser-inline-${width}.png`), initial.png);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            const shown = (await panel.isVisible()) ? panel.locator(".bp-shot") : card;
+            const initial = await takeControlUiScreenshotFrame(page, pane(page), [shown], {
+              animations: "disabled",
+            });
+            await writeFile(
+              path.join(suite.artifactDir, `browser-inline-${width}.png`),
+              initial.png,
+            );
+          }
           expect(await panel.count()).toBe(0);
           expect(
             await pane(page).locator(".agent-chat__composer-combobox textarea").isVisible(),
@@ -573,12 +605,13 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("sessions.messages.subscribe");
         await page.getByText("Run the workspace checks headlessly.", { exact: true }).waitFor();
-        await page.waitForLoadState("networkidle");
-        const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [], {
-          animations: "disabled",
-        });
-        await writeFile(path.join(suite.artifactDir, "failed-move.png"), frame.png);
         await page.getByText(session.placementMove.error, { exact: true }).waitFor();
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(suite.artifactDir, "failed-move.png"), frame.png);
+        }
         expect(await page.getByText("Finishing session move…", { exact: true }).count()).toBe(0);
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         expect(await composer.isDisabled()).toBe(true);

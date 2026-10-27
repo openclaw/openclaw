@@ -144,7 +144,7 @@ export function resolveProtectedSessionTargets(params: {
     !params.adminBypass &&
     directTargets.length > 0 &&
     Boolean(gatewayClientSessionCreator(params.client)) &&
-    params.sessionCap() === "none";
+    ["none", "invited"].includes(params.sessionCap() ?? "");
   const protectedTargets = hidesForeignSessions
     ? directTargets
     : (params.talkTargets?.filter((target) => isIncognitoSessionKey(target.sessionKey)) ??
@@ -236,7 +236,8 @@ export function resolveTalkSessionTargetInput(
     method !== "talk.session.create" &&
     method !== "talk.client.transcript" &&
     method !== "talk.client.close" &&
-    method !== "talk.client.steer"
+    method !== "talk.client.steer" &&
+    method !== "talk.client.say"
   ) {
     return undefined;
   }

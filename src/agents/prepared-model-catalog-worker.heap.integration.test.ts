@@ -10,11 +10,13 @@ import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import {
   publishRemoteModelCatalogSnapshot,
+  withRemoteModelCatalogSnapshot,
   type ActiveRemoteModelCatalog,
 } from "../model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import {
   createCatalogFixture,
@@ -49,6 +51,7 @@ function createCatalogPool(env: NodeJS.ProcessEnv) {
 
 function catalogTask(value: PreparedModelCatalogWorkerInput): PreparedModelCatalogWorkerTask {
   return {
+    context: prepareModelCatalogWorkerContext(value),
     value,
     request: {
       kind: "catalog",
@@ -266,6 +269,9 @@ type NativeCatalogSample = {
   neighborRejected?: boolean;
   effects?: number;
   controlCollected?: boolean;
+  descriptorReads?: number;
+  snapshotFrozen?: boolean;
+  snapshotBytes?: string;
 };
 
 async function createNativeCatalogFixture(options: {
@@ -373,6 +379,65 @@ export function register(api) {
     },
   };
 }
+
+it("freezes cloned remote catalog data without inspecting each model property again", async () => {
+  const remoteCatalog: ActiveRemoteModelCatalog = {
+    sourceUrl: "https://freeze-probe.invalid/catalog.json",
+    revision: "synthetic-revision",
+    generatedAt: 1,
+    providers: {
+      probe: {
+        models: Array.from({ length: 100 }, (_, index) => ({
+          id: `remote-probe-${index}`,
+          input: ["text"],
+          cost: { input: 1, output: 2 },
+        })),
+      },
+    },
+    recommendations: { probe: ["remote-probe-0"] },
+    pricing: {},
+    upstreamPricing: {},
+  };
+  await using fixture = await createNativeCatalogFixture({
+    // Instrument only the private worker, after its first task installs this plugin.
+    setup: `const descriptor = Object.getOwnPropertyDescriptor;
+const freeze = Object.freeze;
+let descriptorReads = 0;
+let snapshot;
+let rows = new Set();
+Object.getOwnPropertyDescriptor = function(value, key) {
+  if (rows.has(value) && !Object.isFrozen(value)) descriptorReads++;
+  return descriptor(value, key);
+};
+Object.freeze = function(value) {
+  if (value?.sourceUrl === "https://freeze-probe.invalid/catalog.json") {
+    snapshot = value;
+    rows = new Set(value.providers.probe.models);
+    descriptorReads = 0;
+  }
+  return freeze(value);
+};`,
+    catalog: `if (snapshot) {
+  Object.getOwnPropertyDescriptor = descriptor;
+  Object.freeze = freeze;
+  const pending = [snapshot];
+  let snapshotFrozen = true;
+  while (pending.length) {
+    const value = pending.pop();
+    snapshotFrozen &&= Object.isFrozen(value);
+    for (const child of Object.values(value)) {
+      if (child && typeof child === "object") pending.push(child);
+    }
+  }
+  extra = { descriptorReads, snapshotFrozen, snapshotBytes: JSON.stringify(snapshot) };
+}`,
+  });
+  await fixture.run(0);
+  const observed = await withRemoteModelCatalogSnapshot(remoteCatalog, () => fixture.run(1));
+  expect(observed.snapshotBytes).toBe(JSON.stringify(remoteCatalog));
+  expect(observed.snapshotFrozen).toBe(true);
+  expect(observed.descriptorReads).toBe(0);
+}, 60_000);
 
 it("reuses one installed native ESM evaluation across 20 catalog context changes", async () => {
   await using fixture = await createNativeCatalogFixture({

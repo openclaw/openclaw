@@ -38,6 +38,7 @@ import type {
   SessionEntryPatchReduction,
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
+import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
@@ -195,11 +196,32 @@ export async function patchSessionEntryInWorker(params: {
             params.assertCurrent();
             params.guard?.assertCurrent?.();
             source?.assertCurrent();
-            const snapshot = await runOpenClawAgentWorkerWrite(params.database, () =>
-              execution.runExisting(executionSource, (worker) =>
-                worker.execute({ type: "session.entry.patch.prepare", input: params.selection }),
-              ),
-            );
+            const snapshot = await runOpenClawAgentWorkerWrite(params.database, async () => {
+              const generation = execution.capturePreparedGenerationClaim();
+              // Complete current facts already contain the callback's CAS preimage.
+              // Alias targets and cold/incomplete facts keep their worker-owned selection.
+              const retained =
+                params.selection.kind === "entry" && generation
+                  ? readRetainedSessionEntryFacts(
+                      params.database,
+                      {
+                        sessionKeys: [
+                          params.selection.exact
+                            ? params.selection.sessionKey
+                            : params.selection.sessionKey.trim(),
+                        ],
+                        projection: "full",
+                      },
+                      generation,
+                    )
+                  : undefined;
+              return (
+                retained?.entries ??
+                execution.runExisting(executionSource, (worker) =>
+                  worker.execute({ type: "session.entry.patch.prepare", input: params.selection }),
+                )
+              );
+            });
             if (!snapshot) {
               throw new Error("Session database disappeared before patching");
             }

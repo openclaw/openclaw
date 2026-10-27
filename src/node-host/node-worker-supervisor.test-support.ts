@@ -11,6 +11,7 @@ import {
   type NodeWorkerSupervisorIdentity,
 } from "../worker/node-supervisor-protocol.js";
 import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
+import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 
 const TEST_BUNDLE_HASH = "a".repeat(64);
 export const TEST_WORKER_CREDENTIAL = 'node worker/"credential\\secret?';
@@ -330,4 +331,18 @@ export function testIsolatedWorkerLaunchInput(
   input.descriptor.admission.environmentId = `environment-${launchId}`;
   input.descriptor.admission.sessionId = `session-${launchId}`;
   return input;
+}
+
+export function createPortalSupervisor(): NodeWorkerSupervisorControl {
+  const unexpectedSupervisorCommand = async (): Promise<never> => {
+    throw new Error("Portal stream must not call another supervisor command");
+  };
+  return {
+    launch: unexpectedSupervisorCommand,
+    status: unexpectedSupervisorCommand,
+    retainWorkspaces: unexpectedSupervisorCommand,
+    cancel: unexpectedSupervisorCommand,
+    observeProcesses: unexpectedSupervisorCommand,
+    stopEnvironment: unexpectedSupervisorCommand,
+  };
 }

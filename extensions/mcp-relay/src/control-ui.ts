@@ -128,7 +128,7 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
   }
 
   async function run(action: (id: number) => Promise<void>) {
-    if (busy || !canUse() || !context.presented) {
+    if (busy || !current(generation)) {
       return;
     }
     const id = ++generation;
@@ -184,13 +184,16 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
   }
 
   function showPairing(returnFocusTarget: HTMLElement, pairingCaller: RelayCaller) {
+    if (!current(generation)) {
+      return;
+    }
     let pairingFull = false;
     const content = element("div", undefined, "mcp-connected-apps mcp-connected-apps__dialog");
     let pairing: Pairing | undefined;
     let pairingBusy = false;
     let pairingError = "";
     const createPairing = async () => {
-      if (pairingBusy || !pairingCaller.canPair || !canUse()) {
+      if (pairingBusy || !pairingCaller.canPair || !current(generation)) {
         return;
       }
       const id = generation;
@@ -474,8 +477,13 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
     dispose() {
       disposed = true;
       generation += 1;
+      snapshot = undefined;
+      consent = undefined;
       closeDialog();
       unsubscribe();
+      // A retained focus event can keep the page alive after it is detached.
+      page.replaceChildren();
+      overlay.replaceChildren();
       page.remove();
       overlay.remove();
     },

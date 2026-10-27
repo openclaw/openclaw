@@ -1,5 +1,6 @@
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import {
+  createCpuTrackedWorker,
   createPluginRuntimeProcessEntrypoint,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
@@ -71,7 +72,7 @@ export class RegistryClient {
     if (this.worker) {
       return this.worker;
     }
-    const worker = new Worker(resolveRuntimeWorkerUrl(registryEntrypoint), {
+    const worker = createCpuTrackedWorker(resolveRuntimeWorkerUrl(registryEntrypoint), {
       workerData: { sdk: sdkUrls(), files: pluginFilesLocation(), stateRoot: this.stateRoot() },
     });
     worker.unref();

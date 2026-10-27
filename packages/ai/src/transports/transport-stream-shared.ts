@@ -31,34 +31,96 @@ import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.
 /** Decodes frame boundaries; callers retain reader lifetime and protocol admission. */
 export async function* iterateSseFrames(
   read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
-  assertWithinLimit?: (pending: string) => void,
+  limit?: { max: number; unit: "characters" | "bytes"; message: string },
 ): AsyncGenerator<{ frame: string; terminated: boolean }> {
   const decoder = new TextDecoder();
-  let buffer = "";
-  // CRLF remains one line ending even when the delimiter expression backtracks.
-  const delimiter = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
-  let scanOffset = 0;
+  const parts: string[] = [];
+  let partsLength = 0;
+  let tail = "";
+  const lengthOf =
+    limit?.unit === "bytes"
+      ? (text: string) => Buffer.byteLength(text, "utf8")
+      : (text: string) => text.length;
+  const assertWithinLimit = (length: number) => {
+    if (limit && length > limit.max) {
+      throw new Error(limit.message);
+    }
+  };
   for (;;) {
     const { done, value } = await read();
-    buffer += decoder.decode(value, { stream: !done });
-    delimiter.lastIndex = scanOffset;
+    const buffer = tail + decoder.decode(value, { stream: !done });
+    let start = 0;
+    let cr = buffer.indexOf("\r");
+    let lf = buffer.indexOf("\n");
     for (;;) {
-      const boundary = delimiter.exec(buffer);
-      if (!boundary && (!done || !buffer)) {
+      let frameEnd = buffer.length;
+      let boundaryEnd = -1;
+      let previousStart = -1;
+      let previousEnd = -1;
+      while (cr >= 0 || lf >= 0) {
+        const next = cr < 0 ? lf : lf < 0 ? cr : Math.min(cr, lf);
+        // Consume CRLF together, including its LF in the cached search cursor.
+        const end = next + (buffer[next] === "\r" && buffer[next + 1] === "\n" ? 2 : 1);
+        if (cr >= 0 && cr < end) {
+          cr = buffer.indexOf("\r", end);
+        }
+        if (lf >= 0 && lf < end) {
+          lf = buffer.indexOf("\n", end);
+        }
+        if (previousEnd === next) {
+          frameEnd = previousStart;
+          boundaryEnd = end;
+          break;
+        }
+        previousStart = next;
+        previousEnd = end;
+      }
+      if (boundaryEnd < 0 && (!done || (!parts.length && start === buffer.length))) {
         break;
       }
-      const frameEnd = boundary?.index ?? buffer.length;
-      const frame = buffer.slice(0, frameEnd);
-      assertWithinLimit?.(frame);
-      buffer = boundary ? buffer.slice(frameEnd + boundary[0].length) : "";
-      delimiter.lastIndex = 0;
-      yield { frame, terminated: boundary !== null };
+      let frame = buffer.slice(start, frameEnd);
+      if (limit) {
+        assertWithinLimit(partsLength + lengthOf(frame));
+      }
+      if (parts.length) {
+        parts.push(frame);
+        frame = parts.join("");
+        parts.length = 0;
+        partsLength = 0;
+      }
+      start = boundaryEnd < 0 ? buffer.length : boundaryEnd;
+      yield { frame, terminated: boundaryEnd >= 0 };
+      if (boundaryEnd < 0) {
+        break;
+      }
     }
-    assertWithinLimit?.(buffer);
+    const pending = buffer.slice(start);
+    // Scan only new text plus the maximum delimiter overlap; scanning an ever-growing
+    // concatenated string would flatten/copy the entire pending frame on every read.
+    // Keep only trailing newline characters, so UTF-8 length accounting never
+    // splits a surrogate pair between a retained fragment and the overlap.
+    let split = pending.length;
+    while (split > 0 && pending.length - split < 3) {
+      const last = pending.charCodeAt(split - 1);
+      if (last !== 10 && last !== 13) {
+        break;
+      }
+      split--;
+    }
+    if (split > 0) {
+      const part = pending.slice(0, split);
+      parts.push(part);
+      if (limit) {
+        partsLength += lengthOf(part);
+      }
+    }
+    tail = pending.slice(split);
+    if (limit) {
+      assertWithinLimit(partsLength + lengthOf(tail));
+    }
     if (done) {
       return;
     }
-    scanOffset = Math.max(0, buffer.length - 3);
   }
 }
 
@@ -254,20 +316,16 @@ export function throwIfModelStreamAborted(signal?: AbortSignal): void {
   }
 }
 
-async function waitForModelStreamTurn(signal?: AbortSignal, work = 1): Promise<void> {
+function waitForModelStreamTurn(signal?: AbortSignal, work = 1): Promise<void> | undefined {
   throwIfModelStreamAborted(signal);
   // All streams share the main loop. Recheck after waking so a swarm cannot
   // spend a fresh per-stream budget in the same microtask burst.
-  for (;;) {
-    if (
-      !nextStreamTurn ||
-      (streamWorkThisTurn + work <= MODEL_STREAM_COOPERATIVE_YIELD_BUDGET &&
-        Date.now() - streamTurnStartedAt < MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS)
-    ) {
-      break;
-    }
-    await nextStreamTurn;
-    throwIfModelStreamAborted(signal);
+  if (
+    nextStreamTurn &&
+    (streamWorkThisTurn + work > MODEL_STREAM_COOPERATIVE_YIELD_BUDGET ||
+      Date.now() - streamTurnStartedAt >= MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS)
+  ) {
+    return nextStreamTurn.then(() => waitForModelStreamTurn(signal, work));
   }
   if (!nextStreamTurn) {
     streamTurnStartedAt = Date.now();
@@ -280,6 +338,7 @@ async function waitForModelStreamTurn(signal?: AbortSignal, work = 1): Promise<v
     });
   }
   streamWorkThisTurn += work;
+  return undefined;
 }
 
 /** Keep ready provider events from monopolizing the main loop, including ignored events. */
@@ -288,7 +347,10 @@ export async function* iterateModelStream<T>(
   signal?: AbortSignal,
 ): AsyncGenerator<T> {
   for await (const event of events) {
-    await waitForModelStreamTurn(signal);
+    const wait = waitForModelStreamTurn(signal);
+    if (wait) {
+      await wait;
+    }
     yield event;
     throwIfModelStreamAborted(signal);
   }
@@ -491,7 +553,10 @@ export function withProviderResponseHook<T = never>(params: {
       try {
         await awaitProviderLifecycleCallback(params.hook, params.signal);
         // Hooks may finish together after waiting through earlier work budgets.
-        await waitForModelStreamTurn(params.signal, MODEL_STREAM_START_WORK);
+        const wait = waitForModelStreamTurn(params.signal, MODEL_STREAM_START_WORK);
+        if (wait) {
+          await wait;
+        }
       } catch (error) {
         params.abort(error instanceof Error ? error : new Error(String(error)));
         throw error;

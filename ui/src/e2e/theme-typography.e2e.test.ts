@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   waitForControlUiRoute,
@@ -113,6 +114,8 @@ suite.define(() => {
       expect(await textarea.inputValue()).toBe(COMPOSER_LIGATURE_SEQUENCE);
       // Blur removes the caret without hiding the corruption.
       await textarea.evaluate((element) => (element as HTMLTextAreaElement).blur());
+      // Blur animates the ancestor border visible through this transparent field.
+      await waitForControlUiProofSurface(textarea, []);
       const typedPixels = await textarea.screenshot();
 
       await textarea.evaluate((element, sequence) => {
@@ -124,6 +127,7 @@ suite.define(() => {
         field.blur();
       }, COMPOSER_LIGATURE_SEQUENCE);
       await expect.poll(() => textarea.inputValue()).toBe(COMPOSER_LIGATURE_SEQUENCE);
+      await waitForControlUiProofSurface(textarea, []);
       const valuePixels = await textarea.screenshot();
 
       expect(Buffer.compare(typedPixels, valuePixels)).toBe(0);

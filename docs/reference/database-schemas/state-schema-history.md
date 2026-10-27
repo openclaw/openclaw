@@ -55,10 +55,27 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 31      | Local workspace baselines stored by path with subtree digests and recoverable checkpoint deltas                                                                                                                                                                                                                                                | Unreleased          |
 | 32      | Native PostgreSQL index ordering for non-null keys; metadata-only SQLite advance ([#183015](https://github.com/openclaw/openclaw/pull/183015))                                                                                                                                                                                                 | Unreleased          |
 | 33      | Native PostgreSQL ordering for predicate-proven non-null partial-index keys; metadata-only SQLite advance ([#183443](https://github.com/openclaw/openclaw/pull/183443))                                                                                                                                                                        | Unreleased          |
+| 34      | Durable default cron partition binding, independent of the state directory                                                                                                                                                                                                                                                                     | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 34
+
+Schema 34 records `cron.defaultStoreKey` in `config_machine_state`. Existing
+partition keys remain unchanged, including keys that spell an old absolute path.
+Fresh databases bind their initial default store path as an opaque identity. Moving an upgraded state directory
+or restoring its backup carries this binding with the jobs, scratch, receipts,
+and run history. Public plugin SDK path arguments continue to select the recorded
+default through the current default path; custom paths retain their own partitions.
+
+SQLite and PostgreSQL publish the binding and schema version in the same migration
+transaction. An older database whose original default cannot be established
+advances without guessing: the Gateway starts, cron reports the partition
+inventory, and `openclaw doctor --fix` offers an explicit interactive selection.
+Other partitions remain unchanged. Rollback restores the verified predecessor
+backup and its matching binary.
 
 ### State schemas 32 and 33
 
@@ -351,7 +368,8 @@ first repairs the known malformed
 `idx_skill_workshop_collection_reviews_workspace_time` index during its schema
 prelude. Its final Workshop step then writes every `pending` or `quarantined`
 proposal draft, plus its support files, to
-`<agentDir>/workshop-skills/.archive/.retired-proposals/<proposalId>/SKILL.md`
+`<agentDir>/workshop-skills/.drafts/<proposalId>/SKILL.md` (earlier builds used
+`.archive/.retired-proposals/`; Doctor moves those into `.drafts/`)
 for the recorded owner agent, or the default agent when none was recorded.
 Pre-SQLite bundles under `<state-dir>/skill-workshop/proposals/<id>/` with a
 `proposal.json` are exported the same way. An existing export is never

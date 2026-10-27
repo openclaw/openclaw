@@ -133,6 +133,8 @@ describe("production lint suppressions", () => {
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
     expect(summarizeSuppressions(productionLintSuppressions)).toEqual(
       [
+        // Indexed scans avoid per-row iterator allocations on frozen catalog snapshots.
+        "extensions/anthropic/session-catalog-runtime.ts|typescript/prefer-for-of|1",
         // These callbacks run only in the page and preserve page-thrown message coercion.
         "extensions/browser/src/browser/page-function-runtime.ts|@typescript-eslint/no-base-to-string|1",
         "extensions/browser/src/browser/page-function-runtime.ts|no-eval|2",
@@ -158,6 +160,8 @@ describe("production lint suppressions", () => {
         // Thread assembly orders fresh Map-spread arrays without mutating posts or caller inputs.
         "extensions/x/src/thread.ts|unicorn/no-array-reverse|1",
         "extensions/x/src/thread.ts|unicorn/no-array-sort|2",
+        // The Talk readiness probe calls the saved media method with its original receiver.
+        "scripts/bench-control-ui-talk.ts|typescript/unbound-method|1",
         // The fault observer preserves methods for restoration and supplies each database receiver through .call.
         "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs|typescript/unbound-method|2",
         "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|no-underscore-dangle|1",
@@ -165,12 +169,18 @@ describe("production lint suppressions", () => {
         "scripts/e2e/parallels/host-command.ts|no-warning-comments|1",
         // The scheduling probe forwards native methods with the original call receiver through Reflect.apply.
         "scripts/lib/control-ui-resource-counts.ts|typescript/unbound-method|8",
-        // The Talk probe forwards native playback and analyser methods with their original receivers.
-        "scripts/lib/control-ui-talk-fixture.ts|typescript/unbound-method|2",
+        // The Talk probe forwards native playback, analyser, processor, start, and stop methods with their original receivers.
+        "scripts/lib/control-ui-talk-fixture.ts|typescript/unbound-method|5",
         "scripts/lib/plain-gh.mjs|no-warning-comments|1",
         "scripts/lib/sqlite-reliability-process.ts|typescript/prefer-promise-reject-errors|1",
+        // The frame census retains native methods and supplies their original receivers through .call.
+        "scripts/perf/agent-event-frame-census-preload.mjs|typescript/unbound-method|3",
         // The copy-count probe restores the native method after measurement.
         "scripts/perf/agent-fresh-array-copy-measure.ts|no-extend-native|2",
+        // The owner probe executes its selected trusted source expression rather than a copied implementation.
+        "scripts/perf/attempt-stream-options-measure.ts|typescript/no-implied-eval|1",
+        // The avatar dispatch probe forwards the original pool receiver and restores the method.
+        "scripts/perf/avatar-inline-measure.ts|typescript/unbound-method|1",
         // The load probe forwards native WebSocket.send with its original socket receiver.
         "scripts/perf/catalog-polling-measure.ts|typescript/unbound-method|1",
         // The retention probe preserves the static Buffer factories for exact restoration.
@@ -180,6 +190,8 @@ describe("production lint suppressions", () => {
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
         "scripts/perf/lease-main-thread-renewal.mjs|typescript/unbound-method|3",
+        // The counts-only probe restores the native copying sort in finally.
+        "scripts/perf/memory-prompt-copy-measure.ts|no-extend-native|2",
         // Keep measured fixture shapes unchanged; construction is outside the benchmark loop.
         "scripts/perf/memory-ranking-copies.ts|oxc/no-map-spread|2",
         // The size-record probe forwards Map.set with the original map receiver.
@@ -190,6 +202,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/pg-footprint-preload.mjs|unicorn/require-post-message-target-origin|1",
         // The fault injector supplies the native pg.Client receiver through Reflect.apply.
         "scripts/perf/pg-pool-hang.worker.mjs|typescript/unbound-method|1",
+        // The require tracer forwards the original method with each requesting module as receiver.
+        "scripts/perf/plugin-transform-preload.mjs|typescript/unbound-method|1",
         // The provider probe forwards native methods with their original receivers.
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
         // Node worker ports have no browser target origin.
@@ -204,6 +218,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/system-prompt-pool-retention.ts|unicorn/prefer-structured-clone|1",
         // The counts-only probe wraps toSorted and restores it in finally; timing uses native methods.
         "scripts/perf/tools-catalog-copy-measure.ts|no-extend-native|2",
+        // The browser probe forwards IndexedDB writes with each store receiver and restores both methods.
+        "scripts/perf/ui-streaming-render-measure.ts|typescript/unbound-method|2",
         // These owners sort only fresh private arrays, preserving their source collections.
         "src/agents/agent-bundle-lsp-env.ts|unicorn/no-array-sort|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
@@ -218,6 +234,8 @@ describe("production lint suppressions", () => {
         "src/agents/embedded-agent-runner/post-compaction-loop-guard.ts|unicorn/no-array-sort|1",
         "src/agents/embedded-agent-runner/run/attempt-context-summary.ts|unicorn/no-array-sort|1",
         "src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts|unicorn/no-array-sort|2",
+        // Stream wrappers preserve the original source iterator's rejection value.
+        "src/agents/embedded-agent-runner/run/stream-wrapper.ts|typescript/prefer-promise-reject-errors|1",
         "src/agents/embedded-agent-runner/session-prompt-state.ts|unicorn/no-array-sort|1",
         "src/agents/embedded-agent-runner/tool-name-allowlist.ts|unicorn/no-array-sort|1",
         "src/agents/harness-runtimes.ts|unicorn/no-array-sort|1",
@@ -265,6 +283,10 @@ describe("production lint suppressions", () => {
         // Pinned Bun HTTP sockets omit Writable._writev; this probe selects native or one-copy batching.
         "src/gateway/server/ws-transport.ts|no-underscore-dangle|1",
         "src/gateway/session-companion-prompt.ts|unicorn/no-array-sort|1",
+        // Preserve the measured indexed fanout loop while reusing envelope tuples.
+        "src/gateway/session-event-projection.ts|typescript/prefer-for-of|1",
+        // Event field ordering sorts only the freshly filtered, audience-private key array.
+        "src/gateway/session-event-projection.ts|unicorn/no-array-sort|1",
         "src/gateway/session-swarm-summary.ts|unicorn/no-array-sort|2",
         // Node worker ports do not accept a browser target origin.
         "src/gateway/system-ca-warmup.worker.ts|unicorn/require-post-message-target-origin|1",
@@ -301,8 +323,13 @@ describe("production lint suppressions", () => {
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/installed-plugin-index-policy.ts|unicorn/no-array-sort|2",
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
+        // Prompt preparation sorts only fresh private tool and supplement arrays.
+        "src/plugins/memory-state.ts|unicorn/no-array-sort|2",
         // Reflect.apply supplies the wrapped callable as Function.prototype.bind's receiver.
         "src/plugins/plugin-instance-bindings.ts|typescript/unbound-method|1",
+        // Iterator continuations supply the native Promise receiver and preserve exact plugin rejection values.
+        "src/plugins/plugin-instance-iterator.ts|typescript/prefer-promise-reject-errors|1",
+        "src/plugins/plugin-instance-iterator.ts|typescript/unbound-method|1",
         "src/plugins/plugin-instance-owned-values.ts|eslint/no-constructor-return|1",
         "src/plugins/plugin-instance-owned-values.ts|typescript/no-extraneous-class|1",
         "src/plugins/plugin-return-value.ts|typescript/prefer-promise-reject-errors|1",

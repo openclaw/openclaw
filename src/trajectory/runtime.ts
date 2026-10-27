@@ -6,6 +6,7 @@ import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-s
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { memoizeFrozenPlainDataProjection } from "../shared/immutable-data.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
@@ -311,6 +312,11 @@ function projectTrajectoryToolParameters(parameters: unknown): unknown {
   }
   return projected;
 }
+
+const projectTrajectoryToolObjectParameters = memoizeFrozenPlainDataProjection(
+  projectTrajectoryToolParameters,
+);
+
 export function toTrajectoryToolDefinitions(
   tools: ReadonlyArray<{ name?: string; description?: string; parameters?: unknown }>,
 ): TrajectoryToolDefinition[] {
@@ -320,11 +326,15 @@ export function toTrajectoryToolDefinitions(
       if (!name) {
         return [];
       }
+      const { description, parameters } = tool;
       return [
         {
           name,
-          description: tool.description,
-          parameters: projectTrajectoryToolParameters(tool.parameters),
+          description,
+          parameters:
+            parameters !== null && typeof parameters === "object"
+              ? projectTrajectoryToolObjectParameters(parameters)
+              : projectTrajectoryToolParameters(parameters),
         },
       ];
     })

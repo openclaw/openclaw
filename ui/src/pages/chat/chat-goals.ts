@@ -31,7 +31,7 @@ import {
   scopedAgentIdForSession,
   scopedAgentListParamsForSession,
   visibleSessionMatches,
-} from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/navigation.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-state.ts";

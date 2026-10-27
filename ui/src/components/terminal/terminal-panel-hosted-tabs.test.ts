@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
-import { createInitializationContext } from "../../pages/chat/chat-pane.test-support.ts";
+import { createInitializationContext } from "../../pages/chat/chat-application-context.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import * as confirmation from "../confirm-dialog.ts";

@@ -14,7 +14,7 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import { AppsPage } from "../pages/apps/apps-page.tsx";
-import { createInitializationContext } from "../pages/chat/chat-pane.test-support.ts";
+import { createInitializationContext } from "../pages/chat/chat-application-context.test-support.ts";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import {
   createGatewayRequestMock,

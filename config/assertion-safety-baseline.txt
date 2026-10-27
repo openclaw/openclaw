@@ -72,7 +72,6 @@ extensions/buzz/src/message-event.ts	2
 extensions/buzz/src/qa/adapter.runtime.ts	2
 extensions/buzz/src/room-membership.ts	2
 extensions/buzz/src/setup-verify.ts	2
-extensions/buzz/src/types.ts	2
 extensions/canvas/src/cli.ts	2
 extensions/canvas/src/config-migration.ts	2
 extensions/canvas/src/tool.ts	1
@@ -192,11 +191,8 @@ extensions/discord/src/internal/api.guild.ts	2
 extensions/discord/src/internal/api.messages.ts	5
 extensions/discord/src/internal/api.reactions.ts	1
 extensions/discord/src/internal/api.users.ts	3
-extensions/discord/src/internal/command-comparison.ts	1
-extensions/discord/src/internal/command-deploy.ts	1
 extensions/discord/src/internal/commands.ts	1
 extensions/discord/src/internal/components.modal.ts	1
-extensions/discord/src/internal/entity-cache.ts	3
 extensions/discord/src/internal/gateway-dispatch.ts	5
 extensions/discord/src/internal/gateway-payload.ts	1
 extensions/discord/src/internal/gateway.ts	2
@@ -253,7 +249,6 @@ extensions/fal/video-generation-provider.ts	3
 extensions/feishu/src/accounts.ts	2
 extensions/feishu/src/bitable.ts	1
 extensions/feishu/src/bot-content.ts	1
-extensions/feishu/src/bot-identity-cache.ts	1
 extensions/feishu/src/bot.ts	7
 extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
@@ -391,7 +386,6 @@ extensions/matrix/src/matrix/direct-management.ts	1
 extensions/matrix/src/matrix/errors.ts	1
 extensions/matrix/src/matrix/format.ts	3
 extensions/matrix/src/matrix/monitor/ack-config.ts	2
-extensions/matrix/src/matrix/monitor/context-summary.ts	2
 extensions/matrix/src/matrix/monitor/events.ts	3
 extensions/matrix/src/matrix/monitor/handler-context.ts	1
 extensions/matrix/src/matrix/monitor/handler-helpers.ts	2
@@ -893,7 +887,6 @@ packages/acp-core/src/runtime/errors.ts	5
 packages/agent-core/src/agent-loop.ts	1
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
 packages/agent-core/src/harness/compaction/compaction.ts	1
-packages/agent-core/src/harness/session/tool-result-pairing.ts	3
 packages/agent-core/src/harness/session/uuid.ts	1
 packages/agent-core/src/harness/utils/truncate.ts	1
 packages/agent-core/src/turn-interruption.ts	1
@@ -914,7 +907,7 @@ packages/ai/src/providers/mistral.ts	1
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	16
 packages/ai/src/providers/openai-completions.ts	1
-packages/ai/src/providers/openai-reasoning-effort.ts	6
+packages/ai/src/providers/openai-reasoning-effort.ts	5
 packages/ai/src/providers/openai-responses-shared.ts	4
 packages/ai/src/providers/openai-responses-tools.ts	2
 packages/ai/src/providers/openai-responses.ts	1
@@ -955,7 +948,6 @@ packages/ai/src/transports/transport-utils.ts	2
 packages/ai/src/utils/credential-redaction.ts	1
 packages/ai/src/utils/oauth/openai-chatgpt-jwt.ts	1
 packages/ai/src/utils/stream-first-event-timeout.ts	2
-packages/ai/src/utils/tls-certificate-errors.ts	1
 packages/gateway-client/src/client.ts	3
 packages/gateway-client/src/gateway-origin-scope.ts	1
 packages/gateway-client/src/pending-request.ts	2
@@ -1041,11 +1033,11 @@ src/agents/agent-tools.read.ts	4
 src/agents/agent-tools.ring-zero-context.ts	1
 src/agents/ai-transport-runtime-host.ts	9
 src/agents/apply-patch-file-ops.ts	2
-src/agents/apply-patch.ts	2
+src/agents/apply-patch.ts	1
 src/agents/auth-profiles/external-auth.ts	1
 src/agents/auth-profiles/oauth-refresh-failure.ts	1
 src/agents/auth-profiles/oauth-refresh-lock-errors.ts	1
-src/agents/auth-profiles/oauth.ts	2
+src/agents/auth-profiles/oauth.ts	1
 src/agents/auth-profiles/persisted.ts	1
 src/agents/auth-profiles/policy.ts	1
 src/agents/auth-profiles/profiles.ts	1
@@ -1151,7 +1143,7 @@ src/agents/embedded-agent-runner/thinking.ts	6
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	3
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	7
 src/agents/embedded-agent-runner/tool-result-context-guard.ts	5
-src/agents/embedded-agent-runner/tool-result-truncation.ts	7
+src/agents/embedded-agent-runner/tool-result-truncation.ts	6
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	1
@@ -1161,7 +1153,7 @@ src/agents/embedded-agent-subscribe.handlers.tools.results.ts	1
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	2
 src/agents/embedded-agent-tool-media.ts	5
 src/agents/embedded-agent-tool-results.ts	6
-src/agents/embedded-agent-utils.ts	3
+src/agents/embedded-agent-utils.ts	2
 src/agents/exec-auto-reviewer.ts	1
 src/agents/exec-defaults.ts	2
 src/agents/execution-auth-binding.ts	1
@@ -1238,7 +1230,7 @@ src/agents/session-transcript-repair.ts	2
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/auth-storage.ts	1
 src/agents/sessions/extensions/loader.ts	2
-src/agents/sessions/extensions/runner.ts	14
+src/agents/sessions/extensions/runner.ts	13
 src/agents/sessions/keybindings.ts	2
 src/agents/sessions/model-registry.ts	3
 src/agents/sessions/resolve-config-value.ts	1
@@ -1295,7 +1287,6 @@ src/agents/tools/dashboard-tool.ts	1
 src/agents/tools/embedded-gateway-stub.ts	7
 src/agents/tools/gateway-tool.ts	2
 src/agents/tools/goal-tools.ts	2
-src/agents/tools/image-tool.helpers.ts	2
 src/agents/tools/in-process-gateway.ts	1
 src/agents/tools/message-tool-discovery.ts	2
 src/agents/tools/message-tool-execution.ts	3
@@ -1357,7 +1348,6 @@ src/auto-reply/reply/directives.ts	2
 src/auto-reply/reply/dispatch-acp.ts	1
 src/auto-reply/reply/dispatch-from-config.events.ts	1
 src/auto-reply/reply/dispatch-from-config.prepare-execution.ts	1
-src/auto-reply/reply/elevated-allowlist-matcher.ts	2
 src/auto-reply/reply/followup-delivery-payloads.ts	1
 src/auto-reply/reply/get-reply-directives.ts	4
 src/auto-reply/reply/get-reply-exec-overrides.ts	1
@@ -1520,7 +1510,6 @@ src/commands/channel-test-registry.ts	2
 src/commands/channels/add-wizard.ts	1
 src/commands/channels/add.ts	1
 src/commands/channels/capabilities.ts	4
-src/commands/channels/list.ts	1
 src/commands/channels/status.runtime.ts	8
 src/commands/configure.wizard.ts	1
 src/commands/daemon-install-helpers.ts	3

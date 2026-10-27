@@ -26,13 +26,22 @@ if (allocations) {
 const budget = { maxChars: 16_000, maxContextChars: 32_000 };
 const metadata = { status: "completed", telemetry: { calls: 1 } };
 try {
-  for (const scenario of ["small", "value", "output", "mixed", "unicode", "error"]) {
-    const text =
-      scenario === "small"
-        ? "x".repeat(64)
-        : scenario === "unicode"
-          ? '漢🌍\\"\n'.repeat(12_000)
-          : "x".repeat(64_000);
+  for (const scenario of [
+    "small",
+    "value",
+    "output",
+    "mixed",
+    "unicode",
+    "error",
+    "network",
+    "network-small",
+  ]) {
+    const small = scenario === "small" || scenario === "network-small";
+    const text = small
+      ? "x".repeat(64)
+      : scenario === "unicode"
+        ? '漢🌍\\"\n'.repeat(12_000)
+        : "x".repeat(64_000);
     const value = captureCodeModeValue(text, 65_536);
     const output = captureCodeModeOutput([{ type: "text", text }], 65_536);
     const invoke = () => {
@@ -40,14 +49,20 @@ try {
       if (["output", "mixed", "unicode"].includes(scenario)) {
         state.append(output);
       }
-      return state.takeResult(metadata, {
-        ...(scenario === "output" || scenario === "error" ? {} : { value }),
-        ...(scenario === "error" ? { error: text } : {}),
-      });
+      return state.takeResult(
+        metadata,
+        {
+          ...(scenario === "output" || scenario === "error" ? {} : { value }),
+          ...(scenario === "error" ? { error: text } : {}),
+        },
+        scenario.startsWith("network"),
+      );
     };
     const stringify = JSON.stringify;
+    const parse = JSON.parse;
     let stringifyCalls = 0;
     let serializedChars = 0;
+    let parsedChars = 0;
     let result;
     try {
       JSON.stringify = (input: unknown, replacer, space) => {
@@ -59,9 +74,14 @@ try {
         serializedChars += json?.length ?? 0;
         return json;
       };
+      JSON.parse = (...args) => {
+        parsedChars += args[0].length;
+        return Reflect.apply(parse, JSON, args);
+      };
       result = invoke();
     } finally {
       JSON.stringify = stringify;
+      JSON.parse = parse;
     }
     const digest = createHash("sha256").update(JSON.stringify(result)).digest("hex");
     for (let warmup = 0; warmup < 50; warmup++) {
@@ -75,7 +95,7 @@ try {
       });
     }
     // Amplify the small-result control above CPU clock granularity.
-    const iterations = scenario === "small" ? 20_000 : 200;
+    const iterations = small ? 20_000 : 200;
     const samples = [];
     for (let sample = 0; sample < 5; sample++) {
       const start = performance.now();
@@ -105,6 +125,7 @@ try {
         digest,
         stringifyCalls,
         serializedChars,
+        parsedChars,
         operations: iterations * 5,
         samples,
         sampledBytes,

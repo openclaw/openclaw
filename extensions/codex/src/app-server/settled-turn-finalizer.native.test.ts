@@ -6,7 +6,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  appendSessionTranscriptMessageByIdentity,
+  readVisibleSessionTranscriptMessageEntries,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import {
   HOST_KEY,
@@ -29,6 +32,7 @@ import {
   type CodexPluginConfig,
 } from "./config.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
+import { createAttributedCodexAssistantMessage } from "./event-projector-assistant-message.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
@@ -53,6 +57,7 @@ import { runCodexSettledTurnFinalization } from "./settled-turn-finalizer.js";
 import * as sharedClients from "./shared-client.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
+import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 setupRunAttemptTestHooks();
 
@@ -256,6 +261,7 @@ type SummaryScenario = {
   homeScope?: "agent" | "user";
   preserveNativeModel?: boolean;
   prepared?: boolean;
+  unfinishedPrior?: "ordinary" | "oversized";
   hidden?: boolean;
   promptSuppressed?: boolean;
   continuation?: boolean;
@@ -300,6 +306,35 @@ async function createRunFixture(
   };
   return { params, shared, run: (attempt = params) => runCodexAppServerAttempt(attempt, options) };
 }
+
+it.skipIf(process.platform === "win32")(
+  "rejects a native patch before accessing the finalizer filesystem",
+  { timeout: 60_000 },
+  nativeCase(async (fixture) => {
+    await fs.writeFile(fixture.marker, "completed-once\n");
+    fixture.setPhase("patch");
+    await expect(
+      runBoundedCodexAppServerTurn({
+        ...boundedParams(fixture, fixture.pluginConfig),
+        taskLabel: "settled-turn finalization",
+        developerInstructions: "Summarize completed work without using tools.",
+        input: textInput("Summarize the completed action."),
+        isolation: "private-stdio",
+      }),
+    ).resolves.toMatchObject({ text: "Ready." });
+    expect(fixture.requests).toHaveLength(2);
+    expect(fixture.requests[1]?.body.input).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "custom_tool_call_output",
+          call_id: "denied-patch",
+          output: expect.stringContaining("No usable execution environment is available"),
+        }),
+      ]),
+    );
+    await expectActionOnce(fixture);
+  }),
+);
 
 it.skipIf(process.platform === "win32")(
   "refuses supervised finalization even when different host credentials and model work",
@@ -430,6 +465,8 @@ it.skipIf(process.platform === "win32")(
 it.skipIf(process.platform === "win32").for<SummaryScenario>([
   { label: "preserveNativeModel-only host profile", preserveNativeModel: true, prepared: false },
   { label: "ordinary user-home private host profile", homeScope: "user", prepared: false },
+  { label: "unfinished prior turn", unfinishedPrior: "ordinary" },
+  { label: "unfinished oversized prior turn", unfinishedPrior: "oversized" },
   { label: "hidden background notification", hidden: true },
   { label: "prompt-less stranded-reply retry", promptSuppressed: true },
   { label: "same-run continuation after a transient provider overload", continuation: true },
@@ -461,6 +498,7 @@ async function runSummary(
     homeScope = "agent",
     preserveNativeModel = false,
     prepared = true,
+    unfinishedPrior,
     live = false,
     hidden = false,
     promptSuppressed = false,
@@ -510,6 +548,38 @@ async function runSummary(
     });
     params.modelId = HOST_MODEL;
     params.model = { ...params.model, id: HOST_MODEL };
+  }
+  if (unfinishedPrior) {
+    await appendSessionTranscriptMessageByIdentity({
+      ...transcriptTarget(params),
+      message: attachCodexMirrorIdentity(
+        { role: "user", content: "Earlier unfinished work.", timestamp: 1 },
+        "unfinished-prior:prompt",
+      ),
+    });
+    const priorCall = createAttributedCodexAssistantMessage(
+      { modelId: NATIVE_MODEL, provider: "openai", api: "openai-responses" },
+      "",
+      { tokenUsage: undefined, aborted: false, promptError: null },
+    );
+    priorCall.content = [
+      { type: "toolCall", id: "unfinished-prior-call", name: "lookup", arguments: {} },
+    ];
+    priorCall.stopReason = "toolUse";
+    await appendSessionTranscriptMessageByIdentity({
+      ...transcriptTarget(params),
+      message: attachCodexMirrorIdentity(priorCall, "unfinished-prior:tool:pending:call"),
+    });
+    if (unfinishedPrior === "oversized") {
+      await appendSessionTranscriptMessageByIdentity({
+        ...transcriptTarget(params),
+        message: {
+          role: "user",
+          content: "x".repeat(65537),
+          timestamp: 2,
+        },
+      });
+    }
   }
   fixture.setPhase("action");
   params.runId = "run-settled-action";
@@ -572,6 +642,14 @@ async function runSummary(
   const context = settledAttempt.settledTurnFinalizationContext;
   if (!(context instanceof settledContext.CodexSettledTurnContext)) {
     throw new Error("Native turn lost its settled-tool evidence");
+  }
+  if (unfinishedPrior) {
+    expect(context.data[0]).toMatchObject({
+      content: [{ text: expect.stringContaining("Earlier conversation was omitted") }],
+    });
+    expect(context.data).not.toContainEqual(
+      expect.objectContaining({ call_id: "unfinished-prior-call" }),
+    );
   }
   if (hidden || continuation) {
     expect(context.data).toEqual(

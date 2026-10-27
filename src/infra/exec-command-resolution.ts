@@ -181,11 +181,9 @@ export function isCwdBoundHashedArgPattern(value: string | null | undefined): bo
   return typeof value === "string" && value.startsWith(CWD_BOUND_HASHED_ARG_PATTERN_PREFIX);
 }
 
-export type ExecAllowlistScope = "command text" | "argv+cwd" | "argv" | "any args" | "inactive";
-
 export function classifyExecAllowlistScope(
   entry: Pick<ExecAllowlistEntry, "pattern" | "source" | "argPattern">,
-): ExecAllowlistScope {
+): "command text" | "argv+cwd" | "argv" | "any args" | "inactive" {
   const pattern = entry.pattern.trim();
   const generated = entry.source === "allow-always";
   // Reserved command markers require generated source; manual patterns remain executable globs.

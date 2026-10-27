@@ -11,6 +11,7 @@ import {
   SqliteWorkerError,
   type SqliteWorkerAdmissionTimeoutError,
   type SqliteWorkerExecutionAuthority,
+  type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerRequestCustodyDescriptor } from "./sqlite-worker-request-custody.js";
 
@@ -20,6 +21,7 @@ export type SqliteWorkerOperationContext = {
   /** Present for broker-owned work; standalone admission owners keep their own lifetime. */
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
   executionAuthority?: SqliteWorkerExecutionAuthority;
+  databaseIdentity?: SqliteWorkerRequest["databaseIdentity"];
   attachment?: { value: unknown };
   refusal?: SqliteWorkerError | InstanceType<typeof SqliteWorkerAdmissionTimeoutError>;
   committed?: { facts: unknown };
@@ -112,7 +114,7 @@ export function captureSqliteWorkerCommitReceipt(
   return { kind: "inline", facts: structuredClone(facts), payloadBytes };
 }
 
-export function deferSqliteWorkerNativeCommitReceipt(
+function deferSqliteWorkerNativeCommitReceipt(
   owner: SqliteWorkerOperationContext,
   database: DatabaseSync | PostgresSqlConnection,
   captured: CapturedSqliteWorkerCommitReceipt,
@@ -195,3 +197,47 @@ export const currentSqliteWorkerOperationAdmission = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteWorkerOperationAdmission"),
   () => new AsyncLocalStorage<WorkerAdmissionScope>(),
 );
+
+/** Record facts only after the real transaction commits, before native settlement is announced. */
+export function deferSqliteWorkerCommitReceipt(
+  database: DatabaseSync | PostgresSqlConnection,
+  facts: unknown,
+  delivery: "commit" | "settlement" = "commit",
+): void {
+  const scope = currentSqliteWorkerOperationAdmission.getStore();
+  if (!scope?.active) {
+    throw new SqliteWorkerError("SQLite receipt requires its retained admission", "unavailable");
+  }
+  deferSqliteWorkerNativeCommitReceipt(
+    scope.owner,
+    database,
+    captureSqliteWorkerCommitReceipt(facts),
+    delivery,
+  );
+}
+
+/** Reuse the capture that selected an inline transport; publication still belongs to COMMIT. */
+export function deferCapturedSqliteWorkerCommitReceipt(
+  database: DatabaseSync | PostgresSqlConnection,
+  captured: Extract<CapturedSqliteWorkerCommitReceipt, { kind: "inline" }>,
+  delivery: "commit" | "settlement" = "commit",
+): void {
+  const scope = currentSqliteWorkerOperationAdmission.getStore();
+  if (!scope?.active) {
+    throw new SqliteWorkerError("SQLite receipt requires its retained admission", "unavailable");
+  }
+  deferSqliteWorkerNativeCommitReceipt(scope.owner, database, captured, delivery);
+}
+
+/** A typed fenced write cannot commit without its destination owner's settlement evidence. */
+export function assertSqliteWorkerCommitReceiptPending(
+  database: DatabaseSync | PostgresSqlConnection,
+): void {
+  const scope = currentSqliteWorkerOperationAdmission.getStore();
+  if (!scope?.active || !scope.owner.pendingReceipts?.get(sqlPublicationAnchor(database))) {
+    throw new SqliteWorkerError(
+      "SQLite source fence requires a destination commit receipt",
+      "closed",
+    );
+  }
+}

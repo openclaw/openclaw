@@ -6,7 +6,8 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { prepareAgentRunReplyText } from "../agents/agent-run-terminal-reply.js";
 import { normalizeContextUsage } from "../agents/usage.js";
-import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
+import { buildInboundMediaUriFromPath } from "../media/inbound-media-path.js";
+import { parseInboundMediaUri } from "../media/inbound-media-uri.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
   isSilentAssistantTranscriptMessage,
@@ -499,7 +500,16 @@ export function sanitizeChatHistoryMessage(
       readRecord(entry.details)?.errorKind === "state_contention"
         ? { errorKind: "state_contention", diagnostic: STATE_CONTENTION_DIAGNOSTIC }
         : undefined;
-    const projectedDetails = conflictDetails ?? toolResultDetails?.details ?? runFailureDetails;
+    const modelChange =
+      entry.role === "custom" && entry.customType === "session-model-change"
+        ? readRecord(entry.details)
+        : undefined;
+    const modelChangeDetails =
+      typeof modelChange?.from === "string" && typeof modelChange.to === "string"
+        ? { from: modelChange.from, to: modelChange.to }
+        : undefined;
+    const projectedDetails =
+      conflictDetails ?? toolResultDetails?.details ?? runFailureDetails ?? modelChangeDetails;
     if (projectedDetails) {
       entry.details = projectedDetails;
     } else {
@@ -669,10 +679,9 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (isProjectedForwardedMessage(entry)) {
     return false;
   }
-  if (resolveAssistantMessagePhase(message) === "commentary") {
-    return !hasAssistantMixedToolVisibleText(message);
-  }
-  return isSilentAssistantTranscriptMessage(message);
+  return resolveAssistantMessagePhase(message) === "commentary"
+    ? !hasAssistantMixedToolVisibleText(message)
+    : isSilentAssistantTranscriptMessage(message);
 }
 
 export function sanitizeChatHistoryMessages(

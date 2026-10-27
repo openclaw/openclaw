@@ -81,6 +81,7 @@ packages/llm-core/src/usage-cost.ts
 packages/llm-core/src/utils/assistant-message-events.ts
 packages/llm-core/src/utils/diagnostics.ts
 packages/llm-core/src/utils/event-stream.ts
+packages/llm-core/src/utils/observe-async-iterator.ts
 packages/llm-core/src/utils/request-headers.ts
 packages/llm-core/src/validation.ts
 packages/media-core/src/constants.ts
@@ -426,6 +427,7 @@ src/infra/database-engine/vector-contract.ts
 src/infra/postgres-sync/bridge-prestart.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/idle-bridges.ts
+src/infra/postgres-sync/pool-state.ts
 src/infra/postgres-sync/pool.ts
 src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
@@ -737,6 +739,7 @@ src/acp/runtime/session-meta-read.types.ts
 src/config/sessions/session-collaboration-scope.ts
 src/config/sessions/cli-session-binding.ts
 src/config/sessions/session-row-facts.types.ts
+src/config/sessions/session-skill-snapshot-intern.ts
 src/state/artifact-preserving-state-reads.ts
 src/state/incognito-session-error.ts
 src/config/sessions/session-model-context-projection.ts
@@ -851,9 +854,11 @@ src/cron/run-history-detail.ts
 src/cron/scratch-contract.ts
 src/daemon/arg-split.ts
 src/daemon/constants.ts
+src/daemon/paths.ts
 src/daemon/runtime-binary.ts
 src/daemon/service-inspection-error.ts
 src/daemon/service-process-env.ts
+src/daemon/service-tmp-dir.ts
 src/gateway/chat-display-projection.helpers.ts
 src/gateway/control-ui-bootstrap-contract.ts
 src/gateway/control-ui-session-diff-revision.ts
@@ -947,6 +952,7 @@ src/infra/config-dir.ts
 src/infra/container-env-file.ts
 src/infra/container-environment.ts
 src/infra/crypto-digest.ts
+src/infra/current-machine-identity.ts
 src/infra/dedupe.ts
 src/infra/deep-merge.ts
 src/infra/deferred-plugin-migrations.contract.ts
@@ -1286,12 +1292,14 @@ src/infra/startup-migration-checkpoint.ts
 src/infra/state-database-maintenance.ts
 src/infra/state-lease-process-owner.ts
 src/infra/state-migrations.agent-owner-guidance.ts
+src/infra/state-legacy-cron-presence.ts
 src/infra/state-migrations.cron-run-logs.ts
 src/infra/state-migrations.media-persistence-targets.ts
 src/infra/state-migrations.receipts.ts
 src/infra/tcp-port.ts
 src/infra/temp-artifact-cleanup.ts
 src/infra/test-runtime-env.ts
+src/infra/tls-certificate-errors.ts
 src/infra/tmp-openclaw-dir.ts
 src/infra/update-channels.ts
 src/infra/update-database-generations.ts
@@ -1325,6 +1333,7 @@ src/infra/update-managed-service-handoff-schema.ts
 src/infra/update-managed-service-handoff-scope.ts
 src/infra/update-managed-service-handoff-source-inspection.ts
 src/infra/update-managed-service-handoff-store-repair.ts
+src/infra/update-managed-service-handoff-temp-root.ts
 src/infra/update-preflight-details.ts
 src/infra/update-recovery-receipt-schema.ts
 src/infra/update-recovery.ts
@@ -1597,7 +1606,9 @@ src/plugins/provider-thinking.ts
 src/plugins/registry-runtime-binding.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
+src/plugins/plugin-instance-iterator.ts
 src/plugins/plugin-instance-module-loader.ts
+src/plugins/plugin-instance-module-resolver.ts
 src/plugins/plugin-state-operation-module-loader.ts
 src/plugins/plugin-state-operation-source.ts
 src/plugins/plugin-instance-owned-values.ts
@@ -1719,6 +1730,7 @@ src/process/exec-runner.ts
 src/process/exec-spawn.ts
 src/process/exec-termination.ts
 src/process/exec.ts
+src/process/gateway-work-admission-state.ts
 src/process/gateway-work-admission.ts
 src/process/kill-tree.ts
 src/process/linux-oom-score.ts
@@ -1748,6 +1760,7 @@ src/process/supervisor/darwin-process-command.ts
 src/process/supervisor/service-child-group-ownership.ts
 src/process/windows-command-line.ts
 src/process/windows-command.ts
+src/projects/project-checkout.ts
 src/proxy-capture/child-transport.ts
 src/proxy-capture/cli-contract.ts
 src/proxy-capture/env.ts
@@ -1999,6 +2012,7 @@ src/state/openclaw-state-db-content-version.ts
 src/state/openclaw-state-db-cache.wal.ts
 src/state/openclaw-state-db-contract.ts
 src/state/openclaw-state-db-cron-delivery-migration.ts
+src/state/openclaw-state-db-cron-identity-migration.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts
 src/state/openclaw-state-db-engine.ts
@@ -2352,6 +2366,7 @@ packages/ai/src/transports/json-unsafe-integers.ts
 packages/ai/src/transports/model-request-body.ts
 packages/ai/src/transports/model-transport-debug.ts
 packages/ai/src/transports/model-transport-url.ts
+packages/ai/src/transports/openai-reasoning-compat.ts
 packages/ai/src/transports/openai-responses-contracts.ts
 packages/ai/src/transports/openai-responses-service-tier.ts
 packages/ai/src/transports/openai-responses-stream-errors.ts
@@ -2375,7 +2390,6 @@ packages/ai/src/utils/sanitize-unicode.ts
 packages/ai/src/utils/stream-first-event-timeout.ts
 packages/ai/src/utils/streaming-byte-guard.ts
 packages/ai/src/utils/system-prompt-cache-boundary.ts
-packages/ai/src/utils/tls-certificate-errors.ts
 packages/ai/src/utils/usage.ts
 packages/gateway-protocol/src/chat-work-context.ts
 packages/gateway-protocol/src/schema/agent-database-admission.ts
@@ -2404,6 +2418,7 @@ packages/gateway-protocol/src/schema/sessions-sharing-constants.ts
 packages/gateway-protocol/src/schema/sessions-sharing-values.ts
 packages/gateway-protocol/src/schema/setup-inference.ts
 packages/gateway-protocol/src/schema/skill-detail.ts
+packages/gateway-protocol/src/schema/skill-workshop-drafts.ts
 packages/gateway-protocol/src/schema/skills-search.ts
 packages/gateway-protocol/src/schema/tab-icon.ts
 packages/gateway-protocol/src/schema/ui-appearance-preferences.ts
@@ -2676,6 +2691,8 @@ src/gateway/worker-environments/workspace-conflicts.ts
 src/infra/sibling-temp-file.ts
 src/interactive/payload.ts
 src/media/media-reference.ts
+src/media/inbound-media-path.ts
+src/media/store-path.ts
 src/media/store.shared.ts
 src/media/store.ts
 src/sessions/session-run-error-presentation.ts

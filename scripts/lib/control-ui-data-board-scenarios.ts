@@ -1,9 +1,16 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
-import type { SessionWorkspaceListResult } from "../../ui/src/api/types.ts";
+import type {
+  SessionWorkspaceGetResult,
+  SessionWorkspaceListResult,
+} from "../../ui/src/api/types.ts";
 import { openChatSidePanelType } from "../../ui/src/e2e/chat-side-panel.test-support.ts";
 import { openSidebarPages } from "../../ui/src/e2e/sidebar-customization.test-support.ts";
 import type { BoardSnapshot } from "../../ui/src/lib/board/types.ts";
-import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionPath,
+  type MockGatewayControls,
+} from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { openInteractionPanel } from "./control-ui-interaction-navigation.ts";
 import type {
   InteractionFixtureOverrides,
@@ -19,6 +26,7 @@ const directoryCount = 20;
 const filesPerDirectory = 250;
 const boardHost = ".chat-pane-cache__pane--active openclaw-board-view";
 const workspaceHost = ".workspace-desktop";
+const workspaceRoot = "/synthetic/data-pages";
 const galleryHost = "openclaw-dashboards-page";
 
 async function settle(page: Page) {
@@ -74,7 +82,7 @@ function boardSnapshot(revision = 1): BoardSnapshot {
 }
 
 /** Saved core reports exercise the production board without synthetic iframe processes. */
-export function createDataBoardFixture(_sandbox?: InteractionSandbox): InteractionFixtureOverrides {
+function createDataBoardFixture(_sandbox?: InteractionSandbox): InteractionFixtureOverrides {
   return {
     featureMethods: ["board.get"],
     featureEvents: ["board.changed"],
@@ -134,7 +142,7 @@ function workspaceListing(path = "", search = ""): SessionWorkspaceListResult {
     : names.map((name) => ({ kind: "directory" as const, name, path: name }));
   return {
     sessionKey,
-    root: "/synthetic/data-pages",
+    root: workspaceRoot,
     files: names.flatMap((name) =>
       Array.from({ length: 5 }, (_, index) => ({
         kind: index % 2 ? ("read" as const) : ("modified" as const),
@@ -149,6 +157,24 @@ function workspaceListing(path = "", search = ""): SessionWorkspaceListResult {
   };
 }
 
+function workspaceSearchListing(): SessionWorkspaceListResult {
+  const query = "module-249";
+  return {
+    ...workspaceListing("", query),
+    browser: {
+      path: "",
+      search: query,
+      entries: Array.from({ length: directoryCount }, (_, index) => ({
+        kind: "file",
+        path: `${directoryPath(index)}/module-249.ts`,
+        name: "module-249.ts",
+        size: 6_032,
+        sessionKind: "read",
+      })),
+    },
+  };
+}
+
 function createWorkspaceFixture(): InteractionFixtureOverrides {
   const query = "module-249";
   return {
@@ -159,20 +185,7 @@ function createWorkspaceFixture(): InteractionFixtureOverrides {
         cases: [
           {
             match: { search: query },
-            response: {
-              ...workspaceListing("", query),
-              browser: {
-                path: "",
-                search: query,
-                entries: Array.from({ length: directoryCount }, (_, index) => ({
-                  kind: "file",
-                  path: `${directoryPath(index)}/module-249.ts`,
-                  name: "module-249.ts",
-                  size: 6_032,
-                  sessionKind: "read",
-                })),
-              },
-            },
+            response: workspaceSearchListing(),
           },
           ...Array.from({ length: directoryCount }, (_, index) => ({
             match: { path: directoryPath(index) },
@@ -182,6 +195,58 @@ function createWorkspaceFixture(): InteractionFixtureOverrides {
         ],
       },
     },
+  };
+}
+
+function createWorkspaceNavigationFixture(): InteractionFixtureOverrides {
+  const fixture = createWorkspaceFixture();
+  const path = `${directoryPath(19)}/module-249.ts`;
+  const file: SessionWorkspaceGetResult = {
+    sessionKey,
+    root: workspaceRoot,
+    file: {
+      kind: "read",
+      name: "module-249.ts",
+      path,
+      workspacePath: path,
+      size: 48,
+      missing: false,
+      previewKind: "text",
+      contentEncoding: "utf8",
+      content: "// Synthetic workspace navigation proof.\n",
+    },
+  };
+  return {
+    ...fixture,
+    featureMethods: [...(fixture.featureMethods ?? []), "sessions.files.get"],
+    methodResponses: {
+      ...fixture.methodResponses,
+      "sessions.files.get": {
+        cases: [{ match: { sessionKey, path: `${workspaceRoot}/${path}` }, response: file }],
+      },
+    },
+  };
+}
+
+async function assertWorkspacePopulation(gateway: MockGatewayControls) {
+  const requests = await gateway.getRequests("sessions.files.list", { sessionKey });
+  const paths = new Set(
+    requests.flatMap(({ params }) =>
+      isRecord(params) && !params.search && typeof params.path === "string" ? [params.path] : [],
+    ),
+  );
+  const expected = Array.from({ length: directoryCount }, (_, index) => directoryPath(index));
+  if (expected.some((path) => !paths.has(path))) {
+    throw new Error("Workspace fixture did not request all 20 directory listings");
+  }
+  // These are the exact fixture responses requested through the production owner,
+  // not a count of mounted rows. Endpoint assertions below verify their presentation.
+  return {
+    requestedFolders: expected.length,
+    requestedFixtureFiles: expected.reduce(
+      (count, path) => count + (workspaceListing(path).browser?.entries.length ?? 0),
+      0,
+    ),
   };
 }
 
@@ -224,16 +289,30 @@ async function prepareWorkspace(page: Page) {
   await settle(page);
 }
 
-async function expandWorkspace(page: Page) {
+async function settleWorkspace(page: Page) {
+  await settle(page);
+  await page.locator(workspaceHost).evaluate(async (element) => {
+    await Promise.allSettled(
+      element.getAnimations({ subtree: true }).map((animation) => animation.finished),
+    );
+  });
+  await settle(page);
+}
+
+async function expandWorkspace(page: Page, gateway: MockGatewayControls) {
   await prepareWorkspace(page);
   for (let index = 0; index < directoryCount; index++) {
     const path = directoryPath(index);
-    await page.locator(workspaceHost).getByRole("button", { name: path, exact: true }).click();
+    // Keyboard setup skips disclosure animation; measured expansion still clicks.
+    await page.locator(workspaceHost).getByRole("button", { name: path, exact: true }).focus();
+    await page.keyboard.press("Enter");
     await page
       .locator(workspaceHost)
       .getByRole("button", { name: `${path}/module-249.ts`, exact: true })
       .waitFor();
+    await settleWorkspace(page);
   }
+  await assertWorkspacePopulation(gateway);
   await settle(page);
 }
 
@@ -249,6 +328,142 @@ async function scrollSurface(page: Page, selector: string) {
     throw new Error(`Large fixture did not scroll: ${selector}`);
   }
   return { scrollBefore: before, scrollAfter: after };
+}
+
+function workspaceInitialScenario(roundTripMs: 0 | 100): InteractionScenario {
+  return {
+    id: `data-workspace-first-render${roundTripMs ? "-100ms" : ""}`,
+    dataPage: "workspace",
+    route: controlUiSessionPath(sessionKey),
+    expected: "Opening Files reads one root listing with 20 folders and 100 touched files.",
+    fixtureOverrides: createWorkspaceFixture,
+    rowSelector: ".workspace-desktop__row",
+    createRequestHandlers: roundTripMs
+      ? () => ({
+          "sessions.files.list": async (params: unknown) => {
+            if (
+              !isRecord(params) ||
+              params.sessionKey !== sessionKey ||
+              params.path !== "" ||
+              params.search !== ""
+            ) {
+              throw new Error("Expected one Workspace root-listing request");
+            }
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, roundTripMs);
+            });
+            return workspaceListing();
+          },
+        })
+      : undefined,
+    prepare: async (page, gateway) => {
+      await page.locator(".chat-thread").first().waitFor();
+      if ((await gateway.getRequests("sessions.files.list", { sessionKey })).length !== 0) {
+        throw new Error("Workspace initial-load fixture was already fetched before opening Files");
+      }
+    },
+    run: async (page, gateway) => {
+      await prepareWorkspace(page);
+      const requests = await gateway.getRequests("sessions.files.list", { sessionKey });
+      const first = requests[0];
+      if (
+        requests.length !== 1 ||
+        !first ||
+        !isRecord(first.params) ||
+        first.params.path !== "" ||
+        first.params.search !== ""
+      ) {
+        throw new Error("Workspace initial load did not use exactly one root listing");
+      }
+      await page.waitForFunction(
+        ({ selector, count }) => {
+          const folders = [
+            ...document.querySelectorAll(
+              `${selector} .workspace-desktop__project-scroll .workspace-desktop__row[aria-expanded]`,
+            ),
+          ];
+          return (
+            folders.length === count &&
+            folders.every(
+              (folder, index) =>
+                folder.getAttribute("aria-label") === `package-${String(index).padStart(2, "0")}`,
+            )
+          );
+        },
+        { selector: workspaceHost, count: directoryCount },
+      );
+      return {
+        rootListingRequests: requests.length,
+        rootListingRoundTripMs: roundTripMs,
+        initialFolders: directoryCount,
+        rootResponseTouchedFiles: directoryCount * 5,
+        descendantListingRequests: 0,
+      };
+    },
+  };
+}
+
+function workspaceSearchScenario(roundTripMs: 0 | 100): InteractionScenario {
+  return {
+    id: roundTripMs ? "data-workspace-search-100ms" : "data-workspace-search",
+    dataPage: "workspace",
+    route: controlUiSessionPath(sessionKey),
+    expected: "Searching a 5,000-file loaded tree presents the 20 authoritative matching results.",
+    fixtureOverrides: createWorkspaceFixture,
+    rowSelector: ".workspace-desktop__row",
+    prepare: expandWorkspace,
+    createRequestHandlers: roundTripMs
+      ? () => ({
+          "sessions.files.list": async (params) => {
+            if (isRecord(params) && params.search === "module-249") {
+              // Only this search RPC receives simulated RTT, not folder reads or assets.
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, roundTripMs);
+              });
+              return workspaceSearchListing();
+            }
+            // A handler replaces every static response for this method, including setup reads.
+            const path = isRecord(params) && typeof params.path === "string" ? params.path : "";
+            const listedPath = Array.from({ length: directoryCount }, (_, index) =>
+              directoryPath(index),
+            ).find((candidate) => candidate === path);
+            return workspaceListing(listedPath);
+          },
+        })
+      : undefined,
+    run: async (page, gateway) => {
+      await page
+        .locator(workspaceHost)
+        .getByRole("button", { name: "Search files", exact: true })
+        .click();
+      await page.locator(workspaceHost).getByRole("searchbox").fill("module-249");
+      await gateway.waitForRequest("sessions.files.list", {
+        match: { sessionKey, search: "module-249" },
+      });
+      await page.waitForFunction(
+        ({ selector, expectedPaths }) => {
+          const paths = Array.from(
+            document.querySelectorAll(
+              `${selector} .workspace-desktop__results .workspace-desktop__row`,
+            ),
+            (row) => row.getAttribute("aria-label"),
+          );
+          return (
+            paths.length === expectedPaths.length &&
+            expectedPaths.every((path) => paths.includes(path))
+          );
+        },
+        {
+          selector: workspaceHost,
+          expectedPaths: Array.from(
+            { length: directoryCount },
+            (_, index) => `${directoryPath(index)}/module-249.ts`,
+          ),
+        },
+      );
+      await settle(page);
+    },
+  };
 }
 
 export const dataBoardScenarios: readonly InteractionScenario[] = [
@@ -466,21 +681,8 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
       }
     },
   },
-  {
-    id: "data-workspace-first-render",
-    dataPage: "workspace",
-    route: controlUiSessionPath(sessionKey),
-    expected:
-      "Opening Files presents 20 folders and 100 touched files without reading descendants.",
-    fixtureOverrides: createWorkspaceFixture,
-    rowSelector: ".workspace-desktop__row",
-    prepare: async (page) => {
-      await page.locator(".chat-thread").first().waitFor();
-    },
-    run: async (page) => {
-      await prepareWorkspace(page);
-    },
-  },
+  workspaceInitialScenario(0),
+  workspaceInitialScenario(100),
   {
     id: "data-workspace-expand",
     dataPage: "workspace",
@@ -488,8 +690,8 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     expected: "Expanding the last folder in a 5,000-file loaded tree presents its 250 children.",
     fixtureOverrides: createWorkspaceFixture,
     rowSelector: ".workspace-desktop__row",
-    prepare: async (page) => {
-      await expandWorkspace(page);
+    prepare: async (page, gateway) => {
+      await expandWorkspace(page, gateway);
       await page
         .locator(workspaceHost)
         .getByRole("button", { name: directoryPath(19), exact: true })
@@ -498,7 +700,13 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
         .locator(workspaceHost)
         .getByRole("button", { name: `${directoryPath(19)}/module-249.ts`, exact: true })
         .waitFor({ state: "detached" });
-      await settle(page);
+      await settleWorkspace(page);
+      await page
+        .locator(`${workspaceHost} .workspace-desktop__project-scroll`)
+        .evaluate((element) => {
+          element.scrollTop = element.scrollHeight;
+        });
+      await settleWorkspace(page);
     },
     run: async (page) => {
       await page
@@ -509,31 +717,11 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
         .locator(workspaceHost)
         .getByRole("button", { name: `${directoryPath(19)}/module-249.ts`, exact: true })
         .waitFor();
-      await settle(page);
+      await settleWorkspace(page);
     },
   },
-  {
-    id: "data-workspace-search",
-    dataPage: "workspace",
-    route: controlUiSessionPath(sessionKey),
-    expected: "Searching a 5,000-file loaded tree presents the 20 authoritative matching results.",
-    fixtureOverrides: createWorkspaceFixture,
-    rowSelector: ".workspace-desktop__row",
-    prepare: expandWorkspace,
-    run: async (page) => {
-      await page
-        .locator(workspaceHost)
-        .getByRole("button", { name: "Search files", exact: true })
-        .click();
-      await page.locator(workspaceHost).getByRole("searchbox").fill("module-249");
-      await page.waitForFunction(
-        () =>
-          document.querySelectorAll(".workspace-desktop__results .workspace-desktop__row")
-            .length === 20,
-      );
-      await settle(page);
-    },
-  },
+  workspaceSearchScenario(0),
+  workspaceSearchScenario(100),
   {
     id: "data-workspace-scroll",
     dataPage: "workspace",
@@ -541,7 +729,26 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     expected: "The 5,000-file expanded tree scrolls within the Files panel.",
     fixtureOverrides: createWorkspaceFixture,
     prepare: expandWorkspace,
-    run: (page) => scrollSurface(page, `${workspaceHost} .workspace-desktop__project-scroll`),
+    run: async (page) => {
+      const scroll = await scrollSurface(
+        page,
+        `${workspaceHost} .workspace-desktop__project-scroll`,
+      );
+      await page.waitForFunction(
+        ({ selector, path }) => {
+          const scroller = document.querySelector(`${selector} .workspace-desktop__project-scroll`);
+          const row = scroller?.querySelector(`[aria-label="${path}"]`);
+          if (!scroller || !row) {
+            return false;
+          }
+          const viewport = scroller.getBoundingClientRect();
+          const bounds = row.getBoundingClientRect();
+          return bounds.height > 0 && bounds.top < viewport.bottom && bounds.bottom > viewport.top;
+        },
+        { selector: workspaceHost, path: `${directoryPath(19)}/module-249.ts` },
+      );
+      return { ...scroll, lastFileVisible: true };
+    },
   },
   {
     id: "data-workspace-filter",
@@ -558,11 +765,150 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
         .click();
       await page.getByRole("menuitemradio", { name: "Changed", exact: true }).click();
       await page.waitForFunction(
-        () =>
-          document.querySelectorAll(".workspace-desktop__project-scroll .workspace-desktop__row")
-            .length === 2_520,
+        ({ selector, folders, first, last }) => {
+          const scroller = document.querySelector(`${selector} .workspace-desktop__project-scroll`);
+          if (!scroller) {
+            return false;
+          }
+          const rows = Array.from(scroller.querySelectorAll("button.workspace-desktop__row"));
+          const directories = rows.filter((row) => row.hasAttribute("aria-expanded"));
+          const files = rows.filter((row) => !row.hasAttribute("aria-expanded"));
+          const paths = new Set(files.map((row) => row.getAttribute("aria-label")));
+          const viewport = scroller.getBoundingClientRect();
+          return (
+            directories.length === folders.length &&
+            folders.every((path) =>
+              directories.some(
+                (row) =>
+                  row.getAttribute("aria-label") === path &&
+                  row.getAttribute("aria-expanded") === "true",
+              ),
+            ) &&
+            folders.every(
+              (path) => paths.has(`${path}/${first}`) && paths.has(`${path}/${last}`),
+            ) &&
+            files.every((row) => {
+              const match = row
+                .getAttribute("aria-label")
+                ?.match(/^package-\d{2}\/module-(\d{3})\.ts$/);
+              return (
+                match &&
+                folders.includes(row.getAttribute("aria-label")!.split("/")[0]!) &&
+                Number(match[1]) <= 248 &&
+                Number(match[1]) % 2 === 0 &&
+                row.getAttribute("aria-description") === "Changed"
+              );
+            }) &&
+            files.some((row) => {
+              const bounds = row.getBoundingClientRect();
+              return (
+                bounds.height > 0 && bounds.top < viewport.bottom && bounds.bottom > viewport.top
+              );
+            })
+          );
+        },
+        {
+          selector: workspaceHost,
+          folders: Array.from({ length: directoryCount }, (_, index) => directoryPath(index)),
+          first: "module-000.ts",
+          last: "module-248.ts",
+        },
       );
       await settle(page);
+      return {
+        expectedChangedFiles: directoryCount * (filesPerDirectory / 2),
+        retainedFolders: await page
+          .locator(`${workspaceHost} .workspace-desktop__project-scroll [aria-expanded="true"]`)
+          .count(),
+        mountedChangedFiles: await page
+          .locator(
+            `${workspaceHost} .workspace-desktop__project-scroll [aria-description="Changed"]`,
+          )
+          .count(),
+      };
+    },
+  },
+  {
+    id: "data-workspace-navigation-reveal",
+    dataPage: "workspace",
+    route: controlUiSessionPath(sessionKey),
+    expected:
+      "The final file supports native neighbor navigation and retains selection and scroll through search hide/reveal.",
+    diagnostic:
+      "Selection, keyboard and hidden-tree lifecycle proof; excluded from timing comparisons.",
+    fixtureOverrides: createWorkspaceNavigationFixture,
+    prepare: expandWorkspace,
+    run: async (page, gateway) => {
+      const path = `${directoryPath(19)}/module-249.ts`;
+      const previous = `${directoryPath(19)}/module-248.ts`;
+      const scroller = page.locator(`${workspaceHost} .workspace-desktop__project-scroll`);
+      const last = scroller.getByRole("button", { name: path, exact: true });
+      const focused = (expected: string) =>
+        page.waitForFunction(
+          (label) => document.activeElement?.getAttribute("aria-label") === label,
+          expected,
+        );
+      await last.scrollIntoViewIfNeeded();
+      await last.focus();
+      await page.keyboard.press("Shift+Tab");
+      await focused(previous);
+      await page.keyboard.press("Tab");
+      await focused(path);
+      const request = { sessionKey, path: `${workspaceRoot}/${path}` };
+      const after = (await gateway.getRequests("sessions.files.get", request)).length;
+      await page.keyboard.press("Enter");
+      await gateway.waitForRequest("sessions.files.get", { after, match: request });
+      // Opening the first preview hides the tree; the reader toggle retains selection.
+      await page.getByRole("button", { name: "Toggle file tree", exact: true }).click();
+      await scroller.waitFor({ state: "visible" });
+      await page.waitForFunction(
+        ({ selector, path: filePath }) =>
+          document
+            .querySelector(`${selector} [aria-label="${filePath}"]`)
+            ?.getAttribute("aria-current") === "true",
+        { selector: `${workspaceHost} .workspace-desktop__project-scroll`, path },
+      );
+      await settle(page);
+      const scrollBefore = await scroller.evaluate((element) => element.scrollTop);
+      if (scrollBefore <= 0) {
+        throw new Error("Last-file navigation did not move the workspace viewport");
+      }
+      await page
+        .locator(workspaceHost)
+        .getByRole("button", { name: "Search files", exact: true })
+        .click();
+      await page
+        .locator(`${workspaceHost} .workspace-desktop__catalog`)
+        .waitFor({ state: "hidden" });
+      await page
+        .locator(workspaceHost)
+        .getByRole("button", { name: "Close file search", exact: true })
+        .click();
+      await scroller.waitFor({ state: "visible" });
+      await page.waitForFunction(
+        ({ selector, path: filePath, top }) => {
+          const element = document.querySelector(`${selector} .workspace-desktop__project-scroll`);
+          const selected = element?.querySelector(`[aria-label="${filePath}"]`);
+          return (
+            element &&
+            Math.abs(element.scrollTop - top) <= 1 &&
+            selected?.getAttribute("aria-current") === "true"
+          );
+        },
+        { selector: workspaceHost, path, top: scrollBefore },
+      );
+      await last.focus();
+      await page.keyboard.press("Shift+Tab");
+      await focused(previous);
+      await page.keyboard.press("Tab");
+      await focused(path);
+      return {
+        ...(await assertWorkspacePopulation(gateway)),
+        scrollBefore,
+        scrollAfter: await scroller.evaluate((element) => element.scrollTop),
+        selectedFileRetained: true,
+        nativeNeighborNavigation: true,
+      };
     },
   },
 ];

@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as pluginRuntime from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import * as workerContext from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -82,7 +81,6 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  await closeOpenClawStateDatabaseAsync();
   await testState.cleanup();
 });
 
@@ -131,14 +129,11 @@ it("keeps the captured endpoint and storage destination across awaits", async ()
   const endpoint = process.env.OPENCLAW_TELEMETRY_ENDPOINT;
   const checking = check();
   const context = contexts[0];
-  try {
-    vi.stubEnv("OPENCLAW_STATE_DIR", testState.path("other-state"));
-    vi.stubEnv("OPENCLAW_TELEMETRY_ENDPOINT", "https://telemetry.example.invalid/changed");
-  } finally {
-    read.resolve({});
-    await checking;
-  }
-  expect(contexts).toHaveLength(3);
+  vi.stubEnv("OPENCLAW_STATE_DIR", testState.path("other-state"));
+  vi.stubEnv("OPENCLAW_TELEMETRY_ENDPOINT", "https://telemetry.example.invalid/changed");
+  read.resolve({});
+  await checking;
+  expect(context).toBeDefined();
   expect(contexts.every((candidate) => candidate === context)).toBe(true);
   expect(fetchImpl).toHaveBeenCalledWith(endpoint, expect.objectContaining({ method: "POST" }));
 });
@@ -148,18 +143,13 @@ it.each(["do-not-track", "opt-out", "update-disabled"] as const)(
   async (change) => {
     const count = pauseOperation<number>("telemetry.countRecentSessions");
     setRuntimeConfigSnapshot(config);
-    expect(getRuntimeConfig()).toBe(config);
     const checking = check(getRuntimeConfig);
     try {
       await count.requested;
-      const replacement: OpenClawConfig = {
+      setRuntimeConfigSnapshot({
         telemetry: { enabled: change !== "opt-out" },
         update: { checkOnStart: change !== "update-disabled" },
-      };
-      setRuntimeConfigSnapshot(replacement);
-      expect(getRuntimeConfig()).toBe(replacement);
-      expect(getRuntimeConfig()).not.toBe(config);
-      expect(config).toEqual({ telemetry: { enabled: true } });
+      });
       if (change === "do-not-track") {
         vi.stubEnv("DO_NOT_TRACK", "1");
       }

@@ -40,15 +40,6 @@ export async function loadFreshHealthModulesForTest(params: {
     getRuntimeConfig: params.getConfig,
     loadConfig: params.getConfig,
   }));
-  vi.doMock("../config/sessions.js", () => ({
-    resolveSessionStorePathCore: params.getSessionStorePath,
-    resolveSessionFilePathCore: vi.fn(params.getSessionStorePath),
-    loadSessionStore: params.getSessions,
-    saveSessionStore: vi.fn().mockResolvedValue(undefined),
-    readSessionUpdatedAt: vi.fn(() => undefined),
-    recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
-    updateLastRoute: vi.fn().mockResolvedValue(undefined),
-  }));
   vi.doMock("../config/sessions/paths.js", () => ({
     resolveSessionStorePathCore: params.getSessionStorePath,
   }));
@@ -82,13 +73,6 @@ export async function loadFreshHealthModulesForTest(params: {
         ),
       };
     }),
-  }));
-  vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
-    webAuthExists: vi.fn(async () => true),
-    getWebAuthAgeMs: vi.fn(() => 1234),
-    readWebSelfId: vi.fn(() => ({ e164: null, jid: null })),
-    logWebSelfId: vi.fn(),
-    logoutWeb: vi.fn(),
   }));
   vi.doMock("../channels/plugins/read-only.js", () => ({
     listReadOnlyChannelPluginsForConfig: params.getPlugins,

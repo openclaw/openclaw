@@ -1,6 +1,6 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isAgentDatabaseInspectionPendingError } from "../../lib/gateway-availability.ts";

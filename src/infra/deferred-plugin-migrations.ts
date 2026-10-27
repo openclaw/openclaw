@@ -275,23 +275,27 @@ export async function readDeferredPluginMigrationsAsync(
 export async function withLeasePinnedDeferredPluginMigrations<T>(
   options: {
     env: NodeJS.ProcessEnv;
-    lease: { databasePath: string; assertOwned: () => void };
+    lease: {
+      databasePath: string;
+      assertOwned: () => void | Promise<void>;
+      assertCurrent: () => void;
+    };
   },
   run: (pending: readonly DeferredPluginMigration[], assertCurrent: () => void) => Promise<T>,
 ): Promise<T> {
-  options.lease.assertOwned();
+  await options.lease.assertOwned();
   const pending = await readDeferredPluginMigrationsAsync({
     env: options.env,
     path: options.lease.databasePath,
   });
-  options.lease.assertOwned();
+  await options.lease.assertOwned();
   const read: PinnedMigrationRead = {
     invalidated: false,
     ...(pinnedMigrationRead.getStore() ? { parent: pinnedMigrationRead.getStore() } : {}),
   };
   return await pinnedMigrationRead.run(read, async () =>
     run(pending, () => {
-      options.lease.assertOwned();
+      options.lease.assertCurrent();
       if (read.invalidated) {
         throw new Error("Deferred plugin migration policy changed since review.");
       }
@@ -553,10 +557,10 @@ export async function recordDeferredPluginMigrations(
     settlements: params.settlements,
     expectedPending: params.expectedPending,
   });
-  const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+  const { withPluginLifecycleLeaseAsync } = await import("../plugins/plugin-lifecycle-lease.js");
   const { runWithOpenClawStateLeaseWorker } =
     await import("../state/openclaw-state-lease-worker-operation.js");
-  return withPluginLifecycleLease({ env: params.env }, async (lease) => {
+  return withPluginLifecycleLeaseAsync({ env: params.env }, async (lease) => {
     const context = captureOpenClawStateWorkerContext({
       env: params.env,
       path: lease.databasePath,

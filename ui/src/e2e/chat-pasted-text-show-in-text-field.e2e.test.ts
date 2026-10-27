@@ -1,10 +1,10 @@
-import { readFile } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   seedChatSettings,
@@ -613,9 +613,7 @@ suite.define(() => {
       const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
       expect(download.suggestedFilename()).toBe(fileName);
       expect(await download.failure()).toBeNull();
-      const file = await download.path();
-      expect(file).not.toBeNull();
-      expect(await readFile(file!)).toEqual(bytes);
+      expect(await readControlUiE2eDownload(download)).toEqual(bytes);
     });
   });
 });

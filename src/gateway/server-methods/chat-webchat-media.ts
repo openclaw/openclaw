@@ -5,8 +5,8 @@ import { isAudioFileName, mimeTypeFromFilePath } from "@openclaw/media-core/mime
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { openLocalFileSafely } from "../../infra/fs-safe.js";
+import { resolveSendableOutboundReplyParts } from "../../infra/outbound/reply-payload-parts.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../../media/local-media-access.js";
-import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import { sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
 
 /** Cap local audio files exposed through assistant media. */

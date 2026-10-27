@@ -18,7 +18,7 @@ import { captureCronSchedulerWakeForTest } from "../cron/service/scheduler-actor
 import * as cronServiceState from "../cron/service/state.js";
 import * as cronRunFinalization from "../cron/service/timer-outcome-finalization.js";
 import {
-  loadCronJobsStoreWithConfigJobs as loadJobs,
+  loadCronJobsStoreWithConfigJobsByKey,
   resolveCronJobsStorePathFromConfigAsync,
 } from "../cron/store.js";
 import {
@@ -73,6 +73,12 @@ type StartedGatewayCron = ReturnType<typeof buildGatewayCronService> & {
   cleanupError?: Error;
 };
 const fixtures: StartedGatewayCron[] = [];
+
+function loadJobs({ cron }: StartedGatewayCron) {
+  return loadCronJobsStoreWithConfigJobsByKey(
+    expectDefined(cron.getStoreKey?.(), "prepared cron store key"),
+  );
+}
 
 async function startGatewayCron(
   label: string,
@@ -227,7 +233,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
       drain = observed.settled;
       original.scheduler.schedule({ id: "cron-drain-sibling", delayMs: 0, run: sibling });
       await withinTest(Promise.resolve(original.clock.advanceBy(0)), signal);
-      await loadJobs(original.storePath);
+      await loadJobs(original);
       expect(sibling).toHaveBeenCalledOnce();
       expect(original.scheduler.signal.aborted).toBe(false);
       expect(observed.outcome).toBeUndefined();
@@ -277,9 +283,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
       original.cleanupError = stopError;
       const observed = observe(expectDefined(original.cron.stopAndDrain?.(), "cron drain"));
       drain = observed.settled;
-      const pending = (await loadJobs(original.storePath)).store.jobs.find(
-        (entry) => entry.id === job.id,
-      );
+      const pending = (await loadJobs(original)).store.jobs.find((entry) => entry.id === job.id);
       expect(pending?.state.runningAtMs).toEqual(expect.any(Number));
       expect(pending?.state.lastRunStatus).toBeUndefined();
       expect(observed.outcome).toBeUndefined();
@@ -288,9 +292,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
       await expect(run).resolves.toMatchObject({ ok: true, ran: true });
       await drain;
       expect(observed.outcome).toEqual({ ok: false, error: stopError });
-      const completed = (await loadJobs(original.storePath)).store.jobs.find(
-        (entry) => entry.id === job.id,
-      );
+      const completed = (await loadJobs(original)).store.jobs.find((entry) => entry.id === job.id);
       expect(completed).toMatchObject({ enabled: false, state: { lastRunStatus: "ok" } });
       expect(completed?.state.runningAtMs).toBeUndefined();
       expect(isCronJobActive(job.id)).toBe(false);

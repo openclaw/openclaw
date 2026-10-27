@@ -1674,7 +1674,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/gateway/server-methods/models-auth-login.catalog.integration.test.ts",
     "src/gateway/server-methods/models-auth-refresh.catalog.integration.test.ts",
     "src/gateway/server-methods/models-dispatch.catalog.integration.test.ts",
-    "src/gateway/server-methods/models-list.discovery-lifecycle.integration.test.ts",
     "src/gateway/server-methods/models-list.worker-recovery.integration.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,

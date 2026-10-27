@@ -1,6 +1,6 @@
 import { t } from "../../i18n/index.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { scopedAgentIdForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentIdForSession } from "../../lib/sessions/navigation.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatExportResult } from "./export.ts";
 

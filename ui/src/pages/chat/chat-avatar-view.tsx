@@ -253,6 +253,8 @@ function AgentAvatar(props: {
         ref={(element) => props.elementRef?.(element)}
         data-avatar-state={presentation.state()}
         class={["chat-avatar-slot", presentation.classes()]}
+        role="img"
+        aria-label={props.name}
       >
         <Show when={Boolean(view().imageUrl)}>
           <IdentityAvatarImage
@@ -260,10 +262,11 @@ function AgentAvatar(props: {
             onStateChange={presentation.onStateChange}
             class="chat-avatar assistant"
             alt={props.name}
+            ariaHidden
           />
         </Show>
         <AgentIdentityAvatar
-          agent={{ id: props.id, name: props.name, textAvatar: props.textAvatar }}
+          agent={{ id: props.id, textAvatar: props.textAvatar }}
           class="chat-avatar assistant"
         />
         <AgentAvatarHat agentId={props.id} branding={branding.read()} />

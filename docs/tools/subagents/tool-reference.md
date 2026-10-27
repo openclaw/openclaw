@@ -190,7 +190,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Spawn under another configured agent id when allowed by `subagents.allowAgents`.
 </ParamField>
 <ParamField path="cwd" type="string">
-  Optional task working directory for the child run. Native sub-agents still load bootstrap files from the target agent workspace; `cwd` only changes where runtime tools and CLI harnesses do the delegated work. Workspace-contained OpenClaw file tools resolve paths against `cwd` and, on the host, also admit registered linked worktrees of the same repository, checking registration at each write. Other repositories and Git metadata remain excluded; container mount boundaries still apply. Codex-native edits require a worktree selected as the turn cwd, including through `worktree: true`. For visible sessions, paths outside configured agent workspaces require `operator.admin`. With `worktree: true`, omitting `cwd`, `projectId`, and `projectGitUrl` inherits the same-agent parent's live managed repository or directly selected registered project; otherwise the target agent workspace is used.
+  Optional task working directory for the child run. Native sub-agents still load bootstrap files from the target agent workspace; `cwd` only changes where runtime tools and CLI harnesses do the delegated work. Workspace-contained OpenClaw file tools resolve paths against `cwd` and, on the host, also admit registered linked worktrees of the same repository, checking registration at each write. Other repositories and Git metadata remain excluded; container mount boundaries still apply. Codex-native edits require a worktree selected as the turn cwd, including through `worktree: true`. For visible sessions, paths outside configured agent workspaces require `operator.admin`. With `worktree: true`, omitting `cwd`, `projectId`, and `projectGitUrl` inherits the same-agent parent's live managed repository or directly selected registered project; otherwise the target agent workspace is used. For manually created linked worktrees outside the agent workspace, pass the repository as `cwd` at each spawn level. A repository path in `task` or an `exec` `workdir` does not bind file tools. If `apply_patch` reports a root escape because `cwd` was omitted, have the parent respawn the worker with the repository `cwd`; the existing worker cannot rebind itself.
 </ParamField>
 <ParamField path="projectId" type="string">
   Select a registered project through the same managed-project flow as New session. Native sub-agents only; hidden children require `worktree: true`. Mutually exclusive with `projectGitUrl` and `cwd`. Registry selection does not grant arbitrary host-path access or bypass sandbox containment.
@@ -343,6 +343,11 @@ registered task, not the session key format. Root sessions, collectors, stopped
 tasks, and superseded generations cannot claim a child message wait. Separate
 admitted follow-ups in the same child session remain independent tasks. A quiet
 native child can pause without acquiring an announced completion or pause notice.
+A turn that owns pending child or runtime completions is not waiting for a
+message: those completions resume the session. There, `waitFor: "message"` is
+not applied. The yield is an ordinary child wait, the requester gets no pause
+notice, and the `yielded` result carries a `note` saying so. Omit `waitFor`
+when yielding for your own children.
 Without a real pending child/runtime completion or this explicit message intent,
 yield is rejected. Return completed work as the normal final response:
 `sessions_yield` is not a final-result submission. An accepted yield pauses

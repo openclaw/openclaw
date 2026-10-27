@@ -95,6 +95,10 @@ capture, worker accounting, the live-pool registry, and shared compute capacity.
 The package controls when those operations run and holds admission until their
 required settlement receipts arrive.
 
+Pools can set their own worker heap limits through `workerOptions.resourceLimits`.
+The Control UI asset reader uses a 16 MiB young generation to reduce committed
+nursery space between read bursts while keeping its workers warm.
+
 Each synchronous pool or rotation pass captures its native workers and asks the
 host to service them. OpenClaw's host binds a pool to one native source, so one
 service call advances that shared source. Nested calls capture a fresh pass;
@@ -158,6 +162,11 @@ requests a cooperative checkpoint. The host operation retains its own lifetime;
 queue pressure does not grant permission to cancel its underlying work. A
 checkpoint releases the task's execution slot through the ordinary settlement
 path, and continuation work rejoins admission.
+
+Task deadlines include queueing by default. Internal retained owners can select
+`timeoutFrom: "dispatch"` when preceding work has an owner-controlled lifetime;
+the budget then starts at slot assignment and still covers input preparation,
+execution, and host exchanges. The scheduler owns both deadline modes.
 
 The caller's execution deadline also bounds host exchanges. Responses may
 shorten that deadline, never renew it. Code Mode explicitly uses

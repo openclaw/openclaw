@@ -22,6 +22,11 @@ it.each([
     "prepareSessionColdArchiveInWorker",
     "withOpenClawAgentDatabaseReadOnly",
   ],
+  [
+    "session-cold-storage-prepare.ts",
+    "prepareSessionColdBatchInWorker",
+    "withOpenClawAgentDatabaseReadOnly",
+  ],
 ])(
   "proves the cold-storage kernel %s:%s only through reviewed entries",
   (file, operation, primitive) => {
@@ -29,9 +34,11 @@ it.each([
     const sources = new Map([
       [relative, `export function ${operation}() { return ${primitive}(query); }`],
       [
-        "src/config/sessions/session-cold-storage-worker.ts",
-        `import { ${operation} } from './${file.replace(/\.ts$/, ".js")}';
-       export function prepareSessionColdBatchInWorker() { return ${operation}(); }`,
+        "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
+        `export async function dispatchColdPreparation() {
+          const { ${operation} } = await import('./${file.replace(/\.ts$/, ".js")}');
+          return scope.run(options, () => ${operation}());
+        }`,
       ],
     ]);
     const tiers = () => inventory(process.cwd(), "", false, sources).map(({ tier }) => tier);
@@ -44,6 +51,35 @@ it.each([
     expect(tiers()).toEqual(["T1"]);
   },
 );
+
+it("preserves worker ownership through the synchronous agent read scope", () => {
+  const sources = new Map([
+    [
+      "src/state/openclaw-agent-db-readonly.ts",
+      "export function withOpenClawAgentDatabaseReadOnly(operation) { return operation(database); }",
+    ],
+    [
+      "src/config/sessions/session-cold-storage-prepare.ts",
+      `import { withOpenClawAgentDatabaseReadOnly } from '../../state/openclaw-agent-db-readonly.js';
+       export function prepareSessionColdBatchInWorker() {
+         return withOpenClawAgentDatabaseReadOnly(() => executeSqliteQuerySync(query), options);
+       }`,
+    ],
+    [
+      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
+      `import { prepareSessionColdBatchInWorker } from './session-cold-storage-prepare.js';
+       prepareSessionColdBatchInWorker();`,
+    ],
+  ]);
+  const tiers = () => inventory(process.cwd(), "", false, sources).map(({ tier }) => tier);
+  expect(tiers()).toEqual(["W"]);
+  sources.set(
+    "src/plugin-sdk/runtime.ts",
+    `import { prepareSessionColdBatchInWorker } from '../config/sessions/session-cold-storage-prepare.js';
+     export function runtime() { return prepareSessionColdBatchInWorker(); }`,
+  );
+  expect(tiers()).toEqual(["T1"]);
+});
 
 it.each([
   ["session-claim-repair-copy.ts", "copySessionClaimForRepair"],

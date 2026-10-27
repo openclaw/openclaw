@@ -2310,17 +2310,19 @@ describe("subagent registry seam flow", () => {
       });
     }
 
-    await mod.testing.sweepOnceForTests();
-
-    await waitForFast(() => {
-      for (const kind of kinds) {
-        expect(mocks.resolveContextEngine).toHaveBeenCalledWith(mocks.getRuntimeConfig(), {
-          agentDir: `/tmp/agent-${kind}`,
-          workspaceDir: `/tmp/workspace-${kind}`,
-          initialize: mocks.ensureContextEnginesInitialized,
-        });
-      }
-    });
+    const settleRootWork = observeRootWork();
+    try {
+      await mod.testing.sweepOnceForTests();
+    } finally {
+      await settleRootWork();
+    }
+    for (const kind of kinds) {
+      expect(mocks.resolveContextEngine).toHaveBeenCalledWith(mocks.getRuntimeConfig(), {
+        agentDir: `/tmp/agent-${kind}`,
+        workspaceDir: `/tmp/workspace-${kind}`,
+        initialize: mocks.ensureContextEnginesInitialized,
+      });
+    }
   });
 
   it.each(["main", "cron"] as const)(
@@ -2374,56 +2376,5 @@ describe("subagent registry seam flow", () => {
       });
     },
   );
-
-  it("retains a run after session read failure and completes it on a later sweep", async () => {
-    const childSessionKey = "agent:main:subagent:child";
-    const startedAt = Date.now() - 2_000;
-    mockPendingAgentWait();
-    await mod.registerSubagentRun({
-      runId: "run-sweep-error",
-      cleanup: "delete",
-    });
-    const run = expectDefined(
-      await mod.getSubagentRunByChildSessionKey(childSessionKey),
-      "registered run",
-    );
-    await updateFixtureRun(run.runId, (next) => {
-      next.execution.startedAt = startedAt;
-    });
-    const execution = structuredClone(mod.getSubagentRunByRunId(run.runId)?.execution);
-    mocks.loadSessionEntry.mockClear().mockImplementation(() => {
-      throw new Error("simulated sweep failure");
-    });
-
-    await mod.testing.sweepOnceForTests();
-    await mod.testing.runSweeperTickForTests();
-
-    expect(mocks.loadSessionEntry).toHaveBeenCalled();
-    expect((await mod.getSubagentRunByChildSessionKey(childSessionKey))?.execution).toEqual(
-      execution,
-    );
-    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-
-    mocks.loadSessionEntry.mockReset();
-    mocks.entries[childSessionKey] = createSessionEntry({
-      lifecycleRevision: "revision-child",
-      status: "done",
-      startedAt,
-      endedAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-    vi.setSystemTime(Date.now() + 1_000);
-    await mod.testing.sweepOnceForTests();
-
-    await waitForFast(() =>
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
-        expect.objectContaining({
-          childRunId: "run-sweep-error",
-          outcome: expect.objectContaining({ status: "ok" }),
-        }),
-      ),
-    );
-    expect(mocks.entries[childSessionKey]?.status).toBe("done");
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

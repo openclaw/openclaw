@@ -198,7 +198,7 @@ describe.skipIf(!connection)("PostgreSQL missing credential Doctor CLI recovery"
     await closeOpenClawStateDatabaseAsync();
     const local = path.join(root, "client", "credentials.sqlite");
     const anchor = path.join(root, "state", "openclaw.sqlite");
-    return { root, env, local, anchor, namespace, identity, source: receipt(env)!.receipt.source };
+    return { root, env, local, anchor, namespace, identity };
   }
   function receipt(env: NodeJS.ProcessEnv) {
     using owner = openClientCredentialCustody(env, { readOnly: true, migration: true });
@@ -221,7 +221,8 @@ describe.skipIf(!connection)("PostgreSQL missing credential Doctor CLI recovery"
   }
 
   it("repairs with --fix --yes, seals legacy imports, and survives a later anchor replacement", async () => {
-    const f = await bootstrap();
+    const prepared = await bootstrap();
+    const f = { ...prepared, source: receipt(prepared.env)!.receipt.source };
     const legacy = path.join(f.root, "identity");
     fs.mkdirSync(legacy, { recursive: true });
     const retained = {

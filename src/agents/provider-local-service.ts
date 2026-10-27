@@ -463,7 +463,11 @@ async function startAndWaitForLocalService(params: {
     service.readyTimeoutMs,
     DEFAULT_READY_TIMEOUT_MS,
   );
-  const deadline = Date.now() + readyTimeoutMs;
+  // The readiness budget is consumed by real health probes and sleepWithAbort
+  // intervals on the monotonic clock; the deadline must live there too, or a
+  // wall-clock step (NTP correction, VM resume) keeps spawning probes past the
+  // configured readiness bound. Spawn/ready timestamps stay wall-clock facts.
+  const deadline = performance.now() + readyTimeoutMs;
   for (;;) {
     if (await probeHealth(healthUrl, healthHeaders, signal, assertAuthCurrent)) {
       diagnostics.readyAt = Date.now();
@@ -481,7 +485,7 @@ async function startAndWaitForLocalService(params: {
         )}${formatLocalServiceDiagnosticTail(diagnostics)}`,
       );
     }
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       throw new Error(`${provider} local service did not become ready at ${healthUrl}`);
     }
     await sleepWithAbort(PROBE_INTERVAL_MS, signal, { ref: false });

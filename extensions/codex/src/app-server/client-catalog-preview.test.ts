@@ -27,7 +27,12 @@ it("normalizes and copies each bounded worker preview only once", () => {
   );
   const copies = vi.spyOn(Buffer, "from");
   const replacements = vi.spyOn(String.prototype, "replace");
+  const slices = vi.spyOn(Array.prototype, "slice");
   const decoded = decodeCodexCatalogFrame({ bytes, route: { id, kind: "list" } });
+  const copiedPages = slices.mock.contexts.filter(
+    (rows) => Array.isArray(rows) && rows.length === 16 && rows[0]?.id === "thread-0",
+  ).length;
+  slices.mockRestore();
   expect(decoded.message).toEqual({
     id,
     result: {
@@ -45,6 +50,7 @@ it("normalizes and copies each bounded worker preview only once", () => {
       ([pattern]) => pattern instanceof RegExp && pattern.source === "\\s+",
     ),
   ).toHaveLength(16);
+  expect(copiedPages).toBe(0);
 });
 
 function createHarness() {

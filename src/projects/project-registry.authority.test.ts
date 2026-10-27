@@ -188,6 +188,21 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("does not classify a protected callback failure as busy source acquisition", async () => {
+  const selected = await select();
+  const failure = new OpenClawStateLeaseError("Another lease in the protected operation is busy", {
+    code: "OPENCLAW_STATE_LEASE_HELD",
+  });
+  await expect(
+    selected.withCurrent(
+      () => {
+        throw failure;
+      },
+      { waitMs: 0 },
+    ),
+  ).rejects.toBe(failure);
+});
+
 it.each(["callback", "drain"] as const)(
   "retains checkout custody when cancellation arrives during %s",
   async (phase) => {

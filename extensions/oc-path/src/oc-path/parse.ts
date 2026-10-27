@@ -93,7 +93,7 @@ function unquote(value: string): string {
   if (value.length >= 2) {
     const f = value.charCodeAt(0);
     const l = value.charCodeAt(value.length - 1);
-    if (f === l && (f === 34 || f === 39)) {
+    if (f === 34 || f === 39) {
       const doc = parseDocument(value, { prettyErrors: false });
       if (
         doc.errors.length === 0 &&
@@ -103,7 +103,7 @@ function unquote(value: string): string {
         return doc.contents.value;
       }
       // Preserve the tolerant handling of malformed, hand-authored quoted values.
-      return value.slice(1, -1);
+      return f === l ? value.slice(1, -1) : value;
     }
   }
   return value;

@@ -498,10 +498,23 @@ export async function runConfigOperations(params: {
     assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
     assertCurrentExpectation?.();
     params.beforePersistentApply?.();
-    committedHint = await params.commit({
+    const { prepareConfigOwnerChange } = await import("./config-cli-owner-patch.js");
+    const change = await prepareConfigOwnerChange({
+      snapshot,
+      pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
       previous: authoredPreviousConfig,
       next: authoredNextConfig,
+      explicitSetPaths: normalizedExplicitSetPaths,
+      unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
+      env: resolutionEnv,
     });
+    committedHint = await params.commit(change);
+    if (change.clearedSessionStoreOwner) {
+      // The local writer reports this itself; the Gateway's writer reports only to its own log.
+      runtime.error(
+        "Cleared agents.defaults.sessionStore.agentId because session.store changed. Set that owner path explicitly to assign the destination store's owner.",
+      );
+    }
   } else {
     await replaceConfigFile({
       sourceConfig: authoredNextConfig,

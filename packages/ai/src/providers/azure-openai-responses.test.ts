@@ -110,9 +110,9 @@ describe("azure-openai-responses", () => {
     supportsTemperature: false,
   };
   it.each([
-    ["gpt-6-astra", undefined, undefined, "none", 0.5],
-    ["gpt-6-luna", "max", undefined, "high", 0.5],
-    ["gpt-6-astra", "xhigh", declaredCompat, "xhigh", undefined],
+    ["unknown-deployment", undefined, undefined, undefined, 0.5],
+    ["unknown-deployment", "max", undefined, "high", 0.5],
+    ["declared-deployment", "xhigh", declaredCompat, "xhigh", undefined],
   ] as const)(
     "preserves %s deployment capabilities for %s",
     async (id, reasoning, compat, effort, temperature) => {

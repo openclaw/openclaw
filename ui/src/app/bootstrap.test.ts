@@ -4,10 +4,12 @@ import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { routeIdFromPath } from "../app-routes.ts";
+import * as channelCapabilities from "../lib/channels/index.ts";
 import {
   isDefaultChatLanding,
   startModelSetupFirstRunRedirectAfterLocation,
 } from "../pages/model-setup/first-run.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { makeLocation, makeRoutingGateway } from "./bootstrap.test-support.ts";
 import { bootstrapApplication as createApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -52,6 +54,40 @@ describe("bootstrapApplication", () => {
     window.history.replaceState({}, "", pathname);
     return bootstrapApplication();
   }
+
+  it("owns one Channels capability only after first use and rejects acquisition after stop", async () => {
+    const createChannels = vi.spyOn(channelCapabilities, "createChannelCapability");
+    const runtime = openAt("/chat/main/example-deadbeef");
+    const gateway = runtime.context.gateway;
+    expect(createChannels).not.toHaveBeenCalled();
+
+    // First route use must observe the current connection, not the startup snapshot.
+    const request = vi.fn(async () => null);
+    const currentSnapshot = {
+      ...gateway.snapshot,
+      client: createTestGatewayClient(request),
+      phase: "connected" as const,
+    };
+    vi.spyOn(gateway, "snapshot", "get").mockReturnValue(currentSnapshot);
+    const channels = runtime.context.acquireChannels(createChannels);
+    expect(channels.state.connected).toBe(true);
+    expect(runtime.context.acquireChannels(createChannels)).toBe(channels);
+    expect(createChannels).toHaveBeenCalledExactlyOnceWith(gateway);
+    await channels.refresh();
+    expect(request).toHaveBeenCalledOnce();
+
+    runtime.stop();
+    runtime.stop();
+    await channels.refresh();
+    expect(request).toHaveBeenCalledOnce();
+    expect(() => runtime.context.acquireChannels(createChannels)).toThrow();
+    expect(createChannels).toHaveBeenCalledOnce();
+
+    const unused = bootstrapApplication();
+    unused.stop();
+    expect(() => unused.context.acquireChannels(createChannels)).toThrow();
+    expect(createChannels).toHaveBeenCalledOnce();
+  });
 
   it.each(["chat", "dashboard"])(
     "gives the initial %s transcript priority over bulk reads",

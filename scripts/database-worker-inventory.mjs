@@ -3561,12 +3561,13 @@ const workerModules = new Set([
   "src/channels/message/ingress-queue-health.kernel.ts",
   "src/channels/message/ingress-queue.kernel.ts",
 
+  "src/config/sessions/session-accessor.sqlite-archive.worker.ts", // The archive owner starts this native worker; cold-prepare callbacks stay inside its read-only scope and private-port dispatcher.
   "src/config/sessions/session-accessor.sqlite-archive-selection.ts", // Archive worker read-page selection only.
   "src/config/sessions/session-accessor.sqlite-mutation-worker.runtime.ts",
   "src/config/sessions/session-accessor.sqlite-summary.ts", // Only session-transcript.worker.ts dispatches the summary kernel at runtime.
   "src/config/sessions/session-accessor.sqlite-transcript-binding.ts", // History worker transcript-binding reader only.
-  "src/config/sessions/session-cold-storage-selection.ts", // Cold preparation and mutation kernels in session-cold-storage-worker.ts only.
-  "src/config/sessions/session-cold-storage-worker.ts", // Archive worker cold-prepare and cold-mutate dispatchers only.
+  "src/config/sessions/session-cold-storage-selection.ts", // Archive-worker preparation and cold-mutation kernels only.
+  "src/config/sessions/session-cold-storage-worker.ts", // Archive-worker cold-mutate dispatcher only.
   "src/config/sessions/session-membership-facts.ts", // Transcript worker session-membership-facts dispatcher only.
 
   "src/cron/store/run-history.kernel.ts", // Cron read worker and shared-state Cron dispatch own history SQL.

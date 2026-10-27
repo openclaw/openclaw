@@ -5,7 +5,7 @@ import type {
   WebSearchTestResult,
 } from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ConfigSnapshot, ModelCatalogResult } from "../../api/types.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";

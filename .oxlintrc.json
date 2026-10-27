@@ -371,6 +371,7 @@
         "src/cli/cli-process-diagnostics.test-support.cjs",
         "scripts/perf/async-context-probe.cjs",
         "scripts/perf/gateway-ui-rpc-preload.mjs",
+        "scripts/perf/session-delete-phases-loader.mjs",
         "scripts/perf/sqlite-reply-census-preload.mjs"
       ],
       "rules": {

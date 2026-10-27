@@ -274,19 +274,12 @@ describe("createVideoGenerateTool", () => {
         }
       }
       const bytes = JSON.stringify(cold.parameters);
-      const publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
-      try {
-        for (const sessionId of [
-          "video-schema-first",
-          "video-schema-second",
-          "video-schema-third",
-        ]) {
-          expect(JSON.stringify(construct(sessionId).parameters)).toBe(bytes);
-        }
-        expect(publish).not.toHaveBeenCalled();
-      } finally {
-        publish.mockRestore();
+      using publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
+
+      for (const sessionId of ["video-schema-first", "video-schema-second", "video-schema-third"]) {
+        expect(JSON.stringify(construct(sessionId).parameters)).toBe(bytes);
       }
+      expect(publish).not.toHaveBeenCalled();
     },
   );
 

@@ -18,24 +18,31 @@ vi.mock("./repository-github-identity.js", () => ({
 }));
 
 const { fixture } = useRepositoryWorkspaceResultFixture();
+async function committedFixture(content: string, orphan = false) {
+  const f = await fixture("worker-turn");
+  if (orphan) {
+    await git(f.remote, ["checkout", "--orphan", "rewritten"]);
+  }
+  await f.write("hello.txt", content);
+  await git(f.remote, ["add", "hello.txt"]);
+  await git(f.remote, [
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "-c",
+    "commit.gpgSign=false",
+    "commit",
+    "-m",
+    "worker commit",
+  ]);
+  return f;
+}
 
 it.each(["restart", "fork"] as const)(
   "restores worker commits and dirty files after repository-session reclaim (%s)",
   async (mode) => {
-    const f = await fixture("worker-turn");
-    await f.write("hello.txt", "committed\n");
-    await git(f.remote, ["add", "hello.txt"]);
-    await git(f.remote, [
-      "-c",
-      "user.name=Fixture",
-      "-c",
-      "user.email=fixture@example.invalid",
-      "-c",
-      "commit.gpgSign=false",
-      "commit",
-      "-m",
-      "worker commit",
-    ]);
+    const f = await committedFixture("committed\n");
     const head = await git(f.remote, ["rev-parse", "HEAD"]);
     await f.write("hello.txt", "committed\ndirty\n");
     await f.stop(sessionTarget);
@@ -70,26 +77,18 @@ it.each(["restart", "fork"] as const)(
   },
 );
 
-it.each(["non-descending", "oversized", "missing", "unavailable"] as const)(
+it.each([
+  ["non-descending", "does not descend"],
+  ["oversized", "byte limit"],
+  ["missing", "did not provide"],
+  ["unavailable", "worker Git capture failed"],
+] as const)(
   "keeps files and reports %s repository Git history at reclaim",
-  async (kind) => {
-    const f = await fixture("worker-turn");
-    if (kind === "non-descending") {
-      await git(f.remote, ["checkout", "--orphan", "rewritten"]);
-    }
-    await f.write("hello.txt", "retained despite history failure\n");
-    await git(f.remote, ["add", "hello.txt"]);
-    await git(f.remote, [
-      "-c",
-      "user.name=Fixture",
-      "-c",
-      "user.email=fixture@example.invalid",
-      "-c",
-      "commit.gpgSign=false",
-      "commit",
-      "-m",
-      "worker commit",
-    ]);
+  async (kind, reason) => {
+    const f = await committedFixture(
+      "retained despite history failure\n",
+      kind === "non-descending",
+    );
     const stage = checkpoints.stageSessionRepositoryCheckpoint;
     const takeUpload = f.workspaceTransfer.takeUpload.bind(f.workspaceTransfer);
     const upload =
@@ -137,15 +136,7 @@ it.each(["non-descending", "oversized", "missing", "unavailable"] as const)(
       }
     }
     expect(f.notes).toEqual([expect.stringMatching(/^Cloud worker commits were not adopted:/u)]);
-    expect(f.notes[0]).toContain(
-      kind === "non-descending"
-        ? "does not descend"
-        : kind === "oversized"
-          ? "byte limit"
-          : kind === "missing"
-            ? "did not provide"
-            : "worker Git capture failed",
-    );
+    expect(f.notes[0]).toContain(reason);
     await checkpoints.withSessionRepositoryCheckpoint(
       { workspaceId: f.repository.workspaceId },
       async (snapshot) => {

@@ -15,12 +15,6 @@ import {
 import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
-export type LoadSessionPullRequests = (
-  params: ControlUiSessionPullRequestsParams,
-  cacheSignal: AbortSignal | undefined,
-  read: ControlUiSessionPrReadContext,
-) => Promise<ControlUiSessionPullRequests>;
-
 export async function loadSessionPullRequests(
   params: ControlUiSessionPullRequestsParams,
   cacheSignal: AbortSignal | undefined,
@@ -128,7 +122,11 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
     target: ControlUiSessionPrTarget,
     operation: (assertCurrent: () => void, sourceIdentity: string) => Promise<T>,
   ) => Promise<T>;
-  load: LoadSessionPullRequests;
+  load: (
+    params: ControlUiSessionPullRequestsParams,
+    cacheSignal: AbortSignal | undefined,
+    read: ControlUiSessionPrReadContext,
+  ) => Promise<ControlUiSessionPullRequests>;
   keyStates: Map<string, State>;
   stateForTarget: (target: ControlUiSessionPrTarget) => State;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
