@@ -389,6 +389,9 @@ function normalize(value: unknown, location = ""): unknown {
   if (normalizedPaths.has(location)) {
     return "<per-run>";
   }
+  if (location === "pluginSurfaceUrls.canvas" && typeof value === "string") {
+    return value.replace(/(\/__openclaw__\/cap\/)[A-Za-z0-9_-]{24}$/u, "$1<per-run>");
+  }
   if (Array.isArray(value)) {
     return value.map((item) => normalize(item, `${location}.*`));
   }
@@ -732,6 +735,7 @@ try {
       loadavg: loadavg(),
     },
     normalization: [...normalizedPaths],
+    canvasCapabilityNormalization: "Replace only the terminal 24-character capability token",
     firstVisits: summarize(samples.filter((sample) => sample.firstVisit)),
     warmVisits: summarize(samples.filter((sample) => !sample.firstVisit)),
     all: summarize(samples),
