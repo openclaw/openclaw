@@ -20,7 +20,7 @@ import type { PreparedAgentCommandExecution } from "./prepare.js";
 import type { AgentCommandOpts } from "./types.js";
 
 /** Deliver a public terminal refusal while the original source claim still owns its route. */
-export async function notifyCommandRestartRecoveryFailure(params: {
+async function notifyCommandRestartRecoveryFailure(params: {
   error?: unknown;
   opts: AgentCommandOpts;
   cfg: OpenClawConfig;

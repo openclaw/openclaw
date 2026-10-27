@@ -9,7 +9,9 @@ const references = vi.hoisted(() => ({
   delivered: false,
   accepted: vi.fn(),
 }));
-vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => ({
+  AgentHarnessPreflightError: (await import("openclaw/plugin-sdk/agent-harness-registration"))
+    .AgentHarnessPreflightError,
   embeddedAgentLog: { debug: vi.fn(), warn: vi.fn() },
   formatErrorMessage: String,
 }));
@@ -182,6 +184,7 @@ async function prepare(
               model: { api: "openai-chatgpt-responses" },
               ...(acknowledgment ? { providerReviewAcknowledgment: acknowledgment } : {}),
             },
+            pluginConfig: {},
             mutable: { pluginAppServer: {} },
             appServer: { start: { transport: "stdio" } },
             usesSupervisionConnection,
