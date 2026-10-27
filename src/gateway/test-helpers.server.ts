@@ -399,7 +399,8 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   resetTestPluginRegistry();
   resetGatewayMutableTestFixtures();
   resetSystemEventsForTest();
-  resetAgentEventsForTest();
+  // Module-owned observers survive fixture resets; the runner retires them between files.
+  resetAgentEventsForTest({ preserveListeners: true });
   await resetPreparedModelCatalogStateForTest();
   gatewayReplyRuntimePrepared = false;
 }
