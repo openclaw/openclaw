@@ -1,4 +1,5 @@
 // QA Lab producer proves exact-run identity inspection through a real local turn and Gateway.
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -7,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocket, type ClientOptions } from "ws";
+import { identityRepeatedTurnEntrypoint } from "../../../../extensions/qa-lab/src/agent-run-identity-runtime.test-support.js";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
@@ -15,9 +17,19 @@ import {
   createQaGatewayChild,
   type QaGatewayChild,
 } from "../../../../extensions/qa-lab/src/gateway-child.js";
+import { startQaGatewayRpcClient } from "../../../../extensions/qa-lab/src/gateway-rpc-client.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_OWNER_PROFILE_ID,
+  type UsersSelfResult,
+} from "../../../../packages/gateway-protocol/src/schema/users.js";
+import { createVitestWorkerRun } from "../../../../scripts/lib/vitest-worker-run.mts";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../../src/infra/runtime-worker-url.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   proveHotExecutionIdentity,
@@ -90,6 +102,44 @@ async function assertUntrustedProxyHeadersRejected(
     });
     socket.once("error", () => undefined);
   });
+}
+
+async function assertSharedOwnerReadOnlyScope(gateway: QaGatewayChild, sessionKey: string) {
+  const reader = await startQaGatewayRpcClient({
+    wsUrl: gateway.wsUrl,
+    token: gateway.token,
+    scopes: ["operator.read"],
+    logs: () => "",
+  });
+  try {
+    const self = (await reader.request(
+      "users.self",
+      {},
+      {
+        timeoutMs: FRAME_TIMEOUT_MS,
+      },
+    )) as UsersSelfResult;
+    if (self.profile.id !== GATEWAY_OWNER_PROFILE_ID) {
+      throw new Error("read-only Gateway client did not retain the shared owner profile");
+    }
+    await assert.rejects(
+      reader.request(
+        "sessions.patch",
+        { key: sessionKey, label: "READ-ONLY-WRITE-MUST-BE-REJECTED" },
+        { timeoutMs: FRAME_TIMEOUT_MS },
+      ),
+      (error: unknown) =>
+        error instanceof Error &&
+        isRecord(error.cause) &&
+        error.cause.code === "FORBIDDEN" &&
+        isRecord(error.cause.details) &&
+        error.cause.details.code === "MISSING_SCOPE" &&
+        error.cause.details.missingScope === "operator.write",
+      "shared-owner attribution must not authorize a read-only client to write",
+    );
+  } finally {
+    await reader.stop();
+  }
 }
 
 function parseOptions(argv: readonly string[]): ProducerOptions {
@@ -175,7 +225,7 @@ function assertJsonProjection(result: AuditRunInspectResult, runId: string) {
   }
 }
 
-function assertProfilelessGatewayIdentityProjection(result: AuditRunInspectResult) {
+function assertSharedOwnerGatewayIdentityProjection(result: AuditRunInspectResult) {
   const context = requireIdentityContext(result);
   if (
     context.ingress.kind !== "gateway-client" ||
@@ -185,16 +235,28 @@ function assertProfilelessGatewayIdentityProjection(result: AuditRunInspectResul
     throw new Error("Gateway run did not retain its authenticated connection ingress");
   }
   if (
-    context.invoker.state !== "absent" ||
-    context.coverageState !== "unattributed" ||
-    context.representedSubject !== undefined
+    context.invoker.state !== "present" ||
+    context.invoker.principal?.kind !== "person" ||
+    context.coverageState !== "attribution-only" ||
+    context.representedSubject !== undefined ||
+    context.applicableGrants.length !== 0
   ) {
     throw new Error(
-      `Gateway identity projection fabricated or lost a subject: ${JSON.stringify(context)}`,
+      "shared-owner Gateway identity lost attribution or implied delegated authority",
     );
   }
-  if (context.assurance.some((item) => item.kind === "durable-profile")) {
-    throw new Error("profileless Gateway run fabricated durable profile assurance");
+  if (
+    !context.assurance.some(
+      (item) => item.kind === "durable-profile" && item.strength === "boundary-verified",
+    ) ||
+    !context.assurance.some(
+      (item) => item.kind === "local-process" && item.strength === "boundary-verified",
+    ) ||
+    context.assurance.some(
+      (item) => item.kind === "trusted-proxy" || item.kind === "tailscale-whois",
+    )
+  ) {
+    throw new Error("shared-owner Gateway assurance lost its profile or claimed a verified login");
   }
 }
 
@@ -279,6 +341,7 @@ function inspectPersistedSessionCreator(gateway: QaGatewayChild, sessionKey: str
     return {
       id: row.created_actor_id,
       labelPersisted: actor ? Object.hasOwn(actor, "label") : false,
+      source: actor?.source,
       type: row.created_actor_type,
     };
   } finally {
@@ -344,42 +407,55 @@ async function runRepeatedIngressTurns(
   repoRoot: string,
   sessionId: string,
 ): Promise<void> {
-  const script = path.join(
-    repoRoot,
-    "test/e2e/qa-lab/runtime/agent-run-identity-repeated-turn-child.ts",
-  );
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", script, sessionId], {
+  const workers = createVitestWorkerRun(process.env);
+  try {
+    // Compile the maintained child before its fixed cold-process execution deadline.
+    await workers.prepare();
+    const childUrl = resolveRuntimeWorkerUrl({
+      ...identityRepeatedTurnEntrypoint,
+      root: workers.descriptor.directory,
+    });
+    const env = { ...process.env, ...gateway.runtimeEnv };
+    delete env.NODE_OPTIONS;
+    delete env.NODE_PATH;
+    delete env.NODE_V8_COVERAGE;
+    delete env.OPENCLAW_DEV_SOURCE_ROOT;
+    const child = spawn(process.execPath, [...resolveRuntimeWorkerArgv(childUrl), sessionId], {
       cwd: repoRoot,
-      env: { ...process.env, ...gateway.runtimeEnv },
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let output = "";
-    const collect = (chunk: Buffer) => {
-      if (output.length < 8_192) {
-        output += chunk.toString("utf8").slice(0, 8_192 - output.length);
-      }
-    };
-    child.stdout?.on("data", collect);
-    child.stderr?.on("data", collect);
-    const timer = setTimeout(() => child.kill("SIGTERM"), 120_000);
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+    const completion = new Promise<void>((resolve, reject) => {
+      let output = "";
+      const collect = (chunk: Buffer) => {
+        if (output.length < 8_192) {
+          output += chunk.toString("utf8").slice(0, 8_192 - output.length);
+        }
+      };
+      child.stdout?.on("data", collect);
+      child.stderr?.on("data", collect);
+      const timer = setTimeout(() => child.kill("SIGTERM"), 120_000);
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.once("exit", (code, signal) => {
+        clearTimeout(timer);
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(
+            new Error(
+              `repeated ingress child failed code=${String(code)} signal=${String(signal)}: ${output}`,
+            ),
+          );
+        }
+      });
     });
-    child.once("exit", (code, signal) => {
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(
-          new Error(
-            `repeated ingress child failed code=${String(code)} signal=${String(signal)}: ${output}`,
-          ),
-        );
-      }
-    });
-  });
+    await workers.borrow(child, completion);
+  } finally {
+    await workers.dispose();
+  }
 }
 
 async function runProof(options: ProducerOptions): Promise<string> {
@@ -435,28 +511,28 @@ async function runProof(options: ProducerOptions): Promise<string> {
     const beforeContext = normalizedContextJson(before);
     assertPersistedContextBytes(gateway, runId, beforeContext);
 
-    const profilelessSessionKey = `agent:qa:i1-profileless-${randomUUID()}`;
-    const profilelessStarted = (await gateway.call("agent", {
-      sessionKey: profilelessSessionKey,
-      message: "Reply exactly: I1-PROFILELESS",
+    const sharedOwnerSessionKey = `agent:qa:i1-shared-owner-${randomUUID()}`;
+    const sharedOwnerStarted = (await gateway.call("agent", {
+      sessionKey: sharedOwnerSessionKey,
+      message: "Reply exactly: I1-SHARED-OWNER",
       deliver: false,
       idempotencyKey: randomUUID(),
     })) as { runId?: unknown; status?: unknown };
-    if (profilelessStarted.status !== "accepted" || typeof profilelessStarted.runId !== "string") {
+    if (sharedOwnerStarted.status !== "accepted" || typeof sharedOwnerStarted.runId !== "string") {
       throw new Error(
-        `profileless Gateway run did not start: ${JSON.stringify(profilelessStarted)}`,
+        `shared-owner Gateway run did not start: ${JSON.stringify(sharedOwnerStarted)}`,
       );
     }
-    const profilelessTerminal = (await gateway.call("agent.wait", {
-      runId: profilelessStarted.runId,
+    const sharedOwnerTerminal = (await gateway.call("agent.wait", {
+      runId: sharedOwnerStarted.runId,
       timeoutMs: 60_000,
     })) as { status?: unknown };
-    if (profilelessTerminal.status !== "ok") {
+    if (sharedOwnerTerminal.status !== "ok") {
       throw new Error(
-        `profileless Gateway run did not finish: ${JSON.stringify(profilelessTerminal)}`,
+        `shared-owner Gateway run did not finish: ${JSON.stringify(sharedOwnerTerminal)}`,
       );
     }
-    const profilelessRunId = profilelessStarted.runId;
+    const sharedOwnerRunId = sharedOwnerStarted.runId;
 
     await assertUntrustedProxyHeadersRejected(gateway.wsUrl, {
       "tailscale-user-login": "operator@example.com",
@@ -466,22 +542,23 @@ async function runProof(options: ProducerOptions): Promise<string> {
       "x-forwarded-proto": "https",
     });
 
-    const profilelessText = await gateway.runCli(["audit", "--run", profilelessRunId, "--explain"]);
-    assertTextProjection(profilelessText);
+    const sharedOwnerText = await gateway.runCli(["audit", "--run", sharedOwnerRunId, "--explain"]);
+    assertTextProjection(sharedOwnerText);
     if (
-      !profilelessText.includes("Invoker [absent]") ||
-      !profilelessText.includes("Represented subject [absent]") ||
-      profilelessText.includes("Operator")
+      !sharedOwnerText.includes("Invoker [present]") ||
+      !sharedOwnerText.includes("Represented subject [absent]")
     ) {
-      throw new Error("profileless text inspection fabricated an operator subject");
+      throw new Error(
+        "shared-owner text inspection lost its invoker or fabricated a represented subject",
+      );
     }
-    const profilelessBefore = parseJson(
-      await gateway.runCli(["audit", "--run", profilelessRunId, "--explain", "--json"]),
-      "profileless Gateway inspection",
+    const sharedOwnerBefore = parseJson(
+      await gateway.runCli(["audit", "--run", sharedOwnerRunId, "--explain", "--json"]),
+      "shared-owner Gateway inspection",
     ) as AuditRunInspectResult;
-    assertProfilelessGatewayIdentityProjection(profilelessBefore);
-    const profilelessContext = normalizedContextJson(profilelessBefore);
-    assertPersistedContextBytes(gateway, profilelessRunId, profilelessContext);
+    assertSharedOwnerGatewayIdentityProjection(sharedOwnerBefore);
+    const sharedOwnerContext = normalizedContextJson(sharedOwnerBefore);
+    assertPersistedContextBytes(gateway, sharedOwnerRunId, sharedOwnerContext);
 
     const listed = (await gateway.call("sessions.list", {})) as {
       sessions?: Array<{
@@ -489,20 +566,25 @@ async function runProof(options: ProducerOptions): Promise<string> {
         createdActor?: { id?: string; label?: string; type?: string };
       }>;
     };
-    const profilelessSession = listed.sessions?.find(
-      (session) => session.key === profilelessSessionKey,
+    const sharedOwnerSession = listed.sessions?.find(
+      (session) => session.key === sharedOwnerSessionKey,
     );
-    if (profilelessSession?.createdActor !== undefined) {
-      throw new Error("profileless Gateway session fabricated a human creator");
-    }
-    const profilelessCreator = inspectPersistedSessionCreator(gateway, profilelessSessionKey);
     if (
-      profilelessCreator.type !== null ||
-      profilelessCreator.id !== null ||
-      profilelessCreator.labelPersisted
+      sharedOwnerSession?.createdActor?.type !== "human" ||
+      sharedOwnerSession.createdActor.id !== GATEWAY_OWNER_PROFILE_ID
     ) {
-      throw new Error("profileless Gateway session persisted a fabricated creator");
+      throw new Error("shared-owner Gateway session did not project its canonical creator");
     }
+    const sharedOwnerCreator = inspectPersistedSessionCreator(gateway, sharedOwnerSessionKey);
+    if (
+      sharedOwnerCreator.type !== "human" ||
+      sharedOwnerCreator.id !== GATEWAY_OWNER_PROFILE_ID ||
+      sharedOwnerCreator.source !== "profile" ||
+      sharedOwnerCreator.labelPersisted
+    ) {
+      throw new Error("shared-owner Gateway session lost creator provenance or persisted a label");
+    }
+    await assertSharedOwnerReadOnlyScope(gateway, sharedOwnerSessionKey);
 
     const repeatedRunId = `identity-repeated-${randomUUID()}`;
     let repeatedRows: ReturnType<typeof findRunExecutions> = [];
@@ -570,13 +652,19 @@ async function runProof(options: ProducerOptions): Promise<string> {
     if (afterContext !== beforeContext) {
       throw new Error("normalized execution identity context bytes changed across Gateway restart");
     }
-    const profilelessAfter = parseJson(
-      await gateway.runCli(["audit", "--run", profilelessRunId, "--explain", "--json"]),
-      `post-restart Gateway run ${profilelessRunId}`,
+    const sharedOwnerAfter = parseJson(
+      await gateway.runCli(["audit", "--run", sharedOwnerRunId, "--explain", "--json"]),
+      `post-restart Gateway run ${sharedOwnerRunId}`,
     ) as AuditRunInspectResult;
-    assertProfilelessGatewayIdentityProjection(profilelessAfter);
-    if (normalizedContextJson(profilelessAfter) !== profilelessContext) {
-      throw new Error(`Gateway execution changed across restart: ${profilelessRunId}`);
+    assertSharedOwnerGatewayIdentityProjection(sharedOwnerAfter);
+    if (normalizedContextJson(sharedOwnerAfter) !== sharedOwnerContext) {
+      throw new Error(`Gateway execution changed across restart: ${sharedOwnerRunId}`);
+    }
+    if (
+      JSON.stringify(inspectPersistedSessionCreator(gateway, sharedOwnerSessionKey)) !==
+      JSON.stringify(sharedOwnerCreator)
+    ) {
+      throw new Error("shared-owner session creator changed across Gateway restart");
     }
     for (const [executionId, expectedContext] of repeatedBeforeRestart) {
       const afterExact = parseJson(
@@ -634,9 +722,10 @@ async function runProof(options: ProducerOptions): Promise<string> {
         {
           runId,
           gatewayRuns: {
-            profileless: {
-              runId: profilelessRunId,
-              contextSha256: sha256(profilelessContext),
+            sharedOwner: {
+              runId: sharedOwnerRunId,
+              contextSha256: sha256(sharedOwnerContext),
+              readOnlyWriteRejected: true,
             },
             spoofedProxyHeadersRejected: true,
           },
@@ -668,7 +757,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
       "utf8",
     );
     const repeatedDetails = `repeated run=${repeatedRunId} executions=${repeatedRows.map((row) => row.execution_id).join(",")}; exact selection passed`;
-    return `local run=${runId}; profileless Gateway run=${profilelessRunId}; spoofed proxy headers rejected; ${repeatedDetails}; Gateway pid=${gateway.pid ?? "unknown"}; text+JSON and persisted bytes passed before/after replacement; normalized context sha256=${sha256(beforeContext)}`;
+    return `local run=${runId}; shared-owner Gateway run=${sharedOwnerRunId}; spoofed proxy headers rejected; ${repeatedDetails}; Gateway pid=${gateway.pid ?? "unknown"}; text+JSON and persisted bytes passed before/after replacement; normalized context sha256=${sha256(beforeContext)}`;
   } finally {
     await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
