@@ -78,8 +78,8 @@ original native turn while its ownership remains valid. Recovery uses the curren
 request's authority, and replayed tool callbacks join its existing execution.
 They do not start the tool effect again.
 
-A recovery-check notice after a Gateway process restart does not confirm that
-the original task has resumed. An unknown tool outcome still blocks automatic
+A healthy Gateway after a process restart does not confirm that the original
+task has resumed. An unknown tool outcome still blocks automatic
 replay; restarting the connection or upgrading Codex does not establish that outcome.
 
 A detached harness completion that has entered a parent turn with an outbound
@@ -633,20 +633,17 @@ establish a human sender for an internal claim. Legacy channel and Control UI
 turns retain their existing recovery checks. Child-completion follow-ups still use
 their existing recovery and delivery ownership checks.
 
-When a recovered turn starts with an eligible channel delivery route, OpenClaw
-sends a resumption notice to that conversation, retaining its account and topic.
-The final reply uses the same delivery route. Transcript-only turns stay private,
-and a turn that has already finished does not receive a late resumption notice.
-A failed notice does not restart or replay the recovered work. Main-session
-resumption notices are best-effort and live-only: automatic-delivery permission and the recovery
-owner are rechecked immediately before the channel send. They are not replayed
-from the outbound queue; terminal-failure notice retries and normal final-reply
-delivery are unchanged.
+Channel recovery stays silent while a turn waits or resumes. It does not send a
+separate resumption notice. The final reply uses the original delivery route,
+retaining its account and topic. Terminal-failure notices keep their existing
+retry and deduplication behavior. When a replacement session is needed, the
+notice explains how to start one and asks the user to describe the unfinished work.
+Transcript-only turns stay private.
 
 Telegram renews its typing indicator while the recovered turn runs. Typing stops
 when the turn settles, its recovery owner changes, or the gateway closes, and
 respects `typingMode: "never"`. Other channels can opt in through the guarded
-typing hook; unsupported channels still receive the resumption notice.
+typing hook.
 
 Channel plugins opt in with `heartbeat.sendTypingGuarded(...)`. Alongside the
 recovery delivery target, core supplies an `AbortSignal` and an

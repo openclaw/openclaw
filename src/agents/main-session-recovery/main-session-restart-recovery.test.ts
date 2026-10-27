@@ -1508,10 +1508,9 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it("keeps recovered Telegram notice authority current after a transport failure", async () => {
+  it("keeps a running recovery silent while preserving its original delivery route", async () => {
     const sessionsDir = await makeSessionsDir();
     const sessionKey = "agent:main:telegram:group:-100123:topic:99";
-    const storePath = path.join(sessionsDir, "sessions.json");
     await writeMainSession({
       sessionsDir,
       sessionKey,
@@ -1523,35 +1522,18 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeCompletedToolTranscript(sessionsDir);
-    sendRecoveryNotice.mockRejectedValueOnce(new Error("temporary transport failure"));
+
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
-    const notice = sendRecoveryNotice.mock.calls[0]?.[0];
-    expect(notice).toMatchObject({
+
+    expect(gatewayParams()).toMatchObject({
+      deliver: true,
       channel: "telegram",
       to: "telegram:-100123",
       accountId: "work",
-      threadId: 99,
-      text: "The service restarted and interrupted your request. I'm checking whether it can continue safely.",
-      idempotencyKey: `main-session-restart-recovery:${String(gatewayParams().idempotencyKey)}:resumed-notice`,
+      threadId: "99",
     });
-    expect(notice?.isCurrent?.({})).toBe(true);
-    const current = loadSessionEntry({ sessionKey, storePath });
-    if (!current) {
-      throw new Error("expected recovered session");
-    }
-    await writeStore(sessionsDir, {
-      [sessionKey]: { ...current, abortedLastRun: true },
-    });
-    expect(notice?.isCurrent?.({})).toBe(false);
-    await writeStore(sessionsDir, {
-      [sessionKey]: { ...current, sessionId: "replacement-session" },
-    });
-    expect(notice?.isCurrent?.({})).toBe(false);
-    await writeStore(sessionsDir, { [sessionKey]: current });
-    expect(notice?.isCurrent?.({})).toBe(true);
+    expect(sendRecoveryNotice).not.toHaveBeenCalled();
     dispatchSettlement.resolve();
-    await waitForFast(() => expect(notice?.isCurrent?.({})).toBe(false));
   });
 
   it("re-adopts a persisted Telegram private-topic route and releases the next turn", async () => {
@@ -2279,11 +2261,7 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).toHaveBeenCalledOnce();
     expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
     expect(gatewayParams().message).toContain(pendingPayload);
-    expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        idempotencyKey: expect.stringMatching(/:resumed-notice$/),
-      }),
-    );
+    expect(sendRecoveryNotice).not.toHaveBeenCalled();
   });
 
   it("defers mixed deliveries while any exact queue owner is pending", async () => {
@@ -3674,9 +3652,15 @@ describe("main-session-restart-recovery", () => {
         text: expect.stringContaining("Resume in new session"),
       }),
     );
-    expect(sendRecoveryNotice).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("/new or /reset") }),
+    expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        text: expect.stringContaining(
+          "/new or /reset to start a replacement session, then describe the unfinished work",
+        ),
+      }),
     );
+    await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     expect(
       loadSessionEntry({ sessionKey: "agent:main:discord:direct:123", storePath }),
     ).toMatchObject({
@@ -4343,11 +4327,7 @@ describe("main-session-restart-recovery", () => {
 
     expect(callGateway).toHaveBeenCalledOnce();
     expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-    expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        idempotencyKey: expect.stringMatching(/:resumed-notice$/),
-      }),
-    );
+    expect(sendRecoveryNotice).not.toHaveBeenCalled();
     expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("running");
   });
 
@@ -4452,11 +4432,7 @@ describe("main-session-restart-recovery", () => {
 
       expect(callGateway).toHaveBeenCalledOnce();
       expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-      expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          idempotencyKey: expect.stringMatching(/:resumed-notice$/),
-        }),
-      );
+      expect(sendRecoveryNotice).not.toHaveBeenCalled();
       expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
         status: "running",
         abortedLastRun: false,
@@ -4496,11 +4472,7 @@ describe("main-session-restart-recovery", () => {
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
 
     expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-    expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        idempotencyKey: expect.stringMatching(/:resumed-notice$/),
-      }),
-    );
+    expect(sendRecoveryNotice).not.toHaveBeenCalled();
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
       status: "running",
       abortedLastRun: false,
@@ -4524,11 +4496,7 @@ describe("main-session-restart-recovery", () => {
       await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
 
       expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-      expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          idempotencyKey: expect.stringMatching(/:resumed-notice$/),
-        }),
-      );
+      expect(sendRecoveryNotice).not.toHaveBeenCalled();
       expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("running");
     },
   );
@@ -4563,11 +4531,7 @@ describe("main-session-restart-recovery", () => {
 
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
-    expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        idempotencyKey: expect.stringMatching(/:resumed-notice$/),
-      }),
-    );
+    expect(sendRecoveryNotice).not.toHaveBeenCalled();
   });
 
   it("reconciles a provider error carrying a non-restart abort code", async () => {

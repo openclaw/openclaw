@@ -21,7 +21,7 @@ import {
 const TOMBSTONED_SESSION_NOTICE =
   "I couldn't continue this session after a gateway restart. " +
   "Your transcript is safe. In WebChat, use Resume in new session to continue it; " +
-  "in other channels, use /new or /reset to start a replacement session.";
+  "in other channels, use /new or /reset to start a replacement session, then describe the unfinished work.";
 
 function buildRestartRecoveryTombstoneNoticeKey(entry: SessionEntry): string {
   const interruptedRunId =

@@ -51,7 +51,6 @@ import {
   probeRestartRecoveryTerminalStatus,
 } from "./main-session-restart-dispatch-start.js";
 import {
-  announceRestartRecoveryResumption,
   isRestartRecoveryDeliveryCurrent,
   resolveRestartRecoveryDeliveryContext,
 } from "./main-session-restart-recovery-delivery.js";
@@ -554,18 +553,6 @@ async function resumeMainSessionWithinAdmission(
             }),
         });
       }
-      await announceRestartRecoveryResumption({
-        ...target,
-        sessionKey: dispatchSessionKey,
-        sessionId: params.entry.sessionId,
-        recoveryRunId,
-        lifecycleGeneration,
-        deliveryContext,
-        cfg: params.cfg,
-        shouldContinue: () =>
-          !dispatchSettled && taskRemainsOwed() && params.shouldContinue?.() !== false,
-        gatewayRuntime: params.gatewayRuntime,
-      });
     }
     log.info(
       `${resumeResult} interrupted main session: ${params.sessionKey}${

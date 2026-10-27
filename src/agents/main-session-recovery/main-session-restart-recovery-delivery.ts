@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
@@ -13,7 +12,6 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
-import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.js";
 
 export function resolveRestartRecoveryDeliveryContext(params: {
   cfg?: OpenClawConfig;
@@ -77,7 +75,7 @@ export function isRestartRecoveryDeliveryCurrent(params: RestartRecoveryDelivery
     current.status === "running" &&
     current.abortedLastRun !== true &&
     current.restartRecoveryDeliveryRunId === params.recoveryRunId &&
-    // A retained route is not permission for an automatic resumption notice.
+    // A retained route is not permission for recovery typing.
     current.restartRecoverySourceReplyDeliveryMode !== "message_tool_only" &&
     deliveryContextKey(
       resolveRestartRecoveryDeliveryContext({
@@ -87,27 +85,4 @@ export function isRestartRecoveryDeliveryCurrent(params: RestartRecoveryDelivery
       }),
     ) === deliveryContextKey(params.deliveryContext)
   );
-}
-
-export async function announceRestartRecoveryResumption(
-  params: RestartRecoveryDeliveryScope & { gatewayRuntime: GatewayRecoveryRuntime },
-): Promise<void> {
-  const isCurrent = (cfg: OpenClawConfig) => isRestartRecoveryDeliveryCurrent({ ...params, cfg });
-  try {
-    if (!isRestartRecoveryDeliveryCurrent(params)) {
-      return;
-    }
-    await params.gatewayRuntime.sendRecoveryNotice({
-      ...params.deliveryContext,
-      text: "The service restarted and interrupted your request. I'm checking whether it can continue safely.",
-      idempotencyKey: `main-session-restart-recovery:${params.recoveryRunId}:resumed-notice`,
-      liveOnly: true,
-      isCurrent,
-    });
-  } catch (error) {
-    // A notice failure must not replay an already admitted recovery turn.
-    mainSessionRecoveryLog.warn(
-      `failed to announce restart recovery ${params.sessionKey}: ${String(error)}`,
-    );
-  }
 }
