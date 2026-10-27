@@ -120,7 +120,8 @@ suite.define(() => {
         await gateway.setOnline(true);
         await page.clock.resume();
         await waitForControlUiGatewayReady(page);
-        await status.waitFor({ state: "detached" });
+        await status.getByText("Connected", { exact: true }).waitFor();
+        await spinnerLocator.waitFor({ state: "detached" });
       },
     ),
   );

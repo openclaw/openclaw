@@ -61,6 +61,13 @@ const workerModule = (input?: Parameters<typeof bindSqliteWorkerBackend>[0]) => 
   moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint),
   input,
 });
+function liveAuthority(message: string) {
+  const controller = new AbortController();
+  return {
+    revoke: () => controller.abort(new Error(message)),
+    assertCurrent: () => controller.signal.throwIfAborted(),
+  };
+}
 const expectValues = (db: { prepare(sql: string): { all(): unknown } }, values: string[]) =>
   expect(db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual(
     values.map((value) => ({ value })),
@@ -224,17 +231,12 @@ describe("pooled agent publication owner (captured source)", () => {
           commandGate: path.join(root, "command-release"),
         };
         const { db, worker } = await setup({ preparation });
-        let current = true;
-        const assertCurrent = () => {
-          if (!current) {
-            throw new Error("fixture authority revoked during preparation");
-          }
-        };
+        const authority = liveAuthority("fixture authority revoked during preparation");
         const command = append("prepared");
         const work =
           entry === "single"
-            ? worker.execute(command, assertCurrent)
-            : worker.run((scope) => scope.execute(command), assertCurrent);
+            ? worker.execute(command, authority.assertCurrent)
+            : worker.run((scope) => scope.execute(command), authority.assertCurrent);
         void work.catch(allow);
         try {
           await waitForFixtureEntry(receipts, preparation.codeMarker, work, signal);
@@ -243,7 +245,9 @@ describe("pooled agent publication owner (captured source)", () => {
           fs.writeFileSync(preparation.codeGate, "release code loading");
           await waitForFixtureEntry(receipts, preparation.commandMarker, work, signal);
           expectValues(db, []);
-          current = outcome === "success";
+          if (outcome === "revoked") {
+            authority.revoke();
+          }
           fs.writeFileSync(preparation.commandGate, "release command preparation");
           if (outcome === "revoked") {
             await expect(work).rejects.toThrow("fixture authority revoked during preparation");
@@ -305,19 +309,15 @@ describe("pooled agent publication owner (captured source)", () => {
     fixture.run(async () => {
       signal.throwIfAborted();
       const { db, worker } = await setup();
-      let current = true;
+      const authority = liveAuthority("fixture authority revoked");
       const transactionMarker = path.join(root, "before-commit");
       const work = worker.run(
         (scope) => scope.execute(append("refused", { transactionMarker })),
-        () => {
-          if (!current) {
-            throw new Error("fixture authority revoked");
-          }
-        },
+        authority.assertCurrent,
       );
       void work.catch(allow);
       await waitForFixtureEntry(receipts, transactionMarker, work, signal);
-      current = false;
+      authority.revoke();
       await expect(work).rejects.toThrow("fixture authority revoked");
       expectValues(db, []);
       await worker.run((scope) => scope.execute(append("retry")), allow);
@@ -424,13 +424,12 @@ describe("pooled agent publication owner (captured source)", () => {
     }, allow);
     void first.catch(allow);
     let second: Promise<number> | undefined;
-    const runFollower = () => worker.run((scope) => scope.execute(append("second")), allow);
     try {
       const result = await Promise.race([committed.promise, first]);
       expect(result).toBeGreaterThan(0);
       expectValues(db, ["first"]);
       // The test context captures this borrower before the first writer starts cleanup.
-      second = runFollower();
+      second = worker.run((scope) => scope.execute(append("second")), allow);
       void second.catch(allow);
       release.resolve();
       expect(await first).toBe(result);
@@ -571,27 +570,17 @@ it.for(["owner revocation", "crash", "exit", "resource revocation"] as const)(
   "V2 settles %s and readmits through a fresh worker",
   async (failure, { signal }) => {
     const db = proofDatabase();
-    let current = true;
-    const worker =
-      failure === "owner revocation"
-        ? await openV2Worker(
-            {
-              onAdmitted(request) {
-                if (request.stage === "transaction") {
-                  current = false;
-                }
-              },
-            },
-            {
-              version: 2,
-              assertCurrent() {
-                if (!current) {
-                  throw new Error("V2 owner revoked");
-                }
-              },
-            },
-          )
-        : await openV2Worker();
+    const authority = liveAuthority("V2 owner revoked");
+    const worker = await openV2Worker(
+      {
+        onAdmitted(request) {
+          if (failure === "owner revocation" && request.stage === "transaction") {
+            authority.revoke();
+          }
+        },
+      },
+      { version: 2, assertCurrent: authority.assertCurrent },
+    );
     const terminal = observeTerminal(worker);
     if (failure === "owner revocation") {
       await expect(worker.execute(append("refused"), allow)).rejects.toThrow("V2 owner revoked");
@@ -646,19 +635,15 @@ it.for(["owner revocation", "crash", "exit", "resource revocation"] as const)(
 );
 
 it("attributes cold worker reservations to bounded commands and actual outer transactions", async () => {
-  const reservationOptions = {
-    agentId: "fixture",
-    path: path.join(tempDirs.make("reservation-"), "agent.sqlite"),
-  };
   const diagnostics = channel("openclaw.agent-database.reservation");
   const observations: unknown[] = [];
   const observe = (message: unknown) => observations.push(message);
   diagnostics.subscribe(observe);
   try {
-    await runWorkerWrite(reservationOptions, async () => {
+    await runWorkerWrite(options, async () => {
       const store = await openSqliteWorkerStore<FixtureOperations>({
         moduleUrl: new URL("../infra/sqlite-worker-store.test-support.ts", import.meta.url),
-        databasePath: reservationOptions.path,
+        databasePath: options.path,
         input: undefined,
       });
       try {
@@ -670,12 +655,12 @@ it("attributes cold worker reservations to bounded commands and actual outer tra
             type: "database.domain.execute",
             input: { command: { type, input: { value } } },
           });
-        await execute("session.actor.appendTranscriptEvent", "synthetic-private-committed");
+        await execute("session.actor.appendTranscriptEvent", "private-committed");
         await expect(
-          execute("session.private-customer-command", "synthetic-private-rolled-back"),
+          execute("session.private-customer-command", "private-rolled-back"),
         ).rejects.toThrow("Fixture transaction rolled back");
         expect(await store.execute({ type: "read", input: undefined })).toEqual([
-          "synthetic-private-committed",
+          "private-committed",
         ]);
       } finally {
         await store.close();
@@ -696,7 +681,7 @@ it("attributes cold worker reservations to bounded commands and actual outer tra
     ]);
     const serialized = JSON.stringify(observations);
     expect(serialized).not.toContain("private");
-    expect(serialized).not.toContain(reservationOptions.path);
+    expect(serialized).not.toContain(options.path);
   } finally {
     diagnostics.unsubscribe(observe);
   }

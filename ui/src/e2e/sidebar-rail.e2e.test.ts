@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import {
   installMockGateway,
@@ -252,12 +253,20 @@ suite.define(() => {
           presenceUsers: [{ id: "alex", name: "Alex", self: true }],
           featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get", "users.prefs.set"],
         });
+        // Chat may migrate its own preferences while the empty rail is loading.
+        const railWrites = async () =>
+          (await gateway.getRequests("users.prefs.set")).filter(({ params }) => {
+            const preferenceEntries = asNullableRecord(asNullableRecord(params)?.entries);
+            return (
+              preferenceEntries !== null && Object.hasOwn(preferenceEntries, "ui.railShortcuts")
+            );
+          });
         await page.goto(suite.server.baseUrl + "chat");
         await gateway.waitForRequest("connect");
         const installProfilePreferences = () =>
           installPreferenceServer(
             page,
-            { "ui.themeMode": "dark" },
+            { "ui.themeMode": "dark", "new-session.migration.v1": true },
             "openclaw-test:clean-rail:profile-prefs",
           );
         await installProfilePreferences();
@@ -269,7 +278,7 @@ suite.define(() => {
         expect(await rail.locator(".sidebar-rail__pin").count()).toBe(0);
         expect(await rail.getAttribute("class")).not.toContain("--drag-active");
         expect(await gateway.getRequests("sessions.list", { pinned: true })).toEqual([]);
-        expect(await gateway.getRequests("users.prefs.set")).toEqual([]);
+        expect(await railWrites()).toEqual([]);
         const sourceBox = await source.boundingBox();
         const railBox = await rail.boundingBox();
         if (!sourceBox || !railBox) {
@@ -305,11 +314,9 @@ suite.define(() => {
               .evaluateAll((pins) => pins.map((pin) => pin.getAttribute("data-sidebar-entry"))),
           )
           .toEqual(rows.map((row) => `session-rail:${row.key}`));
+        await expect.poll(async () => (await railWrites()).length).toBeGreaterThan(0);
         await expect
-          .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
-          .toBeGreaterThan(0);
-        await expect
-          .poll(async () => (await gateway.getRequests("users.prefs.set")).at(-1)?.params)
+          .poll(async () => (await railWrites()).at(-1)?.params)
           .toMatchObject({
             entries: { "ui.railShortcuts": rows.map((row) => `session-rail:${row.key}`) },
           });

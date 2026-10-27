@@ -1,10 +1,12 @@
 // Control UI tests cover the canonical installed-plugin administration surface.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, expect, it } from "vitest";
 import { loadPluginManifest, PLUGIN_MANIFEST_FILENAME } from "../../../src/plugins/manifest.ts";
 import { resolveBundledPluginPublicModulePath } from "../../../src/test-utils/bundled-plugin-public-surface.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createSettingsPageOptions } from "./config-composer-fixtures.test-support.ts";
 import {
@@ -135,6 +137,74 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
 }
 
 suite.define(() => {
+  it("explains MCP sign-in failures and starts a fresh attempt after Close", async () => {
+    await suite.withPage(createSettingsPageOptions(), async ({ page, context }) => {
+      await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+      const beforeMessage =
+        "Sign-in did not finish. Check the plugin settings, then select Connect to try again.";
+      const afterMessage =
+        "OpenClaw could not verify the sign-in provider. Close this dialog, review the connection settings, and try again.";
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...pluginMethods, "mcp.authLogin", "wizard.next", "wizard.cancel"],
+        methodResponses: {
+          ...pluginResponses(),
+          "plugins.inspect": {
+            ...inspection,
+            mcpAuth: [{ serverName: "workboard", state: "requires-authorization" }],
+          },
+          "mcp.authLogin": { done: false, status: "running" },
+          "wizard.next": { done: true, status: "error", error: beforeMessage },
+          "wizard.cancel": { status: "cancelled" },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/plugins/workboard`);
+      const signIn = page
+        .getByRole("button", { name: "Sign in to workboard", exact: true })
+        .first();
+      await signIn.click();
+      const dialog = page.locator("openclaw-modal-dialog dialog").filter({
+        has: page.locator(".model-setup-wizard__error"),
+      });
+      const error = dialog.locator(".model-setup-wizard__error-text");
+      await expect.poll(() => error.textContent()).toBe(beforeMessage);
+      if (captureUiProof) {
+        const frame = await takeControlUiScreenshotFrame(page, dialog, [error], {
+          animations: "disabled",
+          elements: [dialog],
+        });
+        await writeFile(path.join(proofDir, "mcp-error-before.png"), frame.elements[0]!.png);
+      }
+      await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      await expect.poll(() => dialog.count()).toBe(0);
+      await gateway.setMethodResponse("wizard.next", {
+        done: true,
+        status: "error",
+        error: afterMessage,
+      });
+      await signIn.click();
+      await expect.poll(() => error.textContent()).toBe(afterMessage);
+      expect(await dialog.textContent()).not.toContain("Connected");
+      if (captureUiProof) {
+        const frame = await takeControlUiScreenshotFrame(page, dialog, [error], {
+          animations: "disabled",
+          elements: [dialog],
+        });
+        await writeFile(path.join(proofDir, "mcp-error-after.png"), frame.elements[0]!.png);
+      }
+      await dialog.getByRole("button", { name: "Copy", exact: true }).click();
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(afterMessage);
+      const attempts = await gateway.getRequests("mcp.authLogin");
+      expect(attempts).toHaveLength(2);
+      const [first, second] = attempts.map((attempt) => asRecord(attempt.params));
+      expect(first?.serverName).toBe("workboard");
+      expect(second?.serverName).toBe("workboard");
+      expect(second?.sessionId).not.toBe(first?.sessionId);
+      await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      await expect.poll(() => dialog.count()).toBe(0);
+      expect(await signIn.isEnabled()).toBe(true);
+    });
+  });
+
   it.each<{
     pluginId: string;
     name: string;

@@ -425,7 +425,7 @@ suite.define(() => {
           await navigationDrawerToggle(page).click();
           await expect(page.locator(".shell--nav-drawer-open")).toBeVisible();
           await readSurface(".shell-nav", "drawer");
-          await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+          await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
           await expect(page.locator(".sidebar-session-filter-panel")).toBeVisible();
           await readSurface(".sidebar-session-filter-panel", "filter-sheet");
           await page.keyboard.press("Escape");

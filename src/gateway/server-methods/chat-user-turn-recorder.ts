@@ -18,7 +18,10 @@ import {
   prepareSessionSourceAuthority,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
-import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import {
+  measureDiagnosticsTimelineSpan,
+  observeDiagnosticsTimelinePhases,
+} from "../../infra/diagnostics-timeline.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { getRpcSourceIdentity } from "../../sessions/session-controller.rpc-sources.js";
 import {
@@ -247,7 +250,10 @@ export function createGatewayChatUserTurnController(params: {
         }
       : {}),
     input: baseInput,
-    resolveInput: () => inputPromise,
+    resolveInput: async () => {
+      using _ = observeDiagnosticsTimelinePhases("persist.resolveInput");
+      return await inputPromise;
+    },
     target: () => {
       // Retain only the current binding; transcript writers recheck it at commit.
       const target = session.sessionTarget;
@@ -403,6 +409,7 @@ export function createGatewayChatUserTurnController(params: {
         attributes: admission.chatSendTraceAttributes,
       },
     );
+    using _ = observeDiagnosticsTimelinePhases("persist.mentionPublication");
     await mentionCommit;
     return persisted;
   };

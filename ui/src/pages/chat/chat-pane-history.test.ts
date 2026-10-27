@@ -39,6 +39,8 @@ import {
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { agentEvent } from "./tool-stream.test-helpers.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 type HistoryPageOverrides = {
   totalMessages?: number;
@@ -286,6 +288,24 @@ it("keeps the accepted steer and live tail visible while pane refresh is pending
     activeRunId: "run-refresh",
   });
   delta("Saved. Working.");
+  handleAgentEvent(
+    state,
+    agentEvent(
+      "run-refresh",
+      1,
+      "item",
+      {
+        itemId: "tool:build",
+        toolCallId: "build",
+        kind: "tool",
+        name: "exec",
+        title: "Build the workspace",
+        phase: "start",
+        status: "running",
+      },
+      state.sessionKey,
+    ),
+  );
   const liveExpected = ["Start.", "Steer.", "Saved. Working."];
 
   try {
@@ -293,6 +313,12 @@ it("keeps the accepted steer and live tail visible while pane refresh is pending
     pane.render();
     pane.chatProps!.onRefresh();
     expect(renderedText(state)).toEqual(liveExpected);
+    expect([...state.toolStreamById.values()]).toMatchObject([
+      {
+        toolCallId: "build",
+        activity: [{ status: "running" }],
+      },
+    ]);
   } finally {
     state.connected = false;
     history.resolve({ messages: [] });

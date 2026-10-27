@@ -2,6 +2,7 @@
  * Reusable isolated dist-Gateway stress campaign. Usage and metric caveats:
  * scripts/perf/team-shape-stress.md. Run with node --import ./scripts/tsx.mjs.
  * This controller never connects to an existing Gateway or builds either revision.
+ * --auth-availability-storm seeds a shared synthetic profile and alternates primary HTTP 429/success.
  */
 import { createHash } from "node:crypto";
 import {
@@ -70,7 +71,9 @@ export function parseStressOptions(args: string[]) {
       "operator-model-policy": { type: "boolean" },
       "gateway-preload": { type: "string" },
       "worker-heap-snapshot": { type: "boolean" },
+      "knowledge-worker-heap": { type: "boolean" },
       "worktree-tool-churn": { type: "boolean" },
+      "auth-availability-storm": { type: "boolean" },
       port: { type: "string" },
       help: { type: "boolean" },
     },
@@ -132,7 +135,9 @@ export function parseStressOptions(args: string[]) {
     operatorModelPolicy: values["operator-model-policy"] ?? false,
     gatewayPreload: values["gateway-preload"] ? path.resolve(values["gateway-preload"]) : undefined,
     workerHeapSnapshot: values["worker-heap-snapshot"] ?? false,
+    knowledgeWorkerHeap: values["knowledge-worker-heap"] ?? false,
     worktreeToolChurn: values["worktree-tool-churn"] ?? false,
+    authAvailabilityStorm: values["auth-availability-storm"] ?? false,
     port,
     help: values.help,
   };
@@ -190,7 +195,7 @@ async function main() {
   [--mode both|timing|allocation|retention --poll-ms 25000 --list-weight 16 --round-ms 60000 --churn-ms 6000]
   [--warmup-ms 60000 --seed 1711 --transcript-mib 128]
   [--aa-pairs 0: insert a baseline/baseline control after each of the first N pairs]
-  [--operator-model-policy]
+  [--operator-model-policy --auth-availability-storm]
   --smoke-seconds 30 is setup proof only, never performance evidence.
 Timing and allocation are separate fresh-fixture passes. Pairs run AB then BA.
 Without --base, run candidate once per mode. See team-shape-stress.md.`);
@@ -260,6 +265,7 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "./scripts/tsx.mjs",
             "scripts/perf/team-shape-stress.ts",
             "--fixture-only",
+            ...(options.authAvailabilityStorm ? ["--auth-availability-storm"] : []),
             "--output",
             state,
             "--port",
@@ -292,10 +298,12 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "--scenario",
             "memory-soak",
             "--team-stress",
+            ...(options.knowledgeWorkerHeap ? ["--knowledge-worker-heap"] : []),
             ...(options.gatewayPreload ? ["--gateway-preload", options.gatewayPreload] : []),
             "--mixed-rpc",
             "--stress-tools",
             "--stress-subagents",
+            ...(options.authAvailabilityStorm ? ["--auth-availability-storm"] : []),
             ...(options.worktreeToolChurn ? ["--worktree-tool-churn"] : []),
             ...(options.operatorModelPolicy ? ["--operator-model-policy"] : []),
             "--clients",

@@ -377,6 +377,8 @@ export type ReplyPayloadMetadata = {
   nonTerminalToolErrorWarning?: boolean;
   /** Host label or status about the run (truncation, restart, compaction); not the answer. */
   hostNotice?: true;
+  /** The channel notice has a canonical model-fallback transcript event in the Control UI. */
+  modelFallbackNotice?: true;
   /** Runtime acknowledgment of a committed queue decision, independent of active reply delivery. */
   queueAdmissionNotice?: true;
 };

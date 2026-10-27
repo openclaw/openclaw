@@ -122,6 +122,7 @@ export type MenuProps = {
     | "tabindex"
     | "aria-hidden"
     | "aria-disabled"
+    | "aria-description"
     | "aria-keyshortcuts"
     | "aria-busy"
     | "value"

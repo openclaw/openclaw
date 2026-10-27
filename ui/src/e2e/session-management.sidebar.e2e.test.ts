@@ -923,27 +923,28 @@ suite.define(() => {
       }
 
       // Sections must lay out below the rows above them, not paint over them.
-      const overlaps = await page.evaluate(() => {
-        const rects = [
-          ...document.querySelectorAll(".sidebar-recent-session, .sidebar-recent-sessions__head"),
-        ]
-          .map((element) => {
-            const rect = element.getBoundingClientRect();
-            return { top: rect.top, bottom: rect.bottom };
-          })
-          .filter((rect) => rect.bottom > rect.top)
-          .toSorted((a, b) => a.top - b.top);
-        let bad = 0;
-        let previousBottom: number | undefined;
-        for (const rect of rects) {
-          if (previousBottom !== undefined && rect.top < previousBottom - 2) {
-            bad += 1;
+      const overlaps = () =>
+        page.evaluate(() => {
+          const rects = [
+            ...document.querySelectorAll(".sidebar-recent-session, .sidebar-recent-sessions__head"),
+          ]
+            .map((element) => {
+              const rect = element.getBoundingClientRect();
+              return { top: rect.top, bottom: rect.bottom };
+            })
+            .filter((rect) => rect.bottom > rect.top)
+            .toSorted((a, b) => a.top - b.top);
+          let bad = 0;
+          let previousBottom: number | undefined;
+          for (const rect of rects) {
+            if (previousBottom !== undefined && rect.top < previousBottom - 2) {
+              bad += 1;
+            }
+            previousBottom = rect.bottom;
           }
-          previousBottom = rect.bottom;
-        }
-        return bad;
-      });
-      expect(overlaps).toBe(0);
+          return bad;
+        });
+      await expect.poll(overlaps).toBe(0);
     } finally {
       await context.close();
     }

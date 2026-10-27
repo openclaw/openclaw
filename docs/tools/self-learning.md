@@ -23,7 +23,9 @@ Learning happens in three places:
   [Unused-skill cleanup](/tools/skill-workshop#unused-skill-cleanup).
 
 Every change applies immediately and can be undone. Background review changes
-appear in the Control UI chat. See [Undo](/tools/skill-workshop#undo).
+appear in the Control UI chat. See [Undo](/tools/skill-workshop#undo). To
+review background learning before it applies, use `propose` mode: reviews save
+[drafts](/tools/skill-workshop#drafts) that you review with `/learn drafts`.
 
 ## When a review runs
 
@@ -141,11 +143,13 @@ appear only in debug logs. Provider and storage failures still produce warnings.
 
 ```bash
 openclaw config set skills.workshop.autonomous.mode off
+openclaw config set skills.workshop.autonomous.mode propose
 openclaw config set skills.workshop.autonomous.mode auto
 ```
 
-The Control UI **Plugins → Skill workshop** page has the same switch. `off`
-stops background reviews and unused-skill cleanup. The agent can still create or
+The Control UI **Plugins → Skill workshop** page has the same switch. `propose`
+keeps background reviews but saves their changes as drafts and skips
+unused-skill cleanup. `off` stops background reviews and unused-skill cleanup. The agent can still create or
 update learned skills when you ask, through `/learn`, or in a
 **Learn from past conversations** session.
 

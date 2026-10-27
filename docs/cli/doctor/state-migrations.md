@@ -228,11 +228,15 @@ records remain read-only inventory. After the candidate is installed, the real
 Doctor runs the normal import and archival against the operator's state.
 
 Skill Workshop proposals were removed. Doctor exports each pending or
-quarantined proposal draft, with its support files, to
-`<state-dir>/agents/<agentId>/agent/workshop-skills/.archive/.retired-proposals/<proposal-id>/`,
-then drops the proposal tables. Exported drafts are not live skills; to keep
-one, ask the agent to save it with `/learn` so it goes through the normal
-validated, versioned Workshop write.
+quarantined proposal draft, with its support files, to the Workshop
+[drafts](/tools/skill-workshop#drafts) directory
+`<state-dir>/agents/<agentId>/agent/workshop-skills/.drafts/<proposal-id>/`,
+then drops the proposal tables. Drafts are not live skills; review them with
+`/learn drafts`, which saves the ones worth keeping through the normal
+validated, versioned Workshop write. Drafts that an earlier Doctor exported to
+`workshop-skills/.archive/.retired-proposals/` move to `.drafts/` on the next
+run. An existing draft with the same id is never overwritten: Doctor keeps that
+export where it is and warns, so you can compare the two and delete one.
 
 Doctor keeps the proposal tables and files, with a recoverable warning, when no
 configured agent owns a proposal, it cannot export a draft, or it finds a

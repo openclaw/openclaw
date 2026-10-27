@@ -38,6 +38,12 @@ decoded rows even when a caller retains the inactive handle. Predicate compariso
 baselines last only until release; a late acknowledgement cannot restore them.
 Active authorities retain their existing publication and final-effect checks.
 
+Finished worker admissions release publication observers and request callbacks.
+Committed facts remain available for lost-reply recovery, which runs
+after transport cleanup. Workspace mutations release their payload and previous
+row captures after acknowledgement or recovery finishes, including failed writes;
+retaining an admission must not retain those completed workspace payloads.
+
 Idle session reclamation workers retain their admitted connection, not completed
 deletion plans or the caller's async context. Retirement callbacks capture only
 the worker's registry key. Transport startup and idle timers run outside request

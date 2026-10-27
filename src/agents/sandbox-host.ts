@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { WIDGET_SIZE_CONFIRMATION_HTML } from "../canvas/wrap.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { KEYBOARD_SHORTCUT_MATCHER_SOURCE } from "../shared/keyboard-shortcuts.generated.js";
 import { COMMAND_PALETTE_SHORTCUTS } from "../shared/keyboard-shortcuts.js";
@@ -295,7 +296,8 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   const serializedDocumentGuard = JSON.stringify(
     buildSandboxDocumentGuardHtml(blockDescendantFrames) +
       buildSandboxShortcutBridgeHtml() +
-      buildSandboxWidgetScrollBridgeHtml(),
+      buildSandboxWidgetScrollBridgeHtml() +
+      WIDGET_SIZE_CONFIRMATION_HTML,
   ).replaceAll("<", "\\u003c");
   return `<!doctype html>
 <meta charset="utf-8" />
