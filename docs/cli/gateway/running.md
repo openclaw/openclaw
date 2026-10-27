@@ -150,7 +150,13 @@ openclaw gateway auth-token --show
 
 The command resolves `gateway.auth.token`, `OPENCLAW_GATEWAY_TOKEN`, and configured SecretRefs, then prints only the token. It requires an interactive terminal and refuses redirected or piped output so the credential does not silently enter command logs. Treat the terminal output as a secret.
 
-If no persistent token is configured, run `openclaw doctor --generate-gateway-token`, restart the Gateway, and then rerun the command. Generic `openclaw config get` output remains redacted, including `--json`.
+If no persistent token is configured, run `openclaw doctor --generate-gateway-token`, restart the Gateway, and then rerun the command. On Windows PowerShell with a `Restricted` execution policy, the npm shim may resolve to `openclaw.ps1` and be blocked before OpenClaw starts. Use the existing CMD launcher instead:
+
+```powershell
+& "$env:APPDATA\npm\openclaw.cmd" doctor --generate-gateway-token
+```
+
+For a custom npm prefix, run `npm.cmd prefix -g` and append `openclaw.cmd` to the returned directory. Do not weaken the execution policy just to run the PowerShell shim. Generic `openclaw config get` output remains redacted, including `--json`.
 
 ## Recover an unverifiable state lock
 

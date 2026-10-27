@@ -103,7 +103,7 @@ where to run the Gateway see
     - If it asks for shared-secret auth, paste the configured token or password into Control UI settings.
     - Token source: `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
     - Password source: `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
-    - No shared secret configured yet? Run `openclaw doctor --generate-gateway-token` (or `openclaw doctor --fix --generate-gateway-token`).
+    - No shared secret configured yet? Run `openclaw doctor --generate-gateway-token` (or `openclaw doctor --fix --generate-gateway-token`). On Windows PowerShell with a `Restricted` execution policy, use the existing CMD launcher instead: `& "$env:APPDATA\npm\openclaw.cmd" doctor --generate-gateway-token`. For a custom npm prefix, run `npm.cmd prefix -g` and append `openclaw.cmd` to the returned directory; do not weaken the execution policy.
 
     **Not on localhost:**
 
