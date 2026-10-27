@@ -587,6 +587,9 @@ async function verifyAndActivateCandidate(
     );
   };
   if (!isDeepStrictEqual(sourceCandidate, source) || savedCredential?.setup) {
+    // Authority and cancellation govern this activation until its config is persisted;
+    // a saved activation then completes like any other committed config write.
+    let persisted = false;
     const configTarget: SetupInferenceConfigTarget = {
       read: async () => ({
         config: (await readSnapshot()).sourceConfig,
@@ -616,6 +619,7 @@ async function verifyAndActivateCandidate(
             return { nextConfig };
           },
         });
+        persisted = true;
         return committed.nextConfig;
       },
     };
@@ -627,7 +631,11 @@ async function verifyAndActivateCandidate(
           (baselineRoute.route || resolveAgentEffectiveModelPrimary(cfg, routeAgentId))),
       ),
       requireApplied: params.automaticSetup,
-      assertCurrent: () => throwIfSetupInferenceCancelled(params),
+      assertCurrent: () => {
+        if (!persisted) {
+          throwIfSetupInferenceCancelled(params);
+        }
+      },
       activate: activateCredential,
       deferCompletion: params.onActivationCompletion,
       configTarget,
