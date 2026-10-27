@@ -360,6 +360,24 @@ describe("prepared reply dispatch runtime", () => {
           expect(executionWorkspace.pluginGeneration).toBe(lease.pluginGeneration);
           expect(executionWorkspace.snapshot.workspaceDir).toBe(executionWorkspaceDir);
           await executionWorkspace[Symbol.asyncDispose]();
+          const mismatchedWorkspaceDir = fixture.state.path(`mismatch-${runtime}`);
+          const scopeMismatches: Array<readonly [string, Partial<RunInput>]> = [
+            ["config", { config: { agents: { defaults: { model: "other/model" } } } }],
+            ["inherited auth", { inheritedAuthDir: fixture.state.path("other-auth") }],
+            ["environment", { env: { OPENCLAW_PREPARED_RUNTIME_TEST_SCOPE: "different" } }],
+            ["agent", { agentId: "other" }],
+            ["agent directory", { agentDir: fixture.state.agentDir("other") }],
+            ["missing selection", { runtimePluginSelections: undefined }],
+          ];
+          for (const [scope, overrides] of scopeMismatches) {
+            await expect(
+              acquireAgentRunPreparedModelRuntime(
+                { ...input(runtime), workspaceDir: mismatchedWorkspaceDir, ...overrides },
+                { catalogMode: "static", pluginGeneration: lease.pluginGeneration },
+              ),
+              scope,
+            ).rejects.toThrow("plugin generation was superseded");
+          }
           const otherRuntime = [...registries.keys()].find((candidate) => candidate !== runtime)!;
           await expect(acquire(otherRuntime, lease.pluginGeneration)).rejects.toThrow(
             "plugin generation was superseded",
