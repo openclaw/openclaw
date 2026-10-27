@@ -430,6 +430,11 @@ snapshot or startup/Doctor admission keeps its existing owner.
 
 Private snapshots remain necessary for artifact-preserving inspection without a reusable seal, incomplete WAL families whose inspection would create source sidecars, and rollback journals requiring private recovery. Those cases use the existing snapshot owner and deadline; ordinary inspection errors do not trigger a full-copy fallback. A matching clean-close seal permits startup to read the unchanged, checkpointed source directly. Other live files use native SQLite reads; immutable reads require a sealed source or a verified private or explicit consolidated copy. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file.
 
+Startup config-health and plugin-metadata reads verify clean-close proof while
+holding physical custody in their isolated reader. They keep custody through
+native close, without creating WAL sidecars or copying unrelated state. Missing
+proof or competing custody retains the existing private snapshot path.
+
 Concurrent asynchronous requests for the same physical live database share one
 snapshot operation. When the current runtime already owns an open SQLite
 connection, that owner supplies SQLite's online backup instead of reopening or

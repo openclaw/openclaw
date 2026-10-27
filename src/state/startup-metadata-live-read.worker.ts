@@ -1,9 +1,19 @@
 import { configHealthReadOperations } from "../config/io.health-state.kernel.js";
+import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
+import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
+import { runWithSqliteCleanup } from "../infra/sqlite-lifecycle-errors.js";
 import { hasVerifiedLiveSqliteOwner } from "../infra/sqlite-live-owner.js";
 import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
 import type { SqliteReadOnlyOperationContext } from "../infra/sqlite-readonly-operation-types.js";
+import {
+  StateSchemaMutationConflictError,
+  withStateDatabaseSchemaMaintenance,
+} from "../infra/state-database-maintenance.js";
 import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
+import { openOpenClawStateReadConnection } from "./openclaw-state-db-read-connection.js";
 import {
   admitStateSchemaFacts,
   assertSupportedStateSchemaVersion,
@@ -17,18 +27,13 @@ type StartupMetadataRead =
       input: Parameters<(typeof pluginMetadataReadOperations)["plugins.metadata.read"]>[0];
     };
 
-export const startupMetadataLiveReadOperations = {
-  "startupMetadata.readLive": (
+export const startupMetadataReadOperations = {
+  "startupMetadata.readCurrent": (
     command: StartupMetadataRead,
     context: SqliteReadOnlyOperationContext,
   ) => {
     assertStateDatabaseAccessAllowed(context.path);
-    if (!hasVerifiedLiveSqliteOwner(context.path)) {
-      return undefined;
-    }
-    // Only a verified live owner permits SQLite to touch the source WAL index.
-    // The isolated child closes its own read transaction, never a caller's handles.
-    return tryInspectSqliteReadOnlyInProcess(context.path, (db) => {
+    const inspect = (db: EngineConnection) => {
       let sourceAdmitted = false;
       try {
         admitStateSchemaFacts(db, context.path);
@@ -50,6 +55,43 @@ export const startupMetadataLiveReadOperations = {
         }
         return { ok: false as const, error: failure, sourceAdmitted };
       }
-    });
+    };
+    if (hasVerifiedLiveSqliteOwner(context.path)) {
+      // Only a verified live owner permits SQLite to touch the source WAL index.
+      return tryInspectSqliteReadOnlyInProcess(context.path, inspect);
+    }
+    try {
+      return withStateDatabaseSchemaMaintenance(
+        { databasePath: context.path, busyTimeoutMs: 0 },
+        () => {
+          // The parent seal is only a hint. Custody keeps this checkpoint immutable
+          // through native close, including while another Gateway starts.
+          if (!readSqliteDatabaseCleanClose(context.path)) {
+            return undefined;
+          }
+          const connection = openOpenClawStateReadConnection(
+            context.path,
+            resolveImmutableSqliteFileUri(context.path),
+          );
+          return runWithSqliteCleanup(
+            {
+              release: () => {
+                connection.close();
+              },
+            },
+            "Sealed startup metadata inspection",
+            () => ({ value: inspect(connection.database.db) }),
+          );
+        },
+      );
+    } catch (error) {
+      if (
+        error instanceof StateSchemaMutationConflictError ||
+        error instanceof StateDatabaseAdmissionPendingError
+      ) {
+        return undefined;
+      }
+      throw error;
+    }
   },
 };
