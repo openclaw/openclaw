@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { Check } from "typebox/value";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { contract } from "./contract.js";
+import { RegistryClient } from "./registry-client.js";
 import { createKnowledgeService } from "./service.js";
 import {
   adopt,
@@ -102,6 +103,57 @@ it("stopping the service ends maintenance: a pass in flight neither re-arms nor 
     warnings.filter((m) => m.includes("schedule was not recorded")),
     "the stopped service records no maintenance state",
   ).toStrictEqual([]);
+});
+
+it("stopping during a paused review enqueue leaves no registry worker running", async () => {
+  // Capture the service's registry client to observe its private worker handle.
+  const registries = new Set<RegistryClient>();
+  const call = RegistryClient.prototype.call;
+  const spy = vi.spyOn(RegistryClient.prototype, "call").mockImplementation(function (
+    this: RegistryClient,
+    ...args: Parameters<RegistryClient["call"]>
+  ) {
+    registries.add(this);
+    return call.apply(this, args);
+  });
+  afterTest(() => spy.mockRestore());
+  // The review enqueue settles only once stop has closed the registry, the
+  // latest point a slow enqueue can settle while stop is still in progress.
+  let closed!: () => void;
+  const registryClosed = new Promise<void>((resolve) => (closed = resolve));
+  const close = RegistryClient.prototype.close;
+  const closeSpy = vi.spyOn(RegistryClient.prototype, "close").mockImplementation(async function (
+    this: RegistryClient,
+  ) {
+    await close.call(this);
+    closed();
+  });
+  afterTest(() => closeSpy.mockRestore());
+  const f = await fixture({ reviewJobId: "review-job" }),
+    scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
+  let entered!: () => void, release!: () => void;
+  const enqueued = new Promise<void>((resolve) => (entered = resolve)),
+    paused = new Promise<void>((resolve) => (release = resolve));
+  const cron = {
+    enqueueRun: async () => {
+      entered();
+      await paused;
+      return { ok: true, enqueued: true, runId: "run-1" };
+    },
+  };
+  const service = await f.boot(scheduler, { getCron: () => cron });
+  await remember(service, toolContext(f.host.api, "main"), "I prefer short replies.");
+  const pass = scheduler.fire("knowledge-maintenance");
+  await enqueued;
+  const stopped = f.lifecycles[0].stop();
+  await Promise.race([registryClosed, new Promise((resolve) => setTimeout(resolve, 2_000))]);
+  release();
+  await stopped;
+  await pass;
+  expect(registries.size).toBeGreaterThan(0);
+  for (const registry of registries) {
+    expect(Reflect.get(registry, "worker"), "no registry worker after stop").toBeUndefined();
+  }
 });
 
 it("a scheduled pass links across every store and partition, skips unprovisioned stores, repeats as a no-op, and catches up after a miss", async () => {

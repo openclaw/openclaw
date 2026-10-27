@@ -419,32 +419,35 @@ export class Stores {
       throw reloaded();
     }
   }
-  /** Plugin service lifecycle. Stopping fences the current incarnation, retires
-   * every runtime after queued work settles, then closes the registry unless the
-   * service restarted meanwhile. Resolves once those workers have exited. */
+  /** Plugin service lifecycle. Stopping fences the current incarnation at once,
+   * retires every runtime after queued work settles, waits for `settled` (work
+   * outside the lanes that still writes through the registry), then closes the
+   * registry unless the service restarted meanwhile. Resolves once those workers
+   * have exited. */
   start() {
     ++this.epoch;
     this.current = true;
   }
-  stop(): Promise<void> {
+  stop(settled: Promise<unknown> = Promise.resolve()): Promise<void> {
     ++this.epoch;
     this.current = false;
     const runtimes = [...this.runtimes.values()];
     this.runtimes.clear();
-    const stopped = Promise.allSettled(runtimes.map((runtime) => runtime.retire())).then(() =>
-      this.current ? undefined : this.registry.close(),
-    );
+    const stopped = Promise.allSettled([
+      ...runtimes.map((runtime) => runtime.retire()),
+      settled,
+    ]).then(() => (this.current ? undefined : this.registry.close()));
     this.stopping.add(stopped);
-    const settled = () => {
+    const forget = () => {
       this.stopping.delete(stopped);
     };
-    stopped.then(settled, settled);
+    stopped.then(forget, forget);
     return stopped;
   }
   /** Plugin instance disposal: stop for good once every earlier stop has
    * finished. No worker starts afterwards; resolves once all have exited. */
-  async dispose(): Promise<void> {
-    await Promise.all([this.stop(), ...this.stopping]);
+  async dispose(settled?: Promise<unknown>): Promise<void> {
+    await Promise.all([this.stop(settled), ...this.stopping]);
     await this.registry.dispose();
   }
 }
