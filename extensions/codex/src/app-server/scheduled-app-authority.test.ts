@@ -42,6 +42,15 @@ const preparedAuth = {
   profileId: "openai:work",
   accountId: "acct-1",
 };
+const creatorContext = {
+  appsMayBeVisible: true,
+  authenticatedScheduledMode: false,
+  usesSupervisionConnection: false,
+  homeScope: "agent",
+  hasPreparedAccountIdentity: true,
+  hasConfiguredAppServerIdentity: false,
+};
+const calendarConfig = (calendar: Record<string, unknown>) => ({ apps: { calendar } });
 
 function capture(
   request: (
@@ -177,14 +186,16 @@ function intersect(
   {
     thread = threadConfig(),
     tools = toolsByApp("edit"),
+    stored = authority(),
   }: {
     thread?: CodexPluginThreadConfig;
+    stored?: Parameters<typeof intersectCodexPluginThreadConfigWithScheduledAuthority>[1];
     tools?: NonNullable<
       Parameters<typeof intersectCodexPluginThreadConfigWithScheduledAuthority>[2]
     >["toolsByApp"];
   } = {},
 ) {
-  return intersectCodexPluginThreadConfigWithScheduledAuthority(thread, authority(), {
+  return intersectCodexPluginThreadConfigWithScheduledAuthority(thread, stored, {
     config,
     toolsByApp: tools,
   });
@@ -198,12 +209,7 @@ describe("scheduled Codex app authority", () => {
     [{ hasPreparedAccountIdentity: false }, "configured app-server identity"],
   ] as const)("refuses creator capture for %j before mutation", (overrides, message) => {
     const decision = resolveScheduledCodexAppCreatorCaptureDecision({
-      appsMayBeVisible: true,
-      authenticatedScheduledMode: false,
-      usesSupervisionConnection: false,
-      homeScope: "agent",
-      hasPreparedAccountIdentity: true,
-      hasConfiguredAppServerIdentity: false,
+      ...creatorContext,
       ...overrides,
     });
 
@@ -218,10 +224,7 @@ describe("scheduled Codex app authority", () => {
   ])("supports creator capture with a %s identity", (_name, prepared, configured) => {
     expect(
       resolveScheduledCodexAppCreatorCaptureDecision({
-        appsMayBeVisible: true,
-        authenticatedScheduledMode: false,
-        usesSupervisionConnection: false,
-        homeScope: "agent",
+        ...creatorContext,
         hasPreparedAccountIdentity: prepared,
         hasConfiguredAppServerIdentity: configured,
       }),
@@ -249,7 +252,7 @@ describe("scheduled Codex app authority", () => {
                 },
         config: configured
           ? {}
-          : { apps: { calendar: { tools: { "List events": { approval_mode: "writes" } } } } },
+          : calendarConfig({ tools: { "List events": { approval_mode: "writes" } } }),
         requirements: configured
           ? { hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command" }] }] } }
           : undefined,
@@ -429,13 +432,10 @@ describe("scheduled Codex app authority", () => {
     ],
   ])("preserves %s from current config", (_name, appConfig, enabled) => {
     expectCalendarTools(
-      intersect(
-        { apps: { calendar: appConfig } },
-        {
-          thread: threadConfig(true),
-          tools: new Map([["calendar", new Map([["edit", { title: "Edit event" }]])]]),
-        },
-      ),
+      intersect(calendarConfig(appConfig), {
+        thread: threadConfig(true),
+        tools: new Map([["calendar", new Map([["edit", { title: "Edit event" }]])]]),
+      }),
       { edit: { enabled } },
     );
   });
@@ -456,11 +456,10 @@ describe("scheduled Codex app authority", () => {
       }
       const currentPolicy = await readCurrentCodexScheduledAppPolicy({
         request: policyClient({
-          config: {
-            apps: {
-              calendar: { default_tools_enabled: true, tools: { destructive: { enabled: true } } },
-            },
-          },
+          config: calendarConfig({
+            default_tools_enabled: true,
+            tools: { destructive: { enabled: true } },
+          }),
           tools: {
             newly_benign: connectorTool(false, false),
             destructive: connectorTool(true, false),
@@ -507,7 +506,7 @@ describe("scheduled Codex app authority", () => {
       expectCalendarTools(intersected, { edit: { approval_mode: expected } });
       const relaxed = intersectCodexPluginThreadConfigWithScheduledAuthority(config, captured, {
         ...currentPolicy,
-        config: { apps: { calendar: { default_tools_approval_mode: "approve" } } },
+        config: calendarConfig({ default_tools_approval_mode: "approve" }),
       });
       expectCalendarTools(relaxed, { edit: { approval_mode: expected } });
     },
@@ -526,12 +525,9 @@ describe("scheduled Codex app authority", () => {
   });
 
   it("fails before execution when a captured app has no current connector tools", () => {
-    expect(() =>
-      intersectCodexPluginThreadConfigWithScheduledAuthority(threadConfig(), authority(), {
-        config: {},
-        toolsByApp: new Map(),
-      }),
-    ).toThrow("Scheduled Codex apps are unavailable under the current policy or account: calendar");
+    expect(() => intersect({}, { tools: new Map() })).toThrow(
+      "Scheduled Codex apps are unavailable under the current policy or account: calendar",
+    );
   });
 
   it("caps headless tools at the current app's auto approval mode", () => {
@@ -546,9 +542,7 @@ describe("scheduled Codex app authority", () => {
     const first = buildScheduledCodexAppAuthorityInputFingerprint("base", authority());
     const second = buildScheduledCodexAppAuthorityInputFingerprint(
       "base",
-      authority({
-        apps: [capturedApp({}, false, "deny")],
-      }),
+      authority({ apps: [capturedApp({}, false, "deny")] }),
     );
 
     expect(first).not.toBe("base");
@@ -558,26 +552,23 @@ describe("scheduled Codex app authority", () => {
 
   it("fails closed for unknown or malformed Codex authority", () => {
     expect(() =>
-      intersectCodexPluginThreadConfigWithScheduledAuthority(threadConfig(), {
-        ...authority(),
-        namespace: "codex.unknown",
-      }),
-    ).toThrow(/Unsupported Codex scheduled authority namespace/);
-    expect(() =>
-      intersectCodexPluginThreadConfigWithScheduledAuthority(
-        threadConfig(),
-        authority({ apps: [{ id: "calendar" }] }),
+      intersect(
+        {},
+        {
+          stored: { ...authority(), namespace: "codex.unknown" },
+        },
       ),
-    ).toThrow(/Stored Codex app authority is invalid/);
+    ).toThrow(/Unsupported Codex scheduled authority namespace/);
+    expect(() => intersect({}, { stored: authority({ apps: [{ id: "calendar" }] }) })).toThrow(
+      /Stored Codex app authority is invalid/,
+    );
   });
 
   it("reports captured app ids omitted by current policy without exposing the envelope", () => {
     const config = threadConfig();
     delete config.policyContext.apps.calendar;
 
-    expect(() =>
-      intersectCodexPluginThreadConfigWithScheduledAuthority(config, authority()),
-    ).toThrow(
+    expect(() => intersect({}, { thread: config })).toThrow(
       "Scheduled Codex apps are unavailable under the current policy or account: calendar. Restore access or reauthorize the automation from a fresh authenticated Codex owner turn.",
     );
   });
