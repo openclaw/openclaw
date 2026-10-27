@@ -75,6 +75,7 @@ defineSolidBridge<AgentSelectProps>(
     // Menu retains a custom renderer per key; retain that key's live option fields too.
     const optionRows = createProjection(() => props.options, [], { key: "value" });
     function OptionRow(row: { option: AgentSelectOption; bindings: MenuItemBindings }) {
+      const isSelected = createMemo(() => row.option.value === props.value);
       return (
         <button
           {...row.bindings}
@@ -83,15 +84,13 @@ defineSolidBridge<AgentSelectProps>(
           value={row.option.value}
           disabled={props.disabled || row.option.disabled}
           data-agent-option=""
-          data-selected={row.option.value === props.value ? "" : undefined}
+          data-selected={isSelected() ? "" : undefined}
           data-initial-focus={
-            row.option.value === props.value && !props.disabled && !row.option.disabled
-              ? ""
-              : undefined
+            isSelected() && !props.disabled && !row.option.disabled ? "" : undefined
           }
         >
           <span class="oc-menu-item__check" aria-hidden="true">
-            {row.option.value === props.value ? "✓" : ""}
+            {isSelected() ? "✓" : ""}
           </span>
           <span class="oc-menu-item__icon">
             <Avatar option={row.option} />
@@ -111,7 +110,7 @@ defineSolidBridge<AgentSelectProps>(
           </span>
           <span class="oc-menu-item__details">
             <span class="agent-select__option-state" aria-hidden="true">
-              <Show when={row.option.value === props.value}>
+              <Show when={isSelected()}>
                 <span class="agent-select__option-check">
                   <Icon name="check" />
                 </span>
@@ -121,15 +120,18 @@ defineSolidBridge<AgentSelectProps>(
         </button>
       );
     }
-    const items = createMemo<readonly MenuItem[]>(() =>
-      optionRows.map((option) => ({
-        id: `option:${option.value}`,
-        label: [option.label, option.description, option.badge].filter(Boolean).join(", "),
-        type: "radio" as const,
-        checked: option.value === props.value,
-        disabled: props.disabled || option.disabled,
-        render: (bindings) => <OptionRow option={option} bindings={bindings} />,
-      })),
+    const items = createProjection<readonly MenuItem[]>(
+      () =>
+        optionRows.map((option) => ({
+          id: `option:${option.value}`,
+          label: [option.label, option.description, option.badge].filter(Boolean).join(", "),
+          type: "radio" as const,
+          checked: option.value === props.value,
+          disabled: props.disabled || option.disabled,
+          render: (bindings: MenuItemBindings) => <OptionRow option={option} bindings={bindings} />,
+        })),
+      [],
+      { key: "id" },
     );
     return (
       <Menu
@@ -151,7 +153,7 @@ defineSolidBridge<AgentSelectProps>(
             : accessibleLabel()
         }
         disabled={props.disabled || props.options.length === 0}
-        items={items()}
+        items={items}
         placement="bottom-start"
         onAfterShow={() => {
           const surface = menu?.overlay.surface;
