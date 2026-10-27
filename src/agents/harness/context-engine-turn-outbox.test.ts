@@ -9,6 +9,7 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
+  appendTranscriptMessage,
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
   waitForSessionTranscriptProjection,
@@ -147,9 +148,10 @@ async function createTranscript(sessionId: string, content = "current") {
   const stateDir = tempDirs.make();
   const target = createTurnTarget(path.join(stateDir, "sessions.json"), sessionId);
   await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
-  const append = (role: "user" | "assistant", text: string, now: number, parentId?: string) =>
-    appendTurnMessage(target, role, text, now, parentId);
-  const current = await append("user", content, 1_000);
+  const current = await appendTranscriptMessage(target, {
+    message: { role: "user", content },
+    now: 1_000,
+  });
   assert(current?.anchor, "expected admitted transcript entry");
   const admission = {
     ...current.anchor,
@@ -157,7 +159,7 @@ async function createTranscript(sessionId: string, content = "current") {
     role: "user" as const,
   } satisfies TranscriptTurnAdmission;
   const database = openOpenClawAgentDatabase({ agentId: "main", path: admission.storePath });
-  return { stateDir, target, append, current, anchor: current.anchor, admission, database };
+  return { stateDir, target, current, anchor: current.anchor, admission, database };
 }
 
 describe("context-engine turn outbox", () => {
@@ -266,7 +268,10 @@ describe("context-engine turn outbox", () => {
   it.each(["invalid-result", "missing-state"] as const)(
     "retains a queued turn with %s",
     async (failure) => {
-      const commitTurn = createCommitTurn().mockResolvedValueOnce({ status: "ignored" } as never);
+      let valid = failure === "missing-state";
+      const commitTurn = vi.fn(async () =>
+        valid ? { status: "committed" as const } : ({ status: "ignored" } as never),
+      );
       const { database, warn, enqueue, drain } = outboxFixture(commitTurn, false);
       const payload = enqueue(`session-a:${failure}`);
       if (failure === "missing-state") {
@@ -289,6 +294,7 @@ describe("context-engine turn outbox", () => {
         attempt_count: 1,
         last_error: "invalid commitTurn result status: ignored",
       });
+      valid = true;
       const onCommitted = vi.fn(() => {
         throw new Error("maintenance handoff failed");
       });
@@ -309,11 +315,14 @@ describe("context-engine turn outbox", () => {
         current: admitted,
         admission,
         database,
-        append,
       } = await createTranscript(accepted ? "recovered-turn" : "unaccepted-turn", "first");
-      const owner = { database, engineId: "test" };
-      enqueueContextEngineTurnIntent({ ...owner, admission });
-      const terminal = await append(
+      enqueueContextEngineTurnIntent({
+        admission,
+        database,
+        engineId: "test",
+      });
+      const terminal = await appendTurnMessage(
+        target,
         "assistant",
         accepted ? "first answer" : "rejected fallback",
         2_000,
@@ -322,12 +331,13 @@ describe("context-engine turn outbox", () => {
       assert(terminal?.anchor, "expected terminal transcript entry");
       if (accepted) {
         acceptContextEngineTurnIntent({
-          ...owner,
           boundary: { admission, terminal: terminal.anchor },
-          runtimeContext,
+          database,
+          engineId: "test",
+          runtimeContext: { ...runtimeContext },
         });
       }
-      const current = await append("user", "second", 3_000, terminal.messageId);
+      const current = await appendTurnMessage(target, "user", "second", 3_000, terminal.messageId);
       assert(current?.anchor, "expected current transcript entry");
       const currentAdmission = {
         ...current.anchor,
@@ -445,7 +455,13 @@ describe("context-engine turn outbox", () => {
   });
 
   it("does not let later same-session turns overtake a failed commit", async () => {
-    const commitTurn = createCommitTurn().mockRejectedValueOnce(new Error("temporary failure"));
+    let failFirstTurn = true;
+    const commitTurn = vi.fn(async ({ advancementKey }: { advancementKey: string }) => {
+      if (advancementKey === "session-a:z-first" && failFirstTurn) {
+        throw new Error("temporary failure");
+      }
+      return { status: "committed" as const };
+    });
     const { database, enqueue, drain } = outboxFixture(commitTurn, false);
     enqueue("session-a:z-first", "session-a", 1);
     for (let turn = 2; turn <= 17; turn += 1) {
@@ -470,6 +486,7 @@ describe("context-engine turn outbox", () => {
       attempt_count: 1,
     });
     commitTurn.mockClear();
+    failFirstTurn = false;
 
     await drain({ limit: 2 });
 
@@ -487,7 +504,13 @@ describe("context-engine turn outbox", () => {
   });
 
   it("retries the current session before the next run and degrades if it stays blocked", async () => {
-    const commitTurn = createCommitTurn().mockRejectedValueOnce(new Error("temporary failure"));
+    let blocked = true;
+    const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => {
+      if (blocked) {
+        throw new Error("temporary failure");
+      }
+      return { status: "committed" as const };
+    });
     const { database, lease, warn, drain, enqueue } = outboxFixture(commitTurn);
     const payload = {
       ...createPayload(database.path, "session-a:retry"),
@@ -496,6 +519,7 @@ describe("context-engine turn outbox", () => {
     enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
     const { degradeBeforeStart } = lease;
     await drain();
+    blocked = false;
     await drainPendingContextEngineTurnsBeforeRun({
       admission: payload.boundary.admission,
       lease,
@@ -511,7 +535,7 @@ describe("context-engine turn outbox", () => {
     expect(degradeBeforeStart).not.toHaveBeenCalled();
 
     enqueue("session-a:blocked", "session-a", 3);
-    commitTurn.mockRejectedValue(new Error("temporary failure"));
+    blocked = true;
     await drainPendingContextEngineTurnsBeforeRun({
       admission: payload.boundary.admission,
       lease,

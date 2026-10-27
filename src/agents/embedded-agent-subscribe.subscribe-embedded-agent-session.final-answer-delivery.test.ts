@@ -11,12 +11,12 @@ import { processResponsesStream } from "../../packages/ai/src/transports/openai-
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runAgentLoop } from "../plugin-sdk/agent-core.js";
-import { createDeliveryHarness as setup } from "./embedded-agent-subscribe.delivery.test-support.js";
 import {
   createSubscribedSessionHarness,
   emitAssistantTextDelta,
   emitAssistantTextEnd,
   extractTextPayloads,
+  THINKING_TAG_CASES,
   createReasoningFinalAnswerMessage,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import {
@@ -34,6 +34,17 @@ import {
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 type Options = Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId">;
+function setup(options: Options = {}) {
+  const onBlockReply = vi.fn();
+  const harness = createSubscribedSessionHarness({
+    runId: "run",
+    onBlockReply,
+    blockReplyBreak: "text_end",
+    ...options,
+  });
+  onTestFinished(() => harness.subscription.unsubscribe());
+  return { ...harness, onBlockReply, texts: () => extractTextPayloads(onBlockReply.mock.calls) };
+}
 type Harness = ReturnType<typeof setup>;
 function expectSingle(h: Harness, text: string) {
   expect(h.onBlockReply).toHaveBeenCalledTimes(1);
@@ -56,60 +67,6 @@ function block(text: string, id: string, phase?: OpenAiResponsesTextEventPhase) 
   return createOpenAiResponsesTextBlock({ text, id, phase });
 }
 
-function responseItem(id: string, text: string, annotations: unknown[] = []) {
-  return {
-    type: "message",
-    id,
-    role: "assistant",
-    status: "completed",
-    phase: "final_answer",
-    content: [{ type: "output_text", text, annotations }],
-  };
-}
-
-function completedResponse(id: string, output: unknown[]) {
-  return { type: "response.completed", response: { id, status: "completed", output } };
-}
-
-function streamResponses(
-  model: Model<"openai-responses">,
-  wireEvents: AsyncIterable<unknown>,
-  prompt: string,
-  onEvent: NonNullable<Parameters<typeof runAgentLoop>[3]>,
-) {
-  const output = createResponsesAssistantOutput(model);
-  const response = new AssistantMessageEventStream();
-  response.push({ type: "start", partial: output });
-  const producing = processResponsesStream(wireEvents, output, response, model).then(
-    () => {
-      response.push({ type: "done", reason: "stop", message: output });
-      response.end();
-    },
-    (error: unknown) => {
-      response.end({ ...output, stopReason: "error", errorMessage: String(error) });
-      throw error;
-    },
-  );
-  const running = runAgentLoop(
-    [{ role: "user", content: prompt, timestamp: 1 }],
-    { systemPrompt: "", messages: [] },
-    {
-      model,
-      convertToLlm: (messages) =>
-        messages.filter(
-          (message): message is Message =>
-            message.role === "user" ||
-            message.role === "assistant" ||
-            message.role === "toolResult",
-        ),
-    },
-    onEvent,
-    undefined,
-    () => response,
-  );
-  return { output, producing, running };
-}
-
 describe("Responses final delivery", () => {
   it.each(["text_end", "message_end"] as const)(
     "retains the active reply scope when terminal citations enrich an earlier item (%s)",
@@ -121,8 +78,17 @@ describe("Responses final delivery", () => {
         ...makeCompletionsModel(),
         api: "openai-responses",
       };
-      const first = responseItem("msg_alpha", "Alpha");
-      const second = responseItem("msg_beta", "Beta");
+      const output = createResponsesAssistantOutput(model);
+      const item = (id: string, text: string, annotations: unknown[] = []) => ({
+        type: "message",
+        id,
+        role: "assistant",
+        status: "completed",
+        phase: "final_answer",
+        content: [{ type: "output_text", text, annotations }],
+      });
+      const first = item("msg_alpha", "Alpha");
+      const second = item("msg_beta", "Beta");
       const citation = "[Source](https://example.com/source)";
       const secondDelivered = createDeferred();
       async function* wireEvents() {
@@ -136,17 +102,45 @@ describe("Responses final delivery", () => {
         }
         await secondDelivered.promise;
         expect(h.texts()).toEqual(["Alpha", ...(blockReplyBreak === "text_end" ? ["Beta"] : [])]);
-        yield completedResponse("resp_late_source", [
-          responseItem("msg_alpha", "Alpha", [
-            { type: "url_citation", url: "https://example.com/source", title: "Source" },
-          ]),
-          second,
-        ]);
+        yield {
+          type: "response.completed",
+          response: {
+            id: "resp_late_source",
+            status: "completed",
+            output: [
+              item("msg_alpha", "Alpha", [
+                { type: "url_citation", url: "https://example.com/source", title: "Source" },
+              ]),
+              second,
+            ],
+          },
+        };
       }
-      const { output, producing, running } = streamResponses(
-        model,
-        wireEvents(),
-        "Answer with sources.",
+      const response = new AssistantMessageEventStream();
+      response.push({ type: "start", partial: output });
+      const producing = processResponsesStream(wireEvents(), output, response, model).then(
+        () => {
+          response.push({ type: "done", reason: "stop", message: output });
+          response.end();
+        },
+        (error: unknown) => {
+          response.end({ ...output, stopReason: "error", errorMessage: String(error) });
+          throw error;
+        },
+      );
+      const running = runAgentLoop(
+        [{ role: "user", content: "Answer with sources.", timestamp: 1 }],
+        { systemPrompt: "", messages: [] },
+        {
+          model,
+          convertToLlm: (messages) =>
+            messages.filter(
+              (message): message is Message =>
+                message.role === "user" ||
+                message.role === "assistant" ||
+                message.role === "toolResult",
+            ),
+        },
         async (event) => {
           h.emit(event);
           await h.subscription.waitForPendingEvents();
@@ -158,6 +152,8 @@ describe("Responses final delivery", () => {
             secondDelivered.resolve();
           }
         },
+        undefined,
+        () => response,
       );
       try {
         await Promise.all([producing, running]);
@@ -197,15 +193,19 @@ describe("Responses final delivery", () => {
       id: "item-a",
       signaturePhase: "final_answer",
     });
-    h.start(base);
+    h.emit({ type: "message_start", message: base });
     for (const [contentIndex, item] of items.entries()) {
       const partial = createOpenAiResponsesPartial({ ...item, signaturePhase: "final_answer" });
       for (const type of ["text_delta", "text_end"] as const) {
-        h.update(partial, {
-          type,
-          contentIndex,
-          ...(type === "text_delta" ? { delta: item.text } : { content: item.text }),
-          partial,
+        h.emit({
+          type: "message_update",
+          message: partial,
+          assistantMessageEvent: {
+            type,
+            contentIndex,
+            ...(type === "text_delta" ? { delta: item.text } : { content: item.text }),
+            partial,
+          },
         });
       }
       await h.subscription.waitForPendingEvents();
@@ -216,8 +216,10 @@ describe("Responses final delivery", () => {
       content: items.map(({ text, id }) => block(text, id, "final_answer")),
     };
     for (let repeat = 0; repeat < 2; repeat++) {
-      h.end(message);
-      await h.flush(["Alpha", "Beta"], false, 2);
+      h.emit({ type: "message_end", message });
+      await h.subscription.waitForPendingEvents();
+      expect(h.texts()).toEqual(["Alpha", "Beta"]);
+      expect(h.onBlockReply).toHaveBeenCalledTimes(2);
     }
   });
 
@@ -240,8 +242,16 @@ describe("Responses final delivery", () => {
     "preserves $name across late Responses phase updates",
     async ({ prefix, audioAsVoice, expectedPrefix = "", recoveryPrefix, queuedDeltas = [] }) => {
       const model: Model<"openai-responses"> = {
-        ...makeCompletionsModel({ id: "gpt-5.5", name: "GPT-5.5" }),
+        id: "gpt-5.5",
+        name: "GPT-5.5",
         api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
       };
       const answer = "Answer".repeat(32);
       const expected = expectedPrefix + answer;
@@ -270,7 +280,14 @@ describe("Responses final delivery", () => {
         };
         await reanchorProcessed.promise;
         const text = prefix + queuedDeltas.join("") + recoveryPrefix + answer;
-        const finalItem = responseItem("msg_answer", text);
+        const finalItem = {
+          type: "message",
+          id: "msg_answer",
+          role: "assistant",
+          status: "completed",
+          phase: "final_answer",
+          content: [{ type: "output_text", text, annotations: [] }],
+        };
         if (queuedDeltas.length > 0) {
           for (const delta of queuedDeltas) {
             yield { type: "response.output_text.delta", output_index: 0, delta };
@@ -278,15 +295,41 @@ describe("Responses final delivery", () => {
           yield { type: "response.output_item.done", output_index: 0, item: finalItem };
           phaseProcessed.resolve();
         }
-        yield completedResponse("resp_phase_recovery", [
-          finalItem,
-          { type: "reasoning", id: "rs_reanchor", summary: [] },
-        ]);
+        yield {
+          type: "response.completed",
+          response: {
+            id: "resp_phase_recovery",
+            status: "completed",
+            output: [finalItem, { type: "reasoning", id: "rs_reanchor", summary: [] }],
+          },
+        };
       }
-      const { producing, running } = streamResponses(
-        model,
-        wireEvents(),
-        "Give the answer.",
+      const output = createResponsesAssistantOutput(model);
+      const response = new AssistantMessageEventStream();
+      response.push({ type: "start", partial: output });
+      const producing = processResponsesStream(wireEvents(), output, response, model).then(
+        () => {
+          response.push({ type: "done", reason: "stop", message: output });
+          response.end();
+        },
+        (error: unknown) => {
+          response.end({ ...output, stopReason: "error", errorMessage: String(error) });
+          throw error;
+        },
+      );
+      const running = runAgentLoop(
+        [{ role: "user", content: "Give the answer.", timestamp: 1 }],
+        { systemPrompt: "", messages: [] },
+        {
+          model,
+          convertToLlm: (messages) =>
+            messages.filter(
+              (message): message is Message =>
+                message.role === "user" ||
+                message.role === "assistant" ||
+                message.role === "toolResult",
+            ),
+        },
         async (event) => {
           emit(event);
           await subscription.waitForPendingEvents();
@@ -309,6 +352,8 @@ describe("Responses final delivery", () => {
             expect(onPartialReply).not.toHaveBeenCalled();
           }
         },
+        undefined,
+        () => response,
       );
       try {
         await Promise.all([producing, running]);
@@ -332,7 +377,7 @@ describe("Responses final delivery", () => {
     const h = setup({ onAgentEvent, suppressLiveStreamOutput: true });
     const base = createOpenAiResponsesPartial({ text: "", id: "answer-0" });
     const texts = ["First", "Second"];
-    h.start(base);
+    h.emit({ type: "message_start", message: base });
     for (const [contentIndex, delta] of texts.entries()) {
       const partial = {
         ...base,
@@ -340,15 +385,22 @@ describe("Responses final delivery", () => {
           .slice(0, contentIndex + 1)
           .map((text, index) => block(text, `answer-${index}`, "final_answer")),
       };
-      h.update(partial, { type: "text_delta", contentIndex, delta, partial });
+      h.emit({
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: { type: "text_delta", contentIndex, delta, partial },
+      });
       await h.subscription.waitForPendingEvents();
       expect(h.onBlockReply).not.toHaveBeenCalled();
       expect(h.subscription.assistantTexts).toEqual([]);
     }
     expect(onAgentEvent).not.toHaveBeenCalled();
-    h.end({
-      ...base,
-      content: texts.map((text, index) => block(text, `answer-${index}`, "final_answer")),
+    h.emit({
+      type: "message_end",
+      message: {
+        ...base,
+        content: texts.map((text, index) => block(text, `answer-${index}`, "final_answer")),
+      },
     });
     await h.subscription.waitForPendingEvents();
     expectSingle(h, "First\nSecond");
@@ -367,9 +419,10 @@ describe("terminal visible replies", () => {
       arguments: { action: "send", target: "test-target", message: "Visible reply." },
     });
     const message = { ...textAssistant(`<final>${encoded}</final>`), api: "openai-completions" };
-    h.start(message);
-    h.end(message);
-    await h.flush(["Visible reply."]);
+    h.emit({ type: "message_start", message });
+    h.emit({ type: "message_end", message });
+    await h.subscription.waitForPendingEvents();
+    expect(h.texts()).toEqual(["Visible reply."]);
     for (const [payload] of h.onBlockReply.mock.calls) {
       expect(payload.replyToId).toBeUndefined();
       expect(payload.replyToCurrent).toBeFalsy();
@@ -391,7 +444,7 @@ describe("terminal visible replies", () => {
       id: "item-final-code",
       signaturePhase: "final_answer",
     });
-    h.start({ ...message, content: [] });
+    h.emit({ type: "message_start", message: { ...message, content: [] } });
     {
       let accumulatedText = "";
       for (const delta of ["    ", "const value = 1;\n", "    use(value);"]) {
@@ -400,11 +453,15 @@ describe("terminal visible replies", () => {
           ...message,
           content: message.content.map((part) => ({ ...part, text: accumulatedText })),
         };
-        h.update(partial, { type: "text_delta", contentIndex: 0, delta, partial });
+        h.emit({
+          type: "message_update",
+          message: partial,
+          assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial },
+        });
         await h.subscription.waitForPendingEvents();
       }
     }
-    h.end(message);
+    h.emit({ type: "message_end", message });
     await h.subscription.waitForPendingEvents();
     for (const texts of [h.texts(), h.subscription.assistantTexts]) {
       expect
@@ -425,9 +482,9 @@ describe("terminal visible replies", () => {
   it("does not replay a source range assembled from multiple streamed chunks", async () => {
     const h = setup({ blockReplyChunking: { minChars: 1, maxChars: 4 } });
     const text = "aaaaaaaaaaaa";
-    h.start();
+    h.emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit: h.emit, delta: text });
-    h.end(textAssistant(text));
+    h.emit({ type: "message_end", message: textAssistant(text) });
     expect(h.texts()).toEqual(["aaaa", "aaaa", "aaaa"]);
     emitAssistantTextEnd({ emit: h.emit, content: text });
     await Promise.resolve();
@@ -436,7 +493,7 @@ describe("terminal visible replies", () => {
 
   it("delivers the full final text when it extends suppressed commentary", async () => {
     const h = setup();
-    h.start();
+    h.emit({ type: "message_start", message: { role: "assistant" } });
     responsePair(h, "Hello", "item_commentary", "commentary");
     await Promise.resolve();
     expect(h.onBlockReply).not.toHaveBeenCalled();
@@ -447,15 +504,18 @@ describe("terminal visible replies", () => {
 
   it("delivers the final answer at message_end after streamed commentary", async () => {
     const h = setup();
-    h.start();
+    h.emit({ type: "message_start", message: { role: "assistant" } });
     responsePair(h, "Working...", "item_commentary", "commentary");
     await Promise.resolve();
-    h.end({
-      role: "assistant",
-      content: [
-        block("Working...", "item_commentary", "commentary"),
-        block("Done.", "item_final", "final_answer"),
-      ],
+    h.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [
+          block("Working...", "item_commentary", "commentary"),
+          block("Done.", "item_final", "final_answer"),
+        ],
+      },
     });
     expectSingle(h, "Done.");
   });
@@ -466,59 +526,117 @@ function subscribe(options: Options = {}) {
   onTestFinished(() => harness.subscription.unsubscribe());
   return harness;
 }
-describe("reasoning delivery", () => {
-  it("keeps reasoning deduplicated across distinct Responses answer items", () => {
-    const h = setup({ reasoningMode: "on" });
-    const thinking = { type: "thinking", thinking: "Because it helps" };
-    const message = { role: "assistant", content: [thinking] };
-    h.start(message);
-    h.textUpdate(message, "thinking_end", thinking.thinking);
-    responsePair(h, "Alpha", "item_alpha");
-    responsePair(h, "Beta", "item_beta");
-    h.end({
-      role: "assistant",
-      content: [thinking, block("Alpha", "item_alpha"), block("Beta", "item_beta")],
-    });
-    expect(h.texts()).toEqual(["Because it helps", "Alpha", "Beta"]);
-  });
+function blockHarness(options: Options = {}) {
+  const onBlockReply = vi.fn();
+  return { ...subscribe({ onBlockReply, blockReplyBreak: "text_end", ...options }), onBlockReply };
+}
 
+describe("reasoning delivery", () => {
   it.each(["text_end", "message_end"] as const)(
-    "orders and deduplicates native reasoning through %s and resets for the next message",
+    "delivers completed native reasoning before %s answers without repeating it at message_end",
     (blockReplyBreak) => {
-      const h = setup({ blockReplyBreak, reasoningMode: "on" });
-      const thoughts =
-        blockReplyBreak === "text_end" ? ["First thought", "Second thought"] : ["First thought"];
-      for (const answer of ["First answer", "Next answer"]) {
-        const message: TestAssistant = { role: "assistant", content: [] };
-        h.start(message);
-        for (const thought of thoughts) {
-          message.content.push({ type: "thinking", thinking: thought });
-          h.textUpdate(message, "thinking_end", thought, message.content.length - 1);
-        }
-        message.content.push({ type: "text", text: answer });
-        h.textUpdate(message, "text_delta", answer, message.content.length - 1);
-        h.textUpdate(message, "text_end", answer, message.content.length - 1);
-        h.end(message);
-      }
-      expect(h.onBlockReply.mock.calls.map(([payload]) => payload)).toEqual(
-        ["First answer", "Next answer"].flatMap((answer) =>
-          thoughts
-            .map((text) => expect.objectContaining({ text, isReasoning: true }))
-            .concat(expect.objectContaining({ text: answer })),
-        ),
-      );
+      const { emit, onBlockReply } = blockHarness({ blockReplyBreak, reasoningMode: "on" });
+      const thinking = { type: "thinking" as const, thinking: "Because it helps" };
+      const message: TestAssistant = { role: "assistant", content: [thinking] };
+      emit({ type: "message_start", message });
+      emitProviderUpdate(emit, message, {
+        type: "thinking_end",
+        content: thinking.thinking,
+        contentIndex: 0,
+      });
+      message.content = [thinking, { type: "text", text: "Final answer" }];
+      emitProviderUpdate(emit, message, {
+        type: "text_delta",
+        delta: "Final answer",
+        contentIndex: 1,
+      });
+      emitProviderUpdate(emit, message, {
+        type: "text_end",
+        content: "Final answer",
+        contentIndex: 1,
+      });
+      emit({ type: "message_end", message });
+      expect(onBlockReply.mock.calls.map(([payload]) => payload)).toEqual([
+        expect.objectContaining({ text: "Because it helps", isReasoning: true }),
+        expect.objectContaining({ text: "Final answer" }),
+      ]);
     },
   );
 
   it.each(["text_end", "message_end"] as const)(
-    "promotes terminal reasoning and delivers it before %s answer blocks",
+    "orders terminal-only reasoning before %s answer blocks",
     (blockReplyBreak) => {
-      const { emit, onBlockReply } = setup({
-        blockReplyBreak,
+      const { emit, onBlockReply } = blockHarness({ blockReplyBreak, reasoningMode: "on" });
+      emit({ type: "message_end", message: createReasoningFinalAnswerMessage() });
+      expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+        "Because it helps",
+        "Final answer",
+      ]);
+    },
+  );
+
+  it("keeps reasoning deduplicated across distinct Responses answer items", () => {
+    const h = setup({ reasoningMode: "on" });
+    const thinking = { type: "thinking", thinking: "Because it helps" };
+    const message = { role: "assistant", content: [thinking] };
+    h.emit({ type: "message_start", message });
+    h.emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "thinking_end", content: thinking.thinking },
+    });
+    responsePair(h, "Alpha", "item_alpha");
+    responsePair(h, "Beta", "item_beta");
+    h.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [thinking, block("Alpha", "item_alpha"), block("Beta", "item_beta")],
+      },
+    });
+    expect(h.texts()).toEqual(["Because it helps", "Alpha", "Beta"]);
+  });
+
+  it("does not repeat accumulated reasoning and resets delivery for the next message", () => {
+    const { emit, onBlockReply } = blockHarness({ reasoningMode: "on" });
+    for (const answer of ["First answer", "Next answer"]) {
+      const message: TestAssistant = { role: "assistant", content: [] };
+      emit({ type: "message_start", message });
+      for (const thought of ["First thought", "Second thought"]) {
+        message.content.push({ type: "thinking", thinking: thought });
+        emitProviderUpdate(emit, message, {
+          type: "thinking_end",
+          content: thought,
+          contentIndex: message.content.length - 1,
+        });
+      }
+      message.content.push({ type: "text", text: answer });
+      emitProviderUpdate(emit, message, {
+        type: "text_end",
+        content: answer,
+        contentIndex: message.content.length - 1,
+      });
+      emit({ type: "message_end", message });
+    }
+    expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+      "First thought",
+      "Second thought",
+      "First answer",
+      "First thought",
+      "Second thought",
+      "Next answer",
+    ]);
+  });
+
+  it.each(THINKING_TAG_CASES.filter(({ tag }) => tag === "mm:think"))(
+    "promotes $tag reasoning to thinking blocks before delivering the answer",
+    ({ open, close }) => {
+      const { emit, onBlockReply } = blockHarness({
+        blockReplyBreak: "message_end",
         reasoningMode: "on",
       });
       const message: TestAssistant = textAssistant(
-        "<mm:think>\nBecause it helps\n</mm:think>\n\nFinal answer",
+        `${open}\nBecause it helps\n${close}\n\nFinal answer`,
       );
       emit({ type: "message_end", message });
       expect(onBlockReply).toHaveBeenCalledTimes(2);
@@ -548,38 +666,50 @@ describe("reasoning delivery", () => {
 });
 
 describe("unphased provider text delivery", () => {
-  it("streams unphased pre-tool narration once without retroactive phase changes", async () => {
-    const api = "openai-completions";
-    const narration = "Importing ORDER-1234 into the tracker… ";
-    const toolName = "import_order";
-    const args = { id: "ORDER-1234" };
-    const { emit, subscription, onBlockReply } = setup({
-      blockReplyChunking: { minChars: 4, maxChars: 200 },
-    });
-    emit({ type: "message_start", message: textMessage("", api) });
-    emitProviderUpdate(emit, textMessage(narration, api), {
-      type: "text_delta",
-      delta: narration,
-    });
-    emitProviderUpdate(emit, textMessage(narration, api), {
-      type: "text_end",
-      content: narration,
-    });
-    await subscription.waitForPendingEvents();
-    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([narration.trimEnd()]);
-    emit({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        api,
-        stopReason: "toolUse",
-        content: [{ type: "text", text: narration }, toolBlock("tool-1", toolName)],
-      },
-    });
-    emit({ type: "tool_execution_start", toolName, toolCallId: "tool-1", args });
-    await subscription.waitForPendingEvents();
-    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([narration.trimEnd()]);
-  });
+  it.each([
+    {
+      api: "anthropic-messages",
+      narration: "Let me check the files before I answer. ",
+      toolName: "bash",
+      args: { command: "ls" },
+    },
+    {
+      api: "openai-completions",
+      narration: "Importing ORDER-1234 into the tracker… ",
+      toolName: "import_order",
+      args: { id: "ORDER-1234" },
+    },
+  ] as const)(
+    "streams $api pre-tool narration once without retroactive phase changes",
+    async ({ api, narration, toolName, args }) => {
+      const { emit, subscription, onBlockReply } = blockHarness({
+        blockReplyChunking: { minChars: 4, maxChars: 200 },
+      });
+      emit({ type: "message_start", message: textMessage("", api) });
+      emitProviderUpdate(emit, textMessage(narration, api), {
+        type: "text_delta",
+        delta: narration,
+      });
+      emitProviderUpdate(emit, textMessage(narration, api), {
+        type: "text_end",
+        content: narration,
+      });
+      await subscription.waitForPendingEvents();
+      expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([narration.trimEnd()]);
+      emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          api,
+          stopReason: "toolUse",
+          content: [{ type: "text", text: narration }, toolBlock("tool-1", toolName)],
+        },
+      });
+      emit({ type: "tool_execution_start", toolName, toolCallId: "tool-1", args });
+      await subscription.waitForPendingEvents();
+      expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([narration.trimEnd()]);
+    },
+  );
 
   it.each([true, false])(
     "preserves completions text around reasoning (interleaved: %s)",
@@ -613,7 +743,7 @@ describe("unphased provider text delivery", () => {
       emit({ type: "message_start", message: output });
       await processCompletionsStream(chunks(), output, model, {
         push(event) {
-          emitProviderUpdate(emit, output, event);
+          emit({ type: "message_update", message: output, assistantMessageEvent: event });
         },
       });
       emit({ type: "message_end", message: output });
