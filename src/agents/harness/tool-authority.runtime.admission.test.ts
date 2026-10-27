@@ -61,6 +61,8 @@ async function withOperation(
 
 const publish = (handle: Parameters<typeof publishHarnessActiveEmbeddedRun>[1]) =>
   publishHarnessActiveEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile);
+const preparedHandle = (toolAuthorityFingerprint: string | undefined) =>
+  createEmbeddedRunHandle({ runId: attempt.runId, toolAuthorityFingerprint });
 const joinObservation = () =>
   captureReplyMessageJoinObservation({ run: attempt, sessionEntry: undefined });
 
@@ -76,30 +78,6 @@ function observeReads<T extends object>(target: T, reads: AuthorityRead[]): T {
 }
 
 describe("host-prepared embedded tool authority", () => {
-  it("enters the admitted owner without materializing unrelated internal run payload", async () => {
-    await withOperation(async ({ admittedRunContext, operation }) => {
-      const readContinuation = vi.fn(() => ({ prompt: "synthetic continuation" }));
-      const internal = {
-        admittedRunContext,
-        replyOperation: operation,
-        get continuation() {
-          return readContinuation();
-        },
-      };
-      const params: Parameters<typeof withPreparedEmbeddedRunToolAuthority>[1] = Object.freeze({
-        ...attempt,
-        abortSignal: undefined,
-      });
-      await withPreparedEmbeddedRunToolAuthority(internal, params, undefined, async (prepared) => {
-        expect(prepared.replyOperation).toBe(operation);
-        expect(prepared.abortSignal).toBe(operation.abortSignal);
-        expect(prepared.abortSignal?.aborted).toBe(false);
-        expect(params.abortSignal).toBeUndefined();
-      });
-      expect(readContinuation).not.toHaveBeenCalled();
-    });
-  });
-
   it.each([false, true])(
     "preserves requester capture reads with inherited requester=%s",
     async (inherited) => {
@@ -187,41 +165,47 @@ describe("host-prepared embedded tool authority", () => {
   ] as const)(
     "allows direct harness execution only under current prepared authority (%s, %s)",
     async (authority, source) => {
-      let live = true;
-      const check = vi.fn(() => {
-        if (!live) {
-          throw new Error("Plugin grant revoked");
-        }
-      });
+      const revocation = new AbortController();
+      const check = vi.fn(() => revocation.signal.throwIfAborted());
+      const profile = { profileId: "watchdog-person", emails: [], assignedRole: null };
       const operator = createAdmittedRunOperatorAuthority({
         profileId: "watchdog-person",
         scopes: ["operator.write"],
         ...bindPluginGatewayAccessPolicy(
           { authorize: () => ({ assertCurrent: check, signal: new AbortController().signal }) },
           createOwnedTestInstance("watchdog-access"),
-        ).authorize({
-          config: {},
-          profile: { profileId: "watchdog-person", emails: [], assignedRole: null },
-          requiredByRole: true,
-        })!,
+        ).authorize({ config: {}, profile, requiredByRole: true })!,
       });
       await admitted(async ({ admittedRunContext, close }) => {
         const operation = source === "inherited" ? createDirectReplyOperation() : undefined;
+        const readContinuation = vi.fn(() => ({ prompt: "synthetic continuation" }));
+        const internal = {
+          admittedRunContext,
+          replyOperation: operation,
+          get continuation() {
+            return readContinuation();
+          },
+        };
+        const params: Parameters<typeof withPreparedEmbeddedRunToolAuthority>[1] = Object.freeze({
+          ...attempt,
+          abortSignal: undefined,
+        });
         let observed: ReplyOperation | undefined;
         const run = vi.fn(
           async (prepared: {
             replyOperation?: ReplyOperation;
             toolAuthorityFingerprint?: string;
+            abortSignal?: AbortSignal;
           }) => {
             observed = prepared.replyOperation;
             expect(observed).toBe(getSessionControllerOperation(sessionKey));
             if (operation) {
-              expect(observed).toBe(operation);
+              expect(prepared.replyOperation).toBe(operation);
             }
-            const handle = createEmbeddedRunHandle({
-              runId: attempt.runId,
-              toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
-            });
+            expect(prepared.abortSignal).toBe(observed!.abortSignal);
+            expect(prepared.abortSignal?.aborted).toBe(false);
+            expect(params.abortSignal).toBeUndefined();
+            const handle = preparedHandle(prepared.toolAuthorityFingerprint);
             const watchdog = getGatewayToolCallerIdentity()!.watchdogAttempt!;
             check.mockClear();
             expect(watchdog.progressModel()).toBe(true);
@@ -235,7 +219,7 @@ describe("host-prepared embedded tool authority", () => {
             );
             const cleanup = publish(handle);
             try {
-              live = false; // No abort event: publication must consult the plugin.
+              revocation.abort(new Error("Plugin grant revoked")); // The exposed signal stays live.
               expect(() => publish(handle)).toThrow("no longer active");
               expect(watchdog.isCurrent()).toBe(false);
             } finally {
@@ -246,8 +230,8 @@ describe("host-prepared embedded tool authority", () => {
         );
         try {
           const pending = withPreparedEmbeddedRunToolAuthority(
-            { admittedRunContext, replyOperation: operation },
-            attempt,
+            internal,
+            params,
             (input) => {
               if (authority === "closed-during-preparation") {
                 close();
@@ -271,6 +255,7 @@ describe("host-prepared embedded tool authority", () => {
         } finally {
           operation?.complete();
         }
+        expect(readContinuation).not.toHaveBeenCalled();
         if (authority === "current") {
           await expect(
             observed?.bindToolAuthorityRouteAsync({ provider: "openai", model: "gpt-test" }),
@@ -305,12 +290,7 @@ describe("host-prepared embedded tool authority", () => {
       expect(failedRun).not.toHaveBeenCalled();
       await expect(
         withPreparedEmbeddedRunToolAuthority(internal, attempt, undefined, async (prepared) => {
-          const cleanup = publish(
-            createEmbeddedRunHandle({
-              runId: attempt.runId,
-              toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
-            }),
-          );
+          const cleanup = publish(preparedHandle(prepared.toolAuthorityFingerprint));
           cleanup?.();
           return "retried";
         }),
@@ -397,21 +377,17 @@ describe("host-prepared embedded tool authority", () => {
 
   it("prepares direct successor attempts on one controller and revokes retained attempt authority", async () => {
     await withOperation(async ({ admittedRunContext, operation }) => {
+      const internal = { admittedRunContext, replyOperation: operation };
       let previousCaller: ReturnType<typeof getGatewayToolCallerIdentity>;
       let previousFingerprint: string | undefined;
-      await withPreparedEmbeddedRunToolAuthority(
-        { admittedRunContext, replyOperation: operation },
-        attempt,
-        undefined,
-        async (prepared) => {
-          previousCaller = getGatewayToolCallerIdentity();
-          previousFingerprint = prepared.toolAuthorityFingerprint;
-        },
-      );
+      await withPreparedEmbeddedRunToolAuthority(internal, attempt, undefined, async (prepared) => {
+        previousCaller = getGatewayToolCallerIdentity();
+        previousFingerprint = prepared.toolAuthorityFingerprint;
+      });
       const successorId = `${sessionId}-successor`;
       operation.updateSessionId(successorId);
       await withPreparedEmbeddedRunToolAuthority(
-        { admittedRunContext, replyOperation: operation },
+        internal,
         { ...attempt, sessionId: successorId },
         undefined,
         async (prepared) => {
@@ -419,12 +395,7 @@ describe("host-prepared embedded tool authority", () => {
           await expect(
             withoutGatewayToolCallerIdentity(() =>
               withGatewayToolCallerIdentity(previousCaller, () =>
-                publish(
-                  createEmbeddedRunHandle({
-                    runId: attempt.runId,
-                    toolAuthorityFingerprint: previousFingerprint,
-                  }),
-                ),
+                publish(preparedHandle(previousFingerprint)),
               ),
             ),
           ).rejects.toThrow("no longer active");
