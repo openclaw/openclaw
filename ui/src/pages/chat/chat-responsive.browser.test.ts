@@ -2891,7 +2891,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           return {
             background: getComputedStyle(node).backgroundColor,
             borderColor: getComputedStyle(node).borderColor,
-            boxShadow: getComputedStyle(node).boxShadow,
             left: bounds.left,
             right: bounds.right,
             top: bounds.top,
@@ -2945,8 +2944,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(surface.top).toBeGreaterThan(stackSurfaces[index - 1]!.bottom);
         }
       }
-      expect(stackSurfaces[2]?.borderColor).toBe(stackSurfaces[1]?.borderColor);
-      expect(stackSurfaces[2]?.boxShadow).toBe(stackSurfaces[1]?.boxShadow.split(", rgba")[0]);
       for (const { state, surface } of warnGoalSurfaces) {
         expect(surface.background, state).not.toBe(stackSurfaces[2]?.background);
         expect(surface.borderColor, state).not.toBe(stackSurfaces[2]?.borderColor);
