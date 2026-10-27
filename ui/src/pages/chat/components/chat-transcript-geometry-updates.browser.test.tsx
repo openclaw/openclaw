@@ -195,6 +195,10 @@ it.each([
 ])(
   "commits the cached initial window with $cachedRows footprints and $rowHeight px rows at $offset",
   async ({ offset, rowHeight, cachedRows, expected }) => {
+    const cachedHeight = (key: string) =>
+      key.startsWith("row:v1:") && Number(/geometry-row-(\d+):/.exec(key)?.[1]) >= 100 - cachedRows
+        ? rowHeight
+        : undefined;
     const windows: number[][] = [];
     const observer = new MutationObserver((records) => {
       if (
@@ -219,11 +223,16 @@ it.each([
         offset === null,
         rowHeight,
         {
-          read: (key) =>
-            key.startsWith("row:v1:") &&
-            Number(/geometry-row-(\d+):/.exec(key)?.[1]) >= 100 - cachedRows
-              ? rowHeight
-              : undefined,
+          read: cachedHeight,
+          readRows: () => {
+            const layout = expectDefined(pane?.session, "mounted transcript session").layout;
+            return Object.fromEntries(
+              layout.rows.flatMap((_, index) => {
+                const key = layout["rowLayoutKey"](index);
+                return key && cachedHeight(key) ? [[key, rowHeight]] : [];
+              }),
+            );
+          },
           write: () => {},
           writeRows: () => {},
           invalidateRow: () => {},
