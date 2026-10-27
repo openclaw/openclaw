@@ -28,7 +28,8 @@ which can be started again.
 
 - **Review unlinked claims** files claims that
   [maintenance](/plugins/knowledge/maintenance) left unlinked, creates pages for
-  subjects that deserve one, and records outcomes in page State. It runs on its
+  subjects that deserve one, supersedes status snapshots by their outcome, and
+  records outcomes in page State. It runs on its
   own schedule: weekly on Sundays at 3:45 AM in your time zone by default, or
   nightly at 3:45 AM, after maintenance links what it can. Each run is an agent
   turn over every unlinked claim, so nightly uses more tokens. Maintenance
@@ -74,7 +75,7 @@ Turning on **Review unlinked claims** with the weekly default sends:
 ````text
 Set up the Knowledge scribe "Review unlinked claims" in this conversation. Don't ask questions: nobody is watching this turn.
 
-This scribe reviews Knowledge claims that name no page: it files each one on the right page, creates pages for subjects that deserve one, and folds the outcomes into page State. The knowledge-unlinked-claims skill does the work on each run.
+This scribe reviews Knowledge claims that name no page: it files each one on the right page, creates pages for subjects that deserve one, supersedes status snapshots by their outcome, and folds the outcomes into page State. The knowledge-unlinked-claims skill does the work on each run.
 
 Settings:
 - Runs weekly, Sundays at 3:45 AM America/Los_Angeles (cron `45 3 * * 0`).
@@ -104,7 +105,7 @@ Scheduled run of the Knowledge scribe "Review unlinked claims". Don't ask questi
 Steps:
 1. Call knowledge_status. ...
 2. Follow the "Scribe runs" section of the knowledge-unlinked-claims skill: review every claim that names no page until none is left to decide. ...
-3. End your reply with one line: `Scribe status: on — <one sentence with counts: claims examined, linked, withdrawn and left>`.
+3. End your reply with one line: `Scribe status: on — <one sentence with counts: claims examined, linked, superseded, withdrawn and left>`.
 ...
 ```
 ````

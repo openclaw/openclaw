@@ -175,7 +175,7 @@ function workSettings(setup: ScribeSetup) {
 // What the scribe does, and the skill that does the work.
 const PURPOSE: Record<ScribeId, string> = {
   "unlinked-review":
-    "This scribe reviews Knowledge claims that name no page: it files each one on the right page, creates pages for subjects that deserve one, and folds the outcomes into page State.",
+    "This scribe reviews Knowledge claims that name no page: it files each one on the right page, creates pages for subjects that deserve one, supersedes status snapshots by their outcome, and folds the outcomes into page State.",
   conversations:
     "This scribe reads the owner's conversations and saves the decisions, preferences, commitments and lessons in them to Knowledge.",
   memory:
@@ -194,7 +194,7 @@ const WORK: Record<ScribeId, string> = {
 
 // What the closing sentence counts after the work.
 const COUNTS: Record<ScribeId, string> = {
-  "unlinked-review": "claims examined, linked, withdrawn and left",
+  "unlinked-review": "claims examined, linked, superseded, withdrawn and left",
   conversations: "conversations learned and skipped, claims and pages written",
   memory: "files read, items saved, already known and skipped",
 };

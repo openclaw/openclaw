@@ -134,5 +134,9 @@ Conversation partitions are not reviewed.
 
 The `knowledge-unlinked-claims` skill is the agent workflow for the claims relink
 leaves unlinked. It chooses subject pages with judgment, creates pages for
-substantial missing subjects, retires exact duplicates and explicitly replaced
-claims, and folds durable outcomes into page State.
+substantial missing subjects, retires exact duplicates, supersedes explicitly
+replaced claims and status snapshots by their outcome, and folds durable
+outcomes into page State. The same skill runs as a claim consolidation review
+over other scopes when you ask for one: the claims on one hub or oversized page,
+or the claims about one subject since a date. Scribe runs only review the
+unlinked residue.
