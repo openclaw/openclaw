@@ -884,6 +884,11 @@ ineligible, and model-hidden skills are not added by search. Existing explicit
 user references remain separate. Search does not query ClawHub, install a
 skill, or grant permission to execute its commands.
 
+When Tool Search defers these tools in its default `tools` mode, call
+`dispatch_action` with `{"id":"skills_read","args":{"name":"<name>"}}` or
+`{"id":"skills_search","args":{"query":"<query>"}}`. The Skills prompt selects
+this invocation automatically; directly callable tools keep their normal syntax.
+
 Instruction-body indexing requires the effective native `skills_read` tool.
 When reads are denied or shadowed, search uses metadata only and performs no
 instruction-body reads. Revocation also excludes cached body matches and rejects

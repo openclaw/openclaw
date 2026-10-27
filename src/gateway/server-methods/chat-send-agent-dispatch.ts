@@ -221,12 +221,15 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
         }
         phase?.mark("runAdmission");
+        using injectionPhase = diagnostics.scope("detail.run_admission.steer_prepare");
         messageInjectionAttempt = await withCurrentUserTurnInput(
           userTurnRecorder,
           beginCapturedMessageInjection,
         );
+        injectionPhase?.mark("detail.run_admission.steer_settlement");
         acceptedMessageInjection = await settleChatSendMessageInjection(messageInjectionAttempt);
         messageInjectionAttempt = await injectionDisposition.observe(messageInjectionAttempt);
+        injectionPhase?.finish();
         return await (acceptedMessageInjection
           ? operation()
           : withCurrentUserTurnInput(userTurnRecorder, operation));
@@ -278,6 +281,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           }
           const assertWorkspaceRunOwnership = workspacePreparation?.assertCurrent;
           if (messageInjectionAttempt) {
+            using _ = diagnostics.scope("detail.run_admission.steer_finalize");
             const injected = await finalizeAcceptedChatSendMessageInjection({
               attempt: messageInjectionAttempt,
               sourceRef: admission.sourceRef,

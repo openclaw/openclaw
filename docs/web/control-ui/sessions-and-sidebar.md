@@ -369,7 +369,10 @@ enablement and sizing.
 The **Filter & sort** popover keeps **Filters** and **Display** in one panel.
 **Filters** controls status, automation, and system sessions. **Display**
 controls grouping, sorting, message previews, and empty groups. Choices take
-effect immediately. The filter button shows a dot only when **Status** differs from **Active**. **Reset** appears at the right of the Filters header
+effect immediately. The filter button names the current **Status**, including the
+default **Active**. Choose **All** under **Status** to include archived and snoozed
+conversations without clearing the current owner or agent selection. The button
+also shows a dot when Status differs from Active. **Reset** appears at the right of the Filters header
 whenever any visible Filters or Display setting differs from its default. It restores
 all visible panel settings: Active status, automation and system sessions off,
 Custom groups, Created sort, When filtering for empty groups, and message previews off.

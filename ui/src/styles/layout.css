@@ -1008,20 +1008,14 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   flex: 0 0 auto;
 }
 
-.sidebar-session-toolbar__button.sidebar-session-sort {
-  margin-left: auto;
-}
-
 .sidebar-session-toolbar__button:hover,
 .sidebar-session-toolbar__button:focus-visible,
 .sidebar-session-toolbar__button[aria-haspopup][aria-expanded="true"] {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+  opacity: 1;
 }
 
-/* The filter summary names the active filter; the funnel only keeps its dot. */
-.sidebar-session-toolbar__button:hover,
-.sidebar-session-toolbar__button:focus-visible,
-.sidebar-session-toolbar__button[aria-haspopup][aria-expanded="true"],
 .sidebar-session-toolbar__button.sidebar-session-sort--filtered {
   color: var(--text);
   opacity: 1;
@@ -1333,6 +1327,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .sidebar-session-sort {
   position: relative;
+  margin-left: auto;
+  font-size: 12px;
 }
 
 .sidebar-session-sort--filtered::after {
@@ -1493,6 +1489,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-session-catalog-host__label,
 .session-menu__text,
 .sidebar-session-catalog-project__label,
+.sidebar-session-sort__status,
 .activity-feed__selected-person,
 .activity-feed__git-label,
 .activity-feed__session-headline,

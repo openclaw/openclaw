@@ -636,10 +636,6 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -653,9 +649,8 @@
   flex: 1 1 100%;
 }
 
-.plugins-row-message--error {
-  background: var(--danger-subtle);
-  color: var(--danger);
+.plugin-catalog-detail__panel > .plugins-row-message {
+  margin-bottom: var(--space-4);
 }
 
 .plugins-row-message--info {
@@ -664,6 +659,8 @@
   border: 0;
   background: transparent;
   color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.45;
   white-space: normal;
 }
 
