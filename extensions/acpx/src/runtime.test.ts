@@ -196,20 +196,15 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it.each([
-    {
-      stderr:
-        "noise\nUnhandled error during session/new: deployment missing token=[REDACTED] sk-testsecret1234567890\n",
-      expected: "deployment missing",
-      forbidden: "sk-testsecret1234567890",
-    },
-    {
-      stderr: `🚀${"a".repeat(5_999)}`,
-      expected: `Internal error: ${"a".repeat(5_999)}`,
-      forbidden: "\ude80",
-    },
+    [
+      "noise\nUnhandled error during session/new: deployment missing token=[REDACTED] sk-testsecret1234567890\n",
+      "deployment missing",
+      "sk-testsecret1234567890",
+    ],
+    [`🚀${"a".repeat(5_999)}`, `Internal error: ${"a".repeat(5_999)}`, "\ude80"],
   ])(
-    "reports a redacted, UTF-16-safe initialization diagnostic ($forbidden)",
-    async ({ stderr, expected, forbidden }) => {
+    "reports a redacted, UTF-16-safe initialization diagnostic (%#)",
+    async (stderr, expected, forbidden) => {
       const wrapperRoot = tempDirs.make("openclaw-acpx-runtime-");
       const { runtime, delegate, leaseStore } = leasedRuntime(undefined, undefined, wrapperRoot);
       vi.spyOn(delegate, "ensureSession").mockImplementation(async () => {
