@@ -88,18 +88,14 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: replaceConfig,
 }));
 
-vi.mock("../agents/agent-create.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/agent-create.js")>(
-    "../agents/agent-create.js",
-  )),
+vi.mock("../agents/agent-create.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-create.js")>()),
   checkAgentCreationGate: creationGate,
   createAgent,
 }));
 
-vi.mock("../plugins/install-record-commit.js", async () => ({
-  ...(await vi.importActual<typeof import("../plugins/install-record-commit.js")>(
-    "../plugins/install-record-commit.js",
-  )),
+vi.mock("../plugins/install-record-commit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/install-record-commit.js")>()),
   commitConfigWithPendingPluginInstalls: commitConfig,
   transformConfigWithPendingPluginInstalls: transformConfig,
 }));
@@ -204,11 +200,7 @@ describe("agents add command", () => {
   }
 
   function setConfigSnapshot(config: Record<string, unknown>): void {
-    readConfig.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config,
-      sourceConfig: config,
-    });
+    readConfig.mockResolvedValue({ ...baseConfigSnapshot, config, sourceConfig: config });
   }
 
   it.each([false, true])(
