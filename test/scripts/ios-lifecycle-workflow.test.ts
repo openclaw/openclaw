@@ -269,13 +269,6 @@ describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => 
 });
 
 describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", () => {
-  const authClasses = [
-    "CloudflareAccessClientTests",
-    "CloudflareAccessBrowserPresenterTests",
-    "CloudflareAccessTransferTests",
-    "CloudflareAccessSessionStoreTests",
-  ];
-
   it.each(["smoke", "tests"])("executes auth and admitted lifecycle/UI suites in %s", (phase) => {
     const { result, commands } = runSimulatorStep("voice", [...configuredSteps, iosStep], {
       IOS_CI_PHASE: phase,
@@ -292,7 +285,10 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       "-only-testing:OpenClawTests/ChatComposerTextViewIOSTests",
     ]);
     const authSelectors = selectors("OpenClawTests", [
-      ...authClasses,
+      "CloudflareAccessClientTests",
+      "CloudflareAccessBrowserPresenterTests",
+      "CloudflareAccessTransferTests",
+      "CloudflareAccessSessionStoreTests",
       "GatewayConnectionSecurityTests",
     ]);
     expect(tests[0]?.args).toEqual(expect.arrayContaining(authSelectors));
@@ -620,11 +616,13 @@ print(json.dumps({"error": error, "commands": commands, "runs": runs, "bootTimeo
 
 describe("iOS Access process restart proof", () => {
   it.each([
-    { format: 0, prepared: false },
-    { format: 2, prepared: false },
-    { format: 1, prepared: true },
-  ])("preserves two fixed process repetitions (%j)", ({ format, prepared }) => {
-    const proof = runRestartProof("ready", format, prepared);
+    { mode: "ready", format: 0, prepared: false },
+    { mode: "ready", format: 2, prepared: false },
+    { mode: "ready", format: 1, prepared: true },
+    { mode: "already-booted", format: 1, prepared: false },
+    { mode: "execution-count", format: 1, prepared: false },
+  ])("preserves two repetitions (%j)", ({ mode, format, prepared }) => {
+    const proof = runRestartProof(mode, format, prepared);
     const { commands, runs } = proof;
     expect(proof).toMatchObject({ error: null, bootTimeouts: [120], receiptRetained: false });
     expect(runs).toHaveLength(1);
@@ -671,14 +669,6 @@ describe("iOS Access process restart proof", () => {
     ]) {
       expect(commands.some((args) => args.includes(operation))).toBe(false);
     }
-  });
-
-  it.each(["already-booted", "execution-count"])("accepts verified %s repetitions", (mode) => {
-    expect(runRestartProof(mode)).toMatchObject({
-      error: null,
-      bootTimeouts: [120],
-      receiptRetained: false,
-    });
   });
 
   it("rejects xcodebuild failure even when the result records and final receipt would pass", () => {
