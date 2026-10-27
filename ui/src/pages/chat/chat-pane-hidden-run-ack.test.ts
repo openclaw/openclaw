@@ -8,7 +8,7 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
-it("batches 150 folded read acknowledgements without concurrent requests", async () => {
+it("deduplicates repeated pane reads while hidden-run acknowledgements are pending", async () => {
   const htmlStyle = document.documentElement.getAttribute("style");
   onTestFinished(() => {
     if (htmlStyle === null) {

@@ -148,14 +148,17 @@ suite.define(() => {
         if (!traffic) {
           throw new Error("Hidden-run request probe was not installed");
         }
-        const individual = (await gateway.getRequests("sessions.patch")).filter((request) =>
-          String(support.requireRecord(request.params).key).startsWith(runPrefix),
-        );
-        const batch = (await gateway.getRequests("sessions.patchMany")).filter((request) =>
-          (support.requireRecord(request.params).targets as { key: string }[]).some((target) =>
-            target.key.startsWith(runPrefix),
+        const readRequests = async () => ({
+          individual: (await gateway.getRequests("sessions.patch")).filter((request) =>
+            String(support.requireRecord(request.params).key).startsWith(runPrefix),
           ),
-        );
+          batch: (await gateway.getRequests("sessions.patchMany")).filter((request) =>
+            (support.requireRecord(request.params).targets as { key: string }[]).some((target) =>
+              target.key.startsWith(runPrefix),
+            ),
+          ),
+        });
+        const { individual, batch } = await readRequests();
         console.info("hidden-run acknowledgement traffic", entry, {
           individual: individual.length,
           batches: traffic.batches,
@@ -211,18 +214,9 @@ suite.define(() => {
             peak: 1,
             batches: [100, 50],
           });
-          expect(
-            (await gateway.getRequests("sessions.patch")).filter((request) =>
-              String(support.requireRecord(request.params).key).startsWith(runPrefix),
-            ),
-          ).toHaveLength(0);
-          expect(
-            (await gateway.getRequests("sessions.patchMany")).filter((request) =>
-              (support.requireRecord(request.params).targets as { key: string }[]).some((target) =>
-                target.key.startsWith(runPrefix),
-              ),
-            ),
-          ).toHaveLength(2);
+          const repeatedRequests = await readRequests();
+          expect(repeatedRequests.individual).toHaveLength(0);
+          expect(repeatedRequests.batch).toHaveLength(2);
         }
         for (const request of batch) {
           const params = support.requireRecord(request.params);
