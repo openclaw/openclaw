@@ -38,6 +38,7 @@ import {
 } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { bindCurrentPluginInstanceCallbacks } from "../../plugins/plugin-instance-scope.js";
 import { copyChannelParticipantAdmissionEvidence } from "../message-access/admission-evidence.js";
 import { resolveMessageReceiptPrimaryId } from "../message/receipt.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
@@ -381,6 +382,10 @@ async function dispatchChannelTurnWithDeliveryOwner(
 ): Promise<ChannelTurnResult> {
   const [params, ownership] = args;
   const replyPipeline = resolveAssembledReplyPipeline(params);
+  replyPipeline.dispatcherOptions = bindCurrentPluginInstanceCallbacks(
+    replyPipeline.dispatcherOptions,
+  );
+  replyPipeline.replyOptions = bindCurrentPluginInstanceCallbacks(replyPipeline.replyOptions);
   const adoption = params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
   const delivery: AnyChannelDeliveryAdapter =
     params.admission?.kind === "observeOnly"
@@ -681,7 +686,6 @@ async function dispatchChannelTurnWithDeliveryOwner(
         } catch (error: unknown) {
           dispatchError = error;
         }
-
         let settlementError: unknown;
         try {
           await settleChannelDeliveryAttempts(

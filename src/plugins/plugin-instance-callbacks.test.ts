@@ -1,9 +1,12 @@
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { runInNewContext } from "node:vm";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { getPluginValueInstance } from "./plugin-instance-scope.js";
+import {
+  bindCurrentPluginInstanceCallbacks,
+  getPluginValueInstance,
+} from "./plugin-instance-scope.js";
 import {
   createOwnedTestInstance,
   createTestInstance,
@@ -12,6 +15,123 @@ import {
   trackCompletion,
 } from "./plugin-instance.test-support.js";
 import { getPluginRuntimeGatewayRequestScope as getScope } from "./runtime/gateway-request-scope.js";
+
+describe("host callback records", () => {
+  it("preserves receivers, data, result identity and async owner continuations", async () => {
+    const owner = createTestInstance("channel");
+    const provider = createTestInstance("provider");
+    const runtime = createPluginRuntimeStore<string>("uninitialized callback owner");
+    owner.run(() => runtime.setRuntime("channel"));
+    const receiver = {};
+    const data = {};
+    const result = {};
+    const symbol = Symbol("callback");
+    const source = Object.freeze({
+      data,
+      [symbol](this: object, input: object) {
+        expect(this).toBe(receiver);
+        expect(input).toBe(data);
+        expect(runtime.getRuntime()).toBe("channel");
+        return result;
+      },
+      async progress() {
+        await Promise.resolve();
+        expect(runtime.getRuntime()).toBe("channel");
+        return result;
+      },
+    });
+    try {
+      const bound = owner.run(() => bindCurrentPluginInstanceCallbacks(source));
+      expect(bound.data).toBe(data);
+      expect(provider.run(() => bound[symbol].call(receiver, data))).toBe(result);
+      expect(await provider.run(() => bound.progress())).toBe(result);
+      expect(provider.run(() => runtime.tryGetRuntime())).toBeNull();
+      owner.quiesce();
+      expect(() => bound.progress()).toThrow("reloaded or disabled");
+    } finally {
+      await Promise.all([owner.dispose(), provider.dispose()]);
+    }
+  });
+
+  it("preserves private fields for own and inherited adapter methods", async () => {
+    const owner = createTestInstance("channel");
+    const provider = createTestInstance("provider");
+    class Base {
+      #baseValue = {};
+      read() {
+        return this.#baseValue;
+      }
+    }
+    class Adapter extends Base {
+      #ownValue = {};
+      own = function (this: Adapter) {
+        return this.#ownValue;
+      };
+    }
+    const source = new Adapter();
+    try {
+      const expected = owner.run(() => [source.read(), source.own()]);
+      const bound = owner.run(() => bindCurrentPluginInstanceCallbacks(source));
+      expect(provider.run(() => bound.read())).toBe(expected[0]);
+      expect(provider.run(() => bound.own())).toBe(expected[1]);
+      owner.quiesce();
+      expect(() => bound.read()).toThrow("reloaded or disabled");
+    } finally {
+      await Promise.all([owner.dispose(), provider.dispose()]);
+    }
+  });
+
+  it("preserves accessor receivers, callable ownership and data identity", async () => {
+    const owner = createTestInstance("channel");
+    const provider = createTestInstance("provider");
+    const runtime = createPluginRuntimeStore<string>("uninitialized accessor owner");
+    owner.run(() => runtime.setRuntime("channel"));
+    class Adapter {
+      #data = {};
+      get data() {
+        return this.#data;
+      }
+      set data(value: object) {
+        this.#data = value;
+      }
+      get callback() {
+        return function (this: Adapter) {
+          expect(runtime.getRuntime()).toBe("channel");
+          return this.#data;
+        };
+      }
+    }
+    const source = new Adapter();
+    Object.defineProperty(source, "ownData", {
+      get() {
+        return this.data;
+      },
+      enumerable: true,
+    });
+    try {
+      const bound = owner.run(() => bindCurrentPluginInstanceCallbacks(source));
+      expect(provider.run(() => bound.data)).toBe(source.data);
+      expect(Reflect.get(bound, "ownData")).toBe(source.data);
+      const replacement = {};
+      bound.data = replacement;
+      expect(source.data).toBe(replacement);
+      const callback = provider.run(() => bound.callback);
+      expect(provider.run(() => callback.call(bound))).toBe(replacement);
+      const explicitReceiver = new Adapter();
+      expect(provider.run(() => callback.call(explicitReceiver))).toBe(explicitReceiver.data);
+      owner.quiesce();
+      expect(() => callback.call(bound)).toThrow("reloaded or disabled");
+    } finally {
+      await Promise.all([owner.dispose(), provider.dispose()]);
+    }
+  });
+
+  it("leaves host-only callback records and absent records unchanged", () => {
+    const callbacks = { deliver: () => "host" };
+    expect(bindCurrentPluginInstanceCallbacks(callbacks)).toBe(callbacks);
+    expect(bindCurrentPluginInstanceCallbacks(undefined)).toBeUndefined();
+  });
+});
 
 it("preserves a custom then receiver and its exact owned continuation", async () => {
   const instance = createTestInstance("custom-continuation");
