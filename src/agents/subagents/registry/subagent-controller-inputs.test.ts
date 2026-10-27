@@ -1,9 +1,11 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry.js";
+import { sessionSharingTestContext } from "../../../gateway/server-methods/sessions-sharing.test-support.js";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
@@ -25,7 +27,10 @@ import {
   hasSubagentControllerInput as hasInput,
   retireSubagentControllerInputs as retireInputs,
 } from "./subagent-controller-inputs.js";
+import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { createTestSubagentRegistryRestorer } from "./subagent-registry-restore.test-support.js";
+import { createSubagentSweeperHarness } from "./subagent-registry-sweeper.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const storePath = "/private/tmp/subagent-controller-inputs/main/sessions.json";
@@ -147,6 +152,86 @@ it.each(["default", "custom", "memory"] as const)(
       } finally {
         retireSessionControllerInput(input);
         await input.settlement.promise;
+      }
+    });
+  },
+);
+
+it.for(["restore", "expired restore", "sweep"] as const)(
+  "runs parent input behind a terminal child without an outcome after %s",
+  { timeout: 5_000 },
+  async (mode, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const sessionKey = "agent:main:main";
+      const logicalStore = path.join(state.sessionsDir(), "sessions.json");
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey, storePath: logicalStore },
+        { sessionId: "requester-session", updatedAt: 1, status: "done" },
+      );
+      const now = Date.now();
+      const entry = child({
+        requesterSessionKey: sessionKey,
+        requesterStorePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+        completionTarget: "parent",
+        execution: {
+          status: "terminal",
+          startedAt: now - 2_000,
+          endedAt: now - 1_000,
+          lifecycleGeneration: `previous-${getAgentEventLifecycleGeneration()}`,
+        },
+        delivery: {
+          status: "pending",
+          windowStartedAt: now - 1_000,
+          deadlineAt: now + (mode === "restore" ? 60_000 : -1),
+        },
+        cleanupHandled: false,
+      });
+      subagentRuns.set(entry.runId, entry);
+      inputs.push(...(await reserveRestoredSubagentControllerSources([entry])));
+      expect(inputs).toHaveLength(1);
+      const gateway = sessionSharingTestContext(vi.fn());
+      const resolver = () => gateway;
+      const restorer = createTestSubagentRegistryRestorer({
+        getGatewayContextResolver: () => resolver,
+      });
+      const entered = createDeferred();
+      const controller = new AbortController();
+      const turn = withSessionTurn(
+        {
+          sessionKey,
+          sessionId: "requester-session",
+          storePath: logicalStore,
+          agentId: "main",
+          abortSignal: controller.signal,
+        },
+        async () => entered.resolve(),
+      );
+      void turn.catch(() => {});
+      try {
+        if (mode === "sweep") {
+          const harness = createSubagentSweeperHarness({}, entry, subagentRuns);
+          harness.discardTerminalDelivery.mockImplementation(
+            SubagentLifecycleController.discardTerminalDelivery,
+          );
+          await harness.sweeper.sweepOnce();
+          expect(subagentRuns.get(entry.runId)?.delivery?.status).toBe("discarded");
+          expect(harness.callGateway).not.toHaveBeenCalled();
+          expect(harness.emitSubagentEndedHookForRun).not.toHaveBeenCalled();
+          await harness.sweeper.reset();
+        } else {
+          await restorer.restoreOnce();
+          await restorer.activate().settled;
+        }
+        expect(inputs[0]?.abortSignal.aborted).toBe(true);
+        await withinTest(entered.promise, signal);
+        await turn;
+        expect(entry.execution.outcome).toBeUndefined();
+      } finally {
+        restorer.reset();
+        controller.abort();
+        inputs.forEach((input) => retireSessionControllerInput(input));
+        await turn.catch(() => {});
       }
     });
   },
