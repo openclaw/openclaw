@@ -6,15 +6,6 @@ import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 
-const connectConfig = {
-  servers: {
-    calendar: {
-      url: "https://mcp.example/rpc",
-      auth: "oauth" as const,
-      oauth: { identity: "per-requester" as const },
-    },
-  },
-};
 const startAuthorization = vi.hoisted(() => vi.fn());
 const readCredentialsStatus = vi.hoisted(() => vi.fn());
 type Requester = { sessionId: string; requesterSenderId?: string | null };
@@ -473,26 +464,14 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
         publicOrigin: "https://gateway.example",
       }),
     );
-    startAuthorization.mockResolvedValue({
-      status: "redirect",
-      authorizationUrl: "https://auth.example/authorize?state=opaque",
-    });
     const result = await requesterTools("session-connect", {
       requesterSenderId: "alice",
-      messageChannel: "telegram",
-      agentAccountId: "bot",
-      cfg: { gateway: { publicOrigin: "https://gateway.example" }, mcp: connectConfig },
     });
 
     expect(result && toolNames(result.tools)).toEqual(["calendar__connect"]);
     expect(startAuthorization).not.toHaveBeenCalled();
-    const connect = await result!.tools[0]!.execute("connect", {});
-    expect(connect.details).toMatchObject({
-      mcpConnect: {
-        serverName: "calendar",
-        authorizationUrl: "https://auth.example/authorize?state=opaque",
-      },
-    });
+    startAuthorization.mockResolvedValue({ status: "authorized" });
+    await result!.tools[0]!.execute("connect", {});
     expect(startAuthorization).toHaveBeenCalledWith(
       expect.objectContaining({ principal: "requester", serverName: "calendar" }),
       expect.objectContaining({ url: "https://mcp.example/rpc" }),

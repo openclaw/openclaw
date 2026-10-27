@@ -317,25 +317,38 @@ describe("prepared model runtime reload auth adoption", () => {
     await lease[Symbol.asyncDispose]();
   });
 
-  it("rejects an adopted auth gate when config reload fails and permits recovery", async () => {
-    await using work = pendingWork();
-    const replacementConfig = { plugins: {} };
-    await start();
-    const authBuild = work.build();
-    const reloadError = new Error("replacement config failed");
-    holdBuilds(authBuild);
-    mocks.ensureOpenClawModelsJson.mockRejectedValueOnce(reloadError);
-
-    mutate("default");
-    await waitForBuilds(2);
-    const authWaiter = work.track(dispatch());
-    const reload = work.track(refresh(replacementConfig));
-    authBuild.resolve({});
-
-    await expect(reload).rejects.toBe(reloadError);
-    await expect(authWaiter).rejects.toBe(reloadError);
-    await expect(dispatch()).resolves.toMatchObject({ config: replacementConfig });
-  });
+  it.each(["replacement", "obsolete auth"] as const)(
+    "settles an adopted auth gate when %s fails, and permits recovery",
+    async (failedBuild) => {
+      await using work = pendingWork();
+      const replacementConfig = { plugins: {} };
+      await start();
+      const authBuild = work.build();
+      const configBuild = work.build();
+      const failure = new Error(`${failedBuild} build failed`);
+      holdBuilds(authBuild, configBuild);
+      mutate();
+      await waitForBuilds(2);
+      const authWaiter = work.track(dispatch());
+      const reload = work.track(refresh(replacementConfig));
+      if (failedBuild === "replacement") {
+        authBuild.resolve({});
+        await waitForBuilds(3);
+        configBuild.reject(failure);
+        await expect(reload).rejects.toBe(failure);
+        await expect(authWaiter).rejects.toBe(failure);
+        await expect(dispatch()).resolves.toMatchObject({ config: replacementConfig });
+      } else {
+        authBuild.reject(failure);
+        await waitForBuilds(3);
+        await expectPending(authWaiter);
+        configBuild.resolve({});
+        await expect(reload).resolves.toBeUndefined();
+        await expect(authWaiter).resolves.toMatchObject({ config: replacementConfig });
+        expect(mocks.warn).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("continues with a corrective auth mutation after the earlier build fails", async () => {
     await using work = pendingWork();
@@ -445,29 +458,6 @@ describe("prepared model runtime reload auth adoption", () => {
     await expect(dispatch("worker")).resolves.toMatchObject({ agentId: "worker" });
     replaceSpy.mockRestore();
     unregister();
-  });
-
-  it("lets an adopting reload settle the gate after the obsolete auth build fails", async () => {
-    await using work = pendingWork();
-    const replacementConfig = { plugins: {} };
-    await start();
-    const authBuild = work.build();
-    const configBuild = work.build();
-    const obsoleteAuthError = new Error("obsolete auth build failed");
-    holdBuilds(authBuild, configBuild);
-
-    mutate("default");
-    await waitForBuilds(2);
-    const authWaiter = work.track(dispatch());
-    const reload = work.track(refresh(replacementConfig));
-    authBuild.reject(obsoleteAuthError);
-    await waitForBuilds(3);
-    await expectPending(authWaiter);
-
-    configBuild.resolve({});
-    await expect(reload).resolves.toBeUndefined();
-    await expect(authWaiter).resolves.toMatchObject({ config: replacementConfig });
-    expect(mocks.warn).not.toHaveBeenCalled();
   });
 
   it.each(["rollback", "replacement"] as const)(
