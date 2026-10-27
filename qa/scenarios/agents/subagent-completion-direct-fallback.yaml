@@ -213,7 +213,7 @@ flow:
                       value:
                         expr: "await readDirectFallbackReceipts(terminalRun)"
                     - assert:
-                        expr: "terminalCase.name !== 'fallback' || (directFallbackReceipts.length === 1 && directFallbackReceipts[0].content.filter((block) => block.type === 'text').map((block) => block.text).join('') === terminalCase.marker)"
+                        expr: "terminalCase.name === 'fallback' ? (directFallbackReceipts.length === 1 && directFallbackReceipts[0].content.filter((block) => block.type === 'text').map((block) => block.text).join('') === terminalCase.marker) : directFallbackReceipts.length === 0"
                         message:
                           expr: "`terminal ${terminalCase.name}: missing or duplicate direct-fallback receipt: ${JSON.stringify(directFallbackReceipts)}`"
                     - assert:
@@ -227,6 +227,10 @@ flow:
                         expr: "matchingOutbound.length === terminalCase.expectedSendCount"
                         message:
                           expr: "`terminal ${terminalCase.name}: expected ${terminalCase.expectedSendCount} outbound, got ${matchingOutbound.length}; messages=${JSON.stringify(state.getSnapshot().messages.slice(-10))} requests=${JSON.stringify(caseRequests)} logs=${JSON.stringify((env.gateway.logs?.().split('\\n') ?? []).filter((line) => /qa-channel|subagent|announce|completion|requester/i.test(line)).slice(-30))}`"
+                    - assert:
+                        expr: "terminalCase.name !== 'visible' || caseOutbound.every((message) => String(message.text ?? '').trim() === config.parentAcknowledgment)"
+                        message:
+                          expr: "`visible completion emitted output beyond the kickoff acknowledgement: ${JSON.stringify(caseOutbound)}`"
                     - assert:
                         expr: "caseOutbound.every((candidate) => !String(candidate.text ?? '').includes(config.metadataSentinel) && !String(candidate.text ?? '').includes('BEGIN_OPENCLAW_INTERNAL_CONTEXT'))"
                         message:
@@ -527,6 +531,14 @@ flow:
                   expr: "restartMatches.length === 0"
                   message:
                     expr: "`restart completion unexpectedly emitted a terminal payload; outbound=${recentOutboundSummary(state)}`"
+              - assert:
+                  expr: "state.getSnapshot().messages.slice(restartStartIndex).filter((candidate) => candidate.direction === 'outbound' && !candidate.deleted && candidate.conversation.id === restartConversationId && String(candidate.text ?? '').trim() === config.parentAcknowledgment).length === 1"
+                  message:
+                    expr: "`restart completion did not retain exactly one live kickoff acknowledgement: ${recentOutboundSummary(state)}`"
+              - assert:
+                  expr: "state.getSnapshot().messages.slice(restartStartIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId).every((candidate) => String(candidate.text ?? '').trim() === config.parentAcknowledgment)"
+                  message:
+                    expr: "`restart completion emitted output beyond the kickoff acknowledgement: ${recentOutboundSummary(state)}`"
               - assert:
                   expr: "state.getSnapshot().messages.slice(restartStartIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId).every((candidate) => !String(candidate.text ?? '').includes(`Agent couldn't generate a response`))"
                   message:
