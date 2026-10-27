@@ -58,7 +58,9 @@ Reloading or leaving the app does not preserve this in-memory draft.
 New Dashboard conversations receive a title from their opening task. After six more
 user messages, the Gateway makes one attempt to refine that title using recent
 conversation context. A failed attempt keeps the existing title. Manually named
-sessions and conversations created before this feature keep their names.
+sessions and conversations created before this feature keep their names. The open
+conversation URL updates when its name arrives or changes, without reloading the
+page or adding a browser-history entry.
 
 ## Temporary disconnections
 
