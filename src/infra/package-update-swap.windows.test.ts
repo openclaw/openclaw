@@ -38,19 +38,22 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["transient", "persistent", "authority", "source", "destination"] as const)(
+// Activation publishes the sibling stage; the other scenarios deny the package backup.
+const renameScenarios = ["transient", "persistent", "authority", "source", "destination"] as const;
+it.each([...renameScenarios, "activation-transient", "activation-persistent"] as const)(
   "preserves the installation during Windows rename failure: %s",
   async (scenario) => {
     const { params, packageRoot, launcher } = await createPackageSwapFixture(
       dirs.make("swap-rename-"),
     );
-    const interrupted = scenario !== "transient" && scenario !== "persistent";
-    const transient = scenario === "transient";
+    const interrupted = ["authority", "source", "destination"].includes(scenario);
+    const transient = scenario.endsWith("transient");
+    const denied = scenario.startsWith("activation") ? params.stage.packageRoot : packageRoot;
     const rename = fs.rename.bind(fs);
     let attempts = 0;
     let revoked = false;
     vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      if (String(from) === packageRoot) {
+      if (String(from) === denied) {
         attempts++;
         if (interrupted) {
           wait.mockImplementationOnce(async () => {
@@ -104,51 +107,6 @@ it.each(["transient", "persistent", "authority", "source", "destination"] as con
     );
     await expect(fs.readFile(launcher, "utf8")).resolves.toBe(
       transient ? "candidate launcher\n" : "old launcher\n",
-    );
-  },
-);
-
-it.each(["transient", "persistent"] as const)(
-  "retries a %s Windows activation denial without copying the staged package",
-  async (scenario) => {
-    const { params, packageRoot, launcher } = await createPackageSwapFixture(
-      dirs.make("swap-activation-"),
-    );
-    const staged = params.stage.packageRoot;
-    const rename = fs.rename.bind(fs);
-    let attempts = 0;
-    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      if (String(from) === staged) {
-        attempts++;
-        if (scenario === "persistent" || attempts <= 2) {
-          throw Object.assign(new Error("EPERM: staged package is in use"), { code: "EPERM" });
-        }
-      }
-      return rename(from, to);
-    });
-
-    const result = await swapStagedPackageInstall(params);
-
-    expect(result.step.warnings).toContainEqual(
-      expect.stringContaining("Windows package activation rename"),
-    );
-    if (scenario === "transient") {
-      expect(result.status).toBe("committed");
-      expect(attempts).toBe(3);
-    } else {
-      expect(result).toMatchObject({ status: "failed", packageRollbackVerified: true });
-      expect(result.step.stderrTail).toContain("activation rename failed after 16 attempts");
-      expect(attempts).toBe(16);
-      // The exact staged object stays in place; nothing was copied over the live root.
-      await expect(fs.readFile(path.join(staged, "package.json"), "utf8")).resolves.toContain(
-        `"version":"2.0.0"`,
-      );
-    }
-    await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-      `"version":"${scenario === "transient" ? "2.0.0" : "1.0.0"}"`,
-    );
-    await expect(fs.readFile(launcher, "utf8")).resolves.toBe(
-      scenario === "transient" ? "candidate launcher\n" : "old launcher\n",
     );
   },
 );
