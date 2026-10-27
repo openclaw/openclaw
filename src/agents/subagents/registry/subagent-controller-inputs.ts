@@ -10,7 +10,11 @@ import {
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
 import { resolveAnnounceDeliveryDeadline } from "./subagent-registry-cleanup.js";
-import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
+import {
+  ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
+  safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments,
+} from "./subagent-registry-helpers.js";
 import type { CleanupBookkeepingParams } from "./subagent-registry-lifecycle-context.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import { isRetiredSubagentSessionOwner } from "./subagent-registry-restart-recovery-helpers.js";
@@ -152,6 +156,8 @@ export async function settleSubagentCompletionReservation(
     completeCleanupBookkeeping: (params: CleanupBookkeepingParams) => Promise<void>;
     isCleanupOwnerCurrent: (entry: SubagentRunRecord) => boolean;
     isTerminalTailActive: (entry: SubagentRunRecord) => boolean;
+    sessionEffectsHostCurrent: (entry: SubagentRunRecord) => boolean;
+    shouldSuppressSessionEffects: (entry: SubagentRunRecord) => Promise<boolean>;
     discardTerminalDelivery: (entry: SubagentRunRecord, completedAt: number) => void;
     resumedRuns: Set<object>;
     clearPendingLifecycleError: (runId: string) => void;
@@ -167,6 +173,7 @@ export async function settleSubagentCompletionReservation(
     typeof entry.execution.endedAt !== "number" ||
     entry.expectsCompletionMessage !== true ||
     (entry.delivery?.status !== "pending" && entry.delivery?.status !== "in_progress") ||
+    entry.delivery.queueId ||
     entry.pauseReason === "sessions_yield" ||
     entry.requesterSettleWake ||
     entry.execution.restartRecovery ||
@@ -185,10 +192,27 @@ export async function settleSubagentCompletionReservation(
     cleanup: entry.cleanup,
     completedAt: now,
     skipRequesterSettleWake: true,
+    retainForCleanup: entry.cleanup === "delete",
     isCurrent: () => lifecycle.isCleanupOwnerCurrent(entry),
-    finalizeDelivery: (draft) => lifecycle.discardTerminalDelivery(draft, now),
+    finalizeDelivery: (draft) => {
+      lifecycle.discardTerminalDelivery(draft, now);
+      // The sweeper retains ownership of session and attachment deletion.
+      if (draft.cleanup === "delete") {
+        draft.archiveAtMs = now;
+      }
+    },
   });
   retireSubagentCompletionControllerInput(entry);
+  if (
+    entry.cleanup === "keep" &&
+    shouldRemoveSubagentAttachments(entry) &&
+    !(await lifecycle.shouldSuppressSessionEffects(entry))
+  ) {
+    await safeRemoveAttachmentsDir(
+      entry,
+      () => lifecycle.isCleanupOwnerCurrent(entry) && lifecycle.sessionEffectsHostCurrent(entry),
+    );
+  }
   lifecycle.resumedRuns.delete(getSubagentRunRuntimeKey(entry));
   lifecycle.clearPendingLifecycleError(entry.runId);
   lifecycle.clearPendingLifecycleTimeout(entry.runId);

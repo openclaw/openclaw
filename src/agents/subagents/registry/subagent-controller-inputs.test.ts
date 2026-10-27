@@ -17,6 +17,7 @@ import {
 } from "../../../sessions/session-controller.mailbox.js";
 import { bindSessionControllerEntryTarget } from "../../../sessions/session-controller.state.js";
 import { resetSessionControllerStateForTest } from "../../../sessions/session-lifecycle-admission.test-support.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
@@ -27,6 +28,7 @@ import {
   hasSubagentControllerInput as hasInput,
   retireSubagentControllerInputs as retireInputs,
 } from "./subagent-controller-inputs.js";
+import { createLifecycleControllerFixture } from "./subagent-registry-lifecycle-controller.test-support.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { createTestSubagentRegistryRestorer } from "./subagent-registry-restore.test-support.js";
@@ -238,6 +240,64 @@ it.for(["restore", "expired restore", "sweep"] as const)(
 );
 
 const batchIds = ["child-a", "child-b", "child-c"];
+it.for(["queued", "delete"] as const)(
+  "preserves the expired delivery's %s owner",
+  async (owner) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const now = Date.now();
+      const entry = child({
+        cleanup: owner === "delete" ? "delete" : "keep",
+        childSessionIdentity: { sessionId: "child-session", lifecycleRevision: "child-revision" },
+        execution: { status: "terminal", endedAt: now - 1_000, outcome: { status: "ok" } },
+        delivery: {
+          status: owner === "queued" ? "in_progress" : "pending",
+          queueId: owner === "queued" ? "requester-completion" : undefined,
+          deadlineAt: now - 1,
+        },
+      });
+      const harness = createSubagentSweeperHarness({}, entry, subagentRuns);
+      if (owner === "delete") {
+        // The second sweep reloads compacted payloads from the durable writer.
+        vi.mocked(stateWorker.runOpenClawStateWorkerOperation).mockRestore();
+        const lifecycle = createLifecycleControllerFixture(
+          { entry, runs: subagentRuns, realWorker: true },
+          {
+            callGateway: harness.callGateway,
+            cleanupBrowserSessionsForLifecycleEnd: vi.fn(),
+            ownersByEntry: new Map(),
+          },
+        );
+        harness.completeCleanupBookkeeping.mockImplementation(lifecycle.completeCleanupBookkeeping);
+      }
+      harness.discardTerminalDelivery.mockImplementation(
+        SubagentLifecycleController.discardTerminalDelivery,
+      );
+      await harness.sweeper.sweepOnce();
+      if (owner === "queued") {
+        expect(subagentRuns.get(entry.runId)?.delivery).toMatchObject({
+          status: "in_progress",
+          queueId: "requester-completion",
+        });
+        expect(harness.discardTerminalDelivery).not.toHaveBeenCalled();
+      } else {
+        expect(subagentRuns.has(entry.runId)).toBe(true);
+        await harness.sweeper.sweepOnce();
+        expect(harness.callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "sessions.delete",
+            params: expect.objectContaining({
+              key: entry.childSessionKey,
+              expectedSessionId: "child-session",
+              expectedLifecycleRevision: "child-revision",
+            }),
+          }),
+        );
+        expect(subagentRuns.has(entry.runId)).toBe(false);
+      }
+    });
+  },
+);
+
 it.each<[string, string, Partial<SubagentRunRecord> | undefined]>([
   ["explicit", "retired", undefined],
   ["explicit", "generation", { requesterSettleWake: pendingWake(batchIds, 5) }],
