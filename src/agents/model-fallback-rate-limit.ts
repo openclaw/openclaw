@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getProviderRateLimitState } from "../llm/provider-rate-limit.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isProfileInCooldown } from "./auth-profiles/usage-state.js";
+import { resolveConfiguredProviderConfig } from "./embedded-agent-runner/model.configured-overrides.js";
 import { normalizeConfiguredProviderModel } from "./embedded-agent-runner/model.registry-resolution.js";
 import {
   resolveBundledStaticCatalogModel,
@@ -109,6 +110,7 @@ function readFallbackCandidateRateLimit(
     const lookup = { provider: candidate.provider, modelId: candidate.model, cfg };
     const model = normalizeConfiguredProviderModel({
       ...lookup,
+      providerConfig: resolveConfiguredProviderConfig(cfg, candidate.provider),
       discoveredModel: resolveBundledStaticCatalogModel(lookup),
       manifestAlias: resolveManifestModelCatalogProviderAliasMetadata(lookup),
     });

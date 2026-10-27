@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createProviderRateLimitRequest } from "../llm/provider-rate-limit.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import * as staticCatalog from "./embedded-agent-runner/model.static-catalog.js";
 import { FailoverError } from "./failover-error.js";
 import { markFallbackCandidateSkipped } from "./fallback-skip-cache.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
@@ -37,10 +38,13 @@ const cfg = {
     },
   },
 } satisfies OpenClawConfig;
-const request = (id: string) =>
-  createProviderRateLimitRequest({ id, provider, baseUrl }, { apiKey, maxRetryDelayMs: 0 });
-function saturate(id: string, delay: number) {
-  request(id).observe?.(
+const request = (id: string, headers?: Record<string, string>) =>
+  createProviderRateLimitRequest(
+    { id, provider, baseUrl, headers },
+    { apiKey, maxRetryDelayMs: 0 },
+  );
+function saturate(id: string, delay: number, headers?: Record<string, string>) {
+  request(id, headers).observe?.(
     buildEmbeddedRunnerAssistant({
       provider,
       model: id,
@@ -73,6 +77,37 @@ beforeEach(() => {
 afterEach(async () => {
   await vi.advanceTimersByTimeAsync(120_000);
   vi.useRealTimers();
+});
+
+it("routes bundled models around saturation using configured organization headers", async () => {
+  const headers = { "OpenAI-Organization": "org-shared-test" };
+  const providerConfig = { ...cfg.models.providers[provider], headers };
+  const models = providerConfig.models.map((model) => ({
+    ...model,
+    provider,
+    baseUrl,
+    api: providerConfig.api,
+  }));
+  const catalog = vi
+    .spyOn(staticCatalog, "resolveBundledStaticCatalogModel")
+    .mockImplementation(({ modelId }) => models.find((model) => model.id === modelId));
+  try {
+    saturate("primary", 20_000, headers);
+    const run = vi.fn(async (_provider: string, model: string) => model);
+    const result = await runWithModelFallback({
+      cfg: { ...cfg, models: { providers: { [provider]: providerConfig } } },
+      provider,
+      model: "primary",
+      sessionId: "shared-configured-org",
+      skipAuthProfileRuntime: true,
+      manifestPlugins: [],
+      run,
+    });
+    expect(run.mock.calls.map(([, model]) => model)).toEqual(["backup"]);
+    expect(result.attempts).toMatchObject([{ model: "primary", reason: "rate_limit" }]);
+  } finally {
+    catalog.mockRestore();
+  }
 });
 
 it("routes other sessions around shared model saturation, then resumes primary after expiry", async () => {
