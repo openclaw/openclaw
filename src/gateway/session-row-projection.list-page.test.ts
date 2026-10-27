@@ -174,7 +174,6 @@ describe("list preparation", () => {
       await projection.ensureMaterialized();
       expect(projection.materializedCount).toBe(0);
       const context = bindSessionRowProjection(requestContext(cfg), () => projection);
-      const before = projection.materializedCount;
       const reads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
       const sql = observeSqliteReadSql(StatementSync.prototype);
       const rendered: string[] = [];
@@ -200,7 +199,7 @@ describe("list preparation", () => {
           { limit: 5, offset },
           (ok, value) => {
             expect(ok).toBe(true);
-            materialized.push(projection.materializedCount - before);
+            materialized.push(projection.materializedCount);
             result = value as SessionsListResult;
           },
           null,
@@ -221,8 +220,7 @@ describe("list preparation", () => {
         );
         expect(await checkpoint).toBeLessThan(5);
         expect(rendered.toSorted()).toEqual(keys.slice(-10).toSorted());
-        expect(Math.max(...materialized)).toBe(10);
-        expect([reads.mock.calls, sql.queries]).toEqual([[], []]);
+        expect([Math.max(...materialized), reads.mock.calls, sql.queries]).toEqual([10, [], []]);
         await projection.ensureMaterialized();
         expect(projection.materializedCount).toBe(10);
 

@@ -392,9 +392,8 @@ it("bounds archived residency across pages and evicts the least recently read ro
       await waitForPage(overlappingPage, secondPrepared, signal);
       writeRow(query.key, { sessionId: "replacement", updatedAt: 128, archivedAt: 1 });
       releasePage.resolve();
-      const wholePage = await pendingPage;
-      expect(wholePage.sessions).toHaveLength(128);
-      expect(wholePage.sessions[0]?.sessionId).toBe("replacement");
+      const { sessions } = await pendingPage;
+      expect([sessions.length, sessions[0]?.sessionId]).toEqual([128, "replacement"]);
       expect(projection.selectEntries().filter(ready)).toHaveLength(110);
     } finally {
       releasePage.resolve();
