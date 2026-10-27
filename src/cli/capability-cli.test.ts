@@ -1,4 +1,6 @@
 // Capability CLI tests cover capability command registration and output formatting.
+import { execFileSync } from "node:child_process";
+import { closeSync, constants, openSync, writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -842,46 +844,53 @@ describe("capability cli", () => {
     },
   );
 
-  it.each([false, true])(
-    "prepares local model content and instructions (ChatGPT API: %s)",
-    async (chatGpt) => {
-      const tempInput = path.join(tempDirs.make("openclaw-model-run-image-"), "input.png");
-      if (chatGpt) {
-        primeChatGptModel("openai", "gpt-5.5");
-      } else {
-        await fs.writeFile(tempInput, Buffer.from(PNG_1X1_BASE64, "base64"));
-      }
-      await runCapability(
-        "model",
-        "run",
-        "--prompt",
-        chatGpt ? "hello" : "describe this",
-        ...(chatGpt ? ["--model", "openai/gpt-5.5"] : ["--file", tempInput, "--thinking", "high"]),
-        "--json",
+  it.each(
+    (["image", "image-symlink", "chatgpt"] as const).filter(
+      (inputKind) => inputKind !== "image-symlink" || process.platform !== "win32",
+    ),
+  )("prepares local model content and instructions (%s)", async (inputKind) => {
+    const chatGpt = inputKind === "chatgpt";
+    const inputRoot = tempDirs.make("openclaw-model-run-image-");
+    const tempInput = path.join(inputRoot, "input.png");
+    if (chatGpt) {
+      primeChatGptModel("openai", "gpt-5.5");
+    } else if (inputKind === "image-symlink") {
+      const target = path.join(inputRoot, "target.png");
+      await fs.writeFile(target, Buffer.from(PNG_1X1_BASE64, "base64"));
+      await fs.symlink(target, tempInput);
+    } else {
+      await fs.writeFile(tempInput, Buffer.from(PNG_1X1_BASE64, "base64"));
+    }
+    await runCapability(
+      "model",
+      "run",
+      "--prompt",
+      chatGpt ? "hello" : "describe this",
+      ...(chatGpt ? ["--model", "openai/gpt-5.5"] : ["--file", tempInput, "--thinking", "high"]),
+      "--json",
+    );
+    const call = firstCompletionCall();
+    expect(call?.context?.messages?.[0]?.role).toBe("user");
+    if (chatGpt) {
+      expect(call?.context?.systemPrompt).toBe(
+        "You are a personal assistant running inside OpenClaw.",
       );
-      const call = firstCompletionCall();
-      expect(call?.context?.messages?.[0]?.role).toBe("user");
-      if (chatGpt) {
-        expect(call?.context?.systemPrompt).toBe(
-          "You are a personal assistant running inside OpenClaw.",
-        );
-        expect(call?.context?.messages?.[0]?.content).toBe("hello");
-      } else {
-        expect(call?.options?.reasoning).toBe("high");
-        expect(firstJsonOutput()?.transport).toBe("local");
-        expect(mocks.callGateway).not.toHaveBeenCalled();
-        expect(call?.context?.messages?.[0]?.content).toEqual([
-          { type: "text", text: "describe this" },
-          { type: "image", data: PNG_1X1_BASE64, mimeType: "image/png" },
-        ]);
-        expect(call?.context).not.toHaveProperty("systemPrompt");
-        const inputs = firstJsonOutput()?.inputs as Array<{ mimeType?: unknown; path?: unknown }>;
-        expect(inputs).toHaveLength(1);
-        expect(inputs[0]?.path).toBe(tempInput);
-        expect(inputs[0]?.mimeType).toBe("image/png");
-      }
-    },
-  );
+      expect(call?.context?.messages?.[0]?.content).toBe("hello");
+    } else {
+      expect(call?.options?.reasoning).toBe("high");
+      expect(firstJsonOutput()?.transport).toBe("local");
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(call?.context?.messages?.[0]?.content).toEqual([
+        { type: "text", text: "describe this" },
+        { type: "image", data: PNG_1X1_BASE64, mimeType: "image/png" },
+      ]);
+      expect(call?.context).not.toHaveProperty("systemPrompt");
+      const inputs = firstJsonOutput()?.inputs as Array<{ mimeType?: unknown; path?: unknown }>;
+      expect(inputs).toHaveLength(1);
+      expect(inputs[0]?.path).toBe(tempInput);
+      expect(inputs[0]?.mimeType).toBe("image/png");
+    }
+  });
 
   it("normalizes HEIF sequence images before Gateway probes", async () => {
     const fileName = "opaque.bin";
@@ -905,6 +914,53 @@ describe("capability cli", () => {
     ]);
     expect(firstJsonOutput()?.inputs).toEqual([{ path: tempInput, mimeType: "image/jpeg" }]);
   });
+
+  it.runIf(process.platform !== "win32").each(["--local", "--gateway"])(
+    "rejects FIFO image inputs before %s dispatch",
+    async (transport) => {
+      const fifo = path.join(tempDirs.make("openclaw-model-run-fifo-"), "input.pipe");
+      execFileSync("mkfifo", [fifo]);
+      // Release the old blocking reader so a regression fails without leaving it hung.
+      const release = setInterval(() => {
+        try {
+          const fd = openSync(fifo, constants.O_WRONLY | constants.O_NONBLOCK);
+          try {
+            writeSync(fd, "not an image\n");
+          } finally {
+            closeSync(fd);
+          }
+          clearInterval(release);
+        } catch (error) {
+          if (!(error instanceof Error) || !("code" in error) || error.code !== "ENXIO") {
+            throw error;
+          }
+        }
+      }, 100);
+      try {
+        await expect(runModelProbe("--file", fifo, transport)).rejects.toThrow("exit 1");
+        expectRuntimeErrorContains("regular file");
+        expectRuntimeErrorContains(fifo);
+        expectRuntimeErrorContains("retry");
+        expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+        expect(mocks.callGateway).not.toHaveBeenCalled();
+      } finally {
+        clearInterval(release);
+      }
+    },
+  );
+
+  it.each(["--local", "--gateway"])(
+    "reports a missing image file before %s dispatch",
+    async (transport) => {
+      const missing = path.join(tempDirs.make("openclaw-model-run-missing-"), "missing.png");
+      await expect(runModelProbe("--file", missing, transport)).rejects.toThrow("exit 1");
+      expectRuntimeErrorContains(`Cannot read model image file: ${missing}`);
+      expectRuntimeErrorContains("regular file");
+      expectRuntimeErrorContains("retry");
+      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects non-image files for model probes", async () => {
     const tempInput = path.join(os.tmpdir(), `openclaw-model-run-audio-${Date.now()}.mp3`);
