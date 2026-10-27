@@ -511,8 +511,12 @@ export function prepareProjectedSessionPresentation(
     const views = published?.views;
     const value = published?.target ?? toProjectedSessionSharingTarget(record);
     const recipientView = client === undefined ? undefined : viewer(value, options.rowMode);
+    const includeActivitySummary =
+      options.includeActivitySummary !== false &&
+      options.rowMode !== "sidebar" &&
+      options.rowMode !== "dashboard";
     const canEnsure =
-      client !== undefined && preparedFacts?.activitySummary
+      includeActivitySummary && client !== undefined && preparedFacts?.activitySummary
         ? !authorizeIncognitoSessionTarget({
             client: client ?? null,
             sessionKey: value.canonicalKey,
@@ -573,7 +577,7 @@ export function prepareProjectedSessionPresentation(
         run.runIds === undefined ? {} : { activeRunIds: run.runIds },
       );
     }
-    if (options.includeActivitySummary === false) {
+    if (!includeActivitySummary) {
       row.activitySummary = undefined;
     }
     if (recipientView) {
