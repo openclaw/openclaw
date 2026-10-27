@@ -32,27 +32,21 @@ it("shares identical membership participants within one worker reply without ret
       [agent, { ...remote, pluginId: "another" }],
     ];
     const keys = cohorts.map((_, index) => `agent:main:membership-${index}`);
-    const scope = (sessionKey: string) => ({
-      agentId: "main",
-      path: f.database.path,
-      sessionKey,
-    });
-    runSqliteImmediateTransactionSync(f.database.db, () => {
-      for (const [index, identities] of cohorts.entries()) {
-        const key = keys[index]!;
-        writeSessionEntry(f.database, key, { sessionId: `membership-${index}`, updatedAt: 1 });
-        for (const [order, identity] of identities.entries()) {
-          recordSessionParticipantFromWorker(f.database, scope(key), {
-            identity,
-            promptedAt: 10 * (index + 1) + order,
-          });
-        }
+    const record = (index: number, identity: SessionParticipantIdentity, promptedAt: number) =>
+      runSqliteImmediateTransactionSync(f.database.db, () =>
+        recordSessionParticipantFromWorker(
+          f.database,
+          { ...f.scope, sessionKey: keys[index]! },
+          { identity, promptedAt },
+        ),
+      );
+    for (const [index, identities] of cohorts.entries()) {
+      f.writeEntry({ sessionId: `membership-${index}`, updatedAt: 1 }, keys[index]!);
+      for (const [order, identity] of identities.entries()) {
+        record(index, identity, 10 * (index + 1) + order);
       }
-      recordSessionParticipantFromWorker(f.database, scope(keys[1]!), {
-        identity: agent,
-        promptedAt: 100,
-      });
-    });
+    }
+    record(1, agent, 100);
     const read = () =>
       structuredClone(readSessionMembershipFactsInDatabase(f.database, keys)).facts;
     const first = read();
@@ -63,9 +57,7 @@ it("shares identical membership participants within one worker reply without ret
     expect(first[1]![3]).toBe(first[0]![3]);
     expect(first[2]![3]).not.toBe(first[0]![3]);
     expect(first[3]![3]).not.toBe(first[0]![3]);
-    runSqliteImmediateTransactionSync(f.database.db, () =>
-      recordSessionParticipantFromWorker(f.database, scope(keys[0]!), participant("new", 200)),
-    );
+    record(0, { type: "agent", id: "new" }, 200);
     const next = read();
     expect(next[0]![3].participantCount).toBe(3);
     expect(next[1]![3]).toEqual(first[0]![3]);
@@ -98,11 +90,9 @@ it.each(["same-store", "cross-store"])(
       f.read();
       f.participant(participant("shared", 20));
       f.participant(participant("destination-only", 15));
-      f.writeEntry({
-        ...f.read().entry!,
-        category: "work",
-        owner: { actor: { type: "human", id: "alice" } },
-      });
+      const writeOwner = (category: string, id: string) =>
+        f.writeEntry({ ...f.read().entry!, category, owner: { actor: { type: "human", id } } });
+      writeOwner("work", "alice");
       const before = f.read();
       const postimages: SessionEntryWritePostimages = new Map();
       const repair = () => {
@@ -141,11 +131,7 @@ it.each(["same-store", "cross-store"])(
         lastPromptedAt: 40,
       };
       expect(f.read().participants[1]).toMatchObject(afterPrompt);
-      f.writeEntry({
-        ...f.read().entry!,
-        category: "personal",
-        owner: { actor: { type: "human", id: "bob" } },
-      });
+      writeOwner("personal", "bob");
       expect(readSessionMembershipFactsInDatabase(f.database).facts).toContainEqual([
         key,
         "personal",
