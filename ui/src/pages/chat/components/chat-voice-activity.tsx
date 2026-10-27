@@ -26,13 +26,11 @@ export function voiceStatusLabel(
   );
 }
 
-type MicrophoneActivityProps = {
+// Levels stay with the Talk owner; only status/source changes replace the canvas.
+export function MicrophoneActivity(props: {
   status?: RealtimeTalkStatus;
   inputLevel?: RealtimeTalkLevelSignal;
-};
-
-// Levels stay with the Talk owner; only status/source changes replace the canvas.
-export function MicrophoneActivity(props: MicrophoneActivityProps) {
+}) {
   const canvasLifetime = createMemo(
     (): { status: MicrophoneMeterStatus; source: RealtimeTalkLevelSignal | undefined } => ({
       status:
@@ -78,14 +76,12 @@ export function MicrophoneActivity(props: MicrophoneActivityProps) {
   );
 }
 
-type ChatVoiceStatusProps = {
+export function ChatVoiceStatus(props: {
   status?: RealtimeTalkStatus;
   detail?: string | null;
   onDismissError?: () => void;
   onUseSystemDefaultMicrophone?: () => Promise<void>;
-};
-
-export function ChatVoiceStatus(props: ChatVoiceStatusProps) {
+}) {
   return (
     <Show
       when={props.status === "connecting"}
