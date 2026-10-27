@@ -378,6 +378,57 @@ it.each([
   }
 });
 
+it.each(["classic", "overlay"])(
+  "settles %s-scrollbar drafts crossing the height cap",
+  async (bar) => {
+    await page.viewport(390, 800);
+    container.classList.add("chat");
+    container.style.width = "342px";
+    if (bar === "overlay") {
+      // Overlay scrollbars (iOS, Android) take no width from the text.
+      const style = container.appendChild(document.createElement("style"));
+      style.textContent =
+        ".agent-chat__composer-combobox > textarea::-webkit-scrollbar { width: 0; }";
+    }
+    drawComposer(createComposerProps());
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      ".agent-chat__composer-combobox > textarea",
+    )!;
+    let toggles = 0;
+    const observer = new MutationObserver(() => toggles++);
+    observer.observe(textarea, { attributeFilter: ["data-composer-scrollable"] });
+    const type = async (draft: string) => {
+      textarea.value = draft;
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+      await afterLayout();
+      toggles = 0;
+      await afterLayout();
+      return toggles;
+    };
+    const text =
+      "handover for plugin hot reload. To test it, make the knowledge fix and hit reload ";
+    const draft = text.repeat(6);
+    // Typing past the cap must not swap the end inset for a gutter that later
+    // disappears: each wrap change would undo the overflow that caused it.
+    const overflows = async (length: number) => {
+      // A late settle toggles once; an oscillating gutter toggles every frame.
+      expect(await type(draft.slice(0, length)), `toggles at ${length}`).toBeLessThan(2);
+      return textarea.scrollHeight > textarea.clientHeight + 1;
+    };
+    let [fits, length] = [0, draft.length];
+    expect(await overflows(length)).toBe(true);
+    while (length - fits > 1) {
+      const middle = Math.floor((fits + length) / 2);
+      [fits, length] = (await overflows(middle)) ? [fits, middle] : [middle, length];
+    }
+    // Wraps the wider text would absorb sit within a line of the cap.
+    for (let step = fits - 4; step < length + 12; step++) {
+      await overflows(step);
+    }
+    observer.disconnect();
+  },
+);
+
 it.each([
   [320, "active"],
   [560, "blocked"],
