@@ -101,14 +101,19 @@ export function createActivityPage(context: ApplicationContext, initial?: RouteL
   };
 }
 
-export function previews(page: TestActivityPage) {
+export async function settleActivity() {
+  await new Promise(requestAnimationFrame);
   flush();
+}
+
+export async function previews(page: TestActivityPage) {
+  await settleActivity();
   const entries = page.container.querySelectorAll(".activity-entry__preview");
   return Array.from(entries, (entry) => entry.textContent);
 }
 
-export function expandFirst(page: TestActivityPage) {
-  flush();
+export async function expandFirst(page: TestActivityPage) {
+  await settleActivity();
   const row = page.container.querySelector<HTMLDetailsElement>(".activity-entry")!;
   row.open = true;
   row.dispatchEvent(new Event("toggle"));

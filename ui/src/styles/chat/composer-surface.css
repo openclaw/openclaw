@@ -166,7 +166,6 @@
   );
   --chat-composer-hover: var(--surface-hover);
   --chat-composer-group-hover: var(--surface-hover);
-  --chat-composer-popover-background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
   --chat-composer-popover-border: var(--overlay-border);
   --chat-composer-popover-radius: calc(14px * var(--openclaw-corner-radius-scale));
   /* Footer control box. Smaller than the editor's own line box on purpose: the
@@ -241,17 +240,10 @@
   min-height: var(--chat-composer-min-height, 112px);
   margin: 0;
   padding: 0;
-  /* The app owns the artwork; keep one translucent writing surface, not a
-     second texture. Foreground/menu tokens retain their opaque surface color. */
-  background: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
-
-  :where(.shell[data-background-managed]) & {
-    /* Personal artwork never changes the writing surface's readability. */
-    --chat-composer-fill: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
-    background:
-      linear-gradient(var(--chat-composer-fill), var(--chat-composer-fill)),
-      var(--bg-content, var(--bg));
-  }
+  /* The app owns the artwork; the writing surface stays opaque above it. */
+  background:
+    linear-gradient(var(--chat-composer-surface), var(--chat-composer-surface)),
+    var(--bg-content, var(--bg));
   border: 1px solid var(--chat-composer-hairline);
   /* Deliberately lighter than --shadow-sm: with the border and the luminance
      step already doing the separating, a heavier drop reads as a second frame. */
@@ -344,7 +336,7 @@
   z-index: 1;
 }
 
-.agent-chat__input--disabled {
+.agent-chat__input--disabled > * {
   opacity: 0.6;
 }
 

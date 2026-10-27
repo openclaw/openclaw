@@ -44,7 +44,7 @@ import { sanitizeIrcAssistantText } from "./outbound-base.js";
 import { resolveIrcGroupMatch, resolveIrcGroupRequireMention } from "./policy.js";
 import { createIrcReconnectBackoff } from "./reconnect-backoff.js";
 import { getIrcRuntime } from "./runtime.js";
-import type { CoreConfig, IrcInboundMessage } from "./types.js";
+import type { CoreConfig } from "./types.js";
 
 const CHANNEL_ID = "irc" as const;
 type IrcGroupPolicy = "open" | "allowlist" | "disabled";
@@ -81,7 +81,6 @@ type IrcMonitorOptions = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
-  onMessage?: (message: IrcInboundMessage, client: IrcClient) => void | Promise<void>;
   ingressQueue?: NonNullable<Parameters<typeof createIrcIngressMonitor>[0]["queue"]>;
 };
 
@@ -150,10 +149,6 @@ export async function monitorIrcProvider(
         logger.warn?.(
           `[${account.accountId}] dropping replayed IRC DM after the connection changed`,
         );
-        return { kind: "completed" };
-      }
-      if (opts.onMessage) {
-        await opts.onMessage(message, activeClient);
         return { kind: "completed" };
       }
       const deliverReply = async (target: string, payload: OutboundReplyPayload) => {

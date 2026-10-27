@@ -17,6 +17,7 @@ export type UpdatesViewProps = {
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
   configObject: Record<string, unknown>;
   gatewayVersion: string | null;
+  gatewayBuildId?: string | null;
   controlUiCommit: string | null;
   controlUiCommitAt: string | null;
   controlUiBuiltAt: string | null;
