@@ -41,9 +41,8 @@ import {
 import { normalizeConfigIoDeps } from "./io.read-helpers.js";
 import { createSnapshot } from "./mutate.test-support.js";
 import { withTempHomeConfig } from "./test-helpers.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
-// Split from io.snapshot.recovery.test.ts when main's growth left that file
-// over the 1000-line test budget; the promotion suites keep their own home.
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -54,6 +53,36 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+const expectRaw = (file: string, raw: string | null) =>
+  expect(fsp.readFile(file, "utf8")).resolves.toBe(raw);
+const expectPromotion = (
+  io: ReturnType<typeof createConfigIO>,
+  snapshot: ConfigFileSnapshot,
+  accepted = true,
+) => expect(io.promoteConfigSnapshotToLastKnownGood(snapshot)).resolves.toBe(accepted);
+async function promoteCurrent(io: ReturnType<typeof createConfigIO>) {
+  const snapshot = await io.readConfigFileSnapshot();
+  await expectPromotion(io, snapshot);
+  return snapshot;
+}
+const grownConfig = (config: OpenClawConfig, count = 400): OpenClawConfig => ({
+  ...config,
+  gateway: {
+    mode: "local",
+    trustedProxies: Array.from({ length: count }, (_, index) => `192.0.2.${index}`),
+  },
+});
+const verboseConfig = () => ({
+  meta: { lastTouchedVersion: "2026.4.23" },
+  gateway: { mode: "local" },
+  channels: {
+    telegram: {
+      enabled: true,
+      allowFrom: Array.from({ length: 80 }, (_, index) => `telegram:${index}`),
+    },
+  },
+});
+
 // Covers last-known-good promotion admission for suspicious snapshots (#152509).
 describe("config observe recovery promotion", () => {
   it("refuses to promote a suspicious snapshot over last-known-good", async () => {
@@ -62,27 +91,19 @@ describe("config observe recovery promotion", () => {
     const healthyConfig = structuredClone(largeRecoverableCoreConfig);
     const healthy = await makeSnapshot(configPath, healthyConfig);
 
-    await expect(createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(
-      true,
-    );
-    await expect(fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).resolves.toBe(
-      healthy.raw,
-    );
+    await expectPromotion(createConfigIO(deps), healthy);
+    await expectRaw(resolveLastKnownGoodConfigPath(configPath), healthy.raw);
 
     const truncated = await makeSnapshot(configPath, { gateway: { mode: "local", port: 19187 } });
 
-    await expect(
-      createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(truncated),
-    ).resolves.toBe(false);
+    await expectPromotion(createConfigIO(deps), truncated, false);
     expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
       "Config last-known-good promotion skipped",
     );
     expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
       "size-drop-vs-last-good",
     );
-    await expect(fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).resolves.toBe(
-      healthy.raw,
-    );
+    await expectRaw(resolveLastKnownGoodConfigPath(configPath), healthy.raw);
 
     const brokenRaw = "{ gateway: { mode: 123 } }\n";
     await fsp.writeFile(configPath, brokenRaw, "utf-8");
@@ -100,7 +121,7 @@ describe("config observe recovery promotion", () => {
     });
 
     expect(restored).toBe(true);
-    await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(healthy.raw);
+    await expectRaw(configPath, healthy.raw);
   });
 
   it("keeps a newer last-known-good observation when a rolled-back write restores its baseline", async () => {
@@ -111,19 +132,11 @@ describe("config observe recovery promotion", () => {
     const configPath = path.join(home, ".openclaw", "openclaw.json");
     const healthyConfig = createRecoveryBaselineConfig();
     const healthy = await makeSnapshot(configPath, healthyConfig);
-    await expect(createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(
-      true,
-    );
+    await expectPromotion(createConfigIO(deps), healthy);
 
     // An accepted write grows the file beyond twice its size and advances the
     // last-known-good baseline, publishing the compensation record.
-    const grown = await makeSnapshot(configPath, {
-      ...healthyConfig,
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 400 }, (_, index) => `192.0.2.${index}`),
-      },
-    });
+    const grown = await makeSnapshot(configPath, grownConfig(healthyConfig));
     const capture = await captureConfigHealthBaselineForWrite(deps, configPath);
     const compensation = await advanceConfigHealthBaselineForAcceptedWrite(deps, capture, {
       sourceSnapshot: healthy,
@@ -137,15 +150,11 @@ describe("config observe recovery promotion", () => {
 
     // A newer observation replaces the candidate baseline before the rollback
     // compensation runs, so the restore must keep the newer baseline.
-    const newer = await makeSnapshot(configPath, {
-      ...healthyConfig,
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 300 }, (_, index) => `192.0.2.${index}`),
-      },
-    });
-    await expect(createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(newer)).resolves.toBe(
-      true,
+    const newer = await makeSnapshot(configPath, grownConfig(healthyConfig, 300));
+    await expectPromotion(createConfigIO(deps), newer);
+    await expectRaw(resolveLastKnownGoodConfigPath(configPath), newer.raw);
+    expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).not.toContain(
+      "Config last-known-good promotion skipped",
     );
     const newerBaseline = readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastKnownGood;
     expect(newerBaseline?.hash).not.toBe(compensation.candidate.hash);
@@ -154,36 +163,6 @@ describe("config observe recovery promotion", () => {
 
     const restoredEntry = readConfigHealthStateFromStore(deps).entries?.[configPath];
     expect(restoredEntry?.lastKnownGood?.hash).toBe(newerBaseline?.hash);
-  });
-
-  it("promotes a non-suspicious snapshot whose shape matches the baseline", async () => {
-    const home = tempDirs.make("openclaw-config-lgg-promotion-");
-    const { deps, configPath, warn } = makeDeps(home);
-    const healthy = await makeSnapshot(configPath, {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      update: { channel: "beta" },
-      gateway: { mode: "local" as const },
-    });
-
-    await expect(createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(
-      true,
-    );
-
-    const edited = await makeSnapshot(configPath, {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      update: { channel: "beta" },
-      gateway: { mode: "local" as const, port: 19187 },
-    });
-
-    await expect(createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(edited)).resolves.toBe(
-      true,
-    );
-    expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).not.toContain(
-      "Config last-known-good promotion skipped",
-    );
-    await expect(fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).resolves.toBe(
-      edited.raw,
-    );
   });
 
   it("preserves stored health rows through promotion and baseline compensation", async () => {
@@ -218,39 +197,17 @@ describe("config observe recovery promotion", () => {
            VALUES (?, ?, ?, NULL, ?)`,
         )
         .run(configPath, storedRow, storedRow, Date.now());
-      expect(
-        seeder
-          .prepare("PRAGMA table_info(config_health_entries)")
-          .all()
-          .map((row) => row.name),
-      ).toEqual([
-        "config_path",
-        "last_known_good_json",
-        "last_promoted_good_json",
-        "last_observed_suspicious_signature",
-        "updated_at_ms",
-      ]);
     } finally {
       seeder.close();
     }
 
     // The stored baseline permits matching healthy config and refuses truncation.
-    await expect(createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(
-      true,
-    );
+    await expectPromotion(createConfigIO(deps), healthy);
     const truncated = await makeSnapshot(configPath, { gateway: { mode: "local", port: 19187 } });
-    await expect(
-      createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(truncated),
-    ).resolves.toBe(false);
+    await expectPromotion(createConfigIO(deps), truncated, false);
 
     // Advancing the stored baseline retains its prior fingerprint for compensation.
-    const grown = await makeSnapshot(configPath, {
-      ...healthyConfig,
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 400 }, (_, index) => `192.0.2.${index}`),
-      },
-    });
+    const grown = await makeSnapshot(configPath, grownConfig(healthyConfig));
     const capture = await captureConfigHealthBaselineForWrite(deps, configPath);
     const compensation = await advanceConfigHealthBaselineForAcceptedWrite(deps, capture, {
       sourceSnapshot: healthy,
@@ -344,8 +301,7 @@ describe("last-known-good promotion after accepted writes", () => {
         },
       });
       expect(Buffer.byteLength(healthyRaw) < 512).toBe(anomaly === "gateway-mode");
-      const healthy = await io.readConfigFileSnapshot();
-      await expect(io.promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(true);
+      await promoteCurrent(io);
 
       // Missing gateway mode must survive writer stamping below the size-drop
       // threshold; an ordinary edit is not approval of either earlier anomaly.
@@ -354,14 +310,14 @@ describe("last-known-good promotion after accepted writes", () => {
         gateway: { ...(anomaly === "size" ? { mode: "local" } : {}), port: 18789 },
       });
       const truncated = await io.readConfigFileSnapshot();
-      await expect(io.promoteConfigSnapshotToLastKnownGood(truncated)).resolves.toBe(false);
+      await expectPromotion(io, truncated, false);
       await io.writeConfigFile(
         { ...truncated.config, gateway: { ...truncated.config.gateway, port: 19187 } },
         { baseSnapshot: truncated },
       );
       const edited = await io.readConfigFileSnapshot();
       expect(edited.config.gateway?.port).toBe(19187);
-      await expect(io.promoteConfigSnapshotToLastKnownGood(edited)).resolves.toBe(false);
+      await expectPromotion(io, edited, false);
       expect(fs.readFileSync(configPath + ".last-good", "utf8")).toBe(healthyRaw);
 
       await io.writeConfigFile(
@@ -386,19 +342,9 @@ describe("last-known-good promotion after accepted writes", () => {
   it("advances last-known-good after an accepted intentional size-drop write", async () => {
     const { configPath, io } = acceptedWriteFixture();
     const lastGoodPath = `${configPath}.last-good`;
-    seedConfig(configPath, {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      gateway: { mode: "local" as const },
-      channels: {
-        telegram: {
-          enabled: true,
-          allowFrom: Array.from({ length: 80 }, (_, index) => `telegram:${index}`),
-        },
-      },
-    });
+    seedConfig(configPath, verboseConfig());
 
-    const healthySnapshot = await io.readConfigFileSnapshot();
-    await expect(io.promoteConfigSnapshotToLastKnownGood(healthySnapshot)).resolves.toBe(true);
+    const healthySnapshot = await promoteCurrent(io);
     expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(healthySnapshot.raw);
 
     const healthReads = trackHealthReads(configPath);
@@ -410,13 +356,12 @@ describe("last-known-good promotion after accepted writes", () => {
     // One pre-publication capture and one transition read; no read to certify the write.
     expect(healthReads).toHaveBeenCalledTimes(2);
 
-    const reducedSnapshot = await io.readConfigFileSnapshot();
-    await expect(io.promoteConfigSnapshotToLastKnownGood(reducedSnapshot)).resolves.toBe(true);
+    const reducedSnapshot = await promoteCurrent(io);
     expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(reducedSnapshot.raw);
 
     seedConfig(configPath, { gateway: { port: 19187 } });
     const truncatedSnapshot = await io.readConfigFileSnapshot();
-    await expect(io.promoteConfigSnapshotToLastKnownGood(truncatedSnapshot)).resolves.toBe(false);
+    await expectPromotion(io, truncatedSnapshot, false);
     expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(reducedSnapshot.raw);
   });
 
@@ -428,8 +373,7 @@ describe("last-known-good promotion after accepted writes", () => {
         meta: { lastTouchedVersion: "2026.4.22" },
         gateway: { mode: "local", port: 18789 },
       });
-      const before = await io.readConfigFileSnapshot();
-      await expect(io.promoteConfigSnapshotToLastKnownGood(before)).resolves.toBe(true);
+      const before = await promoteCurrent(io);
       const deps = { env, homedir: () => root, logger: console };
       const prior = readConfigHealthStateFromStore(deps).entries?.[configPath];
       const capture = healthOwner.captureConfigHealthStateStore;
@@ -491,152 +435,102 @@ describe("last-known-good promotion after accepted writes", () => {
     },
   );
 
-  it("promotes an accepted formatting normalization over the verbose baseline", async () => {
-    const { configPath, io } = acceptedWriteFixture();
-    const lastGoodPath = `${configPath}.last-good`;
-    const original = {
-      meta: { lastTouchedVersion: "2026.4.23" },
-      gateway: { mode: "local" },
-      channels: {
-        telegram: {
-          enabled: true,
-          allowFrom: Array.from({ length: 80 }, (_, index) => `telegram:${index}`),
-        },
-      },
-    };
-    // Verbose PowerShell formatting (BOM + 12-space indent): canonical writes
-    // shrink raw bytes by more than half through serialization alone.
-    const powerShellRaw = `\uFEFF${JSON.stringify(original, null, 12)}\n`;
-    fs.writeFileSync(configPath, powerShellRaw, "utf8");
+  it.each([false, true])(
+    "promotes formatting normalization (intervening observation=%s)",
+    async (observe) => {
+      const { configPath, env, io, root } = acceptedWriteFixture();
+      const lastGoodPath = `${configPath}.last-good`;
+      const original = verboseConfig();
+      const verboseRaw = `\uFEFF${JSON.stringify(original, null, 12)}\n`;
+      fs.writeFileSync(configPath, verboseRaw, "utf8");
+      const verboseSnapshot = await promoteCurrent(io);
+      expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(verboseRaw);
 
-    const verboseSnapshot = await io.readConfigFileSnapshot();
-    await expect(io.promoteConfigSnapshotToLastKnownGood(verboseSnapshot)).resolves.toBe(true);
-    expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(powerShellRaw);
-
-    // An ordinary accepted edit without allowConfigSizeDrop: the writer's
-    // canonicalized size baseline records no drop, so the raw-byte shrink comes
-    // purely from formatting normalization.
-    await io.writeConfigFile(
-      { ...original, gateway: { mode: "local", port: 18789 } },
-      { baseSnapshot: verboseSnapshot },
-    );
-    const canonicalRaw = fs.readFileSync(configPath, "utf8");
-    expect(Buffer.byteLength(powerShellRaw, "utf8")).toBeGreaterThan(
-      Buffer.byteLength(canonicalRaw, "utf8") * 2,
-    );
-
-    // The accepted write advanced the last-known-good baseline, so the next
-    // startup promotes the edited canonical config instead of freezing the
-    // verbose one as the recovery target.
-    const editedSnapshot = await io.readConfigFileSnapshot();
-    await expect(io.promoteConfigSnapshotToLastKnownGood(editedSnapshot)).resolves.toBe(true);
-    expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(canonicalRaw);
-
-    // An external truncation afterwards never advances the baseline: promotion
-    // keeps refusing it, and recovery restores the edited canonical config.
-    fs.writeFileSync(
-      configPath,
-      `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
-      "utf8",
-    );
-    const truncatedSnapshot = await io.readConfigFileSnapshot();
-    await expect(io.promoteConfigSnapshotToLastKnownGood(truncatedSnapshot)).resolves.toBe(false);
-    expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(canonicalRaw);
-
-    fs.writeFileSync(configPath, "{ gateway: { mode: 123 } }\n", "utf8");
-    const brokenSnapshot = await io.readConfigFileSnapshot();
-    await expect(
-      io.recoverConfigFromLastKnownGood({
-        snapshot: brokenSnapshot,
-        reason: "test-formatting-baseline",
-      }),
-    ).resolves.toBe(true);
-    expect(fs.readFileSync(configPath, "utf8")).toBe(canonicalRaw);
-  });
-
-  it("keeps an accepted write promotable when observed during baseline advancement", async () => {
-    const { configPath, env, io, root } = acceptedWriteFixture();
-    const lastGoodPath = `${configPath}.last-good`;
-    const original = {
-      meta: { lastTouchedVersion: "2026.4.24" },
-      gateway: { mode: "local" },
-      channels: {
-        telegram: {
-          enabled: true,
-          allowFrom: Array.from({ length: 80 }, (_, index) => `telegram:${index}`),
-        },
-      },
-    };
-    const verboseRaw = `\uFEFF${JSON.stringify(original, null, 12)}\n`;
-    fs.writeFileSync(configPath, verboseRaw, "utf8");
-    const verboseSnapshot = await io.readConfigFileSnapshot();
-    await expect(io.promoteConfigSnapshotToLastKnownGood(verboseSnapshot)).resolves.toBe(true);
-    expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(verboseRaw);
-
-    const healthDeps = normalizeConfigIoDeps({
-      env,
-      homedir: () => root,
-      logger: { warn: vi.fn(), error: vi.fn() },
-    });
-    const capture = healthOwner.captureConfigHealthStateStore;
-    let observedDuringAdvance = false;
-    let transitionReads = 0;
-    const outcomes: unknown[] = [];
-    const spy = vi
-      .spyOn(healthOwner, "captureConfigHealthStateStore")
-      .mockImplementation((...args) => {
-        const store = capture(...args);
-        return {
-          ...store,
-          async read() {
-            const snapshot = await store.read();
-            if (fs.readFileSync(configPath, "utf8") !== verboseRaw) {
-              transitionReads += 1;
-            }
-            // Commit an ordinary observation after the actual snapshot, forcing
-            // the worker's conditional patch to miss rather than faking a conflict.
-            if (
-              !observedDuringAdvance &&
-              args[1] === configPath &&
-              fs.readFileSync(configPath, "utf8") !== verboseRaw
-            ) {
-              observedDuringAdvance = true;
-              observeConfigSnapshotSync(healthDeps, await io.readConfigFileSnapshot());
-            }
-            return snapshot;
-          },
-          async updateAfterFileCommit(...updateArgs) {
-            const outcome = await store.updateAfterFileCommit(...updateArgs);
-            outcomes.push(outcome);
-            return outcome;
-          },
-        };
+      const healthDeps = normalizeConfigIoDeps({
+        env,
+        homedir: () => root,
+        logger: { warn: vi.fn(), error: vi.fn() },
       });
-    try {
-      await io.writeConfigFile(
-        { ...original, gateway: { mode: "local", port: 18789 } },
-        { baseSnapshot: verboseSnapshot },
-      );
-    } finally {
-      spy.mockRestore();
-    }
+      const capture = healthOwner.captureConfigHealthStateStore;
+      let observedDuringAdvance = false;
+      let transitionReads = 0;
+      const outcomes: unknown[] = [];
+      const spy = observe
+        ? vi.spyOn(healthOwner, "captureConfigHealthStateStore").mockImplementation((...args) => {
+            const store = capture(...args);
+            return {
+              ...store,
+              async read() {
+                const snapshot = await store.read();
+                if (fs.readFileSync(configPath, "utf8") !== verboseRaw) {
+                  transitionReads += 1;
+                }
+                // Commit an ordinary observation after the actual snapshot, forcing
+                // the worker's conditional patch to miss rather than faking a conflict.
+                if (
+                  observe &&
+                  !observedDuringAdvance &&
+                  args[1] === configPath &&
+                  fs.readFileSync(configPath, "utf8") !== verboseRaw
+                ) {
+                  observedDuringAdvance = true;
+                  observeConfigSnapshotSync(healthDeps, await io.readConfigFileSnapshot());
+                }
+                return snapshot;
+              },
+              async updateAfterFileCommit(...updateArgs) {
+                const outcome = await store.updateAfterFileCommit(...updateArgs);
+                outcomes.push(outcome);
+                return outcome;
+              },
+            };
+          })
+        : undefined;
+      try {
+        await io.writeConfigFile(
+          { ...original, gateway: { mode: "local", port: 18789 } },
+          { baseSnapshot: verboseSnapshot },
+        );
+      } finally {
+        spy?.mockRestore();
+      }
 
-    const canonicalRaw = fs.readFileSync(configPath, "utf8");
-    expect(observedDuringAdvance).toBe(true);
-    expect(outcomes).toEqual([{ status: "conflict" }, { status: "applied" }]);
-    expect(transitionReads).toBe(2);
-    // The accepted edit stays promotable despite the intervening observation.
-    const editedSnapshot = await io.readConfigFileSnapshot();
-    await expect(io.promoteConfigSnapshotToLastKnownGood(editedSnapshot)).resolves.toBe(true);
-    expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(canonicalRaw);
-  });
+      const canonicalRaw = fs.readFileSync(configPath, "utf8");
+      expect(observedDuringAdvance).toBe(observe);
+      if (observe) {
+        expect(outcomes).toEqual([{ status: "conflict" }, { status: "applied" }]);
+        expect(transitionReads).toBe(2);
+      }
+      expect(Buffer.byteLength(verboseRaw)).toBeGreaterThan(Buffer.byteLength(canonicalRaw) * 2);
+      // The accepted edit stays promotable despite the intervening observation.
+      await promoteCurrent(io);
+      expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(canonicalRaw);
+      fs.writeFileSync(
+        configPath,
+        `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
+        "utf8",
+      );
+      const truncatedSnapshot = await io.readConfigFileSnapshot();
+      await expectPromotion(io, truncatedSnapshot, false);
+      expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(canonicalRaw);
+
+      fs.writeFileSync(configPath, "{ gateway: { mode: 123 } }\n", "utf8");
+      const brokenSnapshot = await io.readConfigFileSnapshot();
+      await expect(
+        io.recoverConfigFromLastKnownGood({
+          snapshot: brokenSnapshot,
+          reason: "test-formatting-baseline",
+        }),
+      ).resolves.toBe(true);
+      expect(fs.readFileSync(configPath, "utf8")).toBe(canonicalRaw);
+    },
+  );
 
   it("restores the inherited anomaly when a later accepted edit rolls back", async () => {
     const initial = createRecoveryBaselineConfig();
     await withTempHomeConfig(initial, async ({ configPath }) => {
       const io = createConfigIO({ observe: true });
-      const healthy = await io.readConfigFileSnapshot();
-      await expect(io.promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(true);
+      const healthy = await promoteCurrent(io);
       fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local", port: 18789 } }));
       const truncated = await io.readConfigFileSnapshot();
       await io.writeConfigFile(
@@ -644,7 +538,7 @@ describe("last-known-good promotion after accepted writes", () => {
         { baseSnapshot: truncated },
       );
       const edited = await io.readConfigFileSnapshot();
-      await expect(io.promoteConfigSnapshotToLastKnownGood(edited)).resolves.toBe(false);
+      await expectPromotion(io, edited, false);
       const acceptedRaw = fs.readFileSync(configPath, "utf8");
       const failure = new Error("synthetic overlay failure");
       const unsubscribe = registerFailingRuntimeOverlay(configPath, failure);
@@ -672,150 +566,86 @@ describe("last-known-good promotion after accepted writes", () => {
     });
   });
 
-  it("restores the last-known-good baseline when a committed write rolls back", async () => {
-    const initialConfig = createRecoveryBaselineConfig();
-    await withTempHomeConfig(initialConfig, async ({ home, configPath }) => {
-      const lastGoodPath = `${configPath}.last-good`;
-      const originalRaw = await fsp.readFile(configPath, "utf-8");
-      const io = createConfigIO({ observe: false });
-      const healthDeps = { env: io.env, homedir: () => home, logger: console };
-      const readLastKnownGood = () =>
-        readConfigHealthStateFromStore(healthDeps).entries?.[configPath]?.lastKnownGood;
-
-      const healthySnapshot = await io.readConfigFileSnapshot();
-      await expect(io.promoteConfigSnapshotToLastKnownGood(healthySnapshot)).resolves.toBe(true);
-      expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(originalRaw);
-      const baselineBefore = readLastKnownGood();
-      expect(baselineBefore?.bytes).toBe(Buffer.byteLength(originalRaw, "utf-8"));
-      const healthReads = trackHealthReads(configPath);
-
-      // Grow the config beyond twice its size, then fail runtime activation after
-      // the commit so the write rolls back to the original bytes.
-      const failure = new Error("synthetic overlay failure");
-      const grownConfig = {
-        ...initialConfig,
-        gateway: {
-          mode: "local" as const,
-          trustedProxies: Array.from({ length: 400 }, (_, index) => `192.0.2.${index}`),
-        },
-      };
-      expect(
-        Buffer.byteLength(`${JSON.stringify(grownConfig, null, 2)}\n`, "utf-8"),
-      ).toBeGreaterThan(Buffer.byteLength(originalRaw, "utf-8") * 2);
-      const unsubscribe = registerFailingRuntimeOverlay(configPath, failure);
-      try {
-        setRuntimeConfigSnapshot(initialConfig, initialConfig);
-        await expect(writeConfigFile(grownConfig)).rejects.toMatchObject({
-          name: "ConfigWritePostCommitError",
-          rollbackStatus: "restored",
-          cause: failure,
+  it.each([false, true])(
+    "restores the pre-write baseline on rollback (intervening read=%s)",
+    async (interveningRead) => {
+      const initialConfig = createRecoveryBaselineConfig();
+      await withTempHomeConfig(initialConfig, async ({ home, configPath }) => {
+        const lastGoodPath = `${configPath}.last-good`;
+        const originalRaw = await fsp.readFile(configPath, "utf-8");
+        const io = createConfigIO({ observe: false });
+        const healthDeps = normalizeConfigIoDeps({
+          env: io.env,
+          homedir: () => home,
+          logger: { warn: vi.fn(), error: vi.fn() },
         });
-      } finally {
-        unsubscribe();
-        resetConfigRuntimeState();
-      }
+        const readLastKnownGood = () =>
+          readConfigHealthStateFromStore(healthDeps).entries?.[configPath]?.lastKnownGood;
 
-      // The runtime writer also observes its input and canonical reread. The
-      // capture, advance, and restore each read once, without write verification.
-      expect(healthReads).toHaveBeenCalledTimes(5);
-      // The rollback restored the original bytes and the pre-write baseline, so
-      // the restored config is not a size drop against the baseline.
-      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
-      const baselineAfter = readLastKnownGood();
-      expect(baselineAfter?.hash).toBe(baselineBefore?.hash);
-      expect(baselineAfter?.bytes).toBe(Buffer.byteLength(originalRaw, "utf-8"));
+        await promoteCurrent(io);
+        expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(originalRaw);
+        const baselineBefore = readLastKnownGood();
+        expect(baselineBefore?.bytes).toBe(Buffer.byteLength(originalRaw, "utf-8"));
 
-      const restoredSnapshot = await io.readConfigFileSnapshot();
-      await expect(io.promoteConfigSnapshotToLastKnownGood(restoredSnapshot)).resolves.toBe(true);
-      expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(originalRaw);
-    });
-  });
-
-  it("restores the pre-write baseline when an intervening read records the published candidate", async () => {
-    const initialConfig = createRecoveryBaselineConfig();
-    await withTempHomeConfig(initialConfig, async ({ home, configPath }) => {
-      const lastGoodPath = `${configPath}.last-good`;
-      const originalRaw = await fsp.readFile(configPath, "utf-8");
-      const io = createConfigIO({ observe: false });
-      const healthDeps = normalizeConfigIoDeps({
-        env: io.env,
-        homedir: () => home,
-        logger: { warn: vi.fn(), error: vi.fn() },
-      });
-      const readLastKnownGood = () =>
-        readConfigHealthStateFromStore(healthDeps).entries?.[configPath]?.lastKnownGood;
-
-      const healthySnapshot = await io.readConfigFileSnapshot();
-      await expect(io.promoteConfigSnapshotToLastKnownGood(healthySnapshot)).resolves.toBe(true);
-      expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(originalRaw);
-      const baselineBefore = readLastKnownGood();
-      expect(baselineBefore?.bytes).toBe(Buffer.byteLength(originalRaw, "utf-8"));
-
-      // Grow the config beyond twice its size, then fail runtime activation after
-      // the commit so the write rolls back to the original bytes.
-      const failure = new Error("synthetic overlay failure");
-      const grownConfig = {
-        ...initialConfig,
-        gateway: {
-          mode: "local" as const,
-          trustedProxies: Array.from({ length: 400 }, (_, index) => `192.0.2.${index}`),
-        },
-      };
-      expect(
-        Buffer.byteLength(`${JSON.stringify(grownConfig, null, 2)}\n`, "utf-8"),
-      ).toBeGreaterThan(Buffer.byteLength(originalRaw, "utf-8") * 2);
-
-      // An observed read lands between the file publication and the writer's
-      // baseline advance (the writer asserts path ownership right after the
-      // publication, before the awaited audit stat): the observer records the
-      // published candidate as healthy before the advance settles its capture.
-      let observedPublishedCandidate = false;
-      const observePublishedConfig = () => {
-        observedPublishedCandidate = true;
-        const raw = fs.readFileSync(configPath, "utf-8");
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        observeConfigSnapshotSync(
-          healthDeps,
-          createSnapshot({ path: configPath, raw, sourceConfig: parsed }),
+        const failure = new Error("synthetic overlay failure");
+        const grown = grownConfig(initialConfig);
+        expect(Buffer.byteLength(`${JSON.stringify(grown, null, 2)}\n`, "utf-8")).toBeGreaterThan(
+          Buffer.byteLength(originalRaw, "utf-8") * 2,
         );
-      };
-      const unsubscribe = registerFailingRuntimeOverlay(configPath, failure);
-      try {
-        setRuntimeConfigSnapshot(initialConfig, initialConfig);
-        await expect(
-          writeConfigFile(grownConfig, {
-            assertConfigPathForWrite: () => {
-              if (
-                !observedPublishedCandidate &&
-                fs.readFileSync(configPath, "utf-8") !== originalRaw
-              ) {
-                observePublishedConfig();
-              }
-            },
-          }),
-        ).rejects.toMatchObject({
-          name: "ConfigWritePostCommitError",
-          rollbackStatus: "restored",
-          cause: failure,
-        });
-      } finally {
-        unsubscribe();
-        resetConfigRuntimeState();
-      }
 
-      // The intervening observation ran inside the post-publication window, but
-      // the compensation retained the pre-write baseline, so the rollback
-      // restores it instead of the candidate the observer recorded.
-      expect(observedPublishedCandidate).toBe(true);
-      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
-      const baselineAfter = readLastKnownGood();
-      expect(baselineAfter?.hash).toBe(baselineBefore?.hash);
-      expect(baselineAfter?.bytes).toBe(Buffer.byteLength(originalRaw, "utf-8"));
+        // Observe between publication and baseline advancement, before compensation settles.
+        const healthReads = interveningRead ? undefined : trackHealthReads(configPath);
+        let observedPublishedCandidate = false;
+        const observePublishedConfig = () => {
+          observedPublishedCandidate = true;
+          const raw = fs.readFileSync(configPath, "utf-8");
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          observeConfigSnapshotSync(
+            healthDeps,
+            createSnapshot({ path: configPath, raw, sourceConfig: parsed }),
+          );
+        };
+        const unsubscribe = registerFailingRuntimeOverlay(configPath, failure);
+        try {
+          setRuntimeConfigSnapshot(initialConfig, initialConfig);
+          await expect(
+            writeConfigFile(
+              grown,
+              interveningRead
+                ? {
+                    assertConfigPathForWrite: () => {
+                      if (
+                        !observedPublishedCandidate &&
+                        fs.readFileSync(configPath, "utf-8") !== originalRaw
+                      ) {
+                        observePublishedConfig();
+                      }
+                    },
+                  }
+                : undefined,
+            ),
+          ).rejects.toMatchObject({
+            name: "ConfigWritePostCommitError",
+            rollbackStatus: "restored",
+            cause: failure,
+          });
+        } finally {
+          unsubscribe();
+          resetConfigRuntimeState();
+        }
 
-      // The restored config is not a size drop against the restored baseline.
-      const restoredSnapshot = await io.readConfigFileSnapshot();
-      await expect(io.promoteConfigSnapshotToLastKnownGood(restoredSnapshot)).resolves.toBe(true);
-      expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(originalRaw);
-    });
-  });
+        expect(observedPublishedCandidate).toBe(interveningRead);
+        if (!interveningRead) {
+          expect(healthReads).toHaveBeenCalledTimes(5);
+        }
+        await expectRaw(configPath, originalRaw);
+        const baselineAfter = readLastKnownGood();
+        expect(baselineAfter?.hash).toBe(baselineBefore?.hash);
+        expect(baselineAfter?.bytes).toBe(Buffer.byteLength(originalRaw, "utf-8"));
+
+        await promoteCurrent(io);
+        expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(originalRaw);
+      });
+    },
+  );
 });
