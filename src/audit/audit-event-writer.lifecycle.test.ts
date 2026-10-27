@@ -53,6 +53,14 @@ afterEach(async () => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function startWriter(options: Partial<Parameters<typeof createAuditEventWriter>[0]> = {}) {
+  return createAuditEventWriter({
+    ...options,
+    scheduler: options.scheduler ?? createTestGatewayScheduler(),
+    stateDir: tempDirs.make("audit-writer-"),
+  });
+}
+
 function event(sourceId: string): AgentRunStartedAuditEventInput {
   return { ...input(), sourceId, runId: sourceId };
 }
@@ -82,18 +90,42 @@ function mockEventRequests(handler: (sourceId: string) => Promise<AuditWriterRes
   return requests;
 }
 
+async function stopWriter(writer: ReturnType<typeof startWriter>) {
+  const stopping = writer.stop();
+  await vi.advanceTimersByTimeAsync(10_000);
+  await stopping;
+}
+
 async function advanceDispatch() {
-  await vi.advanceTimersByTimeAsync(1);
+  await vi.advanceTimersByTimeAsync(5);
   await vi.dynamicImportSettled();
 }
 
 describe("audit writer async settlement", () => {
+  it("coalesces neighboring turns without extending the first event's flush deadline", async () => {
+    const requests = mockEventRequests(async () => ({ status: "settled" }));
+    const writer = startWriter();
+    try {
+      await vi.advanceTimersByTimeAsync(5);
+      await writer.ready;
+      execute.mockClear();
+      for (const sourceId of ["first", "second", "third"]) {
+        expect(writer.record(event(sourceId))).toBe(true);
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      expect(requests).toEqual([]);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(requests).toEqual(["first", "second", "third"]);
+      expect(execute).toHaveBeenCalledTimes(1);
+    } finally {
+      await stopWriter(writer);
+    }
+  });
+
   it("counts both run records against the pending budget and releases them after settlement", async () => {
     const requests = mockEventRequests(async () => ({ status: "settled" }));
     const errors: string[] = [];
-    const writer = createAuditEventWriter({
-      scheduler: createTestGatewayScheduler(),
-      stateDir: tempDirs.make("audit-writer-pair-budget-"),
+    const writer = startWriter({
       maxPending: 2,
       onError: (error) => errors.push(error),
     });
@@ -117,9 +149,7 @@ describe("audit writer async settlement", () => {
       expect(requests).toEqual(["pair", "after"]);
       expect(errors).toEqual(["audit event queue is full (2); dropping metadata"]);
     } finally {
-      const stopping = writer.stop();
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
+      await stopWriter(writer);
     }
   });
 
@@ -128,10 +158,7 @@ describe("audit writer async settlement", () => {
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);
     execute.mockResolvedValue([]);
-    const writer = createAuditEventWriter({
-      scheduler,
-      stateDir: tempDirs.make("audit-writer-maintenance-"),
-    });
+    const writer = startWriter({ scheduler });
     try {
       await writer.ready;
       execute.mockClear();
@@ -169,26 +196,20 @@ describe("audit writer async settlement", () => {
       { status: "retry" },
     ]);
     const errors: string[] = [];
-    const writer = createAuditEventWriter({
-      scheduler: createTestGatewayScheduler(),
-      stateDir: tempDirs.make("audit-writer-maintenance-retry-"),
-      onError: (error) => errors.push(error),
-    });
+    const writer = startWriter({ onError: (error) => errors.push(error) });
     try {
       await advanceDispatch();
       await writer.ready;
       expect(errors).toEqual(["synthetic identity prune failure"]);
       expect(writer.record(event("after-maintenance"))).toBe(true);
-      await vi.advanceTimersByTimeAsync(23);
+      await vi.advanceTimersByTimeAsync(19);
       expect(requests).toEqual([]);
       expect(execute).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(2);
+      await vi.advanceTimersByTimeAsync(6);
       expect(requests).toEqual(["after-maintenance"]);
       expect(errors).toEqual(["synthetic identity prune failure"]);
     } finally {
-      const stopping = writer.stop();
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
+      await stopWriter(writer);
     }
   });
 
@@ -196,11 +217,7 @@ describe("audit writer async settlement", () => {
     const finish = createDeferred<AuditWriterResult[]>();
     execute.mockReturnValue(finish.promise);
     const errors: string[] = [];
-    const writer = createAuditEventWriter({
-      scheduler: createTestGatewayScheduler(),
-      stateDir: tempDirs.make("audit-writer-maintenance-settlement-"),
-      onError: (error) => errors.push(error),
-    });
+    const writer = startWriter({ onError: (error) => errors.push(error) });
     try {
       expect(writer.record(event("waiting"))).toBe(true);
       await advanceDispatch();
@@ -224,9 +241,7 @@ describe("audit writer async settlement", () => {
       expect(errors).toHaveLength(1);
     } finally {
       finish.resolve([]);
-      const stopping = writer.stop();
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
+      await stopWriter(writer);
     }
   });
 
@@ -238,9 +253,7 @@ describe("audit writer async settlement", () => {
       return await finish.promise;
     });
     const errors: string[] = [];
-    const writer = createAuditEventWriter({
-      scheduler: createTestGatewayScheduler(),
-      stateDir: tempDirs.make("audit-writer-settlement-"),
+    const writer = startWriter({
       maxPending: 2,
       onError: (error) => errors.push(error),
     });
@@ -280,9 +293,7 @@ describe("audit writer async settlement", () => {
       expect(errors).toHaveLength(2);
     } finally {
       finish.resolve({ status: "settled" });
-      const stopping = writer.stop();
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
+      await stopWriter(writer);
     }
   });
 
@@ -295,10 +306,7 @@ describe("audit writer async settlement", () => {
       }
       return { status: "settled" };
     });
-    const writer = createAuditEventWriter({
-      scheduler: createTestGatewayScheduler(),
-      stateDir: tempDirs.make("audit-writer-batch-retry-"),
-    });
+    const writer = startWriter();
     try {
       await advanceDispatch();
       await writer.ready;
@@ -311,9 +319,7 @@ describe("audit writer async settlement", () => {
       await vi.advanceTimersByTimeAsync(25);
       expect(requests).toEqual(["committed", "blocked", "blocked", "tail", "newer"]);
     } finally {
-      const stopping = writer.stop();
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
+      await stopWriter(writer);
     }
   });
 
@@ -329,11 +335,7 @@ describe("audit writer async settlement", () => {
       return { status: "settled" };
     });
     const errors: string[] = [];
-    const writer = createAuditEventWriter({
-      scheduler: createTestGatewayScheduler(),
-      stateDir: tempDirs.make("audit-writer-unknown-outcome-"),
-      onError: (error) => errors.push(error),
-    });
+    const writer = startWriter({ onError: (error) => errors.push(error) });
     try {
       await advanceDispatch();
       await writer.ready;
@@ -361,18 +363,13 @@ describe("audit writer async settlement", () => {
       expect(batches[1]).toEqual(batches[0]);
       expect(errors).toEqual([failure.message]);
     } finally {
-      const stopping = writer.stop();
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
+      await stopWriter(writer);
     }
   });
 
   it("settles an absent-database batch once without rescheduling", async () => {
     execute.mockResolvedValue(undefined);
-    const writer = createAuditEventWriter({
-      scheduler: createTestGatewayScheduler(),
-      stateDir: tempDirs.make("audit-writer-absent-database-"),
-    });
+    const writer = startWriter();
     try {
       await advanceDispatch();
       await writer.ready;
@@ -386,9 +383,7 @@ describe("audit writer async settlement", () => {
       await vi.advanceTimersByTimeAsync(100);
       expect(execute).toHaveBeenCalledTimes(attempts);
     } finally {
-      const stopping = writer.stop();
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
+      await stopWriter(writer);
     }
   });
 });

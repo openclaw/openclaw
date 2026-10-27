@@ -23,6 +23,7 @@ import type { ExecutionIdentityAdmissionWork } from "./execution-identity-admiss
 
 const MAX_PENDING_AUDIT_EVENTS = 4_096;
 const MAX_AUDIT_BATCH_SIZE = 32;
+const AUDIT_BATCH_DELAY_MS = 5;
 const MAX_CONSECUTIVE_UNKNOWN_OUTCOMES = 3;
 const AUDIT_MAINTENANCE_INTERVAL_MS = 60 * 60_000;
 const AUDIT_RETRY_DELAY_MS = 25;
@@ -67,7 +68,7 @@ export function createAuditEventWriter(options: {
   let draining = false;
   let shutdownExpired = false;
   let maintenancePending = true;
-  let scheduled: ReturnType<typeof setImmediate> | undefined;
+  let scheduled: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let retryAttempt = 0;
   let retryDelayMs = 0;
@@ -171,7 +172,7 @@ export function createAuditEventWriter(options: {
     resolveStop = undefined;
     finish?.();
   };
-  const schedule = () => {
+  const schedule = (delayMs = 0) => {
     if (draining || shutdownExpired) {
       return;
     }
@@ -187,9 +188,9 @@ export function createAuditEventWriter(options: {
       }
       return;
     }
-    scheduled = setImmediate(() => {
+    scheduled = setTimeout(() => {
       void drainOne();
-    });
+    }, delayMs);
     if (!stopped) {
       scheduled.unref?.();
     }
@@ -296,7 +297,8 @@ export function createAuditEventWriter(options: {
       // Preserve the former Worker boundary's clone and prototype-stripping contract.
       queue.push(structuredClone(boundedMessage));
       pendingRows += rows;
-      schedule();
+      // Only an idle queue needs a window; in-flight writes already collect their successors.
+      schedule(AUDIT_BATCH_DELAY_MS);
       return true;
     } catch (error) {
       if (message.type !== "record-event" && message.type !== "record-run") {
@@ -336,7 +338,7 @@ export function createAuditEventWriter(options: {
           queue.length = 0;
           pendingRows = 0;
           if (scheduled) {
-            clearImmediate(scheduled);
+            clearTimeout(scheduled);
             scheduled = undefined;
           }
           if (retryTimer) {
