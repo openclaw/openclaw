@@ -40,7 +40,7 @@ import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import {
   getTranscriptState,
   handleTranscriptContextMenu,
-  handleTranscriptDoubleClick,
+  handleTranscriptSelectionMouseDown,
   handleTranscriptPointerUp,
   registerTranscriptElement,
   type ChatThreadProps,
@@ -73,6 +73,7 @@ export function ChatThread(input: {
 }) {
   const mobile = useContext(ChatConversationMobile);
   let root: HTMLDivElement | undefined;
+  let stopSelectionGesture: (() => void) | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
   const paneId = createMemo(() => input.props.paneId);
   onSettled(() => root && registerTranscriptElement(paneId(), root));
@@ -211,6 +212,7 @@ export function ChatThread(input: {
               listen(element, type, historyIntent, { passive: true }),
             );
             return () => {
+              stopSelectionGesture?.();
               stopHistory.forEach((stop) => stop());
               releaseViewport?.();
             };
@@ -275,7 +277,10 @@ export function ChatThread(input: {
             input.props.onOpenSessionLink?.(sessionTarget);
           }
         }}
-        onDblClick={handleTranscriptDoubleClick}
+        onMouseDown={(event) => {
+          stopSelectionGesture?.();
+          stopSelectionGesture = handleTranscriptSelectionMouseDown(event);
+        }}
         onContextMenu={(event) =>
           handleTranscriptContextMenu(
             event,

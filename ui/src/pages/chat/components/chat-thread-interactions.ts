@@ -364,31 +364,55 @@ function toggleTouchMessageMeta(event: PointerEvent, messageElements: Iterable<H
   }
 }
 
-export function handleTranscriptDoubleClick(event: MouseEvent) {
+export function handleTranscriptSelectionMouseDown(event: MouseEvent) {
   const thread = event.currentTarget;
-  const selection = window.getSelection();
+  const target = event.target;
   if (
+    event.button !== 0 ||
+    event.detail < 2 ||
     !(thread instanceof HTMLElement) ||
-    !selection ||
-    selection.isCollapsed ||
-    selection.rangeCount !== 1 ||
-    (event.target instanceof Element &&
-      event.target.closest("a, button, input, select, textarea, summary, [contenteditable]"))
+    !(target instanceof Element) ||
+    target.closest("a, button, input, select, textarea, summary, [contenteditable]")
   ) {
-    return;
+    return undefined;
   }
-  const anchor = selection.anchorNode;
-  const element = anchor instanceof Element ? anchor : anchor?.parentElement;
-  const bubble = element?.closest(".chat-bubble");
-  if (!bubble || !thread.contains(bubble)) {
+  const bubble = target.closest(".chat-bubble");
+  const view = thread.ownerDocument.defaultView;
+  if (!bubble || !thread.contains(bubble) || !view) {
+    return undefined;
+  }
+  // Capture the pressed message before mouseup/dblclick can target a common
+  // ancestor, including when the drag is released outside this transcript.
+  const listeners = new AbortController();
+  const stop = () => listeners.abort();
+  listen(
+    view,
+    "mouseup",
+    () => {
+      stop();
+      if (thread.isConnected && thread.contains(bubble)) {
+        boundMessageSelection(bubble);
+      }
+    },
+    { once: true, signal: listeners.signal },
+  );
+  listen(view, "blur", stop, { once: true, signal: listeners.signal });
+  return stop;
+}
+
+function boundMessageSelection(bubble: Element) {
+  const selection = bubble.ownerDocument.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount !== 1) {
     return;
   }
   const range = selection.getRangeAt(0);
-  if (bubble.contains(range.startContainer) && bubble.contains(range.endContainer)) {
+  if (
+    !range.intersectsNode(bubble) ||
+    (bubble.contains(range.startContainer) && bubble.contains(range.endContainer))
+  ) {
     return;
   }
-  // A second-click drag can extend the browser's word selection into another
-  // message. Bound only that gesture; ordinary drag and Select All remain native.
+  // Intersect only this multi-click gesture; ordinary drags and Select All stay native.
   const backwards =
     selection.anchorNode === range.endContainer && selection.anchorOffset === range.endOffset;
   const bounded = range.cloneRange();

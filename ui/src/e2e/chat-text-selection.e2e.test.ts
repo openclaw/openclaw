@@ -67,6 +67,22 @@ suite.define(() => {
         await page.getByRole("toolbar", { name: "Selection actions" }).waitFor();
         await page.keyboard.press("Escape");
       }
+      const thread = page.locator(".chat-thread");
+      await thread.focus();
+      await page.keyboard.press("ControlOrMeta+A");
+      const allText = await selection();
+      await thread.dblclick({ position: { x: 100, y: 400 } });
+      expect.soft(await selection(), "blank double-click preserves the native range").toBe(allText);
+      const from = await user.boundingBox();
+      const outside = await page.locator(".agent-chat__composer-combobox textarea").boundingBox();
+      if (!from || !outside) {
+        throw new Error("No outside-release geometry");
+      }
+      await page.mouse.click(from.x + 5, from.y + 10);
+      await page.mouse.down({ clickCount: 2 });
+      await page.mouse.move(outside.x + 5, outside.y + 10, { steps: 8 });
+      await page.mouse.up({ clickCount: 2 });
+      expect.soft(await selection(), "release outside the transcript stays bounded").toBe(prompt);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });
