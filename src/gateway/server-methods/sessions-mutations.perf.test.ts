@@ -22,7 +22,6 @@ import { promptReport } from "../../config/sessions/system-prompt-report.test-su
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -33,10 +32,7 @@ import { createSessionMutationContext } from "./sessions-mutations.native-consen
 import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import type { GatewayClient } from "./types.js";
 
-afterEach(async () => {
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-});
+afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 function humanClient(): GatewayClient {
   const client = createSessionMutationTestClient("perf-reviewer");
