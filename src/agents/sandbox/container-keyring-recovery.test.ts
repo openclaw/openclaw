@@ -4,14 +4,14 @@ import { retainSandboxContainerUsage } from "./container-usage.js";
 
 const fixture = vi.hoisted(() => ({ calls: [] as string[][], failRetry: false }));
 const id = (digit: string) => digit.repeat(64);
-const entries = ["newer", "active", "background", "old"].map((name, index) => ({
+const entries = ["newer", "active", "background", "builder", "old"].map((name, index) => ({
   containerName: name,
-  sessionKey: `agent:${name}:session`,
+  sessionKey: name === "builder" ? "worktree-dependencies:fixture" : `agent:${name}:session`,
   backendId: "podman",
   backendTarget: { key: "local", globalArgs: [] },
   image: "synthetic",
   createdAtMs: 1,
-  lastUsedAtMs: index === 0 ? 4 : index,
+  lastUsedAtMs: index === 0 ? 5 : index,
 }));
 // mock-isolation: synthetic custody and engine snapshots; production recovery owns selection and retry.
 vi.mock("./registry.js", () => ({

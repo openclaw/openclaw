@@ -13,7 +13,13 @@ import { resolveSandboxAgentId } from "./shared.js";
 import { captureSandboxStateOwner } from "./state-owner.js";
 
 function hasActiveUsage(scopeKey: string): boolean {
-  const agentId = resolveSandboxAgentId(scopeKey);
+  let agentId: string | undefined;
+  try {
+    agentId = resolveSandboxAgentId(scopeKey);
+  } catch {
+    // Builder and legacy scopes have no agent identity; leave their runtimes alone.
+    return true;
+  }
   // Process scopes can differ from workspace/profile scopes. Overprotect the agent
   // rather than guessing which container owns a still-running or uncertain exec.
   return (
