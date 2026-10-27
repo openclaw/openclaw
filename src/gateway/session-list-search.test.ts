@@ -173,7 +173,9 @@ test("non-status vocabulary misses skip per-row run state and model facts", () =
   });
   const display = vi.spyOn(rowContext.subagentRuns, "getDisplaySubagentRun");
   withPluginRuntimeRegistryScope(registry, () => {
+    using probe = vi.spyOn(String.prototype, "includes");
     expect(filterSessionEntries(params).entries).toEqual([]);
+    expect(probe.mock.contexts).not.toContain("");
     expect(projectActiveRun).not.toHaveBeenCalled();
     expect(getModelFacts).not.toHaveBeenCalled();
     expect(normalizeModelId).toHaveBeenCalledOnce();
