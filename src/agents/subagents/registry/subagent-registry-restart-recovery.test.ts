@@ -34,13 +34,25 @@ function expectNoSessionEffects() {
   expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
 }
 
+const childSession = () => mocks.entries[childSessionKey]!;
+const sweeperFor = (entry: ReturnType<typeof run>, runtime = gatewayRuntime) =>
+  createSubagentSweeperHarness({ current: runtime }, entry);
+
+async function expectRecovery(
+  entry: ReturnType<typeof run>,
+  status: "handled" | "ignored" | "deferred",
+) {
+  expect(await recover(entry)).toEqual({ status });
+  expectNoSessionEffects();
+}
+
 function retireOrphan(
   entry: ReturnType<typeof run>,
   session: Partial<(typeof mocks.entries)[string]> = {},
 ) {
   entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
   rotateAgentEventLifecycleGeneration();
-  Object.assign(mocks.entries[childSessionKey]!, {
+  Object.assign(childSession(), {
     lifecycleRunId: entry.runId,
     abortedLastRun: false,
     ...session,
@@ -140,10 +152,7 @@ describe("subagent registry restart recovery", () => {
           : {}),
       });
       const before = structuredClone(entry);
-      const { sweeper, runs, finalizeInterruptedSubagentRun } = createSubagentSweeperHarness(
-        { current: gatewayRuntime },
-        entry,
-      );
+      const { sweeper, runs, finalizeInterruptedSubagentRun } = sweeperFor(entry);
 
       await sweeper.recoverInterruptedRuns();
       await sweeper.sweepOnce();
@@ -163,10 +172,7 @@ describe("subagent registry restart recovery", () => {
       prepareRestartRecovery: () =>
         Date.now() < pausedUntilMs ? Promise.resolve(pausedUntilMs) : undefined,
     };
-    const { sweeper, finalizeInterruptedSubagentRun } = createSubagentSweeperHarness(
-      { current: runtime },
-      run(),
-    );
+    const { sweeper, finalizeInterruptedSubagentRun } = sweeperFor(run(), runtime);
     finalizeInterruptedSubagentRun.mockResolvedValue(1);
     try {
       await sweeper.recoverInterruptedRuns();
@@ -230,10 +236,7 @@ describe("subagent registry restart recovery", () => {
       vi.useFakeTimers();
       const entry = run();
       entry.execution.status = "interrupted";
-      const { sweeper, finalizeInterruptedSubagentRun } = createSubagentSweeperHarness(
-        { current: gatewayRuntime },
-        entry,
-      );
+      const { sweeper, finalizeInterruptedSubagentRun } = sweeperFor(entry);
       const lease =
         owner !== "run"
           ? await beginSessionEffect({
@@ -294,10 +297,9 @@ describe("subagent registry restart recovery", () => {
         if (owner === "queued") {
           entry.execution.status = "queued";
         }
-        return mocks.entries[childSessionKey];
+        return childSession();
       });
-      expect(await recover(entry)).toEqual({ status: "deferred" });
-      expectNoSessionEffects();
+      await expectRecovery(entry, "deferred");
     },
   );
 
@@ -331,14 +333,13 @@ describe("subagent registry restart recovery", () => {
       if (scenario !== "current lifecycle") {
         rotateAgentEventLifecycleGeneration();
       }
-      Object.assign(mocks.entries[childSessionKey]!, {
+      Object.assign(childSession(), {
         status: scenario.includes("completed session") ? "done" : undefined,
         lifecycleRunId: entry.runId,
         lastRunId: undefined,
         abortedLastRun: scenario.endsWith("stale abort marker"),
       });
-      expect(await recover(entry)).toEqual({ status: "ignored" });
-      expectNoSessionEffects();
+      await expectRecovery(entry, "ignored");
     });
 
     it.each([
@@ -348,13 +349,13 @@ describe("subagent registry restart recovery", () => {
       "newer visible run",
       "missing transcript",
     ])("does not adopt a hidden recovery with %s", async (scenario) => {
-      const entry = run({ taskRunId: "original-task-run" });
+      const entry = run();
       entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
-      entry.execution.transcriptTarget = { sessionKey: "agent:main:internal:recovered" };
+      hiddenRecovery(entry);
       if (scenario !== "current lifecycle") {
         rotateAgentEventLifecycleGeneration();
       }
-      Object.assign(mocks.entries[childSessionKey]!, {
+      Object.assign(childSession(), {
         status: undefined,
         lifecycleRunId: scenario === "newer visible run" ? "visible-run" : "original-task-run",
         abortedLastRun: false,
@@ -369,8 +370,7 @@ describe("subagent registry restart recovery", () => {
       if (scenario === "missing transcript") {
         entry.execution.transcriptTarget = undefined;
       }
-      expect(await recover(entry)).toEqual({ status: "ignored" });
-      expectNoSessionEffects();
+      await expectRecovery(entry, "ignored");
     });
 
     it.each(["session", "visible turn"])(
@@ -393,7 +393,7 @@ describe("subagent registry restart recovery", () => {
           replacementKind === "session" ? "replacement-session" : "session-id";
         mocks.applySessionEntryExactReplacements.mockImplementationOnce(async ({ update }) => {
           const replacement = {
-            ...mocks.entries[childSessionKey]!,
+            ...childSession(),
             sessionId: replacementSessionId,
             lifecycleRunId: "replacement-run",
           };
@@ -417,7 +417,7 @@ describe("subagent registry restart recovery", () => {
       entry.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
     }
     if (owner === "non-aborted") {
-      mocks.entries[childSessionKey]!.abortedLastRun = false;
+      childSession().abortedLastRun = false;
     }
     expect(await recover(entry)).toEqual({ status: "ignored" });
     expect(dispatchAgent).not.toHaveBeenCalled();
@@ -462,7 +462,7 @@ describe("interrupted requester-settle continuation ownership", () => {
     const worker = run({ runId, taskRunId: "original-task" });
     worker.execution.status = "interrupted";
     worker.execution.interruptionReason = "gateway-restart";
-    mocks.entries[childSessionKey]!.lifecycleRunId = runId;
+    childSession().lifecycleRunId = runId;
     const context = { recoveryRuntime: gatewayRuntime } as GatewayRequestContext;
     let open = true;
     bindGatewayContextResolver(child, () => (open ? context : undefined));
@@ -481,7 +481,7 @@ describe("interrupted requester-settle continuation ownership", () => {
     const { worker } = cohort();
     worker.execution.status = "running";
     worker.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
-    Object.assign(mocks.entries[childSessionKey]!, {
+    Object.assign(childSession(), {
       status: undefined,
       abortedLastRun: false,
     });
@@ -513,9 +513,8 @@ describe("interrupted requester-settle continuation ownership", () => {
       if (privateCompletion) {
         child.completionTarget = "parent";
       }
-      expect(await recover(worker)).toEqual({ status: "handled" });
+      await expectRecovery(worker, "handled");
       expect(worker.execution.outcome).toBeUndefined();
-      expectNoSessionEffects();
     },
   );
 
@@ -618,12 +617,10 @@ describe("interrupted requester-settle continuation ownership", () => {
           : "announce:requester-settle:main:agent:main:subagent:restart-child:settled-leaf:yield-1:retry-1";
       subagentRuns.delete(worker.runId);
       const restored = run({ ...worker, runId });
-      mocks.entries[childSessionKey]!.lifecycleRunId = runId;
+      childSession().lifecycleRunId = runId;
       subagentRuns.set(runId, restored);
-
-      expect(await recover(restored)).toEqual({ status: "handled" });
+      await expectRecovery(restored, "handled");
       expect(restored.execution.outcome).toBeUndefined();
-      expectNoSessionEffects();
     },
   );
 
@@ -631,8 +628,7 @@ describe("interrupted requester-settle continuation ownership", () => {
     const { child, worker } = cohort();
     child.requesterSettleWake!.batchRunIds!.push("retired-member");
 
-    expect(await recover(worker)).toEqual({ status: "handled" });
-    expectNoSessionEffects();
+    await expectRecovery(worker, "handled");
   });
 
   it.each(["yielded", "finished", "same-task replacement"] as const)(
@@ -663,7 +659,7 @@ describe("interrupted requester-settle continuation ownership", () => {
       }).runId;
       subagentRuns.delete(worker.runId);
       const continuation = run({ ...worker, runId: continuationRunId });
-      mocks.entries[childSessionKey]!.lifecycleRunId = continuation.runId;
+      childSession().lifecycleRunId = continuation.runId;
       bindGatewayContextResolver(sibling, getGatewayContextResolver(child)!);
       subagentRuns.set(sibling.runId, sibling);
       subagentRuns.set(continuation.runId, continuation);

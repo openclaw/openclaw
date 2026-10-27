@@ -141,6 +141,10 @@ function expectRetained(entry: ReturnType<typeof createSubagentRunRecord>) {
   expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toEqual(entry);
 }
 
+function expectError(result: unknown, message: string) {
+  expect(result).toMatchObject({ error: expect.stringContaining(message) });
+}
+
 it.each([
   "owned",
   "legacy-owned",
@@ -324,9 +328,7 @@ it.each([
           execAborted: true,
         });
         if (selection === "gateway-error") {
-          expect(result).toMatchObject({
-            error: expect.stringContaining("Synthetic parent command cleanup failed"),
-          });
+          expectError(result, "Synthetic parent command cleanup failed");
         }
         execAborted = result?.execAborted === true;
       } else if (selection === "channel") {
@@ -382,13 +384,9 @@ it.each([
         if (alternate) {
           expect(injected).toBe(true);
           expectEvicted(ordinaryCommand);
-          expect(result).toMatchObject({
-            error: expect.stringContaining("command cleanup could not be confirmed"),
-          });
+          expectError(result, "command cleanup could not be confirmed");
           if (selection === "alternate-freshness-failed") {
-            expect(result).toMatchObject({
-              error: expect.stringContaining("Synthetic freshness read failed"),
-            });
+            expectError(result, "Synthetic freshness read failed");
           }
         }
         execAborted = result.execAborted === true;
@@ -631,11 +629,7 @@ it.each([
           : {}),
       });
       if (cleanup === "late-revoked-evicted") {
-        expect(result).toMatchObject({
-          error: expect.stringContaining(
-            "Synthetic caller revoked after native cancellation acceptance",
-          ),
-        });
+        expectError(result, "Synthetic caller revoked after native cancellation acceptance");
       }
       if (observation) {
         // This plan never requested cancellation; native Stop accepted it through another owner.
