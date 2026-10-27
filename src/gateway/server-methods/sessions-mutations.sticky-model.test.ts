@@ -163,17 +163,6 @@ async function patchSession(
   return responses[0]!;
 }
 
-async function modelSession(name: string, entry: Partial<SessionEntry> = {}, agentId = "main") {
-  const key = `agent:${agentId}:${name}`;
-  const fixture = sessionMutationFixture(key, agentId);
-  await fixture.seed(entry);
-  const patch = (
-    params: Record<string, unknown>,
-    requestContext: GatewayRequestContext = context(),
-  ) => patchSession({ key, ...params }, ["operator.admin"], requestContext);
-  return { ...fixture, key, patch };
-}
-
 async function personalSession(
   key: string,
   entry: Partial<SessionEntry> = {},
@@ -199,21 +188,25 @@ async function personalSession(
 }
 
 function createSession(
-  key: string,
   options: Omit<
     Parameters<typeof createGatewaySession>[0],
-    "cfg" | "key" | "commandSource" | "operatorRoleActor"
-  > = {},
+    "cfg" | "commandSource" | "operatorRoleActor"
+  >,
 ) {
   return createGatewaySession({
     cfg,
-    key,
-    ...runtimeSelection,
-    loadGatewayModelCatalogSnapshot: async () => catalogSnapshot(),
     commandSource: "test",
     operatorRoleActor: { kind: "system" },
     ...options,
   });
+}
+
+function runtimeOptions(key: string) {
+  return {
+    key,
+    ...runtimeSelection,
+    loadGatewayModelCatalogSnapshot: async () => catalogSnapshot(),
+  };
 }
 
 function queueRuntimeSelection(sessionKey: string) {
@@ -315,17 +308,22 @@ describe("sessions.patch sticky model persistence", () => {
     "keeps sandbox recovery local with %s defaults",
     async (scope) => {
       cfg.agents!.defaults!.modelSelectionScope = scope;
+      const sessionKey = `agent:main:dm:native-policy-recovery-${scope}`;
       const sessionId = `native-policy-recovery-${scope}`;
-      const { patch, read } = await modelSession(`dm:${sessionId}`, { sessionId });
-      const response = await patch({
-        model: runtimeSelection.model,
-        sandboxMode: "off",
-        permissionMode: "full",
-        expectedSessionId: sessionId,
-        expectedSandboxMode: null,
-      });
-      expect(response[0]).toBe(true);
-      expect(read()).toMatchObject({
+      await seedSession(sessionKey, { sessionId });
+      expect(
+        (
+          await patchSession({
+            key: sessionKey,
+            model: "openai/gpt-5.6-sol",
+            sandboxMode: "off",
+            permissionMode: "full",
+            expectedSessionId: sessionId,
+            expectedSandboxMode: null,
+          })
+        )[0],
+      ).toBe(true);
+      expect(readSession(sessionKey)).toMatchObject({
         modelOverride: "gpt-5.6-sol",
         sandboxMode: "off",
         permissionMode: "full",
@@ -341,9 +339,11 @@ describe("sessions.patch sticky model persistence", () => {
     "honors configured $scope scope when selecting the current effective model",
     async ({ scope, agentId, model }) => {
       cfg.agents!.defaults!.modelSelectionScope = scope;
-      const { patch, read } = await modelSession(`dm:scope-current-${scope}`, {}, agentId);
-      expect((await patch({ model }))[0]).toBe(true);
-      const entry = read();
+      const sessionKey = `agent:${agentId}:dm:scope-current-${scope}`;
+      await seedSession(sessionKey, { sessionId: `session-scope-current-${scope}` }, agentId);
+
+      expect((await patchSession({ key: sessionKey, model }))[0]).toBe(true);
+      const entry = sessionMutationFixture(sessionKey, agentId).read();
       expect(entry?.modelOverrideSource).toBe("default");
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
@@ -363,11 +363,9 @@ describe("sessions.patch sticky model persistence", () => {
   it.each(["model", "agentRuntime"] as const)(
     "clears the %s pin and invalidates the catalog without changing other pins",
     async (field) => {
-      const {
-        key: sessionKey,
-        patch,
-        read,
-      } = await modelSession(`clear-${field}`, {
+      const sessionKey =
+        field === "model" ? "agent:main:dm:no-sticky-cleared" : "agent:main:runtime-clear";
+      await seedSession(sessionKey, {
         ...selectedModel,
         ...(field === "model"
           ? {
@@ -386,13 +384,17 @@ describe("sessions.patch sticky model persistence", () => {
         ...context(),
         getSessionEventSubscriberConnIds: () => new Set(["reader"]),
       };
-      const response = await patch({ [field]: null }, requestContext);
+      const response = await patchSession(
+        { key: sessionKey, [field]: null },
+        ["operator.admin"],
+        requestContext,
+      );
       await flushPendingSessionsChangedEvents(requestContext);
       expect(response[0]).toBe(true);
       if (field === "model") {
         expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
       } else {
-        const stored = read();
+        const stored = readSession(sessionKey);
         expect(stored).toMatchObject({
           modelOverride: "gpt-5.6-sol",
           authProfileOverride: personalAuthProfileId,
@@ -477,6 +479,7 @@ describe("sessions.patch personal model-account ownership", () => {
           pending,
           `Personal ${loss} patch settled before loading the catalog`,
         );
+        expect(requestContext.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
         if (loss === "invalidated") {
           caller.invalidated = true;
         } else if (loss === "disconnected") {
@@ -546,14 +549,16 @@ describe("explicit session model runtimes", () => {
     { model: "gpt-5.6-sol", agentRuntime: "codex" },
     { model: "openai/gpt-5.6-sol", agentRuntime: "default" },
   ])("rejects ambiguous runtime selections without mutating the row (%j)", async (patch) => {
-    const { patch: apply, read } = await modelSession("runtime-invalid", { label: "Original" });
-    const response = await apply({ label: "Wrong", ...patch });
+    const sessionKey = "agent:main:runtime-invalid";
+    await seedSession(sessionKey, { label: "Original" });
+    const response = await patchSession({ key: sessionKey, label: "Wrong", ...patch });
     expect(response[0]).toBe(false);
-    expect(read()?.label).toBe("Original");
+    expect(readSession(sessionKey)?.label).toBe("Original");
   });
 
   it("revalidates runtime availability immediately before committing", async () => {
-    const { patch, read } = await modelSession("runtime-stale", { label: "Original" });
+    const sessionKey = "agent:main:runtime-stale";
+    await seedSession(sessionKey, { label: "Original" });
     runtimeChoice.prepare.mockResolvedValue({
       kind: "ready",
       runtimeId: "codex",
@@ -562,40 +567,50 @@ describe("explicit session model runtimes", () => {
         .mockReturnValueOnce(undefined)
         .mockReturnValue("The selected runtime is no longer available."),
     });
-    const response = await patch({ label: "Wrong", ...runtimeSelection });
+    const response = await patchSession({
+      key: sessionKey,
+      label: "Wrong",
+      ...runtimeSelection,
+    });
     expect(response[0]).toBe(false);
     expect(response[2]?.message).toContain("no longer available");
-    const stored = read();
+    const stored = readSession(sessionKey);
     expect(stored).toMatchObject({ label: "Original" });
     expect(stored).not.toHaveProperty("agentRuntimeOverride");
   });
 
   it("does not overwrite a replaced session while runtime preparation awaits", async () => {
-    const { seed, read, patch } = await modelSession("runtime-replaced", { sessionId: "original" });
+    const sessionKey = "agent:main:runtime-replaced";
     const entered = createDeferredCore();
     const release = createDeferredCore();
+    await seedSession(sessionKey, { sessionId: "original" });
     runtimeChoice.prepare.mockImplementation(async () => {
       entered.resolve();
       await release.promise;
       return { kind: "ready", runtimeId: "codex", validate: () => undefined };
     });
-    const pending = patch({ expectedSessionId: "original", ...runtimeSelection });
+    const pending = patchSession({
+      key: sessionKey,
+      expectedSessionId: "original",
+      ...runtimeSelection,
+    });
     await Promise.race([entered.promise, pending]);
     try {
       expect(runtimeChoice.prepare).toHaveBeenCalledOnce();
-      await seed({ sessionId: "replacement", updatedAt: 2 });
+      await seedSession(sessionKey, { sessionId: "replacement", updatedAt: 2 });
     } finally {
       release.resolve();
     }
     expect((await pending)[0]).toBe(false);
-    const stored = read();
+    const stored = readSession(sessionKey);
     expect(stored).toMatchObject({ sessionId: "replacement" });
     expect(stored).not.toHaveProperty("agentRuntimeOverride");
   });
 
   it("creates an unlocked session with an explicit runtime and rejects unprivileged adoption changes", async () => {
     const sessionKey = "agent:main:created-runtime";
-    const result = await createSession(sessionKey);
+    const options = runtimeOptions(sessionKey);
+    const result = await createSession(options);
     expect(result).toMatchObject({
       ok: true,
       entry: { agentRuntimeOverride: "codex", modelOverride: "gpt-5.6-sol" },
@@ -603,7 +618,7 @@ describe("explicit session model runtimes", () => {
     expect(result).not.toHaveProperty("entry.modelSelectionLocked");
     expect(result).not.toHaveProperty("entry.liveModelSwitchPending");
     const adopt = (allowExistingModelSelection: boolean) =>
-      createSession(sessionKey, { agentRuntime: "openclaw", allowExistingModelSelection });
+      createSession({ ...options, agentRuntime: "openclaw", allowExistingModelSelection });
     expect(await adopt(false)).toMatchObject({
       ok: false,
       error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
@@ -631,7 +646,7 @@ describe("explicit session model runtimes", () => {
       kind: "unavailable",
       message: "Refresh the model catalog.",
     });
-    expect(await createSession(sessionKey)).toMatchObject({
+    expect(await createSession(runtimeOptions(sessionKey))).toMatchObject({
       ok: false,
       error: { message: "Refresh the model catalog." },
     });
@@ -640,6 +655,8 @@ describe("explicit session model runtimes", () => {
 });
 
 it("validates and persists context windows from the selected runtime", async () => {
+  const model = "openai/gpt-5.6-sol";
+  const selected = { model, agentRuntime: "codex", contextWindow: "64k" };
   const base: ModelCatalogEntry = {
     provider: "openai",
     id: "gpt-5.6-sol",
@@ -655,14 +672,16 @@ it("validates and persists context windows from the selected runtime", async () 
     contextWindowDefault: "64k",
   };
   const snapshot = createSessionMutationCatalog(cfg, openClawTestState, [base], [base, native]);
-  const { patch: apply, read } = await modelSession("runtime-window-patch", selectedModel);
+  const sessionKey = "agent:main:runtime-window-patch";
+  const { seed, read } = sessionMutationFixture(sessionKey);
   const patch = (params: Record<string, unknown>) =>
-    apply(params, {
+    patchSession({ key: sessionKey, ...params }, ["operator.admin"], {
       ...context(),
       loadGatewayModelCatalogSnapshot: async () => snapshot,
     });
+  await seed(selectedModel);
   const window = { contextWindow: "64k", contextWindows: native.contextWindows };
-  const changed = await patch({ ...runtimeSelection, contextWindow: "64k" });
+  const changed = await patch(selected);
   expect(changed[0]).toBe(true);
   expect(changed[1]).toMatchObject({ resolved: window });
   expect(read()).toMatchObject({ contextWindow: "64k", agentRuntimeOverride: "codex" });
@@ -680,6 +699,6 @@ it("validates and persists context windows from the selected runtime", async () 
   const missing = await patch({ contextWindow: "32k" });
   expect(missing[0]).toBe(false);
   expect(missing[2]?.message).not.toContain("use 32k");
-  expect((await patch({ model: runtimeSelection.model, agentRuntime: "openclaw" }))[0]).toBe(true);
+  expect((await patch({ model, agentRuntime: "openclaw" }))[0]).toBe(true);
   expect(read()).not.toHaveProperty("contextWindow");
 });
