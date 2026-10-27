@@ -391,17 +391,16 @@ function expectedRange(fixture: Ready, startDate: string, endDate: string) {
   assert.match(startDate, /^\d{4}-\d{2}-\d{2}$/u);
   assert.match(endDate, /^\d{4}-\d{2}-\d{2}$/u);
   const firstDay = Date.parse(fixture.startDate);
-  let sessions = 0;
   let tokens = 0;
   for (let index = 0; index < fixture.sessions; index++) {
     const day = new Date(firstDay + (index % 180) * 86_400_000).toISOString().slice(0, 10);
     if (day < startDate || day > endDate) {
       continue;
     }
-    sessions++;
     tokens += (100 + index) * (index % 16 === 0 ? 2 : 1);
   }
-  return { sessions, tokens };
+  // Fresh transcript mtimes retain the whole roster; date bounds limit usage totals.
+  return { sessions: fixture.sessions, tokens };
 }
 
 function observeUsage(page: Page) {
