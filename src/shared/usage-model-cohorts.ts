@@ -55,7 +55,11 @@ export function prepareUsageModelCohorts(
   for (const [index, row] of rows.entries()) {
     const models = [...new Set(getSessionModels(row))].toSorted();
     const key = JSON.stringify(models);
-    const group = groups.get(key) ?? { models, indices: [], order: new Map() };
+    const group: Omit<Cohort, "report"> = groups.get(key) ?? {
+      models,
+      indices: [],
+      order: new Map(),
+    };
     group.indices.push(index);
     groups.set(key, group);
     const rank = (key: string) => {
