@@ -543,9 +543,14 @@ describe("session message cache", () => {
     const content = "x".repeat(4 * 1024 * 1024);
     write({
       messages: [
-        { content, __openclaw: { id: "first", seq: 1 } },
-        { content, projection: "sibling", __openclaw: { id: "sibling", seq: 1 } },
-        { content, __openclaw: { id: "last", seq: 2 } },
+        { role: "assistant", content, __openclaw: { id: "first", seq: 1 } },
+        {
+          role: "assistant",
+          content,
+          projection: "sibling",
+          __openclaw: { id: "sibling", seq: 1 },
+        },
+        { role: "assistant", content, __openclaw: { id: "last", seq: 2 } },
       ],
       rowDisplay: {
         first: { links: { source: { title: "First linked task" } } },
