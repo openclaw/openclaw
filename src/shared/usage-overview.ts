@@ -426,25 +426,35 @@ export function compactUsageOverviewSession(
   if (!session.usage) {
     return session;
   }
+  const source = session.usage;
   const row = sessionRowTotals(session, days);
+  // Build the retained table record directly; deleting history fields makes it a dictionary.
   const usage = {
-    ...session.usage,
-    ...row,
+    input: row.input,
+    output: row.output,
+    cacheRead: row.cacheRead,
+    cacheWrite: row.cacheWrite,
+    totalTokens: row.totalTokens,
+    totalCost: row.totalCost,
+    inputCost: row.inputCost,
+    outputCost: row.outputCost,
+    cacheReadCost: row.cacheReadCost,
+    cacheWriteCost: row.cacheWriteCost,
+    missingCostEntries: row.missingCostEntries,
+    missingCostByModel: row.missingCostByModel ?? source.missingCostByModel,
     usageReport: row.usageReport,
+    computedAt: source.computedAt,
+    staleSince: source.staleSince,
+    refreshing: source.refreshing,
+    sessionId: source.sessionId,
+    firstActivity: source.firstActivity,
+    lastActivity: source.lastActivity,
+    durationMs: source.durationMs,
+    messageCounts: source.messageCounts,
+    toolUsage: source.toolUsage,
+    modelUsage: source.modelUsage,
+    latency: source.latency,
   };
-  for (const field of [
-    "dailyBreakdown",
-    "dailyMessageCounts",
-    "dailyModelUsage",
-    "dailyLatency",
-    "utcQuarterHourTokenUsage",
-    "utcQuarterHourMessageCounts",
-    "localHours",
-    "activityDates",
-    "sessionFile",
-  ] as const) {
-    delete usage[field];
-  }
   return { ...session, usage };
 }
 
@@ -474,6 +484,7 @@ function selectUsageOverviewSessions(
 }
 
 function usageOverviewPage(roster: SessionUsageEntry[], options: UsageOverviewOptions) {
+  if (options.limit === 0) return [];
   return roster
     .toSorted(compareUsageOverviewSessions(options))
     .slice(options.offset ?? 0, (options.offset ?? 0) + (options.limit ?? PAGE_SIZE));
