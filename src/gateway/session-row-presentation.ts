@@ -301,6 +301,7 @@ export function prepareProjectedSessionPresentation(
   recipient = prepareSessionRowRecipient(projection, client),
 ) {
   const { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing } = recipient;
+  const entryFilter = client === undefined ? undefined : sharing.entryFilter;
   const models =
     client === undefined
       ? undefined
@@ -411,10 +412,10 @@ export function prepareProjectedSessionPresentation(
       subagentRuns,
     });
     let excludedChildKeys = options.excludedChildKeys;
-    if (!excludedChildKeys && client !== undefined) {
+    if (!excludedChildKeys && entryFilter) {
       let excluded: Set<string> | undefined;
       for (const { key, entry } of record.materialized.source.childLinks ?? []) {
-        if (sharing.entryFilter?.(key, entry) === false) {
+        if (!entryFilter(key, entry)) {
           (excluded ??= new Set()).add(key);
         }
       }
@@ -429,10 +430,10 @@ export function prepareProjectedSessionPresentation(
       for (const { sessionKey } of group.children ?? []) {
         if (
           excludedChildKeys?.has(sessionKey) ||
-          (client !== undefined &&
+          (entryFilter &&
             projection
               .selectEntries({ key: sessionKey })
-              .some((child) => sharing.entryFilter?.(child.key, child.entry) === false))
+              .some((child) => !entryFilter(child.key, child.entry)))
         ) {
           (excludedSwarmKeys ??= new Set()).add(sessionKey);
         }
@@ -510,8 +511,12 @@ export function prepareProjectedSessionPresentation(
     const views = published?.views;
     const value = published?.target ?? toProjectedSessionSharingTarget(record);
     const recipientView = client === undefined ? undefined : viewer(value, options.rowMode);
+    const includeActivitySummary =
+      options.includeActivitySummary !== false &&
+      options.rowMode !== "sidebar" &&
+      options.rowMode !== "dashboard";
     const canEnsure =
-      client !== undefined && preparedFacts?.activitySummary
+      includeActivitySummary && client !== undefined && preparedFacts?.activitySummary
         ? !authorizeIncognitoSessionTarget({
             client: client ?? null,
             sessionKey: value.canonicalKey,
@@ -572,7 +577,7 @@ export function prepareProjectedSessionPresentation(
         run.runIds === undefined ? {} : { activeRunIds: run.runIds },
       );
     }
-    if (options.includeActivitySummary === false) {
+    if (!includeActivitySummary) {
       row.activitySummary = undefined;
     }
     if (recipientView) {

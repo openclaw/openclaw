@@ -479,7 +479,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       gatewayStatus: this.gatewayStatus,
       savedConversation: Boolean(
         this.state &&
-        (!this.state.connected || isInitialChatHistoryUnavailable(this.state)) &&
+        (!this.state.connected ||
+          this.routeResolutionPending ||
+          isInitialChatHistoryUnavailable(this.state)) &&
         this.state.chatMessages.length,
       ),
       title,

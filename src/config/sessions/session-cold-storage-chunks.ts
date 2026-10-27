@@ -82,12 +82,12 @@ export function readSessionColdChunks(
   return chunks;
 }
 
-/** Only one compressed payload and decoded envelope are materialized at a time. */
-export function* iterateSessionColdRecords(
+/** Verify the parent manifest and each compressed payload before restoration admission. */
+export function* readVerifiedSessionColdChunks(
   database: EngineConnection,
   storePath: string,
   archive: Omit<SessionColdArchive, "archive_blob">,
-): Generator<SessionColdRecord> {
+) {
   const db = getNodeSqliteKysely<DB>(database);
   const chunks = readSessionColdChunks(database, archive);
   if (chunks.length === 0) {
@@ -101,13 +101,13 @@ export function* iterateSessionColdRecords(
               .where("session_id", "=", archive.session_id),
           )?.archive_blob
         : null;
-    yield* decodeSessionColdRecords(
-      readVerifiedSessionColdArchiveSync({
+    yield {
+      bytes: readVerifiedSessionColdArchiveSync({
         storePath,
         archive: { ...archive, archive_blob: embedded ?? null },
       }),
       archive,
-    );
+    };
     return;
   }
   for (const chunk of chunks) {
@@ -122,12 +122,23 @@ export function* iterateSessionColdRecords(
               .where("chunk_index", "=", chunk.chunk_index),
           )?.archive_blob
         : null;
-    yield* decodeSessionColdRecords(
-      readVerifiedSessionColdArchiveSync({
+    yield {
+      bytes: readVerifiedSessionColdArchiveSync({
         storePath,
         archive: { ...chunk, storage: archive.storage, archive_blob: embedded ?? null },
       }),
-      { ...chunk, generation: archive.generation },
-    );
+      archive: { ...chunk, generation: archive.generation },
+    };
+  }
+}
+
+/** Only one decompressed chunk and one parsed record are retained during restoration. */
+export function* iterateSessionColdRecords(
+  database: EngineConnection,
+  storePath: string,
+  archive: Omit<SessionColdArchive, "archive_blob">,
+): Generator<SessionColdRecord> {
+  for (const chunk of readVerifiedSessionColdChunks(database, storePath, archive)) {
+    yield* decodeSessionColdRecords(chunk.bytes, chunk.archive);
   }
 }

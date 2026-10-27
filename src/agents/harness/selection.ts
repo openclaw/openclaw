@@ -516,13 +516,16 @@ async function runAgentHarnessOperation<T>(
   params: EmbeddedRunAttemptParams,
   execute: () => Promise<T>,
 ): Promise<T> {
-  await prepareActiveNodeContext(readRunOperatorAuthority(params)?.profileId);
+  const builtIn = isBuiltInOpenClawAgentHarness(harness);
+  // Embedded prompt assembly refreshes this at consumption; plugin host capabilities need it here.
+  if (!builtIn) {
+    await prepareActiveNodeContext(readRunOperatorAuthority(params)?.profileId);
+  }
   resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)?.();
   const activeTrace = getActiveDiagnosticTraceContext();
   const harnessTrace = freezeDiagnosticTraceContext(
     activeTrace ? createChildDiagnosticTraceContext(activeTrace) : createDiagnosticTraceContext(),
   );
-  const builtIn = isBuiltInOpenClawAgentHarness(harness);
   try {
     return await runWithDiagnosticTraceContext(harnessTrace, execute);
   } catch (error) {

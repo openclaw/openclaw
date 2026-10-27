@@ -1801,7 +1801,6 @@ const startupEnglish = {
       menuFilters: "Filters",
       menuDisplay: "Display",
       hideEmpty: "Hide empty",
-      activeFilterCount: "Active filters: {count}",
       sortSessions: "Filter & sort",
       sessionSources: "Session sources",
       showAllSessions: "Show all sessions",

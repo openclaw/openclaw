@@ -45,6 +45,7 @@ import {
   dispatchInitialWorkerPlacement,
   placements,
   readWorkerTurnTranscriptStorageRows as readRows,
+  reconcileUnchangedLocalWorkspace,
   root,
   seedActivePlacement,
   sessionTarget,
@@ -151,8 +152,7 @@ async function launchProbe(
   const tunnel = createWorkerTurnTunnel({
     runWorkspaceCommand: unexpected,
     syncWorkspace: unexpected,
-    quiesceWorkspace: unexpected,
-    reconcileWorkspace: unexpected,
+    reconcileWorkspace: reconcileUnchangedLocalWorkspace,
     launchTurn: async (request) => {
       const { plan } = request;
       launch = {

@@ -247,8 +247,8 @@ function applyMcpHttpControls(
     }
     server.sslVerify = sslVerify === "true";
   }
-  setOptionalField(server, "clientCert", normalizeStringifiedOptionalString(opts.clientCert));
-  setOptionalField(server, "clientKey", normalizeStringifiedOptionalString(opts.clientKey));
+  setOptionalField(server, "clientCert", readNonBlankString(opts.clientCert));
+  setOptionalField(server, "clientKey", readNonBlankString(opts.clientKey));
 }
 
 /** Documented `mcp status --json` shape: legacy booleans stay additive to `state`. */

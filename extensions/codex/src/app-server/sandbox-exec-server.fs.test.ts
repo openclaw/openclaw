@@ -153,18 +153,29 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     });
   });
 
-  it("preserves missing-parent failures for file writes", async () => {
-    const writeFile = vi.fn(async () => undefined);
-    const socket = await connect({
-      stat: async ({ filePath }) =>
-        filePath === "/workspace" ? { type: "directory", size: 1, mtimeMs: 1 } : null,
-      writeFile,
-    });
-    await expect(write(socket, uri("missing/note.txt"), "hello")).rejects.toThrow(
-      "parent directory not found",
-    );
-    expect(writeFile).not.toHaveBeenCalled();
-  });
+  it.each(["writeFile", "createDirectory"] as const)(
+    "requires an existing parent for %s",
+    async (method) => {
+      const mutate = vi.fn(async () => undefined);
+      const directory = method === "createDirectory";
+      const socket = await connect({
+        stat: async ({ filePath }) =>
+          filePath === (directory ? "/workspace/existing" : "/workspace")
+            ? { type: "directory", size: 1, mtimeMs: 1 }
+            : null,
+        ...(directory ? { mkdirp: mutate } : { writeFile: mutate }),
+      });
+      const operation = directory
+        ? fileRpc(socket, method, "missing/child", { recursive: false })
+        : write(socket, uri("missing/note.txt"), "hello");
+      await expect(operation).rejects.toThrow("parent directory not found");
+      expect(mutate).not.toHaveBeenCalled();
+      if (directory) {
+        await fileRpc(socket, method, "existing/child", { recursive: false });
+        expect(mutate).toHaveBeenCalledWith({ filePath: "/workspace/existing/child" });
+      }
+    },
+  );
 
   it("denies copies whose canonical destination is policy-protected", async () => {
     const copyFile = vi.fn(async () => undefined);
@@ -392,21 +403,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       "file is too large to read through Codex sandbox exec-server",
     );
     expect(readFile).not.toHaveBeenCalled();
-  });
-
-  it("does not create parent directories for non-recursive directory creation", async () => {
-    const mkdirp = vi.fn(async () => undefined);
-    const socket = await connect({
-      mkdirp,
-      stat: async ({ filePath }) =>
-        filePath === "/workspace/existing" ? { type: "directory", size: 1, mtimeMs: 1 } : null,
-    });
-    await expect(
-      fileRpc(socket, "createDirectory", "missing/child", { recursive: false }),
-    ).rejects.toThrow("parent directory not found");
-    expect(mkdirp).not.toHaveBeenCalled();
-    await fileRpc(socket, "createDirectory", "existing/child", { recursive: false });
-    expect(mkdirp).toHaveBeenCalledWith({ filePath: "/workspace/existing/child" });
   });
 });
 

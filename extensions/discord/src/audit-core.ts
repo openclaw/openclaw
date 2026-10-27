@@ -17,13 +17,9 @@ type DiscordChannelPermissionsAuditEntry = {
   matchSource?: "id";
 };
 
-export type DiscordChannelPermissionsAudit = {
-  ok: boolean;
-  checkedChannels: number;
-  unresolvedChannels: number;
-  channels: DiscordChannelPermissionsAuditEntry[];
-  elapsedMs: number;
-};
+export type DiscordChannelPermissionsAudit = Awaited<
+  ReturnType<typeof auditDiscordChannelPermissionsWithFetcher>
+>;
 
 const REQUIRED_TEXT_CHANNEL_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 const REQUIRED_THREAD_CHANNEL_PERMISSIONS = ["ViewChannel", "SendMessagesInThreads"] as const;
@@ -99,7 +95,7 @@ export async function auditDiscordChannelPermissionsWithFetcher(params: {
     permissions: string[];
     channelType?: number;
   }>;
-}): Promise<DiscordChannelPermissionsAudit> {
+}) {
   const started = Date.now();
   const token = normalizeOptionalString(params.token) ?? "";
   const channels: DiscordChannelPermissionsAuditEntry[] = [];

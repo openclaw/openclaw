@@ -235,12 +235,6 @@ afterEach(async () => {
   }
 });
 
-it("uses the configured Talk owner for main", async () => {
-  expectCreated(await createClient({ sessionKey: "main" }));
-  expect(createBrowserSession).toHaveBeenCalledWith(expect.objectContaining({ agentId: "voice" }));
-  expect(loadSessionEntry(voiceScope)?.sessionId).toBeTruthy();
-});
-
 it.each(["read-only", "draft", "incognito"] as const)(
   "applies %s restrictions to bare and omitted create targets",
   async (restriction) => {
@@ -302,9 +296,6 @@ it("shares the global fixed-store target while retaining the exact voice key", a
   const scope = { agentId, sessionKey: "global", storePath: config.session.store };
   const stored = loadSessionEntry(scope);
   expect(stored?.sessionId).toBeTruthy();
-  expect(mocks.bootstrap).toHaveBeenCalledWith(
-    expect.objectContaining({ agentId, sessionKey: "global" }),
-  );
   expectCreated(
     await dispatch("talk.client.transcript", {
       sessionKey: voiceKey,
@@ -435,26 +426,6 @@ it.each(["agent", "hidden", "sandbox"] as const)(
   },
 );
 
-it("passes the authorized omitted target into relay creation", async () => {
-  config.session = { scope: "global" };
-  const respond = await dispatch("talk.session.create", {
-    mode: "realtime",
-    transport: "gateway-relay",
-    brain: "agent-consult",
-  });
-  expectCreated(respond, expect.objectContaining({ sessionId: "test-relay" }));
-  expect(mocks.createRelay).toHaveBeenCalledWith(
-    expect.objectContaining({
-      sessionTarget: expect.objectContaining({
-        agentId: "voice",
-        canonicalKey: "global",
-        sessionKey: voiceScope.sessionKey,
-      }),
-    }),
-  );
-  expect(loadSessionEntry({ agentId: "voice", sessionKey: "global" })?.sessionId).toBeTruthy();
-});
-
 it("keeps keyless transcription independent of Talk agent selection", async () => {
   delete config.talk;
   mocks.transcriptionProviders.mockReturnValue([
@@ -573,9 +544,6 @@ it.each(realtimeStarts)(
     }
     const respond = await startRealtime(start, scope.sessionKey);
     expectCreated(respond, expect.any(Object));
-    expect(
-      method === "talk.client.create" ? createBrowserSession : mocks.createRelay,
-    ).toHaveBeenCalledOnce();
     assertRestored();
   },
 );

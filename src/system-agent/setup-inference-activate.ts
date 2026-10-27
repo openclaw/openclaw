@@ -262,8 +262,19 @@ export async function activateSetupInference(
 }
 
 async function activateCandidate(
-  params: ActivateSetupInferenceParams,
+  callerParams: ActivateSetupInferenceParams,
 ): Promise<ActivateSetupInferenceResult> {
+  const effects = { credentialsSaved: false, configPersisted: false };
+  // Like cancellation, caller authority governs activation until its config is persisted;
+  // a saved activation then completes like any other committed config write.
+  const params: ActivateSetupInferenceParams = {
+    ...callerParams,
+    assertCurrent: () => {
+      if (!effects.configPersisted) {
+        callerParams.assertCurrent?.();
+      }
+    },
+  };
   const { readConfigFileSnapshot: readSnapshot } = await import("../config/config.js");
   const snapshot = await readSnapshot();
   if (snapshot.exists && !snapshot.valid) {
@@ -280,7 +291,7 @@ async function activateCandidate(
     workspace: params.workspace?.trim()
       ? resolveUserPath(params.workspace)
       : resolveSetupInferenceWorkspace(snapshot),
-    effects: { credentialsSaved: false },
+    effects,
     beforePersistentEffect: async () => {
       throwIfSetupInferenceCancelled(params);
       params.onActivationStarted?.();
@@ -624,6 +635,7 @@ async function verifyAndActivateCandidate(
           committed.snapshot,
           committed.persistedSourceConfig ?? committed.nextConfig,
         );
+        ctx.effects.configPersisted = true;
         return committed.nextConfig;
       },
     };

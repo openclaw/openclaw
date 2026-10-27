@@ -123,7 +123,7 @@ describe("paired node worker Gateway upgrade wire", () => {
         path.join(runtimeRoot, "node_modules"),
         "junction",
       );
-      const provider = await startPairedNodeWorkerLifecycleProvider([]);
+      const provider = await startPairedNodeWorkerLifecycleProvider(["UPGRADE-BEFORE"]);
       const published = await createPublishedWireWorkspace(root);
       let blockedUploads = 0;
       const unavailableTransfer = createServer((_request, response) => {
@@ -205,8 +205,6 @@ describe("paired node worker Gateway upgrade wire", () => {
         if (!remoteWorkspaceDir) {
           throw new Error("node placement omitted its workspace");
         }
-        await fs.writeFile(path.join(remoteWorkspaceDir, RESULT_FILE), RESULT_BYTES);
-        transferUnavailable = true;
         phase = "retaining the completed result during the upload outage";
         const runId = `paired-node-upgrade-before-${Date.now()}`;
         const started = await operator.request("chat.send", {
@@ -216,6 +214,10 @@ describe("paired node worker Gateway upgrade wire", () => {
           idempotencyKey: runId,
         });
         expect(started).toMatchObject({ runId, status: "started" });
+        await provider.waitForHeld("UPGRADE-BEFORE");
+        await fs.writeFile(path.join(remoteWorkspaceDir, RESULT_FILE), RESULT_BYTES);
+        transferUnavailable = true;
+        provider.release("UPGRADE-BEFORE");
         const firstTurn = await operator.request(
           "agent.wait",
           { runId, timeoutMs: PROOF_TIMEOUT_MS },

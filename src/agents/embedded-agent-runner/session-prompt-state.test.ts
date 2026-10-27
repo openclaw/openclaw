@@ -235,7 +235,7 @@ describe("system prompt series", () => {
     await persist(entries);
     const state = fixture.state;
     const first = project(changed, entries);
-    beginSessionSystemPrompt({ state, routeKey, enabled: true, entries });
+    beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => entries });
     const retry = project(changed, entries);
     expect(retry.update?.content).toBe(first.update?.content);
     await expect(
@@ -270,7 +270,7 @@ describe("system prompt series", () => {
     ).rejects.toThrow("checkpoint acknowledgment rejected");
     expect(entries.at(-1)).toMatchObject({ data: { renderedPrefix: changed.trimEnd() } });
 
-    beginSessionSystemPrompt({ state, routeKey, enabled: true, entries });
+    beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => entries });
     const restored = project(base, entries);
     expect(restored.restart).toBe(false);
     expect(restored.systemPrompt).toBe(base.trimEnd());
@@ -295,7 +295,7 @@ describe("system prompt series", () => {
         fixture.reload();
       }
       const state = fixture.state;
-      beginSessionSystemPrompt({ state, routeKey, enabled: true, entries });
+      beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => entries });
       const recovered = project(base, entries);
       expect(recovered.restart).toBe(true);
       expect(recovered.update).toBeUndefined();
@@ -352,9 +352,14 @@ describe("system prompt series", () => {
     project(changed, entries);
     await persist(entries);
     const state = fixture.state;
-    expect(beginSessionSystemPrompt({ state, routeKey: "other", enabled: false, entries })).toBe(
-      true,
-    );
+    expect(
+      beginSessionSystemPrompt({
+        state,
+        routeKey: "other",
+        enabled: false,
+        getEntries: () => entries,
+      }),
+    ).toBe(true);
     expect(state.systemPrompt).toBeUndefined();
     expect(project(changed, entries).restart).toBe(true);
   });

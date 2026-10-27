@@ -86,6 +86,8 @@ behaviors:
 
 Relative catalog cache TTLs start when a successful load completes. Cache hits
 preserve that deadline, and explicit absolute provider deadlines remain unchanged.
+Expired response-cache payloads are released even when the account is no longer
+queried; catalogs already published to callers keep their own lifetime.
 Pending loads retain their initial expiry so stalled work can be replaced.
 An explicit refresh through the prepared catalog owner bypasses completed
 response-cache entries only for the keys acquired by that request. Repeated

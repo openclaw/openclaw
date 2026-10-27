@@ -36,6 +36,10 @@ import {
   latestSubagentRun,
   compareSubagentRunGeneration,
 } from "./subagent-run-generation.js";
+import {
+  isSubagentRunPayloadEvicted,
+  recordSubagentRunPayloadEviction,
+} from "./subagent-run-payload-facts.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 function freezeValue(value: unknown): void {
@@ -55,12 +59,10 @@ const immutableRunFacts = new WeakMap<
     childAuthority: ReturnType<typeof resolveSubagentChildAuthority>;
   }
 >();
-const evictedSubagentRunPayloads = new WeakSet<SubagentRunRecord>();
-
 /** Finished rows retain topology and ownership; selected readers load their durable payload. */
 export function compactSubagentRunForMemory(entry: SubagentRunRecord): SubagentRunRecord {
   if (
-    evictedSubagentRunPayloads.has(entry) ||
+    isSubagentRunPayloadEvicted(entry) ||
     needsSubagentActivation(entry) ||
     entry.delivery?.status === "pending" ||
     entry.delivery?.status === "in_progress" ||
@@ -73,18 +75,20 @@ export function compactSubagentRunForMemory(entry: SubagentRunRecord): SubagentR
     // A sliced preview can otherwise retain the entire original V8 string.
     task: Buffer.from(entry.task.slice(0, 160), "utf16le").toString("utf16le"),
     ...(entry.completion ? { completion: { ...entry.completion } } : {}),
+    ...(entry.delivery ? { delivery: { ...entry.delivery } } : {}),
   });
   if (compact.completion) {
     delete compact.completion.resultText;
     delete compact.completion.fallbackResultText;
+    delete compact.completion.terminalReply;
   }
+  if (compact.delivery) {
+    delete compact.delivery.payload;
+  }
+  delete compact.operatorRecoverySource;
   bindGatewayContextResolver(compact, getGatewayContextResolver(entry));
-  evictedSubagentRunPayloads.add(compact);
+  recordSubagentRunPayloadEviction(compact, entry);
   return immutableSubagentRun(compact);
-}
-
-export function isSubagentRunPayloadEvicted(entry: SubagentRunRecord): boolean {
-  return evictedSubagentRunPayloads.has(entry);
 }
 
 /** Hydrate only payload fields: the resident row still owns current lifecycle facts. */
@@ -92,18 +96,23 @@ export function restoreSubagentRunPayload(
   resident: SubagentRunRecord,
   full: SubagentRunRecord,
 ): SubagentRunRecord {
-  if (!evictedSubagentRunPayloads.has(resident)) {
+  if (!isSubagentRunPayloadEvicted(resident)) {
     return immutableSubagentRun(resident);
   }
   const restored = copySubagentRunRuntimeOwner(resident, {
     ...resident,
     task: full.task,
+    operatorRecoverySource: full.operatorRecoverySource,
+    ...(resident.delivery
+      ? { delivery: { ...resident.delivery, payload: full.delivery?.payload } }
+      : {}),
     ...(resident.completion
       ? {
           completion: {
             ...resident.completion,
             resultText: full.completion?.resultText,
             fallbackResultText: full.completion?.fallbackResultText,
+            terminalReply: full.completion?.terminalReply,
           },
         }
       : {}),

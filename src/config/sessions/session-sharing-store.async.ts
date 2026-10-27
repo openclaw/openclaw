@@ -36,10 +36,8 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionActorMemoryCollaborationCommand } from "./session-actor-memory-collaboration-contract.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import type { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import { readSessionCollaborationCandidate } from "./session-sharing-store.receipt.js";

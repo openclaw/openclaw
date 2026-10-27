@@ -140,6 +140,11 @@ Agent clean-close receipt messages name the agent. An intermediate `active-lease
 receipt can precede that same agent's final `written` receipt: idle retained database
 handles still hold leases even when no agent work is running. The final handle must
 release its lease after checkpoint and native close before certifying the seal.
+An `active-leases` receipt means this handle closed; peers prevent seal publication,
+not the close itself.
+Each worker coalesces unchanged outcomes for its 128 most recently observed database
+paths. Changed outcomes still log after commit; rollback cannot suppress the next
+committed receipt. This diagnostic history does not change handle retention or seal checks.
 At the next full integrity gate, `no-proof` means no seal was found. Rejected seals
 report `malformed-proof`, `expired-proof`, `file-mismatch`, or `journal-present`;
 incompatible identities report `feature-mismatch`, `schema-mismatch`, or
@@ -835,6 +840,11 @@ carrier, so a brief busy period on one worker does not bind them behind another
 agent's full integrity scan. Worker limits and existing command ordering are unchanged.
 Genuine migration warnings remain recorded for the boot. This changes no stored state or update
 migration behavior.
+
+The initial startup pass reports fleet-wide legacy-session migration guidance.
+Deferred preparation of one agent does not repeat that advisory scan across other
+agents and retired stores. Its own schema, canonical-session, and ACP checks still
+finish before the agent becomes available; Doctor remains the repair owner.
 
 Every 60 seconds while recovery is pending, `agent database startup preparation
 still running` reports `agentId`, `phase`, `elapsedMs`, and `phaseElapsedMs`;

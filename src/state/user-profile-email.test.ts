@@ -43,6 +43,7 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => {
       ...[context, operation, options]: Parameters<typeof actual.runOpenClawStateWorkerOperation>
     ) => {
       const held = delivery.heldSettlement;
+      delivery.heldSettlement = undefined;
       const createAdmission = options?.createAdmission;
       if (held && !createAdmission) {
         throw new Error("Expected canonical profile write admission");
@@ -66,6 +67,7 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => {
               ...options,
               createAdmission: (retained) =>
                 createAdmission({
+                  ...retained,
                   settled: retained.settled.then(async (settlement) => {
                     held.observed(settlement);
                     await held.resume;
@@ -173,7 +175,6 @@ it.each(["native supersession", "accepted precursor"] as const)(
       const publication = createDeferredCore();
       delivery.heldSettlement = { observed: settled.resolve, resume: publication.promise };
       const result = linkCanonicalEmail(email, profileId);
-      delivery.heldSettlement = undefined;
       held.push(async () => {
         publication.resolve();
         await result;

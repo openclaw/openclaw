@@ -107,7 +107,12 @@ async function prepareExternalization(
     if (envelopeBytes > maxEnvelopeBytes) {
       throw new ColdArchiveBudgetError();
     }
-    decodeSessionColdRecords(bytes, { ...file, generation: archive.generation });
+    for (const record of decodeSessionColdRecords(bytes, {
+      ...file,
+      generation: archive.generation,
+    })) {
+      void record;
+    }
     const directory = path.dirname(
       resolveSessionColdArchivePath(input.databaseOptions.path, file.archive_name),
     );
@@ -377,7 +382,12 @@ function prepareSessionColdArchiveInWorker(
               raw_bytes: rawBytes + eventCount - 1,
               archive_bytes: bytes.length,
             };
-            decodeSessionColdRecords(bytes, { ...chunk, generation: plan.snapshot.generation! });
+            for (const record of decodeSessionColdRecords(bytes, {
+              ...chunk,
+              generation: plan.snapshot.generation!,
+            })) {
+              void record;
+            }
             publishEncodedSessionTranscriptArchive({
               archiveDirectory: directory,
               archiveName: chunk.archive_name,

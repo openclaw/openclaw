@@ -42,8 +42,8 @@ function warning(fields: Record<string, unknown>) {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-function makeFixture(prefix: string, agentId = "usage", filename = "agent.sqlite") {
-  const root = tempDirs.make(prefix);
+function makeFixture(agentId = "usage", filename = "agent.sqlite") {
+  const root = tempDirs.make("agent-admission-");
   const options = { agentId, path: path.join(root, filename) };
   const entered = createDeferred();
   const release = createDeferred();
@@ -61,7 +61,7 @@ function makeFixture(prefix: string, agentId = "usage", filename = "agent.sqlite
 it("overlaps Board reads with transcript writes while retaining exclusive mutation order", async ({
   signal,
 }) => {
-  const { options, order, record } = makeFixture("board-admission-", "main");
+  const { options, order, record } = makeFixture("main");
   const writerEntered = createDeferred();
   const releaseWriter = createDeferred();
   const readEntered = createDeferred();
@@ -108,11 +108,7 @@ it.each(["single", "batch"] as const)(
     withExchange(
       () => [],
       async () => {
-        const { root, options, entered, order, record } = makeFixture(
-          "openclaw-cold-writer-order-",
-          "usage",
-          path.join("z", "agent.sqlite"),
-        );
+        const { root, options, entered, order, record } = makeFixture("usage", "z/agent.sqlite");
         const earlier = { agentId: "earlier", path: path.join(root, "a", "agent.sqlite") };
         const requestPrune = createDeferred();
         const releaseTurn = createDeferred();
@@ -151,9 +147,7 @@ it.each(["single", "batch"] as const)(
 it.each([false, true])(
   "defers background writes behind later foreground work (abort=%s)",
   async (abort) => {
-    const { options, entered, release, order, hold, record } = makeFixture(
-      "openclaw-background-admission-",
-    );
+    const { options, entered, release, order, hold, record } = makeFixture();
     const controller = new AbortController();
     const reason = new Error("closed");
     const held = workerWrite(options, async () => {
@@ -220,7 +214,7 @@ it("keeps a missing reservation current when its database is created", async () 
 it.each(["symlink", "hardlink"] as const)(
   "borrows one foreground admission for %s aliases without admitting a worker reservation",
   async (kind) => {
-    const { options, root } = makeFixture("openclaw-batch-alias-");
+    const { options, root } = makeFixture();
     fs.writeFileSync(options.path, "database");
     const aliasDirectory = path.join(root, "alias");
     const alias = {
@@ -321,7 +315,6 @@ it.each(["worker", "multiple stores"] as const)(
   "identifies the inherited %s admission when refusing a nested session read",
   async (kind) => {
     const { options } = makeFixture(
-      "openclaw-reentry-diagnostic-",
       "usage",
       path.join(...Array.from({ length: 12 }, () => "long-directory"), "agent.sqlite"),
     );
@@ -347,21 +340,19 @@ it.each(["worker", "multiple stores"] as const)(
       expect(String(error)).toContain(
         "Session read batch cannot reenter an active SQLite writer admission",
       );
-      expect(String(error)).toContain(`"operation":"${kind === "worker" ? "worker" : "direct"}"`);
-      expect(String(error)).toContain('"ageMs":250');
-      expect(String(error)).toContain(`"threadId":${threadId}`);
-      expect(String(error)).toContain(`"isMainThread":${isMainThread}`);
-      expect(String(error)).toContain('"database":');
-      expect(String(error)).toContain("agent.sqlite");
+      const fields: unknown = JSON.parse(String(error).slice(String(error).indexOf("{")));
+      expect(fields).toMatchObject({
+        operation: kind === "worker" ? "worker" : "direct",
+        ageMs: 250,
+        threadId,
+        isMainThread,
+        database: expect.stringContaining("agent.sqlite"),
+        ...(kind === "worker"
+          ? { workerOperations: ["session.entry.patch.commit", "other"] }
+          : { caller: "session-manager.write" }),
+      });
       expect(String(error)).not.toContain(path.dirname(options.path));
       expect(String(error).length).toBeLessThan(600);
-      if (kind === "worker") {
-        expect(String(error)).toContain(
-          '"workerOperations":["session.entry.patch.commit","other"]',
-        );
-      } else {
-        expect(String(error)).toContain('"caller":"session-manager.write"');
-      }
       expect(String(error)).not.toContain("private-command-payload");
       expect(consume).not.toHaveBeenCalled();
       request.completed();
@@ -377,11 +368,7 @@ it.each(["worker", "multiple stores"] as const)(
 );
 
 function fixture() {
-  const base = makeFixture(
-    "openclaw-reservation-diagnostic-",
-    "synthetic-private-agent",
-    "private.sqlite",
-  );
+  const base = makeFixture("synthetic-private-agent", "private.sqlite");
   const clock = { now: 0 };
   vi.spyOn(performance, "now").mockImplementation(() => clock.now);
   const warnings: unknown[][] = [];

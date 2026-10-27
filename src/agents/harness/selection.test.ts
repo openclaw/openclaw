@@ -72,8 +72,6 @@ import {
   createEmbeddedRunHandle,
   steerTestSessionTurn,
 } from "../embedded-agent-runner/runs.test-support.js";
-import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../internal-event-contract.js";
-import { RUNTIME_EVENT_USER_PROMPT } from "../internal-runtime-context.js";
 import { configFor, createPlatformAuthRoute } from "../model-auth.fixtures.test-support.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -86,6 +84,7 @@ import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { assembleHarnessContextEngine } from "./context-engine-lifecycle.js";
 import { createContextEngineRequiringAssembly } from "./context-engine-lifecycle.test-support.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
+import { createTurnLease } from "./context-engine-turn.test-support.js";
 import { prepareAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import {
@@ -94,6 +93,7 @@ import {
   registerAgentHarness,
 } from "./registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./runtime-plugin.js";
+import { registerSelectionContextCases } from "./selection.context.cases.js";
 import {
   resolveAvailableAgentHarnessPolicy,
   runAgentHarnessAttempt,
@@ -480,6 +480,7 @@ function registerTestCompactor(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  registerSelectionContextCases({ createAttemptParams, registerHarness });
   registerSelectionQueueInputCases({ createAttemptParams });
 
   it.each(["close", "abort", "lifecycle replacement"] as const)(
@@ -563,47 +564,6 @@ describe("runAgentHarnessAttempt", () => {
       expect(result.settledTurnFinalizationContext).toBeUndefined();
     },
   );
-
-  it("carries a runtime-event completion result into the plugin harness inbound context", async () => {
-    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("native"));
-    registerHarness({ runAttempt });
-    const params = {
-      ...createAttemptParams(),
-      agentHarnessId: "codex",
-      prompt: RUNTIME_EVENT_USER_PROMPT,
-      internalEvents: [
-        {
-          type: AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
-          source: "subagent" as const,
-          childSessionKey: "agent:main:subagent:child-a",
-          announceType: "subagent task",
-          taskLabel: "child A",
-          status: "ok" as const,
-          statusLabel: "completed successfully",
-          result: "CHILD_RESULT_A_DONE",
-          replyInstruction: "Summarize the child result for the user.",
-        },
-      ],
-      runtimeContextFragments: [
-        { kind: "runtime-instruction" as const, text: "SUPPLEMENTAL_RUNTIME_NOTE" },
-      ],
-    };
-
-    await runAgentHarnessAttempt(params);
-
-    const received = runAttempt.mock.calls.at(-1)?.[0];
-    expect(received?.prompt).toBe(RUNTIME_EVENT_USER_PROMPT);
-    const text = received?.currentInboundContext?.text ?? "";
-    expect(text.match(/CHILD_RESULT_A_DONE/g)).toHaveLength(1);
-    expect(text).toContain("Summarize the child result for the user.");
-    expect(text.indexOf("CHILD_RESULT_A_DONE")).toBeLessThan(
-      text.indexOf("SUPPLEMENTAL_RUNTIME_NOTE"),
-    );
-    expect(received?.currentInboundContext?.fragments).toContainEqual({
-      kind: "conversation-data",
-      text: expect.stringContaining("CHILD_RESULT_A_DONE"),
-    });
-  });
 
   it.each(["workspace", "explicit cwd"] as const)(
     "binds native provenance to staged input before dispatch and preserves it on a suppressed retry (%s)",
@@ -1418,6 +1378,7 @@ describe("runAgentHarnessAttempt", () => {
       ...(degradedReason ? { reason: degradedReason } : {}),
     });
     const lease = {
+      ...createTurnLease(configuredEngine),
       get engine() {
         return effectiveEngine;
       },
@@ -1444,10 +1405,6 @@ describe("runAgentHarnessAttempt", () => {
         order.push("begin");
         return asEffective();
       }),
-      deferDisposalUntil: vi.fn(),
-      disposed: false,
-      onDispose: vi.fn(),
-      dispose: vi.fn(async () => {}),
     } satisfies ContextEngineLogicalTurnLease;
     contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun.mockImplementationOnce(
       async (params) => {

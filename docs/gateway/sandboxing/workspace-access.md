@@ -108,11 +108,20 @@ build snapshots and `.artifacts/build-cache-inputs/` temporary receipts. Origina
 inputs admitted from the host source or its Git index remain protected even within
 those roots. Guest Git metadata cannot admit generated files as original inputs.
 The same input custody applies during capture, synchronization and recovery without
-changing saved manifest bytes. This build-cache policy does not change native-node
-or SSH workspace synchronization. Older archives can lack the original index
+changing saved manifest bytes. Older archives can lack the original index
 membership of saved files. Exact cache-root paths in the owned archive remain
 restored inputs; new generated paths under the same directories are still excluded.
 An ambiguous older cache file may therefore remain preserved.
+
+For Git-backed native-node and SSH workspaces, worker-side captures also exclude
+new generated files under those two build-cache roots. Tracked files, ignored
+files explicitly selected by `.worktreeinclude`, and exact inputs recorded in a
+prior capture remain part of the workspace. Ordinary `.artifacts/` reports still
+synchronize, and unreadable authored files still fail capture. Plain workspaces
+keep their existing capture policy even when staging creates Git metadata.
+Older remote manifests can contain cache files whose origin is unknown; those
+exact paths remain preserved. This does not change the initial Gateway-source
+snapshot policy or remove previously retained cache files.
 
 If you are a guest, you can ask the agent:
 
@@ -189,7 +198,9 @@ unresolved checkpoint failure cannot be reported as a clean stop.
 Conflicts preserve both versions and block further
 settlement until resolved. A retry or restart recovers the same pending result.
 Archive, reset, and deletion settle changes before retiring their runtimes;
-projection cleanup follows the existing managed-worktree snapshot retention.
+successful retirement clears owned pause receipts without resuming those runtimes.
+Failed retirement preserves guarded recovery for surviving paused runtimes.
+Projection cleanup follows the existing managed-worktree snapshot retention.
 Accepted guest-created ignored files (including symlinks) and empty directories
 survive archive and restore through the same pending-result recovery owner. This
 does not force ignored paths into Git publication or import unrelated ignored host
@@ -228,6 +239,9 @@ Generated skill copies carry their own Git ignore rule, so ordinary Git discover
 omits them while tracked changes and other project files remain visible.
 The Gateway refreshes its own mirrored copies even when an earlier copy inherited
 read-only directory permissions; no manual permission repair is needed.
+Unchanged skill snapshots reuse their mirrored copies. When supporting files
+change, the Gateway reconciles regular skill trees incrementally: changed files
+are replaced, removed files are pruned, and unchanged copies are retained.
 SSH and OpenShell shell execution relies on the remote host or OpenShell policy
 for filesystem restrictions; `workspaceAccess` alone does not make remote shell
 paths read-only.

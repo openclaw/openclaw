@@ -287,9 +287,6 @@ describe("test-projects args", () => {
         "src/agents/openai-transport-stream.failed-sse.test.ts",
         "src/agents/openai-transport-stream.replay-and-tools.test.ts",
       ]),
-      expectedPlan("agents-core-isolated", [
-        "src/agents/openai-transport-stream.streaming.test.ts",
-      ]),
     ]);
   });
 

@@ -1,11 +1,11 @@
+import {
+  attachInternalToolBatchLifecycle,
+  type InternalBeforeToolBatchHook,
+} from "../../../../packages/agent-core/src/internal-hooks.js";
 import { clearBatchAdmittedToolCallsForRun } from "../../agent-tools.before-tool-call.state.js";
 import type { HookContext } from "../../agent-tools.before-tool-call.types.js";
 import { normalizeCodeModeExecBeforeHookParams } from "../../code-mode-control-tools.js";
 import type { Agent } from "../../runtime/index.js";
-import {
-  attachInternalToolBatchLifecycle,
-  type InternalBeforeToolBatchHook,
-} from "../../runtime/internal-hooks.js";
 import { admitToolCallBatch } from "../../tool-loop-admission.js";
 import { hashToolCall, observeRepeatedToolError } from "../../tool-loop-detection.js";
 import { log } from "../logger.js";

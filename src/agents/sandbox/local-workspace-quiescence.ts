@@ -205,6 +205,7 @@ export async function quiesceLocalWorkspace(params: {
   );
   params.assertCurrent();
   let paused = [...params.retained];
+  let retired = false;
   const releases: Array<() => Promise<void>> = [];
   const retirements: Array<() => Promise<void>> = [];
   for (const { runtime, bridges } of selected) {
@@ -323,6 +324,9 @@ export async function quiesceLocalWorkspace(params: {
     });
   }
   return {
+    get retired() {
+      return retired;
+    },
     retire: async () => {
       params.assertCurrent();
       // Retirement settles persistent writers before acquiring this projection
@@ -337,14 +341,25 @@ export async function quiesceLocalWorkspace(params: {
         await retire();
       }
       params.assertCurrent();
+      // Finish receipt cleanup before the caller removes the workspace binding.
+      if (paused.length) {
+        await params.persist([]);
+        paused = [];
+      }
+      retired = true;
     },
     resume: async () => {
+      if (retired) {
+        return;
+      }
       params.assertCurrent();
       for (const release of releases.toReversed()) {
         await release();
       }
       params.assertCurrent();
-      await params.persist([]);
+      if (paused.length) {
+        await params.persist([]);
+      }
     },
   };
 }

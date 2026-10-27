@@ -556,8 +556,9 @@ serveOwnedWorkerTasks(
       if (request.kind === "goal-operation-receipt") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { readSessionGoalOperationInDatabase, SessionGoalOperationError } =
-          await import("./goals-operations.js");
+        const { readSessionGoalOperationInDatabase } =
+          await import("./goals-operation-receipts.js");
+        const { SessionGoalOperationError } = await import("./goals-operations.types.js");
         const { assertSessionGoalOperationTime } = await import("./goals-operation-policy.js");
         try {
           assertSessionGoalOperationTime(request.operation, Date.now());

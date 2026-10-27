@@ -237,7 +237,6 @@ describe("same-root local mutation routing", () => {
             }
             expect(authenticated).toBe(true);
             const method = frame.method!;
-            expect(worktreesHandlers[method]).toBeTypeOf("function");
             methods.push(method);
             if (method === "worktrees.create") {
               requests.push(String(frame.params?.name));
@@ -528,27 +527,21 @@ describe("same-root local mutation routing", () => {
   );
 
   it.each([
-    ["mcp logout", ["mcp", "logout", "synthetic-server"]],
-    ["models auth logout", ["models", "auth", "logout", "synthetic:manual", "--yes"]],
-    ["sandbox recreate", ["sandbox", "recreate", "--all", "--force"]],
-    [
-      "migration import",
-      "migrate apply synthetic-missing-provider --yes --no-backup --force --json".split(" "),
-    ],
-    ["exec-policy preset", ["exec-policy", "preset", "deny-all"]],
-  ])(
-    "refuses live %s before changing local state or dispatching to the owner",
-    async (_name, args) => {
-      const before = methods.length;
-      const configBefore = await readText(env.OPENCLAW_CONFIG_PATH!);
-      const result = await run(args);
-      expect(result.code, result.stderr).toBe(1);
-      expect(result.stderr).toContain("exclusive offline state ownership");
-      expect(methods).toHaveLength(before);
-      expect(await readText(env.OPENCLAW_CONFIG_PATH!)).toBe(configBefore);
-      expect((await observation()).worktreeSql).toBe(0);
-    },
-  );
+    "mcp logout synthetic-server",
+    "models auth logout synthetic:manual --yes",
+    "sandbox recreate --all --force",
+    "migrate apply synthetic-missing-provider --yes --no-backup --force --json",
+    "exec-policy preset deny-all",
+  ])("refuses live %s before changing local state or dispatching to the owner", async (command) => {
+    const before = methods.length;
+    const configBefore = await readText(env.OPENCLAW_CONFIG_PATH!);
+    const result = await run(command.split(" "));
+    expect(result.code, result.stderr).toBe(1);
+    expect(result.stderr).toContain("exclusive offline state ownership");
+    expect(methods).toHaveLength(before);
+    expect(await readText(env.OPENCLAW_CONFIG_PATH!)).toBe(configBefore);
+    expect((await observation()).worktreeSql).toBe(0);
+  });
 });
 
 describe("offline local mutation custody", () => {

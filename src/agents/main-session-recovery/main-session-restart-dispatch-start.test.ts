@@ -18,11 +18,17 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import {
+  abortSessionControllerInput,
+  adoptSessionControllerSource,
+  reserveSessionControllerSource,
+} from "../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { createEmbeddedRunLaneController } from "../embedded-agent-runner/run/lane-controller.js";
 import type { RunEmbeddedAgentParams } from "../embedded-agent-runner/run/params.js";
+import { reconcileAcceptedRestartRecoveryCancellation } from "./main-session-restart-dispatch-settlement.js";
 import {
   dispatchRestartRecoveryUntilStarted as dispatchRecovery,
   normalizeRestartRecoveryTerminalStatus,
@@ -68,6 +74,53 @@ afterEach(() => {
   resetAgentEventsForTest();
   resetCommandQueueStateForTest();
   vi.useRealTimers();
+});
+
+it("joins Stop publication for an adopted resend before dispatch acceptance", async () => {
+  const target = captureSessionTarget({ storeScope: fixture.storePath(), sessionKey });
+  const policy = { mode: "followup" } as const;
+  const controllerInput = reserveSessionControllerSource(sessionKey, {
+    target,
+    protocolRunId: runId,
+    policy,
+  });
+  const publicationEntered = createDeferred();
+  const publication = createDeferred();
+  adoptSessionControllerSource(controllerInput, {
+    target,
+    protocolRunId: runId,
+    policy,
+    adapter: {
+      cancellationAcknowledgment: async () => {
+        publicationEntered.resolve();
+        await publication.promise;
+      },
+    },
+  });
+  expect(abortSessionControllerInput(controllerInput, new Error("Stop"))).toBe(true);
+  const repairAcceptedRecovery = vi.fn(async () => {});
+  const recovery = reconcileAcceptedRestartRecoveryCancellation({
+    controllerInput,
+    dispatchAccepted: false,
+    executionStarted: false,
+    preStartAbortAttempted: false,
+    preStartAbortConfirmed: false,
+    repairAcceptedRecovery,
+  });
+  try {
+    await awaitGateBeforeSettlement(
+      publicationEntered.promise,
+      recovery,
+      "recovery settled before joining Stop publication",
+    );
+    publication.resolve();
+    await expect(recovery).resolves.toBe(false);
+    expect(repairAcceptedRecovery).not.toHaveBeenCalled();
+  } finally {
+    publication.resolve();
+    await recovery;
+    await controllerInput.settlement.promise;
+  }
 });
 
 it.each([

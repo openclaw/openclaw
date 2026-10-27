@@ -40,6 +40,11 @@ Suspended completion deliveries do not block new work. Native subagents, ACP
 sessions, and visible sessions retain their normal active-run limits and
 authorization checks independently of the delivery backlog.
 
+If a completed child's ownership changes while a reply reactivates it, that
+continuation ends with a normal error before the model starts. Your message stays
+in the child session's history, and the current child owner remains unchanged.
+Inspect the session before sending another instruction.
+
 OpenClaw warns when the delivery backlog reaches 25. Within a Gateway process,
 unchanged backlog counts do not repeat the warning every sweep. A count change
 at or above 25, or a return to that threshold after recovery, produces a new
@@ -290,6 +295,12 @@ including agent-qualified child keys, and the original child session identity.
 If a visible spawn's creation receipt omits that identity, the spawn reports an
 error with the child and run identifiers instead of accepting an undeliverable
 child. Inspect that retained child before retrying; do not spawn a replacement.
+
+After a completed task, an ordinary human turn in the same retained child starts
+a new task using the child identity admitted for that execution, including after
+an administrator resets the session. Input acknowledgement alone does not replace the task owner.
+Previous tasks retain their original identity; paused and interrupted task
+continuations keep their existing task custody.
 
 Historical records with a valid agent-qualified key retain that recorded
 ownership without migration. An explicit
