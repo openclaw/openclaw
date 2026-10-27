@@ -2,7 +2,7 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import type { Page } from "./page-context.js";
-import { scribeSetup, setupMessage } from "./scribes-catalog.js";
+import { repairMessage, scribeSetup, setupMessage } from "./scribes-catalog.js";
 import { scribes } from "./scribes-view.js";
 
 type Call = [string, Record<string, unknown> | undefined];
@@ -328,4 +328,109 @@ it("repairs a scribe whose conversation was archived", async () => {
   const send = calls.at(-1)![1]!;
   expect(String(send.message)).toMatch(/^Knowledge scribe repair: unlinked-review\n/);
   expect(String(send.idempotencyKey)).toMatch(/^knowledge:scribe:unlinked-review:repair:/);
+});
+
+const userText = (content: string) => ({ role: "user", content });
+const resultLine = (id: string, state: string, jobId: string | null, summary: string) => ({
+  role: "assistant",
+  content: `Done.\nSCRIBE_RESULT ${JSON.stringify({ scribe: id, state, jobId, summary })}`,
+});
+
+it("forces an ongoing scribe's first run once after its setup turn reports on", async () => {
+  const label = "Scribe · Learn from conversations";
+  const setup = scribeSetup(
+    "conversations",
+    "ongoing",
+    { scope: "active", since: "30d", schedule: "0 4 * * *" },
+    "main",
+    "America/Los_Angeles",
+  );
+  const job = {
+    id: "job-first",
+    declarationKey: "knowledge:scribe:conversations",
+    enabled: true,
+    schedule: { kind: "cron", expr: "0 4 * * *" },
+    state: { nextRunAtMs: 1_793_090_000_000 },
+  };
+  const { render, ui, calls } = fixture({
+    sessions: { [label]: { key: "s-conv", label } },
+    jobs: [job],
+    history: {
+      "s-conv": [
+        userText(setupMessage(setup)),
+        resultLine("conversations", "on", "job-first", "Scheduled daily at 4:00"),
+      ],
+    },
+    runs: [],
+  });
+  ui.s.scribe = "conversations";
+  const view = await render();
+  const forced = () => calls.filter(([method]) => method === "cron.run");
+  expect(forced()).toEqual([["cron.run", { id: "job-first", mode: "force" }]]);
+  expect(view.querySelector(".scribe-run")?.textContent).toContain("First runRunning now");
+  await render();
+  expect(forced()).toHaveLength(1);
+});
+
+it("does not force a run after a repair, or for a job that already ran", async () => {
+  const label = "Scribe · Review unlinked claims";
+  const setup = scribeSetup("unlinked-review", "ongoing", {}, "main", "America/Los_Angeles");
+  const fresh = { ...reviewJob, id: "job-repaired", state: {} };
+  const { render, calls } = fixture({
+    sessions: { [label]: { key: "s-review", label } },
+    jobs: [fresh],
+    history: {
+      "s-review": [
+        userText(repairMessage(setup)),
+        resultLine("unlinked-review", "on", "job-repaired", "Recreated"),
+      ],
+    },
+  });
+  await render();
+  expect(calls.some(([method]) => method === "cron.run")).toBe(false);
+  const ran = fixture({
+    sessions: { [label]: { key: "s-review", label } },
+    jobs: [reviewJob],
+    history: {
+      "s-review": [
+        userText(setupMessage(setup)),
+        resultLine("unlinked-review", "on", "job-review", "On"),
+      ],
+    },
+  });
+  await ran.render();
+  expect(ran.calls.some(([method]) => method === "cron.run")).toBe(false);
+});
+
+it("retries a failed one-time scribe by sending its setup again with a new attempt", async () => {
+  const label = "Scribe · Learn from Memory";
+  const setup = scribeSetup(
+    "memory",
+    "once",
+    { sources: ["memory-md", "dreams"] },
+    "main",
+    "America/Los_Angeles",
+  );
+  const { render, ui, calls, create } = fixture({
+    sessions: { [label]: { key: "s-mem", label } },
+    history: {
+      "s-mem": [
+        userText(setupMessage(setup)),
+        resultLine("memory", "failed", null, "Store was not writable"),
+      ],
+    },
+  });
+  ui.s.scribe = "memory";
+  const view = await render();
+  expect(view.querySelector(".scribe-chip-warn")?.textContent).toBe("Failing");
+  expect(buttonNamed(view, "Repair")).toBeUndefined();
+  buttonNamed(view, "Retry").click();
+  await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("chat.send"));
+  expect(create).not.toHaveBeenCalled();
+  expect(calls.at(-1)![1]).toEqual({
+    sessionKey: "s-mem",
+    agentId: "main",
+    message: setupMessage(setup),
+    idempotencyKey: expect.stringMatching(/^knowledge:scribe:memory:s-mem:[0-9a-f-]{36}$/),
+  });
 });

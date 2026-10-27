@@ -83,6 +83,17 @@ export async function repairScribe(host: ScribeHost, snapshot: ScribeSnapshot, a
   return sessionKey;
 }
 
+/**
+ * Send a one-time scribe's setup message again in its conversation, as a new start attempt. Uses
+ * the options of its latest setup message, or the defaults when the transcript no longer shows one.
+ */
+export function retryScribe(host: ScribeHost, snapshot: ScribeSnapshot, agentId: string) {
+  const { scribe } = snapshot;
+  const setup =
+    snapshot.setup ?? scribeSetup(scribe.id, "once", defaultOptions(scribe.id), agentId);
+  return startScribe(host, snapshot, setup, crypto.randomUUID());
+}
+
 /** Run the scribe's automation now, even when it is not due. */
 export const runScribeNow = (host: ScribeHost, job: ScribeJob) =>
   host.request("cron.run", { id: job.id, mode: "force" });

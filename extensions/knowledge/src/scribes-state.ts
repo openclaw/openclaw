@@ -83,6 +83,11 @@ export type ScribeSnapshot = {
   result?: ScribeResult;
   /** Options from the latest setup or repair message in the conversation. */
   setup?: ScribeSetup;
+  /**
+   * The page owes this ongoing scribe its first run: the setup turn answered `on` with a job
+   * that has never run. Setup turns never run their own job, so the page forces it once.
+   */
+  firstRunDue?: boolean;
 };
 
 /** Cheap facts for the Available rows. Absent fields could not be read. */
@@ -158,7 +163,7 @@ function parseScribeResult(messages: readonly unknown[]) {
   return { result: undefined, index: -1 };
 }
 
-/** Options from the newest setup or repair message the page sent, with its position. */
+/** Options from the newest setup or repair message the page sent, with its kind and position. */
 function parseSetup(messages: readonly unknown[]) {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
@@ -166,30 +171,46 @@ function parseSetup(messages: readonly unknown[]) {
       continue;
     }
     const match =
-      /^Knowledge scribe (?:setup|repair): ([a-z-]+)\n[^\n]*\n```json\n(\{.*\})\n```/.exec(
+      /^Knowledge scribe (setup|repair): ([a-z-]+)\n[^\n]*\n```json\n(\{.*\})\n```/.exec(
         messageText(message).trim(),
       );
-    if (!match || !scribeById(match[1]!)) {
+    if (!match || !scribeById(match[2]!)) {
       continue;
     }
     try {
-      const value: unknown = JSON.parse(match[2]!);
+      const value: unknown = JSON.parse(match[3]!);
       if (
         isRecord(value) &&
-        value.scribe === match[1] &&
+        value.scribe === match[2] &&
         (value.mode === "once" || value.mode === "ongoing") &&
         isRecord(value.options) &&
         typeof value.timezone === "string" &&
         typeof value.agentId === "string"
       ) {
         // SAFETY: fields checked above; options are the page's own serialized choices.
-        return { setup: value as ScribeSetup, index };
+        return { setup: value as ScribeSetup, kind: match[1]!, index };
       }
     } catch {
       // A hand-edited setup message: treat as unknown options.
     }
   }
-  return { setup: undefined, index: -1 };
+  return { setup: undefined, kind: undefined, index: -1 };
+}
+
+/**
+ * Whether the page should force this scribe's first run: the latest page message was an ongoing
+ * setup, the conversation answered it with `on` for this job, and the job has not run yet.
+ */
+function isFirstRunDue(job: ScribeJob, result: ScribeResult, setup: ScribeSetup, kind: string) {
+  return (
+    kind === "setup" &&
+    setup.mode === "ongoing" &&
+    result.state === "on" &&
+    (result.jobId === null || result.jobId === job.id) &&
+    job.enabled &&
+    !job.state.lastRunAtMs &&
+    !job.state.runningAtMs
+  );
 }
 
 /**
@@ -289,7 +310,7 @@ export async function loadScribes(host: ScribeReader, agentId: string): Promise<
       const job = jobs.get(scribeDeclarationKey(scribe.id));
       const messages = session ? await readMessages(host, session, agentId) : [];
       const { result, index: resultIndex } = parseScribeResult(messages);
-      const { setup, index: setupIndex } = parseSetup(messages);
+      const { setup, kind, index: setupIndex } = parseSetup(messages);
       // A result older than the latest setup or repair message answers an earlier start.
       const current = resultIndex > setupIndex ? result : undefined;
       const snapshot: ScribeSnapshot = {
@@ -297,6 +318,9 @@ export async function loadScribes(host: ScribeReader, agentId: string): Promise<
         status: deriveStatus({ scribe, session, job, result: current }),
       };
       Object.assign(snapshot, session && { session }, job && { job }, result && { result });
+      if (job && current && setup && kind && snapshot.status === "on") {
+        snapshot.firstRunDue = isFirstRunDue(job, current, setup, kind);
+      }
       return setup ? Object.assign(snapshot, { setup }) : snapshot;
     }),
   );

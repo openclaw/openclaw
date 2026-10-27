@@ -44,7 +44,10 @@ Starting needs a connection with write access (`operator.write`).
    agent, or reuses the one that already has that label.
 2. It sends that conversation a fixed setup message: the skill to follow and the
    options you chose as JSON. No vault content is included.
-3. An ongoing scribe creates one automation for itself and does one test run.
+3. An ongoing scribe creates one automation for itself and reports `on`. The
+   Scribes tab then runs that automation once as its first run; the setup turn
+   never runs it. If the page is closed when setup finishes, the first run starts
+   the next time the Scribes tab loads.
    A once scribe does its work and reports back. Nothing is scheduled.
 
 Scribes run as you, with your private access to the store, and use the agent's
@@ -78,6 +81,7 @@ alert, and recent runs.
 | Turn off…         | Removes the automation. The conversation is kept.                                                       |
 | Open conversation | Opens the scribe's conversation.                                                                        |
 | Repair            | Restores an archived conversation, or creates one, and asks it to re-check and recreate its automation. |
+| Retry             | For a failed once scribe: sends its setup message again, as a new attempt, in the same conversation.    |
 
 Controls need write access. Pause, resume, and turn off are rejected if the
 automation changed since the page read it; the page shows the error, and
@@ -87,7 +91,7 @@ reopening the scribe shows its current state.
 
 - Conversation counts and the `MEMORY.md` size come from Gateway reads. A count
   the Gateway cannot provide is left out rather than estimated.
-- Repair reuses the options of the latest setup message the page can still read
+- Repair and Retry reuse the options of the latest setup message the page can still read
   in the conversation (its last 100 messages); otherwise it uses the defaults.
 - A scribe conversation's label stays claimed while the conversation is archived,
   so starting or repairing a scribe reuses that conversation.
