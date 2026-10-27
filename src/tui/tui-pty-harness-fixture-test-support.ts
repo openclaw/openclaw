@@ -181,6 +181,10 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
       let pendingPluginApprovalRun: { runId: string; sessionKey: string } | null = null;
       ${TUI_PTY_TASK_FIXTURE.variables}
 
+      function textReply(text: string) {
+        return { role: "assistant", content: [{ type: "text", text }], timestamp: Date.now() };
+      }
+
       function sessionEntry(key = "main") {
         const isModeSource = key.endsWith(":mode-source");
         const isModeTarget = key.endsWith(":mode-target");
@@ -314,11 +318,7 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
                 record("lateSessionEvent", { sessionKey: opts.sessionKey, state });
                 emitChat({
                   state,
-                  message: {
-                    role: "assistant",
-                    content: [{ type: "text", text }],
-                    timestamp: Date.now(),
-                  },
+                  message: textReply(text),
                 });
               }, delayMs);
             }
@@ -364,11 +364,7 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
             setTimeout(() => {
               emitChat({
                 state: "delta",
-                message: {
-                  role: "assistant",
-                  content: [{ type: "text", text: "PTY_STREAMING: streaming prompt" }],
-                  timestamp: Date.now(),
-                },
+                message: textReply("PTY_STREAMING: streaming prompt"),
               });
             }, 5);
           }
@@ -399,11 +395,7 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
             const attachmentOnlyMessage = buildAttachmentOnlyAssistantMessage(opts.message, runId);
             const message = isSourceReplyProof
               ? assistantMessageFromSourceReplyPayloads(sourceReplyPayloads)
-              : (attachmentOnlyMessage ?? {
-                  role: "assistant",
-                  content: [{ type: "text", text: "PTY_RESPONSE: " + opts.message }],
-                  timestamp: Date.now(),
-                });
+              : (attachmentOnlyMessage ?? textReply("PTY_RESPONSE: " + opts.message));
             emitChat({ state: "final", message });
           }, responseDelayMs);
           return { runId };
@@ -595,11 +587,7 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
             runId: pendingRun?.runId ?? "run-pty-fixture",
             sessionKey: pendingRun?.sessionKey ?? "agent:main:main",
             state: "final",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "PTY_SKILL_APPROVAL_RESOLVED: " + decision }],
-              timestamp: Date.now(),
-            },
+            message: textReply("PTY_SKILL_APPROVAL_RESOLVED: " + decision),
           });
           return { ok: true };
         }
