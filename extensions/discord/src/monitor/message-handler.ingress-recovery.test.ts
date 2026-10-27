@@ -5,6 +5,7 @@ import {
 } from "./message-handler.module-test-helpers.js";
 
 installDiscordIngressTestRuntime();
+import assert from "node:assert/strict";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import * as channelOutbound from "openclaw/plugin-sdk/channel-outbound";
@@ -16,6 +17,7 @@ import {
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAsyncGate as barrier } from "../../../test-support/async-gate.test-support.js";
+import { RequestClient } from "../internal/rest.js";
 import * as ingressRuntime from "./ingress.js";
 import { discordChannelInfoCacheState } from "./message-channel-info-state.js";
 import * as preflightRuntime from "./message-handler.preflight.js";
@@ -74,9 +76,7 @@ async function seedPendingFailure(queue: DiscordQueue, id: string, attempts = 1,
   await queue.enqueue(id, event, { laneKey: "channel:lane-a", receivedAt: 1 });
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const claim = await queue.claim(id, { ownerId: `seed-${attempt}` });
-    if (!claim) {
-      throw new Error(`Expected ${id} to be claimable for seed attempt ${attempt}`);
-    }
+    assert(claim, `Expected ${id} to be claimable for seed attempt ${attempt}`);
     await queue.release(claim, {
       lastError: `prior genuine failure ${attempt}`,
       releasedAt: 10 + attempt,
@@ -87,9 +87,7 @@ async function seedPendingFailure(queue: DiscordQueue, id: string, attempts = 1,
 
 async function retryFacts(queue: DiscordQueue, id: string) {
   const record = (await queue.listPending({ limit: "all" })).find((entry) => entry.id === id);
-  if (!record) {
-    throw new Error(`Expected pending Discord ingress row ${id}`);
-  }
+  assert(record, `Expected pending Discord ingress row ${id}`);
   const { attempts, lastAttemptAt, lastError } = record;
   return { attempts, lastAttemptAt, lastError };
 }
@@ -127,15 +125,12 @@ function createHandler(params: {
     createDiscordIngressMonitor({
       ...monitorParams,
       queue: params.queue,
-      dispatch:
-        params.beforeDispatch || params.afterDispatch
-          ? async (event, lifecycle) => {
-              await params.beforeDispatch?.();
-              const result = await monitorParams.dispatch(event, lifecycle);
-              params.afterDispatch?.();
-              return result;
-            }
-          : monitorParams.dispatch,
+      dispatch: async (event, lifecycle) => {
+        await params.beforeDispatch?.();
+        const result = await monitorParams.dispatch(event, lifecycle);
+        params.afterDispatch?.();
+        return result;
+      },
     }),
   );
   return createDiscordMessageHandler({
@@ -298,20 +293,27 @@ describe("Discord durable ingress settlement", () => {
           }
           return messageContext(params.data);
         });
-        const post = vi.fn(() => queue.enqueue("poison", {} as DiscordIngressPayload));
+        const post = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+          await expectRecord(queue, "poison", { kind: "failed" });
+          return Response.json({});
+        });
+        let requests = 0;
         const handler = createHandler({
           queue,
           handlerParams,
           client: {
-            rest: { post },
+            rest: new RequestClient("synthetic-token", {
+              fetch: async (...args) => {
+                if (phase === "revoked" && ++requests === 1) {
+                  const revoked = { channels: { discord: { groupPolicy: "disabled" as const } } };
+                  setRuntimeConfigSnapshot(revoked, revoked);
+                  return Response.json({ retry_after: 0.001 }, { status: 429 });
+                }
+                return post(...args);
+              },
+            }),
             fetchGuild: async () => null,
-            fetchChannel: async () => {
-              if (phase === "revoked") {
-                const revoked = { channels: { discord: { groupPolicy: "disabled" as const } } };
-                setRuntimeConfigSnapshot(revoked, revoked);
-              }
-              return { id: "lane-a", type: phase === "disabled-dm" ? 1 : 0 };
-            },
+            fetchChannel: async () => ({ id: "lane-a", type: phase === "disabled-dm" ? 1 : 0 }),
           } as never,
         });
         try {
@@ -323,17 +325,16 @@ describe("Discord durable ingress settlement", () => {
               reason: phase === "authentication" ? "authentication-failed" : "retry-limit-exceeded",
             },
           });
-          expect(post).toHaveBeenCalledTimes(
-            ["preflight", "authentication"].includes(phase) ? 1 : 0,
-          );
-          if (post.mock.calls.length) {
-            await expect(post.mock.results[0]?.value).resolves.toMatchObject({ kind: "failed" });
-            expect(post).toHaveBeenCalledWith("/channels/lane-a/messages", {
-              body: {
-                content: expect.stringContaining("Please try again"),
-                message_reference: { message_id: "poison", fail_if_not_exists: false },
-                allowed_mentions: { parse: [], replied_user: false },
-              },
+          const noticeAllowed = ["preflight", "authentication"].includes(phase);
+          expect(post).toHaveBeenCalledTimes(noticeAllowed ? 1 : 0);
+          if (noticeAllowed) {
+            expect(post.mock.calls[0]?.[0]).toContain("/channels/lane-a/messages");
+            const body = post.mock.calls[0]?.[1]?.body;
+            assert(typeof body === "string");
+            expect(JSON.parse(body)).toEqual({
+              content: expect.stringContaining("Please try again"),
+              message_reference: { message_id: "poison", fail_if_not_exists: false },
+              allowed_mentions: { parse: [], replied_user: false },
             });
           }
         } finally {

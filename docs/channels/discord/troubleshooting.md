@@ -96,6 +96,8 @@ openclaw logs --follow
     fail or the notice takes more than 15 seconds, OpenClaw logs the suppressed
     or failed notice alongside the original failure cause. A process crash
     between dead-lettering and sending the notice can still prevent the reply.
+    Queued notices recheck access and reply visibility before sending or retrying;
+    a notice already sent to Discord can finish after its deadline.
 
   </Accordion>
 

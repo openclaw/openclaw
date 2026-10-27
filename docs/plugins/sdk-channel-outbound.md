@@ -120,8 +120,10 @@ failure reply or reaction. It runs only after this claim's failure write commits
 ordinary retries and rejected claim writes do not invoke it. Notices are best
 effort: a rejection or a 15-second notice timeout is logged without replaying the
 failed event. The signal aborts on timeout; check it and current transport access
-authority immediately before sending. Durable receipt alone does not authorize a
-reply. A crash between commit and notification can lose the notice.
+authority immediately before sending, including queued dispatch and transport
+retries. An already dispatched request may still settle after abort. Durable
+receipt alone does not authorize a reply. A crash between commit and notification
+can lose the notice.
 
 ### One turn, several durable claims
 

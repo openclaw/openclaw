@@ -15,6 +15,7 @@ import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-sn
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { Client } from "../internal/discord.js";
+import { withDiscordRequestAuthority } from "../internal/request-authority.js";
 import type { DiscordIngressDispatchResult, DiscordIngressLifecycle } from "./ingress.js";
 import type { DiscordMessageEvent } from "./listeners.js";
 import { createDiscordLivePolicyReader, type DiscordLivePolicyReader } from "./live-policy.js";
@@ -387,26 +388,7 @@ export function createDiscordMessageDispatcher(
       ...(params.abortSignal ? [params.abortSignal] : []),
     ]);
     const ctx = await preflightMessage(data, client, { abortSignal });
-    // Durable receipt is not send authority; use current preflight policy at the effect.
-    if (
-      !ctx ||
-      abortSignal.aborted ||
-      !lifecycleActive ||
-      ctx.isPolicyCurrent?.() !== true ||
-      resolveChannelMessageSourceReplyDeliveryMode({
-        cfg: readConfig(),
-        ctx: {
-          ChatType: ctx.isDirectMessage
-            ? "direct"
-            : ctx.isGroupDm
-              ? "group"
-              : ctx.isGuildMessage
-                ? "channel"
-                : undefined,
-          InboundEventKind: ctx.inboundEventKind,
-        },
-      }) === "message_tool_only"
-    ) {
+    if (!ctx) {
       params.runtime.error(
         danger(
           `discord ingress: dead-letter notice suppressed for ${data.message.id} (access or reply policy denied, or authority expired)`,
@@ -414,13 +396,40 @@ export function createDiscordMessageDispatcher(
       );
       return;
     }
-    await client.rest.post(Routes.channelMessages(ctx.messageChannelId), {
-      body: {
-        content: "⚠️ Couldn't process this message after repeated failures. Please try again.",
-        message_reference: { message_id: data.message.id, fail_if_not_exists: false },
-        allowed_mentions: { parse: [], replied_user: false },
-      },
-    });
+    // The REST owner rechecks this assertion after queueing and on rate-limit retries.
+    const assertCurrent = () => {
+      abortSignal.throwIfAborted();
+      if (!lifecycleActive || ctx.isPolicyCurrent?.() !== true) {
+        throw new Error("discord dead-letter notice suppressed: access authority expired");
+      }
+      if (
+        resolveChannelMessageSourceReplyDeliveryMode({
+          cfg: readConfig(),
+          ctx: {
+            ChatType: ctx.isDirectMessage
+              ? "direct"
+              : ctx.isGroupDm
+                ? "group"
+                : ctx.isGuildMessage
+                  ? "channel"
+                  : undefined,
+            InboundEventKind: ctx.inboundEventKind,
+          },
+        }) === "message_tool_only"
+      ) {
+        throw new Error("discord dead-letter notice suppressed: source-reply policy");
+      }
+    };
+    assertCurrent();
+    await withDiscordRequestAuthority(assertCurrent, () =>
+      client.rest.post(Routes.channelMessages(ctx.messageChannelId), {
+        body: {
+          content: "⚠️ Couldn't process this message after repeated failures. Please try again.",
+          message_reference: { message_id: data.message.id, fail_if_not_exists: false },
+          allowed_mentions: { parse: [], replied_user: false },
+        },
+      }),
+    );
   };
 
   handler.deactivate = async () => {
