@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
-import { chromium, type CDPSession, type Page } from "playwright";
+import { chromium, type BrowserContext, type CDPSession, type Page } from "playwright";
 import { createRedactingStreamWriter } from "../src/logging/redacting-stream.ts";
 import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../src/shared/control-ui-storage.js";
 import {
@@ -68,6 +68,14 @@ type Owner = {
   ready: Ready;
   snapshot: () => Promise<Dispatch[]>;
   close: () => Promise<void>;
+};
+type PageEntry = {
+  owner: Owner;
+  context: BrowserContext;
+  page: Page;
+  cdp: CDPSession;
+  proxy: Awaited<ReturnType<typeof startUsageRttProxy>> | undefined;
+  responses: ReturnType<typeof observeUsage>;
 };
 const owners: Owner[] = [];
 const fixtureTokens: string[] = [];
@@ -296,7 +304,7 @@ try {
     owners.push(await start(root, role));
   for (const cpu of values.smoke ? [4] : [1, 4])
     for (const rtt of [0, 100]) {
-      const pages = [];
+      const pages: PageEntry[] = [];
       try {
         for (const owner of owners) {
           const context = await browser.newContext({
@@ -306,12 +314,12 @@ try {
             serviceWorkers: "block",
           });
           const page = await context.newPage();
-          const entry = {
+          const entry: PageEntry = {
             owner,
             context,
             page,
             cdp: await context.newCDPSession(page),
-            proxy: undefined as Awaited<ReturnType<typeof startUsageRttProxy>> | undefined,
+            proxy: undefined,
             responses: observeUsage(page),
           };
           pages.push(entry);
