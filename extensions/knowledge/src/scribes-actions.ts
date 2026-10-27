@@ -22,7 +22,13 @@ async function conversation(host: ScribeHost, snapshot: ScribeSnapshot, agentId:
   const existing = snapshot.session;
   if (existing) {
     if (existing.archived) {
-      await host.request("sessions.patch", { key: existing.key, agentId, archived: false });
+      // Lifecycle patches name the incarnation they restore.
+      await host.request("sessions.patch", {
+        key: existing.key,
+        agentId,
+        archived: false,
+        ...(existing.sessionId ? { expectedSessionId: existing.sessionId } : {}),
+      });
     }
     return existing.key;
   }

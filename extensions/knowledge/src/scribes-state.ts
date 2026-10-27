@@ -22,6 +22,7 @@ export type ScribeStatus =
 /** The session row fields the Scribes view reads. */
 type ScribeSession = {
   key: string;
+  sessionId?: string;
   label?: string;
   agentId?: string;
   archived?: boolean;

@@ -18,7 +18,7 @@ const reviewJob = {
 
 // A fake page host: Gateway reads answer from `world`; writes are recorded.
 function fixture(world: {
-  sessions?: Record<string, { key: string; label: string; archived?: boolean }>;
+  sessions?: Record<string, { key: string; sessionId?: string; label: string; archived?: boolean }>;
   jobs?: unknown[];
   history?: Record<string, unknown[]>;
   runs?: unknown[];
@@ -306,6 +306,7 @@ it("repairs a scribe whose conversation was archived", async () => {
     sessions: {
       "Scribe · Review unlinked claims": {
         key: "s-review",
+        sessionId: "sid-review",
         label: "Scribe · Review unlinked claims",
         archived: true,
       },
@@ -320,7 +321,7 @@ it("repairs a scribe whose conversation was archived", async () => {
   await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("chat.send"));
   expect(calls.at(-2)).toEqual([
     "sessions.patch",
-    { key: "s-review", agentId: "main", archived: false },
+    { key: "s-review", agentId: "main", archived: false, expectedSessionId: "sid-review" },
   ]);
   const send = calls.at(-1)![1]!;
   expect(String(send.message)).toMatch(/^Knowledge scribe repair: unlinked-review\n/);
