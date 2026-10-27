@@ -19,8 +19,29 @@ function buildResultPreview(result: unknown) {
 it.each([
   ["a surrogate pair at the cap", "a".repeat(1_999) + "🦞tail", "a".repeat(1_999)],
   ["a lone surrogate inside the cap", "\ud800" + "a".repeat(2_100), "\ud800" + "a".repeat(1_999)],
+  [
+    "JSON escapes and a lone low surrogate",
+    '"\\\n\t\udc00' + "a".repeat(2_100),
+    '"\\\n\t\udc00' + "a".repeat(1_995),
+  ],
 ])("preserves %s", (_label, source, expected) => {
   expect(buildResultPreview({ text: source })).toBe(expected);
+});
+
+it("updates a preview whose last retained code unit changes", () => {
+  const update = (text: string, phase: string) =>
+    activity({
+      toolCallId: "tool-1",
+      name: "read",
+      phase,
+      partialResult: { text },
+      result: { text },
+    });
+  const entries = updateToolActivity([], update("a".repeat(2_001), "update"));
+  const done = updateToolActivity(entries, update("a".repeat(1_999) + "!tail", "result"));
+  expect(done[0]?.outputPreview).toBe("a".repeat(1_999) + "!");
+  expect(done[0]?.status).toBe("done");
+  expect(entries[0]?.outputPreview).toBe("a".repeat(2_000));
 });
 
 it("preserves dotted API keys in object-shaped tool results", () => {
