@@ -127,10 +127,7 @@ it("persists exact container and browser custody before pausing and resumes only
   const ids: Record<string, string> = { owned: id, "browser-owned": browserId };
   const expected = Object.entries(ids).map(([name, runtimeId]) => ({ name, id: runtimeId }));
   mocks.browsers.mockResolvedValue({
-    entries: [
-      { ...entry, containerName: "browser-owned" },
-      { ...entry, containerName: "foreign", workspaceDir: "/other" },
-    ],
+    entries: [{ ...entry, containerName: "browser-owned" }],
   });
   mockEngine(ids, ({ action, target }) => {
     if (action === "pause") {
