@@ -18,6 +18,7 @@ import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 
 const { values } = parseArgs({
@@ -100,6 +101,7 @@ try {
   }
   await flushLogger();
   const initialLogBytes = fs.statSync(logFile).size;
+  await nextTurn();
   globalThis.gc();
   if (values.mode === "allocation") {
     inspector.connect();
@@ -128,6 +130,8 @@ try {
     allocatedBytes = sum(profile.head);
     inspector.disconnect();
   }
+  // Empty log flushes need not yield; let both arms settle deferred native disposal.
+  await nextTurn();
   globalThis.gc();
   const retainedAfter = process.memoryUsage();
   const logs = fs.readFileSync(logFile).subarray(initialLogBytes).toString();
