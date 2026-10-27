@@ -1,4 +1,5 @@
 import {
+  getCanonicalToolParameterSchema,
   isStrictOpenAIJsonSchemaCompatible,
   normalizeOpenAIStrictToolParameters,
   normalizeToolParameterSchema,
@@ -14,7 +15,10 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
-import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
+import {
+  bindAgentToolExecutionSchema,
+  finalizeAgentToolAvailability,
+} from "./agent-tool-availability.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
@@ -99,7 +103,10 @@ function bindToolParameterSchema(
       return prepared === null || prepared === undefined ? {} : prepared;
     };
   }
-  return copyAgentToolMetadata(tool, normalized);
+  const bound = copyAgentToolMetadata(tool, normalized);
+  // The provider projection is model-facing only; local validation keeps the contract.
+  const canonical = getCanonicalToolParameterSchema(parameters);
+  return canonical === undefined ? bound : bindAgentToolExecutionSchema(bound, canonical);
 }
 
 function publishParameters(parameters: AnyAgentTool["parameters"], name: string) {

@@ -121,3 +121,23 @@ export function finalizeAgentToolAvailability<T extends ToolDefinition>(
 export function resolveAgentToolExecutionSchema(tool: object, schema: unknown): unknown {
   return availabilityBindings.get(tool)?.binding.executionSchema?.(schema) ?? schema;
 }
+
+/**
+ * Point local input validation at the tool's canonical contract while the model-facing
+ * schema keeps its provider projection. A schema the tool owner already declared wins:
+ * this only fills the gap left by provider normalization.
+ */
+export function bindAgentToolExecutionSchema<T extends object>(tool: T, schema: unknown): T {
+  const metadata = availabilityBindings.get(tool);
+  if (metadata?.binding.executionSchema) {
+    return tool;
+  }
+  const executionSchema = () => schema;
+  availabilityBindings.set(
+    tool,
+    metadata
+      ? { ...metadata, binding: { ...metadata.binding, executionSchema } }
+      : { binding: { prepare: () => undefined, executionSchema } },
+  );
+  return tool;
+}

@@ -13,8 +13,10 @@ import {
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
+import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
 import { assertCompleteToolResult, resolveToolResultBudget } from "./tool-result-limits.js";
 import {
   addClientToolsToToolCatalog,
@@ -263,6 +265,30 @@ describe("Tool Search input schemas", () => {
       result: { details: { input: { maxFires: 10 } } },
     });
     expect(target.execute).toHaveBeenCalledOnce();
+  });
+
+  it("accepts read optional on a Gemini-routed catalog through the canonical contract", async () => {
+    const readTool = fakeTool("read", readToolInputSchema);
+    const finalized = finalizeAgentTools({
+      tools: [readTool],
+      hookContext: { sessionId: "gemini-read" },
+      modelProvider: "google",
+      modelId: "gemini-4-argon",
+      wrapBeforeToolCallHook: false,
+    });
+    const { catalogRef, runtime } = createRuntime(finalized);
+    expect(catalogRef.current?.entries[0]?.parameters).toHaveProperty("properties.optional.enum", [
+      "true",
+    ]);
+
+    await expect(
+      runtime.call("read", { path: "nonexistent.txt", optional: true }),
+    ).resolves.toBeDefined();
+    expect(readTool.execute).toHaveBeenCalledOnce();
+    expect(vi.mocked(readTool.execute).mock.calls[0]?.[1]).toEqual({
+      path: "nonexistent.txt",
+      optional: true,
+    });
   });
 
   it.each([

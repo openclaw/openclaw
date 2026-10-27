@@ -3,7 +3,10 @@ import * as toolSchema from "@openclaw/ai/internal/tool-schema";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { bindAgentToolAvailability } from "./agent-tool-availability.js";
+import {
+  bindAgentToolAvailability,
+  resolveAgentToolExecutionSchema,
+} from "./agent-tool-availability.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { getBeforeToolCallHookContext } from "./before-tool-call-metadata.js";
@@ -268,6 +271,46 @@ describe("finalized tool descriptor snapshots", () => {
     expect(refreshed.description).toBe("New description");
     expect(refreshed.parameters).toEqual(replacement);
     expect(refreshed.outputSchema).toEqual(replacement);
+  });
+
+  it("keeps the canonical input contract for execution behind a provider projection", async () => {
+    const parameters = {
+      type: "object",
+      properties: { optional: { type: "boolean", const: true } },
+      required: ["optional"],
+    };
+    const google = attempt([tool(parameters)], {
+      modelProvider: "google",
+      modelId: "gemini-4-argon",
+    });
+    const projected = google.tool();
+    expect(projected.parameters).toHaveProperty("properties.optional.enum", ["true"]);
+    expect(resolveAgentToolExecutionSchema(projected, projected.parameters)).toEqual(parameters);
+    await google.settle();
+
+    const openai = attempt([tool(parameters)], { modelProvider: "openai" });
+    const lossless = openai.tool();
+    expect(resolveAgentToolExecutionSchema(lossless, lossless.parameters)).toBe(
+      lossless.parameters,
+    );
+    await openai.settle();
+  });
+
+  it("keeps an owner-declared execution schema over the canonical provider contract", async () => {
+    const parameters = {
+      type: "object",
+      properties: { optional: { type: "boolean", const: true } },
+    };
+    const ownerSchema = { type: "object", properties: { optional: { type: "boolean" } } };
+    const owner = bindAgentToolAvailability(tool(parameters), {
+      prepare: () => undefined,
+      executionSchema: () => ownerSchema,
+    });
+    const finalized = attempt([owner], {
+      modelProvider: "google",
+      modelId: "gemini-4-argon",
+    }).tool();
+    expect(resolveAgentToolExecutionSchema(finalized, finalized.parameters)).toBe(ownerSchema);
   });
 
   it("never restores a previous availability schema or hook context", async () => {
