@@ -538,6 +538,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt.configured-mcp-lifecycle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.cwd-split.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.exec-review-transcript.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-final-system-prompt.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.settled-turn-finalization-context.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.orphan.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.tool-search-catalog-abort.test.ts",
