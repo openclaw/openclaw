@@ -301,16 +301,27 @@ updater is affected.
 
 ## Extended-stable 2026.9.33 to development builds
 
-When updating an installed **2026.9.33** directly to current development builds,
-activation can fail with `SQLite migration source changed after update capture`.
-The older updater and the candidate use different database fingerprint formats.
-This error alone does not establish that another process changed the database.
-The failed update preserves current databases and recovery snapshots, but may
-leave the Gateway stopped with the candidate package installed.
+Direct updates from **2026.9.33** and **2026.9.34** are supported when the target
+contains the fingerprint repair in [#184547](https://github.com/openclaw/openclaw/pull/184547)
+and artifact-preserving Doctor inspection, starting with the first release
+containing both changes. The installed updater does
+not need the repair. Candidate Doctor verifies the older physical database
+fingerprints, attributes migrations using committed content, and returns receipts
+in the older updater's format. Changed data, intervening commits, replaced files,
+and tampered backups still refuse automatic restoration.
 
-Before switching to development, create a
+Older targets can fail activation with
+`SQLite migration source changed after update capture` because the updater and
+candidate use different fingerprint formats. This error alone does not establish
+that another process changed the database. The failed update preserves current
+databases and recovery snapshots, but may leave the Gateway stopped with the
+candidate package installed.
+
+Before updating, create a
 [verified backup](/install/updating#before-updating-create-a-verified-backup),
-then update through **2026.10.5**:
+then stop other OpenClaw processes using the same state. For a target containing
+the repair, update directly. If the target predates the repair, use the verified
+intermediate path through **2026.10.5**:
 
 ```bash
 openclaw update --channel stable --tag 2026.10.5
