@@ -362,90 +362,87 @@ describe("package verification bounds", () => {
       }),
   );
 
-  it.for(["hash report"] as const)(
-    "settles bounded parallel hashes after a stalled %s without continuing the walk",
-    (_operation, { signal }) =>
-      withSwap(async ({ params, packageRoot, launcher }) => {
-        const window = 64;
-        const full = createDeferredCore();
-        const files = [
-          path.join(packageRoot, "dist", "index.js"),
-          ...Array.from({ length: window }, (_, index) =>
-            path.join(packageRoot, "dist", `peer-${String(index).padStart(3, "0")}.js`),
-          ),
-        ];
-        for (const file of files.slice(1)) {
-          await fs.writeFile(file, "export default 1;\n");
+  it("settles bounded parallel hashes after a stalled hash report without continuing the walk", ({
+    signal,
+  }) =>
+    withSwap(async ({ params, packageRoot, launcher }) => {
+      const window = 64;
+      const full = createDeferredCore();
+      const files = [
+        path.join(packageRoot, "dist", "index.js"),
+        ...Array.from({ length: window }, (_, index) =>
+          path.join(packageRoot, "dist", `peer-${String(index).padStart(3, "0")}.js`),
+        ),
+      ];
+      for (const file of files.slice(1)) {
+        await fs.writeFile(file, "export default 1;\n");
+      }
+      const jobs = new Map(
+        files.map((file) => [
+          file,
+          { release: createDeferredCore(), settled: createDeferredCore() },
+        ]),
+      );
+      const admitted: string[] = [];
+      const started: Promise<string>[] = [];
+      interceptPackageFileHashes(async (file, _stat, next) => {
+        const job = jobs.get(file);
+        if (!job || admitted.includes(file)) {
+          return next();
         }
-        const jobs = new Map(
-          files.map((file) => [
-            file,
-            { release: createDeferredCore(), settled: createDeferredCore() },
-          ]),
-        );
-        const admitted: string[] = [];
-        const started: Promise<string>[] = [];
-        interceptPackageFileHashes(async (file, _stat, next) => {
-          const job = jobs.get(file);
-          if (!job || admitted.includes(file)) {
-            return next();
-          }
-          admitted.push(file);
-          // Delay the real hash report; worker tests own mid-syscall descriptor proof.
-          const result = next();
-          started.push(result);
-          if (admitted.length === window) {
-            full.resolve();
-          }
-          try {
-            const value = await result;
-            await job.release.promise;
-            return value;
-          } finally {
-            job.settled.resolve();
-          }
-        });
-        const lstat = vi.spyOn(fs, "lstat");
-        const beforeActivate = vi.fn();
-        const onLiveMutation = vi.fn();
-        vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-        const update = swapStagedPackageInstall({
-          ...params,
-          beforeActivate,
-          onLiveMutation,
-          timeoutMs: 40,
-        });
+        admitted.push(file);
+        // Delay the real hash report; worker tests own mid-syscall descriptor proof.
+        const result = next();
+        started.push(result);
+        if (admitted.length === window) {
+          full.resolve();
+        }
         try {
-          await waitForGate(full.promise, update, signal, "the admission window never filled");
-          await withinTest(Promise.all(started), signal);
-          expect(admitted).toEqual(files.slice(0, window));
-          expect(lstat.mock.calls.some(([file]) => String(file) === files[window])).toBe(false);
-          await vi.advanceTimersByTimeAsync(40);
-          const result = await withinTest(update, signal);
-          expect(result.status).toBe("committed");
-          expect(result.step.advisory?.message).toContain(
-            "baseline package fingerprint incomplete",
-          );
-          expect(beforeActivate).toHaveBeenCalledOnce();
-          expect(onLiveMutation).toHaveBeenCalledOnce();
-          expect(admitted).toEqual(files.slice(0, window));
-          for (const file of admitted) {
-            jobs.get(file)!.release.resolve();
-          }
-          await withinTest(
-            Promise.all(admitted.map((file) => jobs.get(file)!.settled.promise)),
-            signal,
-          );
-          await expectInstallation(packageRoot, launcher, true);
+          const value = await result;
+          await job.release.promise;
+          return value;
         } finally {
-          for (const job of jobs.values()) {
-            job.release.resolve();
-          }
-          vi.useRealTimers();
-          await update;
+          job.settled.resolve();
         }
-      }),
-  );
+      });
+      const lstat = vi.spyOn(fs, "lstat");
+      const beforeActivate = vi.fn();
+      const onLiveMutation = vi.fn();
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const update = swapStagedPackageInstall({
+        ...params,
+        beforeActivate,
+        onLiveMutation,
+        timeoutMs: 40,
+      });
+      try {
+        await waitForGate(full.promise, update, signal, "the admission window never filled");
+        await withinTest(Promise.all(started), signal);
+        expect(admitted).toEqual(files.slice(0, window));
+        expect(lstat.mock.calls.some(([file]) => String(file) === files[window])).toBe(false);
+        await vi.advanceTimersByTimeAsync(40);
+        const result = await withinTest(update, signal);
+        expect(result.status).toBe("committed");
+        expect(result.step.advisory?.message).toContain("baseline package fingerprint incomplete");
+        expect(beforeActivate).toHaveBeenCalledOnce();
+        expect(onLiveMutation).toHaveBeenCalledOnce();
+        expect(admitted).toEqual(files.slice(0, window));
+        for (const file of admitted) {
+          jobs.get(file)!.release.resolve();
+        }
+        await withinTest(
+          Promise.all(admitted.map((file) => jobs.get(file)!.settled.promise)),
+          signal,
+        );
+        await expectInstallation(packageRoot, launcher, true);
+      } finally {
+        for (const job of jobs.values()) {
+          job.release.resolve();
+        }
+        vi.useRealTimers();
+        await update;
+      }
+    }));
 
   it("does not wait beyond the deadline for directory cleanup", ({ signal }) =>
     withSwap(async ({ params }) => {
