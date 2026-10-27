@@ -9,6 +9,7 @@ export function createTeamScaleHistoryFixture(options: {
   inlineWidgets: number;
   now: number;
   largeSnapshot?: boolean;
+  offlineFirstPage?: boolean;
   duplicateBootReads?: boolean;
   sessionInfo: ControlUiSessionFixture;
   sender?: ControlUiMockPresenceUser;
@@ -46,6 +47,17 @@ export function createTeamScaleHistoryFixture(options: {
       : {}),
     timestamp: options.now - (options.messageCount - index) * 60_000,
     content: [
+      ...(options.offlineFirstPage && index === 8
+        ? [
+            {
+              type: "image",
+              url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAeAAAAEgAQMAAABW8jJiAAAABlBMVEVGgrT///8l7kyTAAAAKElEQVR4nO3BgQAAAADDoPlTX+AIVQEAAAAAAAAAAAAAAAAAAAAAfANEoAABfZUiZQAAAABJRU5ErkJggg==",
+              alt: "Synthetic attached image",
+              width: 480,
+              height: 288,
+            },
+          ]
+        : []),
       ...(options.attachments && index === options.messageCount - 1 ? options.attachments : []),
       {
         type: "text",
@@ -68,6 +80,37 @@ export function createTeamScaleHistoryFixture(options: {
       },
     ],
   }));
+  if (options.offlineFirstPage) {
+    for (const [index, message] of historyMessages.entries()) {
+      message.content = [
+        ...message.content.filter((part) => part.type === "image"),
+        {
+          type: "text",
+          text: [
+            `### Synthetic warm page row ${index + 1}`,
+            ...Array.from(
+              { length: 5 },
+              (_, paragraph) =>
+                `Verification paragraph ${paragraph + 1}. The cached page retains its content and geometry while the connection catches up. This is synthetic benchmark data.`,
+            ),
+            ...(index === 7
+              ? [
+                  "| Check | Owner | Result | Next action |\n| --- | --- | --- | --- |\n" +
+                    Array.from(
+                      { length: 24 },
+                      (_, row) =>
+                        `| Check ${row + 1} | Fixture team | Verified | Continue the synthetic queue |`,
+                    ).join("\n"),
+                ]
+              : []),
+            ...(index === 8
+              ? ['[embed ref="team-scale-chart-1" title="Team metric 1" height="220" /]']
+              : []),
+          ].join("\n\n"),
+        },
+      ];
+    }
+  }
   if (options.rowFacts) {
     const runId = "synthetic-row-facts-run";
     const tail = historyMessages.slice(-3);
@@ -119,6 +162,7 @@ export function createTeamScaleHistoryFixture(options: {
     options.messageCount,
     options.largeSnapshot === true,
     options.duplicateBootReads === true,
+    options.offlineFirstPage === true,
   ]);
   const configuredHistory = {
     messages: historyMessages,

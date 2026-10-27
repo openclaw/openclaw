@@ -30,6 +30,28 @@ function expectAbsent(value: unknown, fields: string) {
 }
 
 describe("Team-scale Gateway fixture", () => {
+  it("models a nine-row warm page with a tall table and one attached image", () => {
+    const fixture = createControlUiTeamScaleFixture({ now, offlineFirstPage: true });
+    const messages = fixture.scenario.historyMessages ?? [];
+    expect(messages).toHaveLength(9);
+    const contents = messages.map((message) => asOptionalRecord(message)?.content);
+    const parts = contents.flatMap((content) => (Array.isArray(content) ? content : []));
+    const images = parts.filter((part) => asOptionalRecord(part)?.type === "image");
+    expect(images).toHaveLength(1);
+    expect(images[0]).toMatchObject({
+      alt: "Synthetic attached image",
+      width: 480,
+      height: 288,
+    });
+    const table = parts.find((part) =>
+      String(asOptionalRecord(part)?.text ?? "").includes(
+        "| Check | Owner | Result | Next action |",
+      ),
+    );
+    expect(String(asOptionalRecord(table)?.text).match(/\| Check \d+ \|/gu)).toHaveLength(24);
+    expect(fixture.counts.inlineWidgets).toBe(1);
+  });
+
   sessionGatewayTest.for(["normal", "large"] as const)(
     "revalidates the selected %s transcript without retransmitting cached messages",
     async (mode, { connect }) => {

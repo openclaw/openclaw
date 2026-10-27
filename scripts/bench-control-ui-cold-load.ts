@@ -17,6 +17,7 @@
 // --gateway-url uses real Gateway HTTP serving with synthetic bootstrap/RPC fixtures.
 // --gateway-http serves paired bundles, including layout cells, through the Gateway HTTP owner.
 // --first-load skips warm-up and clears client state; external Gateway URL runs stay single-sample.
+// --offline-first-page selects nine tall rows, a table and one image, with Details open.
 // --sidebar-persistent-children keeps expanded rows outside root windows for staggered handoff proof.
 // --boot-route chat|new|sessions|settings selects the measured reload destination.
 // --layout-matrix covers routes, themes, viewports and cold/warm reloads; --runs is per bundle/cell.
@@ -268,6 +269,7 @@ const { values } = parseArgs({
     "row-facts": { type: "boolean", default: false },
     "pane-chrome-probe": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
+    "offline-first-page": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
     "latency-profile": { type: "string" },
@@ -580,6 +582,15 @@ if (
   throw new Error("history-validator-delay-ms requires warm-reload and a delay from 0 to 10000");
 }
 const face = values.face;
+if (
+  values["offline-first-page"] &&
+  (!values["warm-reload"] ||
+    values["row-facts"] ||
+    values["large-snapshot"] ||
+    values["transcript-messages"])
+) {
+  throw new Error("offline-first-page requires warm-reload and owns the nine-row transcript shape");
+}
 if (face !== "chat" && face !== "dashboard") {
   throw new Error("Expected face chat or dashboard");
 }
@@ -790,6 +801,7 @@ const fixture = createControlUiTeamScaleFixture({
     : undefined,
   closedMenuMembers: values["closed-menu-members"],
   largeSnapshot: values["large-snapshot"],
+  offlineFirstPage: values["offline-first-page"],
   rowFacts: values["row-facts"],
   offRosterSession: values["off-roster-route"],
   transcriptMessages,
@@ -1478,7 +1490,7 @@ try {
         .frameLocator(".chat-tool-card__preview-frame")
         .last()
         .frameLocator("iframe")
-        .getByText("Team metric 12", { exact: true })
+        .getByText(`Team metric ${fixture.counts.inlineWidgets}`, { exact: true })
         .waitFor();
       if (face === "dashboard") {
         await page.waitForFunction(() => {
@@ -1688,6 +1700,19 @@ try {
       await page.locator('[data-navigation-view="online"]').click();
     }
     await settle("chat");
+    if (values["offline-first-page"]) {
+      const details = page
+        .locator(".chat-pane-cache__pane--active .chat-details")
+        .filter({ visible: true });
+      if (!(await details.isVisible())) {
+        await page
+          .locator(".chat-pane-cache__pane--active .chat-details-toggle")
+          .filter({ visible: true })
+          .click();
+      }
+      await details.waitFor();
+      await settle("chat");
+    }
     await expandSidebar();
     if (viewportName === "mobile") {
       await page.keyboard.press("Escape");
@@ -3288,6 +3313,7 @@ try {
         cpuThrottle,
         comparisonBundleDirs,
         fixture: fixture.counts,
+        offlineFirstPage: values["offline-first-page"],
         sidebarView,
         sidebarAvatars: values["sidebar-avatars"],
         sidebarPresentation: values["sidebar-presentation"],

@@ -534,10 +534,20 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     }
   }
 
+  readReady(sessionKey: string): ChatSessionSnapshot | undefined {
+    const entry = peekPrewarmedChatSnapshot();
+    const snapshot = entry?.prepared?.snapshot;
+    if (entry?.cacheKey !== sessionKey || entry.cancelled || !snapshot) {
+      return undefined;
+    }
+    consumePrewarmedChatSnapshot(sessionKey);
+    setSessionCacheValue(this.hydratedSnapshots, sessionKey, new WeakRef(snapshot));
+    return snapshot;
+  }
+
   async read(
     sessionKey: string,
     onBoard?: (board: ChatSessionSnapshot["board"]) => void,
-    onReady?: (snapshot: ChatSessionSnapshot) => void,
   ): Promise<ChatSessionSnapshot | null> {
     const scope = this.captureReadScope(sessionKey);
     try {
@@ -547,9 +557,6 @@ export class SessionSnapshotStore implements ChatCacheObserver {
           readSnapshotRecord(sessionKey, value, scope.isCurrent, onBoard),
         );
       const prepared = prewarm ? readSharedPrewarm(prewarm, read) : undefined;
-      if (prepared?.snapshot && scope.isCurrent() && !prewarm?.cancelled) {
-        onReady?.(prepared.snapshot);
-      }
       const snapshot = await (prepared?.promise ?? read());
       if (!snapshot || !scope.isCurrent()) {
         return null;
