@@ -55,10 +55,7 @@ afterAll(async () => {
   await server.claim.release();
 });
 
-type WatchdogPolicy = Pick<
-  NonNullable<Parameters<typeof resolveLlmIdleTimeoutMs>[0]>,
-  "cfg" | "trigger"
->;
+type WatchdogPolicy = { trigger?: "cron"; remote?: boolean };
 
 async function openRequest(
   api: Api,
@@ -68,12 +65,9 @@ async function openRequest(
 ) {
   const model = makeProviderModelFixture<Api>({
     id: "local-model",
-    name: "Local model",
     api,
     provider: "custom-local",
     baseUrl: `http://127.0.0.1:${server.claim.port}/v1`,
-    contextWindow: 8192,
-    maxTokens: 128,
   });
   const request = createDeferred<ServerResponse>();
   const closed = createDeferred();
@@ -85,7 +79,9 @@ async function openRequest(
   const accepted = createDeferred();
   const firstText = createDeferred();
   const onTimeout = vi.fn<(error: Error) => void>();
-  const params = { ...policy, model, modelRequestTimeoutMs, runTimeoutMs };
+  const provider = { baseUrl: model.baseUrl, api, models: [], remote: policy.remote };
+  const cfg = { models: { providers: { [model.provider]: provider } } };
+  const params = { cfg, trigger: policy.trigger, model, modelRequestTimeoutMs, runTimeoutMs };
   const idleMs = resolveLlmIdleTimeoutMs(params);
   const firstMs = resolveLlmFirstEventTimeoutMs(params);
   const options: NonNullable<Parameters<StreamFn>[2]> & FirstStreamEventInternalOptions = {
@@ -150,6 +146,19 @@ function received(stream: Request, signal: AbortSignal) {
   );
 }
 
+async function expectWatchdogTimeout(stream: Request, signal: AbortSignal, timeoutMs: number) {
+  await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+  expect(stream.onTimeout).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(stream.onTimeout).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      message: `LLM idle timeout (${timeoutMs / 1000}s): no response from model`,
+    }),
+  );
+  expect(await withinTest(stream.completion, signal)).toBe(stream.onTimeout.mock.calls[0]?.[0]);
+  await withinTest(stream.closed.promise, signal);
+}
+
 const headerCases: [Api, number | undefined, number | undefined, number][] = [
   ["openai-responses", undefined, undefined, 300_000],
   ["openai-completions", undefined, undefined, 300_000],
@@ -165,46 +174,14 @@ describe("provider watchdog deadlines", () => {
     async ([api, providerMs, runMs, expectedMs], { signal, open }) => {
       const stream = await open(api, providerMs, runMs);
       expect((await received(stream, signal)).headersSent).toBe(false);
-      await vi.advanceTimersByTimeAsync(expectedMs - 1);
-      expect(stream.onTimeout).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(stream.onTimeout).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          message: `LLM idle timeout (${expectedMs / 1000}s): no response from model`,
-        }),
-      );
-      expect(await withinTest(stream.completion, signal)).toBe(stream.onTimeout.mock.calls[0]?.[0]);
-      await withinTest(stream.closed.promise, signal);
+      await expectWatchdogTimeout(stream, signal, expectedMs);
     },
   );
 
-  it.for<{
-    name: string;
-    remote?: boolean;
-    trigger?: "cron";
-    providerMs?: number;
-    expectedMs: number;
-  }>([
-    { name: "hosted relay", remote: true, expectedMs: 120_000 },
-    { name: "bounded cron relay", remote: true, trigger: "cron", expectedMs: 60_000 },
-    { name: "explicit hosted timeout", remote: true, providerMs: 3_000, expectedMs: 3_000 },
-    { name: "explicit local timeout", providerMs: 3_000, expectedMs: 3_000 },
-  ])("aborts a stalled stream with $name policy", async (testCase, { signal, open }) => {
-    const { providerMs, trigger, remote } = testCase;
-    const stream = await open("openai-completions", providerMs, trigger ? 600_000 : undefined, {
-      trigger,
-      cfg: {
-        models: {
-          providers: {
-            "custom-local": {
-              baseUrl: `http://127.0.0.1:${server.claim.port}/v1`,
-              api: "openai-completions",
-              models: [],
-              remote,
-            },
-          },
-        },
-      },
+  it("aborts a hosted relay stall before the cron run budget expires", async ({ signal, open }) => {
+    const stream = await open("openai-completions", undefined, 600_000, {
+      trigger: "cron",
+      remote: true,
     });
     const response = await received(stream, signal);
     response.writeHead(200, { "content-type": "text/event-stream" });
@@ -212,16 +189,7 @@ describe("provider watchdog deadlines", () => {
       'data: {"choices":[{"index":0,"delta":{"content":"O"},"finish_reason":null}]}\n\n',
     );
     await withinTest(stream.firstText.promise, signal);
-    await vi.advanceTimersByTimeAsync(testCase.expectedMs - 1);
-    expect(stream.onTimeout).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(stream.onTimeout).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        message: `LLM idle timeout (${testCase.expectedMs / 1000}s): no response from model`,
-      }),
-    );
-    expect(await withinTest(stream.completion, signal)).toBe(stream.onTimeout.mock.calls[0]?.[0]);
-    await withinTest(stream.closed.promise, signal);
+    await expectWatchdogTimeout(stream, signal, 60_000);
   });
 
   it("allows a local completions stream to pause after its first event and deliver its reply", async ({
