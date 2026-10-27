@@ -538,6 +538,31 @@ function browserResources(
   };
 }
 
+function measureBrowserCpu(
+  before: Awaited<ReturnType<typeof metrics>>,
+  after: Awaited<ReturnType<typeof metrics>>,
+) {
+  return Object.fromEntries(
+    ["ThreadTime", "TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration"].map(
+      (key) => {
+        const beforeValue = before[key];
+        const afterValue = after[key];
+        assert(
+          typeof beforeValue === "number" && Number.isFinite(beforeValue),
+          `Invalid initial ${key}`,
+        );
+        assert(
+          typeof afterValue === "number" && Number.isFinite(afterValue),
+          `Invalid final ${key}`,
+        );
+        const ms = (afterValue - beforeValue) * 1000;
+        assert(Number.isFinite(ms) && ms >= 0, `Invalid ${key} delta`);
+        return [key, ms] as const;
+      },
+    ),
+  );
+}
+
 try {
   for (const [role, root] of [
     ["base-a", base],
@@ -642,18 +667,9 @@ try {
               defaultBrowserAfter,
             ),
             gatewayCpu: measureGatewayCpuUsage(defaultCpuBefore, defaultCpuAfter),
-            browserCpuMs: Object.fromEntries(
-              [
-                "ThreadTime",
-                "TaskDuration",
-                "ScriptDuration",
-                "LayoutDuration",
-                "RecalcStyleDuration",
-              ].map((key) => [
-                key,
-                ((defaultBrowserAfter[key] ?? 0) - (defaultBrowserBefore[key] ?? 0)) * 1000,
-              ]),
-            ),
+            // Document counters reset across goto; whole-renderer CPU keeps the cold interval.
+            browserCpuMs: null,
+            browserCpuUnavailableReason: "Document counters reset across navigation",
             dispatches: (await owner.snapshot()).slice(defaultDispatchBefore),
             response: defaultResponse,
             load: os.loadavg(),
@@ -690,18 +706,7 @@ try {
               coldBrowserAfter,
             ),
             gatewayCpu: measureGatewayCpuUsage(coldCpuBefore, coldCpuAfter),
-            browserCpuMs: Object.fromEntries(
-              [
-                "ThreadTime",
-                "TaskDuration",
-                "ScriptDuration",
-                "LayoutDuration",
-                "RecalcStyleDuration",
-              ].map((key) => [
-                key,
-                ((coldBrowserAfter[key] ?? 0) - (coldBrowserBefore[key] ?? 0)) * 1000,
-              ]),
-            ),
+            browserCpuMs: measureBrowserCpu(coldBrowserBefore, coldBrowserAfter),
             dispatches: (await owner.snapshot()).slice(coldDispatchBefore),
             response: coldResponse,
             load: os.loadavg(),
@@ -741,15 +746,7 @@ try {
               assert.equal(dispatches[0]!.packedBytes, 0, "No packed rows resent on warm filters");
             }
             assert((await page.locator(".session-bar-row").count()) <= 50);
-            const delta = Object.fromEntries(
-              [
-                "ThreadTime",
-                "TaskDuration",
-                "ScriptDuration",
-                "LayoutDuration",
-                "RecalcStyleDuration",
-              ].map((key) => [key, ((browserAfter[key] ?? 0) - (browserBefore[key] ?? 0)) * 1000]),
-            );
+            const delta = measureBrowserCpu(browserBefore, browserAfter);
             samples.push({
               role: owner.role,
               phase: "filter",
@@ -869,7 +866,7 @@ try {
         pairsPerQuery: values.smoke ? 1 : pairs,
         queries: ["model:fixture-model-00-end", "model:fixture-model-01-end"],
         limitations:
-          "Backend runs at native CPU; 1x/4x applies only to Chromium. Browser metrics use threadTicks. Each role owns an isolated browser. Whole-renderer CPU and RSS probes bracket each action; their recorded bounds include collection overhead outside wall/main-thread intervals. Heap and RSS are sampled endpoints, not retained heap, peaks, or GPU memory. Same frozen UI for all roles. Population has one/two actual turns per session spread over180days. Durable source seeding and compiled startup recorded separately; no source server or report prewarming. Gateway reused across CPU/RTT cells; default/readiness and population-range phases are not independent cold-process samples. Setup logs retained. No provider calls.",
+          "Backend runs at native CPU; 1x/4x applies only to Chromium. Non-navigation browser metrics use threadTicks; default-readiness document CPU is unavailable because navigation resets those counters. Each role owns an isolated browser. Whole-renderer CPU and RSS probes bracket each action; their recorded bounds include collection overhead outside wall/main-thread intervals. Heap and RSS are sampled endpoints, not retained heap, peaks, or GPU memory. Same frozen UI for all roles. Population has one/two actual turns per session spread over180days. Durable source seeding and compiled startup recorded separately; no source server or report prewarming. Gateway reused across CPU/RTT cells; default/readiness and population-range phases are not independent cold-process samples. Setup logs retained. No provider calls.",
       },
       null,
       2,

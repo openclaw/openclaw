@@ -97,7 +97,8 @@ not prime the usage cache or summary before opening the browser: initial work is
 included in default-readiness and full-range observations. The measured Gateway runs that checkout's normal `dist/entry.js`,
 with production worker entrypoints. Seeding and startup are separate from browser
 default readiness, full-range loading, and warm filters. Numeric dispatch counters
-observe native worker messages without retaining or rewriting their payloads.
+observe native worker messages, including the first synchronous task, without
+retaining or rewriting their payloads.
 All roles use the invoking driver's seed, RTT, and dispatch-observer helpers,
 whose hashes are recorded separately from the per-checkout runtime. The seed
 helper must remain compatible with both checkouts' database schemas. No
@@ -129,14 +130,17 @@ noisy wall times with CPU and work counts. A clean median regression is at most
 5% with no worse p95; any 20% regression requires investigation.
 
 Outputs include actual RPC latency/bytes, Gateway process and main-thread CPU,
-Chromium thread-tick task/script/layout/style CPU, whole-renderer process CPU,
+Chromium thread-tick task/script/layout/style CPU for non-navigation actions,
+whole-renderer process CPU,
 sampled renderer RSS and JS heap endpoints, worker dispatch counts and packed
 bytes, resource snapshots, and cleanup failures. Each role owns a separate
 headless browser so process metrics exclude the other roles; record host memory
 as well as load with this three-browser setup. Process probes retain their own
 start/end timestamps and bracket the action outside its wall/main-thread timing;
 whole-process CPU includes that boundary overhead. Missing metrics or renderer
-PID changes fail collection. Heap and RSS endpoints are neither retained-memory
+PID changes fail collection. Default navigation records document CPU as unavailable:
+those counters reset across navigation, so only the whole-renderer and Gateway
+CPU intervals cover cold readiness. Heap and RSS endpoints are neither retained-memory
 nor peak/GPU measurements; no browser GC runs inside these timed cells. Child
 output streams
 redact each generated fixture token before writing setup or shutdown logs.
