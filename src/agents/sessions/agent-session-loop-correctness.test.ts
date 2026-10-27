@@ -228,6 +228,7 @@ describe("AgentSession loop correctness", () => {
         .getEntries()
         .filter((entry) => entry.type === "message")
         .map((entry) => entry.message);
+      expect(persistedMessages).toHaveLength(waiterCount);
       expect(persistedMessages.every((message) => !getSteeringMessageIdentity(message))).toBe(true);
     } finally {
       for (const message of queuedMessages.splice(0)) {

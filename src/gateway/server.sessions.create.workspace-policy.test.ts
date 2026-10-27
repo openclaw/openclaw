@@ -576,14 +576,28 @@ test("sessions.create rejects worktrees for agent workspaces without a commit", 
   }
 });
 
-test("an explicit cwd reset changes the file root but retains managed workspace ownership", async () => {
+test("an explicit cwd reset refuses the previous managed file source", async () => {
   await using fixture = await setupResetWorktree("openclaw-files-explicit-cwd-");
-  const { worktree } = await fixture.createWorktree();
+  const editor = await openWorkspaceEditor(fixture);
+  const { worktree: original, opened } = editor;
   const replacement = path.join(fixture.workspace, "replacement");
   await fs.mkdir(replacement);
+  await fs.writeFile(path.join(replacement, "README.md"), "base\n");
   const reset = await mainSession({ cwd: replacement });
   expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
-  const expected = { spawnedCwd: replacement, worktree: { id: worktree.id } };
-  expect(reset.payload?.entry).toMatchObject(expected);
-  expect(fixture.readEntry()).toMatchObject(expected);
+  expect(reset.payload?.entry.spawnedCwd).toBe(replacement);
+  expect(reset.payload?.entry.worktree?.id).toBe(original.id);
+  const fresh = await editor.read();
+  expect(fresh.payload).toMatchObject({
+    source: { workspaceId: original.id },
+    file: { content: "base\n" },
+  });
+  await expect(editor.save("draft from A\n")).rejects.toMatchObject({
+    error: { details: { type: "session_file_source_changed" } },
+  });
+  await editor.expectContent(replacement);
+  expect(fresh.payload?.source).not.toEqual(opened.payload?.source);
+  const saved = await editor.save("fresh edit in B\n", fresh.payload!);
+  expect(saved.ok, JSON.stringify(saved.error)).toBe(true);
+  await editor.expectContent(replacement, "fresh edit in B\n");
 });
