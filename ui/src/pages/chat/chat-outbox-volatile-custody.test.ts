@@ -1,5 +1,6 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -18,6 +19,7 @@ import { makeChatHost, requestCalls, requireRecord } from "./chat-host.test-supp
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { removeQueuedMessage, updateQueuedMessage } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes, retryQueuedChatMessage } from "./chat-send-actions.ts";
+import { settleQueuedChatSendFailure } from "./chat-send-queue-runtime.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { updateStoredChatComposerQueueItems } from "./composer-queue-persistence.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff-admission.ts";
@@ -296,6 +298,42 @@ it("does not revive submission authority or old presentation over a newer durabl
   expect(removeQueuedMessage(host, original.id, { discard: true })).toBe("removed");
   expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
 });
+
+it.each(["durable", "memory"] as const)(
+  "keeps a send row retired mid-flight pending without a delivery failure (%s)",
+  (storageMode) => {
+    const host = makeChatHost({ sessionKey: "agent:main:retired" });
+    const queued = {
+      id: "retired-send",
+      text: "Retired by a live receipt before this failure landed",
+      createdAt: 1,
+    };
+    host.chatQueue = [queued];
+    // A live custody receipt or peer pane removed the row while the request
+    // was still in flight; only its failure lands afterwards.
+    host.chatQueue = [];
+    const scheduleRetry = vi.fn();
+    const result = settleQueuedChatSendFailure(
+      host,
+      queued,
+      { ...queued, sendRunId: "retired-run" },
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "gateway closed (1006)",
+        retryable: true,
+        retryAfterMs: 250,
+      }),
+      { storageMode },
+      { sessionKey: host.sessionKey },
+      scheduleRetry,
+    );
+    expect(result).toBe("pending");
+    expect(scheduleRetry).not.toHaveBeenCalled();
+    expect(host.chatQueue).toEqual([]);
+    expect(host.chatError ?? null).toBeNull();
+    expect(host.lastError ?? null).toBeNull();
+  },
+);
 
 it("moves peer panes together while retaining each volatile input under its original owner", async () => {
   failStorageWrites();
