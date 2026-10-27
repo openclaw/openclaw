@@ -5796,7 +5796,10 @@ try {
     { archived: true },
     { search: teamPluginCatalog ? "Synthetic" : "team-shape" },
     { agentId: "main" },
-    { excludeSubagents: true },
+    {
+      excludeSubagents: true,
+      ...(values["team-stress"] ? { includeOwnerSessionCounts: true } : {}),
+    },
     { excludeSystem: true, excludeCron: true },
   ];
   let listChurnSequence = 0;

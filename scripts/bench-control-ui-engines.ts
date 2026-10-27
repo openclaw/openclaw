@@ -257,7 +257,7 @@ try {
     collection: values.trace
       ? "Playwright tracing and engine Inspector/Profiler; overhead included"
       : values["cpu-only"]
-        ? "WebKit sampled process CPU and Chromium CDP thread CPU; no timeline or script profiler"
+        ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
         : "Untraced wall time; Chromium CDP counters only, unavailable WebKit counters are null",
     order:
       "Serial engine and bundle order alternates each pair; fresh browser context per observation",
