@@ -15,6 +15,7 @@ import type { ConfigHealthFingerprint } from "../config/io.health-state.types.js
 import { createConfigIO } from "../config/io.js";
 import { createConfigHealthFingerprint } from "../config/io.observe-state.js";
 import { resolveStateDir } from "../config/paths.js";
+import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import {
   readStoredCanonicalSessionMainKey,
   scanCanonicalSqliteSessionEntries,
@@ -186,7 +187,11 @@ export async function collectQaStartupState(env: NodeJS.ProcessEnv) {
   const machines = machineState
     // Current fresh schemas do not consult these Doctor bookkeeping timestamps.
     .filter(
-      ({ key }) => key !== "config.lastTouchedAt" && key !== "state.repair.acpReplayUtf8Accounting",
+      ({ key }) =>
+        key !== "config.lastTouchedAt" &&
+        key !== "state.repair.acpReplayUtf8Accounting" &&
+        // update-result-claim.ts records update-run provenance, not startup policy.
+        key !== "telemetry.updateResults",
     )
     .map((row) => {
       if (row.key !== "plugins.installedIndex") {
@@ -254,6 +259,20 @@ export async function collectQaStartupState(env: NodeJS.ProcessEnv) {
       database.close();
     }
   }
+  const legacySessions = await migrateLegacyMainSessionKeys({
+    cfg: config.sourceConfig,
+    env,
+    mode: "detect",
+  });
+  assert.deepEqual(legacySessions.warnings, [], "Legacy session migration must have no warnings");
+  if (legacySessions.armed) {
+    assert.equal(legacySessions.complete, true, "Legacy session migration must be complete");
+    assert.equal(
+      legacySessions.ledgerComplete,
+      true,
+      "Legacy session ledger must match current stores",
+    );
+  }
   using custody = openClientCredentialCustody(env, { readOnly: true });
   assert.ok(custody, "Native credential custody must exist");
   assert.equal(custody.needsMetadataUpgrade, false);
@@ -315,6 +334,14 @@ export async function collectQaStartupState(env: NodeJS.ProcessEnv) {
       {
         config: configState,
         workspaces,
+        legacyMainSessions: {
+          armed: legacySessions.armed,
+          complete: legacySessions.complete,
+          ledgerComplete: legacySessions.ledgerComplete,
+          legacyAgentId: legacySessions.legacyAgentId,
+          mainKey: legacySessions.mainKey,
+          ownerAgentId: legacySessions.ownerAgentId,
+        },
         shared: {
           configHealth: rootHealth && {
             lastKnownGood: fingerprint(rootHealth.lastKnownGood),

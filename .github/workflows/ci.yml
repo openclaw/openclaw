@@ -2570,6 +2570,8 @@ jobs:
 
       - name: Test Control UI end-to-end
         if: matrix.task == 'control-ui'
+        # Fail the step before the job deadline so progress diagnostics can upload.
+        timeout-minutes: 20
         env:
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           VITEST_SHARD_INDEX: ${{ matrix.shard }}

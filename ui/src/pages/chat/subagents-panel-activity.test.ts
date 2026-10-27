@@ -59,6 +59,11 @@ it.each<[ChatHistoryResult, ReturnType<typeof count>]>([
   expect(count(history)).toEqual(expected);
 });
 
+it("keeps call-only history provisional in the subagent activity adapter", () => {
+  const snapshot = readSubagentActivitySnapshot(complete([toolCall()]));
+  expect([...snapshot.calls.values()]).toMatchObject([{ unpairedCall: true }]);
+});
+
 it("counts paired transcript calls, results and replayed live items once", () => {
   const history = live(
     [

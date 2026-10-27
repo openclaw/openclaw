@@ -1748,14 +1748,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   outline-offset: -2px;
 }
 
-/* A single selected owner's sessions sit directly under the owner picker:
-   titles start at the picker's leading edge, so the link inset only offsets
-   the list's negative inline margin. Status moves to the trailing edge
-   instead of shifting titles, and an empty status slot takes no room. */
-.sidebar-recent-sessions__group--inline-owner
-  .sidebar-recent-session:not(.sidebar-recent-session--child)
-  > .sidebar-recent-session__link
-  > .sidebar-session-indicator {
+/* State-only indicators belong to the row edge in every native list layout.
+   Artwork and owner avatars keep their leading attribution slot. */
+.sidebar-recent-session > .sidebar-recent-session__link > .sidebar-session-indicator--state-only {
   position: absolute;
   inset-inline-end: calc(6px + (24px - var(--sidebar-lead)) / 2);
   top: 50%;
@@ -1766,12 +1761,25 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   }
 }
 
-/* Keep activity at the row edge, after hover actions and the child toggle.
-   Empty indicators leave the full title width available. */
+/* Keep the normal title column aligned with rows that have artwork. Only the
+   headerless Person layout deliberately starts titles at the owner picker. */
+.sidebar-session-indicator--state-only + .sidebar-recent-session__text {
+  margin-inline-start: calc(var(--sidebar-lead) + var(--sidebar-row-gap));
+}
+
 .sidebar-recent-sessions__group--inline-owner
-  .sidebar-recent-session:not(.sidebar-recent-session--child):has(
-    > .sidebar-recent-session__link > .sidebar-session-indicator:not(:empty)
-  ) {
+  .sidebar-recent-session:not(.sidebar-recent-session--child)
+  > .sidebar-recent-session__link
+  > .sidebar-session-indicator--state-only
+  + .sidebar-recent-session__text {
+  margin-inline-start: 0;
+}
+
+/* Keep state after hover actions and child controls, without reserving a
+   trailing slot for idle rows or moving an avatar's activity ring. */
+.sidebar-recent-session:has(
+  > .sidebar-recent-session__link > .sidebar-session-indicator--state-only:not(:empty)
+) {
   --sidebar-session-state-reserve: 24px;
 }
 
@@ -1787,15 +1795,17 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   padding-inline-start: 6px;
 }
 
-/* Row actions overlay the link's trailing edge (on hover, or always on the
-   mobile drawer); reserve that space on the link instead of the title so the
-   text and metadata stay clear of them. Status has its own fixed row slot. */
+/* Root-row actions overlay the link's trailing edge (on hover, or always on
+   the mobile drawer). Children already reserve their aside in flow. Keep the
+   overlay space on the root link; status has its own fixed row slot. */
 .shell:not(.shell--mobile-nav)
-  .sidebar-recent-sessions__group--inline-owner
-  .sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within),
+  .sidebar-recent-session:not(.sidebar-recent-session--child):has(
+    > .sidebar-recent-session__link > .sidebar-session-indicator--state-only
+  ):is(:hover, :focus-within),
 .shell--mobile-nav
-  .sidebar-recent-sessions__group--inline-owner
-  .sidebar-recent-session:not(.sidebar-recent-session--child) {
+  .sidebar-recent-session:not(.sidebar-recent-session--child):has(
+    > .sidebar-recent-session__link > .sidebar-session-indicator--state-only
+  ) {
   > .sidebar-recent-session__link {
     padding-inline-end: var(--session-row-actions-reserve);
   }
