@@ -141,8 +141,9 @@ Requests with `responseFormat` (or the `response_format` model parameter, includ
 `extra_body.response_format`) use
 [Chat Completions structured output](https://lmstudio.ai/docs/developer/openai-compat/structured-output)
 instead: Messages does not enforce a response schema. Routing happens before the request is sent.
-This path retains the configured supported reasoning efforts and mappings; the Chat Completions
-endpoint may still warn about graded effort on a binary model. Explicit API choices other than
+This path preserves saved reasoning settings and translates binary `off`/`on` wire values to
+`none`/`high`, which Chat Completions accepts. The endpoint may still warn about enabled graded
+effort on a binary model. Explicit API choices other than
 `openai-completions` and `anthropic-messages` retain their selected transport.
 
 <a id="streaming-usage-compatibility" />

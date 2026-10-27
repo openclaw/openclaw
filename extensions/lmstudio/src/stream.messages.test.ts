@@ -474,6 +474,50 @@ it("selects Completions for configured extra_body.response_format before dispatc
   );
 });
 
+it.each([
+  { reasoning: "off", mapped: "off", expected: "none", source: "compat" },
+  { reasoning: "high", mapped: "on", expected: "high", source: "compat" },
+  { reasoning: "off", mapped: "on", expected: "high", source: "compat" },
+  { reasoning: "high", mapped: "off", expected: "none", source: "compat" },
+  { reasoning: "off", mapped: "on", expected: "high", source: "thinking" },
+  { reasoning: "high", mapped: "off", expected: "none", source: "thinking" },
+] as const)(
+  "translates saved binary $source $reasoning:$mapped only for structured-output transport",
+  async ({ reasoning, mapped, expected, source }) => {
+    await withTransport(
+      async ({ call, model, requests }) => {
+        const compat = {
+          supportedReasoningEfforts: ["off", "on"],
+          reasoningEffortMap: source === "compat" ? { [reasoning]: mapped } : undefined,
+        };
+        const thinkingLevelMap = source === "thinking" ? { [reasoning]: mapped } : undefined;
+        const selected: Model = { ...model, compat, thinkingLevelMap };
+        const structured = await call(undefined, { reasoning, responseFormat }, selected);
+        expect(await structured.result()).toMatchObject({ stopReason: "stop" });
+        expect(requests[0]).toMatchObject({
+          path: "/v1/chat/completions",
+          body: { reasoning_effort: expected, response_format: responseFormat },
+        });
+        const native = await call(undefined, { reasoning }, selected);
+        expect(await native.result()).toMatchObject({ stopReason: "stop" });
+        expect(requests[1]).toMatchObject({
+          path: "/v1/messages",
+          body: { thinking: { type: mapped === "off" ? "disabled" : "enabled" } },
+        });
+        expect(compat).toEqual({
+          supportedReasoningEfforts: ["off", "on"],
+          reasoningEffortMap: source === "compat" ? { [reasoning]: mapped } : undefined,
+        });
+        expect(selected.thinkingLevelMap).toEqual(
+          source === "thinking" ? { [reasoning]: mapped } : undefined,
+        );
+      },
+      (response, _index, path) =>
+        response.end(path === "/v1/messages" ? messagesTextResponse("READY") : structuredReply),
+    );
+  },
+);
+
 it("cancels the shared Messages stream after a text delta", async () => {
   await withTransport(
     async ({ call, requests }) => {

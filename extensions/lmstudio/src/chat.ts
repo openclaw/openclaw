@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  createOpenAICompatibleCompletionsThinkingOffWrapper,
   createPlainTextToolCallCompatWrapper,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -19,6 +18,10 @@ export type LmstudioStreamOptions = NonNullable<Parameters<StreamFn>[2]> & {
   // Keep provider-level adaptive intent until the binary request mapping.
   lmstudioThinkingLevel?: ProviderWrapStreamFnContext["thinkingLevel"];
 };
+
+function toCompletionsEffort(effort: string): string {
+  return effort === "off" ? "none" : effort === "on" ? "high" : effort;
+}
 
 function projectLmstudioHistory(context: Context, model: Model): Context {
   return {
@@ -63,16 +66,36 @@ export function createLmstudioChatStream(): StreamFn {
     // Messages silently ignores response schemas. Select the enforcing transport
     // before sending anything, rather than retrying a potentially effectful turn.
     if (streamOptions.responseFormat) {
+      const compat: NonNullable<Model<"openai-completions">["compat"]> = {
+        ...model.compat,
+        supportsJsonSchemaResponseFormat:
+          asRecord(model.compat).supportsJsonSchemaResponseFormat !== false,
+      };
+      // Saved binary labels express intent, but Completions rejects them on the
+      // wire. Translate only this request's copy, preserving authored mappings.
+      compat.supportedReasoningEfforts = compat.supportedReasoningEfforts?.map(toCompletionsEffort);
+      compat.reasoningEffortMap =
+        compat.reasoningEffortMap &&
+        Object.fromEntries(
+          Object.entries(compat.reasoningEffortMap).map(([level, effort]) => [
+            level,
+            toCompletionsEffort(effort),
+          ]),
+        );
       const completionsModel = {
         ...model,
         api: "openai-completions" as const,
-        compat: {
-          ...model.compat,
-          supportsJsonSchemaResponseFormat:
-            asRecord(model.compat).supportsJsonSchemaResponseFormat !== false,
-        },
+        compat,
+        thinkingLevelMap:
+          model.thinkingLevelMap &&
+          Object.fromEntries(
+            Object.entries(model.thinkingLevelMap).map(([level, effort]) => [
+              level,
+              effort === null ? null : toCompletionsEffort(effort),
+            ]),
+          ),
       };
-      return createOpenAICompatibleCompletionsThinkingOffWrapper(completions, requestedThinking)(
+      return completions(
         completionsModel,
         projectLmstudioHistory(context, completionsModel),
         streamOptions,
