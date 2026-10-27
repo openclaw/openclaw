@@ -262,8 +262,19 @@ export async function activateSetupInference(
 }
 
 async function activateCandidate(
-  params: ActivateSetupInferenceParams,
+  callerParams: ActivateSetupInferenceParams,
 ): Promise<ActivateSetupInferenceResult> {
+  const effects = { credentialsSaved: false, configPersisted: false };
+  // Like cancellation, caller authority governs activation until its config is persisted;
+  // a saved activation then completes like any other committed config write.
+  const params: ActivateSetupInferenceParams = {
+    ...callerParams,
+    assertCurrent: () => {
+      if (!effects.configPersisted) {
+        callerParams.assertCurrent?.();
+      }
+    },
+  };
   const { readConfigFileSnapshot: readSnapshot } = await import("../config/config.js");
   const snapshot = await readSnapshot();
   if (snapshot.exists && !snapshot.valid) {
@@ -280,7 +291,7 @@ async function activateCandidate(
     workspace: params.workspace?.trim()
       ? resolveUserPath(params.workspace)
       : resolveSetupInferenceWorkspace(snapshot),
-    effects: { credentialsSaved: false },
+    effects,
     beforePersistentEffect: async () => {
       throwIfSetupInferenceCancelled(params);
       params.onActivationStarted?.();
@@ -587,9 +598,6 @@ async function verifyAndActivateCandidate(
     );
   };
   if (!isDeepStrictEqual(sourceCandidate, source) || savedCredential?.setup) {
-    // Authority and cancellation govern this activation until its config is persisted;
-    // a saved activation then completes like any other committed config write.
-    let persisted = false;
     const configTarget: SetupInferenceConfigTarget = {
       read: async () => ({
         config: (await readSnapshot()).sourceConfig,
@@ -619,7 +627,7 @@ async function verifyAndActivateCandidate(
             return { nextConfig };
           },
         });
-        persisted = true;
+        ctx.effects.configPersisted = true;
         return committed.nextConfig;
       },
     };
@@ -631,11 +639,7 @@ async function verifyAndActivateCandidate(
           (baselineRoute.route || resolveAgentEffectiveModelPrimary(cfg, routeAgentId))),
       ),
       requireApplied: params.automaticSetup,
-      assertCurrent: () => {
-        if (!persisted) {
-          throwIfSetupInferenceCancelled(params);
-        }
-      },
+      assertCurrent: () => throwIfSetupInferenceCancelled(params),
       activate: activateCredential,
       deferCompletion: params.onActivationCompletion,
       configTarget,
