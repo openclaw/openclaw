@@ -16,7 +16,6 @@ import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAsyncGate as barrier } from "../../../test-support/async-gate.test-support.js";
 import * as ingressRuntime from "./ingress.js";
-import type { DiscordIngressLifecycle } from "./ingress.js";
 const createDiscordIngressMonitor = ingressRuntime.createDiscordIngressMonitor;
 import { createDiscordMessageHandler } from "./message-handler.js";
 import { createDiscordMessage } from "./message-handler.preflight.test-helpers.js";
@@ -90,24 +89,16 @@ async function retryFacts(queue: DiscordQueue, id: string) {
 }
 
 async function expectRecovered(queue: DiscordQueue, id: string) {
-  const recovered = vi.fn(async (_event, lifecycle: DiscordIngressLifecycle) => {
-    await lifecycle.onAdopted();
-  });
+  prepareQueuedContext();
+  processMessage.mockReset().mockResolvedValue(undefined);
   const completed = observeChannelIngressQueueWrite(queue, "complete", id);
-  const replacement = createDiscordIngressMonitor({
-    accountId: "default",
-    client: {} as never,
-    runtime: createDiscordHandlerParams().runtime,
-    queue,
-    dispatch: recovered,
-  });
-  replacement.start();
+  const replacement = createHandler({ queue });
   try {
     await expect(completed).resolves.toBe(true);
-    expect(recovered).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
     await expectRecord(queue, id, { kind: "completed" });
   } finally {
-    await replacement.stop();
+    await replacement.deactivate();
   }
 }
 
@@ -116,12 +107,11 @@ async function expectRecord(queue: DiscordQueue, id: string, record: Record<stri
 }
 
 async function seedPoisonLane(queue: DiscordQueue) {
-  const facts = await seedPendingFailure(queue, "poison", priorAttempts);
+  await seedPendingFailure(queue, "poison", priorAttempts);
   await queue.enqueue("follower", payload("follower", 2), {
     laneKey: "channel:lane-a",
     receivedAt: 2,
   });
-  return facts;
 }
 
 function createHandler(params: {
@@ -130,6 +120,7 @@ function createHandler(params: {
   debounceMs?: number;
   beforeDispatch?: () => Promise<void>;
   afterDispatch?: () => void;
+  post?: ReturnType<typeof vi.fn>;
 }) {
   const handlerParams = createDiscordHandlerParams();
   handlerParams.cfg.messages = { inbound: { debounceMs: params.debounceMs ?? 0 } };
@@ -153,7 +144,7 @@ function createHandler(params: {
   );
   return createDiscordMessageHandler({
     ...handlerParams,
-    client: {} as never,
+    client: { rest: { post: params.post ?? vi.fn(async () => ({})) } } as never,
   });
 }
 
@@ -207,6 +198,7 @@ it.each(["dispatch", "buffer", "preflight", "queued", "returns", "throws"] as co
       );
       if (phase === "queued") {
         expect(processMessage).not.toHaveBeenCalled();
+        vi.mocked(channelOutbound.createChannelRunQueue).mockRestore();
       }
       expect(await queue.listPending()).toHaveLength(1);
       expect(await retryFacts(queue, "poison")).toEqual(before);
@@ -216,39 +208,61 @@ it.each(["dispatch", "buffer", "preflight", "queued", "returns", "throws"] as co
 );
 
 describe("Discord durable ingress settlement", () => {
+  it.each(["preflight", "processing"] as const)(
+    "adopts a retry while the timed-out %s is still blocked",
+    async (phase) => {
+      vi.useFakeTimers();
+      await withQueue(async (queue) => {
+        const gate = barrier();
+        prepareQueuedContext();
+        const stalled = phase === "preflight" ? preflightMock : processMessage;
+        const dispatch = stalled.getMockImplementation();
+        let attempts = 0;
+        stalled.mockImplementation(async (...args) => {
+          if (++attempts === 1) {
+            await gate.wait();
+          }
+          return dispatch?.(...args);
+        });
+        const handler = createHandler({ queue, debounceMs: 1 });
+        try {
+          await handler(payload("retry").rawMessage, {} as never);
+          await vi.waitFor(() => expect(attempts).toBe(1));
+          await vi.advanceTimersByTimeAsync(301_100);
+          await vi.waitFor(() => expect(attempts).toBe(2));
+          await expectRecord(queue, "retry", { kind: "completed" });
+        } finally {
+          gate.release();
+          await handler.deactivate();
+        }
+      });
+    },
+  );
+
   it("waits for an active durable admission before stopping the drain", async () => {
     const admissionGate = createDeferred<void>();
-    const accept = vi.fn(() => admissionGate.promise);
-    const start = vi.fn();
     const stop = vi.fn(async () => {});
-    const params = createDiscordHandlerParams();
     vi.spyOn(ingressRuntime, "createDiscordIngressMonitor").mockImplementation(() => ({
-      accept,
-      start,
+      accept: () => admissionGate.promise,
+      start: () => {},
       stop,
     }));
     const handler = createDiscordMessageHandler({
-      ...params,
+      ...createDiscordHandlerParams(),
       client: {} as never,
     });
     const handling = handler({ id: "m-admitting", channel_id: "ch-1" } as never, {} as never);
 
-    let deactivated = false;
-    const deactivation = handler.deactivate().then(() => {
-      deactivated = true;
-    });
+    const deactivation = handler.deactivate();
     await Promise.resolve();
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(accept).toHaveBeenCalledTimes(1);
     expect(stop).not.toHaveBeenCalled();
-    expect(deactivated).toBe(false);
 
     admissionGate.resolve();
     await Promise.all([handling, deactivation]);
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["preflight", "processing"] as const)(
+  it.each(["preflight", "processing", "authentication"] as const)(
     "dead-letters an exhausted %s failure and releases its Discord lane",
     async (phase) => {
       vi.useFakeTimers();
@@ -259,12 +273,16 @@ describe("Discord durable ingress settlement", () => {
         const failPoison = (id: string) => {
           processed.push(id);
           if (id === "poison") {
-            throw new Error("deterministic queued failure");
+            throw Object.assign(new Error("deterministic queued failure"), {
+              status: phase === "authentication" ? 401 : 500,
+            });
           }
         };
         processMessage.mockImplementation(async (ctx) => failPoison(ctx.message.id));
+        const post = vi.fn(() => queue.enqueue("poison", {} as DiscordIngressPayload));
         const handler = createHandler({
           queue,
+          post,
           preflight:
             phase === "preflight"
               ? async ({ data }) => {
@@ -277,11 +295,21 @@ describe("Discord durable ingress settlement", () => {
           await vi.advanceTimersByTimeAsync(1_000);
           await vi.waitFor(() => expect(processed).toHaveLength(2));
           expect(processed).toEqual(["poison", "follower"]);
-          await expectRecord(queue, "poison", {
+          await expect(post.mock.results[0]?.value).resolves.toMatchObject({
             kind: "failed",
-            record: { reason: "retry-limit-exceeded" },
+            record: {
+              reason: phase === "authentication" ? "authentication-failed" : "retry-limit-exceeded",
+            },
           });
           await expectRecord(queue, "follower", { kind: "completed" });
+          expect(post).toHaveBeenCalledExactlyOnceWith("/channels/lane-a/messages", {
+            body: {
+              content:
+                "⚠️ Couldn't process this message after repeated failures. Please try again.",
+              message_reference: { message_id: "poison", fail_if_not_exists: false },
+              allowed_mentions: { parse: [], replied_user: false },
+            },
+          });
         } finally {
           await handler.deactivate();
         }

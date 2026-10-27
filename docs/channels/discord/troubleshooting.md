@@ -87,6 +87,14 @@ openclaw logs --follow
 
     Discord does not apply a channel-owned timeout to queued agent turns. Message listeners hand off immediately, and queued Discord runs preserve per-session ordering until the session/tool/runtime lifecycle completes or aborts the work.
 
+    Before a turn is adopted, durable ingress retries attempts that stall for five
+    minutes. A timed-out attempt releases its Discord dispatch slots so the retry
+    can run. After eight failed attempts, OpenClaw dead-letters the message and
+    posts a short failure reply asking you to try again. The log records the
+    failure cause; if Discord refuses the notice, it also records that delivery
+    failure. A process crash between dead-lettering and sending the notice can
+    still prevent the reply.
+
   </Accordion>
 
   <Accordion title="Gateway metadata lookup timeout warnings">

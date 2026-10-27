@@ -9,6 +9,7 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { Client } from "../internal/discord.js";
 import type { DiscordIngressDispatchResult, DiscordIngressLifecycle } from "./ingress.js";
 import type { DiscordMessageEvent } from "./listeners.js";
@@ -171,26 +172,29 @@ export function createDiscordMessageDispatcher(
             return;
           }
           try {
-            const policy = await readPolicy();
-            const { cfg } = policy;
-            const { preflightDiscordMessage } = await loadMessagePreflightRuntime();
-            const ctx = await preflightDiscordMessage({
-              ...params,
-              ...policy,
-              isPolicyCurrent: policy.isCurrent,
-              avatarResolver,
-              ackReactionScope:
-                params.discordConfig?.ackReactionScope ??
-                cfg.messages?.ackReactionScope ??
-                "group-mentions",
-              abortSignal,
-              data: last.data,
-              client: last.client,
-              // Preflight hydrates each original before deriving mention facts
-              // or rendering the batch, so neither text nor metadata is lost.
-              precedingMessages: entries.slice(0, -1).map((entry) => entry.data.message),
-              turnAdoptionLifecycle: admissionLifecycle,
-            });
+            // A retired attempt must release its debounce slot even if external I/O ignores abort.
+            const ctx = await racePromiseWithAbortSignal(async () => {
+              const policy = await readPolicy();
+              const { cfg } = policy;
+              const { preflightDiscordMessage } = await loadMessagePreflightRuntime();
+              return await preflightDiscordMessage({
+                ...params,
+                ...policy,
+                isPolicyCurrent: policy.isCurrent,
+                avatarResolver,
+                ackReactionScope:
+                  params.discordConfig?.ackReactionScope ??
+                  cfg.messages?.ackReactionScope ??
+                  "group-mentions",
+                abortSignal,
+                data: last.data,
+                client: last.client,
+                // Preflight hydrates each original before deriving mention facts
+                // or rendering the batch, so neither text nor metadata is lost.
+                precedingMessages: entries.slice(0, -1).map((entry) => entry.data.message),
+                turnAdoptionLifecycle: admissionLifecycle,
+              });
+            }, abortSignal);
             if (abortSignal?.aborted) {
               await ingress.cancel();
               return;
@@ -240,8 +244,11 @@ export function createDiscordMessageDispatcher(
                     ? AbortSignal.any([ctx.abortSignal, lifecycleSignal])
                     : (ctx.abortSignal ?? lifecycleSignal);
                 try {
-                  const { processDiscordMessage } = await loadMessageProcessRuntime();
-                  await processDiscordMessage({ ...ctx, abortSignal: processAbortSignal });
+                  // The same event's retry also needs its message-keyed run slot back.
+                  await racePromiseWithAbortSignal(async () => {
+                    const { processDiscordMessage } = await loadMessageProcessRuntime();
+                    await processDiscordMessage({ ...ctx, abortSignal: processAbortSignal });
+                  }, processAbortSignal);
                   if (processAbortSignal?.aborted) {
                     // Retain prior retry facts when cancellation ends ownership before delivery.
                     await ingress.cancel();
@@ -253,8 +260,8 @@ export function createDiscordMessageDispatcher(
                     await ingress.cancel();
                   } else {
                     await ingress.abandon(error);
+                    throw error;
                   }
-                  throw error;
                 }
               } finally {
                 settlePending();

@@ -348,61 +348,31 @@ describe("Discord durable ingress", () => {
     });
     createMonitor(recoveredDispatch);
 
-    await vi.waitFor(() => expect(recoveredDispatch).toHaveBeenCalledTimes(1));
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 25);
+    await vi.waitFor(async () => {
+      expect(await queue.enqueue("1002", payloadFor(createRawMessage("1002")))).toMatchObject({
+        kind: "completed",
+      });
     });
     expect(recoveredDispatch).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects a duplicate after completion", async () => {
-    const dispatch = vi.fn(async (_event, lifecycle: DiscordIngressLifecycle) => {
-      await lifecycle.onAdopted();
-    });
-    const monitor = createMonitor(dispatch);
-    const rawMessage = createRawMessage("1003");
-    await monitor.accept(rawMessage);
-    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
-    await vi.waitFor(async () => {
-      const verdict = await queue.enqueue("1003", payloadFor(rawMessage));
-      expect(verdict.kind).toBe("completed");
-    });
-
-    await monitor.accept(rawMessage);
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 25);
-    });
-    expect(dispatch).toHaveBeenCalledTimes(1);
-  });
-
-  it("matches the old guard for duplicate MESSAGE_CREATE delivery during RESUME", async () => {
+  it("deduplicates concurrent RESUME delivery and later delivery after completion", async () => {
     let lifecycle: DiscordIngressLifecycle | undefined;
     const dispatch = vi.fn(async (_event, claimedLifecycle: DiscordIngressLifecycle) => {
       lifecycle = claimedLifecycle;
       return { kind: "deferred" as const };
     });
     const monitor = createMonitor(dispatch);
-    const replayed = createRawMessage("1004");
-    await Promise.all([monitor.accept(replayed), monitor.accept(replayed)]);
+    const rawMessage = createRawMessage("1003");
+    await Promise.all([monitor.accept(rawMessage), monitor.accept(rawMessage)]);
     await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
-
     await lifecycle?.onAdopted();
     await vi.waitFor(async () => {
-      const verdict = await queue.enqueue("1004", payloadFor(replayed));
+      const verdict = await queue.enqueue("1003", payloadFor(rawMessage));
       expect(verdict.kind).toBe("completed");
     });
-    expect(dispatch).toHaveBeenCalledTimes(1);
-  });
 
-  it("dead-letters a permanent Discord authentication failure", async () => {
-    const monitor = createMonitor(async () => {
-      throw Object.assign(new Error("unauthorized"), { status: 401 });
-    });
-    const rawMessage = createRawMessage("1005");
     await monitor.accept(rawMessage);
-    await vi.waitFor(async () => {
-      const verdict = await queue.enqueue("1005", payloadFor(rawMessage));
-      expect(verdict.kind).toBe("failed");
-    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 });

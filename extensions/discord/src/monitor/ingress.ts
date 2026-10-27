@@ -1,5 +1,5 @@
 // Discord plugin module owns raw gateway-message durable ingress and replay draining.
-import { GatewayDispatchEvents, type APIMessage } from "discord-api-types/v10";
+import { GatewayDispatchEvents, Routes, type APIMessage } from "discord-api-types/v10";
 import { prepareChannelIngressEvent } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createChannelIngressError,
@@ -179,6 +179,16 @@ export function createDiscordIngressMonitor(params: {
           return { reason: "authentication-failed", message: formatErrorMessage(error) };
         }
         return null;
+      },
+      onDeadLetter: async (claim) => {
+        const { rawMessage } = decodeDiscordIngressPayload(claim.payload, claim.id).body;
+        await params.client.rest.post(Routes.channelMessages(rawMessage.channel_id), {
+          body: {
+            content: "⚠️ Couldn't process this message after repeated failures. Please try again.",
+            message_reference: { message_id: rawMessage.id, fail_if_not_exists: false },
+            allowed_mentions: { parse: [], replied_user: false },
+          },
+        });
       },
       onLog: (message) => params.runtime.error?.(danger(`discord ingress: ${message}`)),
     },
