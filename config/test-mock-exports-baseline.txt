@@ -4083,7 +4083,6 @@
 ["src/commands/status.scan.shared.test.ts","../gateway/call.js","64011d40301330b379e7aea54e4e35d6dfa3da206700467657e3fa35f1e31c87",1]
 ["src/commands/status.scan.shared.test.ts","../gateway/probe-target.js","8e150957c53542013d79113fe327786c668790112f9359ab9837f0a6c60d0b22",1]
 ["src/commands/status.scan.shared.test.ts","../gateway/probe.js","e4052c52555071cc4961000d62b6832cd789e757dfb22a312b11eef037222b3e",1]
-["src/commands/status.scan.shared.test.ts","./gateway-presence.js","b79bc4dc93ceed84a097f1c0b073fa9c135c1c416df84952bbcc39974c71bec7",1]
 ["src/commands/status.scan.shared.test.ts","./status.gateway-probe.js","afd5279bf0923117f0e2c01ef7aa5aa9f8c21eac7414c935e497be187d08401d",1]
 ["src/commands/status.scan.test-helpers.ts","../agents/memory-search.js","5ed9470649e6a1443eafaff5ba886ac698fd8bca79fbdfdb0732a1cc717b8db5",1]
 ["src/commands/status.scan.test-helpers.ts","../cli/command-config-resolution.js","ab0f38cf8307ad963b5e1e359ffb95970902293eecdb4189a4b75e2e31a74b85",1]
