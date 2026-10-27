@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import {
@@ -14,11 +14,11 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import * as entryReads from "./session-accessor.sqlite-entry-read.js";
 import {
   readSessionEntrySelectionSnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import * as entryStore from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
 import {
@@ -116,6 +116,7 @@ describe("session entry replacement compare-and-swap", () => {
         { length: 4 },
         (_, index) => `agent:main:unrelated-${index}`,
       );
+      let unrelatedReads = 0;
       runOpenClawAgentWriteTransaction((database) => {
         for (const [index, sessionKey] of unrelatedKeys.entries()) {
           writeSessionEntry(database, sessionKey, {
@@ -124,15 +125,34 @@ describe("session entry replacement compare-and-swap", () => {
           });
         }
         const validationKeys = [scope.sessionKey, ...unrelatedKeys, "agent:main:absent"];
-        const expectedRows = new Map(
-          validationKeys.map((key) => [key, entryStore.readExactSessionEntryRow(database, key)!]),
-        );
+        const { expectedRows } = readSessionEntryReplacementState(database, {
+          sessionKeys: validationKeys,
+        });
         const previous = expectedRows.get(scope.sessionKey)!.entry;
         const reads = trackSqliteStatementExecutions(
           requireNativeSqliteDatabase(database.db),
           ["entries"],
           (sql) => (/\bfrom\s+"session_nodes"/iu.test(sql) ? "entries" : null),
         );
+        const prepare = entryReads.prepareExactSessionEntryRowReads;
+        const observe = vi
+          .spyOn(entryReads, "prepareExactSessionEntryRowReads")
+          .mockImplementation((...args) => {
+            const read = prepare(...args);
+            return (sessionKey) => {
+              const selected = read(sessionKey);
+              if (selected && unrelatedKeys.includes(sessionKey)) {
+                const entry = selected.entry;
+                Object.defineProperty(selected, "entry", {
+                  get() {
+                    unrelatedReads++;
+                    return entry;
+                  },
+                });
+              }
+              return selected;
+            };
+          });
         try {
           commitSessionEntryReplacementsInDatabase(
             database,
@@ -149,10 +169,13 @@ describe("session entry replacement compare-and-swap", () => {
             () => {
               expect(reads.counts.entries).toBe(1);
               expect(reads.rowCounts.entries).toBe(5);
+              unrelatedReads = 0;
             },
           );
           expect(reads.counts.entries).toBe(1);
+          expect(unrelatedReads).toBe(0);
         } finally {
+          observe.mockRestore();
           reads.restore();
         }
       }, options);
