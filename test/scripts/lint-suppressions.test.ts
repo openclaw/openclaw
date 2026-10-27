@@ -270,6 +270,9 @@ describe("production lint suppressions", () => {
         "src/commands/backup-restore.ts|preserve-caught-error|2",
         // Sort only freshly materialized private arrays, preserving source order and ownership.
         "src/config/channel-config-activation.ts|unicorn/no-array-sort|1",
+        // Active-tail readers reorder only their fresh private selection and visitor arrays.
+        "src/config/sessions/session-accessor.sqlite-active-events-read.ts|unicorn/no-array-sort|1",
+        "src/config/sessions/session-accessor.sqlite-active-events.ts|unicorn/no-array-reverse|1",
         "src/config/sessions/session-accessor.sqlite-schema-probes.test-support.ts|typescript/unbound-method|2",
         "src/config/sessions/session-accessor.sqlite-worker-request.ts|no-warning-comments|1",
         "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
