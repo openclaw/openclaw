@@ -20,6 +20,7 @@ import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { setImmediate } from "node:timers/promises";
 import { deserialize, serialize } from "node:v8";
+import { readExactSessionEntryRow } from "../../src/config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "../../src/config/sessions/session-accessor.sqlite-entry.js";
 import {
   readSessionActorEntryFacts,
@@ -45,7 +46,7 @@ assert(gc, "Run with --expose-gc");
 const inspector = new Session();
 inspector.connect();
 try {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env, stateDir }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:lifecycle-prepare-measure";
     replaceSessionEntrySync(
@@ -69,11 +70,13 @@ try {
         nativeLocation: database.path,
       },
     };
-    const backend = runWithSqliteWorkerStateContext({ environment: env }, () =>
-      bindSqliteWorkerBackend(
-        { agentId: "main" },
-        { database: database.db, databasePath: database.path },
-      ),
+    const backend = runWithSqliteWorkerStateContext(
+      { environment: { ...env, OPENCLAW_STATE_DIR: stateDir } },
+      () =>
+        bindSqliteWorkerBackend(
+          { agentId: "main" },
+          { database: database.db, databasePath: database.path },
+        ),
     );
     try {
       const input = {
@@ -82,8 +85,17 @@ try {
         archiveDirectory: "/synthetic/archives",
       };
       const base = backend.execute({ type: "prepare", input });
-      assert(!base.reuseEntry);
-      const entry = base.store[sessionKey]!;
+      const entry = readExactSessionEntryRow(database, sessionKey)!.entry;
+      const expected: Reply = {
+        store: { [sessionKey]: entry },
+        selected: {
+          removedKeysToArchive: new Set(),
+          changedSessionKeys: new Set(),
+          projectedRemovals: [],
+        },
+        archiveRecovery: { pending: false, databaseIdentity: identity.identity },
+      };
+      assert.deepEqual(base, expected);
       retainSessionActorEntryFacts(
         target.database,
         [{ sessionKey, facts: { entry, snapshots: "full" } }],
@@ -107,7 +119,7 @@ try {
         };
       };
       const candidate = backend.execute({ type: "prepare", input: prepareRequest().input });
-      assert(candidate.reuseEntry, "Candidate backend did not accept the current host receipt");
+      assert.deepEqual(candidate, { ...expected, store: {}, reuseEntry: true });
       const bytes = { base: serialize(base), candidate: serialize(candidate) };
       const operations = {
         base: () => deserialize(bytes.base) as Reply,
@@ -126,9 +138,9 @@ try {
         }
       };
       const verify = () => {
-        assert.deepEqual(last?.store, base.store);
-        assert.deepEqual(last?.selected, base.selected);
-        assert.deepEqual(last?.archiveRecovery, base.archiveRecovery);
+        assert.deepEqual(last?.store, expected.store);
+        assert.deepEqual(last?.selected, expected.selected);
+        assert.deepEqual(last?.archiveRecovery, expected.archiveRecovery);
       };
       for (const operation of Object.values(operations)) {
         run(operation);
