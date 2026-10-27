@@ -2464,7 +2464,6 @@
 ["src/auto-reply/reply/get-reply-run.media-only.test.ts","../../agents/harness/selection-decision.js","a5912b62208d819bb517e441759f135e44b6c7a70d84d5b773b0d1f39fececc1",1]
 ["src/auto-reply/reply/get-reply-run.media-only.test.ts","../../agents/main-session-recovery/main-session-recovery-owner-release.js","6e6e80d226c0afc3e8fe4015a44ec7d130a4c5b5cb597bc336d5017848e21d1a",1]
 ["src/auto-reply/reply/get-reply-run.media-only.test.ts","../../agents/main-session-recovery/main-session-recovery-store.js","f484bfdfbac5fe9f28600cd17f785fe414af1120b8611fcbe7f1bc5a0fcdb625",1]
-["src/auto-reply/reply/get-reply-run.media-only.test.ts","../../agents/session-runtime-compat.js","60c28b1c2064903ca8b6b75f6d78718014b6fd5024c5e2e75e052bdbf52c7cb8",1]
 ["src/auto-reply/reply/get-reply-run.media-only.test.ts","../../agents/subagents/spawn/subagent-capabilities.js","7323ee3d52ed1f9ecc56910283ae71ed603f431bce6eaff810f76b2e6728c84d",1]
 ["src/auto-reply/reply/get-reply-run.media-only.test.ts","../../config/sessions/ambient-transcript-watermark.js","20521a95d08d27a6581212d2827c87384c474177e3d98b2094242f8b41b0c31b",1]
 ["src/auto-reply/reply/get-reply-run.media-only.test.ts","../../config/sessions/group.js","19060cfa73463825f5bd5eef9762e7b1310f488db7d7acf962219a553f25601e",1]
