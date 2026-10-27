@@ -49,6 +49,11 @@ Removed UI test paths also select the UI runtime inventory check so its literal
 Node-driven browser list cannot silently retain deleted tests. Both checks use
 the existing bounded Node planner and leave native and real-Gateway tiers unchanged.
 
+Added tests outside the ordinary suite roots select the full-suite ownership
+inventory, including rename destinations. The policy watch uses the PR base
+to distinguish additions from existing-file edits, which add no inventory work.
+See [selection and routing](/ci/scope-and-routing/selection) for the scope.
+
 Gateway close and run-shutdown owner changes likewise select the Gateway
 detached-execution shutdown and late-admission suites. `server.close()` reaches
 those owners through the kernel's lazy shutdown runtime, beyond the bounded

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { matchesGlob, resolve } from "node:path";
 import { isPlainRepoRelativePath } from "../../test/vitest/vitest.include-patterns.ts";
@@ -10,6 +11,7 @@ import {
 import { UI_E2E_OWNER_WATCHES } from "./ci-ui-e2e-owner-inventory.mts";
 
 type PolicyTestWatch = {
+  addedOnly?: boolean;
   includeDotPaths?: boolean;
   missingOnly?: boolean;
   ownerGlobs?: readonly string[];
@@ -2048,6 +2050,15 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "test/vitest-projects-config.test.ts",
     watchGlobs: ["extensions/codex/src/app-server/**/*.test.ts"],
   },
+  {
+    // Tests outside ordinary suite roots need an explicit full-suite owner or exclusion.
+    testFile: "test/vitest-projects-config.test.ts",
+    watchGlobs: [
+      "!(src|test|extensions|packages|ui)/**/!(*.live|*.e2e).{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
+      "!(*.live|*.e2e).{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
+    ],
+    addedOnly: true,
+  },
   ...[
     "test/scripts/pr-worktree-provision.test.ts",
     "test/scripts/eager-import-closure.test.ts",
@@ -2132,16 +2143,17 @@ function matchesPolicyPattern(
 /** Resolve watched tests, optionally restricting to complete owners of the changed input. */
 export function resolvePolicyTestTargets(
   changedPaths: readonly string[],
-  options: { completeOwnersOnly?: boolean; cwd?: string } = {},
+  options: { baseRef?: string; completeOwnersOnly?: boolean; cwd?: string } = {},
 ): string[] {
   const paths = changedPaths.map((changedPath) => ({
     changedPath,
     literal: isPlainRepoRelativePath(changedPath),
   }));
   return policyTestWatches
-    .filter(({ watchGlobs, ownerGlobs, sourceOnly, includeDotPaths, missingOnly }) =>
-      paths.some(
+    .filter(({ watchGlobs, ownerGlobs, sourceOnly, includeDotPaths, missingOnly, addedOnly }) => {
+      const matchingPaths = paths.filter(
         ({ changedPath, literal }) =>
+          (!addedOnly || literal) &&
           (!sourceOnly || !isTestFileTarget(changedPath)) &&
           watchGlobs.some((watchGlob) =>
             matchesPolicyPattern(changedPath, watchGlob, literal, includeDotPaths),
@@ -2152,8 +2164,31 @@ export function resolvePolicyTestTargets(
             ownerGlobs?.some((ownerGlob) =>
               matchesPolicyPattern(changedPath, ownerGlob, literal, includeDotPaths),
             )),
-      ),
-    )
+      );
+      if (!addedOnly || matchingPaths.length === 0) {
+        return matchingPaths.length > 0;
+      }
+      if (!options.baseRef) {
+        return false;
+      }
+      // Disable rename detection so a new destination is audited as an addition.
+      return (
+        execFileSync(
+          "git",
+          [
+            "diff",
+            "--name-only",
+            "-z",
+            "--diff-filter=A",
+            "--no-renames",
+            options.baseRef,
+            "--",
+            ...matchingPaths.map(({ changedPath }) => changedPath),
+          ],
+          { cwd: options.cwd ?? process.cwd(), encoding: "utf8" },
+        ).length > 0
+      );
+    })
     .map(({ testFile }) => testFile);
 }
 

@@ -50,6 +50,13 @@ browser inventory against discovered files. Changed-scope detection includes
 both sides of renames. Existing unrelated files do not activate these watches;
 the selected tests use the existing Node packing, runners, and row caps.
 
+New test files outside the ordinary `src/`, `test/`, `extensions/`, `packages/`,
+and `ui/` suite roots also select `test/vitest-projects-config.test.ts`. This
+checks that opt-in tests have an explicit full-suite owner or exclusion. The
+policy watch compares matching paths with the PR base, treating rename
+destinations as additions. Edits to existing files do not add this check;
+live and E2E tests retain their separate owners.
+
 Import-cycle checks are blocking correctness guards. Four cycles reached main after
 the architecture deferral ([#165174](https://github.com/openclaw/openclaw/pull/165174),
 [#165274](https://github.com/openclaw/openclaw/pull/165274),
