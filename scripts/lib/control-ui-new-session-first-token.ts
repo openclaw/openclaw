@@ -29,6 +29,8 @@ export async function measureNewSession(
     await page.evaluate(
       ({ held, viewerId, tokenDelayMs, worker }) => {
         const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+        gateway.setMethodResponse("chat.history", { messages: [] });
+        gateway.setMethodResponse("chat.startup", { messages: [] });
         const state = {
           held,
           marks: {} as Record<string, number>,
@@ -50,10 +52,11 @@ export async function measureNewSession(
           );
           const pendingRow = document.querySelector(".sidebar-recent-session--creating");
           const row =
-            state.key &&
-            [...document.querySelectorAll("[data-session-key]")].find(
-              (el) => el.getAttribute("data-session-key") === state.key,
-            );
+            (state.key &&
+              [...document.querySelectorAll("[data-session-key]")].find(
+                (el) => el.getAttribute("data-session-key") === state.key,
+              )) ||
+            document.querySelector('.sidebar-recent-session--creating [aria-busy="false"]');
           const status =
             document.querySelector(".chat-working-indicator")?.textContent ??
             document.querySelector(".chat-group--working")?.textContent;
@@ -66,16 +69,23 @@ export async function measureNewSession(
             row: Boolean(row),
             status,
           };
-          for (const [name, value] of Object.entries(values))
-            if (value && !state.marks[name]) state.marks[name] = at;
+          for (const [name, value] of Object.entries(values)) {
+            if (value && !state.marks[name]) {
+              state.marks[name] = at;
+            }
+          }
           const signature = JSON.stringify(values);
-          if (signature !== oldState) state.states.push({ at, ...values });
+          if (signature !== oldState) {
+            state.states.push({ at, ...values });
+          }
           oldState = signature;
           if (values.token) {
             state.done = true;
             performance.mark("l247:token");
           }
-          if (!state.done) requestAnimationFrame(monitor);
+          if (!state.done) {
+            requestAnimationFrame(monitor);
+          }
         };
         requestAnimationFrame(monitor);
         document.addEventListener(
@@ -86,12 +96,15 @@ export async function measureNewSession(
               state.marks.click = performance.now();
               performance.mark("l247:click");
             }
-            if (el?.matches(".new-session-page__start-submit"))
+            if (el?.matches(".new-session-page__start-submit")) {
               state.marks.send = performance.now();
+            }
           },
           true,
         );
-        if (held) gateway.setRequestHandler("sessions.list", () => {});
+        if (held) {
+          gateway.setRequestHandler("sessions.list", () => {});
+        }
         gateway.setRequestHandler("sessions.create", ({ params, respond, emit }) => {
           state.key =
             params &&
@@ -114,21 +127,25 @@ export async function measureNewSession(
               : {}),
           };
           Reflect.get(window, "__teamScaleSidebarLists").apply({ upsert: [entry] });
-          gateway.setMethodResponse("chat.startup", {
+          const history = {
             sessionId: entry.sessionId,
             sessionInfo: entry,
             messages: [],
             ...(!worker
               ? { inFlightRun: { runId: "l247-run", startedAt: Date.now(), text: "", events: [] } }
               : {}),
-          });
+          };
+          gateway.setMethodResponse("chat.history", history);
+          gateway.setMethodResponse("chat.startup", history);
           respond({
             key: state.key,
             entry,
             runStarted: !worker,
             ...(!worker ? { runId: "l247-run" } : {}),
           });
-          if (worker) return;
+          if (worker) {
+            return;
+          }
           setTimeout(() => {
             state.marks.deltaEmitted = performance.now();
             emit("chat", {
@@ -140,15 +157,16 @@ export async function measureNewSession(
             });
           }, 55 + tokenDelayMs);
         });
-        if (worker)
+        if (worker) {
           gateway.setRequestHandler("chat.send", ({ params, respond, emit }) => {
             if (
               !params ||
               typeof params !== "object" ||
               !("idempotencyKey" in params) ||
               typeof params.idempotencyKey !== "string"
-            )
+            ) {
               throw new Error("Missing first-turn idempotency key");
+            }
             const runId = params.idempotencyKey;
             state.marks.sendHandler = performance.now();
             respond({ runId, status: "started" });
@@ -173,6 +191,7 @@ export async function measureNewSession(
               });
             }, tokenDelayMs);
           });
+        }
       },
       {
         held: options.held,
@@ -189,7 +208,9 @@ export async function measureNewSession(
     });
     await page.getByRole("button", { name: "Start session", exact: true }).click();
     await page.waitForFunction(() => Reflect.get(window, "__l247").marks.user);
-    if (run <= 2) await page.screenshot({ path: path.join(output, `l247-${run}-pending.png`) });
+    if (run <= 2) {
+      await page.screenshot({ path: path.join(output, `l247-${run}-pending.png`) });
+    }
     try {
       await page.waitForFunction(() => Reflect.get(window, "__l247").done, undefined, {
         timeout: 20000,
@@ -210,18 +231,24 @@ export async function measureNewSession(
         "chat.startup",
         original,
       );
+      (window as MockGatewayWindow).openclawControlUiE2eGateway!.setMethodResponse(
+        "chat.history",
+        original,
+      );
     }, options.initialHistory);
     const result = await page.evaluate(() => ({
       ...Reflect.get(window, "__l247"),
       census: Reflect.get(window, "__coldLoad").read(),
     }));
-    if (run <= 2) await page.screenshot({ path: path.join(output, `l247-${run}-token.png`) });
+    if (run <= 2) {
+      await page.screenshot({ path: path.join(output, `l247-${run}-token.png`) });
+    }
     return result;
   } finally {
     if (cdp) {
-      const complete = new Promise<void>((resolve) =>
-        cdp.once("Tracing.tracingComplete", () => resolve()),
-      );
+      const complete = new Promise<void>((resolve) => {
+        cdp.once("Tracing.tracingComplete", () => resolve());
+      });
       await cdp.send("Tracing.end");
       await complete;
       await writeFile(path.join(output, `l247-${run}.filmstrip.json`), JSON.stringify(frames));

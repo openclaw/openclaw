@@ -254,6 +254,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   get sessionOwnerFilterActive() {
     return this.sessionOwnerFilterId !== null;
   }
+
   sessionOwnershipVisibility = { filters: false, avatars: false };
 
   private readonly sessionSelection = createSidebarSessionSelection(

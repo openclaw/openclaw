@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { getInitialHistoryRequests } from "./chat-initial-history.test-support.ts";
 import {
@@ -180,10 +181,57 @@ suite.define(() => {
         const provisionalTop = await top(provisional);
         expect(provisionalTop).toBeLessThan(await top(existing));
 
-        await gateway.setSessionsListResponse({
-          sessions: [row(params.key, "Draft the next release notes", 4, "Claws"), ...sessions],
+        await page.evaluate(() => {
+          const replies: Array<(payload: unknown) => void> = [];
+          Reflect.set(window, "heldCreateLists", replies);
+          const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+          mock.setRequestHandler("sessions.list", ({ respond }) => replies.push(respond));
+          mock.setRequestHandler("sessions.describe", () => {});
         });
-        await gateway.resolveDeferred("sessions.create", { key: params.key });
+        const accepted = row(params.key, "Draft the next release notes", 4, "Claws");
+        await gateway.setMethodResponse("chat.startup", {
+          messages: [],
+          sessionId: accepted.sessionId,
+        });
+        await gateway.resolveDeferred("sessions.create", {
+          key: params.key,
+          entry: { ...accepted, displayName: accepted.label },
+        });
+        await expect
+          .poll(() => new URL(page.url()).pathname)
+          .toContain(params.key.split(":").at(-1)!.replaceAll("-", ""));
+        await expect.poll(() => provisional.count()).toBe(1);
+        expect(await provisional.textContent()).toContain(accepted.label);
+        const title = page
+          .locator("openclaw-chat-pane .chat-pane__session-title-text")
+          .filter({ hasText: accepted.label });
+        await title.waitFor({ state: "visible" });
+        expect(await provisional.locator('[aria-busy="true"]').count()).toBe(0);
+        expect(await top(provisional)).toBe(provisionalTop);
+        expect(await claws.locator(`[data-session-key="${params.key}"]`).count()).toBe(0);
+        await gateway.setSessionsListResponse({ sessions: [accepted, ...sessions] });
+        await page.evaluate(
+          (sessions) => {
+            const replies = Reflect.get(window, "heldCreateLists") as Array<
+              (payload: unknown) => void
+            >;
+            const payload = {
+              sessions,
+              count: sessions.length,
+              ts: Date.now(),
+              path: "",
+              defaults: {},
+            };
+            (window as MockGatewayWindow).openclawControlUiE2eGateway!.setRequestHandler(
+              "sessions.list",
+              ({ respond }) => respond(payload),
+            );
+            for (const reply of replies) {
+              reply(payload);
+            }
+          },
+          [accepted, ...sessions],
+        );
         const admitted = claws.locator(`[data-session-key="${params.key}"]`);
         await admitted.waitFor();
         await expect.poll(() => provisional.count()).toBe(0);
