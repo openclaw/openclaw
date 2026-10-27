@@ -58,11 +58,13 @@ function sameSelectionFacts(previous: SelectionTarget, next: SelectionTarget) {
   ) {
     return false;
   }
-  const before: Record<string, unknown> = previous.entry;
-  const after: Record<string, unknown> = next.entry;
-  return [...new Set([...Object.keys(before), ...Object.keys(after)])].every(
-    (field) => presentationFields.has(field) || isDeepStrictEqual(before[field], after[field]),
+  const before = new Map<string, unknown>(
+    Object.entries(previous.entry).filter(([field]) => !presentationFields.has(field)),
   );
+  const after = new Map<string, unknown>(
+    Object.entries(next.entry).filter(([field]) => !presentationFields.has(field)),
+  );
+  return isDeepStrictEqual(before, after);
 }
 
 export function createSessionRowSelection(

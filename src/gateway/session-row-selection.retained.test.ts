@@ -31,6 +31,7 @@ function fixture() {
     createSessionRowSelection(
       cfg,
       {
+        agentId: undefined,
         path: storePath,
         paths: new Map([[storePath, 0]]),
         configuredAgentIds: agents,
