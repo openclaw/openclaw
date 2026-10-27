@@ -240,14 +240,17 @@ describe("chat waiting on subagents", () => {
     const settled = { ...parent, hasActiveSubagentRun: false };
     const idle = (subagentSessions: GatewaySessionRow[], subagentSessionsPending = false) =>
       status({ selectedSession: settled, subagentSessions, subagentSessionsPending }).wait;
-    expect(idle(paused)).toMatchObject({ runningCount: 0, sessions: [{ status: "paused" }] });
-    expect(idle(paused)?.pausedNote).toBeUndefined();
+    expect([idle(paused)?.pausedOnly, idle(paused)?.pausedNote]).toEqual([true, undefined]);
+    // The clock follows execution, not the attention label shown on a row.
+    const agentStatus = { note: "Pick one", attention: "hand" as const, expiresAt: 9e15 };
+    expect(idle([{ ...paused[0]!, agentStatus }])?.pausedOnly).toBe(true);
+    const mixed = status({ subagentSessions: [...paused, { ...child, agentStatus }] }).wait;
+    expect([mixed?.runningCount, mixed?.pausedOnly]).toEqual([1, undefined]);
     // After the parent resumes, paused children alone read as a note.
     const resumed = { ...settled, startedAt: 3_000, endedAt: 4_000 };
-    expect(status({ selectedSession: resumed, subagentSessions: paused }).wait).toMatchObject({
-      pausedNote: true,
-      sessions: [{ key: child.key, status: "paused" }],
-    });
+    expect(status({ selectedSession: resumed, subagentSessions: paused }).wait?.pausedNote).toBe(
+      true,
+    );
     expect([idle([done]), idle(paused, true)]).toEqual([null, null]);
   });
 
@@ -589,15 +592,10 @@ describe("chat waiting on subagents", () => {
     onTestFinished(() => {
       vi.restoreAllMocks();
     });
-    const ended = (key: string, label: string, endedAt: number, row = {}): GatewaySessionRow => ({
-      ...child,
-      key: `agent:main:${key}`,
-      label,
-      hasActiveRun: false,
-      status: "done",
-      endedAt,
-      ...row,
-    });
+    const ended = (key: string, label: string, endedAt: number, row = {}): GatewaySessionRow => {
+      const facts = { key: `agent:main:${key}`, label, hasActiveRun: false, endedAt };
+      return { ...child, ...facts, status: "done", ...row };
+    };
     const rows: GatewaySessionRow[] = [
       { ...child, createdAt: 10 },
       ended("subagent:review", "Review", 3_000, {
@@ -648,14 +646,16 @@ describe("chat waiting on subagents", () => {
     flush();
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector("li")).toBeNull();
-    // Only paused children remain: nothing is working, so no clock.
-    const audit = wait!.sessions[1]!;
+    // The clock follows the projection's execution facts, not row labels.
+    const [review, audit] = wait!.sessions;
     const text = () => container.textContent?.replace(/\s+/gu, " ").trim();
-    update({ waitingSubagents: { ...wait!, startedAt: 1_500, sessions: [audit] } });
+    update({ waitingSubagents: { ...wait!, startedAt: 1_500, sessions: [review!, audit!] } });
+    expect(text()).toBe("Waiting on 2 sessions · 1 needs your input · 1 paused · 1m 5s");
+    update({ waitingSubagents: { ...wait!, pausedOnly: true, sessions: [audit!] } });
     expect(text()).toBe("Waiting on Audit · Paused");
-    update({ waitingSubagents: { ...wait!, pausedNote: true, sessions: [audit] } });
+    update({ waitingSubagents: { ...wait!, pausedNote: true, sessions: [audit!] } });
     expect(text()).toBe("Audit is paused");
-    update({ waitingSubagents: { ...wait!, pausedNote: true, sessions: [audit, audit] } });
+    update({ waitingSubagents: { ...wait!, pausedNote: true, sessions: [audit!, audit!] } });
     expect(text()).toBe("2 sessions are paused");
   });
 

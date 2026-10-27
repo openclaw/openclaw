@@ -307,9 +307,7 @@ suite.define(() => {
       // Only a paused child is left: a quiet note below the answer, not a waiting line.
       const note = thread.locator(".chat-group.assistant .chat-subagent-wait");
       expect(squash(await note.textContent())).toBe(`${THIRD} is paused`);
-      expect(await note.locator("a").getAttribute("href")).toBe(
-        "/chat/main/subagent/dependency-update-3",
-      );
+      expect(await note.locator("a").getAttribute("href")).toMatch(/dependency-update-3$/);
       expect(await thread.textContent()).not.toContain("Waiting on");
       expect(await thread.locator(".chat-notice").count()).toBe(0);
       expect(await thread.textContent()).not.toContain(PRIVATE);

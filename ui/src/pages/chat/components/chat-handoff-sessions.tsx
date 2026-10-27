@@ -98,10 +98,8 @@ function HandoffWaitLine(props: {
     props.wait.sessions.filter((session) => session.status === status).length;
   const attention = createMemo(() => count("attention"));
   const paused = createMemo(() => count("paused"));
-  // Nothing is working while every remaining child is paused, so no clock runs.
-  const timed = createMemo(() => paused() === 0 || count("running") > 0);
   const elapsed = () => (
-    <Show when={timed()}>
+    <Show when={!props.wait.pausedOnly}>
       <span aria-hidden="true">·</span>{" "}
       <ElapsedTime class="chat-working-indicator__elapsed" startMs={props.startMs} />
     </Show>

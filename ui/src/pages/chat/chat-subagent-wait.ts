@@ -34,6 +34,8 @@ export type ChatSubagentWait = {
   sessionCount?: number;
   /** Every child session the handoff waits on, named on the waiting line. */
   sessions: readonly ChatHandoffSession[];
+  /** Every child left is paused: nothing runs, so the line keeps no clock. */
+  pausedOnly?: true;
   /** The parent resumed with only paused children left: a quiet note naming them. */
   pausedNote?: true;
 };
@@ -152,7 +154,7 @@ export function handoffSessionLinks(input: HandoffLinkInput): HandoffSessionLink
   };
 }
 
-// Resume rules also show each child's name and attention, which launch rows don't.
+// Resume rules also show each child's name, attention and pause, which launch rows don't.
 function handoffFactsKey(rows: readonly GatewaySessionRow[] | undefined): string {
   return (rows ?? [])
     .map((row) => {
@@ -161,6 +163,7 @@ function handoffFactsKey(rows: readonly GatewaySessionRow[] | undefined): string
         row.key,
         resolveSessionDisplayName(row.key, row),
         attention.kind === "agent" ? attention.note : null,
+        isPausedChild(row),
       ]);
     })
     .toSorted()
@@ -344,7 +347,8 @@ export function projectSubagentStatus(
   const running = children.length;
   // Paused children alone keep the wait. Once the parent has resumed (its latest
   // turn is not the loaded handoff), nothing is running: they read as a note.
-  const pausedNote = hydrated && unfinished.length === 0 && paused.length > 0 && !handoffRunId;
+  const pausedOnly = hydrated && unfinished.length === 0 && paused.length > 0;
+  const pausedNote = pausedOnly && !handoffRunId;
   // A hydrated roster with no unfinished or paused children ends the wait.
   const wait: ChatSubagentWait | null =
     waitStartedAt !== null && (!hydrated || unfinished.length + paused.length > 0)
@@ -355,6 +359,7 @@ export function projectSubagentStatus(
           ...(hydrated && unfinished.length > running
             ? { sessionCount: unfinished.length - running }
             : {}),
+          ...(pausedOnly ? { pausedOnly } : {}),
           ...(pausedNote ? { pausedNote } : {}),
           sessions:
             hydrated && session
@@ -391,6 +396,7 @@ export function projectSubagentStatus(
             wait.sessionCount,
             wait.sessions,
             listed,
+            wait.pausedOnly,
             wait.pausedNote,
           ]
         : [running, listed],
