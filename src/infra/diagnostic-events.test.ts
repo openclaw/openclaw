@@ -311,14 +311,37 @@ describe("diagnostic-events", () => {
 
   it("shares owned events with immutable plain leaves without cloning", async () => {
     const clone = vi.spyOn(globalThis, "structuredClone");
+    const cycleTrackers = vi.spyOn(globalThis, "WeakSet");
     const trace = Object.freeze({ ...diagnosticTraceInput });
     const received = collectEvents(onInternal);
     emitTrusted(Object.freeze({ ...modelStartedEvent(), trace }));
+    emitTrusted({ ...modelStartedEvent(), trace });
     await drain();
 
     expect(received[0]?.trace).toBe(trace);
+    expect(received[1]?.trace).toBe(trace);
     expect(Object.isFrozen(received[0])).toBe(true);
     expect(clone).not.toHaveBeenCalled();
+    expect(cycleTrackers).not.toHaveBeenCalled();
+  });
+
+  it("keeps cyclic frozen graphs with mutable descendants isolated", async () => {
+    const leaf = { value: "original" };
+    const root: { child?: object; leaf: typeof leaf } = { child: undefined, leaf };
+    const child = Object.freeze({ root });
+    root.child = child;
+    Object.freeze(root);
+    const received = collectEvents(onPublic);
+    const parentEvent = { ...modelStartedEvent(), extra: root };
+    const childEvent = { ...modelStartedEvent(), extra: child };
+    emit(parentEvent);
+    emit(childEvent);
+    leaf.value = "changed";
+    await drain();
+
+    const second = received[1] as Event & { extra: typeof child };
+    expect(second.extra.root.leaf.value).toBe("original");
+    expect(Object.isFrozen(leaf)).toBe(false);
   });
 
   it("captures queued public and private payloads before the producer changes them", async () => {

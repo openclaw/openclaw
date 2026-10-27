@@ -470,7 +470,7 @@ describe("worker workspace reconciliation recovery", () => {
     const oversized = fileEntry("large", "e");
     oversized.size = MAX_RECONCILIATION_FILE_BYTES + 1;
     expect(() => workerWorkspaceTransferPaths(makeManifest([oversized]), makeManifest([]))).toThrow(
-      "too large",
+      /^Cloud workspace result is too large: large$/,
     );
   });
 

@@ -1,7 +1,13 @@
-import { decisionBatchV2ToV1, decisionResultV1ToV2 } from "openclaw/plugin-sdk/decisions";
+import { randomUUID } from "node:crypto";
+import {
+  decisionBatchV2ToV1,
+  decisionResultV1ToV2,
+  validateDecisionBatchV2,
+} from "openclaw/plugin-sdk/decisions";
 import type {
   DecisionBatch,
   DecisionBatchResult,
+  DecisionBatchV2,
   DecisionProviderV1,
   DecisionProviderV2,
   DecisionProviderContextV2,
@@ -13,6 +19,7 @@ import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { hasCredentials, providerBaseUrl, type RuntimeConfig } from "./config.js";
 import { decisionFailure } from "./errors.js";
+import type { ImageAssets } from "./schema.js";
 
 const loadClient = createLazyRuntimeModule(() => import("./client.js"));
 const models = manifest.modelCatalog.providers.typesafe.models;
@@ -29,7 +36,7 @@ function effectiveBaseUrl(config: RuntimeConfig): string {
 
 function bindHostedFacts(inference: Inference, id: string, config: RuntimeConfig): Inference {
   const declared = models.find((model) => model.id === id)?.inference.decision;
-  if (!declared || !("billing" in declared) || !inference.decision) {
+  if (!declared || !inference.decision) {
     return inference;
   }
   const configured = config.providerConfig;
@@ -95,20 +102,27 @@ function bindHostedFacts(inference: Inference, id: string, config: RuntimeConfig
   const {
     maxRequestTokens: _maxRequestTokens,
     maxStateAndQuestionTokens: _maxStateAndQuestionTokens,
+    image,
     ...otherLimits
   } = limits ?? {};
   return {
     ...inference,
     decision: {
       ...decision,
+      ...(!hosted ? { input: decision.input.filter((kind) => kind !== "image") } : {}),
       ...(billing && (hosted || billing.source !== "provider-docs") ? { billing } : {}),
-      ...(Object.keys(otherLimits).length ? { limits: otherLimits } : {}),
+      ...(Object.keys(otherLimits).length || (hosted && image)
+        ? { limits: { ...otherLimits, ...(hosted && image ? { image } : {}) } }
+        : {}),
     },
   };
 }
 
 /** Translate the host-selected decision contract through the TypeSafe transport. */
-function createDecisionEvaluator(getConfig: () => RuntimeConfig): DecisionProviderV1["evaluate"] {
+function createDecisionEvaluator(
+  getConfig: () => RuntimeConfig,
+  assets?: ImageAssets,
+): DecisionProviderV1["evaluate"] {
   return async (batch: DecisionBatch, context) => {
     context.signal.throwIfAborted();
     // Registration and readiness do not need the transport or compiled validators.
@@ -148,6 +162,7 @@ function createDecisionEvaluator(getConfig: () => RuntimeConfig): DecisionProvid
             !current.credentialsUnavailable
           );
         },
+        assets,
       );
       context.signal.throwIfAborted();
       const answers: Record<string, DecisionBatchResult["answers"][string]> = {};
@@ -184,6 +199,56 @@ function createDecisionEvaluator(getConfig: () => RuntimeConfig): DecisionProvid
       context.signal.throwIfAborted();
       return decisionFailure(error);
     }
+  };
+}
+
+/** Preserve the existing question/result translation; only tagged image state adds assets. */
+function translateBatch(
+  batch: DecisionBatchV2,
+): { batch: DecisionBatch; assets?: ImageAssets } | undefined {
+  // Admit the full envelope before removing image bytes for the existing text translation.
+  if (!validateDecisionBatchV2(batch)) {
+    return undefined;
+  }
+  if (batch.state.type !== "image") {
+    const text = decisionBatchV2ToV1(batch);
+    return text ? { batch: text } : undefined;
+  }
+  const match = /^data:image\/(png|jpeg);base64,/.exec(batch.state.dataUri);
+  if (
+    !match ||
+    Object.values(batch.questions).some(
+      (question) =>
+        question.type !== "boolean" && question.type !== "choice" && question.type !== "score",
+    )
+  ) {
+    return undefined;
+  }
+  // TypeSafe replaces references inside strings; a UUID must not occur in caller text.
+  const callerText = JSON.stringify([batch.state.text, batch.questions]);
+  let ref = randomUUID();
+  while (callerText.includes(ref)) {
+    ref = randomUUID();
+  }
+  const translated = decisionBatchV2ToV1({
+    state:
+      batch.state.text === undefined
+        ? { type: "text", text: ref }
+        : { type: "json", value: [batch.state.text, ref] },
+    questions: batch.questions,
+  });
+  if (!translated) {
+    return undefined;
+  }
+  return {
+    batch: translated,
+    assets: {
+      [ref]: {
+        type: "image",
+        format: match[1] === "png" ? "png" : "jpg",
+        data_base64: batch.state.dataUri.slice(match[0].length),
+      },
+    },
   };
 }
 
@@ -253,8 +318,18 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
           ),
     },
     async evaluate(batch, context) {
-      const v1 = decisionBatchV2ToV1(batch);
-      if (!v1 || (context.reasoning !== undefined && context.reasoning !== "auto")) {
+      const request = translateBatch(batch);
+      if (!request || (context.reasoning !== undefined && context.reasoning !== "auto")) {
+        return { status: "unavailable", reason: "unsupported-input" };
+      }
+      const v1 = request.batch;
+      if (
+        request.assets &&
+        !models.some(
+          (model) =>
+            model.id === context.model.id && model.inference.decision.input.includes("image"),
+        )
+      ) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
       const original = getConfig();
@@ -285,7 +360,7 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
           current.credentialsUnavailable === original.credentialsUnavailable
           ? prepared
           : { ...current, credentialsUnavailable: true };
-      });
+      }, request.assets);
       const outcome = await evaluate(v1, {
         model: context.model.id,
         agentId: context.agentId,

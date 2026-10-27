@@ -22,7 +22,8 @@
  * --dispatch session includes Agent state and AgentSession listener dispatch with
  * an in-memory transcript. Compare to --dispatch loop (the default) to attribute
  * listener promises. Session runs reset agent history before each prompt.
- * Accept lower allocation/update with stable CPU and identical delivery counts;
+ * --extensions 40 loads unrelated session extensions to measure delta handler scans.
+ * Accept lower allocation or CPU/update with identical delivery counts; report tradeoffs.
  * this measures the real agent loop, not whole-Gateway throughput or latency.
  */
 import assert from "node:assert/strict";
@@ -65,6 +66,7 @@ const { values } = parseArgs({
     owner: { type: "string" },
     layer: { type: "string" },
     dispatch: { type: "string", default: "loop" },
+    extensions: { type: "string", default: "0" },
   },
 });
 const {
@@ -78,12 +80,15 @@ const events = Number(values.events);
 const turns = Number(values.turns);
 const warmup = Number(values.warmup);
 const transforms = Number(values.transforms);
+const extensions = Number(values.extensions);
+assert(Number.isSafeInteger(extensions) && extensions >= 0);
 assert(Number.isSafeInteger(transforms) && transforms >= 0);
 assert(Number.isSafeInteger(events) && events > 0);
 assert(Number.isSafeInteger(turns) && turns > 0);
 assert(Number.isSafeInteger(warmup) && warmup > 0);
 assert(["timing", "allocation", "verify", "promises"].includes(values.mode));
 assert(values.dispatch === "loop" || values.dispatch === "session");
+assert(extensions === 0 || values.dispatch === "session");
 assert(values.dispatch === "loop" || (!values.layer && values.mode !== "verify"));
 if (values.layer) {
   const { measureStreamLayers } = await import("./agent-stream-update-layers.js");
@@ -180,9 +185,18 @@ async function createSession() {
   const { ModelRegistry } = await import("../../src/agents/sessions/model-registry.js");
   const { SessionManager } = await import("../../src/agents/sessions/session-manager.js");
   const { SettingsManager } = await import("../../src/agents/sessions/settings-manager.js");
-  const { createResourceLoader } =
-    await import("../../src/agents/sessions/agent-session-loop-resource-loader.test-support.js");
+  const { DefaultResourceLoader } = await import("../../src/agents/sessions/resource-loader.js");
   const manager = SessionManager.inMemory();
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: manager.getCwd(),
+    agentDir: manager.getCwd(),
+    extensionFactories: Array.from({ length: extensions }, () => (api) => {
+      api.on("session_start", () => {});
+    }),
+  });
+  await resourceLoader.reload();
+  assert.equal(resourceLoader.getExtensions().errors.length, 0);
+  assert.equal(resourceLoader.getExtensions().extensions.length, extensions);
   const result = new AgentSession({
     agent,
     systemPrompt: "synthetic probe",
@@ -192,7 +206,7 @@ async function createSession() {
       retry: { enabled: false },
     }),
     cwd: manager.getCwd(),
-    resourceLoader: await createResourceLoader(),
+    resourceLoader,
     modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     allowedToolNames: [],
     cleanupProviderSessionResourcesOnDispose: false,
@@ -398,6 +412,7 @@ console.log(
     warmup,
     transforms,
     pluginBound: Boolean(plugin),
+    extensions,
     observations,
     promisesPerUpdate: values.mode === "promises" ? promises / deliveries : undefined,
     deliveries,

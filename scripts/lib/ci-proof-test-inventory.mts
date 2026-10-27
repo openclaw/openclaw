@@ -4415,7 +4415,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/agents/workspace-state-read.worker.test.ts",
   "src/agents/workspace-state-store.test.ts",
   "src/agents/worktrees/service.canonical-paths.test.ts",
-  "src/agents/worktrees/service.exact-state.test.ts",
   "src/agents/worktrees/service.gc-cli.test.ts",
   "src/agents/worktrees/service.input-files.test.ts",
   "src/agents/worktrees/service.orphans.test.ts",

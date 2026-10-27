@@ -44,8 +44,9 @@ answer that was never saved.
 
 Tool activity shows a tool-specific icon beside its purpose or details instead of
 repeating the tool name. When no distinct purpose or detail is available, the row
-shows the tool label instead of leaving the text blank. Hover the icon to see the
-exact tool name; screen readers retain that identity. Expanding an activity group keeps the individual tool details
+shows the tool label instead of leaving the text blank. Activity summaries stay
+dimmed until hover or keyboard focus brightens their text, without an icon tooltip;
+screen readers retain the exact tool identity. Expanding an activity group keeps the individual tool details
 and outcomes available. Completed group summaries retain their operation counts.
 Tool Search calls use the called tool's name, icon, and input details in tool rows
 and activity summaries. Built-in tools use semantic icons, including an envelope

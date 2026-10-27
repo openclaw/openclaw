@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { jsonPathValue } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -119,11 +118,16 @@ export class StorageBase {
         .select(["scope", "request", "intent", "state", "plan", "receipt"])
         .where("scope", "=", scope)
         .where(
-          (eb) => jsonPathValue(db, eb.ref("plan"), eb.val("$.source.provider")),
+          (eb) =>
+            eb.fn<string | null>("json_extract", [eb.ref("plan"), eb.val("$.source.provider")]),
           "=",
           source.provider,
         )
-        .where((eb) => jsonPathValue(db, eb.ref("plan"), eb.val("$.source.key")), "=", source.key)
+        .where(
+          (eb) => eb.fn<string | null>("json_extract", [eb.ref("plan"), eb.val("$.source.key")]),
+          "=",
+          source.key,
+        )
         .orderBy("rowid", "desc")
         .limit(1),
     );

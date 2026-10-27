@@ -318,7 +318,7 @@ suite.define(() => {
       await plainRow.hover();
       const plainArchive = plainRow.locator("[data-sidebar-session-archive] svg");
       await ui.visible(plainArchive);
-      expect(ui.centerX(await ui.bounds(pullRequestIcon.locator("svg")))).toBeCloseTo(
+      expect(ui.centerX(await ui.bounds(pullRequestIcon.locator(".session-css-icon")))).toBeCloseTo(
         ui.centerX(await ui.bounds(plainArchive)),
         1,
       );
@@ -326,6 +326,7 @@ suite.define(() => {
       await pullRequestRow.hover();
 
       await pullRequestIcon.waitFor({ state: "hidden" });
+      await pullRequestRow.locator(".session-row-badges").waitFor({ state: "hidden" });
       await ui.visible(unreadBadge);
       expect(await ui.bounds(unreadBadge)).toEqual(badgeBounds);
       await page.mouse.move(0, 0);
@@ -333,6 +334,7 @@ suite.define(() => {
       await ui.visible(unreadBadge);
       await pullRequestRow.locator("[data-sidebar-session-archive]").focus();
       await pullRequestIcon.waitFor({ state: "hidden" });
+      await pullRequestRow.locator(".session-row-badges").waitFor({ state: "hidden" });
       await ui.visible(unreadBadge);
       expect(await ui.bounds(unreadBadge)).toEqual(badgeBounds);
       await codingToggle.focus();
@@ -381,7 +383,7 @@ suite.define(() => {
         .toBe(true);
       await expect.poll(() => state.isVisible()).toBe(true);
       await ui.expectCount(row.locator(".session-glyph__ring"), 0);
-      const prIcon = row.locator("[data-pull-request-state='open'] svg");
+      const prIcon = row.locator("[data-pull-request-state='open'] .session-css-icon");
       expect(
         await prIcon.evaluate((icon) => {
           const { width, height } = icon.getBoundingClientRect();

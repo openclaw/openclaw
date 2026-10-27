@@ -113,12 +113,20 @@ export function createSessionActorWithExecutor(params: {
       throw new Error("Session actor command belongs to another phase");
     }
     return retain(async () => {
-      const reducers = phase?.reducers.splice(0) ?? [];
-      captured.reducers = [...reducers, ...(captured.reducers ?? [])];
+      const reducers = phase?.reducers.length ? phase.reducers.splice(0) : undefined;
+      if (reducers) {
+        captured.reducers = captured.reducers?.length
+          ? reducers.concat(captured.reducers)
+          : reducers;
+      }
       const outcome = await executor.command(name, captured, authority, observer);
       if (phase && outcome.kind === "unknown") {
         phase.uncertain ??= outcome.error;
-      } else if (phase && (outcome.kind === "rolled-back" || outcome.kind === "stale-version")) {
+      } else if (
+        phase &&
+        reducers &&
+        (outcome.kind === "rolled-back" || outcome.kind === "stale-version")
+      ) {
         phase.reducers.unshift(...reducers);
       }
       return outcome;

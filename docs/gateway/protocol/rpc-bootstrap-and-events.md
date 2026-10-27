@@ -479,6 +479,23 @@ or protocol-version change.
   Job definitions, run summaries, diagnostics, and delivery traces are omitted;
   use `cron.get`, `cron.list`, or `cron.runs` when displaying those details.
   Internal `cron_changed` plugin hooks still receive the full job snapshot.
+- `cron.inventory.changed`: payload-free notice after a committed cron definition
+  change, including add, update, retarget, remove, and enable/disable changes.
+  It reaches every operator connection admitted to read cron, including readers
+  who can no longer see a retargeted job. It contains no job ID, session, or job
+  content; clients refresh only their own authorized inventory. Normal runtime
+  `started`, `finished`, and `scheduled` events do not invalidate inventory.
+  State-only `updated` publications and unchanged declarative saves also stay
+  quiet. A run that actually disables a job publishes a definition invalidation;
+  completing an already-disabled job does not. The same committed-definition
+  comparison gates `sessions.changed` with reason `cron-binding`, including
+  both old and new bound sessions on retarget. Known jobs consume runtime facts
+  locally; unrelated unknown job IDs do not require a list read.
+  Support is advertised in `hello-ok.features.events`. Clients using this
+  contract debounce invalidations, share inventory reads by connection and query,
+  and defer hidden views until they become visible. When the event is absent
+  from the catalog, retain the older `cron`-event refresh behavior. The notice
+  uses the ordinary per-connection sequence and slow-client gap recovery.
 - `shutdown`: gateway shutdown notification.
 - `node.pair.requested` / `node.pair.resolved`: node pairing lifecycle.
 - `node.invoke.request`: node invoke request broadcast.

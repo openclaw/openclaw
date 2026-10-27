@@ -46,19 +46,38 @@ export async function* iterateSseFrames(
       throw new Error(limit.message);
     }
   };
-  // CRLF remains one line ending even when the delimiter expression backtracks.
-  const delimiter = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
   for (;;) {
     const { done, value } = await read();
     const buffer = tail + decoder.decode(value, { stream: !done });
     let start = 0;
-    delimiter.lastIndex = 0;
+    let cr = buffer.indexOf("\r");
+    let lf = buffer.indexOf("\n");
     for (;;) {
-      const boundary = delimiter.exec(buffer);
-      if (!boundary && (!done || (!parts.length && start === buffer.length))) {
+      let frameEnd = buffer.length;
+      let boundaryEnd = -1;
+      let previousStart = -1;
+      let previousEnd = -1;
+      while (cr >= 0 || lf >= 0) {
+        const next = cr < 0 ? lf : lf < 0 ? cr : Math.min(cr, lf);
+        // Consume CRLF together, including its LF in the cached search cursor.
+        const end = next + (buffer[next] === "\r" && buffer[next + 1] === "\n" ? 2 : 1);
+        if (cr >= 0 && cr < end) {
+          cr = buffer.indexOf("\r", end);
+        }
+        if (lf >= 0 && lf < end) {
+          lf = buffer.indexOf("\n", end);
+        }
+        if (previousEnd === next) {
+          frameEnd = previousStart;
+          boundaryEnd = end;
+          break;
+        }
+        previousStart = next;
+        previousEnd = end;
+      }
+      if (boundaryEnd < 0 && (!done || (!parts.length && start === buffer.length))) {
         break;
       }
-      const frameEnd = boundary?.index ?? buffer.length;
       let frame = buffer.slice(start, frameEnd);
       if (limit) {
         assertWithinLimit(partsLength + lengthOf(frame));
@@ -69,14 +88,14 @@ export async function* iterateSseFrames(
         parts.length = 0;
         partsLength = 0;
       }
-      start = boundary ? frameEnd + boundary[0].length : buffer.length;
-      yield { frame, terminated: boundary !== null };
-      if (!boundary) {
+      start = boundaryEnd < 0 ? buffer.length : boundaryEnd;
+      yield { frame, terminated: boundaryEnd >= 0 };
+      if (boundaryEnd < 0) {
         break;
       }
     }
     const pending = buffer.slice(start);
-    // Scan only new text plus the maximum delimiter overlap. Regex on an ever-growing
+    // Scan only new text plus the maximum delimiter overlap; scanning an ever-growing
     // concatenated string would flatten/copy the entire pending frame on every read.
     // Keep only trailing newline characters, so UTF-8 length accounting never
     // splits a surrogate pair between a retained fragment and the overlap.

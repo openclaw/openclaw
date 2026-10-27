@@ -16,6 +16,7 @@ import { gatewayPresentationScope } from "../../../app/gateway-presentation-scop
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { isCronInventoryInvalidation } from "../../../lib/cron/inventory-connection.ts";
 import { loadCompactCronJobsPage, retireCronJobsRequest } from "../../../lib/cron/jobs.ts";
 import { createInitialCronState } from "../../../lib/cron/state.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
@@ -155,10 +156,12 @@ export function createSessionAutomationInventory(
     append = false,
     isPresented = presented(),
     event,
+    refresh = false,
   }: {
     append?: boolean;
     isPresented?: boolean;
     event?: unknown;
+    refresh?: boolean;
   } = {}) {
     const current = cron;
     if (
@@ -174,7 +177,7 @@ export function createSessionAutomationInventory(
     retryPending = false;
     dirty = false;
     const alreadyLoading = current.cronLoading || current.cronJobsLoadingMore;
-    const pending = loadCompactCronJobsPage(current, { append, event });
+    const pending = loadCompactCronJobsPage(current, { append, event, refresh });
     // Coalesced events return early; retain the active read's completion receipt.
     if (!alreadyLoading && (current.cronLoading || current.cronJobsLoadingMore)) {
       setReceipt({ state: current, result: pending });
@@ -233,9 +236,12 @@ export function createSessionAutomationInventory(
             }
           });
           const unsubscribeEvents = source.subscribeEvents((event) => {
-            if (current() && event.event === "cron") {
+            if (
+              current() &&
+              (event.event === "cron" || isCronInventoryInvalidation(event, source.snapshot))
+            ) {
               dirty = true;
-              void load({ event: event.payload });
+              void load({ event: event.event === "cron" ? event.payload : undefined });
             }
           });
           void load();
@@ -300,7 +306,7 @@ export function createSessionAutomationInventory(
     readable,
     error: () => state().cronJobsError !== null,
     read,
-    refresh: () => load(),
+    refresh: () => load({ refresh: true }),
     loadMore: () => load({ append: true }),
   };
 }

@@ -177,6 +177,9 @@ The replay validates the completed run's repository and workflow, then selects
 only current PRs whose head, source repository, and branch still match. It runs
 the ordinary security review and CI checks; it does not rerun CI or waive a gate.
 The dispatch must use the default branch. A stale run cannot approve a newer PR head.
+Native prior-CI admission accepts the replay only when its successful security
+enforcement names the selected PR head, CI run, and attempt. Protected publisher
+source and current review authority checks still apply.
 
 Completion reviews retain the observed run ID and attempt. Missing or older
 observations retry within the existing recovery budget; exhaustion fails the

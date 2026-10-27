@@ -83,6 +83,14 @@ export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
   }
 }
 
+export { initializeQaRuntimeState } from "./qa-state-initializer.js";
+
+/** Read startup facts through the same packaged owners as the QA initializer. */
+export async function snapshotQaStartupState(env: NodeJS.ProcessEnv) {
+  const { collectQaStartupState } = await import("./qa-startup-state.js");
+  return collectQaStartupState(env);
+}
+
 type QaRuntimeSurface = Pick<
   ReturnType<typeof loadQaRunnerRuntimeModule>,
   "defaultQaRuntimeModelForMode" | "createQaLiveLaneGateway"

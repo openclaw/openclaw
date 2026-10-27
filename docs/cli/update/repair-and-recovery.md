@@ -519,7 +519,8 @@ recoverable larger recorded timeout extends that grace period. Gateway startup
 and borrowed update processes do not reclaim these leases. The census matches
 process arguments and working directories. On macOS it does not read process
 environments, which some macOS releases report without a bounded end; a process
-whose arguments cannot be read still leaves the census incomplete.
+whose arguments cannot be read still leaves the census incomplete. Processes
+started by the repair itself are never handoff work, so they do not block it.
 
 Repair also checks legacy update child-lineage leases left after a manual
 installation hop, even when the installation-root lease is absent. Dead PIDs
@@ -549,7 +550,12 @@ the update run is identifiable in the selected state and has no unverified
 rollback or restoration; the 45-minute grace, or a longer recorded timeout, has
 passed since the family's latest recorded activity; and the host census finds no
 process referencing the run, its retained paths, or any family key, including the
-installation and service roots. Repair then replaces the custody with
+installation and service roots. A process that matches only because it runs from
+the installation or service root, or is an OpenClaw process, does not block repair
+when it and every live ancestor below the service manager started after that grace
+ended: the cancelled family could not have started it. References to the run, its
+retained paths, or a candidate root still block regardless of start time.
+Repair then replaces the custody with
 its own claim in one transaction, records the settled keys in the
 `finalize:handoff-settlement` step, and releases its claim after finalization.
 A failed or deferred repair keeps the original custody record in its claim and
@@ -564,8 +570,9 @@ JSON output reports `status: "warning"`, a `nextAction`, and
 and `reason`. Standalone repair exits with code **2**. Act on the reason: wait
 for or stop the named processes through their owning terminal or service, retry
 after the stated grace period, or complete the recorded restoration. A census
-match can name any OpenClaw process on the host, such as a Gateway launched from
-the installation; stop it through its service owner before retrying. An installed CLI without this repair cannot
+match can name an OpenClaw process on the host that may have started while the
+family was active, such as a Gateway launched from the installation before the
+grace ended; stop it through its service owner before retrying. An installed CLI without this repair cannot
 settle cancelled custody, and its update refuses before staging a candidate.
 Install a version containing this repair manually (the package hop above, or
 [updating a source checkout](/install/updating/update-methods#source-checkout-servers-reference-script)),
