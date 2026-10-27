@@ -8,6 +8,9 @@
  * --reuse-fixture reopens a successfully completed fixture without reseeding or augmentation;
  * runs sharing a directory must be serial. --base-filter <adjacent baseline .ts copy>
  * compares both filter owners in one process, with --pairs 5 alternating AB/BA.
+ * --base-model-facts <adjacent baseline .ts copy> compares the model vocabulary owner
+ * over identical resident rows and catalog/context inputs; --candidate-model-facts
+ * optionally pins its candidate copy. Other selection and model-facts reads stay current.
  * Compare identical scripts on pinned revisions in alternating AB/BA launch order.
  * Acceptance: identical response digests and fewer target reads, lower CPU or allocation
  * without a reproducible adverse sibling-query result. Record host load for each arm.
@@ -54,6 +57,8 @@ const { values } = parseArgs({
     "candidate-filter": { type: "string" },
     "base-list": { type: "string" },
     "candidate-list": { type: "string" },
+    "base-model-facts": { type: "string" },
+    "candidate-model-facts": { type: "string" },
     pairs: { type: "string", default: "5" },
     "selection-workload": { type: "boolean", default: false },
   },
@@ -66,6 +71,10 @@ assert(
 );
 assert(!values["candidate-list"] || values["base-list"], "--candidate-list requires --base-list");
 assert(
+  !values["candidate-model-facts"] || values["base-model-facts"],
+  "--candidate-model-facts requires --base-model-facts",
+);
+assert(
   !values["base-list"] || values["selection-workload"],
   "--base-list requires --selection-workload",
 );
@@ -75,7 +84,8 @@ const integer = (name: "sessions" | "iterations" | "warmup" | "pairs", min = 1) 
 const sessions = integer("sessions", 100);
 const iterations = integer("iterations");
 const warmup = integer("warmup");
-const pairs = values["base-filter"] || values["base-list"] ? integer("pairs") : 1;
+const pairs =
+  values["base-filter"] || values["base-list"] || values["base-model-facts"] ? integer("pairs") : 1;
 assert(iterations >= pairs && iterations % pairs === 0, "iterations must divide into pairs");
 const root = path.resolve(values["state-dir"]);
 const anchor = Date.UTC(2026, 9, 25);
@@ -84,10 +94,13 @@ const sourceSha256 = createHash("sha256")
     readFileSync(
       values["candidate-list"] ??
         values["candidate-filter"] ??
+        values["candidate-model-facts"] ??
         new URL(
           values["base-list"]
             ? "../../src/gateway/session-utils-list.ts"
-            : "../../src/gateway/session-list-filters.ts",
+            : values["base-model-facts"] && !values["base-filter"]
+              ? "../../src/gateway/session-row-model-facts.ts"
+              : "../../src/gateway/session-list-filters.ts",
           import.meta.url,
         ),
     ),
@@ -335,6 +348,15 @@ try {
   const baseLists: typeof lists | undefined = values["base-list"]
     ? await import(pathToFileURL(path.resolve(values["base-list"])).href)
     : undefined;
+  const currentModelFacts: typeof import("../../src/gateway/session-row-model-facts.js") =
+    await import(
+      values["candidate-model-facts"]
+        ? pathToFileURL(path.resolve(values["candidate-model-facts"])).href
+        : "../../src/gateway/session-row-model-facts.js"
+    );
+  const baseModelFacts: typeof currentModelFacts | undefined = values["base-model-facts"]
+    ? await import(pathToFileURL(path.resolve(values["base-model-facts"])).href)
+    : undefined;
   inspector.connect();
   connected = true;
   const workloads = values["selection-workload"]
@@ -397,19 +419,31 @@ try {
         projectActiveRun: (key: string) => presentation.active(prepared.getTarget(key)!)!,
       };
     };
+    const prepareArm = (listOwner: typeof lists, modelOwner: typeof currentModelFacts) => {
+      const prepared = prepare(listOwner);
+      if (baseModelFacts) {
+        const { cfg: modelConfig, modelCatalog, rowContext } = projection!.state;
+        prepared.modelSearchMayMatch = (query) =>
+          modelOwner.mayMatchSessionRowModelSearch(
+            { cfg: modelConfig, modelCatalog, rowContext, rows: shapeRows },
+            query,
+          );
+      }
+      return prepared;
+    };
     const window = { offset: 0, limit: 50, ownerLimit: 0 };
     const arms =
-      baseFilters || baseLists
+      baseFilters || baseLists || baseModelFacts
         ? [
             {
               name: "base",
-              prepare: () => prepare(baseLists ?? lists),
+              prepare: () => prepareArm(baseLists ?? lists, baseModelFacts ?? currentModelFacts),
               select: (params: ReturnType<typeof prepare>) =>
                 (baseFilters ?? currentFilters).filterSessionEntries(params, window),
             },
             {
               name: "candidate",
-              prepare: () => prepare(candidateLists),
+              prepare: () => prepareArm(candidateLists, currentModelFacts),
               select: (params: ReturnType<typeof prepare>) =>
                 currentFilters.filterSessionEntries(params, window),
             },
@@ -555,10 +589,21 @@ try {
   const result = {
     node: process.version,
     sourceSha256,
+    modelFactsSourceSha256: values["base-model-facts"]
+      ? [
+          values["base-model-facts"],
+          values["candidate-model-facts"] ??
+            new URL("../../src/gateway/session-row-model-facts.ts", import.meta.url),
+        ].map((source) => createHash("sha256").update(readFileSync(source)).digest("hex"))
+      : undefined,
     baseSourceSha256:
-      values["base-list"] || values["base-filter"]
+      values["base-list"] || values["base-filter"] || values["base-model-facts"]
         ? createHash("sha256")
-            .update(readFileSync((values["base-list"] ?? values["base-filter"])!))
+            .update(
+              readFileSync(
+                (values["base-list"] ?? values["base-filter"] ?? values["base-model-facts"])!,
+              ),
+            )
             .digest("hex")
         : undefined,
     mode: values.mode,

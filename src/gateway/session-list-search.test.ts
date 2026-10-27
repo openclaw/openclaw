@@ -14,6 +14,7 @@ import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunStateActive } from "../shared/session-run-state.js";
 import { normalizeSessionSearchText } from "../shared/session-search-text.js";
 import { filterSessionEntries, type SessionListFilterParams } from "./session-list-filters.js";
+import { addSessionListSearchModelFields } from "./session-list-search-fields.js";
 import {
   readSessionListSelectionFacts,
   type SessionListModelFactsLookup,
@@ -430,7 +431,7 @@ test("search preserves the eager predicate's rows and order across vocabulary su
     }),
   });
   const facts = new Map<string, ReturnType<SessionListModelFactsLookup>>(
-    rows.map(([key]): [string, ReturnType<SessionListModelFactsLookup>] => [
+    rows.map(([key], index): [string, ReturnType<SessionListModelFactsLookup>] => [
       key,
       {
         selectedModel: {
@@ -443,6 +444,7 @@ test("search preserves the eager predicate's rows and order across vocabulary su
           agentRuntime: {
             id: choose(["openclaw", "codex", "acp"]),
             source: "implicit",
+            ...(index % 2 ? { fallback: "portable-mode" } : {}),
           },
           acpMeta: undefined,
         },
@@ -510,6 +512,34 @@ test("search preserves the eager predicate's rows and order across vocabulary su
     "agent:main",
   ];
   const searches = [...vocabulary];
+  // Every field the model matcher can emit must survive its vocabulary gate.
+  const modelFields: Array<string | undefined> = [];
+  for (const [key, entry] of rows) {
+    const source = facts.get(key)!;
+    for (const identity of [
+      { provider: entry.modelProvider, model: entry.model },
+      resolveSessionModelIdentityRef(
+        params.cfg,
+        entry,
+        targets.get(key)!.agentId,
+        rowContext.subagentRuns.getDisplaySubagentRun(key)?.model,
+        { allowPluginNormalization: false },
+      ),
+      source.selectedModel,
+      source.rowModelIdentity,
+    ]) {
+      addSessionListSearchModelFields(modelFields, identity);
+    }
+    modelFields.push(formatAgentRuntimeLabel(source.thinkingProjection.agentRuntime));
+  }
+  for (const field of new Set(modelFields.map(normalizeLowercaseStringOrEmpty))) {
+    for (const query of [field, field.slice(1), field.slice(0, -1)]) {
+      if (query) {
+        expect(params.modelSearchMayMatch!(query), query).toBe(true);
+        searches.push(query);
+      }
+    }
+  }
   for (let index = 0; index < 256; index++) {
     const word = choose(vocabulary);
     const start = choose(Array.from({ length: word.length + 1 }, (_, i) => i));
