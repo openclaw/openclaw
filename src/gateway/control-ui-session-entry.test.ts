@@ -14,8 +14,7 @@ const { authenticate, resolveSession, current } = vi.hoisted(() => ({
 }));
 vi.mock(import("./http-auth-utils.js"), async (importOriginal) => ({
   ...(await importOriginal()),
-  checkGatewayHttpRequestAuth: authenticate,
-  resolveSharedSecretHttpOperatorScopes: () => ["operator.read"],
+  authorizeControlUiReadRequestOrReply: authenticate,
 }));
 vi.mock(import("./control-ui-session-path-resolve.js"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -28,8 +27,10 @@ const projection = {} as SessionRowProjection;
 beforeEach(() => {
   current.mockReset().mockReturnValue(true);
   authenticate.mockReset().mockResolvedValue({
-    ok: true,
-    requestAuth: { authenticatedUserProfile: profile, hasCurrentClientAuthority: current },
+    authenticatedUserProfile: profile,
+    hasCurrentClientAuthority: current,
+    operatorScopes: ["operator.read"],
+    revalidate: async () => {},
   });
   resolveSession
     .mockReset()
@@ -101,9 +102,12 @@ describe("protected canonical session handoff", () => {
   it.each(["password"] as const)(
     "keeps explicit %s login on the existing app login gate",
     async (mode) => {
-      authenticate.mockResolvedValue({
-        ok: false,
-        authResult: { ok: false, reason: "token_missing" },
+      authenticate.mockImplementation(async ({ res, replyOnFailure }) => {
+        if (replyOnFailure) {
+          res.statusCode = 401;
+          res.end();
+        }
+        return null;
       });
       const opened = await request(entry, mode);
       expect(opened.serveApp).toHaveBeenCalledWith(canonical);

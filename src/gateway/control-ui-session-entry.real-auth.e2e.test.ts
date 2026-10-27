@@ -21,6 +21,7 @@ import {
   CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS,
   ensureControlUiAssetsBuilt,
 } from "../infra/control-ui-assets.js";
+import * as tailscale from "../infra/tailscale.js";
 import * as commandProcess from "../process/exec.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -32,6 +33,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { computeInlineScriptHashes } from "./control-ui-csp.js";
 import { buildControlUiSessionEntryUrl } from "./control-ui-session-entry-path.js";
 import * as documentTransport from "./control-ui-static.js";
+import type { GatewayIngressTransport } from "./ingress-attribution.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -148,6 +150,9 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
   let index: string;
   let port: number;
   let auth: ResolvedGatewayAuth;
+  let createServer: (
+    ingressTransport?: GatewayIngressTransport,
+  ) => ReturnType<typeof createGatewayHttpServer>;
 
   beforeAll(async () => {
     // qaRuntime snapshots omit UI assets. The existing owner builds the real bundle
@@ -251,24 +256,26 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
     const context = createGatewayRequestContext(makeContextParams());
     context.resolveGatewayContext = () => context;
     bindSessionRowProjection(context, () => projection);
+    createServer = (ingressTransport) =>
+      createGatewayHttpServer({
+        ingressTransport,
+        clients: new Set(),
+        controlUiEnabled: true,
+        controlUiBasePath: basePath,
+        controlUiRoot: { kind: "resolved", path: root },
+        openAiChatCompletionsEnabled: false,
+        openResponsesEnabled: false,
+        handleHooksRequest: async () => false,
+        resolvedAuth: auth,
+        getResolvedAuth: () => auth,
+        getRuntimeConfig: () => cfg,
+        getGatewayRequestContext: () => context,
+        httpRequestLifetime: context,
+        isTerminalEnabled: () => false,
+      });
     listener = await reserveTestPortListener({
       offsets: [0],
-      createListener: () =>
-        createGatewayHttpServer({
-          clients: new Set(),
-          controlUiEnabled: true,
-          controlUiBasePath: basePath,
-          controlUiRoot: { kind: "resolved", path: root },
-          openAiChatCompletionsEnabled: false,
-          openResponsesEnabled: false,
-          handleHooksRequest: async () => false,
-          resolvedAuth: auth,
-          getResolvedAuth: () => auth,
-          getRuntimeConfig: () => cfg,
-          getGatewayRequestContext: () => context,
-          httpRequestLifetime: context,
-          isTerminalEnabled: () => false,
-        }),
+      createListener: () => createServer(),
     });
     port = listener.claim.port;
   });
@@ -328,6 +335,66 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
       }
     });
   }
+
+  it("recognizes verified Tailscale viewers without a stored browser credential", async ({
+    signal,
+  }) => {
+    const previousAuth = auth;
+    auth = { mode: "token", token: "synthetic-token", allowTailscale: true };
+    const whois = vi.spyOn(tailscale, "readTailscaleWhoisIdentity");
+    const managed = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () => createServer({ kind: "managed-tailscale", mode: "serve" }),
+    });
+    const entry = buildControlUiSessionEntryUrl(privatePath, basePath);
+    const headers = {
+      ...proxyHeaders,
+      "x-forwarded-for": "100.64.0.10",
+      "x-forwarded-host": "threads.example.test",
+      "sec-fetch-site": "same-origin",
+      "tailscale-user-login": memberEmail,
+    };
+    try {
+      whois.mockResolvedValue({ login: memberEmail, name: "Member" });
+      const anonymous = await readHttp(managed.claim.port, privatePath, undefined, signal, headers);
+      expect(anonymous.status).toBe(404);
+      expectNoApp(anonymous);
+      const probe = await readHttp(
+        managed.claim.port,
+        entry + "&probe=1",
+        undefined,
+        signal,
+        headers,
+      );
+      expect(probe.status).toBe(204);
+      const app = await readHttp(managed.claim.port, entry, undefined, signal, headers);
+      expect(app.status).toBe(200);
+      expect(app.body).toContain("<openclaw-app");
+      expect(app.headers["x-openclaw-session-entry"]).toBe("1");
+
+      whois.mockResolvedValue({ login: deniedEmail, name: "Denied" });
+      const deniedHeaders = { ...headers, "tailscale-user-login": deniedEmail };
+      for (const route of [entry + "&probe=1", entry]) {
+        const denied = await readHttp(managed.claim.port, route, undefined, signal, deniedHeaders);
+        expect(denied.status).toBe(403);
+        expectNoApp(denied);
+      }
+      // Forwarded headers cannot substitute for verified identity or managed ingress.
+      expect(
+        (await readHttp(managed.claim.port, entry + "&probe=1", undefined, signal, headers)).status,
+      ).toBe(401);
+      whois.mockResolvedValue({ login: memberEmail, name: "Member" });
+      expect((await readHttp(port, entry + "&probe=1", undefined, signal, headers)).status).toBe(
+        401,
+      );
+    } finally {
+      whois.mockRestore();
+      auth = previousAuth;
+      managed.listener.closeAllConnections();
+      await managed.releaseListener();
+      await managed.claim.release();
+    }
+  });
 
   it("delivers the real app for both the owner and an allowed authenticated reader", async ({
     signal,
