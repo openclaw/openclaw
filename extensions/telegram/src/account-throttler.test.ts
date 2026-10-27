@@ -71,7 +71,10 @@ const flood = (seconds?: number) =>
     ...(seconds === undefined ? {} : { parameters: { retry_after: seconds } }),
   });
 type SentCall = { chatId: number; text?: string; method: string; at: number };
-function floodApi(token: string, reject: (call: SentCall, count: number) => Response | undefined) {
+function floodApi(
+  token: string,
+  reject: (call: SentCall, count: number) => Response | Promise<Response> | undefined,
+) {
   const startedAt = Date.now(),
     sent: SentCall[] = [];
   const api = createApi(token, true, async (input: unknown, init?: { body?: unknown }) => {
@@ -148,24 +151,19 @@ beforeEach(() => {
 
 it("preserves the group message budget while sending topic actions", async () => {
   vi.useFakeTimers();
-  const sent: string[] = [];
-  const api = createApi("typing-budget", true, async (input: unknown) => {
-    assert(typeof input === "string");
-    const url = input;
-    const method = url.slice(url.lastIndexOf("/") + 1);
-    sent.push(method);
-    return method === "sendChatAction" ? response(success) : messageResponse("Complete");
-  });
+  const { api, sent } = floodApi("typing-budget", ({ method }) =>
+    method === "sendChatAction" ? response(success) : undefined,
+  );
   const actions = Array.from({ length: 21 }, (_, index) => typing(api, index + 1));
   const replies = Array.from({ length: 21 }, () => api.sendMessage(-100123, "Complete"));
   finishClock(180_000, () => Promise.all([...actions, ...replies]));
   await tick(100);
-  expect(sent.filter((method) => method === "sendChatAction")).toHaveLength(1);
+  expect(sent.filter(({ method }) => method === "sendChatAction")).toHaveLength(1);
   await tick(21_000);
-  expect(sent.filter((method) => method === "sendChatAction")).toHaveLength(21);
-  expect(sent.filter((method) => method === "sendMessage")).toHaveLength(20);
+  expect(sent.filter(({ method }) => method === "sendChatAction")).toHaveLength(21);
+  expect(sent.filter(({ method }) => method === "sendMessage")).toHaveLength(20);
   await tick(40_000);
-  expect(sent.filter((method) => method === "sendMessage")).toHaveLength(21);
+  expect(sent.filter(({ method }) => method === "sendMessage")).toHaveLength(21);
 });
 
 it("shares suspension and recovery across clients for the same token", async () => {
@@ -412,27 +410,17 @@ it("pauses a fixed second for a 429 without retry_after and yields previews to t
 
 it("keeps the later deadline when overlapping 429s carry different retry_after", async () => {
   vi.useFakeTimers();
-  const startedAt = Date.now();
   const longFlood = deferred<Response>();
   const shortFlood = deferred<Response>();
-  const sentAt = new Map<number, number>();
-  const api = createApi(
-    "flood-overlap",
-    true,
-    async (_input: unknown, init?: { body?: unknown }) => {
-      const body = JSON.parse(String(init?.body)) as { chat_id: number; text: string };
-      if (!sentAt.has(body.chat_id)) {
-        sentAt.set(body.chat_id, Date.now() - startedAt);
-        if (body.chat_id === 111) {
-          return await longFlood.promise;
-        }
-        if (body.chat_id === 222) {
-          return await shortFlood.promise;
-        }
-      }
-      return messageResponse(body.text);
-    },
-  );
+  const pending = new Map([
+    [111, longFlood],
+    [222, shortFlood],
+  ]);
+  const { api, sent } = floodApi("flood-overlap", ({ chatId }) => {
+    const held = pending.get(chatId);
+    pending.delete(chatId);
+    return held?.promise;
+  });
   const first = api.sendMessage(111, "first");
   const second = api.sendMessage(222, "second");
   finishClock(60_000, undefined, () => {
@@ -440,17 +428,17 @@ it("keeps the later deadline when overlapping 429s carry different retry_after",
     shortFlood.resolve(flood(2));
   });
   await tick(100);
-  expect([...sentAt.keys()]).toEqual([111, 222]);
+  expect(sent.map(({ chatId }) => chatId)).toEqual([111, 222]);
   longFlood.resolve(flood(10));
   await tick(0);
   shortFlood.resolve(flood(2));
   await tick(0);
   const third = api.sendMessage(333, "third");
   await tick(9_500);
-  expect(sentAt.has(333)).toBe(false);
+  expect(sent.some(({ chatId }) => chatId === 333)).toBe(false);
   await tick(2_000);
   await expect(third).resolves.toMatchObject({ text: "third" });
-  expect(sentAt.get(333)).toBeGreaterThanOrEqual(10_000);
+  expect(sent.find(({ chatId }) => chatId === 333)?.at).toBeGreaterThanOrEqual(10_000);
   await expect(Promise.all([first, second])).resolves.toHaveLength(2);
 });
 
