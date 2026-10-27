@@ -10,6 +10,7 @@ import {
   testing as embeddedRunTesting,
 } from "../../../agents/embedded-agent-runner/runs.test-support.js";
 import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
+import * as workspace from "../../../agents/workspace.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
@@ -43,7 +44,6 @@ import {
 } from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import type {
-  RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceGatewayControl,
   RealtimeVoiceProviderCapabilities,
@@ -60,6 +60,7 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server
 import { resolveSessionMutationAuthorizationAsync } from "../../session-sharing-authorization-async.js";
 import { sharingPolicyClient } from "../../session-sharing.test-utils.js";
 import { adoptRpcSourceSessionKeyForTest } from "../../test-helpers.rpc-source.js";
+import type { GatewayControlOwner } from "../client-agent-consult.types.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import { drainingRelaySessions } from "../relay/state.js";
 import { resolveOwnedActiveTalkRunTarget } from "../run-ownership.js";
@@ -81,6 +82,7 @@ import {
 } from "./native-consult-control.test-support.js";
 import { registerOwnedNativeConsultRun } from "./native-consult-target.test-support.js";
 import { talkSessionHandlers } from "./session.js";
+import { talkVoiceHandlers } from "./voice.js";
 
 const mocks = vi.hoisted(() => ({
   capabilities: {
@@ -109,7 +111,7 @@ vi.mock("../../../talk/provider-registry.js", () => ({ listRealtimeVoiceProvider
 let state: OpenClawTestState;
 let config: OpenClawConfig;
 let client: ReturnType<typeof sharingPolicyClient> & { connId: string };
-let callback: RealtimeVoiceAgentConsultRunner | undefined;
+let callback: GatewayControlOwner["runAgentConsult"] | undefined;
 let relayRequest: RealtimeVoiceBridgeCreateRequest | undefined;
 let providerInstructions: string | undefined;
 const browserVoiceSessionIds = new Set<string>();
@@ -935,6 +937,94 @@ it.each(["browser", "relay"] as const)(
       clientVoiceSessionTesting.readRecord("voice", result.voiceSessionId ?? result.sessionId!)
         ?.sessionKey,
     ).toBe("main");
+  },
+);
+
+it.each(["before admission", "during preparation"] as const)(
+  "rejects native consult storage changes %s",
+  async (changeAt) => {
+    config = { ...config, session: { store: state.statePath("route-a.sqlite") } };
+    setRuntimeConfigSnapshot(config);
+    const { voiceSessionId } = await createNativeTalkCall(dispatch, true);
+    const voiceId = expectDefined(voiceSessionId, "created browser call");
+    const providerConsult = expectDefined(callback, "provider-owned consult callback");
+    providerConsult.adoptCompletionClaims?.();
+    const retained = resolveTalkVoiceSession({
+      kind: "client",
+      connId: client.connId,
+      voiceSessionId: voiceId,
+    }).sessionTarget;
+    const readVoice = () =>
+      dispatch("talk.voice.get", { voiceSessionId: voiceId }, talkVoiceHandlers);
+    const oldScope = sessionScope(retained);
+    expectOk(await readVoice());
+    await expect(providerConsult({ prompt: "Before the store change" })).resolves.toEqual({
+      text: "Synthetic consult answer",
+    });
+    providerConsult.claimAppend?.();
+    expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
+    const before = expectDefined(loadSessionEntry(oldScope), "ordinary consult session persisted");
+    await replaceSessionEntry(oldScope, { ...before, updatedAt: 1 });
+
+    const preparing = createDeferredCore();
+    const resume = createDeferredCore();
+    if (changeAt === "during preparation") {
+      const ensureWorkspace = workspace.ensureAgentWorkspace;
+      const preparation = vi
+        .spyOn(workspace, "ensureAgentWorkspace")
+        .mockImplementationOnce(async (...args) => {
+          const result = await ensureWorkspace(...args);
+          preparing.resolve();
+          await resume.promise;
+          return result;
+        });
+      onTestFinished(() => preparation.mockRestore());
+    }
+    const consult = () =>
+      providerConsult({ prompt: "A new consultation" }).then(
+        () => {
+          providerConsult.claimAppend?.();
+        },
+        (error: unknown) => {
+          providerConsult.claimFailureAppend?.();
+          return error;
+        },
+      );
+    const pending = changeAt === "during preparation" ? consult() : undefined;
+    try {
+      if (pending) {
+        await awaitGateBeforeSettlement(
+          preparing.promise,
+          pending,
+          "Consult must reach preparation",
+        );
+      }
+      config = {
+        ...config,
+        session: { ...config.session, store: state.statePath("route-b.sqlite") },
+      };
+      setRuntimeConfigSnapshot(config);
+      const fresh = await prepareTalkSessionTarget(config, retained.sessionKey);
+      expect(fresh.storePath).not.toBe(retained.storePath);
+      fresh.assertCurrent(config);
+      const changed = "Talk session storage target changed; retry the request";
+      expect(() => retained.assertCurrent(config)).toThrow(changed);
+      expectDenied(await readVoice(), {
+        code: "UNAVAILABLE",
+        message: expect.stringContaining(changed),
+      });
+      resume.resolve();
+      expect(await (pending ?? consult())).toEqual(new Error(changed));
+      expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(loadSessionEntry(oldScope)).toMatchObject({
+        sessionId: before.sessionId,
+        updatedAt: 1,
+      });
+      expect(loadSessionEntry(sessionScope(fresh))).toBeUndefined();
+    } finally {
+      resume.resolve();
+      await pending;
+    }
   },
 );
 
