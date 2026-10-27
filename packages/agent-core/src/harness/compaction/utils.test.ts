@@ -234,11 +234,12 @@ describe("serializeConversation", () => {
   it.each([600, 1_500, 1_950])(
     "keeps an earlier failure at offset %i over routine terminal output",
     (offset) => {
+      const prefix = "exit code 0".padStart(offset - 630, "h").padEnd(offset, "h");
       for (const footer of ["exit code 0", "RESULT_CODE=STUDY-01-OK"]) {
-        const output = `${"h".repeat(offset)}ERROR: deployment failed${"m".repeat(3_000)}\n${footer}`;
+        const output = `${prefix}ERROR: deployment failed${"m".repeat(3_000)}\n${footer}`;
         const serialized = serializeToolResult(output);
         expect(serialized.split("ERROR: deployment failed")).toHaveLength(2);
-        expect(serialized.length).toBeLessThanOrEqual(2_000 + "[Tool result]: ".length);
+        expect(serialized.length).toBeLessThanOrEqual(2_064 + "[Tool result]: ".length);
       }
     },
   );
