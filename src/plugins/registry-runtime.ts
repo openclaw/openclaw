@@ -631,24 +631,21 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         const subagent: PluginRuntime["subagent"] = getRuntimeProperty();
         const native = subagent.native;
+        const list = native?.list;
+        const runNative = <T>(run: () => T): T =>
+          runWithPluginScope(() =>
+            withNativeSubagentRuntimeGuard(
+              { pluginId, assertCurrent: assertNativeRuntimeCurrent },
+              run,
+            ),
+          );
         return {
           ...(native
             ? {
                 native: {
-                  spawn: (params) =>
-                    runWithPluginScope(() =>
-                      withNativeSubagentRuntimeGuard(
-                        { pluginId, assertCurrent: assertNativeRuntimeCurrent },
-                        () => native.spawn(params),
-                      ),
-                    ),
-                  collect: (params) =>
-                    runWithPluginScope(() =>
-                      withNativeSubagentRuntimeGuard(
-                        { pluginId, assertCurrent: assertNativeRuntimeCurrent },
-                        () => native.collect(params),
-                      ),
-                    ),
+                  spawn: (params) => runNative(() => native.spawn(params)),
+                  collect: (params) => runNative(() => native.collect(params)),
+                  ...(list ? { list: (params) => runNative(() => list(params)) } : {}),
                 },
               }
             : {}),

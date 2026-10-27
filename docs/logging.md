@@ -480,6 +480,19 @@ must not be summed. Unfinished spans stop at the startup boundary; later model
 and tool latency does not extend them. Structured `chat.send.detail.*` phase
 events use the same durations when diagnostics are enabled.
 
+Before acknowledgement, `detail.persist.stage.*` separates pending-input resolution,
+storage preparation, reads, authority preparation, message preparation, and durable
+commit. `detail.persist.transcript.*` covers target selection, owner authority,
+append, and transcript publication; `detail.persist.turn.*` further separates the
+append's preparation, authority, message hook, commit, and completion waits.
+`detail.session.actor.command.queue` measures the physical writer FIFO wait;
+`execute` includes the command's `commit` and `publication` intervals. Commit
+timing includes worker delivery, transaction admission, and durable settlement;
+it is not an isolated fsync measurement. `detail.persist.resolveInput` identifies
+input/media resolution, and `detail.session.inputActor.acquire` times actor acquisition.
+These nested spans use the same request-owned diagnostics without logging input
+bytes or enabling timeline files.
+
 `detail.attempt.setup.*` checkpoints separate initialization, workspace preparation,
 and finalization. Within `workspace`, `policy` and `policy_finalize` cover session
 policy admission and revalidation; `baseline_wait` records only the time setup
@@ -1149,6 +1162,23 @@ These fixed labels contain no message content or session identifiers and require
 no diagnostic flag. Durations include awaited work: `admission.revalidate` is
 nested inside `admission.work`, so their values must not be added together or
 treated as SQLite execution time.
+
+Admission subphases separate operator retention (`operator`), lifecycle preparation
+through the session writer barrier (`lifecycle_prepare`), the initial session read
+(`session_read`), ACP metadata (`acp_metadata`), placement preparation and refresh
+(`placement_prepare`, `placement_refresh`), and current session/retry validation
+(`current_session`). Lifecycle preparation includes agent admission checks and
+queue waits; it is not a pure SQLite lock timer. These fields use the
+`detail.admission.` prefix. Sends without restart-safe recovery skip the unused
+transcript lifecycle-header read; current session and caller checks still run.
+
+After acknowledgement, `runAdmission` also covers steering into an active turn.
+Its `detail.run_admission.steer_*` subphases separate authority, continuation and
+delivery preparation, ordered admission (`steer_admit`), waiting for the backend
+outcome (`steer_settlement`), and finalization (`steer_finalize`). `steer_prepare`
+encloses preparation through ordered admission. A long `stage=steer` interval
+can therefore be an intentional wait behind older input or for its transcript
+commit, rather than slow startup of a new turn. Nested totals overlap.
 
 When a reply spends a long time preparing, inspect the normal Gateway logs:
 

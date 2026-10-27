@@ -389,11 +389,6 @@ openclaw-pending-session-create {
   color: var(--muted);
 }
 
-.chat-child-attention .chat-composer-neighbor-card__copy :is(strong, span) {
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
 .chat-composer-neighbor-card--info {
   border-color: color-mix(in srgb, var(--info) 16%, transparent);
 }
@@ -725,6 +720,21 @@ openclaw-pending-session-create {
   justify-content: center;
   gap: 10px;
   padding: 8px 12px;
+}
+
+/* Included in the transcript virtualizer's header margin; keep this height exact. */
+.chat-pending-inputs--history {
+  box-sizing: border-box;
+  overflow: hidden;
+  height: 44px;
+  flex-wrap: nowrap;
+  padding: 4px 12px;
+}
+
+.chat-pending-inputs--history .btn {
+  min-width: 0;
+  height: 100%;
+  white-space: normal;
 }
 
 .chat-history-error--inline {

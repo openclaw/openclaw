@@ -120,7 +120,7 @@ suite.define(() => {
         .fill("Check the next workspace.");
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       await gateway.waitForRequest("chat.send");
-      await working.getByText("Waiting for turn to start…", { exact: true }).waitFor();
+      await working.getByText("Waiting for turn to start", { exact: true }).waitFor();
       // A late event from the previous run must not claim the next run's progress.
       await gateway.emitGatewayEvent("agent", {
         sessionKey,

@@ -34,6 +34,7 @@ import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/age
 import { updateChatRunProvider } from "../chat-abort.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { prepareGatewaySkillLibraryTurn } from "../skill-library-authoring.js";
+import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatDelta } from "./chat-broadcast.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
@@ -221,12 +222,15 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
         }
         phase?.mark("runAdmission");
+        using injectionPhase = diagnostics.scope("detail.run_admission.steer_prepare");
         messageInjectionAttempt = await withCurrentUserTurnInput(
           userTurnRecorder,
           beginCapturedMessageInjection,
         );
+        injectionPhase?.mark("detail.run_admission.steer_settlement");
         acceptedMessageInjection = await settleChatSendMessageInjection(messageInjectionAttempt);
         messageInjectionAttempt = await injectionDisposition.observe(messageInjectionAttempt);
+        injectionPhase?.finish();
         return await (acceptedMessageInjection
           ? operation()
           : withCurrentUserTurnInput(userTurnRecorder, operation));
@@ -278,6 +282,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           }
           const assertWorkspaceRunOwnership = workspacePreparation?.assertCurrent;
           if (messageInjectionAttempt) {
+            using _ = diagnostics.scope("detail.run_admission.steer_finalize");
             const injected = await finalizeAcceptedChatSendMessageInjection({
               attempt: messageInjectionAttempt,
               sourceRef: admission.sourceRef,
@@ -320,11 +325,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
             replyDispatchRun = options;
             if (activeRunAbort.markExecutionStarted()) {
               admission.armOperatorRunCancellation();
-              emitSessionsChanged(
-                context,
-                { sessionKey, agentId, reason: "agent.run.started" },
-                { accessChanged: false, rowScope: "runtime" },
-              );
             }
             // A bound runtime can start on a different transcript than the source chat.
             agentRunStarted = true;
@@ -666,7 +666,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
   // Runtime completion must not retire the source before media and reply persistence settle.
   // Keep terminal cleanup outside this receipt because it can join source settlement.
   trackSessionControllerSourceWork(admission.sourceRef.input, dispatch);
-  return (async () => {
+  const completion = (async () => {
     try {
       await dispatch;
     } finally {
@@ -688,4 +688,9 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
       }
     }
   })();
+  // Ordinary chat.send detaches completion; Goal acknowledgments still consume its rejection.
+  void completion.catch((error: unknown) => {
+    context.logGateway.warn(`webchat dispatch settlement failed: ${formatForLog(error)}`);
+  });
+  return completion;
 }

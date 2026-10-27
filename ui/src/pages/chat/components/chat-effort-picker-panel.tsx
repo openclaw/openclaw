@@ -206,7 +206,10 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
   };
   return (
     <div
-      class="chat-controls__inline-select-menu chat-controls__effort-menu"
+      class={[
+        "chat-controls__inline-select-menu chat-controls__effort-menu",
+        { "chat-controls__effort-menu--access": props.accessProgram !== undefined },
+      ]}
       aria-label={t(
         view().showReasoning ? "chat.modelControls.effort" : "chat.modelControls.fastMode",
       )}

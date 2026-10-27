@@ -1,17 +1,13 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo, onCleanup, refresh, untrack, useContext } from "solid-js";
+import { For, Show, createMemo, onCleanup, refresh, useContext } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
-import { ChatImageActions } from "./chat-image-actions.tsx";
-import { imageTitle } from "./chat-image-presentation.ts";
-import {
-  MIN_CHAT_IMAGE_PREVIEW_WIDTH,
-  resolveChatImagePreviewSize,
-} from "./chat-image-preview-size.ts";
+import { ImageFrame, type ImagePresentation } from "./chat-image-frame.tsx";
+import { resolveChatImagePreviewSize } from "./chat-image-preview-size.ts";
 import { chatImageRenditionWidth } from "./chat-image-rendition.ts";
 import {
   isManagedOutgoingMediaSource,
@@ -22,16 +18,13 @@ import {
   retainAssistantImage,
   takeRetainedAssistantImage,
 } from "./chat-message-attachment-availability.ts";
-import {
-  AssistantAttachmentStatusCard,
-  type AssistantAttachmentStatusCardProps,
-} from "./chat-message-attachment-status-solid.tsx";
+import type { AssistantAttachmentStatusCardProps } from "./chat-message-attachment-status-solid.tsx";
 import {
   managedImageInlineVariant,
   readCachedManagedImageUrl,
   resolveManagedImageResource,
 } from "./chat-message-image-loading.ts";
-import { openMessageImage, readImageOriginalBlob } from "./chat-message-image-open.ts";
+import { openMessageImage } from "./chat-message-image-open.ts";
 import {
   buildAssistantAttachmentUrl,
   isCanonicalInboundMediaSource,
@@ -58,17 +51,6 @@ type RetainedInlineImage = {
 
 const isInlineImageSource = (source: string | undefined): source is string =>
   source?.startsWith("data:image/") === true || source?.startsWith("blob:") === true;
-
-type ImagePresentation = {
-  image: ImageBlock;
-  key?: symbol;
-  managed: boolean;
-  originalUnavailable?: boolean;
-  previewUrl?: string;
-  state?: "loading" | "unavailable";
-  actions?: Pick<AssistantAttachmentStatusCardProps, "path" | "onAllow" | "onRetry" | "onOpen">;
-  reason?: string;
-};
 
 function createMessageImagePresentation(props: MessageImageProps) {
   let active = true;
@@ -139,6 +121,9 @@ function createMessageImagePresentation(props: MessageImageProps) {
       !isInlineImageSource(currentImage.url)
     ) {
       failImage();
+    }
+    if (loadedElement) {
+      refreshImage();
     }
   };
 
@@ -352,7 +337,18 @@ function createMessageImagePresentation(props: MessageImageProps) {
   }
 
   function renderImageElement(image: ImageBlock, previewUrl: string): ImagePresentation {
-    return { image, previewUrl, managed, key: imageKey };
+    return {
+      image,
+      previewUrl,
+      managed,
+      key: imageKey,
+      previewSize: resolveChatImagePreviewSize(
+        image,
+        loadedElement
+          ? { width: loadedElement.naturalWidth, height: loadedElement.naturalHeight }
+          : undefined,
+      ),
+    };
   }
 
   function renderPreviewElement(image: ImageBlock, url: string, title: string) {
@@ -630,88 +626,6 @@ function MessageImageContent(props: MessageImageProps): JSX.Element {
     <Show when={view.model().key} keyed>
       {(_key) => <ImageFrame model={view.model()} presentation={view} options={props.options} />}
     </Show>
-  );
-}
-
-function ImageFrame(props: {
-  model: ImagePresentation;
-  presentation: ReturnType<typeof createMessageImagePresentation>;
-  options: ImageRenderOptions;
-}): JSX.Element {
-  const image = () => props.model.image;
-  const title = () => imageTitle(image());
-  const compact = () => props.model.state === "unavailable";
-  const pending = () => props.model.state === "loading";
-  const loadOriginal = () => readImageOriginalBlob(image(), props.options);
-  // Native previews use the viewer’s file controls. Show their inline menu only
-  // when a failed preview cannot open that viewer, never over retained pixels.
-  const hasFileActions = () =>
-    !props.model.originalUnavailable &&
-    (props.model.managed || (compact() && isLocalAssistantAttachmentSource(image().url ?? "")));
-  // A mounted preview keeps its initial frame when the upload receipt adds dimensions.
-  // Fresh history mounts use those durable dimensions; older facts retain a stable fallback.
-  const initialDimensions = untrack(() => resolveChatImagePreviewSize(props.model.image));
-  return (
-    <span
-      ref={props.presentation.observeFrame}
-      class={[
-        "chat-image-frame chat-image-frame--image",
-        {
-          "chat-image-frame--managed": props.model.managed,
-          "chat-image-frame--compact": compact(),
-          "chat-image-frame--compact-actions": compact() && hasFileActions(),
-        },
-      ]}
-      style={{
-        "--chat-image-width": `${compact() ? Math.max(MIN_CHAT_IMAGE_PREVIEW_WIDTH, initialDimensions.width) : initialDimensions.width}px`,
-        "--chat-image-ratio": compact()
-          ? "auto"
-          : `${initialDimensions.width} / ${initialDimensions.height}`,
-      }}
-      aria-busy={pending() ? "true" : "false"}
-      role={pending() ? "status" : undefined}
-      aria-label={pending() ? t("common.loading") : undefined}
-    >
-      <Show
-        when={!compact()}
-        fallback={
-          <AssistantAttachmentStatusCard
-            label={image().fileName ?? image().alt ?? t("chat.imageLightbox.untitled")}
-            badge={t("chat.attachments.unavailable")}
-            reason={props.model.reason}
-            {...props.model.actions}
-          />
-        }
-      >
-        <span class="chat-image-surface">
-          <button
-            type="button"
-            class="chat-message-image-button"
-            aria-label={t("chat.imageLightbox.open", { title: title() })}
-            aria-disabled={props.model.previewUrl ? undefined : "true"}
-            onFocus={() => props.presentation.admit()}
-            onClick={(event) => {
-              event.stopPropagation();
-              if (props.model.previewUrl) {
-                openMessageImage(image(), props.model.previewUrl, props.options);
-              } else {
-                props.presentation.admit();
-              }
-            }}
-          >
-            <Show
-              when={props.model.previewUrl}
-              fallback={<span class="chat-image-skeleton skeleton" aria-hidden="true" />}
-            >
-              {(url) => <>{props.presentation.renderPreviewElement(image(), url(), title())}</>}
-            </Show>
-          </button>
-        </span>
-      </Show>
-      <Show when={!pending() && hasFileActions()}>
-        <ChatImageActions title={title()} readOriginalBlob={loadOriginal} overlay={!compact()} />
-      </Show>
-    </span>
   );
 }
 

@@ -188,7 +188,7 @@ function resolvePrExemptChangedTargets(changedPaths: readonly string[], cwd: str
   // transitive imports cover subjects reached through shared integration fixtures.
   const targets = new Set(
     [
-      ...resolvePolicyTestTargets(paths),
+      ...resolvePolicyTestTargets(paths, { cwd }),
       ...resolveChangedTestTargetPlan(paths, {
         broad: false,
         combineSiblingWithImportGraph: true,
@@ -1492,7 +1492,7 @@ export function resolveUiE2ePrTestSelection(
   });
   const roots = [...new Set(ownerWatches.flatMap(({ ownerRoots }) => ownerRoots))];
   const policyTargets = new Set(
-    resolvePolicyTestTargets(paths).map((file) => resolveUiTypeScriptPath(file, cwd)),
+    resolvePolicyTestTargets(paths, { cwd }).map((file) => resolveUiTypeScriptPath(file, cwd)),
   );
   const importedTargets = new Set(
     resolveAffectedTestsFromImportGraph(paths, cwd, { ...graphOptions, forceFull: true }),

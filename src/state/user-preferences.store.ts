@@ -1,11 +1,14 @@
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeBackgroundPreference,
   USER_BACKGROUND_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
 import {
   parseSidebarSessionReference,
+  UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
   UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
 import {
@@ -33,6 +36,10 @@ import type {
 import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
 
 type UserPreferencesDatabase = Pick<OpenClawStateKyselyDatabase, "user_preferences">;
+const personalPinPreferenceKeys: readonly string[] = [
+  UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+  UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
+];
 
 export const ensureUserPreferencesSchema = createOpenClawStateSchemaEnsurer({
   table: "user_preferences",
@@ -48,8 +55,8 @@ export function updatesGitCoauthorPreference(update: PreparedUserPreferenceUpdat
 
 export function updatesPersonalSessionPins(update: PreparedUserPreferenceUpdate): boolean {
   return (
-    update.serialized.some(({ prefKey }) => prefKey === UI_RAIL_SHORTCUTS_PREFERENCE_KEY) ||
-    update.deletionKeys.includes(UI_RAIL_SHORTCUTS_PREFERENCE_KEY)
+    update.serialized.some(({ prefKey }) => personalPinPreferenceKeys.includes(prefKey)) ||
+    update.deletionKeys.some((key) => personalPinPreferenceKeys.includes(key))
   );
 }
 
@@ -59,7 +66,7 @@ export function deleteUserPreference(
   key: string,
 ): void {
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
-  if (key === UI_RAIL_SHORTCUTS_PREFERENCE_KEY) {
+  if (personalPinPreferenceKeys.includes(key)) {
     assertUserPreferenceWriteNotHeld(database);
   }
   if (!tableExists(database, "user_preferences")) {
@@ -107,11 +114,26 @@ export function selectPersonalPinnedSessionKeys(database: EngineConnection): str
     database,
     db
       .selectFrom("user_preferences")
-      .select("value_json")
-      .where("pref_key", "=", UI_RAIL_SHORTCUTS_PREFERENCE_KEY),
+      .select(["pref_key", "value_json"])
+      .where("pref_key", "in", personalPinPreferenceKeys),
   )) {
     const entries: unknown = JSON.parse(row.value_json);
     if (!Array.isArray(entries)) {
+      continue;
+    }
+    if (row.pref_key === UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY) {
+      for (const group of entries) {
+        if (!isRecord(group) || !Array.isArray(group.sessionKeys)) {
+          continue;
+        }
+        // Group membership stores raw session keys, unlike sidebar shortcut references.
+        for (const value of group.sessionKeys) {
+          const key = normalizeOptionalString(value);
+          if (key) {
+            keys.add(key);
+          }
+        }
+      }
       continue;
     }
     for (const entry of entries) {

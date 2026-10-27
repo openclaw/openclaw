@@ -68,6 +68,14 @@ export function resolveCommandReplyExpectation(params: {
     replyExpectation?: ReplyExpectation;
   };
 }): ReplyExpectation | undefined {
+  const provenance = params.opts.inputProvenance;
+  if (
+    provenance?.kind === "inter_session" &&
+    (provenance.sourceTool === "subagent_announce" || provenance.sourceTool === "subagent_settle")
+  ) {
+    // Completion processing consumes child findings; it does not owe another answer.
+    return "optional";
+  }
   const inputExpectation = params.opts.replyExpectation;
   if (inputExpectation === "optional" || inputExpectation === "result-required") {
     return inputExpectation;

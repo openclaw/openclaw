@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import * as pendingInputs from "../../../config/sessions/session-accessor.pending-inputs.js";
 import {
   bindSessionPendingInputSources,
@@ -19,6 +20,7 @@ import {
   createAssistant,
   createAssistantResultStream,
   createTestSession,
+  holdAssistantResponse,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
   testModel,
@@ -282,6 +284,78 @@ describe("live pending inputs at the attempt boundary", () => {
       });
     },
   );
+
+  it("delivers live input steered into the run after the boundary sampled it", async () => {
+    await withLiveInput(async (target) => {
+      const recorder = createUserTurnTranscriptRecorder({
+        message: {
+          role: "user",
+          content: "correction steered into the run",
+          timestamp: 2,
+          idempotencyKey: "correction-run:user",
+        },
+        target: { ...target, sessionEntry: { sessionId: target.sessionId, updatedAt: 1 } },
+        updateMode: "none",
+      });
+      expect(
+        await recorder.stageApproved?.({ runId: "correction-run", assertCurrent: () => {} }),
+      ).toBe(true);
+      const foreign = expectDefined(
+        await stageSessionPendingInput(target, {
+          runId: "queued-run",
+          message: {
+            role: "user",
+            content: "queued user request",
+            timestamp: 3,
+            idempotencyKey: "queued-run:user",
+          },
+          assertCurrent: () => {},
+        }),
+        "Expected queued receipt",
+      );
+      try {
+        const foreignRecorder = createUserTurnTranscriptRecorder({
+          message: foreign.message,
+          target: { ...target, sessionEntry: { sessionId: target.sessionId, updatedAt: 1 } },
+          updateMode: "none",
+        });
+        await foreign.run(() => foreignRecorder.persistApproved());
+        const manager = guardSessionManager(
+          await SessionManager.openBoundedAsync(target, { maxBytes: 8192, maxEvents: 30 }),
+          { runId: "active-run" },
+        );
+        const { session: activeSession } = await createTestSession({
+          model: testModel,
+          sessionManager: manager,
+        });
+        // Recovery compaction prepares a new attempt while the correction is still live custody.
+        await prepareBoundary(activeSession, target, "original request");
+        const entered = createDeferred();
+        const held = holdAssistantResponse("working on the original request");
+        streamMocks.streamSimple.mockImplementationOnce(() => {
+          entered.resolve();
+          return held.response;
+        });
+        replyWith("correction applied");
+        const run = activeSession.prompt("original request", { expandPromptTemplates: false });
+        await entered.promise;
+        // This run's steering queue accepts the correction after the boundary sampled it.
+        await activeSession.steer("correction steered into the run", undefined, recorder);
+        held.release();
+        await run;
+        expect(activeSession.getLastAssistantText()).toBe("correction applied");
+        expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
+        const corrected = JSON.stringify(streamMocks.streamSimple.mock.calls[1]?.[1].messages);
+        expect(corrected).toContain("correction steered into the run");
+        // Adoption is per input: another turn's live input stays out of this run.
+        expect(corrected).not.toContain("queued user request");
+        activeSession.dispose();
+      } finally {
+        recorder.finishPendingInput?.("interrupted");
+        foreign.finish("interrupted");
+      }
+    });
+  });
 
   it("keeps live foreign input out of an already persisted current turn", async () => {
     await withLiveInput(async (target) => {

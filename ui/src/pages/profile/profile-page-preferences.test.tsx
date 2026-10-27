@@ -131,6 +131,7 @@ it.each([
     const profile = {
       ...modelAccountProfile,
       id: owner ? "gateway-owner" : modelAccountProfile.id,
+      emails: owner ? [] : modelAccountProfile.emails,
     };
     const request = profileRpc(() => profile, {
       "users.prefs.get": () => ({
@@ -146,6 +147,20 @@ it.each([
     await waitForFast(() => {
       expect(attributionToggle(page)).toMatchObject({ disabled: false, checked: enabled });
     });
+    if (owner) {
+      const identity = page.querySelector("#settings-profile-identity")!;
+      expect(identity.textContent).toContain(
+        "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
+      );
+      expect(identity.textContent).toContain(
+        "Requires GitHub-backed sign-in through Cloudflare Access or Tailscale Serve.",
+      );
+      expect(identity.textContent).not.toContain("Linked emails");
+      expect(identity.textContent).not.toContain("Refresh to retry");
+      expect(
+        identity.querySelector<HTMLInputElement>("input.settings-toggle__input"),
+      ).toMatchObject({ checked: false, disabled: true });
+    }
     const displayName = page.querySelector<HTMLInputElement>(".identity-name-control input")!;
     displayName.value = "Unsaved name";
     displayName.dispatchEvent(new Event("input", { bubbles: true }));

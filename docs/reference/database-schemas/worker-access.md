@@ -38,6 +38,12 @@ decoded rows even when a caller retains the inactive handle. Predicate compariso
 baselines last only until release; a late acknowledgement cannot restore them.
 Active authorities retain their existing publication and final-effect checks.
 
+Finished worker admissions release publication observers and request callbacks.
+Committed facts remain available for lost-reply recovery, which runs
+after transport cleanup. Workspace mutations release their payload and previous
+row captures after acknowledgement or recovery finishes, including failed writes;
+retaining an admission must not retain those completed workspace payloads.
+
 Idle session reclamation workers retain their admitted connection, not completed
 deletion plans or the caller's async context. Retirement callbacks capture only
 the worker's registry key. Transport startup and idle timers run outside request
@@ -565,6 +571,8 @@ and outgoing public reads remain detached from the resident state.
 Internal hot-state projections also retain the actor's replace-only target,
 version, participants, and members. Read replies and committed receipt capture
 own detachment before those facts leave the worker.
+Cold hydration decodes each participant aggregate once; the selected entry and
+hot participant records share their actor-owned identity objects.
 
 Actor commands retain their immutable replica preimage for admission transport.
 The worker sends a reference only after matching its authoritative write token,
@@ -5906,6 +5914,8 @@ sweeps. Each preparation closes its scoped read-only handles before replying;
 selection, configuration checks, and commit authority remain per request.
 Preparation loads its read-only selection and archive encoding helpers without
 initializing the writable database lifecycle or transcript restoration machinery.
+Canonical validation and reclamation load cold-restoration source guards only
+when executing a cold mutation; restoration retains its existing source checks.
 
 Single-message lookups and display-message counts use that same history worker.
 Session-message broadcasts await the stored content and sequence in their existing

@@ -1,5 +1,6 @@
 import { createMemo, type Accessor } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
+import { t as translate } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import {
   normalizeChatModelProviderId,
@@ -113,13 +114,18 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         state.modelSelectionPolicy?.defaultModel,
         overrides?.[props.sessionKey],
         overrides !== undefined && Object.hasOwn(overrides, props.sessionKey),
+        // Unrelated lazy catalogs must not rebuild every model choice.
+        t("chat.modelControls.defaultWithModel"),
+        t("chat.selectors.lockedSessionModel"),
+        t("chat.modelControls.api"),
+        t("chat.modelControls.subscription"),
+        t("modelSetup.candidates.signInNeeded"),
       ] as const;
     },
     { equals: (before, after) => before.every((value, index) => value === after[index]) },
   );
   const selection = createMemo(() => {
-    // Catalog/auth helpers use plain translation reads.
-    i18nRevision();
+    // selectionInputs tracks the copy used here and by the plain auth helper.
     const [
       policy,
       retired,
@@ -206,7 +212,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const canonicalDefaultLabel = resolveChatModelPickerLabel(defaultCatalogEntry, defaultLabel);
     const pickerDefaultLabel =
       defaultModel && canonicalDefaultLabel !== defaultLabel
-        ? t("chat.modelControls.defaultWithModel", { model: canonicalDefaultLabel })
+        ? translate("chat.modelControls.defaultWithModel", { model: canonicalDefaultLabel })
         : defaultLabel;
     const normalizedDefaultModel = defaultModel.trim().toLowerCase();
     const modelOptions: ChatModelPickerOption[] = selectOptions.flatMap((option) => {
@@ -376,7 +382,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     // Without a selection, neither the runtime nor the agent default identifies it.
     const committedModelLabel =
       modelSelectionLocked === true && !triggerModelValue
-        ? t("chat.selectors.lockedSessionModel")
+        ? translate("chat.selectors.lockedSessionModel")
         : resolveChatModelPickerLabel(
             catalog.entry(triggerModelValue || defaultModel),
             formatPickerModelLabel(
@@ -544,6 +550,14 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const selectedContextWindow =
       contextWindowOwner?.contextWindow ?? contextWindowOwner?.contextWindowDefault ?? "";
     const defaultContextWindow = contextWindowOwner?.contextWindowDefault;
+    const accessProgramModel = resolveModelRuntimeEntry(
+      catalog.entry(currentOverride || defaultModel),
+      triggerRuntime,
+    );
+    const effectiveAccessProgram =
+      !retired && !uninitialized && !props.modelSwitching
+        ? accessProgramModel?.cyberAccessProgramDefault
+        : undefined;
     const accessPrograms =
       props.connected &&
       catalogState.hasSnapshot &&
@@ -551,32 +565,25 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       !retired &&
       !uninitialized &&
       !props.modelSwitching
-        ? (resolveModelRuntimeEntry(catalog.entry(currentOverride || defaultModel), triggerRuntime)
-            ?.availableAccessPrograms?.cyber ?? [])
-        : [];
+        ? accessProgramModel?.availableAccessPrograms?.cyber
+        : undefined;
+    const hasAccessSelection =
+      props.requestedAccessProgram !== undefined || effectiveAccessProgram !== undefined;
     const showAccessProgram =
       Boolean(props.onAccessProgramSelect) &&
-      accessPrograms.some((program) => program !== "standard");
+      (hasAccessSelection || accessPrograms?.some((program) => program !== "standard"));
     const accessProgramDisabled =
-      commonDisabled || Boolean(props.accessProgramMutationDisabledReason);
+      commonDisabled || !hasResolvableModel || Boolean(props.accessProgramMutationDisabledReason);
     const effortDisabled =
       commonDisabled ||
-      !hasResolvableModel ||
-      ((effortMutationDisabled || (thinking.options.length === 0 && fastMode.disabled)) &&
-        (!showAccessProgram || accessProgramDisabled));
+      (!(showAccessProgram && hasAccessSelection) &&
+        (!hasResolvableModel ||
+          ((effortMutationDisabled || (thinking.options.length === 0 && fastMode.disabled)) &&
+            (!showAccessProgram || accessProgramDisabled))));
     // Keep the effort control mounted but hidden until its catalog resolves.
-    const reserveEffortPicker = !hasResolvableModel;
+    const reserveEffortPicker = !hasResolvableModel && !(showAccessProgram && hasAccessSelection);
     return {
       model: {
-        accessProgramRecovery:
-          props.requestedAccessProgram !== undefined &&
-          !showAccessProgram &&
-          props.onAccessProgramSelect
-            ? {
-                disabled: accessProgramDisabled,
-                onClear: (sessionKey) => props.onAccessProgramSelect?.(null, sessionKey),
-              }
-            : undefined,
         providerAuth: props.modelAuthStatusResult ? providerAuth : undefined,
         accountSection: props.renderAccountSection?.(currentOverride || defaultModel),
         contextWindow:
@@ -630,6 +637,8 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           showAccessProgram && props.onAccessProgramSelect
             ? {
                 requested: props.requestedAccessProgram,
+                previous: props.daybreakAccessProgram,
+                effectiveAccessProgram,
                 programs: accessPrograms,
                 disabled: accessProgramDisabled,
                 sessionKey: props.sessionKey,

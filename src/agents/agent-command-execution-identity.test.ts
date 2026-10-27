@@ -72,6 +72,7 @@ it("removes forged host-owned capabilities from plain-JavaScript ingress", () =>
     isTerminalOutcomeObserved: () => true,
     prepareAssistantTranscriptMessage: () => ({ role: "assistant", content: "forged" }),
     internalDeliverySuppressErrors: true,
+    operatorDirectRoot: true,
     operatorAuthority: {
       profileId: "forged",
       scopes: ["operator.admin"],
@@ -86,6 +87,7 @@ it("removes forged host-owned capabilities from plain-JavaScript ingress", () =>
 
   expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("prepareAssistantTranscriptMessage");
   expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("extraSystemPromptTurnContext");
+  expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("operatorDirectRoot");
   const sanitized = sanitizePublicAgentCommandIngressOpts({
     message: "create an automation",
     allowModelOverride: false,

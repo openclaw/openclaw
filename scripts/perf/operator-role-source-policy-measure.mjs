@@ -2,9 +2,13 @@
 // --bundle --platform=node --format=esm --outfile=<revision>.mjs, then run:
 // node --expose-gc scripts/perf/operator-role-source-policy-measure.mjs \
 //   --base <base.mjs> --candidate <candidate.mjs> --iterations 100000 --pairs 5
+// For retained scope checks, bundle each revision's src/shared/operator-scope-compat.ts
+// instead, then add --scope-check. The base calls resolveMissingRequestedScope;
+// a revision exporting resolveMissingOperatorScope calls that normalized-grant callee.
 // Serial AB/BA owner checks, separate timing/allocation passes, synthetic roles.
 // Acceptance: repeatable allocation/CPU reduction without material CPU regression.
-// This does not measure whole-Gateway latency or authorize a production load test.
+// Scope mode measures only the retained check's scope callee, not source-policy
+// currency, profile lookup, or whole-Gateway latency; it authorizes no production load.
 import assert from "node:assert/strict";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
@@ -18,6 +22,7 @@ const { values } = parseArgs({
     candidate: { type: "string" },
     iterations: { type: "string", default: "100000" },
     pairs: { type: "string", default: "5" },
+    "scope-check": { type: "boolean", default: false },
   },
 });
 assert(values.base && values.candidate && globalThis.gc);
@@ -55,16 +60,33 @@ try {
     for (const mode of ["timing", "allocation"]) {
       for (let pair = 0; pair < pairs; pair++) {
         for (const arm of pair % 2 ? ["candidate", "base"] : ["base", "candidate"]) {
-          const { sourceRolePolicy, isOperatorRoleSourcePolicyCurrent } = modules[arm];
-          const captured = roles.map((role) => sourceRolePolicy(structuredClone(role)));
-          const check = (index) => {
-            const slot = index % roles.length;
-            return isOperatorRoleSourcePolicyCurrent(
-              captured[slot],
-              sourceRolePolicy(roles[slot]),
-              scopes,
-            );
-          };
+          const {
+            sourceRolePolicy,
+            isOperatorRoleSourcePolicyCurrent,
+            resolveMissingRequestedScope,
+            resolveMissingOperatorScope,
+          } = modules[arm];
+          const captured = values["scope-check"]
+            ? undefined
+            : roles.map((role) => sourceRolePolicy(structuredClone(role)));
+          const check = values["scope-check"]
+            ? resolveMissingOperatorScope
+              ? (index) =>
+                  resolveMissingOperatorScope(scopes, roles[index % roles.length].scopes) === null
+              : (index) =>
+                  resolveMissingRequestedScope({
+                    role: "operator",
+                    requestedScopes: scopes,
+                    allowedScopes: roles[index % roles.length].scopes,
+                  }) === null
+            : (index) => {
+                const slot = index % roles.length;
+                return isOperatorRoleSourcePolicyCurrent(
+                  captured[slot],
+                  sourceRolePolicy(roles[slot]),
+                  scopes,
+                );
+              };
           for (let index = 0; index < 10000; index++) {
             assert(check(index));
           }
@@ -93,11 +115,10 @@ try {
               node.selfSize + node.children.reduce((sum, child) => sum + total(child), 0);
             allocatedBytes = total(profile.head);
           }
-          const revoked = { ...roles[0], scopes: [] };
-          assert.equal(
-            isOperatorRoleSourcePolicyCurrent(captured[0], sourceRolePolicy(revoked), scopes),
-            false,
-          );
+          const admitted = roles[0];
+          roles[0] = { ...admitted, scopes: [] };
+          assert.equal(check(0), false);
+          roles[0] = admitted;
           results.push({
             scenario,
             mode,
@@ -115,7 +136,13 @@ try {
       }
     }
   }
-  console.log(JSON.stringify({ node: process.version, warmup: 10000, results }, null, 2));
+  console.log(
+    JSON.stringify(
+      { node: process.version, scopeCheck: values["scope-check"], warmup: 10000, results },
+      null,
+      2,
+    ),
+  );
 } finally {
   inspector.disconnect();
 }

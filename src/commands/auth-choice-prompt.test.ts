@@ -5,19 +5,10 @@ import { isKeepCurrentAuthChoice, promptAuthChoiceGrouped } from "./auth-choice-
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 
 const buildAuthChoiceGroups = vi.hoisted(() => vi.fn());
-const compareAuthChoiceGroups = vi.hoisted(() =>
-  vi.fn((a: AuthChoiceGroup, b: AuthChoiceGroup) => a.label.localeCompare(b.label)),
-);
-const isFeaturedAuthChoiceGroup = vi.hoisted(() =>
-  vi.fn((group: AuthChoiceGroup) =>
-    ["openai", "anthropic", "xai", "google", "openrouter"].includes(group.value),
-  ),
-);
 
-vi.mock("./auth-choice-options.js", () => ({
+vi.mock("./auth-choice-options.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-choice-options.js")>()),
   buildAuthChoiceGroups,
-  compareAuthChoiceGroups,
-  isFeaturedAuthChoiceGroup,
 }));
 
 function authChoiceGroup(
@@ -79,10 +70,6 @@ function optionValues(prompt: WizardSelectParams<unknown> | undefined) {
 describe("promptAuthChoiceGrouped", () => {
   beforeEach(() => {
     buildAuthChoiceGroups.mockReset();
-    compareAuthChoiceGroups
-      .mockReset()
-      .mockImplementation((a, b) => a.label.localeCompare(b.label));
-    isFeaturedAuthChoiceGroup.mockClear();
   });
 
   it("marks the configured provider and offers keep current config first", async () => {
@@ -125,15 +112,6 @@ describe("promptAuthChoiceGrouped", () => {
   });
 
   it("filters guided choices while keeping featured providers and grouped methods", async () => {
-    const featuredOrder = new Map([
-      ["openai", 0],
-      ["anthropic", 1],
-    ]);
-    compareAuthChoiceGroups.mockImplementation((a, b) => {
-      const priorityA = featuredOrder.get(a.value) ?? Number.POSITIVE_INFINITY;
-      const priorityB = featuredOrder.get(b.value) ?? Number.POSITIVE_INFINITY;
-      return priorityA - priorityB || a.label.localeCompare(b.label);
-    });
     mockGroups([
       authChoiceGroup("minimax", "MiniMax", [
         ["minimax-global-oauth", "MiniMax OAuth (Global)"],
@@ -197,8 +175,8 @@ describe("promptAuthChoiceGrouped", () => {
     expect(optionValues(prompts[0])).toEqual([
       "detected-ai",
       "recommended-ai",
-      "anthropic",
       "openai",
+      "anthropic",
       "__more",
       "skip",
     ]);

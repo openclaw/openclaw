@@ -14,6 +14,7 @@ import {
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -120,7 +121,7 @@ it("preserves shared ancestor references across staggered roster reads and first
   });
 });
 
-it("shares recipient encodings only for matching authority and delivered baselines", async () => {
+it("shares producer envelopes across matching authority and divergent baselines", async () => {
   using _ = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
@@ -183,6 +184,12 @@ it("shares recipient encodings only for matching authority and delivered baselin
           ["__proto__"]: { fixture: "own-data-property" },
         },
         new Set(ids),
+        {
+          prepareSessionProjection: prepareSessionEventProjection(projection, undefined, {
+            ancestors: [],
+            reuseEnvelope: true,
+          }),
+        },
       );
     const decodeLast = (peer: (typeof peers)[number]) => {
       const frame = JSON.parse(peer.send.mock.lastCall![0]) as EventFrame;
@@ -224,6 +231,7 @@ it("shares recipient encodings only for matching authority and delivered baselin
       let envelopeEnumerations = 0;
       const envelopeTuples = new Set<unknown>();
       let envelopeMaxFields = 0;
+      let filteredEnvelopes = 0;
       let fieldNameInsertions = 0;
       let stagedFieldIndexTuples = 0;
       const MapConstructor = globalThis.Map;
@@ -257,6 +265,7 @@ it("shares recipient encodings only for matching authority and delivered baselin
       const copying = vi.spyOn(Object, "fromEntries").mockImplementation((entries) => {
         const result = fromEntries(entries);
         if (result.sessionKey === key && isRecord(result.session) && Array.isArray(entries)) {
+          filteredEnvelopes++;
           envelopeMaxFields = Math.max(envelopeMaxFields, entries.length);
           for (const entry of entries) {
             envelopeTuples.add(entry);
@@ -278,8 +287,16 @@ it("shares recipient encodings only for matching authority and delivered baselin
       let rowEncodings = 0;
       let envelopeEncodings = 0;
       let sharingKeyEncodings = 0;
+      let ancestorFieldEncodings = 0;
       const encoding = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
         const value: unknown = args[0];
+        if (
+          isRecord(value) &&
+          Object.keys(value).length === 1 &&
+          (Object.hasOwn(value, "ancestorSessions") || Object.hasOwn(value, "ancestorSessionRefs"))
+        ) {
+          ancestorFieldEncodings++;
+        }
         if (
           Array.isArray(value) &&
           value.length === 10 &&
@@ -363,6 +380,8 @@ it("shares recipient encodings only for matching authority and delivered baselin
       expect(envelopeEnumerations).toBe(0);
       // Interleaved histories and audiences share only synchronous copy scratch space.
       expect(envelopeTuples.size).toBe(envelopeMaxFields);
+      // A producer-owned envelope is filtered once per authority, even with divergent baselines.
+      expect(filteredEnvelopes).toBe(2);
       // Field names are indexed once per audience, not inserted into a Set per history.
       expect(fieldNameInsertions).toBe(0);
       // Index construction must not stage a tuple for every field before inserting it.
@@ -373,6 +392,8 @@ it("shares recipient encodings only for matching authority and delivered baselin
       expect(rowEncodings).toBeLessThanOrEqual(16);
       // Two wire capabilities per group, plus one legacy envelope per authority.
       expect(envelopeEncodings).toBeLessThanOrEqual(10);
+      // Empty ancestor fields are constant across divergent connection histories.
+      expect(ancestorFieldEncodings).toBe(0);
     } finally {
       detach();
       await connection.mentionInbox.dispose();

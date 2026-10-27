@@ -3,6 +3,38 @@
   overflow: visible;
 }
 
+/* Account identity remains recognizable while a cold profile photo resolves. */
+.sidebar-identity-card .viewer-avatar.is-pending > img {
+  display: none;
+}
+
+.sidebar-identity-card .viewer-avatar.is-pending > .viewer-avatar__fallback {
+  display: grid;
+  visibility: visible;
+}
+
+.sidebar--rail .sidebar-shell__footer {
+  min-height: 37px;
+  padding-block: 4px;
+}
+
+.sidebar--rail .sidebar-shell__connection,
+.sidebar--rail .sidebar-shell__footer .gateway-status--row {
+  height: 28px;
+}
+
+.sidebar-shell__connection > .gateway-status-tooltip {
+  display: flex;
+}
+
+.sidebar--rail .sidebar-shell__footer .gateway-status--connected {
+  color: var(--muted);
+}
+
+.sidebar--rail .sidebar-shell__footer .gateway-status--connected .gateway-status__icon {
+  color: var(--ok);
+}
+
 .sidebar--rail .sidebar-shell {
   min-width: 0;
   overflow: hidden;
@@ -216,8 +248,7 @@
     .nav-item__icon > svg,
     .session-glyph__content,
     .session-glyph__icon,
-    .session-glyph__icon > svg,
-    .session-glyph__icon > img
+    .session-glyph__icon > *
   ) {
   width: var(--sidebar-rail-glyph-size);
   height: var(--sidebar-rail-glyph-size);
@@ -341,7 +372,7 @@
   background: var(--sidebar-rail-control-surface);
 }
 
-.sidebar-footer-bar__home .session-row-badge svg {
+.sidebar-footer-bar__home .session-row-badge > i {
   width: 10px;
   height: 10px;
 }
@@ -443,7 +474,6 @@
 }
 
 .sidebar-pages__entry:hover .sidebar-pages__pin,
-.sidebar-online__row:hover .sidebar-pages__pin,
 .sidebar-pages__pin:focus-visible,
 .sidebar-pages__pin--pinned {
   opacity: 1;
@@ -624,6 +654,7 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 }
 
 .sidebar-session-owner-filter .picker-select__trigger {
+  gap: 4px;
   min-height: 30px;
   padding: 4px 6px;
   border: 0;
@@ -646,6 +677,13 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 .sidebar--rail .sidebar-session-toolbar__button {
   width: 28px;
   height: 28px;
+}
+
+.sidebar--rail .sidebar-session-toolbar__button.sidebar-session-sort {
+  width: auto;
+  max-width: 50%;
+  gap: 2px;
+  opacity: 1;
 }
 
 html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-panel-header {

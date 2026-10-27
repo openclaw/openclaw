@@ -308,7 +308,9 @@ test("capped stream output stays ordered, compact, and frozen through terminal d
   appendOutput(session, "stderr", "late".repeat(1_000));
   expect(text(await poll())).toBe(discarded + "(no new output)\n\nProcess exited with code 0.");
   expect(session).toMatchObject({ totalOutputChars: 8_000, pendingOutput: "" });
-  expect(text(await call("log"))).toBe(discarded + "oe".repeat(1_500));
+  expect(text(await call("log"))).toBe(
+    discarded + "oe".repeat(1_500) + "\n\nProcess exited with code 0.",
+  );
 });
 
 test.each([

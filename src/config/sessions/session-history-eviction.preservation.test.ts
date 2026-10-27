@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { UI_RAIL_SHORTCUTS_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
+import {
+  UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
+  UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+} from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
@@ -50,7 +53,7 @@ describe("SQLite historical session preservation", () => {
     mode: "enforce" as const,
     maintenance: { maxDiskBytes, highWaterBytes, preserveRecentMs },
   });
-  it.each(["registry", "recent", "pinned", "personal", "manual"] as const)(
+  it.each(["registry", "recent", "pinned", "personal", "personal-group", "manual"] as const)(
     "preserves every generation of a %s session under physical pressure",
     async (protection) => {
       async function inspectHistoryReads<T>(operation: () => Promise<T>): Promise<T> {
@@ -93,7 +96,9 @@ describe("SQLite historical session preservation", () => {
             ? { skillsSnapshot: { prompt: "p".repeat(64 * 1024), skills: [] } }
             : {}),
           ...(protection === "manual" ? { archivedAt: now, archiveReason: protection } : {}),
-          ...(protection === "registry" || protection === "personal"
+          ...(protection === "registry" ||
+          protection === "personal" ||
+          protection === "personal-group"
             ? { archivedAt: now, archiveReason: "active-session-cap" as const }
             : {}),
           ...(protection === "pinned" ? { pinnedAt: now } : {}),
@@ -108,13 +113,17 @@ describe("SQLite historical session preservation", () => {
           projectSessionActive: true,
         });
       }
-      if (protection === "personal") {
+      if (protection === "personal" || protection === "personal-group") {
         const profile = ensureProfileForEmail("pin@example.test").id;
-        expect(
-          await setCanonicalUserPreferences(profile, {
-            [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: [`session-rail:${recentKey}`],
-          }),
-        ).toMatchObject({ ok: true });
+        const preferences =
+          protection === "personal"
+            ? { [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: [`session-rail:${recentKey}`] }
+            : {
+                [UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY]: [
+                  { id: "focus", label: "Focus", sessionKeys: [recentKey] },
+                ],
+              };
+        expect(await setCanonicalUserPreferences(profile, preferences)).toMatchObject({ ok: true });
       }
       const before = await measureSessionPhysicalDiskUsage(storePath);
       const preserveRecentMs = protection === "recent" ? 7 * dayMs : undefined;

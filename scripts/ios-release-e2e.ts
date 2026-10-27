@@ -38,6 +38,7 @@ export type Operation =
   | "simulator-create"
   | "simulator-boot"
   | "simulator-ready"
+  | "simulator-headroom"
   | "simulator-slim"
   | "simulator-delete"
   | "fixture-server"

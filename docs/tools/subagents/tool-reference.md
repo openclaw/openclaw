@@ -216,6 +216,9 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
 <ParamField path="thinking" type="string">
   Override thinking level for the sub-agent run. Not available with `visible: true`.
 </ParamField>
+<ParamField path="cyberAccessProgram" type='"standard" | "daybreak_blue" | "daybreak_red"'>
+  Select the child's OpenAI [cyber Access](/providers/openai/models#chat-access-control): `daybreak_blue` is Blue and `daybreak_red` is Red. When omitted, a same-agent child on the requester's model keeps the requester's saved session Access; a child on another agent or model starts at its model default. The value is saved on the child session like a chat Access selection, and both the OpenClaw runtime and the Codex runtime check it against the child's account and model before every model request, so an unavailable program fails the child run instead of downgrading. Native sub-agents only (hidden or `visible: true`); rejected with `runtime: "acp"`.
+</ParamField>
 <ParamField path="thread" type="boolean" default="false">
   When `true`, requests channel thread binding for this sub-agent session.
 </ParamField>
@@ -301,6 +304,15 @@ to arrive as the next message. Use it when the requester needs results from
 announcing children before answering. It does not collect Swarm results:
 collectors require `agents_wait`, or an awaited `agents.run()` in OpenClaw
 Code Mode, and do not send completion notifications.
+
+In automation turns, including cron jobs and jobs running in an existing session,
+`sessions_yield` returns `status: "yielded"` and ends the current model turn.
+The scheduler delivers child output under the job's delivery policy; yielding
+does not register an interactive requester continuation or an incoming-message
+wait, even with `waitFor: "message"`.
+Use this handoff when child output is the deliverable. If the parent still needs
+child results to finish the job, spawn with `collect: true` and collect them with
+`agents_wait` in the same turn before synthesizing the final result.
 
 `sessions_yield` is the waiting primitive for announced completions. Do not replace it with polling
 loops over `subagents`, `sessions_list`, `sessions_history`, shell

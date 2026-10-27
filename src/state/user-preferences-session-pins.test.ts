@@ -1,5 +1,8 @@
 import { expect, it, vi } from "vitest";
-import { UI_RAIL_SHORTCUTS_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
+import {
+  UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
+  UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "./openclaw-state-db-readonly.js";
@@ -40,12 +43,23 @@ it("selects the union until the last profile removes its personal reference", ()
     },
     options,
   );
-  setUserPreferences(bob, { [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: [pin, "person:alice"] }, options);
-  expect(read()).toEqual([key, "agent:main:other"]);
+  setUserPreferences(
+    bob,
+    {
+      [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: [pin, "person:alice"],
+      [UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY]: [
+        { id: "focus", label: "Focus", sessionKeys: [key, "agent:main:group"] },
+      ],
+    },
+    options,
+  );
+  expect(read()).toEqual([key, "agent:main:group", "agent:main:other"]);
 
   setUserPreferences(alice, { [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: [] }, options);
-  expect(read()).toEqual([key]);
+  expect(read()).toEqual([key, "agent:main:group"]);
   setUserPreferences(bob, { [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: null }, options);
+  expect(read()).toEqual([key, "agent:main:group"]);
+  setUserPreferences(bob, { [UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY]: null }, options);
   expect(read()).toEqual([]);
 });
 
@@ -82,9 +96,14 @@ it("shares one worker refresh after a preference change and retires a closed rea
   expect(read).toHaveBeenCalledTimes(4);
 });
 
-it.each(["completed", "unknown"] as const)(
-  "keeps a queued pin behind cleanup's %s native outcome",
-  async (kind) => {
+it.each([
+  ["completed", UI_RAIL_SHORTCUTS_PREFERENCE_KEY],
+  ["unknown", UI_RAIL_SHORTCUTS_PREFERENCE_KEY],
+  ["completed", UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY],
+  ["unknown", UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY],
+] as const)(
+  "keeps a queued %s native outcome ahead of %s pin changes",
+  async (kind, preferenceKey) => {
     const options = stateOptions();
     const profile = ensureProfileForEmail("queued@example.test", options).id;
     const pins = await preparePersonalSessionPins(options);
@@ -96,7 +115,12 @@ it.each(["completed", "unknown"] as const)(
       .mockResolvedValueOnce(undefined);
     const writer = setCanonicalUserPreferences(
       profile,
-      { [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: ["session:agent:main:queued"] },
+      {
+        [preferenceKey]:
+          preferenceKey === UI_RAIL_SHORTCUTS_PREFERENCE_KEY
+            ? ["session:agent:main:queued"]
+            : [{ id: "focus", label: "Focus", sessionKeys: ["agent:main:queued"] }],
+      },
       options,
     );
     expect(pins.isCurrent()).toBe(false);

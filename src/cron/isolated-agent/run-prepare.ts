@@ -23,6 +23,7 @@ import { withSessionTurn } from "../../sessions/session-controller.admission.js"
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronRuntimeSessionEntry } from "../inference-binding.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { CronWorkspaceLease } from "../run-workspace.js";
@@ -182,6 +183,8 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
     agentConfigOverride,
   });
   const baseSessionKey = (input.sessionKey?.trim() || `cron:${input.job.id}`).trim();
+  // A `current` job is a child run of its creating conversation: it keeps its own
+  // `cron:<jobId>` run key, and the conversation's resources come from the admission.
   const currentBoundSourceKey =
     input.job.sessionTarget === "current" ? input.job.sessionKey?.trim() : undefined;
   const usesDetachedRunSession =
@@ -247,6 +250,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       forceNew: usesDetachedRunSession,
       exactRunSession: usesExactRunSession,
       hookExternalContentSource,
+      inferenceCaptured: Boolean(input.job.inferenceBinding?.runtime),
     });
     const sourceEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
     const completionSource = input.job.sourceConversation ?? sourceEntry;
@@ -384,13 +388,18 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         };
       }
       const { provider, model, modelFallbacksOverride, runtimePluginCandidates } = preflight;
+      // A captured runtime replaces the override the cron session copied from its source row.
+      const runtimeSessionEntry = resolveCronRuntimeSessionEntry(
+        input.job.inferenceBinding,
+        cronSession.sessionEntry,
+      );
       const effectiveAgentRuntime = resolveEffectiveAgentRuntime({
         cfg: cfgWithAgentDefaults,
         provider,
         modelId: model,
         agentId: modelOwner.agentId,
         sessionKey: agentSessionKey,
-        sessionEntry: cronSession.sessionEntry,
+        sessionEntry: runtimeSessionEntry,
       });
       const thinkingSelection = await resolveCronThinkingSelection({
         cfg: cfgWithAgentDefaults,
@@ -434,7 +443,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           runtimePluginSelections: runtimePluginCandidates.map((candidate) => {
             const runtime = resolveSessionRuntimeOverrideForProvider({
               provider: candidate.provider,
-              entry: cronSession.sessionEntry,
+              entry: runtimeSessionEntry,
               cfg: cfgWithAgentDefaults,
             });
             return runtime
@@ -609,7 +618,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         model,
         agentRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
           provider,
-          entry: cronSession.sessionEntry,
+          entry: runtimeSessionEntry,
           cfg: admittedConfig,
         }),
         authProfileId,

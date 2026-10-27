@@ -268,6 +268,14 @@ keys or request values. Worktree preparation measures only work required before
 the response; provisioning already deferred to an initial turn stays with that
 turn's lifecycle.
 
+At trace log level, chat startup diagnostics break `detail.attempt.system-prompt`
+into sandbox policy,
+tool catalog text, session entry, runtime facts, reference paths, provider
+contributions, memory and watched-session context, project memory, TTS preferences,
+rendering, and reporting. These `detail.attempt.system-prompt.*` phases measure
+elapsed preparation time, including awaited work, without recording prompt content.
+The parent and nested phase totals overlap; do not add them together as CPU time.
+
 Managed worktree preparation emits one info-level `managed worktree preparation`
 record on return or failure. `kind=managed` covers checkout creation;
 `kind=sandbox` covers a managed guest projection through backend readiness,
@@ -794,6 +802,11 @@ bytes from inside their isolate; ArrayBuffers are already included in external
 memory, so do not add those values together. Other direct workers use native heap
 statistics and leave ArrayBuffer bytes unavailable. Nested workers are outside
 the parent registry's coverage.
+
+Worker script labels come from the runtime entrypoint manifest. Source and sealed
+entrypoints use their canonical built names; unknown dependency workers and eval
+sources remain `other`. Knowledge registry and storage workers participate in the
+same census, labeled `registry-worker.js` and `storage-worker.js`.
 
 The prepared-model catalog worker also reports `workerHeaps[].retainedData`: bounded, size-only
 censuses with fixed structure labels, entry counts, approximate bytes, and

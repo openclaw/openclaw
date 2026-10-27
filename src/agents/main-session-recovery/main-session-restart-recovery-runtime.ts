@@ -32,6 +32,7 @@ import {
   restartRecoveryStoreTargetKey,
   type MainSessionRecoverySkipReason,
 } from "./main-session-restart-recovery-diagnostics.js";
+import type { RecoveryCounts } from "./main-session-restart-recovery-dispatch.js";
 import {
   loadExpectedRestartRecoveryTarget,
   prepareExpectedRestartRecoveryCurrent,
@@ -47,8 +48,6 @@ import {
   discoverRestartRecoveryStoreTargets,
 } from "./main-session-restart-recovery-shared.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
-
-type RecoveryCounts = { started: number; settled: number; failed: number; skipped: number };
 
 function prepareRestartRecovery(gatewayRuntime: GatewayRecoveryRuntime, signal?: AbortSignal) {
   return gatewayRuntime.prepareRestartRecovery(signal)?.then((pausedUntilMs) => {
@@ -154,25 +153,51 @@ export async function recoverRestartAbortedMainSessions(params: {
       a.storePath.localeCompare(b.storePath) ||
       a.sessionKey.localeCompare(b.sessionKey),
   );
-  for (const candidate of candidates) {
-    if (params.shouldContinue?.() === false) {
-      break;
+  let dispatchTail = Promise.resolve();
+  let dispatchFailure: { error: unknown } | undefined;
+  try {
+    for (const candidate of candidates) {
+      if (params.shouldContinue?.() === false) {
+        break;
+      }
+      const storeResult = await recoverStore({
+        ...params,
+        passId,
+        onDispatch: (dispatch) => {
+          // One FIFO pump preserves admission order and attempt accounting.
+          // Its capacity/start wait must not block the reconciliation scan.
+          dispatchTail = dispatchTail.then(async () => {
+            try {
+              const dispatched = await dispatch();
+              result.started += dispatched.started;
+              result.settled += dispatched.settled;
+              result.failed += dispatched.failed;
+              result.skipped += dispatched.skipped;
+            } catch (error) {
+              dispatchFailure ??= { error };
+            }
+          });
+        },
+        storePath: candidate.storePath,
+        storeAgentId: candidate.storeAgentId,
+        preparedEntries: [candidate],
+        handledSessionKeys,
+        onSkipped: (reason) => {
+          skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);
+        },
+      });
+      result.started += storeResult.started;
+      result.settled += storeResult.settled;
+      result.failed += storeResult.failed;
+      result.skipped += storeResult.skipped;
     }
-    const storeResult = await recoverStore({
-      ...params,
-      passId,
-      storePath: candidate.storePath,
-      storeAgentId: candidate.storeAgentId,
-      preparedEntries: [candidate],
-      handledSessionKeys,
-      onSkipped: (reason) => {
-        skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);
-      },
-    });
-    result.started += storeResult.started;
-    result.settled += storeResult.settled;
-    result.failed += storeResult.failed;
-    result.skipped += storeResult.skipped;
+  } finally {
+    // Stop joins queued dispatches too, releasing their retained sources without
+    // retiring the durable claims that the next Gateway must recover.
+    await dispatchTail;
+  }
+  if (dispatchFailure) {
+    throw dispatchFailure.error;
   }
 
   if (result.started > 0 || result.settled > 0 || result.failed > 0 || result.skipped > 0) {

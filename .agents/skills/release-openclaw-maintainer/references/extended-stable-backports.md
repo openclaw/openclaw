@@ -197,8 +197,10 @@ git cherry "<canonical-extended-stable-ref>" "$scan_end" "$scan_start"
 
 If no auditable start exists, stop rather than guessing from dates or titles.
 
-Create the durable unreleased backport ledger required by
-`backport-discovery.md`, with one row per non-equivalent commit. Process
+Use the [shared hotfix ledger](hotfix-ledger-management.md) for candidate
+assessments and carry-forward decisions, retaining the complete staging inventory
+from `backport-discovery.md` with one row per non-equivalent commit. If ledger
+access is unavailable, keep the decisions with that local evidence. Process
 deterministic batches of at most 100 commits. Record each SHA, subject, changed
 paths, first-pass decision, applicability result, exclusions, and missing
 evidence. Keep public security rows opaque and private advisory detail only in

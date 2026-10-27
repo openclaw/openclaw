@@ -215,6 +215,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     ids: { content: contentId, trigger: triggerId },
     surface: "listbox",
     focus: "retain",
+    reveal: "caller",
     virtualized: canWindow,
     items: () => {
       opened();

@@ -3093,6 +3093,32 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   .knowledge-facets .knowledge-facet-count {
     margin-left: 0;
   }
+  /* While types load, show pill-shaped placeholders in the chip row instead of a stacked list. */
+  .knowledge-facets .knowledge-placeholder,
+  .knowledge-facets .knowledge-placeholder-blocks {
+    display: contents;
+  }
+  .knowledge-facets .knowledge-placeholder > p {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .knowledge-facets .knowledge-placeholder-rows .knowledge-placeholder-block {
+    flex: none;
+    display: flex;
+    align-items: center;
+    width: 84px;
+    min-height: 0;
+    padding: 0 14px;
+    border-width: 1px;
+    border-radius: 999px;
+  }
+  .knowledge-facets .knowledge-placeholder-block .knowledge-skeleton {
+    width: 100%;
+    height: 8px;
+  }
   .knowledge-table-toolbar .knowledge-browse-filter {
     flex-basis: 100%;
   }

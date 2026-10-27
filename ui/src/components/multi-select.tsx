@@ -78,7 +78,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
         exact = option;
       } else if (
         !search ||
-        [option.label, option.value, option.provider, option.detail].some((text) =>
+        [option.label, option.value, option.provider, option.description].some((text) =>
           text?.toLowerCase().includes(search),
         )
       ) {
@@ -306,8 +306,8 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
                       ? t("common.multiSelect.addCustom", { value: row.value })
                       : row.label}
                   </span>
-                  <Show when={row.detail}>
-                    <span class="picker-select__description">{row.detail}</span>
+                  <Show when={row.description}>
+                    <span class="picker-select__description">{row.description}</span>
                   </Show>
                 </span>
               </div>

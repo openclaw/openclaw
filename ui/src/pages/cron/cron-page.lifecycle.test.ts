@@ -431,7 +431,7 @@ it("coalesces a cron event burst into one trailing refresh of the current page",
   );
   const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
   const channels = createChannelCapability(gateway);
-  const context = { ...createContext(gateway), channels };
+  const context = { ...createContext(gateway), acquireChannels: () => channels };
   const page = createPage(context);
   cleanups.push(() => channels.dispose());
   await page.settle();
@@ -771,14 +771,14 @@ it("defers a hidden mount and reconnect, then catches up once with the current s
   emitEvent(gateway, "cron", {}, 20);
   await settle();
   expect(request.mock.calls.filter(([method]) => refreshMethods.includes(method))).toEqual([]);
-  expect(context.channels.refresh).not.toHaveBeenCalled();
+  expect(context.acquireChannels(createChannelCapability).refresh).not.toHaveBeenCalled();
   visibility("visible");
   globalThis.dispatchEvent(new Event("focus"));
   await waitForCronPage(() => expect(page.cron.cronStatus).not.toBeNull());
   await settle();
   expectCalls(request, refreshMethods, 1);
   expect(request).toHaveBeenCalledWith("cron.list", expect.objectContaining({ agentId: "writer" }));
-  expect(context.channels.refresh).toHaveBeenCalledTimes(1);
+  expect(context.acquireChannels(createChannelCapability).refresh).toHaveBeenCalledTimes(1);
   page.remove();
   request.mockClear();
   visibility("hidden");

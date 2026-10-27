@@ -122,8 +122,12 @@ export function enqueueSessionEventForHost(
           ),
           execRequestOwners,
         ),
-        // Refuse matching keyed plugin retries; unkeyed and host occurrences stay distinct.
-        { allowDuplicate: options.source !== "plugin" || !options.contextKey?.trim() },
+        // Refuse matching keyed plugin and tool-handoff retries; unkeyed and host occurrences stay distinct.
+        {
+          allowDuplicate:
+            (options.source !== "plugin" && options.source !== "tool_handoff") ||
+            !options.contextKey?.trim(),
+        },
       );
   const occurrences = options.occurrences
     ? [...options.occurrences]

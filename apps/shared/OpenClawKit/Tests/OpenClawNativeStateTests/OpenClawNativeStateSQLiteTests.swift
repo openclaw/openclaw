@@ -6,7 +6,7 @@ import Darwin.membership
 #endif
 
 struct OpenClawNativeStateSQLiteTests {
-    private static let currentSharedSchemaVersion: Int64 = 34
+    private static let currentSharedSchemaVersion: Int64 = 35
 
     @Test(arguments: [OpenClawNativeStateCanonicalTable.deviceIdentities, .deviceAuthTokens])
     func `shared adapter refuses credential creation`(_ table: OpenClawNativeStateCanonicalTable) throws {

@@ -268,6 +268,7 @@ export function createBoundSpawnInvocation(
     expectsCompletionMessage?: boolean;
     completionTarget?: "parent";
     thinking?: string;
+    cyberAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red" | null;
   },
   requesterModel?: { provider: string; model: string },
   senderIsOwner?: boolean,

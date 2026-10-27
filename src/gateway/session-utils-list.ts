@@ -322,12 +322,13 @@ export function prepareSessionRowSelection(
   }
   const candidates =
     prepared?.candidateSessionIdsOrKeys &&
-    Array.from(prepared.candidateSessionIdsOrKeys).flatMap((sessionIdOrKey) =>
-      projection.selectEntries(
-        { agentId: selectedScope.agentId, sessionIdOrKey, sortBy: null },
-        prepared.metadataPrepared === true,
-        "running-candidate",
-      ),
+    projection.selectEntries(
+      {
+        agentId: selectedScope.agentId,
+        candidateSessionIdsOrKeys: prepared.candidateSessionIdsOrKeys,
+        sortBy: null,
+      },
+      prepared.metadataPrepared === true,
     );
   const selected = selection.read(
     prepared?.ordered ? (opts.sortBy ?? "updatedAt") : undefined,
@@ -344,19 +345,16 @@ export function prepareSessionRowSelection(
     partitions: retained ? selected.partitions : undefined,
     configuredAgentIds: selected.configuredAgentIds,
     involvementKeys: selected.involvementKeys,
-    candidateKeys(identities: Iterable<string>) {
+    candidateKeys(identities: ReadonlySet<string>) {
       return new Set(
-        Array.from(identities).flatMap((sessionIdOrKey) =>
-          projection
-            .selectEntries(
-              { agentId: selectedScope.agentId, sessionIdOrKey, sortBy: null },
-              prepared?.metadataPrepared === true,
-              "running-candidate",
-            )
-            .map((row) =>
-              sentinel(row.key) && activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key,
-            ),
-        ),
+        projection
+          .selectEntries(
+            { agentId: selectedScope.agentId, candidateSessionIdsOrKeys: identities, sortBy: null },
+            prepared?.metadataPrepared === true,
+          )
+          .map((row) =>
+            sentinel(row.key) && activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key,
+          ),
       );
     },
     storePath: selectedScope.path,

@@ -337,10 +337,7 @@ function createResponsesTransportExecutor(config: {
           // SAFETY: Restoration preserves SDK parameters and adds validated reasoning input controls.
           params = (continuationClaim?.fullRequest ?? restoreRequest()) as typeof params;
         }
-        const observePrompt = createResponsesPromptEgressObserver(
-          responsesOptions,
-          context.systemPrompt,
-        );
+        const observePrompt = createResponsesPromptEgressObserver(responsesOptions, context);
         const requestStartedAt = Date.now();
         let started = false;
         const startStream = () => {

@@ -21,6 +21,11 @@ import {
   startWorktreeMaintenance,
 } from "./worktree-maintenance.js";
 
+// mock-isolation: Scheduler fixtures have no shared-state broker; CAS sweep behavior has worker tests.
+vi.mock("./worker-environments/local-workspace-gc.js", () => ({
+  sweepLocalWorkspaceManifests: vi.fn(async () => {}),
+}));
+
 function completedResult(): ManagedWorktreeGcResult {
   return { ...new WorktreeGcProgress().result, limitsSatisfied: true };
 }
