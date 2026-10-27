@@ -354,6 +354,30 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip browser ownership", 
     },
   );
 
+  it("yields to typing outside a hover tooltip before the next Escape", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const f = await fixture();
+    const input = element("textarea");
+    f.host.append(input);
+    input.focus();
+    let escapes = 0;
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        escapes += 1;
+      }
+    });
+    // A growing textarea can move an attachment action under a stationary pointer.
+    await changeVisibility(f, "show", () => {
+      f.trigger.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse" }));
+    });
+    await expectVisibility(f, true);
+    await changeVisibility(f, "hide", () => userEvent.keyboard("Keep typing"));
+    expect(input.value).toBe("Keep typing");
+    await expectVisibility(f, false);
+    await userEvent.keyboard("{Escape}");
+    expect(escapes).toBe(1);
+  });
+
   it("changes placement without reopening or moving focus", async () => {
     const f = await fixture();
     await openTooltip(f);
