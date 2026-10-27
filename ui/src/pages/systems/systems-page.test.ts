@@ -3,6 +3,7 @@ import type {
   BackupRunRecord,
   BackupStatusResult,
   EnvironmentSummary,
+  SessionPlacement,
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
 import { createRouter, definePage } from "@openclaw/uirouter";
@@ -20,10 +21,11 @@ import { setupSidebarTest } from "../../test-helpers/app-sidebar-setup.ts";
 import {
   createContext,
   createGatewayHarness,
-  createSessions,
+  createSessionsHarness,
 } from "../../test-helpers/app-sidebar.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid as cleanup, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { renderSidebar, renderSolid } from "./systems-route-view.tsx";
 import { createSystems, type Systems, type SystemsRouteData } from "./systems-state.ts";
@@ -98,7 +100,8 @@ function harness(
       ["operator.admin"],
     ),
   });
-  const context = createContext(gateway.gateway, createSessions("main", []));
+  const sessions = createSessionsHarness("main", []);
+  const context = createContext(gateway.gateway, sessions.sessions);
   const runtimeConfig = createRuntimeConfigCapability(gateway.gateway);
   runtimeConfigs.push(runtimeConfig);
   Object.assign(context, {
@@ -113,7 +116,7 @@ function harness(
     }),
   });
   const controller = createSystems(context);
-  return { controller, gateway, context, request };
+  return { controller, gateway, context, request, sessions };
 }
 
 function text(root: ParentNode, selector: string) {
@@ -760,6 +763,50 @@ describe("Systems workspace", () => {
     );
     expect(readings()[0]).toBe("3.00");
     expect(page.querySelector('.systems-metrics[data-stale="true"]')).not.toBeNull();
+  });
+
+  it("re-reads worker lifecycle when a session placement changes", async () => {
+    const cloud = (state: "attached" | "destroyed") =>
+      environment("worker:cloud", "worker", "Cloud worker", {
+        worker: {
+          providerId: "crabbox",
+          state,
+          ageMs: 1,
+          attachedSessionIds: [],
+          tunnelStatus: "stopped",
+        },
+      });
+    let environments = [host, cloud("attached")];
+    const { controller, request, sessions } = harness(async () => environments);
+    const active = createActiveSessionPlacement({ environmentId: "worker:cloud" });
+    const place = (placement: SessionPlacement) =>
+      sessions.publish({
+        result: {
+          ...sessions.sessions.state.result!,
+          sessions: [{ key: "agent:main:cloud", kind: "direct", updatedAt: 1, placement }],
+        },
+      });
+    place(active);
+    const { sidebar, unmount } = await mount(controller);
+    expect(sidebar.textContent).toContain("Cloud worker");
+    const reads = calls(request, "environments.list").length;
+
+    place({ ...active, updatedAtMs: 2 });
+    await waitForSolid(() => expect(controller.loading()).toBe(false));
+    expect(calls(request, "environments.list")).toHaveLength(reads);
+
+    environments = [host, cloud("destroyed")];
+    place({
+      state: "reclaimed",
+      generation: 1,
+      createdAtMs: 1,
+      updatedAtMs: 3,
+      stateChangedAtMs: 3,
+      environmentId: "worker:cloud",
+    });
+    await waitForSolid(() => expect(sidebar.textContent).not.toContain("Cloud worker"));
+    expect(calls(request, "environments.list")).toHaveLength(reads + 1);
+    unmount();
   });
 
   it("shares inventory, keeps a single view-only connection through presentation changes, and retains a removed selection", async () => {

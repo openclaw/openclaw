@@ -2,6 +2,7 @@ import type { BackupStatusResult, StorageLocationsProbeResult } from "@openclaw/
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
@@ -27,6 +28,19 @@ import {
 } from "./systems-telemetry.ts";
 
 const TELEMETRY_SAMPLE_LIMIT = 120;
+
+// Worker lifecycle is only reported by environments.list; placement changes signal it moved.
+function placementSignature(sessions: readonly GatewaySessionRow[]): string {
+  return JSON.stringify(
+    sessions
+      .flatMap(({ key, placement }) =>
+        placement && placement.state !== "local"
+          ? [[key, "environmentId" in placement ? placement.environmentId : null, placement.state]]
+          : [],
+      )
+      .toSorted(([a], [b]) => String(a).localeCompare(String(b))),
+  );
+}
 
 export type SystemsSortMode = "name" | "online-first" | "offline-first";
 export type SystemsStatusFilter = "all" | "online" | "offline";
@@ -469,6 +483,7 @@ export function createSystems(context: ApplicationContext) {
         return;
       }
       let location = context.router.getState().location;
+      let placements = placementSignature(context.sessions.state.result?.sessions ?? []);
       subscriptions = [
         context.router.subscribe((next) => {
           if (next.location !== location) {
@@ -521,6 +536,11 @@ export function createSystems(context: ApplicationContext) {
         context.sessions.subscribe(() => {
           projectRows();
           notify();
+          const next = placementSignature(context.sessions.state.result?.sessions ?? []);
+          if (next !== placements) {
+            placements = next;
+            void refresh();
+          }
         }),
       ];
       if (lifecycle.transition(context.gateway.snapshot)) {
