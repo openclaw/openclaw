@@ -591,33 +591,28 @@ it.each(["reset", "revocation", "retirement", "account publication"])(
 );
 
 it("never represents unknown, unavailable or non-selectable rows as available, and drops credential-bearing fields", () => {
+  const model = (
+    id: string,
+    name: string,
+    fields: Partial<ModelsListResult["models"][number]> = {},
+  ) => ({
+    id,
+    provider: "test",
+    name,
+    ...fields,
+  });
   const catalog = projectRequesterModelCatalog({
     models: [
-      {
-        id: "ready",
-        provider: "test",
-        name: "Ready",
+      model("ready", "Ready", {
         available: true,
         apiKeySupported: true,
         thinkingLevels: [{ id: "high", label: "High" }],
         supportsFastMode: true,
-      },
-      {
-        id: "no-fast",
-        provider: "test",
-        name: "No fast",
-        available: true,
-        supportsFastMode: false,
-      },
-      { id: "unknown", provider: "test", name: "Unknown" },
-      { id: "offline", provider: "test", name: "Offline", available: false },
-      {
-        id: "hidden",
-        provider: "test",
-        name: "Hidden",
-        available: true,
-        manualSelectionAllowed: false,
-      },
+      }),
+      model("no-fast", "No fast", { available: true, supportsFastMode: false }),
+      model("unknown", "Unknown"),
+      model("offline", "Offline", { available: false }),
+      model("hidden", "Hidden", { available: true, manualSelectionAllowed: false }),
     ],
     pendingProviders: ["test"],
     accountSelection: {

@@ -70,6 +70,16 @@ const abort = vi.fn();
 let handle: EmbeddedAgentQueueHandle;
 let operation: ReplyOperation;
 
+function activateHandle(next = handle, target = operation) {
+  setActiveEmbeddedRun(ref.sessionId, next, ref.sessionKey, undefined, undefined, target);
+}
+
+function expectHumanQuestionWait() {
+  expect(operation.watchdog.snapshot().waits).toContainEqual(
+    expect.objectContaining({ kind: "human_question" }),
+  );
+}
+
 beforeEach(async () => {
   handle = {
     runId: ref.runId,
@@ -148,8 +158,7 @@ beforeEach(async () => {
         },
       }),
     },
-    () =>
-      setActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey, undefined, undefined, operation),
+    () => activateHandle(),
   );
 });
 
@@ -234,9 +243,7 @@ it("keeps an accepted one-hour question alive through default diagnostic recover
     const id = await request();
     await vi.advanceTimersByTimeAsync(920_000);
     expect(recovery).not.toHaveBeenCalled();
-    expect(operation.watchdog.snapshot().waits).toContainEqual(
-      expect.objectContaining({ kind: "human_question" }),
-    );
+    expectHumanQuestionWait();
     expect(abort).not.toHaveBeenCalled();
     expect(manager.get(id)?.status).toBe("pending");
     const answer = manager.waitAnswer(id);
@@ -433,9 +440,7 @@ it("does not let operator questions or public diagnostic text suppress unrelated
 
 it("keeps explicit user abort authoritative during human input", async () => {
   const id = await request();
-  expect(operation.watchdog.snapshot().waits).toContainEqual(
-    expect.objectContaining({ kind: "human_question" }),
-  );
+  expectHumanQuestionWait();
   await expect(recover()).resolves.toMatchObject({ reason: "active_reply_work" });
   await expect(
     abortAndDrainEmbeddedAgentRun({ ...ref, reason: "user_abort" }),
@@ -497,7 +502,7 @@ it("does not transfer a pending question to a replacement handle with the same r
       operation.complete();
     }),
   };
-  setActiveEmbeddedRun(ref.sessionId, replacement, ref.sessionKey, undefined, undefined, operation);
+  activateHandle(replacement);
   await expect(recover()).resolves.toMatchObject({ status: "aborted" });
   expect(replacement.abort).toHaveBeenCalledTimes(1);
   expect(abort).not.toHaveBeenCalled();
@@ -557,9 +562,7 @@ it.each(["pending", "requester-inactive"] as const)(
     });
     expect(recovery).toHaveBeenCalledOnce();
     await request();
-    expect(operation.watchdog.snapshot().waits).toContainEqual(
-      expect.objectContaining({ kind: "human_question" }),
-    );
+    expectHumanQuestionWait();
     if (terminal === "requester-inactive") {
       // Worker placement or turn capability can close while the local run claim survives.
       requesterActive = false;
@@ -572,10 +575,7 @@ it.each(["pending", "requester-inactive"] as const)(
       expect(abort).toHaveBeenCalledOnce();
       return;
     }
-    expect(outcome).toMatchObject({
-      status: "skipped",
-      reason: "active_reply_work",
-    });
+    expect(outcome).toMatchObject({ status: "skipped", reason: "active_reply_work" });
     expect(abort).not.toHaveBeenCalled();
   },
 );
@@ -584,9 +584,7 @@ it("keeps the run protected until its last pending human question settles", asyn
   const first = await request();
   const second = await request(true, 3_600_000, "second-question");
   manager.cancel(first);
-  expect(operation.watchdog.snapshot().waits).toContainEqual(
-    expect.objectContaining({ kind: "human_question" }),
-  );
+  expectHumanQuestionWait();
   await expect(recover()).resolves.toMatchObject({ reason: "active_reply_work" });
   manager.cancel(second);
   await expect(recover()).resolves.toMatchObject({ status: "aborted" });
@@ -600,14 +598,7 @@ it("does not abort a replacement installed synchronously by question expiry", as
     if (operation === expiringOperation) {
       expiringOperation.complete();
       operation = createReplyOperation({ ...ref, resetTriggered: false });
-      setActiveEmbeddedRun(
-        ref.sessionId,
-        replacement,
-        ref.sessionKey,
-        undefined,
-        undefined,
-        operation,
-      );
+      activateHandle(replacement);
     }
   };
   onBroadcast = (event) => {
