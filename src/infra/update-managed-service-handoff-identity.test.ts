@@ -136,17 +136,14 @@ describe("managed handoff boot identities", () => {
     });
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
   });
-  it.each(["linux", "android"] as const)(
-    "reads %s boot IDs from Linux procfs",
-    async (platform) => {
-      const read = vi.spyOn(fs, "readFileSync").mockReturnValue(`${uuid}\n`);
-      await withMockedPlatform(platform, async () => {
-        expect(store.bootIdentity()).toEqual({ platform: "linux", identity: uuid });
-      });
-      expect(read).toHaveBeenCalledWith("/proc/sys/kernel/random/boot_id", "utf8");
-      expect(spawnSyncMock).not.toHaveBeenCalled();
-    },
-  );
+  it.each(["linux", "android"] as const)("reads %s boot IDs from procfs", async (platform) => {
+    const read = vi.spyOn(fs, "readFileSync").mockReturnValue(`${uuid}\n`);
+    await withMockedPlatform(platform, async () => {
+      expect(store.bootIdentity()).toEqual({ platform: "linux", identity: uuid });
+    });
+    expect(read).toHaveBeenCalledWith("/proc/sys/kernel/random/boot_id", "utf8");
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
   it("round-trips a strict FreeBSD foreground lease token", () => {
     const boot = { platform: "freebsd", identity: bootBytes.toString("hex") };
     const payload = {

@@ -134,29 +134,26 @@ it.each(["ESRCH", "EPERM", "success"])(
 );
 
 describe("process start times", () => {
-  it.each(["linux", "android"] as const)(
-    "parses %s /proc stat start times and rejects malformed variants",
-    async (platform) => {
-      mockProcReads({
-        [`/proc/${process.pid}/stat`]: procStat(process.pid, 98765),
-        "/proc/42/stat": procStat(42, 55555),
-        "/proc/43/stat": "43 node S malformed",
-        "/proc/44/stat": procStat(44, 66666, "My App (v2)"),
-        "/proc/45/stat": procStat(45, -1),
-        "/proc/46/stat": procStat(46, 1.5),
-      });
+  it.each(["linux", "android"] as const)("parses %s /proc stat start times", async (platform) => {
+    mockProcReads({
+      [`/proc/${process.pid}/stat`]: procStat(process.pid, 98765),
+      "/proc/42/stat": procStat(42, 55555),
+      "/proc/43/stat": "43 node S malformed",
+      "/proc/44/stat": procStat(44, 66666, "My App (v2)"),
+      "/proc/45/stat": procStat(45, -1),
+      "/proc/46/stat": procStat(46, 1.5),
+    });
 
-      await withMockedPlatform(platform, async () => {
-        expect(getProcessStartTime(process.pid)).toBe(98765);
-        expect(getFileLockProcessStartTime(42)).toBe(55555);
-        expect(getProcessInstanceStartTime(42)).toBe(55555);
-        expect(getProcessStartTime(43)).toBeNull();
-        expect(getProcessStartTime(44)).toBe(66666);
-        expect(getProcessStartTime(45)).toBeNull();
-        expect(getProcessStartTime(46)).toBeNull();
-      });
-    },
-  );
+    await withMockedPlatform(platform, async () => {
+      expect(getProcessStartTime(process.pid)).toBe(98765);
+      expect(getFileLockProcessStartTime(42)).toBe(55555);
+      expect(getProcessInstanceStartTime(42)).toBe(55555);
+      expect(getProcessStartTime(43)).toBeNull();
+      expect(getProcessStartTime(44)).toBe(66666);
+      expect(getProcessStartTime(45)).toBeNull();
+      expect(getProcessStartTime(46)).toBeNull();
+    });
+  });
 
   it("reads Windows file-lock identity through the canonical reader", () => {
     readWindowsProcessStartTimeSyncMock.mockReturnValue(1_752_000_000_123);
