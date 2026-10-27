@@ -47,6 +47,9 @@ async function appStatus(ticket: string, params: Partial<Parameters<typeof reque
 }
 const appCall = (name = "app-only") => ({ method: "tools/call", params: { name, arguments: {} } });
 const resourceRead = { method: "resources/read", params: { uri: "ui://demo/state" } };
+function issue(overrides: Partial<Parameters<typeof issueTicket>[0]> = {}) {
+  return issueTicket({ sessionKey: "agent:main:main", view, nowMs, ...overrides });
+}
 function mintTicket(
   sessionKey: string,
   changes: Partial<Parameters<typeof createMcpAppStandaloneTicket>[0]["view"]> = {},
@@ -80,11 +83,11 @@ describe("MCP App standalone host", () => {
   });
 
   it("mints an opaque reusable ticket and rejects tampering and expiry at HTTP admission", async () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+    const issued = issue();
     expect(issued.ticket).toMatch(/^v1\.[A-Za-z0-9_-]+\.\d+\.[A-Za-z0-9_-]+$/u);
     expect(issued.ticket).not.toContain("agent:main:main");
     expect(issued.expiresAtMs).toBe(nowMs + 2 * 60_000);
-    expect(issueTicket({ sessionKey: "agent:main:main", view, nowMs: nowMs + 1 })).toEqual(issued);
+    expect(issue({ nowMs: nowMs + 1 })).toEqual(issued);
     const invoke = (ticket: string, now = nowMs) => appStatus(ticket, { now });
     expect(await invoke(issued.ticket)).toBe(200);
     expect(mocks.peekSessionMcpRuntime).toHaveBeenCalledWith({ sessionKey: "agent:main:main" });
@@ -115,9 +118,7 @@ describe("MCP App standalone host", () => {
       const path = `/__openclaw__/mcp-app${authorized ? "/view" : ""}`;
       const originalHtml = view.html;
       view.html = "<!doctype html><p>caf\u00e9 \ud83e\udd9e</p>";
-      const ticket = authorized
-        ? issueTicket({ sessionKey: "agent:main:main", view, nowMs }).ticket
-        : undefined;
+      const ticket = authorized ? issue().ticket : undefined;
       const server = await startStandaloneHttp({ sandboxPort: 18_790 });
       try {
         const headers = ticket ? { Authorization: `MCP-App ${ticket}` } : undefined;
@@ -179,7 +180,7 @@ describe("MCP App standalone host", () => {
   });
 
   it("returns capabilities only for handlers installed on the live view", async () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+    const issued = issue();
     const route = "/__openclaw__/mcp-app/view";
     expect((await request({ url: route })).res.statusCode).toBe(401);
     expect((await request({ url: `${route}?ticket=${issued.ticket}` })).res.statusCode).toBe(401);
@@ -191,12 +192,7 @@ describe("MCP App standalone host", () => {
       serverTools: true,
       serverResources: true,
     });
-    const readOnly = issueTicket({
-      sessionKey: "agent:main:main",
-      view,
-      toolOperationsAuthorized: false,
-      nowMs,
-    });
+    const readOnly = issue({ toolOperationsAuthorized: false });
     const payload = await appRequest(readOnly.ticket);
     expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toHaveProperty("serverTools", false);
     expect(await appStatus(issued.ticket)).toBe(200);
@@ -469,7 +465,7 @@ describe("MCP App standalone host", () => {
   });
 
   it("executes only owning-server app-visible allowed tools and resources", async () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+    const issued = issue();
     const invoke = operations(issued.ticket);
 
     expect(await invoke(appCall())).toBe(200);
@@ -494,7 +490,7 @@ describe("MCP App standalone host", () => {
     });
     let grantActive = true;
     view.authorizeAppInteraction = vi.fn(async () => grantActive);
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+    const issued = issue();
 
     const pending = appRequest(issued.ticket, {
       method: "POST",
@@ -526,7 +522,7 @@ describe("MCP App standalone host", () => {
                 },
               },
       );
-      const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+      const issued = issue();
       const invoke = operations(issued.ticket);
       if (mode !== "unbound") {
         const payload = await appRequest(issued.ticket);
@@ -545,7 +541,7 @@ describe("MCP App standalone host", () => {
   );
 
   it("revalidates expiry and enforces request concurrency through the ticket boundary", async () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+    const issued = issue();
     const invoke = (now: number) =>
       appStatus(issued.ticket, {
         method: "POST",
@@ -574,7 +570,7 @@ describe("MCP App standalone host", () => {
   });
 
   it("is path-scoped and rejects malformed operations", async () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+    const issued = issue();
     expect((await request({ url: "/__openclaw__/mcp-app", method: "POST" })).res.statusCode).toBe(
       404,
     );
