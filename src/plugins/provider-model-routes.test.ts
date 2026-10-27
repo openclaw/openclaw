@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configForProviders, modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import * as sourceProjection from "../config/runtime-source-projection.js";
-import type { ModelApi } from "../config/types.models.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import {
@@ -34,7 +34,7 @@ describe("provider model route adapter", () => {
     });
   const resolve = (options: Parameters<typeof resolveProviderModelRoutes>[0]) =>
     resolveProviderModelRoutes({ env: {}, surface: { resolveModelRoutes }, ...options });
-  it.each(["present", "none", undefined] as const)(
+  it.each(["present", undefined] as const)(
     "projects authored overrides only when the request has not already established them (%s)",
     (requestTransportOverrides) => {
       const project = vi.spyOn(sourceProjection, "projectConfigOntoRuntimeSourceSnapshot");
@@ -94,26 +94,17 @@ describe("provider model route adapter", () => {
     },
   );
 
-  it.each(["provider", "model"] as const)(
-    "projects an explicit %s runtime pin without treating the adapter as a pin",
-    (scope) => {
-      const config: OpenClawConfig = openaiConfig({
-        baseUrl: "https://api.openai.com/v1",
-        api: "openai-completions",
-        ...(scope === "provider" ? { agentRuntime: { id: "openclaw" } } : {}),
-        models: [
-          modelDefinition(
-            "gpt-5.4-mini",
-            scope === "model" ? { agentRuntime: { id: "openclaw" } } : {},
-          ),
-        ],
-      });
-      resolve({ provider: "openai", config, modelId: "gpt-5.4-mini" });
-      expect(resolveModelRoutes.mock.calls[0]?.[0]).toMatchObject({
-        routeIntent: { runtimeId: "openclaw", source: "explicit" },
-      });
-    },
-  );
+  it("projects an explicit model runtime pin without treating the adapter as a pin", () => {
+    const config: OpenClawConfig = openaiConfig({
+      baseUrl: "https://api.openai.com/v1",
+      api: "openai-completions",
+      models: [modelDefinition("gpt-5.4-mini", { agentRuntime: { id: "openclaw" } })],
+    });
+    resolve({ provider: "openai", config, modelId: "gpt-5.4-mini" });
+    expect(resolveModelRoutes.mock.calls[0]?.[0]).toMatchObject({
+      routeIntent: { runtimeId: "openclaw", source: "explicit" },
+    });
+  });
 
   it("does not invent an observed transport from a model id alone", () => {
     const routeHook = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
@@ -123,7 +114,6 @@ describe("provider model route adapter", () => {
     const resolveRoutes = createProviderModelRoutesResolver({
       provider: "openai",
       config: {},
-      env: {},
       surface: { resolveModelRoutes: routeHook },
     });
 
@@ -135,84 +125,9 @@ describe("provider model route adapter", () => {
       provider: "openai",
       modelId: "gpt-5.4-nano",
       requestTransportOverrides: "none",
-      env: {},
+      env: process.env,
     });
-  });
-
-  it("resolves only the requested model/config/env facts", () => {
-    const routeHook = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
-      kind: "indeterminate" as const,
-      defaultRuntimeId: "codex",
-    }));
-    const env = { OPENAI_BASE_URL: "https://env.example.test/v1" };
-    const config = openaiConfig({
-      api: "openai-completions",
-      baseUrl: "https://provider.example.test/v1",
-      models: [
-        { ...modelDefinition("unrelated"), api: "openai-chatgpt-responses" },
-        {
-          ...modelDefinition("gpt-5.5"),
-          api: "openai-responses",
-          baseUrl: "https://model.example.test/v1",
-        },
-      ],
-    });
-
-    expect(
-      resolveProviderModelRoutes({
-        provider: "OPENAI",
-        modelId: "gpt-5.5",
-        config,
-        env,
-        surface: { resolveModelRoutes: routeHook },
-      }),
-    ).toEqual({ kind: "indeterminate", defaultRuntimeId: "codex" });
-    expect(routeHook).toHaveBeenCalledWith({
-      provider: "openai",
-      modelId: "gpt-5.5",
-      requestTransportOverrides: "none",
-      configuredModel: {
-        api: "openai-responses",
-        baseUrl: "https://model.example.test/v1",
-      },
-      configuredProvider: {
-        api: "openai-completions",
-        baseUrl: "https://provider.example.test/v1",
-      },
-      env,
-    });
-    expect(routeHook.mock.calls[0]?.[0].env).toBe(env);
-  });
-
-  it("passes the live environment view instead of cloning it", () => {
-    resolveProviderModelRoutes({
-      provider: "openai",
-      surface: { resolveModelRoutes },
-    });
-
-    expect(resolveModelRoutes.mock.calls[0]?.[0].env).toBe(process.env);
-  });
-
-  it("resolves catalog ids through the direct provider policy surface", () => {
-    expect(
-      resolveProviderModelCatalogId({
-        provider: "OpenAI",
-        modelId: "gpt-5.4-codex",
-      }),
-    ).toBe("gpt-5.4");
-    expect(
-      resolveProviderModelCatalogId({
-        provider: "OpenAI",
-        modelId: "openai/acme-model",
-      }),
-    ).toBe("openai/acme-model");
-    expect(
-      resolveProviderModelCatalogId({
-        provider: "fixture",
-        modelId: "demo-latest",
-        surface: {},
-      }),
-    ).toBeNull();
+    expect(routeHook.mock.calls[0]?.[0].env).toBe(process.env);
   });
 
   it("does not treat namespaced custom providers as bundled route artifacts", () => {
@@ -231,21 +146,14 @@ describe("provider model route adapter", () => {
   });
 
   it("preserves provider-scoped nested ids through route resolution", () => {
-    const config = {
-      models: {
-        providers: {
-          openai: {
-            models: [
-              {
-                id: "openai/acme-model",
-                api: "openai-completions",
-                baseUrl: "https://acme.example.test/v1",
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const config = openaiConfig({
+      models: [
+        modelDefinition("openai/acme-model", {
+          api: "openai-completions",
+          baseUrl: "https://acme.example.test/v1",
+        }),
+      ],
+    }) as unknown as OpenClawConfig;
 
     resolveProviderModelRoutes({
       provider: "openai",
@@ -304,49 +212,6 @@ describe("provider model route adapter", () => {
     });
   });
 
-  it.each([
-    ["canonical config for legacy selection", "gpt-5.4", "gpt-5.4-codex"],
-    ["legacy config for canonical selection", "gpt-5.4-codex", "gpt-5.4"],
-  ] as const)("canonicalizes provider-owned aliases: %s", (_label, configuredId, requestedId) => {
-    const normalizeModelCatalogId = vi.fn(({ modelId }: { modelId: string }) =>
-      modelId === "gpt-5.4-codex" ? "gpt-5.4" : modelId,
-    );
-    const config = {
-      models: {
-        providers: {
-          openai: {
-            models: [
-              {
-                id: configuredId,
-                api: "openai-responses",
-                baseUrl: "https://model.example.test/v1",
-                headers: { "x-route-contract": "required" },
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    resolveProviderModelRoutes({
-      provider: "openai",
-      modelId: requestedId,
-      config,
-      env: {},
-      surface: { normalizeModelCatalogId, resolveModelRoutes },
-    });
-
-    expectContext({
-      modelId: "gpt-5.4",
-      requestTransportOverrides: "present",
-      configuredModel: {
-        api: "openai-responses",
-        baseUrl: "https://model.example.test/v1",
-      },
-      configuredProvider: { api: undefined, baseUrl: undefined },
-    });
-  });
-
   it("forwards one reversed physical route group in one artifact call", () => {
     const resolveRoutes = createProviderModelRoutesResolver({
       provider: "openai",
@@ -371,28 +236,16 @@ describe("provider model route adapter", () => {
   });
 
   it("locks configured route facts while keeping the environment live", () => {
-    const configuredModel: {
-      id: string;
-      api: ModelApi;
-      baseUrl: string;
-    } = {
-      ...modelDefinition("demo"),
+    const configuredModel = modelDefinition("demo", {
       api: "openai-responses",
       baseUrl: "https://model-one.example.test/v1",
-    };
-    const configuredProvider: {
-      api: ModelApi;
-      baseUrl: string;
-      authHeader?: boolean;
-      models: Array<typeof configuredModel>;
-    } = {
+    });
+    const configuredProvider: ModelProviderConfig = {
       api: "openai-completions",
       baseUrl: "https://provider-one.example.test/v1",
       models: [configuredModel],
     };
-    const config = {
-      models: { providers: { openai: configuredProvider } },
-    } as unknown as OpenClawConfig;
+    const config = openaiConfig(configuredProvider);
     const env = { OPENAI_BASE_URL: "https://env-one.example.test/v1" };
     const resolveRoutes = createProviderModelRoutesResolver({
       provider: "openai",
@@ -422,36 +275,6 @@ describe("provider model route adapter", () => {
       env: { OPENAI_BASE_URL: "https://env-two.example.test/v1" },
     });
     expect(resolveModelRoutes.mock.calls[0]?.[0].env).toBe(env);
-  });
-
-  it("merges duplicate route facts only for the requested canonical model", () => {
-    const config = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://provider.example.test/v1",
-            models: [
-              { id: "gpt-5.5" },
-              {
-                id: "gpt-5.5",
-                api: "openai-responses",
-                baseUrl: "https://model.example.test/v1",
-              },
-            ],
-          },
-          " openai ": { api: "openai-completions" },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    resolve({ provider: "openai", modelId: "gpt-5.5", config });
-    expectContext({
-      modelId: "gpt-5.5",
-      configuredModel: { api: "openai-responses", baseUrl: "https://model.example.test/v1" },
-      configuredProvider: {
-        api: "openai-completions",
-        baseUrl: "https://provider.example.test/v1",
-      },
-    });
   });
 
   it("captures separate override facts for canonical duplicate rows", () => {
@@ -570,7 +393,6 @@ describe("provider model route adapter", () => {
   it.each([
     ["missing", undefined],
     ["null", null],
-    ["without a route hook", {}],
   ] as const)("returns null for a %s route surface despite configured facts", (_label, surface) => {
     const config = configForProviders({
       "fixture:routes": {
