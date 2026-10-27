@@ -49,8 +49,10 @@ try {
     $head = (Invoke-FixtureGit -C $repo rev-parse HEAD).Trim()
     $porcelain = (Invoke-FixtureGit -C $repo status --porcelain --untracked-files=all | Out-String).Trim()
     $rebasing = (Test-Path -LiteralPath (Join-Path $gitDir 'rebase-merge')) -or (Test-Path -LiteralPath (Join-Path $gitDir 'rebase-apply'))
-    $passed = $outcome -eq 'FIXTURE_BUILD_BOUNDARY' -and $head -eq $localHead -and -not $porcelain -and -not $rebasing
-    [pscustomobject]@{ passed = $passed; outcome = $outcome; head = $head; expectedHead = $localHead; status = $porcelain; rebasing = $rebasing } | ConvertTo-Json -Compress
+    # The reflog proves the pull reached the conflicted rebase and the installer aborted it.
+    $aborted = [bool](@(Invoke-FixtureGit -C $repo reflog -n 5 --format=%gs) -match '^rebase \(abort\)')
+    $passed = $outcome -eq 'FIXTURE_BUILD_BOUNDARY' -and $aborted -and $head -eq $localHead -and -not $porcelain -and -not $rebasing
+    [pscustomobject]@{ passed = $passed; outcome = $outcome; aborted = $aborted; head = $head; expectedHead = $localHead; status = $porcelain; rebasing = $rebasing } | ConvertTo-Json -Compress
     if (-not $passed) { exit 1 }
 } finally {
     foreach ($name in $savedEnvironment.Keys) {

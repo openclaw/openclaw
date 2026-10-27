@@ -1974,22 +1974,21 @@ function Get-GitCheckoutState {
 function Update-GitCheckoutBestEffort {
     param([string]$RepoDir)
 
+    # Windows PowerShell 5.1 and PowerShell 7.0/7.1 turn Git's stderr progress into
+    # terminating errors under Stop; judge Git only by its exit code.
+    $ErrorActionPreference = "Continue"
     $before = Get-GitCheckoutState -RepoDir $RepoDir
     if (-not $before -or $before.Rebasing) {
         throw "Could not record the Git checkout state before updating: $RepoDir. Inspect the checkout (git status), then retry."
     }
-    $pulled = $false
-    try {
-        git -C $RepoDir pull --rebase 2>$null | Out-Host
-        $pulled = ($LASTEXITCODE -eq 0)
-    } catch {}
-    if ($pulled) {
+    git -C $RepoDir pull --rebase 2>$null | Out-Host
+    if ($LASTEXITCODE -eq 0) {
         return
     }
 
     $after = Get-GitCheckoutState -RepoDir $RepoDir
     if ($after -and $after.Rebasing) {
-        try { git -C $RepoDir rebase --abort 2>$null | Out-Null } catch {}
+        git -C $RepoDir rebase --abort 2>$null | Out-Null
         $after = Get-GitCheckoutState -RepoDir $RepoDir
     }
     if ($after -and -not $after.Rebasing -and $after.Head -eq $before.Head -and $after.Status -eq $before.Status) {
