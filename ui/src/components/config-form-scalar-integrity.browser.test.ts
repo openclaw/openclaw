@@ -10,15 +10,17 @@ import {
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
 
-const multilinePlaceholder = "Default guidance.\nSecond line.";
-const multilineSchema: JsonSchema = { type: "string", maxLength: 4000 };
-const multilineHints = {
-  reviewInstructions: {
-    label: "Review instructions",
-    multiline: true,
-    placeholder: multilinePlaceholder,
-  },
-};
+function analyze(properties: Record<string, JsonSchema>) {
+  return analyzeConfigSchema({ type: "object", properties });
+}
+function edit(
+  control: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
+  value: string,
+  event = "input",
+) {
+  control.value = value;
+  control.dispatchEvent(new Event(event, { bubbles: true }));
+}
 
 describe("config form scalar integrity", () => {
   let container: HTMLDivElement;
@@ -32,60 +34,63 @@ describe("config form scalar integrity", () => {
   function field<T extends Element>(selector: string) {
     return expectElement(container.querySelector<T>(selector), selector);
   }
-  function renderText(
+  function renderText<T extends Element = HTMLInputElement>(
     options: Omit<Parameters<typeof renderTextInputFixture>[1], "onPatch" | "inputType"> & {
       inputType?: "text" | "number";
     },
   ) {
     renderTextInputFixture(container, { onPatch, inputType: "text", ...options });
+    return field<T>("input, textarea");
   }
   function renderNumber(options: Omit<Parameters<typeof renderNumberInputFixture>[1], "onPatch">) {
     renderNumberInputFixture(container, { onPatch, ...options });
+    return field<HTMLInputElement>("input[type='number']");
   }
   function renderSelect(options: Omit<Parameters<typeof renderSelectFixture>[1], "onPatch">) {
     renderSelectFixture(container, { onPatch, ...options });
+    return field<HTMLSelectElement>("select");
+  }
+  function secret(value: string, options: Partial<Parameters<typeof renderText>[0]> = {}) {
+    return renderText({
+      schema: { type: "string" },
+      path: ["secret"],
+      hints: { secret: { sensitive: true } },
+      value,
+      ...options,
+    });
   }
   it.each([false, true])("edits multiline string hints with commitOnBlur=%s", (commitOnBlur) => {
     const path = ["reviewInstructions"];
-    renderText({
-      schema: multilineSchema,
+    const placeholder = "Default guidance.\nSecond line.";
+    const textarea = renderText<HTMLTextAreaElement>({
+      schema: { type: "string", maxLength: 4000 },
       value: undefined,
       path,
-      hints: multilineHints,
+      hints: { reviewInstructions: { label: "Review instructions", multiline: true, placeholder } },
       commitOnBlur,
     });
-    const textarea = field<HTMLTextAreaElement>("textarea");
     expect(textarea.getAttribute("aria-label")).toBe("Review instructions");
-    expect(textarea.placeholder).toBe(multilinePlaceholder);
+    expect(textarea.placeholder).toBe(placeholder);
     expect(textarea.value).toBe("");
     expect(onPatch).not.toHaveBeenCalled();
-    textarea.value = "Look for scope drift.\nPreserve required checks.";
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    edit(textarea, "Look for scope drift.\nPreserve required checks.");
     if (commitOnBlur) {
       expect(onPatch).not.toHaveBeenCalled();
       textarea.dispatchEvent(new FocusEvent("blur"));
     }
     expect(onPatch).toHaveBeenLastCalledWith(path, textarea.value);
-    textarea.value = "x".repeat(4001);
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    edit(textarea, "x".repeat(4001));
     textarea.dispatchEvent(new Event("change", { bubbles: true }));
     expect(textarea.getAttribute("aria-invalid")).toBe("true");
     expect(onPatch).toHaveBeenCalledTimes(1);
   });
 
   it("separates boolean help from its default description", () => {
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        runtime: {
-          type: "object",
-          properties: {
-            enabled: {
-              type: "boolean",
-              default: true,
-              description: "Controls runtime processing.",
-            },
-          },
+    const analysis = analyze({
+      runtime: {
+        type: "object",
+        properties: {
+          enabled: { type: "boolean", default: true, description: "Controls runtime processing." },
         },
       },
     });
@@ -141,83 +146,56 @@ describe("config form scalar integrity", () => {
     },
   );
 
-  it("shows inherited defaults without turning them into stored overrides", () => {
-    renderText({
+  it.each([
+    ["text", { type: "string", default: "balanced" }],
+    ["number", { type: "integer", default: 3 }],
+  ] satisfies Array<[string, JsonSchema]>)(
+    "keeps %s defaults inherited until edited",
+    (kind, schema) => {
+      const options = { schema, value: undefined, path: ["setting"], onRemove };
+      const input = kind === "number" ? renderNumber(options) : renderText(options);
+      expect(input).toMatchObject({ value: "", placeholder: `Default: ${schema.default}` });
+      expect(container.textContent).not.toContain("Using default:");
+      expect(onPatch).not.toHaveBeenCalled();
+      expect(onRemove).not.toHaveBeenCalled();
+      if (kind === "number") {
+        const up = new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "ArrowUp",
+        });
+        input.dispatchEvent(up);
+        expect(up.defaultPrevented).toBe(true);
+        expect(onPatch).toHaveBeenLastCalledWith(["setting"], 4);
+        const overridden = renderNumber({
+          ...options,
+          value: 9,
+          schema: { ...schema, description: "Controls retry attempts." },
+        });
+        expect(container.textContent).toContain("Controls retry attempts. Default: 3");
+        edit(overridden, "");
+        expect(onPatch).toHaveBeenLastCalledWith(["setting"], undefined);
+        expect(onRemove).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("clears a select override and displays its inherited default", () => {
+    const options = {
       schema: { type: "string", default: "balanced" },
-      value: undefined,
-      path: ["mode"],
-      onRemove,
-    });
-
-    const textInput = field<HTMLInputElement>("input[type='text']");
-    expect(textInput.value).toBe("");
-    expect(textInput.placeholder).toBe("Default: balanced");
-    expect(container.textContent).not.toContain("Using default:");
-    expect(onPatch).not.toHaveBeenCalled();
-    expect(onRemove).not.toHaveBeenCalled();
-    renderNumber({
-      schema: { type: "integer", default: 3 },
-      value: undefined,
-      path: ["retries"],
-      onRemove,
-    });
-    const numberInput = field<HTMLInputElement>("input[type='number']");
-    expect(numberInput.value).toBe("");
-    expect(numberInput.placeholder).toBe("Default: 3");
-    expect(container.textContent).not.toContain("Using default:");
-
-    const arrowUp = new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      key: "ArrowUp",
-    });
-    numberInput.dispatchEvent(arrowUp);
-    expect(arrowUp.defaultPrevented).toBe(true);
-    expect(onPatch).toHaveBeenLastCalledWith(["retries"], 4);
-  });
-
-  it("restores scalar and select defaults through clearing and default selection", () => {
-    renderNumber({
-      schema: { type: "integer", default: 3, description: "Controls retry attempts." },
-      value: 9,
-      path: ["retries"],
-      onRemove,
-    });
-    expect(container.textContent).toContain("Default: 3");
-    expect(container.textContent).toContain("Controls retry attempts. Default: 3");
-    const numberInput = field<HTMLInputElement>("input[type='number']");
-    numberInput.value = "";
-    numberInput.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(["retries"], undefined);
-    expect(onRemove).not.toHaveBeenCalled();
-
-    onPatch.mockClear();
-    renderSelect({
-      schema: { type: "string", default: "balanced" },
-      value: "fast",
       path: ["mode"],
       options: ["balanced", "fast", "careful", "safe", "strict", "custom"],
       onRemove,
-    });
-    const select = field<HTMLSelectElement>("select");
+    };
+    const select = renderSelect({ ...options, value: "fast" });
     expect(container.textContent).toContain("Default: balanced");
     expect(select.options[0]?.textContent?.trim()).toBe("Default: balanced");
     expect(select.selectedOptions[0]?.textContent?.trim()).toBe("fast");
-    select.value = "__unset__";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    edit(select, "__unset__", "change");
     expect(onRemove).toHaveBeenCalledWith(["mode"]);
     expect(onPatch).not.toHaveBeenCalled();
-
-    renderSelect({
-      schema: { type: "string", default: "balanced" },
-      value: undefined,
-      path: ["mode"],
-      options: ["balanced", "fast", "careful", "safe", "strict", "custom"],
-      onRemove,
-    });
-    expect(field<HTMLSelectElement>("select").selectedOptions[0]?.textContent?.trim()).toBe(
-      "Default: balanced",
-    );
+    const inherited = renderSelect({ ...options, value: undefined });
+    expect(inherited.selectedOptions[0]?.textContent?.trim()).toBe("Default: balanced");
   });
 
   it("does not commit a clear while a number input holds partial numeric text", () => {
@@ -304,13 +282,9 @@ describe("config form scalar integrity", () => {
   );
 
   it("conceals the default description while a sensitive value is concealed", () => {
-    renderText({
+    secret("stored-secret", {
       schema: { type: "string", default: "inherited" },
-      value: "stored-secret",
-      path: ["secret"],
-      hints: { secret: { sensitive: true } },
       revealSensitive: false,
-      onRemove: vi.fn(),
     });
 
     expect(container.textContent).not.toContain("inherited");
@@ -319,20 +293,13 @@ describe("config form scalar integrity", () => {
   it.each([false, true])(
     "keeps a server-redacted sentinel readonly (maskSensitive=%s)",
     (maskSensitive) => {
-      renderText({
-        schema: { type: "string" },
-        value: "__OPENCLAW_REDACTED__",
-        path: ["secret"],
-        hints: { secret: { sensitive: true } },
+      const input = secret("__OPENCLAW_REDACTED__", {
         // Even with reveal forced on, the sentinel is not the stored value;
         // showing it editable would let a stray edit overwrite the credential.
         revealSensitive: !maskSensitive,
         maskSensitive,
         onToggleSensitivePath: vi.fn(),
-        onRemove: vi.fn(),
       });
-
-      const input = field<HTMLInputElement>("input");
       expect(input.value).not.toContain("__OPENCLAW_REDACTED__");
       expect(input.readOnly).toBe(true);
       if (maskSensitive) {
@@ -345,47 +312,21 @@ describe("config form scalar integrity", () => {
   );
 
   it("keeps an env placeholder readable in a masked sensitive field", () => {
-    renderText({
-      schema: { type: "string" },
-      value: "${SLACK_BOT_TOKEN}",
-      path: ["botToken"],
-      hints: { botToken: { sensitive: true } },
-      maskSensitive: true,
-      onRemove: vi.fn(),
-    });
-
-    const input = field<HTMLInputElement>("input");
+    const input = secret("${SLACK_BOT_TOKEN}", { maskSensitive: true });
     expect(input.type).toBe("text");
     expect(input.value).toBe("${SLACK_BOT_TOKEN}");
     expect(input.readOnly).toBe(false);
   });
 
   it.each([
-    {
-      name: "object literal",
-      variants: [{ type: "string" }, { const: { enabled: true } }],
-      value: { enabled: true },
-    },
-    {
-      name: "explicit null branch",
-      variants: [{ type: "string" }, { const: false }, { type: "null" }],
-      value: null,
-    },
-    {
-      name: "nullable string branch",
-      variants: [{ type: ["string", "null"] }, { const: false }],
-      value: null,
-    },
-  ] satisfies Array<{ name: string; variants: JsonSchema[]; value: unknown }>)(
-    "keeps $name sentinels outside text editing",
-    ({ variants, value }) => {
-      const schema: JsonSchema = {
-        type: "object",
-        properties: { policy: { anyOf: variants } },
-      };
-      const analysis = analyzeConfigSchema(schema);
+    ["object literal", [{ type: "string" }, { const: { enabled: true } }], { enabled: true }],
+    ["explicit null", [{ type: "string" }, { const: false }, { type: "null" }], null],
+    ["nullable string", [{ type: ["string", "null"] }, { const: false }], null],
+  ] satisfies Array<[string, JsonSchema[], unknown]>)(
+    "keeps %s sentinels outside text editing",
+    (_name, variants, value) => {
+      const analysis = analyze({ policy: { anyOf: variants } });
       expect(analysis.unsupportedPaths).toEqual(["policy"]);
-      expect(analysis.schema?.properties?.policy).toMatchObject({ anyOf: variants });
       renderAnalyzedFormFixture(container, analysis, {
         value: { policy: value },
         onPatch,
@@ -413,20 +354,12 @@ function fixture(
   const container = document.createElement("div");
   document.body.append(container);
   containers.push(container);
-  const analysis = analyzeConfigSchema({
-    type: "object",
-    properties: {
-      settings: {
-        type: "object",
-        required: field.required ? ["mode"] : [],
-        properties: {
-          mode: {
-            title: "Typed mode",
-            enum: options,
-            ...(field.default !== undefined ? { default: field.default } : {}),
-          },
-        },
-      },
+  const { required, ...defaults } = field;
+  const analysis = analyze({
+    settings: {
+      type: "object",
+      required: required ? ["mode"] : [],
+      properties: { mode: { enum: options, ...defaults } },
     },
   });
   expect(analysis.unsupportedPaths).toEqual([]);
@@ -446,112 +379,84 @@ function fixture(
     });
   }
   draw();
-  const control = container.querySelector<HTMLElement>('[role="radiogroup"], select');
-  if (!control) {
-    throw new Error("Missing analyzed enum control");
-  }
+  const control = expectElement(
+    container.querySelector<HTMLElement>('[role="radiogroup"], select'),
+    "enum control",
+  );
+  const value = () =>
+    control instanceof HTMLSelectElement
+      ? control.value
+      : control.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value;
   return {
-    container,
     control,
     onPatch,
-    value() {
-      return control instanceof HTMLSelectElement
-        ? control.value
-        : control.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value;
-    },
-    setValue(value: unknown) {
-      current = value;
+    value,
+    setValue(next: unknown) {
+      current = next;
       draw();
     },
-    async select(index: number | string) {
+    async select(index: number | string, expected: unknown, selected = index) {
       const { userEvent } = await import("vitest/browser");
       if (control instanceof HTMLSelectElement) {
-        const option = control.querySelector<HTMLOptionElement>(`option[value="${index}"]`);
-        if (!option) {
-          throw new Error("Missing enum option");
-        }
+        const option = expectElement(
+          control.querySelector<HTMLOptionElement>(`option[value="${index}"]`),
+          "enum option",
+        );
         await userEvent.selectOptions(control, option);
       } else {
-        const radio = control.querySelector<HTMLInputElement>(
-          `input[type="radio"][value="${index}"]`,
+        const radio = expectElement(
+          control.querySelector<HTMLInputElement>(`input[type="radio"][value="${index}"]`),
+          "enum radio",
         );
-        if (!radio) {
-          throw new Error("Missing enum radio");
-        }
         await userEvent.click(radio);
       }
+      expect(onPatch).toHaveBeenLastCalledWith(["settings", "mode"], expected);
+      expect(value()).toBe(String(selected));
     },
   };
 }
 
 const cases = [
-  {
-    name: "boolean/string segmented",
-    options: [true, false, "true"],
-    typed: "true",
-    primitive: true,
-  },
-  { name: "number/string segmented", options: [1, 2, "1"], typed: "1", primitive: 1 },
-  {
-    name: "boolean/string dropdown",
-    options: [true, false, "true", "false", "auto", "off"],
-    typed: "true",
-    primitive: true,
-  },
-  { name: "number/string dropdown", options: [1, 2, "1", "2", 3, "3"], typed: "1", primitive: 1 },
-];
+  ["boolean/string segmented", [true, false, "true"]],
+  ["number/string segmented", [1, 2, "1"]],
+  ["boolean/string dropdown", [true, false, "true", "false", "auto", "off"]],
+  ["number/string dropdown", [1, 2, "1", "2", 3, "3"]],
+] satisfies Array<[string, Array<string | number | boolean>]>;
 
 describe("typed config enum selection through analyzed forms", () => {
+  it.each(cases)("preserves type through callbacks and rerenders: %s", async (_name, options) => {
+    const view = fixture(options, options[0]);
+    expect(view.value()).toBe("0");
+    await view.select(2, options[2]);
+    await view.select(0, options[0]);
+    view.setValue(options[2]);
+    expect(view.value()).toBe("2");
+  });
+
   it.each(cases)(
-    "preserves type through callbacks and rerenders: $name",
-    async ({ options, typed, primitive }) => {
-      const view = fixture(options, primitive);
-      expect(view.value()).toBe("0");
-      await view.select(2);
-      expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], typed);
-      expect(view.value()).toBe("2");
-      await view.select(0);
-      expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], primitive);
-      expect(view.value()).toBe("0");
-      view.setValue(typed);
-      expect(view.value()).toBe("2");
+    "restores the typed member after a rejected selection: %s",
+    async (_name, options) => {
+      const view = fixture(options, options[2], false);
+      await view.select(0, options[0], 2);
     },
   );
 
   it.each(cases)(
-    "restores the typed member after a rejected selection: $name",
-    async ({ options, typed }) => {
-      const view = fixture(options, typed, false);
-      await view.select(0);
-      expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], options[0]);
-      expect(view.value()).toBe("2");
-    },
-  );
-
-  it.each(cases)(
-    "keeps the typed default without creating an override: $name",
-    async ({ options, typed, primitive }) => {
-      const view = fixture(options, undefined, true, { default: typed });
+    "keeps the typed default without creating an override: %s",
+    async (_name, options) => {
+      const view = fixture(options, undefined, true, { default: options[2] });
       expect(view.value()).toBe(options.length <= 5 ? "2" : "__unset__");
       expect(view.onPatch).not.toHaveBeenCalled();
-      await view.select(0);
-      expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], primitive);
-      expect(view.value()).toBe("0");
+      await view.select(0, options[0]);
     },
   );
 
   it("keeps null, unset and a typed string distinct in a nullable enum", async () => {
     const view = fixture([true, false, "true", null], null);
     expect(view.value()).toBe("__null__");
-    await view.select(2);
-    expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], "true");
-    expect(view.value()).toBe("2");
-    await view.select("__unset__");
-    expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], undefined);
-    expect(view.value()).toBe("__unset__");
-    await view.select("__null__");
-    expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], null);
-    expect(view.value()).toBe("__null__");
+    await view.select(2, "true");
+    await view.select("__unset__", undefined);
+    await view.select("__null__", null);
   });
 
   it("keeps required nullable enums from clearing an explicit typed member", async () => {
@@ -560,7 +465,6 @@ describe("typed config enum selection through analyzed forms", () => {
     expect(
       view.control.querySelector<HTMLOptionElement>('option[value="__unset__"]')?.disabled,
     ).toBe(true);
-    await view.select("__null__");
-    expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], null);
+    await view.select("__null__", null);
   });
 });

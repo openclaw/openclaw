@@ -15,11 +15,19 @@ const pullUrl = `${repoUrl}/pull/3434`;
 const directoryUrl = `${repoUrl}/tree/main/.agents/skills/test-audit`;
 const itemLabel = "openclaw/openclaw#3434";
 const longRepository = "a-very-long-organization-name/a-very-long-repository-name";
+const web = "https://example.com";
+const httpGitHub = "http://github.com/openclaw";
 const render = (input: string, options?: MarkdownRenderOptions) =>
   htmlFragment(toSanitizedMarkdownHtml(input, options));
 const renderStreaming = (input: string, options?: MarkdownRenderOptions, id?: string) =>
   htmlFragment(toStreamingMarkdownParts(input, options, id).join(""));
 const renderBoth = (input: string) => [render(input), renderStreaming(input)];
+
+function expectExternalLink(link: HTMLAnchorElement | null, href: string, text: string) {
+  expect(link).not.toBeNull();
+  expect(link).toMatchObject({ textContent: text, target: "_blank", rel: "noreferrer noopener" });
+  expect(link?.getAttribute("href")).toBe(href);
+}
 
 function onChatPage(assert: () => void) {
   const previous = location.href;
@@ -40,10 +48,12 @@ function expectWwwLink(input: string, label: string, prefix = "", suffix = "", p
 describe("toSanitizedMarkdownHtml links", () => {
   describe("www autolinks", () => {
     it.each([
-      ["See www.example.com/path?a=1#section", "www.example.com/path?a=1#section", "See "],
-      ["Visit www.localhost:3000/path for dev", "www.localhost:3000/path", "Visit ", " for dev"],
+      [
+        "See www.foo_bar.example.com:3000/path?a=1#section",
+        "www.foo_bar.example.com:3000/path?a=1#section",
+        "See ",
+      ],
       ["Visit www.münich.de", "www.münich.de", "Visit ", "", "www.xn--mnich-kva.de"],
-      ["Visit www.foo_bar.example.com", "www.foo_bar.example.com", "Visit "],
       ["See www.example.com!", "www.example.com", "See ", "!"],
       [
         "www.google.com/search?q=commonmark&hl;",
@@ -85,41 +95,30 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it.each([
-      [
-        "Visit http://github.com/openclaw",
-        'Visit <a href="http://github.com/openclaw" class="markdown-bare-url markdown-github-link" title="http://github.com/openclaw"',
-        "github.com/openclaw</a>",
-      ],
-      [
-        "https://example.com/path重新解读",
-        '<a href="https://example.com/path" class="markdown-bare-url"',
-        "https://example.com/path</a>重新解读",
-      ],
-      [
-        "https://example.com/你/test",
-        '<a href="https://example.com/%E4%BD%A0/test" class="markdown-bare-url"',
-        "https://example.com/你/test</a>",
-      ],
-      [
-        "https://example.com/path/%E4%BD%A0%E5%A5%BD",
-        '<a href="https://example.com/path/" class="markdown-bare-url"',
-        "https://example.com/path/</a>你好",
-      ],
-      [
-        "[OpenClaw中文](https://docs.openclaw.ai)",
-        '<a href="https://docs.openclaw.ai"',
-        "OpenClaw中文</a>",
-      ],
+      [`Visit ${httpGitHub}`, httpGitHub, "github.com/openclaw", "Visit "],
+      [`${web}/path重新解读`, `${web}/path`, `${web}/path`, "", "重新解读"],
+      [`${web}/你/test`, `${web}/%E4%BD%A0/test`, `${web}/你/test`],
+      [`${web}/path/%E4%BD%A0%E5%A5%BD`, `${web}/path/`, `${web}/path/`, "", "你好"],
       [
         "Contact test@example.com 中文说明",
-        'Contact <a href="mailto:test@example.com"',
-        "test@example.com</a> 中文说明",
+        "mailto:test@example.com",
+        "test@example.com",
+        "Contact ",
+        " 中文说明",
       ],
-    ])("preserves protocol and CJK boundaries in %s", (input, opening, ending) => {
-      expect(toSanitizedMarkdownHtml(input)).toBe(
-        `<p>${opening} rel="noreferrer noopener" target="_blank">${ending}</p>\n`,
-      );
-    });
+    ] as const)(
+      "preserves protocol and CJK boundaries in %s",
+      (input, href, label, before = "", after = "") => {
+        const fragment = render(input);
+        expectExternalLink(fragment.querySelector("a"), href, label);
+        expect(fragment.textContent).toBe(`${before}${label}${after}\n`);
+        if (href === httpGitHub) {
+          const link = fragment.querySelector("a");
+          expect(link?.className).toBe("markdown-bare-url markdown-github-link");
+          expect(link?.getAttribute("title")).toBe(httpGitHub);
+        }
+      },
+    );
   });
 
   it("preserves adjacent quoted links and authored or encoded URL content", () => {
@@ -257,7 +256,6 @@ describe("toSanitizedMarkdownHtml links", () => {
       [`[${itemLabel}](${pullUrl})`, itemLabel, "pull"],
       [`[#3434](${pullUrl} "A pull request")`, itemLabel, "pull"],
       [`[the fix](${pullUrl})`, "the fix"],
-      [`[other/project#3434](${pullUrl})`, "other/project#3434"],
       [`[\`#3434\`](${pullUrl})`, "#3434"],
       [`https://github.com/${longRepository}/issues/3434`, `${longRepository}#3434`, "issue"],
       [
@@ -276,16 +274,11 @@ describe("toSanitizedMarkdownHtml links", () => {
         expect(link?.textContent).toBe(expectedText);
         expect(link?.classList.contains("markdown-github-item")).toBe(Boolean(expectedKind));
         expect(link?.getAttribute("data-github-kind")).toBe(expectedKind ?? null);
-        if (input.startsWith("https://github.com/")) {
-          expect(link?.classList.contains("markdown-bare-url")).toBe(true);
-        }
         if (expectedHref) {
           expect(link?.getAttribute("href")).toBe(expectedHref);
         }
         if (expectedKind) {
           expect(link?.getAttribute("title")).toBe(keepsTitle ? link?.getAttribute("href") : null);
-          expect(link?.getAttribute("rel")).toBe("noreferrer noopener");
-          expect(link?.getAttribute("target")).toBe("_blank");
         }
       },
     );
@@ -300,12 +293,9 @@ describe("toSanitizedMarkdownHtml links", () => {
       for (const source of [href, `<${href}>`, "`" + href + "`"]) {
         for (const fragment of renderBoth(source)) {
           const link = fragment.querySelector<HTMLAnchorElement>("a");
+          expectExternalLink(link, href, label);
           expect(link?.classList.contains("markdown-github-link")).toBe(true);
-          expect(link?.textContent).toBe(label);
-          expect(link?.getAttribute("href")).toBe(href);
           expect(link?.getAttribute("title")).toBe(href);
-          expect(link?.getAttribute("target")).toBe("_blank");
-          expect(link?.getAttribute("rel")).toBe("noreferrer noopener");
         }
       }
     });

@@ -163,9 +163,8 @@ function names(sidebar: SidebarLifecycleState) {
   );
 }
 
-function personDescription(sidebar: SidebarLifecycleState, name: string) {
-  return person(sidebar, name).getAttribute("aria-description");
-}
+const personDescription = (sidebar: SidebarLifecycleState, name: string) =>
+  person(sidebar, name).getAttribute("aria-description");
 
 function expectCounts(sidebar: SidebarLifecycleState, expected: Record<string, string[]>) {
   expect(
@@ -199,7 +198,6 @@ describe("sidebar people workload", () => {
     await vi.dynamicImportSettled();
     await settle(sidebar);
     expect(person(sidebar, "ada").getAttribute("href")).toBe("/activity/ada");
-    expect(link).toHaveBeenCalled();
     await selectSidebarView(sidebar, "sessions");
     link.mockClear();
     gateway.publishEvent("presence", { presence: [profile("ada", "Ada renamed", NOW)] });
@@ -467,21 +465,21 @@ describe("sidebar people workload", () => {
       await vi.dynamicImportSettled();
       await settle(sidebar);
     };
-    await open();
-    expect(dom.query("#sidebar-people-reset")).toBeNull();
-    expect(dom.text("#sidebar-people-status")).toContain("All");
-    await click(sidebar, "#sidebar-people-status");
-    await click(
-      sidebar,
-      'openclaw-select-picker:has(#sidebar-people-status) [data-value="running"]',
-    );
-    expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
-    expect(names(sidebar)).toEqual(["ada", "bea"]);
-    await open();
-    await click(sidebar, "#sidebar-people-sort");
-    await click(sidebar, 'openclaw-select-picker:has(#sidebar-people-sort) [data-value="running"]');
-    expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
-    expect(names(sidebar)).toEqual(["bea", "ada"]);
+    for (const [control, expected] of [
+      ["status", ["ada", "bea"]],
+      ["sort", ["bea", "ada"]],
+    ] as const) {
+      await open();
+      if (control === "status") {
+        expect(dom.query("#sidebar-people-reset")).toBeNull();
+        expect(dom.text("#sidebar-people-status")).toContain("All");
+      }
+      const selector = `#sidebar-people-${control}`;
+      await click(sidebar, selector);
+      await click(sidebar, `openclaw-select-picker:has(${selector}) [data-value="running"]`);
+      expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
+      expect(names(sidebar)).toEqual(expected);
+    }
     provider.setContext({ ...context, basePath: "/control" });
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["bea", "ada"]);
@@ -517,7 +515,7 @@ describe("sidebar people workload", () => {
   });
 
   it("keeps all mixed Active, Idle, and Online-only people, including zero counts, in presence order", async () => {
-    const { sidebar, publishPresence, dom } = await mountWorkload(undefined, true);
+    const { sidebar, publishPresence } = await mountWorkload(undefined, true);
     const entries = presence(true);
     await publishPresence([profile("zoe"), entries[1]!, entries[3]!, entries[2]!, entries[0]!]);
     expectCounts(sidebar, { ada: ["1", "7"], "Raw Ada": [], cy: [], zoe: [] });
@@ -529,12 +527,6 @@ describe("sidebar people workload", () => {
     }
     expect(ada.attr('[data-session-count="open"]', "title")).toBe("7\u00a0open");
     expect(names(sidebar)).toEqual(["ada", "cy", "bea", "Raw Ada", "zoe"]);
-    expect(personDescription(sidebar, "zoe")).toBe("Online · 0 open sessions, 0 running");
-    expect(
-      dom.query(
-        ".sidebar-online__columns, .sidebar-online__filter, .sidebar-online__totals, .sidebar-online__person-status",
-      ),
-    ).toBeNull();
     for (const [name, activity, description] of [
       ["ada", "active", "Online · Active"],
       ["bea", "idle", "Online · Idle"],

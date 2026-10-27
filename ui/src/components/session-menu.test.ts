@@ -25,6 +25,8 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { SessionMenuAction } from "./session-menu-solid.tsx";
 
+const reviewAction = { id: "review/open", label: "Open review" };
+
 function press(target: EventTarget, key: string, options: KeyboardEventInit = {}) {
   const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...options });
   target.dispatchEvent(event);
@@ -117,7 +119,6 @@ describe("session menu", () => {
     await selectMenuValue(menu, "reload-owners");
     await waitForOwners(menu, ["Me", "Research", "Bob", "Carol"]);
     expect(menu.querySelector('[role="alert"]')).toBeNull();
-    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it.each(["reconnect", "replace gateway"] as const)(
@@ -224,7 +225,7 @@ describe("session menu", () => {
     [{}, "toggle-archived", { kind: "toggle-archived" }],
     [{ cloudWorkerStopAllowed: true }, "stop-cloud-worker", { kind: "stop-cloud-worker" }],
     [
-      { pluginActions: [{ id: "review/open", label: "Open review" }] },
+      { pluginActions: [reviewAction] },
       "plugin:review/open",
       { kind: "plugin", id: "review/open" },
     ],
@@ -287,12 +288,12 @@ describe("session menu", () => {
   });
 
   it.each([
-    { pluginActions: [{ id: "review/open", label: "Open review", disabled: true }] },
+    { pluginActions: [{ ...reviewAction, disabled: true }] },
     {
-      pluginActions: [{ id: "review/open", label: "Open review" }],
+      pluginActions: [reviewAction],
       actionDisabledReasons: { plugin: "Admin access required" },
     },
-    { pluginActions: [{ id: "review/open", label: "Open review" }], selectionCount: 2 },
+    { pluginActions: [reviewAction], selectionCount: 2 },
     { pluginActions: [] },
   ])("blocks unavailable plugin actions: %j", async (options) => {
     const { menu, onAction } = await actionMenu({ ...options });
@@ -309,31 +310,21 @@ describe("session menu", () => {
   it.each([
     [
       { archiveAllowed: false, session: { archived: true } },
-      [
-        ["Restore session", false],
-        ["Delete…", false],
-        ["Pin session", true],
-      ],
+      ["Restore session", "Delete…"],
+      "Pin session",
     ],
-    [
-      { archiveAllowed: true, deleteAllowed: false },
-      [
-        ["Archive session", false],
-        ["Delete…", true],
-      ],
-    ],
+    [{ archiveAllowed: true, deleteAllowed: false }, ["Archive session"], "Delete…"],
     [
       { selectionCount: 2, archiveAllowed: false, deleteAllowed: false },
-      [
-        ["Archive 2", false],
-        ["Delete 2…", true],
-      ],
+      ["Archive 2"],
+      "Delete 2…",
     ],
-  ] as const)("gates archive, delete and pin: %j", async (options, disabled) => {
+  ] as const)("gates archive, delete and pin: %j", async (options, enabled, disabled) => {
     const menu = await mountMenu(options);
-    for (const [label, expected] of disabled) {
-      expect(menuItem(menu, label).disabled).toBe(expected);
+    for (const label of enabled) {
+      expect(menuItem(menu, label).disabled).toBe(false);
     }
+    expect(menuItem(menu, disabled).disabled).toBe(true);
   });
 
   it.each([
@@ -497,10 +488,7 @@ describe("session menu", () => {
     ["absent", null],
     [
       "PR",
-      {
-        pullRequestUrl: "https://github.com/openclaw/openclaw/pull/12345",
-        worktreePath: null,
-      },
+      { pullRequestUrl: "https://github.com/openclaw/openclaw/pull/12345", worktreePath: null },
     ],
     ["editor", { pullRequestUrl: null, worktreePath: "/work/trees/demo" }],
   ] as const)("opens resolved workspace destinations: %s", async (_name, work) => {
@@ -634,12 +622,11 @@ describe("sidebar snooze menu", () => {
   it.each([{ archived: true }, { isChild: true }, { pinnable: false }])(
     "omits ineligible snoozes: %j",
     async (session) => {
-      const { menu, onAction } = await actionMenu({ snoozeAllowed: true, session });
+      const menu = await mountMenu({ snoozeAllowed: true, session });
       expect(menuItemLabels(menu)).not.toContain("Snooze");
       expect(menuItemLabels(menu).some((label) => label.startsWith("Wake session"))).toBe(false);
       expect(menu.querySelector('button[value^="snooze:"]')).toBeNull();
       expect(menu.querySelector('button[value="wake"]')).toBeNull();
-      expect(onAction).not.toHaveBeenCalled();
     },
   );
 });

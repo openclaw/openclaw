@@ -97,6 +97,8 @@ function startNarration(
     narration,
     input,
     emit: narration.handleEvent,
+    run: (event: string, payload: Record<string, unknown>) =>
+      narration.handleEvent(runEvent(event, payload)),
     line: (expected: string | undefined, key = runKey) =>
       expect(narration.read().lines.get(key)).toBe(expected),
   };
@@ -318,21 +320,18 @@ describe("createSidebarNarration", () => {
   });
 
   it("renders paced digests immediately and keeps the final line after queued tool activity", async () => {
-    const { narration, emit, line } = narrationFixture();
+    const { narration, emit, line, run } = narrationFixture();
     const tool = () =>
-      runEvent("session.tool", {
-        stream: "tool",
-        data: { phase: "start", name: "read" },
-      });
+      run("session.tool", { stream: "tool", data: { phase: "start", name: "read" } });
 
-    emit(tool());
+    tool();
     emit(digest("**Reading** source."));
     line("Reading source.");
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
     emit(digest("Earlier.\n\nChecks are **passing**."));
     line("Checks are passing.");
 
-    emit(tool());
+    tool();
     await vi.advanceTimersByTimeAsync(100);
     emit(digest("Final result."));
     emit(chatFrame({ state: "final", message: assistant("Final result.") }));
@@ -344,7 +343,7 @@ describe("createSidebarNarration", () => {
   });
 
   it("scopes digest replacements and retracts hidden content across run boundaries", () => {
-    const { narration, emit, line } = narrationFixture();
+    const { narration, emit, line, run } = narrationFixture();
 
     emit(digest("Visible progress."));
     emit(
@@ -363,20 +362,9 @@ describe("createSidebarNarration", () => {
       expect(narration.read().lines.has(runKey)).toBe(false);
     }
     emit(digest("Previous run result."));
-    emit(
-      runEvent("agent", {
-        runId: "run-2",
-        stream: "lifecycle",
-        data: { phase: "start" },
-      }),
-    );
+    run("agent", { runId: "run-2", stream: "lifecycle", data: { phase: "start" } });
     expect(narration.read().lines.has(runKey)).toBe(false);
-    emit(
-      runEvent("session.narration", {
-        runId: "run-2",
-        text: "New run progress.",
-      }),
-    );
+    run("session.narration", { runId: "run-2", text: "New run progress." });
     line("New run progress.");
     narration.disconnect();
   });
@@ -384,17 +372,15 @@ describe("createSidebarNarration", () => {
   it.each(["final", "aborted", "error"])(
     "settles queued full-owner narration immediately on %s",
     (state) => {
-      const { narration, emit, line } = narrationFixture();
+      const { narration, emit, line, run } = narrationFixture();
       emit(chatDelta("Initial work."));
       emit(chatDelta("Last visible result."));
       line("Initial work.");
 
-      emit(
-        runEvent("chat", {
-          state,
-          ...(state === "final" ? { message: assistant("Final corrected result.") } : {}),
-        }),
-      );
+      run("chat", {
+        state,
+        ...(state === "final" ? { message: assistant("Final corrected result.") } : {}),
+      });
       line(state === "final" ? "Final corrected result." : "Last visible result.");
       expect(vi.getTimerCount()).toBe(0);
       narration.disconnect();
@@ -448,19 +434,18 @@ describe("createSidebarNarration", () => {
       Promise.resolve({ key, agentId: options?.agentId ?? null }),
     );
     const source = sourceWith(subscribeMessages);
-    const { narration, input, emit, line } = startNarration(source, {
+    const { narration, input, run, line } = startNarration(source, {
       rows: [runningRow("global")],
     });
     await Promise.resolve();
-    emit(
-      gatewayEvent("chat", {
-        sessionKey: "global",
-        agentId: "main",
-        state: "delta",
-        deltaText: "Old agent work.",
-        message: assistant("Old agent work."),
-      }),
-    );
+    run("chat", {
+      sessionKey: "global",
+      runId: undefined,
+      agentId: "main",
+      state: "delta",
+      deltaText: "Old agent work.",
+      message: assistant("Old agent work."),
+    });
     line("Old agent work.", "global");
 
     narration.sync({ ...input, agentId: "research" });
