@@ -478,13 +478,8 @@ describe("usage archive identity", () => {
       cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0 },
     });
 
-    const lookup = {
-      agentId,
-      sessionId: expectDefined(sessions[0], "discovered archive").sessionId,
-      config,
-    };
-    const summary = await sessionSummary(lookup);
-    expect(summary).toMatchObject({ sessionFile, totalTokens: 17 });
+    const lookup = { agentId, sessionId, config };
+    expect(await sessionSummary(lookup)).toMatchObject({ sessionFile, totalTokens: 17 });
     expect(await loadSessionLogs(lookup)).toEqual([
       expect.objectContaining({ role: "user", content: "retained archive prompt" }),
       expect.objectContaining({ role: "assistant", tokens: 17 }),
@@ -493,8 +488,7 @@ describe("usage archive identity", () => {
       sessionId,
       points: [expect.objectContaining({ totalTokens: 17, cumulativeTokens: 17 })],
     });
-    const firstRows = readRollups(agentId);
-    expect(firstRows.map((row) => row.key)).toEqual([resolved.filePath]);
+    expect(readRollups(agentId).map((row) => row.key)).toEqual([resolved.filePath]);
   });
 
   it("excludes a compressed archive copy of SQLite only in its owning agent", async () => {
@@ -504,12 +498,9 @@ describe("usage archive identity", () => {
     const mainArchive = await writeArchive(manager);
     const workerArchive = await writeArchive(manager, { agentId: "worker" });
     const readFile = vi.spyOn(fsSync, "readFileSync");
-    try {
-      await listTranscripts("main");
-      expect(readFile.mock.calls.filter(([file]) => file === mainArchive)).toEqual([]);
-    } finally {
-      readFile.mockRestore();
-    }
+    await listTranscripts("main");
+    expect(readFile.mock.calls.filter(([file]) => file === mainArchive)).toEqual([]);
+    readFile.mockRestore();
 
     const sessions = await discoverAllSessions({ agentId: "main" });
     expect.soft(sessions).toEqual([
