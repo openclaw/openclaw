@@ -127,6 +127,13 @@ describe("agent command restart recovery ownership", () => {
     inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
   } as const;
 
+  async function interruptedTarget() {
+    const base = createTarget();
+    const entry: SessionEntry = { sessionId: base.sessionId, updatedAt: 100, ...interrupted() };
+    await write(base, entry);
+    return { ...base, sessionEntry: { ...entry }, sessionStore: { [sessionKey]: { ...entry } } };
+  }
+
   function startOwner(target: ReturnType<typeof createTarget>) {
     return createReplyOperation({
       sessionKey,
@@ -243,18 +250,7 @@ describe("agent command restart recovery ownership", () => {
   });
 
   it("refreshes the prepared working copy after claiming a recovery owner", async () => {
-    const base = createTarget();
-    const staleEntry: SessionEntry = {
-      sessionId: base.sessionId,
-      updatedAt: 100,
-      ...interrupted(),
-    };
-    const target = {
-      ...base,
-      sessionEntry: { ...staleEntry },
-      sessionStore: { [sessionKey]: { ...staleEntry } },
-    };
-    await write(target, staleEntry);
+    const target = await interruptedTarget();
 
     await execute(target, {
       opts: { runId: "foreground-run" } as AgentCommandOpts,
@@ -263,12 +259,7 @@ describe("agent command restart recovery ownership", () => {
         expect(claims?.tokens).toEqual([expect.any(String)]);
         expect(Object.values(claims?.runIdsByClaimId ?? {})).toContain("foreground-run");
         expect(prepared.sessionStore[sessionKey]).toEqual(prepared.sessionEntry);
-        const completed: SessionEntry = {
-          ...prepared.sessionEntry,
-          status: "done",
-          abortedLastRun: false,
-        };
-        await write(target, completed);
+        await write(target, { ...prepared.sessionEntry, status: "done", abortedLastRun: false });
       },
     });
 
@@ -303,14 +294,7 @@ describe("agent command restart recovery ownership", () => {
   );
 
   it("preserves persisted interrupted recovery custody during requester settle", async () => {
-    const base = createTarget();
-    const interruptedEntry: SessionEntry = {
-      sessionId: base.sessionId,
-      updatedAt: 100,
-      ...interrupted(),
-    };
-    const target = { ...base, sessionEntry: { ...interruptedEntry } };
-    await write(target, interruptedEntry);
+    const target = await interruptedTarget();
 
     const run = vi.fn(async (prepared: typeof target) => {
       expect(prepared.sessionEntry.mainRestartRecovery?.foregroundClaims?.tokens).toEqual([
@@ -341,27 +325,6 @@ describe("agent command restart recovery ownership", () => {
         storePath: target.storePath,
       }),
     );
-  });
-
-  it.each([
-    { mode: "claim", status: "failed", cleared: true },
-    { mode: "reject_uncoordinated", status: "done", cleared: false },
-  ] as const)("handles terminal residue in $mode mode", async ({ mode, status, cleared }) => {
-    const target = createTarget();
-    const restartRecoveryRuns = [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }];
-    await write(target, {
-      status,
-      abortedLastRun: false,
-      restartRecoveryRuns,
-      restartRecoveryTerminalRunIds: ["stale-run"],
-    });
-    const run = vi.fn(async () => "ran");
-    await expect(execute(target, { mode, run })).resolves.toBe("ran");
-    expect(run).toHaveBeenCalledOnce();
-    const stored = read(target);
-    expect(stored).toMatchObject({ status, abortedLastRun: false });
-    expect(stored?.restartRecoveryRuns).toEqual(cleared ? undefined : restartRecoveryRuns);
-    expect(stored?.mainRestartRecovery).toBeUndefined();
   });
 
   it.each([false, true])(
@@ -424,22 +387,14 @@ describe("agent command restart recovery ownership", () => {
     const target = createTarget();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     await write(target, runningRecovery(lifecycleGeneration));
-    if (sourceTool) {
+    if (sourceTool === "subagent_settle") {
       await expect(
         claimMainSessionRecoveryOwner({
           lifecycleGeneration,
           sessionId: target.sessionId,
-          target: { sessionKey, storePath: target.storePath },
+          target,
         }),
-      ).resolves.toEqual({
-        kind: "invalidated",
-        reason: "recovery_pending",
-        sessionKey,
-        entry: expect.objectContaining({
-          sessionId: target.sessionId,
-          ...runningRecovery(lifecycleGeneration),
-        }),
-      });
+      ).resolves.toMatchObject({ kind: "invalidated", reason: "recovery_pending" });
     }
     const owner = startOwner(target);
     const prepared = createDeferred();

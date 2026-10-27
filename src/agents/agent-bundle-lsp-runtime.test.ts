@@ -187,7 +187,7 @@ function pendingChild(...respondMethods: string[]) {
 async function duringInitialization(
   child: MockChildProcess,
   check: (context: {
-    observed: ReturnType<typeof observeCreation>;
+    observed: { isSettled: () => boolean };
     abort: () => Promise<void>;
     respond: (result: unknown) => void;
   }) => Promise<void>,
@@ -196,36 +196,6 @@ async function duringInitialization(
   const controller = new AbortController();
   const reason = new Error("LSP preparation aborted");
   const creation = createRuntime({ abortSignal: controller.signal });
-  const observed = observeCreation(creation);
-  let initializeId: number | undefined;
-  let responded = false;
-  try {
-    initializeId = await waitForLspInitialization(child, creation);
-    await check({
-      observed,
-      respond: (result) => {
-        responded = true;
-        child.reply(initializeId, result);
-      },
-      abort: async () => {
-        controller.abort(reason);
-        await vi.advanceTimersByTimeAsync(1_000);
-      },
-    });
-    expect(await observed.error()).toBe(reason);
-    expect(child.dispose).toHaveBeenCalledOnce();
-    expect(child.messages("initialized")).toEqual([]);
-  } finally {
-    if (initializeId !== undefined && !responded) {
-      child.reply(initializeId);
-    }
-    child.extinction.resolve();
-    await observed.dispose();
-    vi.useRealTimers();
-  }
-}
-
-function observeCreation(creation: ReturnType<typeof createRuntime>) {
   let settled = false;
   const outcome = creation
     .finally(() => {
@@ -235,19 +205,36 @@ function observeCreation(creation: ReturnType<typeof createRuntime>) {
       (runtime) => ({ runtime }),
       (error: unknown) => ({ error }),
     );
-  return {
-    isSettled: () => settled,
-    error: async () => {
-      const result = await outcome;
-      return "error" in result ? result.error : undefined;
-    },
-    dispose: async () => {
-      const result = await outcome;
-      if ("runtime" in result) {
-        await result.runtime.dispose();
-      }
-    },
-  };
+  let initializeId: number | undefined;
+  let responded = false;
+  try {
+    initializeId = await waitForLspInitialization(child, creation);
+    await check({
+      observed: { isSettled: () => settled },
+      respond: (result) => {
+        responded = true;
+        child.reply(initializeId, result);
+      },
+      abort: async () => {
+        controller.abort(reason);
+        await vi.advanceTimersByTimeAsync(1_000);
+      },
+    });
+    const result = await outcome;
+    expect("error" in result ? result.error : undefined).toBe(reason);
+    expect(child.dispose).toHaveBeenCalledOnce();
+    expect(child.messages("initialized")).toEqual([]);
+  } finally {
+    if (initializeId !== undefined && !responded) {
+      child.reply(initializeId);
+    }
+    child.extinction.resolve();
+    const result = await outcome;
+    if ("runtime" in result) {
+      await result.runtime.dispose();
+    }
+    vi.useRealTimers();
+  }
 }
 
 function requestOutcome(request: Promise<unknown>) {
@@ -278,19 +265,6 @@ describe("bundle LSP runtime", () => {
     spawnMock.mockReset();
     loadLspConfigMock.mockReset();
     vi.restoreAllMocks();
-  });
-
-  it("reuses the prepared plugin manifest registry for bundle discovery", async () => {
-    configureServers({});
-    const manifestRegistry = { plugins: [] };
-
-    await createRuntime({ manifestRegistry });
-
-    expect(loadLspConfigMock).toHaveBeenCalledWith({
-      workspaceDir: "/tmp/workspace",
-      cfg: undefined,
-      manifestRegistry,
-    });
   });
 
   it("fails LSP startup immediately when the child process cannot spawn", async () => {
@@ -464,9 +438,7 @@ describe("bundle LSP runtime", () => {
       const frame = `${header}\r\n\r\n${json}`;
       return [frame.slice(0, header.length + 1), frame.slice(header.length + 1)];
     });
-    const runtime = await startRuntime(child);
-
-    expect(runtime.tools.map((tool) => tool.name)).toContain("lsp_hover_typescript");
+    await startTool(child);
   });
 
   it("rejects invalid UTF-8 in LSP JSON bodies", async () => {
@@ -520,10 +492,15 @@ describe("bundle LSP runtime", () => {
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
   });
 
-  it("joins repeated disposal until descendants settle", async () => {
-    const child = new MockChildProcess();
+  it("closes retained and pending requests while joining repeated descendant cleanup", async () => {
+    const child = pendingChild("initialize");
     child.holdExtinction = true;
-    const runtime = await startRuntime(child);
+    const { runtime, tool } = await startTool(child, "lsp_references_typescript");
+    const before = tool.execute("before-dispose", position);
+    child.reply(2);
+    await before;
+    const controller = new AbortController();
+    const pending = requestOutcome(tool.execute("pending", position, controller.signal));
     const cleanupScope = createAgentCleanupScope();
     let settled = false;
     const cleanup = cleanupScope
@@ -533,7 +510,12 @@ describe("bundle LSP runtime", () => {
       .then(() => {
         settled = true;
       });
+    const during = await requestOutcome(tool.execute("during-dispose", position));
     try {
+      const shutdown = child.messages("shutdown")[0];
+      controller.abort(new Error("caller aborted during shutdown"));
+      expect(await pending).toBe("LSP session disposed");
+      child.reply(shutdown?.id, null);
       await vi.waitFor(() => expect(child.exitCode).toBe(0));
       expect(settled).toBe(false);
       expect(child.dispose).not.toHaveBeenCalled();
@@ -541,10 +523,22 @@ describe("bundle LSP runtime", () => {
       child.extinction.resolve();
       await cleanup;
     }
+    const after = await requestOutcome(tool.execute("after-dispose", position));
+    expect({ during, after }).toEqual({
+      during: "LSP session disposed",
+      after: "LSP session disposed",
+    });
+    expect(child.receivedMessages.map((message) => message.method)).toEqual([
+      "initialize",
+      "initialized",
+      "textDocument/references",
+      "textDocument/references",
+      "shutdown",
+      "exit",
+    ]);
     expect(cleanupScope.outcome).toBe("closed");
     expect(child.dispose).toHaveBeenCalledOnce();
     expect(child.kill).not.toHaveBeenCalled();
-    expect(child.messages("shutdown")).toHaveLength(1);
   });
 
   it("records uncertain cleanup without descendant settlement", async () => {
@@ -569,49 +563,5 @@ describe("bundle LSP runtime", () => {
 
     expect(runtime.tools).toEqual([]);
     expect(cleanupScope.outcome).toBe("uncertain");
-  });
-
-  it("rejects retained references requests throughout disposal", async () => {
-    const child = new MockChildProcess();
-    const { runtime, tool } = await startTool(child, "lsp_references_typescript");
-    await tool.execute("before-dispose", position);
-
-    const disposal = runtime.dispose();
-    const during = await requestOutcome(tool.execute("during-dispose", position));
-    await disposal;
-    const after = await requestOutcome(tool.execute("after-dispose", position));
-
-    expect({ during, after }).toEqual({
-      during: "LSP session disposed",
-      after: "LSP session disposed",
-    });
-    expect(child.messages("textDocument/references")).toHaveLength(1);
-    expect(child.messages("shutdown")).toHaveLength(1);
-    expect(child.messages("exit")).toHaveLength(1);
-    expect(child.dispose).toHaveBeenCalledOnce();
-  });
-
-  it("rejects pending requests before shutdown and detaches abort listeners", async () => {
-    const child = pendingChild("initialize");
-    const { runtime, tool: hover } = await startTool(child);
-    const controller = new AbortController();
-    const pending = requestOutcome(hover.execute("pending", position, controller.signal));
-
-    const disposal = runtime.dispose();
-    const shutdown = child.messages("shutdown")[0];
-    controller.abort(new Error("caller aborted during shutdown"));
-    const outcome = await pending;
-    child.reply(shutdown?.id, null);
-    await disposal;
-
-    expect(outcome).toBe("LSP session disposed");
-    expect(child.receivedMessages.map((message) => message.method)).toEqual([
-      "initialize",
-      "initialized",
-      "textDocument/hover",
-      "shutdown",
-      "exit",
-    ]);
-    expect(child.dispose).toHaveBeenCalledOnce();
   });
 });

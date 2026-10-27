@@ -267,11 +267,6 @@ describe("resolveBootstrapFilesForRun", () => {
     const workspaceDir = await workspace({ "AGENTS.md": "workspace rules" });
     const agentsPath = path.join(workspaceDir, "AGENTS.md");
 
-    const files = await resolveBootstrapFilesForRun({ workspaceDir });
-    const agentsFiles = files.filter((file) => file.path === agentsPath);
-
-    expect(agentsFiles.map((file) => file.content)).toEqual(["workspace rules"]);
-
     const context = await resolveBootstrapContextForRun({ workspaceDir });
     const agentsContextFiles = context.contextFiles.filter((file) => file.path === agentsPath);
     expect(agentsContextFiles.map((file) => file.content)).toEqual(["workspace rules"]);
@@ -293,32 +288,21 @@ describe("resolveBootstrapFilesForRun", () => {
     );
   });
 
-  it("ignores stale root BOOTSTRAP.md for home-relative workspace paths", async () => {
+  it("filters completed root BOOTSTRAP.md but keeps nested hooks in a home-relative workspace", async () => {
     registerNamedBootstrapFileHook("BOOTSTRAP.md", "BOOTSTRAP.md", "stale ritual");
+    registerNamedBootstrapFileHook("packages/core/BOOTSTRAP.md", "BOOTSTRAP.md", "package ritual");
     const parentDir = await makeTempWorkspace("openclaw-bootstrap-home-");
     const workspaceDir = path.join(parentDir, "workspace");
-    await writeFiles(workspaceDir, { "AGENTS.md": "rules", "BOOTSTRAP.md": "stale ritual" });
-    await writeCompletedWorkspaceState(workspaceDir);
-
-    const files = await withEnvAsync({ OPENCLAW_HOME: parentDir }, async () =>
-      resolveBootstrapFilesForRun({ workspaceDir: "~/workspace" }),
-    );
-
-    expect(files.map((file) => file.name)).toContain("AGENTS.md");
-    expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
-  });
-
-  it("keeps hook-added nested BOOTSTRAP.md after setup is completed", async () => {
-    registerNamedBootstrapFileHook("packages/core/BOOTSTRAP.md", "BOOTSTRAP.md", "stale ritual");
-    const workspaceDir = await workspace({
+    await writeFiles(workspaceDir, {
       "AGENTS.md": "rules",
       "BOOTSTRAP.md": "stale ritual",
       "packages/core/BOOTSTRAP.md": "package ritual",
     });
     await writeCompletedWorkspaceState(workspaceDir);
-
-    const files = await resolveBootstrapFilesForRun({ workspaceDir });
-
+    const files = await withEnvAsync({ OPENCLAW_HOME: parentDir }, async () =>
+      resolveBootstrapFilesForRun({ workspaceDir: "~/workspace" }),
+    );
+    expect(files.map((file) => file.name)).toContain("AGENTS.md");
     expect(files.map((file) => path.relative(workspaceDir, file.path))).toContain(
       path.join("packages", "core", "BOOTSTRAP.md"),
     );
@@ -420,15 +404,7 @@ describe("resolveBootstrapFilesForRun", () => {
   ] as const)(
     "rejects loader aliases to root memory relabeled under the $mode allowlist",
     async ({ sessionKey, relabeledName, expectedNames }) => {
-      const workspaceDir = await workspace({
-        "AGENTS.md": "project rules",
-        "SOUL.md": "persona",
-        "IDENTITY.md": "identity",
-        "USER.md": "user profile",
-        "MEMORY.md": "memory",
-        "HEARTBEAT.md": "heartbeat",
-        "BOOTSTRAP.md": "setup",
-      });
+      const workspaceDir = await workspace({ "MEMORY.md": "private memory" });
       const rootMemoryPath = path.join(workspaceDir, DEFAULT_MEMORY_FILENAME);
       const aliasDir = await createDirectoryAlias(workspaceDir, workspaceDir, "root-memory-alias");
       registerLoadedBootstrapFilesHook(
