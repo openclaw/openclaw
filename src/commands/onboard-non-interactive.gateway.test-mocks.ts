@@ -238,7 +238,6 @@ export {
   gatewayServiceMock,
   healthCommandMock,
   installGatewayDaemonNonInteractiveMock,
-  gatewayOnboardConfigSnapshotMock,
   readLastGatewayErrorLineMock,
   waitForGatewayReachableMock,
 };
