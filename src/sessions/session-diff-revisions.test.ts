@@ -114,14 +114,19 @@ describe("branch base resolution", () => {
     ).resolves.toEqual({ base: `${refs[0]}-base`, baseRef });
   });
 
-  it.each([undefined, "main", "master"])(
-    "keeps HEAD for branch %s even when remote defaults exist",
-    async (branch) => {
+  it.each([
+    [undefined, true],
+    ["main", true],
+    ["master", true],
+    ["feature", false],
+  ] as const)(
+    "keeps HEAD for branch %s (remote defaults: %s)",
+    async (branch, hasRemoteDefaults) => {
       const gitOut = async (_root: string, args: string[]) => {
         if (args[0] === "symbolic-ref") {
           return null;
         }
-        if (args[0] === "merge-base" && args[1]?.startsWith("origin/")) {
+        if (hasRemoteDefaults && args[0] === "merge-base" && args[1]?.startsWith("origin/")) {
           return "remote-base\n";
         }
         return null;
@@ -135,17 +140,6 @@ describe("branch base resolution", () => {
       });
     },
   );
-
-  it("keeps HEAD when no default ref resolves", async () => {
-    await expect(
-      resolveSessionDiffBase({
-        branch: "feature",
-        gitOut: async () => null,
-        head: "captured-head",
-        root: "/repo",
-      }),
-    ).resolves.toEqual({ base: "captured-head", baseRef: "HEAD" });
-  });
 });
 
 describe("captured session history", () => {
