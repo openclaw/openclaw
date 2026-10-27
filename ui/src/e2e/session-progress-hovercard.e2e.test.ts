@@ -6,7 +6,10 @@ import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
 } from "../../../src/gateway/control-ui-contract.js";
-import { reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  reconnectMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   captureUiProof,
@@ -864,6 +867,65 @@ suite.define(() => {
         expect(await card.evaluate((element) => element.outerHTML)).not.toContain(
           "e2e-device-token",
         );
+      },
+    );
+  });
+
+  it("dismisses a failed session from its hovercard and clears the sidebar alert", async () => {
+    const now = Date.now();
+    const homeKey = "agent:main:dismiss-home";
+    const failedKey = "agent:main:dismiss-failed";
+    await suite.withPage(
+      { hasTouch: false, ...createControlUiE2eContextOptions() },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "progressCard.get"],
+          methodResponses: { "progressCard.get": { card: null } },
+          sessionKey: homeKey,
+          sessions: [
+            { key: homeKey, kind: "direct", label: "Release planning", updatedAt: now },
+            {
+              key: failedKey,
+              sessionId: "dismiss-failed-session",
+              kind: "direct",
+              label: "Nightly audit",
+              status: "failed",
+              lastRunError: "You've hit your session limit",
+              endedAt: now - 60_000,
+              updatedAt: now - 60_000,
+            },
+          ],
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, homeKey));
+        const row = page.locator(`.sidebar-recent-session[data-session-key="${failedKey}"]`);
+        await row.waitFor({ state: "visible" });
+        await expect
+          .poll(() => row.evaluate((element) => element.className))
+          .toContain("sidebar-recent-session--attention-danger");
+        await row.hover();
+        const card = page.locator(".session-progress-hovercard");
+        const error = card.locator(".session-hovercard__error");
+        await error.waitFor({ state: "visible" });
+        expect(await error.textContent()).toContain("You've hit your session limit");
+        await captureProof(page, "sidebar-row-hovercard-failure-before-dismiss.png");
+
+        await error.getByRole("button", { name: "Dismiss", exact: true }).click();
+        await expect
+          .poll(async () =>
+            (await gateway.getRequests("sessions.patch")).map((request) => request.params),
+          )
+          .toEqual([
+            expect.objectContaining({
+              key: failedKey,
+              unread: false,
+              expectedSessionId: "dismiss-failed-session",
+            }),
+          ]);
+        await expect
+          .poll(() => row.evaluate((element) => element.className))
+          .not.toContain("sidebar-recent-session--attention-danger");
+        await expect.poll(() => error.count()).toBe(0);
+        await captureProof(page, "sidebar-row-hovercard-failure-after-dismiss.png");
       },
     );
   });

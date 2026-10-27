@@ -19,13 +19,13 @@ import { formatGitHubItemReference } from "./github-link-target.ts";
 import { PersonAvatarLink, PersonName } from "./person-activity-link-solid.tsx";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createHovercardControlRef, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
-import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 import { SessionColorDot } from "./session-color.tsx";
 import { SessionGitDiff } from "./session-git-diff.tsx";
 import {
   SessionHovercardAutomations,
   type SessionHovercardAutomation,
 } from "./session-hovercard-automations.tsx";
+import { SessionHovercardError } from "./session-hovercard-error.tsx";
 import { participantLabel, formatSessionAge, sessionAttribution } from "./session-hovercard.ts";
 import { sessionMachineParts } from "./session-machine.ts";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
@@ -199,6 +199,8 @@ export type SessionHovercardInput = SessionHovercardContextInput & {
   personActivity?: PersonActivityRouting;
   pullRequests?: ControlUiSessionPullRequestSnapshot;
   progressCard?: ProgressCard | null;
+  /** Marks the failed source session read; omitted when the viewer cannot. */
+  dismissFailure?: () => void;
 };
 function ParticipantLink(props: {
   participant: SessionParticipant;
@@ -668,16 +670,7 @@ export function SessionHovercard(props: SessionHovercardInput) {
             <div class="session-hovercard__excerpt">{preview()}</div>
           </section>
         </Show>
-        <Show when={props.row?.attention?.kind === "error"}>
-          <section class="session-hovercard__section session-hovercard__error">
-            <span class="session-hovercard__error-icon" aria-hidden="true">
-              <Icon name="alertTriangle" />
-            </span>
-            <span>
-              {props.row?.attention ? sessionAttentionSubtitle(props.row.attention, t) : ""}
-            </span>
-          </section>
-        </Show>
+        <SessionHovercardError attention={props.row?.attention} dismiss={props.dismissFailure} />
         <Show when={props.progressCard?.markdown?.trim()}>
           <section
             class="session-hovercard__section session-hovercard__notepad"

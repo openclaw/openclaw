@@ -28,6 +28,8 @@ export function createHovercard({
   rowDetails: initialRowDetails = {},
   triggerKind = "sidebar",
   browser = false,
+  scopes = ["operator.read"],
+  sessionsPatch,
 }: {
   sessionKey?: string;
   card?: ProgressCard | null;
@@ -35,6 +37,9 @@ export function createHovercard({
   rowDetails?: Partial<SidebarSessionHovercardRow>;
   triggerKind?: "sidebar" | "markdown";
   browser?: boolean;
+  scopes?: string[];
+  /** Serves `sessions.patch` through the context's session capability. */
+  sessionsPatch?: ApplicationContext["sessions"]["patch"];
 } = {}) {
   let rowDetails = initialRowDetails;
   let selectedId = "research";
@@ -76,8 +81,14 @@ export function createHovercard({
       assistantAgentId: browser ? "research" : "main",
       client: { request },
       hello: {
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["progressCard.get", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
+        auth: { role: "operator", scopes },
+        features: {
+          methods: [
+            "progressCard.get",
+            SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+            ...(sessionsPatch ? ["sessions.patch"] : []),
+          ],
+        },
       },
     },
     connection: { token: "", password: "" },
@@ -87,7 +98,10 @@ export function createHovercard({
   const context = {
     gateway,
     basePath: "",
-    sessions: { subscribe: browser ? () => () => undefined : sessions.subscribe },
+    sessions: {
+      subscribe: browser ? () => () => undefined : sessions.subscribe,
+      patch: sessionsPatch,
+    },
     agentSelection: {
       get state() {
         return { selectedId, scopeId: selectedId };

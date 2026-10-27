@@ -10,10 +10,16 @@ import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-detail
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { useApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
+import { isUnacknowledgedSessionFailure } from "../../../lib/session-attention.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { isSessionRunStateActive } from "../../../lib/session-run-state.ts";
+import {
+  canDismissSessionFailure,
+  dismissSessionFailures,
+} from "../../../lib/sessions/session-failure-dismissal.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { PaneSessionChangeOptions } from "../chat-pane-shared.ts";
@@ -67,6 +73,17 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
       syncSelection,
     );
     const readiness = createSubagentsPresentation(data);
+    const application = useApplication();
+    // Rows republish on Gateway changes, so access is re-read with each publication.
+    const canDismissFailure = (row: SubagentsPanelRow) =>
+      isUnacknowledgedSessionFailure(row.session) &&
+      canDismissSessionFailure(application, row.session, host.agentId);
+    const dismissFailures = (rows: readonly SubagentsPanelRow[]) =>
+      dismissSessionFailures(
+        application,
+        rows.filter(canDismissFailure).map((row) => row.session),
+        host.agentId,
+      );
     const emptyLoading = createMemo(
       () =>
         !data().rows.length &&
@@ -255,6 +272,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
               ? "waiting"
               : (endedWithoutFinishing(row.session) ?? "finished");
       const title = resolveSessionDisplayName(row.session.key, row.session);
+      const dismissLabel = t("chat.subagentsPanel.markFailureRead", { name: title });
       const statusLabel =
         status === "queued"
           ? t("common.queued")
@@ -272,6 +290,9 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
         title,
         status,
         statusLabel,
+        dismiss: canDismissFailure(row)
+          ? { label: dismissLabel, onDismiss: () => dismissFailures([row]) }
+          : undefined,
         elapsed: renderElapsed(row),
         stop:
           active && row.session.activeRunIds?.length === 1
@@ -306,6 +327,9 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     const mobileFinished = createMemo(() =>
       props.mobile === true ? finished().map(mobileItem) : [],
     );
+    const mobileDismissable = createMemo(() =>
+      props.mobile === true ? finished().filter(canDismissFailure) : [],
+    );
     return (
       <>
         <Show when={props.mobile === true}>
@@ -321,6 +345,14 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
                 finishedId={finishedId}
                 finishedOpen={finishedOpen()}
                 onToggleFinished={() => setFinishedOpen((value) => !value)}
+                dismissAll={
+                  mobileDismissable().length > 1
+                    ? {
+                        label: t("chat.subagentsPanel.markAllFailuresRead"),
+                        onDismiss: () => dismissFailures(mobileDismissable()),
+                      }
+                    : undefined
+                }
                 loading={isPending(readiness.read)}
                 emptyLoading={emptyLoading()}
                 onScrollPortRef={props.onScrollPortRef}
@@ -384,6 +416,8 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
               onOpen={(row) =>
                 setSelected({ key: row.session.key, agentId: subagentAgentId(row.session.key) })
               }
+              canDismissFailure={canDismissFailure}
+              onDismissFailures={dismissFailures}
               renderElapsed={renderElapsed}
             />
           </ReadBoundary>

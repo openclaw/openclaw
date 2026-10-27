@@ -26,6 +26,8 @@ const enSessionOrganizationShared = {
     archiveReasonStaleDashboard: "Automatically archived after dashboard inactivity",
     archiveReasonRestartRecovery: "Archived when a replacement session was recovered",
     goal: "Goal",
+    markFailureReadFailed: "Couldn't mark as read. Try again. {error}",
+    markFailureReadDone: "Marked as read",
     pinRootSessionsOnly: "Only root sessions can be pinned; pin the parent session instead.",
     copyTranscriptChanged: "Conversation changed while copying. Try again.",
     openWindowBlocked: "Allow pop-ups for this site, then try again.",

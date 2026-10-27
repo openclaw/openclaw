@@ -296,6 +296,117 @@ suite.define(() => {
     );
   });
 
+  it("marks failed subagents read one at a time and all at once on desktop and mobile", async () => {
+    await suite.withPage(
+      { viewport: { width: 1440, height: 1000 }, colorScheme: "dark", locale: "en-US" },
+      async ({ page }) => {
+        const { parent, finished } = scenario();
+        const failure = (id: string, label: string, reason: string) =>
+          ({
+            ...finished,
+            key: `agent:main:subagent:${id}`,
+            sessionId: `${id}-session`,
+            label,
+            status: "failed",
+            lastRunError: reason,
+          }) satisfies GatewaySessionRow;
+        const failures = [
+          failure("limit", "Audit release notes", "You've hit your session limit"),
+          failure("jsonl", "Index transcripts", "CLI JSONL output exceeded 8388608 characters"),
+          failure("caps", "Refresh tool metadata", "Session capability metadata changed"),
+          failure("mobile", "Check mobile layout", "You've hit your session limit"),
+        ];
+        const gateway = await installMockGateway(page, {
+          ...previewModel,
+          sessionKey: parent.key,
+          communityInvite: false,
+          sessions: [parent, ...failures, finished],
+          historyMessages: [{ role: "assistant", content: "Delegated review finished." }],
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
+        await openChatSidePanelType(page, "Subagents");
+        const panel = page.locator("openclaw-chat-subagents-panel");
+        const surface = panel.locator(".subagents-desktop, .chat-subagents-mobile");
+        const failedRows = panel.locator('.subagents-desktop__row[data-group="failed"]');
+        const capture = async (stage: string) => {
+          const frame = await takeControlUiScreenshotFrame(page, surface, [surface], {
+            animations: "disabled",
+            elements: [surface],
+          });
+          await writeFile(path.join(suite.artifactDir, `${stage}.png`), frame.png);
+          await writeFile(
+            path.join(suite.artifactDir, `${stage}-panel.png`),
+            frame.elements[0]!.png,
+          );
+        };
+        await expect.poll(() => failedRows.count()).toBe(4);
+        await capture("failed-desktop-before");
+
+        await page.setViewportSize({ width: 390, height: 900 });
+        await page.locator(".shell--mobile-nav").waitFor();
+        await openChatSidePanelType(page, "Subagents");
+        await panel.locator(`[data-session-key="${failures[3]!.key}"]`).waitFor();
+        await capture("failed-mobile-before");
+        const mobileDismiss = panel.locator(".chat-subagents-mobile__dismiss");
+        await expect.poll(() => mobileDismiss.count()).toBe(4);
+        await panel
+          .getByRole("button", { name: `Mark ${failures[3]!.label} as read`, exact: true })
+          .click();
+        await expect.poll(() => mobileDismiss.count()).toBe(3);
+        expect(
+          await panel
+            .locator(`[data-session-key="${failures[3]!.key}"] .chat-subagents-mobile__indicator`)
+            .getAttribute("data-status"),
+        ).toBe("failed");
+        await capture("failed-mobile-after-one");
+
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
+        await openChatSidePanelType(page, "Subagents");
+        const desktopMark = panel.locator(".subagents-desktop__dismiss");
+        await expect.poll(() => desktopMark.count()).toBe(3);
+        const first = panel.getByRole("button", {
+          name: `Mark ${failures[0]!.label} as read`,
+          exact: true,
+        });
+        await first.focus();
+        await first.press("Enter");
+        await expect.poll(() => desktopMark.count()).toBe(2);
+        expect(
+          await panel
+            .locator(`[data-session-key="${failures[0]!.key}"]`)
+            .getAttribute("data-group"),
+        ).toBe("failed");
+        await expect
+          .poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label")))
+          .toBe(`Mark ${failures[1]!.label} as read`);
+        await capture("failed-desktop-after-one");
+
+        await panel.getByRole("button", { name: "Mark all as read", exact: true }).click();
+        await expect.poll(() => desktopMark.count()).toBe(0);
+        // Grouping stays by run outcome; only the alert is acknowledged.
+        expect(await failedRows.count()).toBe(4);
+        const patched = (await gateway.getRequests("sessions.patch")).map(
+          (request) => request.params,
+        );
+        expect(patched).toHaveLength(4);
+        expect(patched.slice(0, 2)).toEqual([
+          expect.objectContaining({
+            key: failures[3]!.key,
+            unread: false,
+            expectedSessionId: failures[3]!.sessionId,
+          }),
+          expect.objectContaining({
+            key: failures[0]!.key,
+            unread: false,
+            expectedSessionId: failures[0]!.sessionId,
+          }),
+        ]);
+        await capture("failed-desktop-after-all");
+      },
+    );
+  });
+
   it("uses narrow subagent panel width without empty avatar gutters", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1000 }, colorScheme: "dark" },

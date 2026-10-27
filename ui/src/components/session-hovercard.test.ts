@@ -83,6 +83,9 @@ function renderCard(input: SessionHovercardInput, container = document.createEle
           get progressCard() {
             return current().progressCard;
           },
+          get dismissFailure() {
+            return current().dismissFailure;
+          },
         });
       },
       { container },
@@ -104,6 +107,24 @@ function attributionSummary(container: ParentNode): string {
 }
 
 describe("session hovercard", () => {
+  it("offers Dismiss on a failure only when the owner supplies the acknowledgement", () => {
+    const failed = row({
+      attention: { kind: "error", reason: "Session limit", sourceSessionKey: "agent:main:failed" },
+    });
+    const dismissFailure = vi.fn();
+    const container = renderCard({ row: failed, dismissFailure });
+    const button = container.querySelector<HTMLButtonElement>(
+      ".session-hovercard__error .session-hovercard__dismiss",
+    );
+    expect(button?.textContent).toBe("Dismiss");
+    button!.click();
+    expect(dismissFailure).toHaveBeenCalledOnce();
+
+    renderCard({ row: failed }, container);
+    expect(container.querySelector(".session-hovercard__error")).not.toBeNull();
+    expect(container.querySelector(".session-hovercard__dismiss")).toBeNull();
+  });
+
   it.each([undefined, "Validation worker"])(
     "shows the full failure above the notepad (child: %s)",
     (childLabel) => {

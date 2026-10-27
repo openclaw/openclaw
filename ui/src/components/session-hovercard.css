@@ -457,6 +457,22 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   white-space: normal;
 }
 
+.session-hovercard__dismiss {
+  grid-column: 2;
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  white-space: normal;
+}
+
+.session-hovercard__dismiss:hover,
+.session-hovercard__dismiss:focus-visible {
+  color: var(--text);
+}
+
 .session-hovercard__error-icon svg {
   display: block;
   width: var(--session-hovercard-context-icon-size);

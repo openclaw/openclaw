@@ -18,6 +18,7 @@ import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.t
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { isUnacknowledgedSessionFailure } from "../../lib/session-attention.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   summarizeSessionPullRequests,
@@ -369,10 +370,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     if (!state || !row || !this.secondarySessionReadsReady()) {
       return;
     }
-    const failureAt = row.endedAt ?? row.updatedAt ?? 0;
-    const unreadFailure =
-      (row.status === "failed" || row.status === "timeout") &&
-      (row.lastReadAt == null || failureAt > row.lastReadAt);
+    const unreadFailure = isUnacknowledgedSessionFailure(row);
     const agentStatusActive = Boolean(row.agentStatus && row.agentStatus.expiresAt > Date.now());
     const unread = row.unread === true || unreadFailure || agentStatusActive;
     if (!unread) {

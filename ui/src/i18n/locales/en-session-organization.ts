@@ -142,6 +142,8 @@ const enSessionOrganization = {
     updated: "Updated",
     tokens: "Tokens",
     goal: sharedSessions.goal,
+    markFailureReadFailed: sharedSessions.markFailureReadFailed,
+    markFailureReadDone: sharedSessions.markFailureReadDone,
     goalNote: "Goal note",
     thinking: "Thinking",
     fast: "Fast",

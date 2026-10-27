@@ -83,6 +83,8 @@ const enChatSession = {
       refresh: "Refresh subagents",
       stop: "Stop {name}",
       stopping: "Stopping…",
+      markFailureRead: "Mark {name} as read",
+      markAllFailuresRead: "Mark all as read",
       elapsed: "Elapsed time",
       duration: "Run duration",
     },
