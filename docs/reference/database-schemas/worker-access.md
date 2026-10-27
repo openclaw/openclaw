@@ -651,6 +651,12 @@ or per-session ordering.
 Entry receipts follow physical database generations and scoped revisions; they do
 not require the publishing SQLite connection to match the actor worker's connection.
 
+Fresh pending input refreshes profile policy before source preparation, then reads
+session sharing facts once immediately before its message-approval callback.
+Replays still authorize before returning recorded input. The writer checks fresh
+transaction facts again before commit, and acknowledgment still waits for durable
+custody; removing the preliminary sharing read does not reorder the writer FIFO.
+
 Session memory indexing is background work. It batches transcript changes after
 30 seconds without transcript changes or running turns. Pending work keeps its
 original age across turns; after five minutes it can start in the next idle gap
@@ -2705,6 +2711,14 @@ facts in their mutation statements. Approval expiry and corrupt-row repair are
 writers too. Effective exec policy and usage accounting remain separate domains:
 recording a use does not advertise a new policy. Existing cron grant and
 resolution receipts retain their settlement meaning alongside those facts.
+
+Exec approval initialization checks the existing owner-invalidated policy snapshot
+before entering the writer queue. Missing or noncanonical state still normalizes
+inside the writer transaction. Authorization replies carry the policy file their
+host consumes without repeating raw JSON, paths, and hashes; policy-edit receipts
+share one postimage between precommit validation and committed publication. Usage
+publications retain the full policy for unseeded hosts and final execution checks.
+No schema, stored shape, or approval-authority contract changes.
 
 Environment receipts replace each affected environment's complete environment,
 credential, and attachment tuple, including explicit absence. Placement receipts

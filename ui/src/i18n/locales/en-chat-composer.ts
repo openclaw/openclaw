@@ -3,6 +3,10 @@ import { en } from "./en.ts";
 
 const catalog = {
   chat: {
+    view: {
+      activityDetails: "View activity details",
+      workingDetails: "Agent is working. View details",
+    },
     composer: {
       running: "running",
       composerInput: "Chat composer",
@@ -55,61 +59,9 @@ const catalog = {
       attachMedia: "Media",
       attachFileOption: "File",
       menu: {
-        back: "Back",
-        fromLibraries: "From your libraries",
-        agentWorkspace: "Agent & workspace",
-        unavailable: "Unavailable",
-        addFromLibraries: "Add from libraries",
-        searchSkills: "Search skills",
-        clearSearch: "Clear search",
-        noMatches: "No skills match your search.",
-        reset: "Reset",
-        sessionChange: "{count} change for this session",
-        sessionChanges: "{count} changes for this session",
-        libraryOwner: "{owner}'s library",
-        readSkill: "Read skill",
-        updateSkill: "Update to latest",
-        newVersion: "New version",
-        removeSkill: "Remove from session",
-        tools: "Tools",
-        turnAllOn: "Turn all on",
-        turnAllOff: "Turn all off",
-        serverNoResponse: "The server didn’t respond.",
-        noServers: "No MCP servers yet. Add one to give the agent new tools.",
-        skills: "Skills",
-        connectors: "Plugins",
-        webSearch: "Web search",
-        webSearchGloballyDisabled:
-          "Web search is disabled in config (tools.web.search.enabled). Session overrides cannot turn it back on.",
-        webSearchClearStaleEnable:
-          "Web search is disabled in config. Click to clear this session’s enable override.",
-        managePlugins: "Manage plugins",
-        manageSkills: "Manage skills",
-        addMcpServer: "Add MCP server",
-        addMcpServerTitle: "Add MCP server",
-        addMcpServerDescription: "Configure the server and choose where it is enabled.",
-        scopeLabel: "Availability",
-        scopeSession: "This session",
-        scopeEverywhere: "Everywhere",
-        scopeSessionHint:
-          "The server is saved globally disabled and enabled only for this session.",
-        scopeEverywhereHint: "The server is saved and enabled for every session.",
         toolAccess: {
-          label: "Tool access",
-          loading: "Loading tools…",
           loadFailed: "Couldn’t load tools.",
-          noTools: "No tools available for this MCP server.",
-          summary: "{enabled} of {total} tools on",
-          summaryOne: "{enabled} of {total} tool on",
         },
-        enabledCount: "{count} on",
-        loadingSkills: "Loading skills…",
-        skillsLoadFailed: "Couldn’t load skills.",
-        noSkills: "No skills available.",
-        noConnectors: "No MCP servers configured.",
-        depsMissing: "deps missing",
-        skillBlocked: "not available for this agent",
-        sessionTag: "session",
         offlineBlocked: "Connect to the gateway to change session capabilities.",
         adminBlocked: "Admin access is required to manage MCP servers.",
         savingBlocked: "Wait for the current session capability change to finish.",
@@ -281,46 +233,7 @@ const catalog = {
       unsupported:
         "Human mentions are not available in this mode. Remove the selected mentions or send from a normal chat.",
     },
-    permissions: {
-      title: "Grant {permissions}",
-      neededOn: "OpenClaw needs access on {node} to continue this action.",
-      openApp:
-        "Grant access in the OpenClaw Mac app on that device: Settings → This Mac → Permissions. Then tell the agent to try again.",
-      ready: "Access is available. You can ask the agent to try again.",
-      following: "Then grant the remaining permissions: {permissions}.",
-      actions: {
-        "not-determined": "Grant {permissions}",
-        denied: "Open System Settings",
-        "restart-required": "Relaunch OpenClaw",
-        "stale-grant": "Open System Settings",
-        "disabled-in-openclaw": "Enable {permissions}",
-      },
-      tryAgain: "Try again",
-      retryMessage: "I granted {permissions}, try again.",
-      states: {
-        "not-determined": "Choose Grant to review the permission request.",
-        denied: "Open System Settings to allow access for OpenClaw.",
-        "restart-required":
-          "If you enabled access in System Settings, relaunch OpenClaw to make it available.",
-        "stale-grant":
-          "macOS may be using a stale permission grant. Open System Settings to review it.",
-        "disabled-in-openclaw": "Choose Enable to review and enable this capability in OpenClaw.",
-      },
-      capabilities: {
-        notifications: "Notifications",
-        accessibility: "Accessibility",
-        eventPosting: "Event Posting",
-        screenRecording: "Screen Recording",
-        microphone: "Microphone",
-        speechRecognition: "Speech Recognition",
-        camera: "Camera",
-        cameraEnabled: "Camera in OpenClaw",
-        location: "Location",
-        computerControl: "Computer Control",
-        canvas: "Canvas",
-        automation: "Automation",
-      },
-    },
+    permissions: {},
     voice: {
       asking: "Asking OpenClaw...",
       replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
@@ -458,6 +371,7 @@ const catalog = {
 export const registerChatComposerEnglish = Object.assign(
   () => {
     const {
+      view,
       composer,
       queue,
       mentions,
@@ -470,7 +384,10 @@ export const registerChatComposerEnglish = Object.assign(
       ...outboxRecovery
     } = catalog.chat;
     Object.assign(en.chat, outboxRecovery);
-    Object.assign(en.chat.composer, composer);
+    Object.assign(en.chat.view, view);
+    const { menu, ...composerLabels } = composer;
+    Object.assign(en.chat.composer, composerLabels);
+    en.chat.composer.menu ??= menu;
     Object.assign(en.chat.queue, queue);
     Object.assign(en.chat.mentions, mentions);
     Object.assign(en.chat.permissions, permissions);

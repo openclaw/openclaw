@@ -2137,18 +2137,27 @@ button.chat-reply-attribution__target:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 6px;
   width: auto;
   max-width: 100%;
-  min-height: 28px;
-  padding: 4px 0;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted);
-  font-size: 12px;
   list-style: none;
   cursor: var(--cursor-action);
+}
+
+.chat-bubble-activity__summary {
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-activity-group--bubble > .chat-activity-group__summary {
+  gap: 4px;
+  padding: 0;
+  color: var(--chat-tool-activity-color, var(--muted));
 }
 
 .chat-bubble-activity--working > .chat-bubble-activity__summary,

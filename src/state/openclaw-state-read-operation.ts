@@ -37,6 +37,10 @@ import type {
   RetainedReadScope,
 } from "./openclaw-state-read.types.js";
 import type { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
+import {
+  hydrateOpenClawStateWorkerError,
+  retainOpenClawStateWorkerErrorPayload,
+} from "./openclaw-state-worker-error.js";
 
 export type OpenClawStateReadCompletion = Promise<OpenClawStateReadReply | undefined>;
 
@@ -297,8 +301,6 @@ export function startOpenClawStateReadOperation(
         if (inspected) {
           const result = inspected.value;
           if (!result.ok) {
-            const { retainOpenClawStateWorkerErrorPayload, hydrateOpenClawStateWorkerError } =
-              await import("./openclaw-state-worker-error.js");
             const error = new Error("Live startup metadata inspection failed");
             retainOpenClawStateWorkerErrorPayload(error, result.error);
             return consume({

@@ -114,7 +114,10 @@ export async function maybeSpawnVisibleSession(params: {
       `Cloud placement requires visible=true and worktree=true. Corrected call: ${correctedVisibleSpawnCall(params.raw)}`,
     );
   }
-  const worktreeName = readToolStringParam(params.raw, "worktreeName", {
+  // Hidden native checkout selectors only apply when worktree is explicitly enabled.
+  const checkoutParams =
+    worktree || params.raw.visible === true || params.runtime === "acp" ? params.raw : {};
+  const worktreeName = readToolStringParam(checkoutParams, "worktreeName", {
     trim: false,
     allowEmpty: true,
   });
@@ -125,9 +128,9 @@ export async function maybeSpawnVisibleSession(params: {
       throw new ToolInputError(error instanceof Error ? error.message : String(error));
     }
   }
-  const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
+  const worktreeBaseRef = readToolStringParam(checkoutParams, "worktreeBaseRef");
   const group = readToolStringParam(params.raw, "group");
-  const projectId = readToolStringParam(params.raw, "projectId");
+  const projectId = readToolStringParam(checkoutParams, "projectId");
   const projectGitUrl = readToolStringParam(params.raw, "projectGitUrl");
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
@@ -146,18 +149,6 @@ export async function maybeSpawnVisibleSession(params: {
     if (params.runtime === "acp" && (projectId || worktree || worktreeName || worktreeBaseRef)) {
       throw new ToolInputError(
         'Managed worktree parameters are unavailable with runtime="acp". Use runtime="subagent" with worktree=true, or omit projectId, worktree, worktreeName, and worktreeBaseRef for ACP.',
-      );
-    }
-    if (!worktree && (projectId || worktreeName || worktreeBaseRef)) {
-      const corrected = Object.fromEntries(
-        Object.entries(params.raw).filter(
-          ([key]) => !["projectId", "worktreeName", "worktreeBaseRef"].includes(key),
-        ),
-      );
-      throw new ToolInputError(
-        "Hidden native subagents require worktree=true with projectId, worktreeName, or worktreeBaseRef. " +
-          "For a managed checkout, set worktree=true. Otherwise omit those parameters to keep the hidden runtime without a checkout. " +
-          `Corrected hidden call: sessions_spawn(${JSON.stringify(corrected)})`,
       );
     }
     return undefined;
