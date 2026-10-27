@@ -23,6 +23,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as sqliteReadOnlyWorker from "./sqlite-readonly-worker.js";
 import {
   runUpdateStateInspectionWorker,
   parseUpdateStateInspectionWorker,
@@ -38,6 +39,7 @@ import {
 import * as updateGenerations from "./update-database-generations.js";
 import { recordUpdateModelRetirement } from "./update-deferred-model-retirement.js";
 import {
+  beginUpdateSqliteCompanion,
   getDoctorMigrationBackup,
   getUpdateDoctorMigrationSource,
   hasUpdateDoctorMigrationCapture,
@@ -74,6 +76,76 @@ function captureContext(expected: () => string | null | undefined, refuse = vi.f
   return { expected, assertCurrent() {}, accept() {}, refuse };
 }
 
+it("settles the final receipt without generation or authority work on native close", async () => {
+  const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
+  const generations = readUpdateDatabaseGenerations([pathname]);
+  const authority = vi.fn();
+  const { receipt, warnings } = await withCapture(
+    env,
+    generations,
+    async () => {
+      const database = new DatabaseSync(pathname);
+      try {
+        migrate(database, pathname);
+        const generation = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
+        authority.mockClear();
+        database.close();
+        expect(generation).not.toHaveBeenCalled();
+        expect(authority).not.toHaveBeenCalled();
+      } finally {
+        if (database.isOpen) {
+          database.close();
+        }
+      }
+    },
+    authority,
+  );
+  expect(warnings).toEqual([]);
+  expect(receipt).toMatchObject({
+    unchanged: true,
+    fromGenerations: generations,
+    generations: readUpdateDatabaseGenerations([pathname]),
+  });
+});
+
+it.each([true, false])(
+  "admits a changed companion only if this session opened it: %s",
+  async (opened) => {
+    const { root, pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
+    const companionPath = path.join(root, "companion.sqlite");
+    {
+      using companion = new DatabaseSync(companionPath);
+      companion.exec("CREATE TABLE retained(value);");
+    }
+    const generations = readUpdateDatabaseGenerations([pathname, companionPath]);
+    const { receipt, warnings } = await withCapture(env, generations, async () => {
+      using source = new DatabaseSync(pathname);
+      using companion = new DatabaseSync(companionPath);
+      if (opened) {
+        runUpdateSqliteMigration(companion, companionPath, () => {});
+      }
+      companion.exec("PRAGMA locking_mode=EXCLUSIVE; INSERT INTO retained VALUES (9);");
+      runUpdateSqliteMigration(source, pathname, () => {
+        const begin = () => beginUpdateSqliteCompanion(companion, companionPath, false);
+        if (opened) {
+          const publication = begin();
+          expect(publication).toBeDefined();
+          publication!.complete();
+        } else {
+          expect(begin).toThrow("Database migration companion no longer matches its capture.");
+        }
+      });
+    });
+    expect(receipt?.unchanged).toBe(opened);
+    if (opened) {
+      expect(warnings).toEqual([]);
+      expect(receipt?.generations).toEqual(
+        readUpdateDatabaseGenerations([pathname, companionPath]),
+      );
+    }
+  },
+);
+
 it.each([
   "read-only reader opens",
   "last writable reader closes",
@@ -96,14 +168,9 @@ it.each([
       readOnly.prepare("SELECT * FROM retained").all();
     }
     expect(readUpdateDatabaseGenerations([pathname])[pathname]).not.toBe(generations[pathname]);
-    const database = new DatabaseSync(pathname);
-    try {
-      migrate(database, pathname);
-      expect(database.prepare("SELECT value FROM retained").all()).toEqual([{ value: 7 }]);
-    } finally {
-      // Migration installs a close observer after acquisition; using would retain the old disposer.
-      database.close();
-    }
+    using database = new DatabaseSync(pathname);
+    migrate(database, pathname);
+    expect(database.prepare("SELECT value FROM retained").all()).toEqual([{ value: 7 }]);
   });
   expect(warnings).toEqual([]);
   expect(receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
