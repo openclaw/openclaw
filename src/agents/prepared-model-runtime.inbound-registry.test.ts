@@ -26,10 +26,7 @@ import type { ProviderPlugin } from "../plugins/types.js";
 import type { DiscoverAuthStorageOptions } from "./agent-auth-discovery.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
-import {
-  scopePreparedModelRuntimeLease,
-  withPreparedModelRuntimePluginGenerationScope,
-} from "./prepared-model-runtime-generation-scope.js";
+import { scopePreparedModelRuntimeLease } from "./prepared-model-runtime-generation-scope.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -55,14 +52,10 @@ const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime"
 const { mocks } = fixture;
 type Dispatch = NonNullable<Awaited<ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime>>>;
 type RunInput = Parameters<typeof acquireAgentRunPreparedModelRuntime>[0];
+type RuntimeSelections = RunInput["runtimePluginSelections"];
 
-function runInput(
-  dispatch: Dispatch,
-  runtimePluginSelections: RunInput["runtimePluginSelections"],
-  config = dispatch.config,
-  agentId = dispatch.agentId,
-) {
-  const { agentDir, workspaceDir } = dispatch;
+function runInput(dispatch: Dispatch, runtimePluginSelections: RuntimeSelections) {
+  const { config, agentId, agentDir, workspaceDir } = dispatch;
   return { config, agentId, agentDir, workspaceDir, runtimePluginSelections };
 }
 
@@ -78,13 +71,12 @@ function catalogGate(onRelease?: () => void) {
   return { started: started.promise, finish: () => finish.resolve() };
 }
 
-function prepareGroup(
+const prepareGroup = (
   input: Parameters<typeof prepareWorkspaceBuildGroup>[0][number],
   previous?: Parameters<typeof prepareWorkspaceBuildGroup>[4],
   preparedMetadata?: Parameters<typeof prepareWorkspaceBuildGroup>[5],
-) {
-  return prepareWorkspaceBuildGroup([input], "static", {}, undefined, previous, preparedMetadata);
-}
+  resolveRegistry?: Parameters<typeof prepareWorkspaceBuildGroup>[3],
+) => prepareWorkspaceBuildGroup([input], "static", {}, resolveRegistry, previous, preparedMetadata);
 
 function publication(phase: "published" | "failed") {
   const ready = createDeferred();
@@ -93,37 +85,29 @@ function publication(phase: "published" | "failed") {
       ready.resolve();
     }
   });
-  return async () => {
-    await ready.promise;
-    unregister();
-  };
+  return () => ready.promise.finally(unregister);
 }
 
 function provider(id: string, apiKey?: string): ProviderPlugin {
-  return {
-    id,
-    label: id,
-    auth: [],
-    ...(apiKey
-      ? { resolveSyntheticAuth: () => ({ apiKey, source: "fixture", mode: "api-key" as const }) }
-      : {}),
-  };
+  const plugin: ProviderPlugin = { id, label: id, auth: [] };
+  if (apiKey) {
+    plugin.resolveSyntheticAuth = () => ({ apiKey, source: "fixture", mode: "api-key" });
+  }
+  return plugin;
 }
 
-function metadata(config: OpenClawConfig, plugins: Parameters<typeof makeRegistry>[0] = []) {
-  return createPluginMetadataSnapshot({ config, manifestRegistry: makeRegistry(plugins) });
-}
+const metadata = (config: OpenClawConfig, plugins: Parameters<typeof makeRegistry>[0] = []) =>
+  createPluginMetadataSnapshot({ config, manifestRegistry: makeRegistry(plugins) });
 
-function publishGateway(
+const publishGateway = (
   config: OpenClawConfig = {},
   options: Parameters<typeof refreshPreparedModelRuntimeSnapshots>[1] = {},
-) {
-  return refreshPreparedModelRuntimeSnapshots(config, {
+) =>
+  refreshPreparedModelRuntimeSnapshots(config, {
     gatewayLifecycle: true,
     catalogMode: "static",
     ...options,
   });
-}
 
 async function useDiscoveryCredentials() {
   const { prepareAmbientAgentCredentialsForDiscovery } = await vi.importActual<
@@ -146,29 +130,20 @@ describe("prepared reply dispatch runtime", () => {
     const config = {};
     await publishGateway(config, { allowGatewaySubagentBinding: true });
     const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
-    const input = {
-      config,
-      agentId: published.agentId,
-      agentDir: published.agentDir,
-      workspaceDir: published.workspaceDir,
-      allowGatewaySubagentBinding: true,
-    };
+    const input = { ...runInput(published, undefined), allowGatewaySubagentBinding: true };
     mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
-    expect(await loadSubagentRegistryPluginRuntimeHandle(input)).toBe(
-      published.inboundPluginRegistry,
-    );
-    expect(await loadSubagentRegistryPluginRuntimeHandle(input)).toBe(
-      published.inboundPluginRegistry,
-    );
+    const loadSubagent = (overrides: Partial<typeof input> = {}) =>
+      loadSubagentRegistryPluginRuntimeHandle({ ...input, ...overrides });
+    expect(await loadSubagent()).toBe(published.inboundPluginRegistry);
+    expect(await loadSubagent()).toBe(published.inboundPluginRegistry);
     expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
 
     const replacementConfig = { plugins: { enabled: false } };
     await publishGateway(replacementConfig, { allowGatewaySubagentBinding: true });
     const replacement = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
     mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
-    expect(
-      await loadSubagentRegistryPluginRuntimeHandle({ ...input, config: replacementConfig }),
-    ).toBe(replacement.inboundPluginRegistry);
+    const replacementRegistry = await loadSubagent({ config: replacementConfig });
+    expect(replacementRegistry).toBe(replacement.inboundPluginRegistry);
     expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
 
     // Historical workspaces and changed policy cannot borrow the current publication.
@@ -176,9 +151,8 @@ describe("prepared reply dispatch runtime", () => {
       input,
       { ...input, config: replacementConfig, workspaceDir: fixture.state.path("old-workspace") },
     ]) {
-      expect(await loadSubagentRegistryPluginRuntimeHandle(unmatched)).not.toBe(
-        replacement.inboundPluginRegistry,
-      );
+      const unmatchedRegistry = await loadSubagentRegistryPluginRuntimeHandle(unmatched);
+      expect(unmatchedRegistry).not.toBe(replacement.inboundPluginRegistry);
     }
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
   });
@@ -203,21 +177,17 @@ describe("prepared reply dispatch runtime", () => {
       observedValue = database.prepare("SELECT value FROM observations").get()?.value;
     });
     const config = {};
-    const preparation = prepareWorkspaceBuildGroup(
-      [
-        {
-          config,
-          agentDir: fixture.state.agentDir("default"),
-          workspaceDir: fixture.state.workspaceDir,
-          env: fixture.state.env,
-          skipCredentials: true,
-        },
-      ],
-      "static",
-      {},
-      () => registry,
+    const preparation = prepareGroup(
+      {
+        config,
+        agentDir: fixture.state.agentDir("default"),
+        workspaceDir: fixture.state.workspaceDir,
+        env: fixture.state.env,
+        skipCredentials: true,
+      },
       undefined,
       metadata(config),
+      () => registry,
     );
     const outcome = preparation.catch((error: unknown) => error);
     try {
@@ -262,12 +232,8 @@ describe("prepared reply dispatch runtime", () => {
     );
     await publishGateway(config);
     const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
-    const input = runInput(
-      published,
-      [{ provider: "selected", modelId: "model", runtime: "openclaw" }],
-      config,
-      "default",
-    );
+    const selection = { provider: "selected", modelId: "model", runtime: "openclaw" as const };
+    const input = { ...runInput(published, [selection]), config };
     const lease = await acquireAgentRunPreparedModelRuntime(input, {
       catalogMode: "static",
       pluginGeneration: published.pluginGeneration,
@@ -285,21 +251,19 @@ describe("prepared reply dispatch runtime", () => {
   it("isolates selected run owners while retaining the published generation and lease lifetime", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = { agents: { defaults: { model: "custom/model" } } };
+    const runtimes = ["first-harness", "second-harness"];
     const registries = new Map(
-      ["first-harness", "second-harness"].map((runtime) => {
-        const registry = harnessRegistry(runtime, {
-          runAttempt: async () => {
-            throw new Error("unused");
-          },
-        });
+      runtimes.map((runtime) => {
+        const registry = harnessRegistry(runtime);
         registry.agentHarnesses[0]!.source = "test";
         return [runtime, registry] as const;
       }),
     );
-    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(
+    const loadRegistry = mocks.loadAgentRuntimePluginRegistryHandle;
+    loadRegistry.mockImplementation(
       (params) => registries.get(params.selections?.[0]?.runtime) ?? createEmptyPluginRegistry(),
     );
-    const manifests = [...registries.keys()].map((id) => ({
+    const manifests = runtimes.map((id) => ({
       id,
       origin: "bundled" as const,
       channels: [],
@@ -310,28 +274,54 @@ describe("prepared reply dispatch runtime", () => {
       pluginMetadataSnapshot: metadata(config, manifests),
     });
     const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
-    const input = (runtime: string) => ({
-      ...runInput(
-        published,
-        [{ provider: "custom", modelId: "model", runtime }],
-        config,
-        "default",
-      ),
-      allowGatewaySubagentBinding: true,
-    });
     const acquire = (
       runtime: string,
       pluginGeneration = published.pluginGeneration,
       catalogMode?: "static",
-    ) => acquireAgentRunPreparedModelRuntime(input(runtime), { pluginGeneration, catalogMode });
-    const leases = await Promise.all(
-      [...registries.keys()].map((runtime) =>
-        acquire(runtime, published.pluginGeneration, "static"),
-      ),
+      overrides: Partial<RunInput> = {},
+    ) =>
+      acquireAgentRunPreparedModelRuntime(
+        {
+          ...runInput(published, [{ provider: "custom", modelId: "model", runtime }]),
+          config,
+          allowGatewaySubagentBinding: true,
+          ...overrides,
+        },
+        { pluginGeneration, catalogMode },
+      );
+    const expectSuperseded = async (
+      result: ReturnType<typeof acquireAgentRunPreparedModelRuntime>,
+      scope?: string,
+    ) => {
+      const failures = (
+        await Promise.allSettled([
+          result.then(
+            (lease) => lease[Symbol.asyncDispose](),
+            () => undefined,
+          ),
+          expect(result, scope).rejects.toThrow("plugin generation was superseded"),
+        ])
+      ).flatMap((entry) => (entry.status === "rejected" ? [entry.reason] : []));
+      if (failures.length) {
+        throw new AggregateError(
+          failures,
+          `${scope ?? "runtime scope"} rejection or cleanup failed`,
+        );
+      }
+    };
+    await using acquiredLeases = new AsyncDisposableStack();
+    const initial = await Promise.allSettled(
+      runtimes.map((runtime) => acquire(runtime, published.pluginGeneration, "static")),
     );
-    const loadsBeforeExecutionWorkspaces =
-      mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
-    for (const [index, runtime] of [...registries.keys()].entries()) {
+    const leases = initial.map((result) =>
+      result.status === "fulfilled" ? acquiredLeases.use(result.value) : undefined,
+    );
+    const failed = initial.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") {
+      throw failed.reason;
+    }
+    const loadsBeforeExecutionWorkspaces = loadRegistry.mock.calls.length;
+    for (const [index, runtime] of runtimes.entries()) {
       const lease = leases[index]!;
       expect(lease.snapshot.pluginRegistry === registries.get(runtime)).toBe(true);
       expect(lease.snapshot.metadataSnapshot).toBe(
@@ -339,93 +329,63 @@ describe("prepared reply dispatch runtime", () => {
       );
       expect(lease.pluginGeneration.inboundPluginRegistry).toBe(published.inboundPluginRegistry);
       expect(Object.isFrozen(lease.pluginGeneration)).toBe(true);
-      const repeated = await acquire(runtime, published.pluginGeneration, "static");
+      await using repeated = await acquire(runtime, published.pluginGeneration, "static");
       expect(repeated.snapshot === lease.snapshot).toBe(true);
       expect(repeated.pluginGeneration === lease.pluginGeneration).toBe(true);
       await repeated[Symbol.asyncDispose]();
-      let active = true;
-      await withPreparedModelRuntimePluginGenerationScope(
-        lease.pluginGeneration,
-        async () => {
-          const nested = await acquire(runtime, lease.pluginGeneration);
-          expect(nested.snapshot === lease.snapshot).toBe(true);
-          await nested[Symbol.asyncDispose]();
-          const executionWorkspaceDir = fixture.state.path(`execution-${runtime}`);
-          const executionWorkspace = await acquireAgentRunPreparedModelRuntime(
-            {
-              ...input(runtime),
-              workspaceDir: executionWorkspaceDir,
-            },
-            { catalogMode: "static", pluginGeneration: lease.pluginGeneration },
+      await using scopedLease = scopePreparedModelRuntimeLease(lease);
+      await scopedLease.run(async () => {
+        await using nested = await acquire(runtime, lease.pluginGeneration);
+        expect(nested.snapshot === lease.snapshot).toBe(true);
+        await nested[Symbol.asyncDispose]();
+        await using executionWorkspace = await acquire(runtime, lease.pluginGeneration, "static", {
+          workspaceDir: fixture.state.path(`execution-${runtime}`),
+        });
+        expect(executionWorkspace.pluginGeneration).toBe(lease.pluginGeneration);
+        expect(executionWorkspace.snapshot.workspaceDir).toBe(
+          fixture.state.path(`execution-${runtime}`),
+        );
+        await executionWorkspace[Symbol.asyncDispose]();
+        const scopeMismatches: Array<readonly [string, Partial<RunInput>]> = [
+          ["config", { config: { agents: { defaults: { model: "other/model" } } } }],
+          ["inherited auth", { inheritedAuthDir: fixture.state.path("other-auth") }],
+          ["environment", { env: { OPENCLAW_PREPARED_RUNTIME_TEST_SCOPE: "different" } }],
+          ["agent", { agentId: "other" }],
+          ["agent directory", { agentDir: fixture.state.agentDir("other") }],
+          ["missing selection", { runtimePluginSelections: undefined }],
+        ];
+        for (const [scope, overrides] of scopeMismatches) {
+          await expectSuperseded(
+            acquire(runtime, lease.pluginGeneration, "static", {
+              workspaceDir: fixture.state.path(`mismatch-${runtime}`),
+              ...overrides,
+            }),
+            scope,
           );
-          expect(executionWorkspace.pluginGeneration).toBe(lease.pluginGeneration);
-          expect(executionWorkspace.snapshot.workspaceDir).toBe(executionWorkspaceDir);
-          await executionWorkspace[Symbol.asyncDispose]();
-          const mismatchedWorkspaceDir = fixture.state.path(`mismatch-${runtime}`);
-          const scopeMismatches: Array<readonly [string, Partial<RunInput>]> = [
-            ["config", { config: { agents: { defaults: { model: "other/model" } } } }],
-            ["inherited auth", { inheritedAuthDir: fixture.state.path("other-auth") }],
-            ["environment", { env: { OPENCLAW_PREPARED_RUNTIME_TEST_SCOPE: "different" } }],
-            ["agent", { agentId: "other" }],
-            ["agent directory", { agentDir: fixture.state.agentDir("other") }],
-            ["missing selection", { runtimePluginSelections: undefined }],
-          ];
-          for (const [scope, overrides] of scopeMismatches) {
-            await expect(
-              acquireAgentRunPreparedModelRuntime(
-                { ...input(runtime), workspaceDir: mismatchedWorkspaceDir, ...overrides },
-                { catalogMode: "static", pluginGeneration: lease.pluginGeneration },
-              ),
-              scope,
-            ).rejects.toThrow("plugin generation was superseded");
-          }
-          const otherRuntime = [...registries.keys()].find((candidate) => candidate !== runtime)!;
-          await expect(acquire(otherRuntime, lease.pluginGeneration)).rejects.toThrow(
-            "plugin generation was superseded",
-          );
-          active = false;
-          await lease[Symbol.asyncDispose]();
-          await expect(acquire(runtime, lease.pluginGeneration)).rejects.toThrow(
-            "plugin generation was superseded",
-          );
-        },
-        () => (active ? lease.snapshot : undefined),
-      );
+        }
+        await expectSuperseded(acquire(runtimes[1 - index]!, lease.pluginGeneration));
+        await scopedLease[Symbol.asyncDispose]();
+        await expectSuperseded(acquire(runtime, lease.pluginGeneration));
+      });
     }
-    expect(
-      (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })) === published,
-    ).toBe(true);
+    expect(await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })).toBe(published);
     expect(published.pluginGeneration.pluginRegistry?.agentHarnesses).toEqual([]);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(
-      loadsBeforeExecutionWorkspaces + registries.size,
-    );
+    expect(loadRegistry).toHaveBeenCalledTimes(loadsBeforeExecutionWorkspaces + registries.size);
     const retirementRuntime = [...registries.keys()][0]!;
-    const retirementLease = await acquire(retirementRuntime, published.pluginGeneration, "static");
-    let retirementLeaseActive = true;
-    try {
-      await withPreparedModelRuntimePluginGenerationScope(
-        retirementLease.pluginGeneration,
-        async () => {
-          await retirePreparedModelRuntimeAgent({
-            agentId: "default",
-            agentDirs: [published.agentDir],
-          });
-          await expect(
-            acquireAgentRunPreparedModelRuntime(
-              {
-                ...input(retirementRuntime),
-                workspaceDir: fixture.state.path("workspace-after-agent-retirement"),
-              },
-              { catalogMode: "static", pluginGeneration: retirementLease.pluginGeneration },
-            ),
-          ).rejects.toThrow("plugin generation was superseded");
-        },
-        () => (retirementLeaseActive ? retirementLease.snapshot : undefined),
+    await using retirementLease = scopePreparedModelRuntimeLease(
+      await acquire(retirementRuntime, published.pluginGeneration, "static"),
+    );
+    await retirementLease.run(async () => {
+      await retirePreparedModelRuntimeAgent({
+        agentId: "default",
+        agentDirs: [published.agentDir],
+      });
+      await expectSuperseded(
+        acquire(retirementRuntime, retirementLease.pluginGeneration, "static", {
+          workspaceDir: fixture.state.path("workspace-after-agent-retirement"),
+        }),
       );
-    } finally {
-      retirementLeaseActive = false;
-      await retirementLease[Symbol.asyncDispose]();
-    }
+    });
   });
 
   it.each(["disabled", "error", "not-imported"] as const)(
@@ -475,49 +435,37 @@ describe("prepared reply dispatch runtime", () => {
         },
       });
       const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
-      const input = {
-        ...runInput(
-          published,
-          [{ provider: "bailian-token-plan", modelId: "qwen3.7-max", runtime: "openclaw" }],
-          config,
-          "default",
-        ),
-        allowGatewaySubagentBinding: true,
+      const pick = {
+        provider: "bailian-token-plan",
+        modelId: "qwen3.7-max",
+        runtime: "openclaw" as const,
       };
-      const parent = await acquireAgentRunPreparedModelRuntime(input, {
-        catalogMode: "static",
-        pluginGeneration: published.pluginGeneration,
-      });
+      const input = { ...runInput(published, [pick]), config, allowGatewaySubagentBinding: true };
+      await using parent = scopePreparedModelRuntimeLease(
+        await acquireAgentRunPreparedModelRuntime(input, {
+          catalogMode: "static",
+          pluginGeneration: published.pluginGeneration,
+        }),
+      );
       expect(parent.pluginGeneration).not.toBe(published.pluginGeneration);
-      let active = true;
-      try {
-        await withPreparedModelRuntimePluginGenerationScope(
-          parent.pluginGeneration,
-          async () => {
-            const borrowing = acquireAgentRunPreparedModelRuntime(input, {
-              catalogMode: "static",
-              pluginGeneration: parent.pluginGeneration,
-            });
-            if (outcome === "not-imported") {
-              await expect(borrowing).rejects.toThrow("plugin generation was superseded");
-              return;
-            }
-            const nested = await borrowing;
-            expect(nested.snapshot).toBe(parent.snapshot);
-            expect(registryContainsRuntimePluginIds(registry, ["qwen"])).toBe(false);
-            if (outcome === "error") {
-              expect(nested.snapshot.pluginRegistry?.plugins[0]?.error).toBe(
-                "provider fixture failed to load",
-              );
-            }
-            await nested[Symbol.asyncDispose]();
-          },
-          () => (active ? parent.snapshot : undefined),
-        );
-      } finally {
-        active = false;
-        await parent[Symbol.asyncDispose]();
-      }
+      await parent.run(async () => {
+        const borrowing = acquireAgentRunPreparedModelRuntime(input, {
+          catalogMode: "static",
+          pluginGeneration: parent.pluginGeneration,
+        });
+        if (outcome === "not-imported") {
+          await expect(borrowing).rejects.toThrow("plugin generation was superseded");
+          return;
+        }
+        await using nested = await borrowing;
+        expect(nested.snapshot).toBe(parent.snapshot);
+        expect(registryContainsRuntimePluginIds(registry, ["qwen"])).toBe(false);
+        if (outcome === "error") {
+          expect(nested.snapshot.pluginRegistry?.plugins[0]?.error).toBe(
+            "provider fixture failed to load",
+          );
+        }
+      });
     },
   );
 
@@ -635,17 +583,15 @@ describe("prepared reply dispatch runtime", () => {
       waitForReplacement: true,
       agentIds: new Set(["worker"]),
     });
-    const leases: PreparedModelRuntimeLease[] = [];
+    await using leases = new AsyncDisposableStack();
+    const retainLease = <T extends PreparedModelRuntimeLease>(lease: T) => leases.use(lease);
     const reading = Promise.all([
       loadPublishedGatewayReplyDispatchRuntime({
         agentId: "default",
-        onRuntimeLease: (lease) => leases.push(lease),
+        onRuntimeLease: retainLease,
       }),
       prepareModelRuntimeSnapshot(input),
-      acquireAgentRunPreparedModelRuntime(input, { catalogMode: "static" }).then((lease) => {
-        leases.push(lease);
-        return lease;
-      }),
+      acquireAgentRunPreparedModelRuntime(input, { catalogMode: "static" }).then(retainLease),
     ]);
     const observed = reading.catch((error: unknown) => error);
     try {
@@ -659,16 +605,14 @@ describe("prepared reply dispatch runtime", () => {
       });
       expect(snapshot.isCurrent()).toBe(true);
       expect(lease.snapshot.isCurrent()).toBe(true);
-      await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })).resolves.toBe(
-        original,
-      );
+      const retained = loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+      await expect(retained).resolves.toBe(original);
       await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" })).rejects.toThrow(
         "was not published for worker",
       );
     } finally {
       rejectPendingPreparedModelRuntimeReplacement(gate, new Error("test cleanup"));
       await observed;
-      await Promise.all(leases.map((lease) => lease[Symbol.asyncDispose]()));
     }
   });
 
@@ -732,14 +676,13 @@ describe("prepared reply dispatch runtime", () => {
       finishAuthRefreshGate.resolve();
       await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
       expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-      const lease = await acquireAgentRunPreparedModelRuntime(input);
+      await using lease = await acquireAgentRunPreparedModelRuntime(input);
       expect(lease.snapshot).toMatchObject({
         agentId: "default",
         agentDir: input.agentDir,
         workspaceDir: "/tmp/unused-workspace",
       });
       expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-      await lease[Symbol.asyncDispose]();
     } finally {
       finishAuthRefreshGate.resolve();
       await Promise.allSettled([
@@ -768,24 +711,22 @@ it("refreshes successor discovery auth after the preceding runtime registry reti
   };
   const previous = createRuntime("previous");
   const successor = createRuntime("successor");
+  const registry = successor.registry;
   const added = createPluginRecord({ id: "selected-owner" });
-  successor.registry.plugins.push(added);
-  const addedInstance = new PluginInstance(added.id, {
-    record: added,
-    registry: successor.registry,
-  });
-  successor.registry.providers.push({
+  registry.plugins.push(added);
+  const addedInstance = new PluginInstance(added.id, { record: added, registry });
+  registry.providers.push({
     pluginId: added.id,
     source: added.source,
     provider: provider("selected-provider"),
   });
   const discoveries = new Map([
     [previous.registry, previous.discovery],
-    [successor.registry, successor.discovery],
+    [registry, successor.discovery],
   ]);
   mocks.prepareStaticCatalog.mockImplementation(async () => {
-    const registry = getPluginRuntimeGenerationRegistry();
-    const discovery = registry && discoveries.get(registry);
+    const activeRegistry = getPluginRuntimeGenerationRegistry();
+    const discovery = activeRegistry && discoveries.get(activeRegistry);
     if (!discovery) {
       throw new Error("Static discovery must run under its selected runtime registry");
     }
@@ -795,7 +736,7 @@ it("refreshes successor discovery auth after the preceding runtime registry reti
     params.selections?.some(
       (selection: { provider: string }) => selection.provider === "selected-provider",
     )
-      ? successor.registry
+      ? registry
       : previous.registry,
   );
   const input = {
@@ -815,28 +756,28 @@ it("refreshes successor discovery auth after the preceding runtime registry reti
   ]);
   const first = await prepareGroup(input, undefined, pluginMetadata);
   const releasePrevious = retainPreparedPluginGeneration(first.pluginGeneration);
-  let releaseSuccessor: (() => Promise<void>) | undefined;
-  try {
-    expect(first.agentFacts[0]?.credentials["discovery-auth"]).toMatchObject({
-      key: "synthetic-previous-not-real",
-    });
-    const replacement = await prepareGroup(expandedInput, first.pluginGeneration);
-    expect(replacement.pluginGeneration.pluginRegistry).toBe(successor.registry);
-    expect(replacement.pluginGeneration.pluginRegistry).not.toBe(
-      first.pluginGeneration.pluginRegistry,
-    );
-    releaseSuccessor = retainPreparedPluginGeneration(replacement.pluginGeneration);
-    await releasePrevious();
-    expect(previous.instance.lifecycle.signal.aborted).toBe(true);
-    const refreshed = await prepareGroup(expandedInput, replacement.pluginGeneration);
-    expect(refreshed.agentFacts[0]?.credentials["discovery-auth"]).toMatchObject({
-      key: "synthetic-successor-not-real",
-    });
-  } finally {
-    await releasePrevious();
-    await releaseSuccessor?.();
+  await using lifecycle = new AsyncDisposableStack();
+  lifecycle.defer(async () => {
     await addedInstance.dispose();
-  }
+  });
+  const releases: { successor?: () => Promise<void> } = {};
+  lifecycle.defer(() => releases.successor?.());
+  lifecycle.defer(releasePrevious);
+  expect(first.agentFacts[0]?.credentials["discovery-auth"]).toMatchObject({
+    key: "synthetic-previous-not-real",
+  });
+  const replacement = await prepareGroup(expandedInput, first.pluginGeneration);
+  expect(replacement.pluginGeneration.pluginRegistry).toBe(registry);
+  expect(replacement.pluginGeneration.pluginRegistry).not.toBe(
+    first.pluginGeneration.pluginRegistry,
+  );
+  releases.successor = retainPreparedPluginGeneration(replacement.pluginGeneration);
+  await releasePrevious();
+  expect(previous.instance.lifecycle.signal.aborted).toBe(true);
+  const refreshed = await prepareGroup(expandedInput, replacement.pluginGeneration);
+  expect(refreshed.agentFacts[0]?.credentials["discovery-auth"]).toMatchObject({
+    key: "synthetic-successor-not-real",
+  });
 });
 
 describe("catalog-worker replacement demand", () => {
@@ -910,29 +851,25 @@ describe("catalog-worker replacement demand", () => {
 
   it("limits scheduled checks to one per failure, retaining foreground recovery after cooldown", async () => {
     const { input } = await failReplacement();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    using clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
     const repeatedFailure = new Error("catalog replacement still fails");
     mocks.resolveAmbientCredentials.mockClear().mockImplementation(() => {
       throw repeatedFailure;
     });
-    try {
-      await expect(dispatch("scheduled")).rejects.toMatchObject({ cause: repeatedFailure });
-      await expect(dispatch()).rejects.toThrow("was not published");
-      clock.mockReturnValue(20_000);
-      await expect(dispatch("scheduled")).rejects.toThrow("was not published");
-      expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
-      await expect(dispatch()).rejects.toMatchObject({ cause: repeatedFailure });
-      clock.mockReturnValue(30_000);
-      await expect(dispatch("scheduled")).rejects.toThrow("was not published");
-      expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
-      mocks.resolveAmbientCredentials.mockReturnValue({});
-      expect(await dispatch()).toMatchObject({ agentId: "default" });
-      await failReplacement(await prepareModelRuntimeSnapshot(input));
-      expect(await dispatch("scheduled")).toMatchObject({ agentId: "default" });
-      expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(5);
-    } finally {
-      clock.mockRestore();
-    }
+    await expect(dispatch("scheduled")).rejects.toMatchObject({ cause: repeatedFailure });
+    await expect(dispatch()).rejects.toThrow("was not published");
+    clock.mockReturnValue(20_000);
+    await expect(dispatch("scheduled")).rejects.toThrow("was not published");
+    expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
+    await expect(dispatch()).rejects.toMatchObject({ cause: repeatedFailure });
+    clock.mockReturnValue(30_000);
+    await expect(dispatch("scheduled")).rejects.toThrow("was not published");
+    expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
+    mocks.resolveAmbientCredentials.mockReturnValue({});
+    expect(await dispatch()).toMatchObject({ agentId: "default" });
+    await failReplacement(await prepareModelRuntimeSnapshot(input));
+    expect(await dispatch("scheduled")).toMatchObject({ agentId: "default" });
+    expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(5);
   });
   it("does not spend the scheduled check while waiting for an unrelated failed replacement", async () => {
     await failReplacement(undefined, ["default", "other"]);
