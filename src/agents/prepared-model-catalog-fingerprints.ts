@@ -50,3 +50,11 @@ export function fingerprintPreparedModelCatalogPluginContext(
     pluginFingerprint: fingerprintPreparedModelCatalogPlugins(value.pluginMetadataSnapshot),
   });
 }
+
+/** The worker's workspace slot and registration identity travel together. */
+export function prepareModelCatalogWorkerContext(value: PreparedModelCatalogWorkerInput) {
+  return {
+    workspaceDir: value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir,
+    fingerprint: fingerprintPreparedModelCatalogPluginContext(value),
+  };
+}

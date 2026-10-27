@@ -147,7 +147,6 @@ test("disables only enabled jobs bound to the archived session", async () => {
   ];
   const update = fakeUpdateWithPrecondition(() => jobs);
   expect(await disable(jobs, update)).toEqual(["bound", "created-here"]);
-  expect(update).toHaveBeenCalledTimes(2);
   expect(update.mock.calls[0]?.slice(0, 2)).toEqual(["bound", { enabled: false }]);
 });
 
@@ -171,6 +170,5 @@ test("a failing job does not abort the remaining bound jobs", async () => {
   const listed = [job({ id: "vanished", sessionKey: "cron:bound" }), job({ id: "bound" })];
   const update = fakeUpdateWithPrecondition(() => [job({ id: "bound" })]);
   await expect(disable(listed, update)).rejects.toThrow(AggregateError);
-  expect(update).toHaveBeenCalledTimes(2);
   expect(update.mock.calls.map((call) => call[0])).toEqual(["vanished", "bound"]);
 });

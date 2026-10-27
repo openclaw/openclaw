@@ -41,3 +41,14 @@ export function configFor(
 export function providerConfig(provider: string, entry: Partial<ModelProviderConfig>) {
   return configFor(provider, entry.baseUrl ?? "", entry);
 }
+
+export function createPlatformAuthRoute() {
+  return {
+    provider: "openai",
+    modelId: "gpt-5.5",
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    authRequirement: "api-key",
+    requestTransportOverrides: "none",
+  } as const;
+}

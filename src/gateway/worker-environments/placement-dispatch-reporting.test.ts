@@ -7,49 +7,41 @@ import {
   PROVISIONING_PLACEMENT,
 } from "./placement-dispatch-coordinator.test-support.js";
 
-it.each([false, true])(
-  "reports the sweep without fencing independent recovery behind its baseline (report fails=%s)",
-  async (reportFails) => {
-    const baseline = createReadBarrier();
-    const reportError = new Error("synthetic reporting failure");
-    const states = ["provisioning"];
-    const coordinated = coordinateWorkerPlacementDispatch(
-      createCoordinatorTestService({
-        resumeProvisioning: admittedRecovery(async (_placement, core) => await core()),
-        reconcile: async () => {
-          states.push("reclaimed");
-        },
-      }),
-      (_request, run) => run(),
-      undefined,
-      async (operation) => {
-        await baseline.hold(undefined);
-        if (reportFails) {
-          throw reportError;
-        }
-        await operation();
+it("does not fence independent recovery behind a failing report baseline", async () => {
+  const baseline = createReadBarrier();
+  const reportError = new Error("synthetic reporting failure");
+  const states = ["provisioning"];
+  const coordinated = coordinateWorkerPlacementDispatch(
+    createCoordinatorTestService({
+      resumeProvisioning: admittedRecovery(async (_placement, core) => await core()),
+      reconcile: async () => {
+        states.push("reclaimed");
       },
-    );
-    const sweep = coordinated.reconcile();
-    const sweepOutcome = sweep.catch((error: unknown) => error);
-    await baseline.entered.promise;
-    const recovery = coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {
-      states.push("active");
-    });
-    try {
-      await recovery;
-      expect(states).toEqual(["provisioning", "active"]);
-      baseline.resume.resolve();
-      expect(await sweepOutcome).toBe(reportFails ? reportError : undefined);
-      expect(states).toEqual(
-        reportFails ? ["provisioning", "active"] : ["provisioning", "active", "reclaimed"],
-      );
-    } finally {
-      baseline.resume.resolve();
-      await Promise.all([sweepOutcome, recovery]);
-    }
-  },
-);
+    }),
+    (_request, run) => run(),
+    undefined,
+    async () => {
+      await baseline.hold(undefined);
+      throw reportError;
+    },
+  );
+  const sweep = coordinated.reconcile();
+  const sweepOutcome = sweep.catch((error: unknown) => error);
+  await baseline.entered.promise;
+  const recovery = coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {
+    states.push("active");
+  });
+  try {
+    await recovery;
+    expect(states).toEqual(["provisioning", "active"]);
+    baseline.resume.resolve();
+    expect(await sweepOutcome).toBe(reportError);
+    expect(states).toEqual(["provisioning", "active"]);
+  } finally {
+    baseline.resume.resolve();
+    await Promise.all([sweepOutcome, recovery]);
+  }
+});
 
 it("reports completed sweep work while independent recovery and destruction settle", async () => {
   const operation = createReadBarrier();

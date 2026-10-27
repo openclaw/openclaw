@@ -2,7 +2,10 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/types.adapters.js";
 // Covers native approval runtime delivery and resolution.
-import { createSystemAgentChangeRequest } from "./approval-handler.test-helpers.js";
+import {
+  createExecRequest,
+  createSystemAgentChangeRequest,
+} from "./approval-handler.test-helpers.js";
 import { createChannelNativeApprovalRuntime as createChannelNativeApprovalRuntimeRaw } from "./approval-native-runtime.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -34,14 +37,7 @@ vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: hoisted.startGatewayClientWhenEventLoopReady,
 }));
 
-const execRequest = {
-  id: "approval-1",
-  request: {
-    command: "uname -a",
-  },
-  createdAtMs: 0,
-  expiresAtMs: 120_000,
-};
+const execRequest = createExecRequest("approval-1", "uname -a", 0, 120_000);
 
 const approvalRuntimes: Array<ReturnType<typeof createChannelNativeApprovalRuntimeRaw>> = [];
 

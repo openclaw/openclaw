@@ -1,3 +1,4 @@
+import { createHook } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   createAssistantMessageEventStream,
@@ -260,6 +261,49 @@ describe("AgentSession loop correctness", () => {
     await session.prompt("second prompt");
     expect(observed).toEqual(["first", "second", "third", "second", "late"]);
   });
+
+  it.runIf(!process.versions.bun)(
+    "does not wrap each streamed session update in a forwarding promise",
+    async () => {
+      const updates = 16;
+      let promises = 0;
+      let delivered = 0;
+      const hook = createHook({
+        init(_id, type) {
+          if (type === "PROMISE") {
+            promises++;
+          }
+        },
+      });
+      const message = createAssistant(testModel, "synthetic answer");
+      const { session } = await createTestSession();
+      session.agent.streamFn = () => ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: "start", partial: message } as const;
+          for (let index = 0; index < updates; index++) {
+            hook.enable();
+            yield { type: "text_delta", contentIndex: 0, delta: "x", partial: message } as const;
+          }
+          yield { type: "done", reason: "stop", message } as const;
+        },
+        result: async () => message,
+      });
+      session.subscribe((event) => {
+        if (event.type === "message_update") {
+          hook.disable();
+          delivered++;
+        }
+      });
+      try {
+        await session.agent.prompt("answer");
+      } finally {
+        hook.disable();
+      }
+      expect(delivered).toBe(updates);
+      // Three iterator handoff promises, Agent dispatch, and the awaited session handler.
+      expect(promises).toBeLessThanOrEqual(updates * 5);
+    },
+  );
 
   it("carries the canonical assistant entry id through ordered terminal listeners", async () => {
     const assistant = createAssistant(testModel, [{ type: "text", text: "same answer" }]);

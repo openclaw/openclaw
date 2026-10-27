@@ -76,6 +76,7 @@ export class ComposerSkillCatalog {
               return {
                 key: skill.skillKey,
                 name: skill.name,
+                emoji: skill.emoji,
                 enabled: baseEnabled && !missingDeps && !blocked,
                 baseEnabled,
                 ...(missingDeps ? { missingDeps: true } : {}),

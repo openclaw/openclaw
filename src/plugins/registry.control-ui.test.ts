@@ -3,6 +3,8 @@ import type { PluginControlUiDescriptor } from "./host-hooks.js";
 import { expectDiagnostic, registrationFixture } from "./registry-registration.test-support.js";
 
 const tab = { surface: "tab", id: "panel", label: "Reports" } as const;
+const invalidSlug = "descriptor slug requires";
+const foreignRoute = "must be owned by its bundled plugin";
 function fixture() {
   const { registry, register: registerPlugin } = registrationFixture();
   const register = (
@@ -17,29 +19,14 @@ function fixture() {
 
 describe("plugin registry Control UI descriptors", () => {
   it.each([
-    ["reserved API slug", { slug: "api" }, {}, "descriptor slug requires"],
-    ["HTTP health slug", { slug: "health" }, {}, "descriptor slug requires"],
-    [
-      "slug with native route",
-      { slug: "reports", placement: "route:reports" },
-      { origin: "bundled" },
-      "descriptor slug requires",
-    ],
-    [
-      "workspace native route",
-      { placement: "route:workboard" },
-      { id: "workboard", origin: "workspace" },
-      "must be owned by its bundled plugin",
-    ],
-    [
-      "foreign bundled route",
-      { placement: "route:workboard" },
-      { id: "logbook", origin: "bundled" },
-      "must be owned by its bundled plugin",
-    ],
-    ["protocol-relative path", { path: "//attacker.example/panel" }, {}, undefined],
-    ["backslash host path", { path: "/\\attacker.example/panel" }, {}, undefined],
-  ] as const)("rejects %s", (_name, descriptor, fields, message) => {
+    [{ slug: "api" }, {}, invalidSlug],
+    [{ slug: "health" }, {}, invalidSlug],
+    [{ slug: "reports", placement: "route:reports" }, { origin: "bundled" }, invalidSlug],
+    [{ placement: "route:workboard" }, { id: "workboard", origin: "workspace" }, foreignRoute],
+    [{ placement: "route:workboard" }, { id: "logbook", origin: "bundled" }, foreignRoute],
+    [{ path: "//attacker.example/panel" }, {}, undefined],
+    [{ path: "/\\attacker.example/panel" }, {}, undefined],
+  ] as const)("rejects %j", (descriptor, fields, message) => {
     const { registry, register } = fixture();
     const record = { id: "reports", ...fields };
     register({ ...tab, ...descriptor }, record);

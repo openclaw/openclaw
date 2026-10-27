@@ -851,6 +851,7 @@ suite.define(() => {
       await expect(userGroup.locator("img.chat-avatar.user[src]")).toHaveCount(0);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
+      const originalImage = (await image.elementHandles())[0] ?? null;
 
       await userGroup.hover();
       await userGroup.getByRole("button", { name: "Reply to message" }).click();
@@ -865,7 +866,15 @@ suite.define(() => {
       );
 
       expect(avatarRequests).toHaveLength(1);
-      await expect(image).toHaveCount(0);
+      await expect(userGroup.locator("img.chat-avatar.user[src]")).toHaveCount(0);
+      await expect(image).toBeHidden();
+      // A settled miss may retain its first frame, but rerenders must not create more images.
+      expect(
+        await image.evaluateAll(
+          (images, original) => images.every((candidate) => candidate === original),
+          originalImage,
+        ),
+      ).toBe(true);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
     });

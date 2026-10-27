@@ -12,7 +12,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { inspectCurrentConversationBindingRecordsInDatabase as readBindings } from "./outbound/current-conversation-bindings.kernel.js";
 import { assertNoRetiredRuntimeStateFiles } from "./state-migrations.retired-runtime-files.js";
-import { migrateRetiredRuntimeState } from "./state-migrations.retired-runtime.js";
 import { runLegacyStateMigrationSteps } from "./state-migrations.steps.js";
 
 const binding = {
@@ -64,7 +63,7 @@ function write(relative: string, value: unknown) {
   return { file, bytes };
 }
 function migrate() {
-  return migrateRetiredRuntimeState({ stateDir, env, assertCurrent() {} });
+  return repairRetiredDoctorState(env);
 }
 function expectArchived({ file, bytes }: ReturnType<typeof write>, suffix = ".migrated") {
   expect(fs.existsSync(file)).toBe(false);
@@ -211,6 +210,6 @@ it.each(imports)(
 it("does not import another profile's default-home approval", async () => {
   const source = write(approvalsFile, { version: 1, approvals: [] });
   const profileDir = path.join(path.dirname(stateDir), ".openclaw-work");
-  await migrateRetiredRuntimeState({ stateDir: profileDir, env, assertCurrent() {} });
+  await repairRetiredDoctorState({ ...env, OPENCLAW_STATE_DIR: profileDir });
   expect(fs.readFileSync(source.file)).toEqual(source.bytes);
 });

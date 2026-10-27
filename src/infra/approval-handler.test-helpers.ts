@@ -68,3 +68,12 @@ export function createSystemAgentChangeRequest(
     sessionId,
   };
 }
+
+export function createExecRequest(
+  id: string,
+  command: string,
+  createdAtMs: number,
+  expiresAtMs: number,
+) {
+  return { id, request: { command }, createdAtMs, expiresAtMs };
+}

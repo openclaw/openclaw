@@ -6,6 +6,7 @@ import { expect, it } from "vitest";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.ts";
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
+import { GatewaySessionRowEvents } from "../api/gateway-session-row-events.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -252,6 +253,7 @@ suite.define(() => {
             await page.routeWebSocket(`ws://127.0.0.1:${instance.port}/**`, (socket) => {
               sockets += 1;
               const server = socket.connectToServer();
+              const rowEvents = new GatewaySessionRowEvents();
               socket.onMessage((message) => {
                 const raw = message.toString();
                 const frame: Frame = JSON.parse(raw);
@@ -282,7 +284,18 @@ suite.define(() => {
               });
               server.onMessage((message) => {
                 const raw = message.toString();
-                const frame: Frame = JSON.parse(raw);
+                const wireFrame: Frame = JSON.parse(raw);
+                // Withhold logical notifications without dropping wire compression baselines.
+                const projected =
+                  wireFrame.type === "event" &&
+                  (wireFrame.event === "sessions.changed" || wireFrame.event === "session.message")
+                    ? rowEvents.project({ ...wireFrame, event: wireFrame.event })
+                    : null;
+                if (projected?.missingBaseline) {
+                  throw new Error("UNQUALIFIED: fixture lost a Gateway session row baseline");
+                }
+                const frame: Frame = projected?.event ?? wireFrame;
+                const forwarded = projected ? JSON.stringify(frame) : message;
                 const request = frame.id ? pending.get(frame.id) : undefined;
                 if (frame.type === "res") {
                   received.push(frame);
@@ -302,7 +315,7 @@ suite.define(() => {
                       pending.delete(frame.id);
                     }
                     delivered.push(frame);
-                    socket.send(message);
+                    socket.send(forwarded);
                   };
                   const session = frame.payload?.session;
                   const historySession = frame.payload?.sessionInfo;
@@ -507,6 +520,9 @@ suite.define(() => {
               .getByRole("button", { name: "Send message", exact: true })
               .waitFor({ state: "visible" });
             await page.screenshot({ path: path.join(artifactDir, "03-send-restored.png") });
+            expect(
+              await page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase),
+            ).toBe("connected");
             expect(sockets).toBe(1);
             expect(sent.filter((frame) => frame.method === "connect")).toHaveLength(1);
             expect(sent.filter((frame) => frame.method === "chat.abort")).toHaveLength(1);

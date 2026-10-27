@@ -13,6 +13,7 @@ import {
   createComposerContainer,
   createComposerProps,
   disposeComposer,
+  findPrimaryButton,
   renderComposerInto,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
@@ -172,6 +173,31 @@ it("publishes submitted and restored drafts without remounting the input", () =>
   flush();
   expect(textarea.value).toBe("A recoverable draft");
   expect(view.textarea()).toBe(textarea);
+});
+
+it("retires submitted command suggestions before a delayed catalog refresh", async () => {
+  const refresh = createDeferred();
+  const onSend = vi.fn(() => {
+    clearSubmittedComposerState(state, state.chatMessage, [], [], null);
+  });
+  const { state, view, input } = mountOwnedComposer({
+    onSend,
+    onSlashIntent: () => refresh.promise,
+  });
+  input("/help");
+  await waitForSolid(() => expect(view.query('[role="listbox"]')).not.toBeNull());
+
+  findPrimaryButton(view.container).click();
+  flush();
+  expect(onSend).toHaveBeenCalledOnce();
+  expect(state.chatMessage).toBe("");
+  expect(view.textarea().value).toBe("");
+  expect(view.query('[role="listbox"]')).toBeNull();
+  expect(view.textarea().hasAttribute("aria-controls")).toBe(false);
+
+  refresh.resolve();
+  await refresh.promise;
+  await waitForSolid(() => expect(view.query('[role="listbox"]')).toBeNull());
 });
 
 it("publishes a restored persisted draft and queue after adopting their revision", () => {

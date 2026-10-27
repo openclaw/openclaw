@@ -22,6 +22,8 @@ const toolsPerGroup = 25;
 const catalogPageSize = 100;
 const pluginQuery = "Data plugin 09";
 const skillQuery = "Data skill 0999";
+const skillScrollRowSelector =
+  "css:light=.agent-skills-group:last-child .agent-skill-row:last-child";
 
 function suffix(index: number) {
   return String(index).padStart(4, "0");
@@ -709,9 +711,18 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
     id: "data-agent-skills-scroll",
     route: pathForAgentPanel("main", "skills"),
     expected: "The last installed skill remains reachable in the 1,000-skill report.",
-    prepare: async (page) => countRows(page, ".agent-skill-row", inventorySize),
+    prepare: async (page) => {
+      await countRows(page, ".agent-skill-row", inventorySize);
+      const lastTitle = await page
+        .locator(skillScrollRowSelector)
+        .locator(".settings-row__title")
+        .textContent();
+      if (lastTitle?.trim() !== skillQuery) {
+        throw new Error("The final installed row is not the expected fixture skill");
+      }
+    },
     run: async (page) => {
-      const last = page.locator(".agent-skill-row").filter({ hasText: "Data skill 0999" });
+      const last = page.locator(skillScrollRowSelector);
       await last.scrollIntoViewIfNeeded();
       if (!(await last.isVisible())) {
         throw new Error("The final installed skill is not visible after scrolling");

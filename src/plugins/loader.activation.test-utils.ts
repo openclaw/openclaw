@@ -1318,7 +1318,6 @@ ${channelPluginSource({
     const marker = path.join(makePluginLoaderTempDir(), "untrusted-load-path-channel-imported.txt");
     const plugin = writePlugin({
       id: "untrusted-load-path-channel",
-      filename: "untrusted-load-path-channel.cjs",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
 ${channelPluginSource({
   pluginId: "untrusted-load-path-channel",
@@ -1357,7 +1356,6 @@ ${channelPluginSource({
     );
     const plugin = writePlugin({
       id: "denylisted-load-path-channel",
-      filename: "denylisted-load-path-channel.cjs",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
 ${channelPluginSource({
   pluginId: "denylisted-load-path-channel",

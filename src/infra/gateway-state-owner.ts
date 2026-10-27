@@ -15,6 +15,7 @@ import type { acquireFileLockSync } from "./file-lock-manager.js";
 import { describeGatewayLockHolder, type LockPayload } from "./gateway-lock-payload.js";
 import {
   resolveStateOwnerIdentity,
+  resolveStateOwnerIdentityAsync,
   removeCreatedProjectionDirectories,
   type StateOwnerDirectoryIdentity,
 } from "./gateway-state-owner-directory.js";
@@ -493,15 +494,16 @@ export function captureGatewayStateOwner(databasePath: string) {
   }
   const assertCurrent = () => {
     owner.lost.signal.throwIfAborted();
+    const identity = resolveStateOwnerIdentity(databasePath);
     if (
       owners.get(key) !== owner ||
       !owner.accepting ||
-      resolveStateOwnerIdentity(databasePath).key !== key ||
+      identity.key !== key ||
       (owner.getProjection && !owner.getProjection()?.verifyStillHeld())
     ) {
       throw new GatewayStateOwnerContentionError(databasePath);
     }
-    assertStateDatabaseAccessAllowed(databasePath);
+    assertStateDatabaseAccessAtOwnerPath(databasePath, identity, undefined);
   };
   assertCurrent();
   return {
@@ -581,11 +583,25 @@ export function assertStateDatabaseAccessAllowed(
 }
 
 /** Retained handles keep their admitted paths; reopening captures a fresh identity. */
-export function captureStateDatabaseAccess(databasePath: string) {
-  const identity = resolveStateOwnerIdentity(databasePath);
+export async function captureStateDatabaseAccess(databasePath: string) {
+  const identity = await resolveStateOwnerIdentityAsync(databasePath);
   const { canonicalPath } = identity;
+  const registered = owners.get(identity.key);
   return {
     canonicalPath,
+    processOwner:
+      registered?.kind === "process"
+        ? {
+            role: registered.payload.role ?? "gateway",
+            signal: registered.lost.signal,
+            assertCurrent() {
+              registered.lost.signal.throwIfAborted();
+              if (!registered.accepting || owners.get(identity.key) !== registered) {
+                throw new Error("OpenClaw state process owner is no longer current");
+              }
+            },
+          }
+        : undefined,
     async prepareAccess(captured?: Parameters<typeof assertStateDatabaseAccessAllowed>[1]) {
       const owner = owners.get(identity.key);
       const role = owner?.payload.role ?? "gateway";

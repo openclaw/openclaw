@@ -428,6 +428,7 @@ export async function commitPreparedSessionWorkspace(params: {
           ...(params.projectId ? { projectId: params.projectId } : {}),
           sessionRoot: prepared.sessionRoot,
           spawnedCwd: prepared.spawnedCwd,
+          spawnedWorkspaceDir: undefined,
           ...(prepared.worktree ? { worktree: prepared.worktree } : {}),
           ...(params.priorWorkspace ? { priorWorkspace: params.priorWorkspace } : {}),
           ...(params.clearPendingIntent

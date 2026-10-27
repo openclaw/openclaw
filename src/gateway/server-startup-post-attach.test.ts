@@ -14,6 +14,7 @@ import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
+  nextEventLoopTurn,
 } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { currentUpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
@@ -704,9 +705,7 @@ describe("startGatewayPostAttachRuntime", () => {
         } else {
           sidecars.resolve();
         }
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
         expect(returned).not.toHaveBeenCalled();
         logging.resolve();
         sidecars.resolve();
@@ -777,9 +776,7 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(completed).toEqual([]);
         const closed = vi.fn();
         const closing = lifetime.drain().then(closed);
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
         expect(closed).not.toHaveBeenCalled();
         release();
         await closing;
@@ -868,9 +865,7 @@ describe("startGatewayPostAttachRuntime", () => {
     events.push("returned");
 
     try {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(updateCheck.initialize).not.toHaveBeenCalled();
       expect(updateCheck.start).not.toHaveBeenCalled();
       expect(events).toEqual(["sidecars", "returned"]);
@@ -908,12 +903,8 @@ describe("startGatewayPostAttachRuntime", () => {
       if (outcome === "close-prelude") {
         closing = true;
         postReadyWork.resolve();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
+        await nextEventLoopTurn();
       }
       let stopped = false;
       const stopping = result.stopGatewayUpdateCheck().then(() => {
@@ -926,9 +917,7 @@ describe("startGatewayPostAttachRuntime", () => {
         postReadyWork.resolve();
         await stopping;
       }
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(createGatewayUpdateCheck).not.toHaveBeenCalled();
       expect(updateCheck.initialize).not.toHaveBeenCalled();
       expect(updateCheck.start).not.toHaveBeenCalled();
@@ -1241,9 +1230,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
       const closed = vi.fn();
       const closing = lifetime.drain().then(closed);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(closed).not.toHaveBeenCalled();
       channels.resolve();
       await closing;
@@ -2161,9 +2148,7 @@ describe("startGatewayPostAttachRuntime", () => {
     for (const sidecar of postReadySidecars) {
       await stopTrackedSidecar(sidecar);
     }
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextEventLoopTurn();
 
     expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
   });
@@ -2209,9 +2194,7 @@ describe("startGatewayPostAttachRuntime", () => {
           closing = true;
         }
         releaseImport?.();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
 
         expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
       } finally {
@@ -2707,9 +2690,7 @@ describe("startGatewayPostAttachRuntime", () => {
       const closing = connectionWork.drain().then(() => {
         events.push("metadata-retired");
       });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       if (closeAfterRefreshStarts) {
         expect.soft(events).toEqual(["refresh-started"]);
       } else {
@@ -2718,9 +2699,7 @@ describe("startGatewayPostAttachRuntime", () => {
       releaseRefresh.resolve();
       await runtime.startupSettled;
       await closing;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(events).toEqual(
         closeAfterRefreshStarts
           ? ["refresh-started", "refresh-completed", "metadata-retired"]
@@ -2729,9 +2708,7 @@ describe("startGatewayPostAttachRuntime", () => {
     } finally {
       releaseRefresh.resolve();
       await connectionWork.drain();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
     }
   });
 
@@ -2777,24 +2754,18 @@ describe("startGatewayPostAttachRuntime", () => {
       await hookLoadStarted.promise;
       connectionWork.beginClose();
       const closing = connectionWork.drain().then(retirePluginMetadata);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect.soft(retirePluginMetadata).not.toHaveBeenCalled();
       releaseHookLoad.resolve();
       await runtime.startupSettled;
       await closing;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(gatewayStart).not.toHaveBeenCalled();
       expect(retirePluginMetadata).toHaveBeenCalledOnce();
     } finally {
       releaseHookLoad.resolve();
       await connectionWork.drain();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
     }
   });
 

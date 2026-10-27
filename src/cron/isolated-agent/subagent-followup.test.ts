@@ -294,6 +294,37 @@ describe("waitForDescendantSubagentSummary", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it.each([-60_000, 60_000])(
+    "keeps the descendant wait budget after a %s ms wall-clock step",
+    async (wallClockStepMs) => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      listRuns.mockResolvedValue([createDescendantRun({ pauseReason: "sessions_yield" })]);
+      unsettled.mockResolvedValue(true);
+      latestReply.mockResolvedValue("on it");
+      let settled = false;
+      const resultPromise = waitSummary({ timeoutMs: 300, abortSignal: controller.signal }).then(
+        (result) => {
+          settled = true;
+          return result;
+        },
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(100);
+        vi.setSystemTime(Date.now() + wallClockStepMs);
+        await vi.advanceTimersByTimeAsync(150);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(settled).toBe(true);
+        await expect(resultPromise).resolves.toBeUndefined();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        controller.abort();
+        await resultPromise;
+      }
+    },
+  );
+
   it.each(["handoff", "running"])("stops waiting when cron cancels during %s", async (phase) => {
     vi.useFakeTimers();
     const controller = new AbortController();

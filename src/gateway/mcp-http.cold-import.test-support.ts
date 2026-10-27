@@ -4,7 +4,7 @@ import {
   resolveSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
 } from "../config/sessions/session-transcript-read-fence.js";
-import type { UserTurnTranscriptAdmissionReceipt } from "../sessions/user-turn-transcript.types.js";
+import { createFirstTurnContextFixture } from "./mcp-http.context-fixture.test-support.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
 
 const { execute, resolveTools } = vi.hoisted(() => ({ execute: vi.fn(), resolveTools: vi.fn() }));
@@ -28,19 +28,7 @@ afterEach(async () => {
 });
 
 export async function assertColdImportContextCleared(): Promise<void> {
-  const session = { agentId: "main", sessionId: "first-turn-session" };
-  const receipt: UserTurnTranscriptAdmissionReceipt = {
-    ...session,
-    sessionKey: "agent:main:first-turn",
-    storePath: "first-turn-store",
-    generation: "first-turn-generation",
-    entryId: "first-turn-user",
-    rawSeq: 1,
-    effectiveParentId: null,
-    activeMessagePosition: 0,
-    logicalTurnId: "first-turn",
-    role: "user",
-  };
+  const { session, receipt } = createFirstTurnContextFixture();
   const turnLocal = new AsyncLocalStorage<string>();
   const observed: unknown[] = [];
   execute.mockImplementation(() => {

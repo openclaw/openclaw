@@ -1,8 +1,9 @@
+import { stat } from "node:fs/promises";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { publishSqliteWalCheckpointObservation } from "../infra/sqlite-wal-checkpoint.js";
 import type { SqliteWorkerCloseReceipt } from "../infra/sqlite-worker-contract.js";
 import {
-  assertExistingDatabaseIdentity,
+  assertDatabaseFileIdentity,
   readDatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -115,11 +116,11 @@ export function readAgentDatabaseClosedReceipt(
   return { receipt, identity, lease };
 }
 
-export function publishAgentDatabaseCloseCheckpoint(
+export async function publishAgentDatabaseCloseCheckpoint(
   pathname: string,
   closed: ReturnType<typeof readAgentDatabaseClosedReceipt>,
   assertCleanupOwned: () => void,
-): void {
+): Promise<void> {
   const checkpoint = closed?.receipt.checkpoint;
   if (!closed || !checkpoint) {
     return;
@@ -128,9 +129,15 @@ export function publishAgentDatabaseCloseCheckpoint(
   try {
     // Cleanup retains custody after ordinary admission is revoked during shutdown.
     assertCleanupOwned();
-    assertExistingDatabaseIdentity(pathname, receipt.identity.key);
-    assertExistingDatabaseIdentity(identity.nativeLocation, receipt.identity.key);
-    assertExistingDatabaseIdentity(lease.sharedStatePath, lease.sharedStateIdentity);
+    const [selected, native, shared] = await Promise.all([
+      stat(pathname, { bigint: true }),
+      stat(identity.nativeLocation, { bigint: true }),
+      stat(lease.sharedStatePath, { bigint: true }),
+    ]);
+    assertDatabaseFileIdentity(selected, { key: receipt.identity.key });
+    assertDatabaseFileIdentity(native, { key: receipt.identity.key });
+    assertDatabaseFileIdentity(shared, { key: lease.sharedStateIdentity });
+    assertCleanupOwned();
     publishSqliteWalCheckpointObservation(pathname, checkpoint);
   } catch {
     // A stale diagnostic must not clear another generation's budget or fail native cleanup.

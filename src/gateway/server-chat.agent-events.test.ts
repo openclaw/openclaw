@@ -156,6 +156,28 @@ describe("agent event handler", () => {
     );
   }
 
+  it("resolves each synchronous streamed event once while keeping routing current", () => {
+    let sessionKey = "agent:main:first";
+    const resolveSessionKeyForRun = vi.fn(() => sessionKey);
+    const h = createHarness({ resolveSessionKeyForRun });
+    onTestFinished(async () => {
+      await h.handler.dispose();
+      h.chatRunState.clear();
+    });
+    const expected = [];
+    for (let seq = 1; seq <= 12; seq++) {
+      if (seq === 7) {
+        sessionKey = "agent:main:second";
+      }
+      const stream = seq % 2 ? "assistant" : "thinking";
+      const data = { text: `fragment ${seq}` };
+      expect(h.emit("streamed-run", stream, data, { seq })).toBeUndefined();
+      expected.push({ runId: "streamed-run", sessionKey, stream, seq, data });
+    }
+    expect(h.agent().map(([, payload]) => payload)).toMatchObject(expected);
+    expect(resolveSessionKeyForRun).toHaveBeenCalledTimes(12);
+  });
+
   it("projects successful widgets into live assistant snapshots without final text", async () => {
     const h = createHarness();
     h.registerNamed("widgets", {

@@ -107,12 +107,10 @@ async function* parseAnthropicSseBody(
         completed = chunk.done;
         return chunk;
       },
-      (pending) => {
-        if (pending.length > ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS) {
-          throw new Error(
-            `Anthropic Messages SSE response exceeded max pending buffer size (${ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS} chars) without event boundary`,
-          );
-        }
+      {
+        max: ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS,
+        unit: "characters",
+        message: `Anthropic Messages SSE response exceeded max pending buffer size (${ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS} chars) without event boundary`,
       },
     )) {
       const data = (terminated ? frame : frame.trim())

@@ -6,10 +6,8 @@ import {
   subscriptionRoute,
 } from "../../agents/model-auth-availability.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  listModels,
-  WITHOUT_OPENAI_ENV_AUTH,
-} from "./models-list-result.openai-routes.test-support.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
+import { listModels } from "./models-list-result.openai-routes.test-support.js";
 
 it("publishes only explicit access metadata for the selected account, model and runtime", async () => {
   await withOpenClawTestState(
@@ -35,6 +33,7 @@ it("publishes only explicit access metadata for the selected account, model and 
             agents: {
               defaults: {
                 model: "openai/" + id,
+                params: { accessPrograms: { cyber: "daybreak_blue" } },
                 models: { ["openai/" + id]: { agentRuntime: { id: runtime } } },
               },
             },
@@ -67,9 +66,14 @@ it("publishes only explicit access metadata for the selected account, model and 
       };
       expect(await read("openai:a")).toMatchObject({
         availableAccessPrograms: { cyber: ["standard", "daybreak_blue"] },
+        cyberAccessProgramDefault: "daybreak_blue",
       });
-      expect(await read("openai:b")).not.toHaveProperty("availableAccessPrograms");
-      expect(await read("openai:a", "codex")).not.toHaveProperty("availableAccessPrograms");
+      const otherAccount = await read("openai:b");
+      expect(otherAccount).not.toHaveProperty("availableAccessPrograms");
+      expect(otherAccount).toHaveProperty("cyberAccessProgramDefault", "daybreak_blue");
+      const native = await read("openai:a", "codex");
+      expect(native).not.toHaveProperty("availableAccessPrograms");
+      expect(native).toHaveProperty("cyberAccessProgramDefault", "daybreak_blue");
     },
   );
 });

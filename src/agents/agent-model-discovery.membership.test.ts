@@ -11,6 +11,7 @@ const generatedProvider = {
   apiKey: "cached-key-is-not-current-auth",
   models: [{ id: "retained-model", name: "Generated model", contextWindow: 65536 }],
 };
+const catalogOwner = { id: "catalog-owner", providers: ["fixture"] };
 function catalogs(
   providers: Record<string, typeof generatedProvider> = { fixture: generatedProvider },
 ) {
@@ -18,7 +19,7 @@ function catalogs(
   return [{ pluginId: "catalog-owner", contents }];
 }
 const deferredMetadata = createPluginMetadataSnapshotFixture({
-  plugins: [{ id: "catalog-owner", providers: ["fixture"], activation: { onStartup: false } }],
+  plugins: [{ ...catalogOwner, activation: { onStartup: false } }],
 });
 
 type Sources = Parameters<typeof discoverModelsFromCapturedSources>[1];
@@ -95,8 +96,7 @@ it("excludes generated native inventory for a configured proxy endpoint", () => 
     pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
       plugins: [
         {
-          id: "catalog-owner",
-          providers: ["fixture"],
+          ...catalogOwner,
           providerEndpoints: [{ endpointClass: "openai-public", hosts: ["fixture.example"] }],
         },
       ],
@@ -121,8 +121,7 @@ it.each([
       pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
         plugins: [
           {
-            id: "catalog-owner",
-            providers: ["fixture"],
+            ...catalogOwner,
             modelCatalog: {
               discovery: { fixture: "runtime" },
               configuredEndpointDiscovery: ["fixture"],

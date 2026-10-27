@@ -71,6 +71,9 @@ automations. It runs only while `writesEnabled` is `true`.
 ```
 
 `schedule` is a five-field cron expression (minute, hour, day, month, weekday).
+Schedules use local civil time in the configured zone. A spring-forward change
+on a skipped day does not discard matching midnight slots on the following day.
+A configured time that does not exist during the forward jump is skipped.
 An invalid schedule or time zone does not disable the plugin: the pass is not
 scheduled, a warning is logged, and **Settings → Maintenance** shows the error.
 

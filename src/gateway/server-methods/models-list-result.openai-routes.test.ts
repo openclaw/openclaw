@@ -9,13 +9,13 @@ import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import {
   catalogEntry,
   listModels,
   providerCatalogEntry,
   createModelsListTestContext,
-  WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 
 const IMPLICIT_CODEX_RUNTIME = {
@@ -117,7 +117,7 @@ describe("models.list OpenAI routes", () => {
     expect(resolveRoutes).toHaveBeenCalledTimes(2);
   });
 
-  it("omits route-sensitive metadata while route observation is required", async () => {
+  it("keeps the Codex Access default while omitting unobserved route metadata", async () => {
     const routeResolverFactory = vi.fn(() => () => ({
       kind: "indeterminate" as const,
       defaultRuntimeId: "codex",
@@ -142,6 +142,7 @@ describe("models.list OpenAI routes", () => {
           name: "gpt-5.6",
           provider: "openai",
           agentRuntime: IMPLICIT_CODEX_RUNTIME,
+          cyberAccessProgramDefault: "standard",
           available: false,
         },
       ],

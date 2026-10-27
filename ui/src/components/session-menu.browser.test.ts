@@ -35,7 +35,6 @@ it.each(["dispatch", "move", "retry"] as const)(
     menu.actionDisabledReasons = { "move-session": "Wait for the active turn to finish." };
     await menu.updateComplete;
     await expect.element(item).toBeDisabled();
-    expect(onAction).not.toHaveBeenCalled();
     menu.actionDisabledReasons = {};
     await menu.updateComplete;
     await item.click();

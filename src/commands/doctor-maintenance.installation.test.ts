@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
@@ -233,10 +234,7 @@ async function runInstallationCase(params: {
     [mocks.activeRoot, "2026.9.17"],
   ] as const) {
     await fs.mkdir(path.join(root, "dist"), { recursive: true });
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({ name: "openclaw", version }),
-    );
+    await writeFixtureJson(path.join(root, "package.json"), { name: "openclaw", version });
     await fs.writeFile(path.join(root, "dist/index.js"), "export {};\n");
   }
   await withEnvAsync(

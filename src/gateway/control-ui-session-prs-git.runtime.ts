@@ -50,7 +50,7 @@ export async function readCheckoutGitRevision(
     paths: diffPaths,
   }: GitReadOperations["checkout.revision"]["input"],
   timing?: DiffReadTiming,
-): Promise<string | null> {
+): Promise<GitReadOperations["checkout.revision"]["output"]> {
   if (!canReadGitFilesystemRefs()) {
     return unavailableDiffRevision(timing, "no-revision-environment");
   }
@@ -122,28 +122,30 @@ export async function readCheckoutGitRevision(
       scope === "context" && canDiscoverAlternateForkHeads(selectedBranch, defaultBranchName)
         ? readBranchTrackingRemotes(checkout, selectedBranch)
         : null;
-    return JSON.stringify([
-      // Context exposes branch names and remote configuration, not commit IDs.
-      scope !== "context" ? checkout : { branch: checkout.branch, refsBase: checkout.refsBase },
-      defaultRef,
-      [...tips],
-      packedReplacements,
-      trackingRemotes,
-      paths.toSorted().map((file) => {
-        const stat = fs.lstatSync(file, { throwIfNoEntry: false });
-        if (
-          stat?.isSymbolicLink() ||
-          (stat?.isFile() &&
-            file.startsWith(`${replacements}${nodePath.sep}`) &&
-            readGitMetadataPrefix(file).startsWith("ref:"))
-        ) {
-          throw new Error("Symbolic Git metadata requires Git discovery");
-        }
-        return stat?.isDirectory()
-          ? [file, stat.dev, stat.ino]
-          : [file, stat?.ino, stat?.size, stat?.mtimeMs, stat?.ctimeMs];
-      }),
-    ]);
+    return {
+      key: JSON.stringify([
+        // Context exposes branch names and remote configuration, not commit IDs.
+        scope !== "context" ? checkout : { branch: checkout.branch, refsBase: checkout.refsBase },
+        defaultRef,
+        [...tips],
+        packedReplacements,
+        trackingRemotes,
+        paths.toSorted().map((file) => {
+          const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+          if (
+            stat?.isSymbolicLink() ||
+            (stat?.isFile() &&
+              file.startsWith(`${replacements}${nodePath.sep}`) &&
+              readGitMetadataPrefix(file).startsWith("ref:"))
+          ) {
+            throw new Error("Symbolic Git metadata requires Git discovery");
+          }
+          return stat?.isDirectory()
+            ? [file, stat.dev, stat.ino]
+            : [file, stat?.ino, stat?.size, stat?.mtimeMs, stat?.ctimeMs];
+        }),
+      ]),
+    };
   } catch (error) {
     return unavailableDiffRevision(timing, undefined, error);
   }
