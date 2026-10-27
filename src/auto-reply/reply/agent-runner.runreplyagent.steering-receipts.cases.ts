@@ -15,13 +15,9 @@ import {
 import * as controllerMailbox from "../../sessions/session-controller.mailbox.js";
 import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
 import type { TemplateContext } from "../templating.js";
+import { registerSteeringRequesterCases } from "./agent-runner.runreplyagent.steering-requesters.cases.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import {
-  enqueueFollowupRun,
-  reserveSteerCandidate,
-  scheduleFollowupDrain,
-  type FollowupRun,
-} from "./queue.js";
+import { enqueueFollowupRun, reserveSteerCandidate, type FollowupRun } from "./queue.js";
 import { clearSessionQueues } from "./queue/cleanup.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
 import {
@@ -132,94 +128,7 @@ export function registerSteeringReceiptCases({
     },
   );
 
-  it("queues instead of steering when privilege facts differ on the active route", async ({
-    signal,
-  }) => {
-    const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
-    const followupTasks: Promise<void>[] = [];
-    const observeFollowup =
-      (runFollowup: Parameters<typeof scheduleFollowupDrain>[1]) => (queued: FollowupRun) => {
-        const task = runFollowup(queued);
-        followupTasks.push(task.catch(() => {}));
-        return task;
-      };
-    vi.mocked(reserveSteerCandidate).mockImplementation((key, queued, settings, runFollowup) =>
-      actualQueue.reserveSteerCandidate(key, queued, settings, observeFollowup(runFollowup)),
-    );
-    vi.mocked(scheduleFollowupDrain).mockImplementation((key, runFollowup) =>
-      actualQueue.scheduleFollowupDrain(key, observeFollowup(runFollowup)),
-    );
-    const queued = createDeferred();
-    const onDeferred = vi.fn(() => queued.resolve());
-    const settled = createDeferred();
-    const onAdopted = vi.fn();
-    const onBlockReply = vi.fn();
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
-    const { followupRun, run } = createMinimalRun({
-      isActive: true,
-      shouldSteer: true,
-      resolvedQueueMode: "steer",
-      runOverrides: { config: { messages: { queue: { allowCollaborativeSteering: false } } } },
-      bindActiveAuthority: false,
-      opts: {
-        onBlockReply,
-        turnAdoptionLifecycle: {
-          onAdopted,
-          onDeferred,
-          onSettled: settled.resolve,
-        },
-      },
-    });
-    await active.bindToolAuthoritySnapshotAsync(
-      prepareReplyToolAuthority({
-        ...followupRun,
-        run: {
-          ...followupRun.run,
-          runtimePluginToolGrant: {
-            pluginId: "workboard",
-            toolNames: ["workboard_complete"],
-          },
-        },
-      }),
-    );
-    await active.bindToolAuthorityRouteAsync({ provider: "openai", model: "gpt-fallback" });
-    active.setPhase("running");
-    try {
-      await expect(run()).resolves.toBeUndefined();
-      await withinTest(
-        awaitGateBeforeSettlement(
-          queued.promise,
-          settled.promise,
-          "followup settled before queue acceptance",
-        ),
-        signal,
-      );
-      expect(onDeferred).toHaveBeenCalledOnce();
-      expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
-      expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-      expect(onAdopted).not.toHaveBeenCalled();
-      expect(onBlockReply).not.toHaveBeenCalled();
-
-      active.complete();
-      await withinTest(settled.promise, signal);
-      await Promise.all(followupTasks);
-      expect(onAdopted).toHaveBeenCalledOnce();
-      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-      expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
-        prompt: "hello",
-      });
-      expect(onBlockReply).toHaveBeenCalledOnce();
-      expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "final" }));
-    } finally {
-      active.complete();
-      clearSessionQueues(["main"], getSessionControllerEntryForOperation(active).target);
-      await Promise.all(followupTasks);
-    }
-  });
+  registerSteeringRequesterCases({ createMinimalRun, state });
 
   it("does not steer, enqueue, or start a second run after accepted Gateway injection", async () => {
     const runState: ReplyOperationRunState = {};

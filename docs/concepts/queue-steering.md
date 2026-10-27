@@ -12,7 +12,7 @@ When a prompt from the active turn’s requester arrives in the same conversatio
 
 This page covers queue-mode steering for normal inbound messages in `steer` mode. In `followup` or `collect` mode, normal messages skip this path and wait until the active run finishes. For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
-An older followup does not disable steering for later input. OpenClaw tries each new steer against the active run after earlier steering attempts settle. When the runtime cannot accept steering, messages remain queued in their original order; accepted steering goes to the active turn. A cross-requester attempt refused because collaborative steering is disabled is not queued.
+An older followup does not disable steering for later input. OpenClaw tries each new steer against the active run after earlier steering attempts settle. When the runtime cannot accept steering, messages remain queued in their original order; accepted steering goes to the active turn. If either requester cannot be identified, the message stays queued for a separate turn under its own authority, even when collaborative steering is enabled. Only a positively identified cross-requester attempt refused because collaborative steering is disabled is not queued.
 
 ## Runtime boundary
 
