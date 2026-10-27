@@ -65,7 +65,7 @@ export function createEmbeddedAgentPluginRuntimeRefresh(
   ): EmbeddedAgentRunResult | undefined {
     if (
       input.dispatchedAttempt.rawAttempt.terminal.kind !== "ok" ||
-      !captureAgentPluginRuntimeRefresh().isPending()
+      !captureAgentPluginRuntimeRefresh().continuesAfterAttempt()
     ) {
       return undefined;
     }

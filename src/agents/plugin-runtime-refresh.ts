@@ -9,6 +9,10 @@ type Refresh = {
   consumer?: () => boolean;
   requested: boolean;
   source?: PluginRuntimeRefreshSource;
+  // A reload-sourced request stays wanted only while its reload is still pending.
+  stillWanted?: () => boolean;
+  // Set when an attempt actually stopped before another model request for this refresh.
+  stopped?: boolean;
 };
 
 const refreshScope = new AsyncContext<Refresh>(Symbol.for("openclaw.agentPluginRuntimeRefresh"));
@@ -22,15 +26,47 @@ export function captureAgentPluginRuntimeRefresh() {
         owner.consumer = isCurrent;
       }
     },
-    request: (source: PluginRuntimeRefreshSource = "tool"): boolean => {
+    request: (
+      source: PluginRuntimeRefreshSource = "tool",
+      stillWanted?: () => boolean,
+    ): boolean => {
       if (!owner?.active || owner.consumer?.() !== true) {
         return false;
       }
       owner.requested = true;
       // The run's own tool request wins: the continuation should verify that change.
       owner.source = owner.source === "tool" ? "tool" : source;
+      owner.stillWanted = owner.source === "tool" ? undefined : stillWanted;
       return true;
     },
+    /**
+     * The step boundary: stop before another model request when a refresh is
+     * pending. A reload that was cancelled or rolled back since its request is
+     * dropped here instead of stopping the turn.
+     */
+    stopAtStep: (): boolean => {
+      if (!owner?.active || !owner.requested || owner.holds !== 0) {
+        return false;
+      }
+      if (owner.stillWanted && !owner.stillWanted()) {
+        owner.requested = false;
+        owner.source = undefined;
+        owner.stillWanted = undefined;
+        return false;
+      }
+      owner.stopped = true;
+      return true;
+    },
+    /**
+     * Whether the finished attempt hands its turn to a refresh continuation. A
+     * reload can arrive during the final model step, so a reload-sourced refresh
+     * continues only if the attempt actually stopped at a step boundary.
+     */
+    continuesAfterAttempt: (): boolean =>
+      owner?.active === true &&
+      owner.requested &&
+      owner.holds === 0 &&
+      (owner.source === "tool" || owner.stopped === true),
     /** Why the pending refresh was requested, while the run still owns it. */
     requestSource: () => (owner?.active ? owner.source : undefined),
     isRequested: () => owner?.active === true && owner.requested,
@@ -74,6 +110,8 @@ export function createAgentPluginRuntimeRefresh() {
       owner.consumer = undefined;
       owner.requested = false;
       owner.source = undefined;
+      owner.stillWanted = undefined;
+      owner.stopped = undefined;
     }
   };
   return {

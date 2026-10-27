@@ -384,7 +384,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     bindWatchdogAttempt: attemptControls.bindWatchdogAttempt,
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
     awaitSessionDiffBaseline: params.awaitSessionDiffBaseline,
-    pluginRuntimeRefreshPending: pluginRefresh.isPending,
+    pluginRuntimeRefreshPending: pluginRefresh.stopAtStep,
     registerPluginRuntimeRefreshConsumer: (isCurrent) => {
       if (attemptControls.isCurrent()) {
         pluginRefresh.bindConsumer(() => attemptControls.isCurrent() && isCurrent());

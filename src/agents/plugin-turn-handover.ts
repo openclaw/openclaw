@@ -52,6 +52,11 @@ export function captureTurnHandoverRequest(
   const held = [...registries];
   const yields: Array<() => void> = [];
   let scheduled = false;
+  // Every plugin the reload reserved is still reserved, and every one can hand over.
+  const handoverReady = () => {
+    const reserved = [...reservedPluginIds(held)];
+    return reserved.length > 0 && reserved.every((pluginId) => handsOverTurns(held, pluginId));
+  };
   const decide = () => {
     scheduled = false;
     const pendingYields = yields.splice(0);
@@ -69,7 +74,7 @@ export function captureTurnHandoverRequest(
       pendingYields.forEach((yieldHold) => yieldHold());
       return;
     }
-    const requested = refresh.request("reload");
+    const requested = refresh.request("reload", handoverReady);
     log.info(
       requested
         ? `plugin ${plugins} reload requested; turn will continue on the new generation at its next step boundary`

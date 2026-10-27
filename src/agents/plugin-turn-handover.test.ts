@@ -154,4 +154,40 @@ describe("plugin turn handover", () => {
     await settle();
     expect(control.requestSource()).toBe("tool");
   });
+
+  it("continues only a turn that actually stopped at a step boundary", async () => {
+    const { registry, instance } = createRegistryWithInstance("swap", true);
+    const refresh = createAgentPluginRuntimeRefresh();
+    const control = refresh.run(() => {
+      const captured = captureAgentPluginRuntimeRefresh();
+      captured.bindConsumer(() => true);
+      retainRuntimePluginWork([registry], "unknown", captureTurnHandoverRequest([registry]));
+      return captured;
+    });
+
+    instance.reserveReplacement();
+    await settle();
+    // The reload landed during the final, tool-free model step: no boundary followed.
+    expect(control.continuesAfterAttempt()).toBe(false);
+    expect(control.stopAtStep()).toBe(true);
+    expect(control.continuesAfterAttempt()).toBe(true);
+  });
+
+  it("drops a handover whose reload was cancelled before the next step", async () => {
+    const { registry, instance } = createRegistryWithInstance("swap", true);
+    const refresh = createAgentPluginRuntimeRefresh();
+    const control = refresh.run(() => {
+      const captured = captureAgentPluginRuntimeRefresh();
+      captured.bindConsumer(() => true);
+      retainRuntimePluginWork([registry], "unknown", captureTurnHandoverRequest([registry]));
+      return captured;
+    });
+
+    const cancel = instance.reserveReplacement();
+    await settle();
+    cancel();
+    expect(control.stopAtStep()).toBe(false);
+    expect(control.isRequested()).toBe(false);
+    expect(control.continuesAfterAttempt()).toBe(false);
+  });
 });
