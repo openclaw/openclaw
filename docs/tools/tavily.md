@@ -76,16 +76,30 @@ Choosing Tavily in onboarding or `openclaw configure --section web` installs and
 
 Use this when you want Tavily-specific search controls instead of generic `web_search`.
 
-| Parameter         | Type         | Constraints / default                  | Description                                   |
-| ----------------- | ------------ | -------------------------------------- | --------------------------------------------- |
-| `query`           | string       | required                               | Search query string.                          |
-| `search_depth`    | enum         | `basic` (default), `advanced`          | `advanced` is slower but higher relevance.    |
-| `topic`           | enum         | `general` (default), `news`, `finance` | Filter by topic family.                       |
-| `max_results`     | integer      | 1-20, default `5`                      | Number of results.                            |
-| `include_answer`  | boolean      | default `false`                        | Include a Tavily AI-generated answer summary. |
-| `time_range`      | enum         | `day`, `week`, `month`, `year`         | Filter results by recency.                    |
-| `include_domains` | string array | (none)                                 | Only include results from these domains.      |
-| `exclude_domains` | string array | (none)                                 | Exclude results from these domains.           |
+| Parameter         | Type         | Constraints / default                               | Description                                   |
+| ----------------- | ------------ | --------------------------------------------------- | --------------------------------------------- |
+| `query`           | string       | required                                            | Search query string.                          |
+| `search_depth`    | enum         | `basic` (default), `advanced`, `fast`, `ultra-fast` | `advanced` is slower but higher relevance.    |
+| `topic`           | enum         | `general` (default), `news`, `finance`              | Filter by topic family.                       |
+| `max_results`     | integer      | 0-20, default `5`                                   | Number of results.                            |
+| `include_answer`  | boolean      | default `false`                                     | Include a Tavily AI-generated answer summary. |
+| `time_range`      | enum         | `day`, `week`, `month`, `year`                      | Filter results by recency.                    |
+| `include_domains` | string array | (none)                                              | Only include results from these domains.      |
+| `exclude_domains` | string array | (none)                                              | Exclude results from these domains.           |
+
+Additional optional Search controls:
+
+- `include_domains_mode`: `restrict` (default) or `prefer`; requires `include_domains`.
+- `language` and `filter_by_language`: prefer a language code, or require it with `filter_by_language: true`.
+- `safe_search`: filter unsafe content. Use `basic` or `advanced`; `fast` and `ultra-fast` do not support it.
+- `start_date` and `end_date`: published or last-updated date bounds in `YYYY-MM-DD` format.
+- `include_published_date`: return best-estimate published or last-updated dates (beta), which may be later than the original publication date.
+- `filter_by_published_date`: with an active `time_range`, `start_date`, or `end_date` window, exclude undated or out-of-window pages; also enables `include_published_date`.
+- `exact_match`: match quoted phrases exactly.
+- `include_usage`: include returned credit usage. A cached result retains the original request's usage; it is not a new charge.
+
+`max_results: 0` is useful for answer-only requests with `include_answer: true`.
+The generic `web_search` interface retains its 1–20 result range.
 
 For publication metadata, use `topic: "news"`. When Tavily supplies a
 `published_date`, OpenClaw returns it as `published`; GMT news timestamps are
@@ -111,6 +125,11 @@ Use this to extract clean content from one or more URLs. Handles JavaScript-rend
 | `extract_depth`     | enum         | `basic` (default), `advanced` | Use `advanced` for JS-heavy pages, SPAs, or dynamic tables. |
 | `chunks_per_source` | integer      | 1-5; **requires `query`**     | Chunks returned per URL. Errors if set without `query`.     |
 | `include_images`    | boolean      | default `false`               | Include image URLs in results.                              |
+
+Use `format: "text"` for plain text instead of the default Markdown. Set
+`include_favicon: true` to return each page's favicon URL, or `include_usage: true`
+to return credit usage. These options are omitted unless requested. Extraction
+content remains bounded and wrapped as untrusted external content.
 
 Extract depth tradeoff:
 

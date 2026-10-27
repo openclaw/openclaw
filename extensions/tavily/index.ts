@@ -1,4 +1,5 @@
 import { optionalStringEnum } from "openclaw/plugin-sdk/channel-actions";
+import { readNonNegativeIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import {
   definePluginEntry,
   type OpenClawPluginToolContext,
@@ -16,16 +17,16 @@ import { createTavilyWebSearchProvider } from "./src/tavily-search-provider.js";
 const TavilySearchToolSchema = Type.Object(
   {
     query: Type.String({ description: "Search query string." }),
-    search_depth: optionalStringEnum(["basic", "advanced"] as const, {
-      description: 'Search depth: "basic" (default, faster) or "advanced" (more thorough).',
+    search_depth: optionalStringEnum(["basic", "advanced", "fast", "ultra-fast"] as const, {
+      description: 'Search depth: "basic" (default), "advanced", "fast", or "ultra-fast".',
     }),
     topic: optionalStringEnum(["general", "news", "finance"] as const, {
       description: 'Search topic: "general" (default), "news", or "finance".',
     }),
     max_results: Type.Optional(
       Type.Integer({
-        description: "Number of results to return (1-20).",
-        minimum: 1,
+        description: "Number of results to return (0-20; default 5).",
+        minimum: 0,
         maximum: 20,
       }),
     ),
@@ -41,6 +42,39 @@ const TavilySearchToolSchema = Type.Object(
       Type.Array(Type.String(), {
         description: "Only include results from these domains.",
       }),
+    ),
+    include_domains_mode: optionalStringEnum(["restrict", "prefer"] as const, {
+      description:
+        "Restrict to include_domains (default), or prefer them while allowing other domains.",
+    }),
+    language: Type.Optional(Type.String({ description: "Preferred language code, such as en." })),
+    filter_by_language: Type.Optional(
+      Type.Boolean({ description: "Only return the requested language; requires language." }),
+    ),
+    safe_search: Type.Optional(
+      Type.Boolean({
+        description: "Filter unsafe content; unavailable with fast or ultra-fast depth.",
+      }),
+    ),
+    include_published_date: Type.Optional(
+      Type.Boolean({
+        description: "Include best-estimate published or last-updated dates (beta).",
+      }),
+    ),
+    filter_by_published_date: Type.Optional(
+      Type.Boolean({
+        description: "With a date window, exclude undated or out-of-window results (beta).",
+      }),
+    ),
+    start_date: Type.Optional(
+      Type.String({ description: "Earliest published or last-updated date, YYYY-MM-DD." }),
+    ),
+    end_date: Type.Optional(
+      Type.String({ description: "Latest published or last-updated date, YYYY-MM-DD." }),
+    ),
+    exact_match: Type.Optional(Type.Boolean({ description: "Match quoted phrases exactly." })),
+    include_usage: Type.Optional(
+      Type.Boolean({ description: "Include credit usage in the result." }),
     ),
     exclude_domains: Type.Optional(
       Type.Array(Type.String(), {
@@ -72,6 +106,15 @@ const TavilyExtractToolSchema = Type.Object(
         minimum: 1,
         maximum: 5,
       }),
+    ),
+    format: optionalStringEnum(["markdown", "text"] as const, {
+      description: "Extracted content format (default markdown).",
+    }),
+    include_favicon: Type.Optional(
+      Type.Boolean({ description: "Include a favicon URL for each extracted page." }),
+    ),
+    include_usage: Type.Optional(
+      Type.Boolean({ description: "Include credit usage in the result." }),
     ),
     include_images: Type.Optional(
       Type.Boolean({
@@ -110,14 +153,39 @@ export default definePluginEntry({
               query: readStringParam(rawParams, "query", { required: true }),
               searchDepth: readStringParam(rawParams, "search_depth") || undefined,
               topic: readStringParam(rawParams, "topic") || undefined,
-              maxResults: readPositiveIntegerParam(rawParams, "max_results", {
+              maxResults: readNonNegativeIntegerParam(rawParams, "max_results", {
                 max: 20,
-                message: "max_results must be an integer from 1 to 20.",
+                message: "max_results must be an integer from 0 to 20.",
               }),
-              includeAnswer: rawParams.include_answer === true,
+              includeAnswer:
+                typeof rawParams.include_answer === "boolean"
+                  ? rawParams.include_answer
+                  : undefined,
               timeRange: readStringParam(rawParams, "time_range") || undefined,
               includeDomains: readStringArrayParam(rawParams, "include_domains"),
               excludeDomains: readStringArrayParam(rawParams, "exclude_domains"),
+              includeDomainsMode: readStringParam(rawParams, "include_domains_mode") || undefined,
+              language: readStringParam(rawParams, "language") || undefined,
+              startDate: readStringParam(rawParams, "start_date") || undefined,
+              endDate: readStringParam(rawParams, "end_date") || undefined,
+              filterByLanguage:
+                typeof rawParams.filter_by_language === "boolean"
+                  ? rawParams.filter_by_language
+                  : undefined,
+              safeSearch:
+                typeof rawParams.safe_search === "boolean" ? rawParams.safe_search : undefined,
+              includePublishedDate:
+                typeof rawParams.include_published_date === "boolean"
+                  ? rawParams.include_published_date
+                  : undefined,
+              filterByPublishedDate:
+                typeof rawParams.filter_by_published_date === "boolean"
+                  ? rawParams.filter_by_published_date
+                  : undefined,
+              exactMatch:
+                typeof rawParams.exact_match === "boolean" ? rawParams.exact_match : undefined,
+              includeUsage:
+                typeof rawParams.include_usage === "boolean" ? rawParams.include_usage : undefined,
               cfg: resolveToolConfig(ctx),
               ...(signal ? { signal } : {}),
             }),
@@ -153,7 +221,8 @@ export default definePluginEntry({
           if (chunksPerSource !== undefined && !query) {
             throw new Error("tavily_extract requires query when chunks_per_source is set.");
           }
-          const includeImages = rawParams.include_images === true;
+          const includeImages =
+            typeof rawParams.include_images === "boolean" ? rawParams.include_images : undefined;
 
           return jsonResult(
             await runTavilyExtract({
@@ -163,6 +232,13 @@ export default definePluginEntry({
               extractDepth,
               chunksPerSource,
               includeImages,
+              format: readStringParam(rawParams, "format") || undefined,
+              includeFavicon:
+                typeof rawParams.include_favicon === "boolean"
+                  ? rawParams.include_favicon
+                  : undefined,
+              includeUsage:
+                typeof rawParams.include_usage === "boolean" ? rawParams.include_usage : undefined,
               ...(signal ? { signal } : {}),
             }),
           );

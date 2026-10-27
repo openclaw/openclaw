@@ -29,16 +29,30 @@ straightforward queries where you don't need Tavily-specific options.
 
 Use when you need fine-grained control over search behavior.
 
-| Parameter         | Description                                                           |
-| ----------------- | --------------------------------------------------------------------- |
-| `query`           | Search query string (keep under 400 characters)                       |
-| `search_depth`    | `basic` (default, balanced) or `advanced` (highest relevance, slower) |
-| `topic`           | `general` (default), `news` (real-time updates), or `finance`         |
-| `max_results`     | Number of results, 1-20 (default: 5)                                  |
-| `include_answer`  | Include an AI-generated answer summary (default: false)               |
-| `time_range`      | Filter by recency: `day`, `week`, `month`, or `year`                  |
-| `include_domains` | Array of domains to restrict results to                               |
-| `exclude_domains` | Array of domains to exclude from results                              |
+| Parameter         | Description                                                   |
+| ----------------- | ------------------------------------------------------------- |
+| `query`           | Search query string (keep under 400 characters)               |
+| `search_depth`    | `basic` (default), `advanced`, `fast`, or `ultra-fast`        |
+| `topic`           | `general` (default), `news` (real-time updates), or `finance` |
+| `max_results`     | Number of results, 0-20 (default: 5)                          |
+| `include_answer`  | Include an AI-generated answer summary (default: false)       |
+| `time_range`      | Filter by recency: `day`, `week`, `month`, or `year`          |
+| `include_domains` | Array of domains to restrict results to                       |
+| `exclude_domains` | Array of domains to exclude from results                      |
+
+Additional optional Search controls:
+
+- `include_domains_mode`: `restrict` (default) or `prefer`; requires `include_domains`.
+- `language` and `filter_by_language`: prefer a language code, or require it with `filter_by_language: true`.
+- `safe_search`: filter unsafe content. Use `basic` or `advanced`; `fast` and `ultra-fast` do not support it.
+- `start_date` and `end_date`: published or last-updated date bounds in `YYYY-MM-DD` format.
+- `include_published_date`: return best-estimate published or last-updated dates (beta), which may be later than the original publication date.
+- `filter_by_published_date`: with an active `time_range`, `start_date`, or `end_date` window, exclude undated or out-of-window pages; also enables `include_published_date`.
+- `exact_match`: match quoted phrases exactly.
+- `include_usage`: include returned credit usage. A cached result retains the original request's usage; it is not a new charge.
+
+`max_results: 0` is useful for answer-only requests with `include_answer: true`.
+The generic `web_search` interface retains its 1–20 result range.
 
 ### Search depth
 
@@ -68,6 +82,11 @@ extraction.
 | `extract_depth`     | `basic` (default, fast) or `advanced` (for JS-heavy pages, tables) |
 | `chunks_per_source` | Chunks per URL, 1-5 (requires `query`)                             |
 | `include_images`    | Include image URLs in results (default: false)                     |
+
+Use `format: "text"` for plain text instead of the default Markdown. Set
+`include_favicon: true` to return each page's favicon URL, or `include_usage: true`
+to return credit usage. These options are omitted unless requested. Extraction
+content remains bounded and wrapped as untrusted external content.
 
 ### Extract depth
 
