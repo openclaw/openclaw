@@ -35,6 +35,7 @@ const execFileAsync = promisify(execFile);
 const { cleanup, makeTempDir } = createTempDirHarness({ beforeCleanup: closeQaRuntimeStores });
 
 afterEach(() => {
+  vi.useRealTimers();
   resetPluginStateStoreForTests({ closeDatabase: false });
   clearRuntimeConfigSnapshot();
 });
@@ -165,7 +166,7 @@ describe("qa suite runtime agent session helpers", () => {
   }
 
   it.each(["sessions.create", "skills.status"] as const)(
-    "normalizes the %s result",
+    "reads %s with its default arguments and normalized result",
     async (method) => {
       const session = method === "sessions.create";
       gatewayCall.mockResolvedValueOnce(
@@ -174,10 +175,11 @@ describe("qa suite runtime agent session helpers", () => {
       await expect(
         session ? createSession(env, "Test Session") : readSkillStatus(env),
       ).resolves.toEqual(session ? "session-1" : [{ name: "alpha", eligible: true }]);
-      expect(gatewayCall).toHaveBeenCalledWith(
+      expect(gatewayCall).toHaveBeenNthCalledWith(
+        1,
         method,
         session ? { label: "Test Session" } : { agentId: "qa" },
-        expect.anything(),
+        expect.objectContaining({ timeoutMs: session ? 60_000 : 45_000 }),
       );
     },
   );
@@ -196,16 +198,16 @@ describe("qa suite runtime agent session helpers", () => {
   it("seeds QA session metadata and transcript messages in SQLite", async () => {
     const sessionId = "seeded-session";
     const sessionKey = "agent:qa:seeded-session";
-    const messages = [
-      { role: "user", text: "What is the codename?", timestamp: 100 },
-      { role: "assistant", text: "The codename is ORBIT-10.", timestamp: 200 },
-    ] as const;
+
     await seedTranscript(env, {
       sessionId,
       sessionKey,
       updatedAt: 300,
       label: "Seeded QA transcript",
-      messages,
+      messages: [
+        { role: "user", text: "What is the codename?", timestamp: 100 },
+        { role: "assistant", text: "The codename is ORBIT-10.", timestamp: 200 },
+      ],
     });
 
     const sessionStore = await readStore(env);
@@ -222,7 +224,10 @@ describe("qa suite runtime agent session helpers", () => {
         const message = (event as { message?: unknown }).message;
         return message ? [message] : [];
       }),
-    ).toEqual(messages.map(({ role, text, timestamp }) => textMessage(role, text, timestamp)));
+    ).toEqual([
+      textMessage("user", "What is the codename?", 100),
+      textMessage("assistant", "The codename is ORBIT-10.", 200),
+    ]);
 
     await expect(fs.stat(qaPath("agent", "openclaw-agent.sqlite"))).resolves.toBeDefined();
     for (const file of ["sessions.json", `${sessionId}.jsonl`]) {
@@ -268,24 +273,28 @@ describe("qa suite runtime agent session helpers", () => {
   });
 
   it("seeds multi-agent session entries through the canonical accessor", async () => {
-    const parentSessionKey = "agent:qa:main",
-      childKey = "agent:qa:subagent:child",
-      acpKey = "agent:claude:acp:child";
+    const parentSessionKey = "agent:qa:main";
     const entry = (sessionId: string, updatedAt: number) => ({ sessionId, updatedAt });
     const qaEntries = {
       [parentSessionKey]: entry("session-main", 300),
-      [childKey]: {
+      "agent:qa:subagent:child": {
         ...entry("session-child", 200),
         spawnedBy: parentSessionKey,
         status: "done" as const,
         endedAt: 250,
       },
     };
-    const claudeEntries = { [acpKey]: { ...entry("session-acp-child", 100), parentSessionKey } };
+    const claudeEntries = {
+      "agent:claude:acp:child": { ...entry("session-acp-child", 100), parentSessionKey },
+    };
     await seedEntries("qa", qaEntries);
     await seedEntries("claude", claudeEntries);
-    await expect(readStore(env)).resolves.toMatchObject(qaEntries);
-    await expect(readStore(env, { agentId: "claude" })).resolves.toMatchObject(claudeEntries);
+    for (const [agentId, entries] of [
+      ["qa", qaEntries],
+      ["claude", claudeEntries],
+    ] as const) {
+      await expect(readStore(env, { agentId })).resolves.toMatchObject(entries);
+    }
     const updated = {
       [parentSessionKey]: {
         ...entry("session-main", 400),
@@ -297,9 +306,9 @@ describe("qa suite runtime agent session helpers", () => {
     const refreshed = await readStore(env, { agentId: "qa" });
     expect(refreshed).toMatchObject({
       ...updated,
-      [childKey]: { sessionId: "session-child" },
+      "agent:qa:subagent:child": { sessionId: "session-child" },
     });
-    expect(refreshed[acpKey]).toBeUndefined();
+    expect(refreshed["agent:claude:acp:child"]).toBeUndefined();
   });
 
   it("reports bounded persisted compaction summaries", async () => {
@@ -311,23 +320,25 @@ describe("qa suite runtime agent session helpers", () => {
     let parentId: string | null = null;
     for (const [index, summary] of summaries.entries()) {
       const id = `compaction-${index}`;
+      const event = {
+        type: "compaction",
+        id,
+        parentId,
+        timestamp: new Date(index).toISOString(),
+        summary,
+        firstKeptEntryId: id,
+        tokensBefore: 100,
+      };
       await appendSqliteSessionTranscriptEventForTest({
         ...identityFor(sessionId, sessionKey),
-        event: {
-          type: "compaction",
-          id,
-          parentId,
-          timestamp: new Date(index).toISOString(),
-          summary,
-          firstKeptEntryId: id,
-          tokensBefore: 100,
-        },
+        event,
       });
       parentId = id;
     }
     await transcript.append({ role: "assistant", content: "done" });
 
     const result = await transcript.read();
+
     expect(result.compactionSummaries).toEqual(summaries.slice(-16));
     expect(result.finalText).toBe("done");
   });
@@ -632,7 +643,9 @@ describe("qa suite runtime agent session helpers", () => {
 
   it("returns an empty checkpoint before the session exists", async () => {
     await expect(
-      readSummary(env, "agent:qa:not-created-yet", { allowEmpty: true }),
+      readSummary(env, "agent:qa:not-created-yet", {
+        allowEmpty: true,
+      }),
     ).resolves.toEqual({
       assistantToolCallCounts: {},
       compactionSummaries: [],
@@ -645,15 +658,15 @@ describe("qa suite runtime agent session helpers", () => {
     });
   });
 
-  it.each(["empty", "entry not found"])(
-    "fails closed for a transcript that is %s",
-    async (error) => {
-      if (error === "empty") {
-        await makeTranscript();
-      }
-      await expect(readSummary(env, "agent:qa:session")).rejects.toThrow(
-        `session transcript ${error}`,
-      );
-    },
-  );
+  it("fails closed when a requested QA session transcript is empty", async () => {
+    const transcript = await makeTranscript();
+
+    await expect(transcript.read()).rejects.toThrow("session transcript is empty");
+  });
+
+  it("fails closed when a requested QA session transcript entry is missing", async () => {
+    await expect(readSummary(env, "agent:qa:missing")).rejects.toThrow(
+      "session transcript entry not found",
+    );
+  });
 });
