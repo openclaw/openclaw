@@ -221,7 +221,7 @@ it.each([FinishReason.MAX_TOKENS, FinishReason.CONTINUATION])(
 );
 
 type SignatureCase = [string, Part[][], unknown[], boolean?];
-it.each([
+it.each<SignatureCase>([
   [
     "late standalone signature",
     [[lookupPart({ query: "cats" })], [{ thoughtSignature: "Y2FsbF9zaWc=" }]],
@@ -265,26 +265,23 @@ it.each([
     [thoughtOutput("first", signature1), thoughtOutput("second", signature1)],
     true,
   ],
-] satisfies SignatureCase[])(
-  "preserves %s",
-  async (_name, chunks, content, roundTrip?: boolean) => {
-    const { output, events } = await runFixture(
-      chunks.map((parts, index) =>
-        candidate(parts, index === chunks.length - 1 ? FinishReason.STOP : undefined),
-      ),
-    );
-    expect(output.content).toEqual(content);
-    if (roundTrip) {
-      const parts = chunks.flat();
-      expect(convertMessages(model, { messages: [output] })).toEqual([{ role: "model", parts }]);
-      expect(
-        events
-          .filter((event) => event.type === "text_delta" || event.type === "thinking_delta")
-          .map((event) => event.delta),
-      ).toEqual(parts.map((part) => part.text));
-    }
-  },
-);
+])("preserves %s", async (_name, chunks, content, roundTrip?: boolean) => {
+  const { output, events } = await runFixture(
+    chunks.map((parts, index) =>
+      candidate(parts, index === chunks.length - 1 ? FinishReason.STOP : undefined),
+    ),
+  );
+  expect(output.content).toEqual(content);
+  if (roundTrip) {
+    const parts = chunks.flat();
+    expect(convertMessages(model, { messages: [output] })).toEqual([{ role: "model", parts }]);
+    expect(
+      events
+        .filter((event) => event.type === "text_delta" || event.type === "thinking_delta")
+        .map((event) => event.delta),
+    ).toEqual(parts.map((part) => part.text));
+  }
+});
 
 it("closes an unread SDK stream without waiting when acceptance fails", async () => {
   const close = vi.fn(() => new Promise<IteratorResult<GenerateContentResponse>>(() => {}));

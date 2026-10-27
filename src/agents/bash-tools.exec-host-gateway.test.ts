@@ -163,6 +163,7 @@ vi.mock("../infra/exec-auto-review.js", async (importOriginal) => ({
   defaultExecAutoReviewer: reviewerMock,
 }));
 
+// mock-isolation: Keep Gateway transport and credential loading inert while testing local approval ownership.
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: gatewayMock,
   readGatewayCallOptions: vi.fn(() => ({})),

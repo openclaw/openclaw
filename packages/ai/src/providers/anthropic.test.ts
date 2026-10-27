@@ -1057,4 +1057,3 @@ describe("Anthropic provider", () => {
     expect(payload.system).toEqual([{ type: "text", text: "Stable prefix\nDynamic suffix" }]);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
