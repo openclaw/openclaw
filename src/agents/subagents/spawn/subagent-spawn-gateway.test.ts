@@ -91,3 +91,38 @@ it("keeps socket dispatch available when no Gateway owner was bound", async () =
   });
   expect(callGateway).toHaveBeenCalledOnce();
 });
+
+it("keeps the reconcile budget on the monotonic clock across a wall-clock step", async () => {
+  // The Gateway is unreachable on the first dispatch, so the launch enters the
+  // reconcile loop. A forward wall-clock step (NTP sync) landing between two loop
+  // iterations must not shrink the remaining reconcile budget below the per-call
+  // interval cap (which would prematurely kill a healthy reconciliation).
+  const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+  const seenTimeoutMs: number[] = [];
+  let calls = 0;
+  callGateway.mockImplementation((opts: { timeoutMs?: number }) => {
+    calls += 1;
+    if (calls === 1) {
+      // Transport unavailable on the initial dispatch → enter reconcile loop.
+      throw new Error("gateway timeout after 5000ms");
+    }
+    if (calls === 2) {
+      // Loop iteration 1: provisional in-flight, keep reconciling.
+      seenTimeoutMs.push(opts.timeoutMs ?? 0);
+      // Simulate a forward wall-clock step landing between this dispatch and the
+      // next remainingMs read (across the await delay()).
+      nowSpy.mockReturnValue(1_000_000 + 10_000);
+      return { status: "in_flight", admissionPending: true };
+    }
+    // Loop iteration 2: the Gateway is reachable and the run is admitted.
+    seenTimeoutMs.push(opts.timeoutMs ?? 0);
+    return { status: "in_flight", runId: "child-1" };
+  });
+
+  await expect(callNativeSubagentGateway(request)).resolves.toMatchObject({
+    response: { status: "in_flight", runId: "child-1" },
+  });
+  // The 10s forward wall-clock step must not shrink a later iteration's Gateway
+  // RPC timeout below the 800ms interval cap (pre-fix it read 0 and aborted).
+  expect(seenTimeoutMs.at(-1)).toBe(800);
+});

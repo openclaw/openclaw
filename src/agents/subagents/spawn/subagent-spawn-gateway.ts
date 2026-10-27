@@ -264,9 +264,13 @@ async function reconcileSubagentAgentDispatch(
     if (!isGatewayRpcUnavailableError(error)) {
       throw error;
     }
-    const deadline = Date.now() + SUBAGENT_AGENT_RECONCILE_TIMEOUT_MS;
+    // The reconcile budget is in-process only (never serialized or reported across
+    // processes), so anchor it to the monotonic clock. A wall-clock step (NTP sync)
+    // between iterations must not stretch the Gateway RPC timeout or the delay, nor
+    // prematurely kill a healthy reconciliation by shrinking remainingMs below zero.
+    const deadline = performance.now() + SUBAGENT_AGENT_RECONCILE_TIMEOUT_MS;
     while (true) {
-      const remainingMs = deadline - Date.now();
+      const remainingMs = deadline - performance.now();
       if (remainingMs <= 0) {
         throw error;
       }
@@ -289,7 +293,7 @@ async function reconcileSubagentAgentDispatch(
         );
       }
       await delay(
-        Math.min(SUBAGENT_AGENT_RECONCILE_INTERVAL_MS, Math.max(0, deadline - Date.now())),
+        Math.min(SUBAGENT_AGENT_RECONCILE_INTERVAL_MS, Math.max(0, deadline - performance.now())),
       );
     }
   }
