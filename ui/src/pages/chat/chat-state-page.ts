@@ -12,7 +12,6 @@ import {
 } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
-import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { currentDisplaySpeechConfig } from "../../lib/config/config-state-model.ts";
@@ -128,10 +127,7 @@ export function createPageState(
       agentsList: context.agents.state.agentsList,
       hello: context.gateway.snapshot.hello,
     },
-    context.agentIdentity.get,
-    hasSameOriginGatewayTransport(context.gateway.connection.gatewayUrl)
-      ? appConfig.assistantIdentity
-      : null,
+    context,
   );
   const errors = createChatErrorState();
   const presentedFields = {
@@ -333,7 +329,7 @@ export function createPageState(
   });
   state.loadAssistantIdentity = () => {
     if (!state.connected) {
-      const cachedIdentity = cachedChatAssistantIdentity(state, context.agentIdentity.get);
+      const cachedIdentity = cachedChatAssistantIdentity(state, context);
       state.assistantName = cachedIdentity.name;
       state.assistantAvatar = cachedIdentity.avatar;
       state.assistantAvatarStatus = cachedIdentity.avatarStatus ?? null;

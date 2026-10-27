@@ -9,6 +9,13 @@ it.each([
   { owner: "main", agentId: "other", name: "", avatar: null },
   { owner: null, agentId: "other", name: "Observatory", avatar: null },
   { owner: "main", agentId: "main", gatewayUrl: "wss://other.example", name: "", avatar: null },
+  {
+    owner: null,
+    agentId: "other",
+    gatewayUrl: "wss://other.example",
+    name: "Observatory",
+    avatar: null,
+  },
 ])(
   "scopes bootstrap identity from $owner to the $agentId chat",
   ({ owner, agentId, gatewayUrl, name, avatar }) => {

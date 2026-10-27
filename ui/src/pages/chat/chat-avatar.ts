@@ -1,7 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
-import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
+import type { AgentsListResult } from "../../api/types.ts";
 import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 import {
   normalizeAssistantIdentity,
   type AssistantIdentity,
@@ -61,14 +63,18 @@ export function resolveAgentIdForSession(
 
 export function cachedChatAssistantIdentity(
   state: Pick<ChatAvatarHost, "sessionKey" | "assistantAgentId" | "agentsList" | "hello">,
-  readIdentity: ((agentId: string) => AgentIdentityResult | null) | undefined,
-  bootstrap?: AssistantIdentity | null,
+  context?: Pick<ApplicationContext, "agentIdentity" | "config" | "gateway">,
 ): AssistantIdentity {
   const agentId = resolveAgentIdForSession(state);
-  if (bootstrap?.agentId === agentId) {
+  const bootstrap = context?.config.current.assistantIdentity;
+  if (
+    context &&
+    bootstrap?.agentId === agentId &&
+    hasSameOriginGatewayTransport(context.gateway.connection.gatewayUrl)
+  ) {
     return bootstrap;
   }
-  const cached = readIdentity?.(agentId);
+  const cached = context?.agentIdentity.get(agentId);
   if (cached) {
     return normalizeAssistantIdentity({ ...cached, avatar: cached.avatar || cached.emoji });
   }

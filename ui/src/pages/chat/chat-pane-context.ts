@@ -19,7 +19,6 @@ import {
 import { loadSettings } from "../../app/settings.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import type { SessionPlacementPresentation } from "../../components/session-placement-move-dialog.tsx";
-import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -529,11 +528,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
           hello: state.hello,
           agentsList: reactionOwnerChanged ? null : this.context.agents.state.agentsList,
         },
-        reactionOwnerChanged ? undefined : this.context.agentIdentity.get,
-        !reactionOwnerChanged &&
-          hasSameOriginGatewayTransport(this.context.gateway.connection.gatewayUrl)
-          ? this.context.config.current.assistantIdentity
-          : null,
+        reactionOwnerChanged ? undefined : this.context,
       );
       state.assistantName = identity.name;
       state.assistantAvatar = identity.avatar;

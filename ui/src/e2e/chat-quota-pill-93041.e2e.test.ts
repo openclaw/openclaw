@@ -3,11 +3,13 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import { installControlUiMockBootstrapDocument } from "../test-helpers/control-ui-bootstrap-fixture.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   controlUiSessionUrl,
+  createControlUiMockBootstrapConfig,
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -400,7 +402,7 @@ suite.define(() => {
     });
   });
 
-  it("binds delayed auth and quota presentation to the selected global agent", async () => {
+  it.each(["scoped", "unscoped"])("scopes auth, quota, and %s identity", async (bootstrapScope) => {
     const context = await suite.browser.newContext({
       ...createControlUiE2eContextOptions(),
       ...(captureOwnershipProof
@@ -468,6 +470,14 @@ suite.define(() => {
         sessionKey: "global",
         sessionScope: "global",
       });
+      if (bootstrapScope === "unscoped") {
+        const bootstrap = createControlUiMockBootstrapConfig();
+        delete bootstrap.assistantAgentId;
+        await page.route("**/control-ui-config.json", (route) =>
+          route.fulfill({ json: bootstrap }),
+        );
+        await installControlUiMockBootstrapDocument(page, bootstrap);
+      }
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "global"));
       const connectRequest = await gateway.waitForRequest("connect");
       const { client: connectedClient } = connectRequest.params as {
@@ -506,7 +516,11 @@ suite.define(() => {
             };
           }, visiblePaneSelector),
         )
-        .toEqual({ name: "OpenClaw", avatar: null, renderedAvatar: null });
+        .toEqual({
+          name: bootstrapScope === "unscoped" ? "OpenClaw" : "",
+          avatar: null,
+          renderedAvatar: null,
+        });
       await gateway.emitGatewayEvent("presence", {
         presence: [
           {
@@ -523,9 +537,15 @@ suite.define(() => {
       await page.waitForTimeout(100);
       const delayedMainState = await visibleAuthState(page);
       expect(delayedMainState).toEqual(loadingWorkAuth);
+      expect(await visiblePane.evaluate((pane: ChatPane) => pane.state?.assistantName)).toBe(
+        bootstrapScope === "unscoped" ? "OpenClaw" : "",
+      );
       await captureOwnership(page, "02-after-delayed-main");
 
       await replyToAgentMetadata(gateway, "work");
+      await expect
+        .poll(() => visiblePane.evaluate((pane: ChatPane) => pane.state?.assistantName))
+        .toBe("Work Agent");
       await expect
         .poll(() => visibleAuthState(page))
         .toEqual({

@@ -237,14 +237,23 @@ describe("chat pane assistant identity snapshots", () => {
     }
   });
 
-  it.each([false, true])(
-    "resets a session identity only on connection replacement (%s)",
-    (replace) => {
+  it.each([
+    { replace: false, bootstrapAgentId: "main", expected: "Session Agent" },
+    { replace: true, bootstrapAgentId: "main", expected: "" },
+    { replace: true, bootstrapAgentId: null, expected: "Gateway-wide" },
+  ])(
+    "resets session identity on replacement=$replace with bootstrap owner $bootstrapAgentId",
+    ({ replace, bootstrapAgentId, expected }) => {
       const client = createGatewayBrowserClientFixture();
       const { pane, state } = createTestChatPane({
         client,
         sessions: createSessionCapabilityFixture(),
       });
+      pane.context.config.current.assistantIdentity = {
+        ...pane.context.config.current.assistantIdentity,
+        agentId: bootstrapAgentId,
+        name: "Gateway-wide",
+      };
       state.client = client;
       state.connected = true;
       state.assistantName = "Session Agent";
@@ -254,8 +263,8 @@ describe("chat pane assistant identity snapshots", () => {
         client: replace ? createGatewayBrowserClientFixture() : client,
         phase: replace ? "reconnecting" : pane.context.gateway.snapshot.phase,
       });
-      // A different Gateway cannot borrow this document's bootstrap identity.
-      expect(state.assistantName).toBe(replace ? "" : "Session Agent");
+      // Only an unscoped name remains a fallback across Gateways.
+      expect(state.assistantName).toBe(expected);
     },
   );
 
