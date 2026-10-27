@@ -1,10 +1,12 @@
 /**
  * Attachment header owner benchmark; no Gateway, filesystem staging, or worker queue.
- * node --import ./scripts/tsx.mjs scripts/perf/attachment-header-measure.ts \
+ * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/attachment-header-measure.ts \
  *   --format jpeg --iterations 1000 --output "$PWD/.local/header-base.json"
  * Repeat with --allocations for a separate main-thread sampled-JS-allocation pass.
  * --owner-dir reads captured src/media/attachment-processor.runtime.ts, preserving
  * its original import URL. This direct-owner benchmark does not start workers.
+ * Compare two captured owners with --owner-dir on BOTH arms: the global loader
+ * hook also participates in cached dynamic imports on the measured MIME path.
  * --format png (default) preserves three 700x700 noise PNGs below the offload
  * threshold. jpeg/webp use 1600x1200 noise encoded by Rastermill; gif uses a
  * 1000x700 three-frame indexed animation. These formats use explicit inline
@@ -12,7 +14,8 @@
  * Warm-up, fixture generation, and a separate exact base64 decode-byte
  * count pass are excluded from timing and sampling. Buffer backing stores are not
  * represented by the sampled JS allocation count; report exact decoded bytes too.
- * --expose-gc adds an untimed post-GC memory snapshot after measurement.
+ * After restoring the decode counter, warm again before an untimed GC clears
+ * fixture garbage. --expose-gc also adds a post-GC snapshot after measurement.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -190,6 +193,11 @@ try {
 } finally {
   Object.defineProperty(Buffer, "from", originalFrom);
 }
+// Restoring Buffer.from can invalidate optimized call sites; keep that outside timing.
+for (let index = 0; index < 10; index++) {
+  await run();
+}
+globalThis.gc?.();
 const inspector = values.allocations ? new Session() : undefined;
 inspector?.connect();
 await inspector?.post("HeapProfiler.startSampling", {
@@ -231,6 +239,7 @@ const result = {
   kind: "attachment-header-owner",
   iterations,
   allocations: values.allocations,
+  preMeasurementGc: Boolean(globalThis.gc),
   ownerReceipt,
   fixture: {
     format,
