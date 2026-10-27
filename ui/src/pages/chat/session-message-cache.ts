@@ -476,11 +476,7 @@ export function appendChatMessageToCache(
     snapshot,
     weight,
   });
-  trimChatSessionSnapshotCache(cache);
-  const final = cache.get(cacheKey);
-  if (final) {
-    chatCacheObservers.get(cache)?.write(cacheKey, final.snapshot, final.weight);
-  }
+  trimChatSessionSnapshotCache(cache, cacheKey);
 }
 
 export function readChatMessagesFromCache(
@@ -573,11 +569,7 @@ export function cacheChatSessionSnapshot(
     return;
   }
   setSessionCacheValue(cache, cacheKey, bounded);
-  trimChatSessionSnapshotCache(cache);
-  const final = cache.get(cacheKey);
-  if (final) {
-    chatCacheObservers.get(cache)?.write(cacheKey, final.snapshot, final.weight);
-  }
+  trimChatSessionSnapshotCache(cache, cacheKey);
 }
 
 export function readChatSessionSnapshot(
@@ -607,7 +599,8 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
     if (!pagination) {
       return null;
     }
-    const envelope = { ...snapshot, messages: [], pagination };
+    const rowDisplay = projectChatRowDisplay(snapshot, start);
+    const envelope = { ...snapshot, messages: [], rowDisplay, pagination };
     let weight: number | null;
     try {
       const envelopeWeight = JSON.stringify(envelope)?.length ?? 0;
@@ -618,16 +611,16 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
     }
     if (weight !== null && weight <= MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
       if (start === 0) {
-        return { snapshot, weight };
+        return {
+          snapshot: rowDisplay === snapshot.rowDisplay ? snapshot : { ...snapshot, rowDisplay },
+          weight,
+        };
       }
       return {
         snapshot: {
           ...snapshot,
           messages: snapshot.messages.slice(start),
-          rowDisplay: projectChatRowDisplay({
-            ...snapshot,
-            messages: snapshot.messages.slice(start),
-          }),
+          rowDisplay,
           pagination: { ...pagination },
         },
         weight,
@@ -704,7 +697,7 @@ function samePagination(left: ChatHistoryPagination, right: ChatHistoryPaginatio
   return !left.hasMore && !right.hasMore && left.completeSnapshot === right.completeSnapshot;
 }
 
-function trimChatSessionSnapshotCache(cache: ChatMessageCache): void {
+function trimChatSessionSnapshotCache(cache: ChatMessageCache, updatedKey: string): void {
   let weight = 0;
   for (const cached of cache.values()) {
     weight += cached.weight;
@@ -724,8 +717,14 @@ function trimChatSessionSnapshotCache(cache: ChatMessageCache): void {
       const bounded = boundChatSessionSnapshot(snapshot);
       if (bounded) {
         cache.set(key, bounded);
-        chatCacheObservers.get(cache)?.write(key, bounded.snapshot, bounded.weight);
+        if (key !== updatedKey) {
+          chatCacheObservers.get(cache)?.write(key, bounded.snapshot, bounded.weight);
+        }
       }
     }
+  }
+  const current = cache.get(updatedKey);
+  if (current) {
+    chatCacheObservers.get(cache)?.write(updatedKey, current.snapshot, current.weight);
   }
 }
