@@ -14,6 +14,7 @@ import {
   removePackagePath,
   restoreNpmPackageRoot,
 } from "./package-update-filesystem.js";
+import * as retry from "./retry.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -735,3 +736,148 @@ it.each(["publish", "revoke", "replace"] as const)(
     );
   },
 );
+
+const retryReal = retry.retryAsync;
+function errno(message: string, code: string) {
+  return Object.assign(new Error(message), { code });
+}
+async function expectFile(file: string, content: string) {
+  await expect(fs.readFile(file, "utf8")).resolves.toBe(content);
+}
+async function expectMissing(file: string) {
+  await expect(fs.lstat(file)).rejects.toHaveProperty("code", "ENOENT");
+}
+function restoreRenameRetryHarness() {
+  const wait = vi.fn(async () => {});
+  vi.spyOn(retry, "retryAsync").mockImplementation((fn, options) =>
+    retryReal(fn, { ...(typeof options === "object" ? options : {}), sleep: wait }),
+  );
+  return wait;
+}
+
+it("names the retained backup when publication fails without a candidate", async () => {
+  const root = dirs.make("rollback-proof-");
+  const writeFiles = async (files: Record<string, string>) => {
+    for (const [file, content] of Object.entries(files)) {
+      await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+      await fs.writeFile(path.join(root, file), content);
+    }
+  };
+  const liveRoot = path.join(root, "live");
+  const backupRoot = path.join(root, "backup");
+  const displacedRoot = path.join(root, "displaced");
+  await writeFiles({ "backup/marker.txt": "original" });
+  vi.spyOn(fs, "rename").mockRejectedValue(errno("EXDEV: cross-device link", "EXDEV"));
+
+  const failure = restoreNpmPackageRoot({
+    liveRoot,
+    backupRoot,
+    displacedRoot,
+    candidatePresent: false,
+  });
+  await expect(failure).rejects.toThrow(/is missing/u);
+  const message = await failure.then(
+    () => "",
+    (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  );
+  expect(message).toContain("EXDEV: cross-device link");
+  expect(message).toContain(`moving ${backupRoot} to ${liveRoot}`);
+  await expectMissing(liveRoot);
+  await expectFile(path.join(backupRoot, "marker.txt"), "original");
+});
+
+it("stops Windows rollback rename retries when the update owner refuses", async () => {
+  const root = dirs.make("rollback-proof-");
+  const writeFiles = async (files: Record<string, string>) => {
+    for (const [file, content] of Object.entries(files)) {
+      await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+      await fs.writeFile(path.join(root, file), content);
+    }
+  };
+  const liveRoot = path.join(root, "live");
+  const backupRoot = path.join(root, "backup");
+  const displacedRoot = path.join(root, "displaced");
+  await writeFiles({ "live/marker.txt": "candidate", "backup/marker.txt": "original" });
+  const wait = restoreRenameRetryHarness();
+  const refused = errno("update owner revoked", "EPERM");
+  const rename = fs.rename.bind(fs);
+  let publicationAttempts = 0;
+  let revoked = false;
+  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+    if (String(from) === backupRoot) {
+      publicationAttempts++;
+      if (publicationAttempts === 1) {
+        throw errno("EPERM: package is in use", "EPERM");
+      }
+    }
+    return rename(from, to);
+  });
+  wait.mockImplementationOnce(async () => {
+    revoked = true;
+  });
+
+  await expect(
+    restoreNpmPackageRoot({
+      liveRoot,
+      backupRoot,
+      displacedRoot,
+      candidatePresent: true,
+      platform: "win32",
+      assertCurrent: () => {
+        if (revoked) {
+          throw refused;
+        }
+      },
+    }),
+  ).rejects.toBe(refused);
+
+  expect(publicationAttempts).toBe(1);
+  await expectMissing(liveRoot);
+  await expectFile(path.join(backupRoot, "marker.txt"), "original");
+});
+
+it("stops Windows rollback rename retries when the retained backup changes identity", async () => {
+  const root = dirs.make("rollback-proof-");
+  const writeFiles = async (files: Record<string, string>) => {
+    for (const [file, content] of Object.entries(files)) {
+      await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+      await fs.writeFile(path.join(root, file), content);
+    }
+  };
+  const liveRoot = path.join(root, "live");
+  const backupRoot = path.join(root, "backup");
+  const displacedRoot = path.join(root, "displaced");
+  await writeFiles({ "live/marker.txt": "candidate", "backup/marker.txt": "original" });
+  const wait = restoreRenameRetryHarness();
+  const rename = fs.rename.bind(fs);
+  let publicationAttempts = 0;
+  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+    if (String(from) === backupRoot) {
+      publicationAttempts++;
+      if (publicationAttempts === 1) {
+        throw errno("EPERM: package is in use", "EPERM");
+      }
+    }
+    return rename(from, to);
+  });
+  wait.mockImplementationOnce(async () => {
+    await rename(backupRoot, `${backupRoot}.retained`);
+    await fs.mkdir(backupRoot);
+    await fs.writeFile(path.join(backupRoot, "replacement"), "keep");
+  });
+
+  await expect(
+    restoreNpmPackageRoot({
+      liveRoot,
+      backupRoot,
+      displacedRoot,
+      candidatePresent: true,
+      platform: "win32",
+    }),
+  ).rejects.toThrow("package path changed");
+
+  expect(publicationAttempts).toBe(1);
+  await expectFile(path.join(liveRoot, "marker.txt"), "candidate");
+  await expectMissing(displacedRoot);
+  await expectFile(path.join(`${backupRoot}.retained`, "marker.txt"), "original");
+});
