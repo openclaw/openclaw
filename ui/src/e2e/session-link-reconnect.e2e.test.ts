@@ -28,7 +28,9 @@ suite.define(() => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const gateway = await installMockGateway(page, {
           sessionKey: sourceKey,
-          featureMethods: [...defaultControlUiFeatureMethods, "sessions.resolve"],
+          featureMethods: defaultControlUiFeatureMethods.filter(
+            (method) => method !== "sessions.resolve",
+          ),
           sessions: [createControlUiSessionRow(sourceKey, "Source conversation", 1)],
           sessionTranscripts: {
             [sourceKey]: transcript(`Open [Linked conversation](${destinationPath}).`),
@@ -58,7 +60,7 @@ suite.define(() => {
         );
         // Settle title decoration before deferring the separate navigation lookup.
         await link
-          .and(page.locator(`[data-session-key="${destinationKey}"]`))
+          .and(page.locator(`.markdown-session-link--titled[data-session-key="${destinationKey}"]`))
           .waitFor({ state: "visible" });
         await page.locator('openclaw-app-sidebar [data-navigation-view="pages"]').click();
         const activity = page.locator('openclaw-app-sidebar a[href="/activity"]');
