@@ -61,6 +61,7 @@ const sessionCleanupMocks = vi.hoisted(() => ({
   retireSessionMcpRuntime: vi.fn(async () => false),
 }));
 
+// mock-isolation: Keep global hook dispatch on this suite's synthetic lifecycle handlers.
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () =>
     ({
