@@ -23,10 +23,7 @@ import {
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockReset();
-import {
-  AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
-  buildAgentRunTerminalOutcomeFromLifecycleEvent,
-} from "../../agent-run-terminal-outcome.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import type { SubagentRegistryHarness } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   configureMockSubagentRegistryPersistence,
