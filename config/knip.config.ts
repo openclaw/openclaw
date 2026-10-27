@@ -208,6 +208,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-tool-surface-measure.ts!",
   "scripts/perf/subagent-maintenance-capture-measure.ts!",
   "scripts/perf/subagent-sweep-measure.ts!",
+  "scripts/perf/subagent-timing-write-measure.ts!",
   // Its source header documents the shutdown workload; the literal URL links its preload.
   "scripts/perf/gateway-shutdown-sweep-measure.ts!",
   "scripts/perf/tool-schema-preparation-measure.ts!",
