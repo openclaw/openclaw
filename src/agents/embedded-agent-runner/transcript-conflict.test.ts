@@ -4,6 +4,7 @@ import { createEmbeddedRunReplayState } from "./replay-state.js";
 import {
   isReplaySafeTranscriptConflict,
   isTranscriptConflictReplaySafe,
+  isTranscriptRewriteConflict,
   ReplaySafeTranscriptConflictError,
 } from "./transcript-conflict.js";
 
@@ -50,4 +51,26 @@ it("recognizes only the live typed safety proof, including wrapped failures", ()
   expect(isReplaySafeTranscriptConflict(conflict)).toBe(false);
   expect(isReplaySafeTranscriptConflict(new Error(conflict.message))).toBe(false);
   expect(isReplaySafeTranscriptConflict({ name: "ReplaySafeTranscriptConflictError" })).toBe(false);
+});
+
+it("recognizes rewrite revision conflicts from either owner, including wrapped failures", () => {
+  for (const error of [
+    new SqliteTranscriptMutationConflictError("fixture"),
+    new Error("Session transcript changed before rewrite preparation"),
+    new Error("Session transcript changed before rewrite publication"),
+    new Error("dispatch failed", {
+      cause: new Error("Session transcript changed before rewrite publication"),
+    }),
+  ]) {
+    expect(isTranscriptRewriteConflict(error)).toBe(true);
+  }
+  // Read fences and projection rebuilds are different failures and stay fatal.
+  for (const error of [
+    new Error("Session transcript changed during context read"),
+    new Error("Session transcript projection is rebuilding: fixture"),
+    new Error("other failure"),
+    { name: "SqliteTranscriptMutationConflictError" },
+  ]) {
+    expect(isTranscriptRewriteConflict(error)).toBe(false);
+  }
 });

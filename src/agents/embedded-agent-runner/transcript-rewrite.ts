@@ -9,6 +9,8 @@ import type {
 import type { AgentMessage } from "../runtime/index.js";
 import { getRawSessionAppendMessageAsync } from "../session-raw-append-message.js";
 import type { SessionManager } from "../sessions/session-manager.js";
+import { log } from "./logger.js";
+import { isTranscriptRewriteConflict } from "./transcript-conflict.js";
 
 type SessionBranchEntry = ReturnType<SessionManager["getBranch"]>[number];
 type RewriteMessageAppender = (
@@ -148,13 +150,51 @@ export async function rewriteTranscriptEntriesInSessionManager(params: {
     return unchangedRewrite("no replacements requested");
   }
 
-  const activeBranch = params.sessionManager.getBranch();
-  if (activeBranch.length === 0) {
+  const observedBranch = params.sessionManager.getBranch();
+  if (observedBranch.length === 0) {
     return unchangedRewrite("empty session");
   }
 
+  try {
+    return await rewriteBranch({ params, replacementsById, observedBranch });
+  } catch (error) {
+    if (!isTranscriptRewriteConflict(error)) {
+      throw error;
+    }
+    // In-memory views cannot reread storage, so their intervening writes stay fatal.
+    if (!params.sessionManager.getSessionTarget()) {
+      throw error;
+    }
+    // Accepted input can land while a rewrite prepares or publishes. Reloading the
+    // revision and re-planning once keeps that input instead of failing the turn.
+    let refreshed: SessionBranchEntry[];
+    try {
+      await params.sessionManager.reloadPersistedTranscriptAsync();
+      refreshed = params.sessionManager.getBranch();
+    } catch {
+      // Recovery is best effort; the conflict stays the reported outcome.
+      throw error;
+    }
+    if (!isAppendOnlyAdvance(observedBranch, refreshed)) {
+      throw error;
+    }
+    log.warn(
+      `[session-recovery] transcript gained ${refreshed.length - observedBranch.length} appends during rewrite; ` +
+        `re-planning once sessionKey=${params.sessionManager.getSessionTarget()?.sessionKey ?? params.sessionManager.getSessionId()}`,
+    );
+    return await rewriteBranch({ params, replacementsById, observedBranch: refreshed });
+  }
+}
+
+/** Rewrites against the branch revision the caller observed; conflicts surface to the caller. */
+async function rewriteBranch(input: {
+  params: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0];
+  replacementsById: ReadonlyMap<string, AgentMessage>;
+  observedBranch: SessionBranchEntry[];
+}): Promise<TranscriptRewriteResult> {
+  const { params, replacementsById, observedBranch } = input;
   const { matchedIndices, bytesFreed } = findTranscriptRewriteMatches(
-    activeBranch,
+    observedBranch,
     replacementsById,
   );
 
@@ -166,8 +206,8 @@ export async function rewriteTranscriptEntriesInSessionManager(params: {
   const rewriteManager = rewrite.sessionManager;
   const branch = rewriteManager.getBranch();
   if (
-    branch.length !== activeBranch.length ||
-    branch.some((entry, index) => entry.id !== activeBranch[index]?.id)
+    branch.length !== observedBranch.length ||
+    branch.some((entry, index) => entry.id !== observedBranch[index]?.id)
   ) {
     throw new Error("Session transcript changed before rewrite preparation");
   }
@@ -223,4 +263,19 @@ export async function rewriteTranscriptEntriesInSessionManager(params: {
     bytesFreed,
     rewrittenEntries: matchedIndices.length,
   };
+}
+
+/** True when the revision only gained entries after every previously observed one. */
+function isAppendOnlyAdvance(
+  previous: readonly SessionBranchEntry[],
+  next: readonly SessionBranchEntry[],
+): boolean {
+  return (
+    next.length > previous.length &&
+    previous.every((entry, index) => next[index]?.id === entry.id) &&
+    // A concurrent reset or compaction replaces history instead of extending it.
+    next
+      .slice(previous.length)
+      .every((entry) => entry.type !== "reset" && entry.type !== "compaction")
+  );
 }
