@@ -46,6 +46,10 @@ function streamScenario(options: {
 }): EngineScenario {
   const messages = options.messages ?? 400;
   const reply = createControlUiStreamingReply(options.rate ?? 30, options.content);
+  const expectedParts = [
+    ...(reply.text.match(/^export (?:function|const) .+$/gmu) ?? []),
+    ...(reply.text.match(/^## .+$/gmu) ?? []).map((heading) => heading.slice(3)),
+  ];
   const streams = [sessionKey, secondSessionKey].slice(0, options.panes ?? 1).map((key, i) => ({
     sessionKey: key,
     runId: `engine-streaming-run-${i}`,
@@ -209,6 +213,9 @@ function streamScenario(options: {
         throw new Error("Streaming lost native composer input");
       }
       for (const pane of result.panes) {
+        if (expectedParts.some((part) => !pane.finalText?.includes(part))) {
+          throw new Error("Streaming lost completed reply content");
+        }
         if (
           !pane.visible ||
           !pane.finalHtml ||
