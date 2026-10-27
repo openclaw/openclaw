@@ -41,11 +41,14 @@ type ReplaySnapshot = {
   bytes: number;
   unregister: () => void;
 };
-const replaySnapshots = resolveGlobalSingleton(
+const replaySnapshots = resolveGlobalSingleton<{
+  entries: Map<string, ReplaySnapshot>;
+  unsubscribe: (() => void) | undefined;
+}>(
   Symbol.for("openclaw.codeModeReplaySnapshots"),
   () => ({
     entries: new Map<string, ReplaySnapshot>(),
-    unsubscribe: undefined as (() => void) | undefined,
+    unsubscribe: undefined,
   }),
   (cache) => {
     cache.unsubscribe?.();
