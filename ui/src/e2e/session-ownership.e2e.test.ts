@@ -128,11 +128,15 @@ suite.define(() => {
   });
 
   it("keeps collaborative owner stacks legible without shifting session rows", async () => {
+    const sessions = collaborativeSessionsList();
+    for (const session of sessions.sessions.slice(0, 2)) {
+      Object.assign(session, { hasActiveRun: true, status: "running" });
+    }
     const { page } = await openSession(
-      collaborativeSessionsList(),
+      sessions,
       {
         hasMultipleSessionSharingIdentities: true,
-        sessionKey: "agent:main:collaboration",
+        sessionKey: "agent:main:single-owner",
       },
       {
         avatars: [
@@ -206,6 +210,27 @@ suite.define(() => {
     );
     expect(collaborative?.height).toBeCloseTo(single?.height ?? 0, 5);
     expect(collaborative?.titleLeft).toBeCloseTo(single?.titleLeft ?? 0, 5);
+    for (const row of [collaborativeRow, overflowRow]) {
+      const [trace, title] = await Promise.all([
+        row.locator(".session-glyph__trace").evaluate(geometry),
+        row.locator(".sidebar-recent-session__text").evaluate(geometry),
+      ]);
+      expect(trace.width).toBe(32);
+      expect(trace.right).toBeLessThanOrEqual(title.left);
+    }
+    const frame = await takeControlUiScreenshotFrame(
+      page,
+      page.locator("body"),
+      [collaborativeRow],
+      {
+        animations: "disabled",
+        elements: [page.locator(".sidebar-shell")],
+      },
+    );
+    await writeFile(
+      path.join(suite.artifactDir, "shared-activity-sidebar.png"),
+      frame.elements[0]!.png,
+    );
   });
 
   it.each([
@@ -215,7 +240,7 @@ suite.define(() => {
     { width: 390, grouping: "None" },
     { width: 390, grouping: "Custom groups" },
     { width: 390, grouping: "Person" },
-  ])("keeps $grouping activity last at $width px", async ({ width, grouping }) => {
+  ])("aligns $grouping left status at $width px", async ({ width, grouping }) => {
     const patrick = sessionPerson("profile-patrick", "Patrick");
     const mira = sessionPerson("profile-mira", "Mira");
     const states: Array<[string, Record<string, unknown>]> = [
@@ -227,6 +252,8 @@ suite.define(() => {
       ],
       ["unread", { unread: true }],
       ["running", { hasActiveRun: true, status: "running", activeRunIds: ["run-1"] }],
+      ["artwork", { icon: "🔧" }],
+      ["draft", { visibility: "draft", sharingRole: "owner" }],
       ["parent", { hasActiveRun: true, status: "running", childSessions: ["agent:main:child"] }],
     ];
     const rows = states.map(([id, state], index) =>
@@ -302,10 +329,17 @@ suite.define(() => {
 
     const rowGeometry = (id: string) =>
       row(id).evaluate((element) => {
-        const box = (selector: string) => element.querySelector(selector)?.getBoundingClientRect();
+        // Compare row-owned padding, not the mobile drawer's viewport transform.
+        const origin = element.getBoundingClientRect().left;
+        const box = (selector: string) => {
+          const bounds = element.querySelector(selector)?.getBoundingClientRect();
+          return bounds
+            ? { left: bounds.left - origin, right: bounds.right - origin, width: bounds.width }
+            : undefined;
+        };
         const link = element.querySelector(".sidebar-recent-session__link")!;
         return {
-          link: link.getBoundingClientRect(),
+          link: box(".sidebar-recent-session__link")!,
           gap: Number.parseFloat(getComputedStyle(link).columnGap),
           top: element.getBoundingClientRect().top,
           right: element.getBoundingClientRect().right,
@@ -318,17 +352,19 @@ suite.define(() => {
     const header = await page
       .locator(".personal-session-groups__heading")
       .evaluate((element) => element.getBoundingClientRect().bottom);
-    const [idle, legacyOwner, unread, running] = await Promise.all([
+    const [idle, legacyOwner, unread, running, artwork, draft] = await Promise.all([
       rowGeometry("idle"),
       rowGeometry("legacy-owner"),
       rowGeometry("unread"),
       rowGeometry("running"),
+      rowGeometry("artwork"),
+      rowGeometry("draft"),
     ]);
     expect(legacyOwner.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
     if (grouping === "Person") {
       expect(idle.top - header).toBeLessThanOrEqual(12);
     }
-    if (width === 1200 && grouping !== "Person") {
+    if (width === 1200 || grouping === "Person") {
       const frame = await takeControlUiScreenshotFrame(
         page,
         page.locator("body"),
@@ -344,43 +380,33 @@ suite.define(() => {
         frame.elements[0]!.png,
       );
     }
-    expect(idle.indicator).toBeUndefined();
-    for (const status of [running, unread]) {
+    for (const status of [running, unread, artwork, draft]) {
       expect(status.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
-      expect(status.indicator?.left).toBeGreaterThanOrEqual(status.text?.right ?? Infinity);
+      expect(status.indicator?.right).toBeLessThanOrEqual(status.text?.left ?? 0);
     }
 
-    // Hover actions must appear before the fixed trailing status, not push it left.
+    // Revealing actions must not move the leading state or the title column.
     await row("running").hover();
     await expectBrowser(row("running").locator(".session-row-actions button").first()).toHaveCSS(
       "opacity",
       "1",
     );
     const hovered = await rowGeometry("running");
-    expect(hovered.indicator?.left).toBeGreaterThanOrEqual(hovered.actions?.right ?? Infinity);
-    expect(hovered.right - (hovered.indicator?.right ?? 0)).toBeCloseTo(
-      running.right - (running.indicator?.right ?? 0),
-      5,
-    );
+    expect(hovered.indicator?.left).toBeCloseTo(running.indicator?.left ?? 0, 5);
+    expect(hovered.text?.left).toBeCloseTo(running.text?.left ?? 0, 5);
     await page.mouse.move(1100, 700);
     await row("running").locator("a").focus();
     const focused = await rowGeometry("running");
-    expect(focused.indicator?.left).toBeGreaterThanOrEqual(focused.actions?.right ?? Infinity);
-    expect(focused.right - (focused.indicator?.right ?? 0)).toBeCloseTo(
-      running.right - (running.indicator?.right ?? 0),
-      5,
-    );
+    expect(focused.indicator?.left).toBeCloseTo(running.indicator?.left ?? 0, 5);
+    expect(focused.text?.left).toBeCloseTo(running.text?.left ?? 0, 5);
     await page.locator("#sidebar-session-owner-title").focus();
     await page.mouse.move(width - 10, 700);
     await expectBrowser(page.locator(".session-progress-hovercard")).toBeHidden();
     await row("parent").hover();
     const parent = await rowGeometry("parent");
     expect(parent.toggle).toBeDefined();
-    expect(parent.indicator?.left).toBeGreaterThanOrEqual(parent.toggle?.right ?? Infinity);
-    expect(parent.right - (parent.indicator?.right ?? 0)).toBeCloseTo(
-      running.right - (running.indicator?.right ?? 0),
-      5,
-    );
+    expect(parent.indicator?.right).toBeLessThanOrEqual(parent.text?.left ?? 0);
+    expect(parent.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
     const toggle = row("parent").locator("[data-child-session-toggle]");
     await toggle.click();
     await expectBrowser(group.locator('[data-session-key="agent:main:child"]')).toContainText(
@@ -416,11 +442,7 @@ suite.define(() => {
     expect(focusedChild.text?.width).toBeGreaterThanOrEqual(
       focusedChild.link.right - focusedChild.text!.left - focusedChild.gap,
     );
-    expect(child.indicator?.left).toBeGreaterThanOrEqual(child.actions?.right ?? Infinity);
-    expect(child.right - (child.indicator?.right ?? 0)).toBeCloseTo(
-      running.right - (running.indicator?.right ?? 0),
-      5,
-    );
+    expect(child.indicator?.right).toBeLessThanOrEqual(child.text?.left ?? 0);
     await row("running").hover();
     if (width === 390) {
       await row("running").locator("[data-sidebar-session-menu]").click();
@@ -433,11 +455,7 @@ suite.define(() => {
     );
     await row("running").hover();
     const pinned = await rowGeometry("running");
-    expect(pinned.indicator?.left).toBeGreaterThanOrEqual(pinned.actions?.right ?? Infinity);
-    expect(pinned.right - (pinned.indicator?.right ?? 0)).toBeCloseTo(
-      running.right - (running.indicator?.right ?? 0),
-      5,
-    );
+    expect(pinned.indicator?.right).toBeLessThanOrEqual(pinned.text?.left ?? 0);
   });
 
   it("derives People controls and owner filtering from current session owners", async () => {
