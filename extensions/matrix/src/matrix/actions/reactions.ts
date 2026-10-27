@@ -132,13 +132,7 @@ export async function removeMatrixReactions(
       allPages: true,
     });
     const userId = await client.getUserId();
-    if (!userId) {
-      return { removed: 0 };
-    }
     const toRemove = selectOwnMatrixReactionEventIds(chunk, userId, opts.emoji);
-    if (toRemove.length === 0) {
-      return { removed: 0 };
-    }
     await Promise.all(toRemove.map((id) => client.redactEvent(resolvedRoom, id)));
     return { removed: toRemove.length };
   });

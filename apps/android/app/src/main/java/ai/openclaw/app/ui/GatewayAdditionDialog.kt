@@ -4,13 +4,13 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.MainViewModel.GatewayAdditionRequest
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.formatGatewayAuthority
+import ai.openclaw.app.hasPermission
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import android.Manifest
-import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -42,10 +42,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
-import com.google.mlkit.vision.barcode.BarcodeScannerOptions
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -86,12 +82,9 @@ internal fun GatewayAdditionDialog(
   var token by remember(request) { mutableStateOf("") }
   var password by remember(request) { mutableStateOf("") }
   var cameraAllowed by remember {
-    mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+    mutableStateOf(context.hasPermission(Manifest.permission.CAMERA))
   }
-  val scanner =
-    remember(request) {
-      BarcodeScanning.getClient(BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build())
-    }
+  val scanner = remember(request) { createSetupBarcodeScanner() }
   val handoff by viewModel.gatewayConnectionHandoff.collectAsState()
   val gateways by viewModel.pairedGateways.collectAsState()
 
@@ -132,11 +125,10 @@ internal fun GatewayAdditionDialog(
     }
 
   fun stageCode(
-    raw: String,
+    decoded: GatewayScannedSetupCodeResult,
     previous: GatewayAdditionStep,
   ) {
     if (!isCurrent()) return
-    val decoded = resolveScannedSetupCodeResult(raw)
     val config =
       decoded.setupCode?.let { code ->
         resolveGatewayConnectConfig(true, code, "", "", false, "", "", "")
@@ -169,11 +161,11 @@ internal fun GatewayAdditionDialog(
         .process(image)
         .addOnSuccessListener { barcodes ->
           if (!isCurrent() || step !== reading) return@addOnSuccessListener
-          val raw = barcodes.firstNotNullOfOrNull { it.rawValue?.takeIf(String::isNotBlank) }
-          if (raw == null) {
+          val scanned = resolveScannedSetupCodeResult(barcodes.asSequence().map { it.rawValue })
+          if (scanned == null) {
             step = GatewayAdditionStep.ScanError(nativeString("No QR code found in the selected image."))
           } else {
-            stageCode(raw, GatewayAdditionStep.Scan)
+            stageCode(scanned, GatewayAdditionStep.Scan)
           }
         }.addOnFailureListener {
           if (isCurrent() && step === reading) step = GatewayAdditionStep.ScanError(nativeString("Could not read the QR code from this image."))
@@ -220,7 +212,7 @@ internal fun GatewayAdditionDialog(
               onClick = { step = GatewayAdditionStep.Scan },
               onClose = ::cancel,
               onRequestCameraPermission = { permission.launch(Manifest.permission.CAMERA) },
-              onCodeScanned = { raw -> if (step == GatewayAdditionStep.Scan) stageCode(raw, GatewayAdditionStep.Scan) },
+              onCodeScanned = { raw -> if (step == GatewayAdditionStep.Scan) stageCode(resolveScannedSetupCodeResult(raw), GatewayAdditionStep.Scan) },
               onCameraError = { if (isCurrent() && step == GatewayAdditionStep.Scan) step = GatewayAdditionStep.ScanError(nativeString("Could not start the camera.")) },
             )
             ClawSecondaryButton(text = nativeString("Enter setup code"), onClick = { step = GatewayAdditionStep.Code() }, modifier = Modifier.fillMaxWidth())
@@ -249,7 +241,7 @@ internal fun GatewayAdditionDialog(
               modifier = Modifier.testTag("gateway-add-code"),
             )
             current.error?.let { Text(it, color = ClawTheme.colors.warning) }
-            ClawPrimaryButton(text = nativeString("Continue"), onClick = { stageCode(setupCode, GatewayAdditionStep.Code()) }, modifier = Modifier.fillMaxWidth())
+            ClawPrimaryButton(text = nativeString("Continue"), onClick = { stageCode(resolveScannedSetupCodeResult(setupCode), GatewayAdditionStep.Code()) }, modifier = Modifier.fillMaxWidth())
           }
 
           is GatewayAdditionStep.Manual -> {

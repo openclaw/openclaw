@@ -1,5 +1,10 @@
-// Provider model helpers normalize model catalog entries shared by provider plugins.
+import { normalizeModelCostConfig } from "@openclaw/llm-core";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
+import {
+  buildFamilyForwardCompatModel,
+  buildFirstTemplateModel,
+} from "../plugins/provider-model-construction.js";
 import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -10,15 +15,28 @@ import {
   buildStrictAnthropicReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
+  sanitizeGoogleGeminiReplayHistoryAsync,
 } from "../plugins/provider-replay-helpers.js";
+import type { ProviderRuntimeModel as ConstructedProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
-import type {
-  ProviderReasoningOutputModeContext,
-  ProviderReplayPolicyContext,
-  ProviderRuntimeModel,
-  ProviderSanitizeReplayHistoryContext,
-} from "./plugin-entry.js";
+import type { ProviderReplayPolicyContext, ProviderRuntimeModel } from "./plugin-entry.js";
+
+export { matchesExactOrPrefix } from "../plugins/provider-model-id-match.js";
+
+// Cold catalog completion consumes these results without runner normalization.
+// Keep its constructed-model contract separate from policy-free metadata construction.
+export function cloneFirstTemplateModel(
+  params: Parameters<typeof buildFirstTemplateModel>[0],
+): ConstructedProviderRuntimeModel | undefined {
+  return buildFirstTemplateModel(params, normalizeModelCompat);
+}
+
+export function resolveFamilyForwardCompatModel(
+  params: Parameters<typeof buildFamilyForwardCompatModel>[0],
+): ConstructedProviderRuntimeModel | undefined {
+  return buildFamilyForwardCompatModel(params, normalizeModelCompat);
+}
 
 export { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 export {
@@ -47,6 +65,8 @@ export function defineSelfHostedOpenAICompatibleProvider(
 ): ReturnType<typeof definePluginEntry> {
   // Provider entries load during plugin discovery; setup/wizard code stays lazy until used.
   const loadProviderSetup = async () => await import("./provider-setup.js");
+  // Catalog discovery runs under a deadline; keep setup and auth-write code out of its import.
+  const loadDiscovery = async () => await import("../plugins/provider-self-hosted-discovery.js");
   return definePluginEntry({
     id: options.id,
     name: `${options.label} Provider`,
@@ -92,8 +112,8 @@ export function defineSelfHostedOpenAICompatibleProvider(
         catalog: {
           order: "late",
           run: async (ctx) => {
-            const setup = await loadProviderSetup();
-            return await setup.discoverOpenAICompatibleSelfHostedProvider({
+            const discovery = await loadDiscovery();
+            return await discovery.discoverOpenAICompatibleSelfHostedProvider({
               ctx,
               providerId: options.id,
               buildProvider: async (params) => {
@@ -101,7 +121,7 @@ export function defineSelfHostedOpenAICompatibleProvider(
                   /\/+$/,
                   "",
                 );
-                const models = await setup.discoverOpenAICompatibleLocalModels({
+                const models = await discovery.discoverOpenAICompatibleLocalModels({
                   baseUrl,
                   apiKey: params?.apiKey,
                   label: options.label,
@@ -140,11 +160,13 @@ export type {
 export {
   bindsClaudeThinkingPrefix,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   supportsClaude1MContext,
@@ -179,8 +201,6 @@ export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 export {
   GPT5_BEHAVIOR_CONTRACT,
   GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY,
-  GPT5_FRIENDLY_PROMPT_OVERLAY,
-  GPT5_HEARTBEAT_PROMPT_OVERLAY,
   isGpt5ModelId,
   normalizeGpt5PromptOverlayMode,
   resolveGpt5PromptOverlayMode,
@@ -204,19 +224,19 @@ export {
   buildPassthroughGeminiSanitizingReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
+  sanitizeGoogleGeminiReplayHistoryAsync,
   buildStrictAnthropicReplayPolicy,
 };
 
-/** Compare canonical flat rates without assuming display-only models include cost metadata. */
+/** Compare canonical rates and tiers; display-only models may omit cost metadata. */
 export function modelCostsEqual(
   current: ProviderRuntimeModel["cost"] | undefined,
   expected: ProviderRuntimeModel["cost"],
 ): boolean {
   return (
-    current?.input === expected.input &&
-    current?.output === expected.output &&
-    current?.cacheRead === expected.cacheRead &&
-    current?.cacheWrite === expected.cacheWrite
+    current !== undefined &&
+    JSON.stringify(normalizeModelCostConfig(current)) ===
+      JSON.stringify(normalizeModelCostConfig(expected))
   );
 }
 
@@ -275,35 +295,18 @@ export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
 } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
-export {
-  cloneFirstTemplateModel,
-  matchesExactOrPrefix,
-  resolveFamilyForwardCompatModel,
-} from "../plugins/provider-model-helpers.js";
 
 export {
   isClaudeAdaptiveThinkingDefaultModelId,
   resolveClaudeThinkingProfile,
 } from "../plugins/provider-claude-thinking.js";
 
-function getModelProviderHint(modelId: string): string | null {
-  const trimmed = normalizeOptionalLowercaseString(modelId);
-  if (!trimmed) {
-    return null;
-  }
-  const slashIndex = trimmed.indexOf("/");
-  if (slashIndex <= 0) {
-    return null;
-  }
-  return trimmed.slice(0, slashIndex) || null;
-}
-
 /** @deprecated Proxy provider-owned model helper; do not use from third-party plugins. */
 export function isProxyReasoningUnsupportedModelHint(
   /** Model id that may include a provider prefix such as `x-ai/model`. */
   modelId: string,
 ): boolean {
-  return getModelProviderHint(modelId) === "x-ai";
+  return normalizeOptionalLowercaseString(modelId)?.startsWith("x-ai/") ?? false;
 }
 
 /**
@@ -319,7 +322,10 @@ export type ProviderReplayFamily =
 
 type ProviderReplayFamilyHooks = Pick<
   ProviderPlugin,
-  "buildReplayPolicy" | "sanitizeReplayHistory" | "resolveReasoningOutputMode"
+  | "buildReplayPolicy"
+  | "sanitizeReplayHistory"
+  | "sanitizeReplayHistoryAsync"
+  | "resolveReasoningOutputMode"
 >;
 
 type BuildProviderReplayFamilyHooksOptions =
@@ -378,22 +384,26 @@ export function buildProviderReplayFamilyHooks(
       };
     }
     case "anthropic-by-model":
+    case "native-anthropic-by-model": {
+      const buildPolicy =
+        options.family === "native-anthropic-by-model"
+          ? buildNativeAnthropicReplayPolicyForModel
+          : buildAnthropicReplayPolicyForModel;
       return {
-        buildReplayPolicy: ({ modelId, model }: ProviderReplayPolicyContext) =>
-          buildAnthropicReplayPolicyForModel(modelId, model),
+        buildReplayPolicy: ({
+          modelId,
+          model,
+          inHistorySystemUpdates,
+        }: ProviderReplayPolicyContext) => buildPolicy(modelId, model, inHistorySystemUpdates),
       };
-    case "native-anthropic-by-model":
-      return {
-        buildReplayPolicy: ({ modelId, model }: ProviderReplayPolicyContext) =>
-          buildNativeAnthropicReplayPolicyForModel(modelId, model),
-      };
+    }
     case "google-gemini":
       return {
-        buildReplayPolicy: () => buildGoogleGeminiReplayPolicy(),
-        sanitizeReplayHistory: (ctx: ProviderSanitizeReplayHistoryContext) =>
-          sanitizeGoogleGeminiReplayHistory(ctx),
-        resolveReasoningOutputMode: (_ctx: ProviderReasoningOutputModeContext) =>
-          resolveTaggedReasoningOutputMode(),
+        buildReplayPolicy: buildGoogleGeminiReplayPolicy,
+        // Retained adapter for third-party callers of the legacy family hook.
+        sanitizeReplayHistory: sanitizeGoogleGeminiReplayHistory,
+        sanitizeReplayHistoryAsync: sanitizeGoogleGeminiReplayHistoryAsync,
+        resolveReasoningOutputMode: resolveTaggedReasoningOutputMode,
       };
     case "passthrough-gemini":
       return {
@@ -410,16 +420,6 @@ export function buildProviderReplayFamilyHooks(
   }
   throw new Error("Unsupported provider replay family");
 }
-
-/** @deprecated Provider-owned replay hook shortcut; use local provider hooks instead. */
-export const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
-
-/** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
-export const ANTHROPIC_BY_MODEL_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "anthropic-by-model",
-});
 
 /** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
 export const NATIVE_ANTHROPIC_REPLAY_HOOKS = buildProviderReplayFamilyHooks({

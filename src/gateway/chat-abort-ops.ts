@@ -1,13 +1,18 @@
 // Keep exact-run abort wiring independent from session-wide cancellation orchestration.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatAbortOps } from "./chat-abort.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import {
+  getWorkerInferenceSessionControl,
+  type WorkerInferenceCancellation,
+} from "./worker-environments/inference-control-internal.js";
 
 export function createChatAbortOps(
   context: Omit<ChatAbortOps, "onRunAborted"> &
     Pick<GatewayRequestContext, "cancelRunBoundApprovals">,
 ): ChatAbortOps {
   return {
-    chatAbortControllers: context.chatAbortControllers,
+    resolveGatewayContext: context.resolveGatewayContext,
     chatRunState: context.chatRunState,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
@@ -19,4 +24,18 @@ export function createChatAbortOps(
       void context.cancelRunBoundApprovals?.(runId).catch(() => {});
     },
   };
+}
+
+export function captureWorkerInferenceForSession(params: {
+  context: GatewayRequestContext;
+  sessionId?: string;
+  runId?: string;
+}): WorkerInferenceCancellation | undefined {
+  const sessionId = normalizeOptionalString(params.sessionId);
+  if (!sessionId) {
+    return undefined;
+  }
+  return getWorkerInferenceSessionControl(
+    params.context.workerEnvironmentService,
+  )?.captureSessionCancellation(sessionId, params.runId);
 }

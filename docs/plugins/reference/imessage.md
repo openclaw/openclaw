@@ -15,7 +15,7 @@ OpenClaw iMessage channel plugin using imsg on a signed-in Mac.
 ## Distribution
 
 - Package: `@openclaw/imessage`
-- Install route: npm or ClawHub: `clawhub:@openclaw/imessage`
+- Install route: npm or ClawHub: `@openclaw/imessage`
 
 ## Surface
 

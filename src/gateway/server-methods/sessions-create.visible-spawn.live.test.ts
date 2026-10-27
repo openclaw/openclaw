@@ -79,6 +79,9 @@ describeLive("Gateway visible worktree spawn (live)", () => {
           "-m",
           "Initialize fixture",
         ]);
+        const remote = instance.state.path("registered-project.git");
+        await git(["clone", "--bare", repository, remote]);
+        await git(["remote", "add", "origin", remote]);
         const config: OpenClawConfig = {
           gateway: {
             mode: "local",
@@ -116,13 +119,13 @@ describeLive("Gateway visible worktree spawn (live)", () => {
               model: { primary: modelRef },
               models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
               thinkingDefault: "low",
-              heartbeat: { every: "0m" },
               sandbox: { mode: "off" },
               timeoutSeconds: RUN_TIMEOUT_MS / 1000,
               subagents: { model: modelRef, maxSpawnDepth: 1 },
             },
           },
-          tools: { codeMode: false, allow: ["read", "sessions_spawn"] },
+          // Keep sessions_spawn direct so its receipt is the sessions_spawn tool result.
+          tools: { codeMode: false, toolSearch: false, allow: ["read", "sessions_spawn"] },
         };
         await instance.state.writeConfig(config);
         await instance.startGateway();
@@ -132,7 +135,7 @@ describeLive("Gateway visible worktree spawn (live)", () => {
           role: "operator",
           scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
-            path: instance.state.path("operator-device.sqlite"),
+            path: instance.state.path("operator-device", "client", "credentials.sqlite"),
           }),
           requestTimeoutMs: RUN_TIMEOUT_MS + 5_000,
           timeoutMs: 60_000,

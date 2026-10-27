@@ -1,6 +1,6 @@
 ---
 name: verify-release
-description: "Verify regular or extended-stable OpenClaw releases against the exact publication surfaces, workflow identities, package provenance, smoke tests, and live Gateway behavior expected for that release track."
+description: "Verify regular or extended-stable OpenClaw releases against the exact publication surfaces, workflow identities, package provenance, and published CLI smoke tests expected for that release track."
 ---
 
 # Verify Release
@@ -22,7 +22,7 @@ publish skill; use `$release-openclaw-maintainer` before changing release state.
 - If the checkout is dirty or divergent, use it only for scripts/reference.
   For version metadata, fetch from GitHub release/tag or unpack the tag tarball
   under `/tmp`.
-- Never print secrets. Use inherited live keys only for scoped smoke commands.
+- Never print secrets.
 - Keep the final terse: `yes/no`, evidence bullets, caveats, cleanup.
 
 ## Regular beta/stable checks
@@ -125,31 +125,19 @@ the live tag, workflow, registry, provenance, and image state.
    private dist-tags, or regular `latest`. Require shared release evidence, but
    do not require regular native or ClawHub assets.
 
-## Shared live smoke
+## Published package smoke
 
-After the track-specific publication checks pass:
+After the track-specific publication checks pass, use a disposable
+installation/cache with isolated OpenClaw state:
 
-1. Published package smoke:
-   - In `/tmp`, isolated HOME:
-     `npm exec --yes --package openclaw@<VERSION> -- openclaw --version`.
-   - Run at least one harmless command that touches the published CLI surface,
-     for example `plugins --help` or `gateway --help`.
-2. Dev Gateway live model smoke:
-   - Use temp HOME/workspace, not the user's normal state:
-     `HOME=/tmp/openclaw-release-smoke/home OPENCLAW_WORKSPACE=/tmp/openclaw-release-smoke/work pnpm openclaw --dev gateway run --auth none --force --verbose`.
-   - Resolve the launched Gateway's bound port from its startup output or log.
-   - For `--auth none`, require unauthenticated
-     `GET http://127.0.0.1:<PORT>/healthz` to return HTTP 200 with the exact JSON
-     object `{"ok":true,"status":"live"}`.
-   - Reserve `gateway health --json` for intentionally credentialed or
-     device-paired smoke, passing the explicit credential required by that
-     Gateway.
-   - Run one Gateway-backed agent turn with inherited `OPENAI_API_KEY`, short
-     prompt, explicit session key, JSON output, and a known-available model.
-   - If the configured default model fails as unavailable, record that caveat
-     and retry with the newest known-good OpenAI model instead of declaring the
-     release failed.
-   - Stop the gateway and verify the port is not listening.
+- `npm exec --yes --package openclaw@<VERSION> -- openclaw --version`.
+- Run at least one harmless command that touches the published CLI surface,
+  for example `plugins --help` or `gateway --help`.
+
+Do not start an extra local Gateway or run an ad hoc live model turn as a
+preliminary release check. Use the canonical release-validation workflows and
+publication evidence above; this does not remove any of their required lanes.
+Run additional manual live checks only when explicitly requested.
 
 ## Caveats To Report
 
@@ -160,6 +148,3 @@ After the track-specific publication checks pass:
   missing regular-release artifacts an extended-stable failure.
 - Divergent checkout caveat: say when local source SHA differs from release tag
   or origin and which live sources were used instead.
-- Smoke caveat: distinguish Gateway-backed agent success from local embedded
-  fallback. A valid auth-none live smoke has the exact `/healthz` result plus a
-  successful Gateway-backed agent turn and the Gateway log/run id for that call.

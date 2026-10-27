@@ -1,13 +1,13 @@
-/**
- * Identifies messaging tools and send actions during embedded-agent runs.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import {
-  CHANNEL_MESSAGE_ACTION_NAMES,
-  type ChannelMessageActionName,
-} from "../channels/plugins/types.public.js";
+  isMessageToolSendActionName,
+  resolveChannelMessageActionFacts,
+} from "../channels/plugins/message-action-names.js";
+import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import { shouldApplyCrossContextMarker } from "../infra/outbound/outbound-policy.js";
+
+export { isMessageToolSendActionName } from "../channels/plugins/message-action-names.js";
 
 const CORE_MESSAGING_TOOLS = new Set([
   "sessions_send",
@@ -15,45 +15,12 @@ const CORE_MESSAGING_TOOLS = new Set([
   "conversations_turn",
   "message",
 ]);
-const MESSAGE_TOOL_SEND_ACTIONS = new Set([
-  "send",
-  "thread-reply",
-  "sendWithEffect",
-  "sendAttachment",
-  "upload-file",
-]);
-const MESSAGE_TOOL_READ_ONLY_ACTIONS = new Set([
-  "read",
-  "reactions",
-  "list-pins",
-  "permissions",
-  "thread-list",
-  "search",
-  "sticker-search",
-  "member-info",
-  "role-info",
-  "emoji-list",
-  "channel-info",
-  "channel-list",
-  "voice-status",
-  "event-list",
-  "download-file",
-]);
-const MESSAGE_TOOL_MUTATION_ACTIONS = new Set<string>(
-  CHANNEL_MESSAGE_ACTION_NAMES.filter((action) => !MESSAGE_TOOL_READ_ONLY_ACTIONS.has(action)),
-);
 const MESSAGE_TOOL_CONVERSATION_CREATE_ACTIONS = new Set([
   "thread-create",
   "topic-create",
   "threadcreate",
   "createforumtopic",
 ]);
-
-/** Return true when a message action sends or uploads user-visible content. */
-export function isMessageToolSendActionName(action: unknown): boolean {
-  const normalized = normalizeOptionalString(action) ?? "";
-  return MESSAGE_TOOL_SEND_ACTIONS.has(normalized);
-}
 
 /** Return true when a message action creates a visible destination conversation. */
 export function isMessageToolConversationCreateActionName(action: unknown): boolean {
@@ -64,10 +31,7 @@ export function isMessageToolConversationCreateActionName(action: unknown): bool
 // Provider docking: any plugin with `actions` opts into messaging tool handling.
 /** Return true for core or channel-plugin messaging tool names. */
 export function isMessagingTool(toolName: string): boolean {
-  if (CORE_MESSAGING_TOOLS.has(toolName)) {
-    return true;
-  }
-  return isPluginNativeMessagingTool(toolName);
+  return CORE_MESSAGING_TOOLS.has(toolName) || isPluginNativeMessagingTool(toolName);
 }
 
 export function isPluginNativeMessagingTool(toolName: string): boolean {
@@ -81,15 +45,8 @@ export function isMessagingToolSendAction(
   args: Record<string, unknown>,
 ): boolean {
   const action = normalizeOptionalString(args.action) ?? "";
-  if (
-    toolName === "sessions_send" ||
-    toolName === "conversations_send" ||
-    toolName === "conversations_turn"
-  ) {
-    return true;
-  }
-  if (toolName === "message") {
-    return isMessageToolSendActionName(action);
+  if (CORE_MESSAGING_TOOLS.has(toolName)) {
+    return toolName !== "message" || isMessageToolSendActionName(action);
   }
   const providerId = normalizeChannelId(toolName);
   return Boolean(
@@ -125,8 +82,9 @@ export function isMessagingToolDeliveryAction(
   }
   if (toolName === "message") {
     const action = normalizeOptionalString(args.action) ?? "";
+    const facts = resolveChannelMessageActionFacts(action);
     return (
-      MESSAGE_TOOL_MUTATION_ACTIONS.has(action) || isMessageToolConversationCreateActionName(action)
+      (facts !== undefined && !facts.readOnly) || isMessageToolConversationCreateActionName(action)
     );
   }
   const providerId = normalizeChannelId(toolName);

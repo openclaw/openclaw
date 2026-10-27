@@ -32,18 +32,7 @@ export type PendingFaceTimeDial = FaceTimeDialRequest & {
   proxyIdentifier?: string;
 };
 
-type FaceTimeOutboundIdentityEvent = {
-  event: "ft-outbound-call-identified";
-  data: {
-    dial_id: string;
-    call_uuid?: string;
-    proxy_identifier?: string;
-  };
-};
-
-export function normalizeFaceTimeOutboundIdentityEvent(
-  value: unknown,
-): FaceTimeOutboundIdentityEvent | undefined {
+export function normalizeFaceTimeOutboundIdentityEvent(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -62,7 +51,7 @@ export function normalizeFaceTimeOutboundIdentityEvent(
     return undefined;
   }
   return {
-    event: "ft-outbound-call-identified",
+    event: "ft-outbound-call-identified" as const,
     data: {
       dial_id: dialID,
       ...(callUUID ? { call_uuid: callUUID } : {}),
@@ -157,11 +146,7 @@ export function doesFaceTimeCallMatchPendingDial(params: {
     return params.event.data.dial_id === params.pending.dialID;
   }
   if (params.pending.callUUID) {
-    const eventCallUUID = params.event.data.call_uuid;
-    return (
-      typeof eventCallUUID === "string" &&
-      doesPendingFaceTimeDialHaveCallUUID(params.pending, eventCallUUID)
-    );
+    return doesPendingFaceTimeDialHaveCallUUID(params.pending, params.event.data.call_uuid);
   }
   if (params.pending.proxyIdentifier) {
     return params.event.data.proxy_identifier === params.pending.proxyIdentifier;

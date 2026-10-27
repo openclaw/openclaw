@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { execNodeEvalSync } from "../test-utils/node-process.js";
+import { runWithAsyncWorkResources, runWithTrackedCancellation } from "./async-work-resources.js";
 import {
   AsyncWorkScope,
   captureAsyncWorkTracker,
@@ -8,315 +10,402 @@ import {
   isAsyncWorkScopeActiveHere,
   trackAsyncWork,
 } from "./async-work-scope.js";
-import { createDeferredCore } from "./deferred.js";
+import { createDeferredCore, type Deferred } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
-describe("async work scope", () => {
-  it.each(["released caller", "released helper"])(
-    "joins work across the shipped scope carrier with a %s",
-    async (direction) => {
-      // Released chunks retain this carrier while package replacement drains their work.
-      const carrier = resolveGlobalSingleton(
-        Symbol.for("openclaw.asyncWorkScope"),
-        () => new AsyncLocalStorage<AsyncWorkScope>(),
-      );
-      const scope = new AsyncWorkScope();
-      const finish = createDeferredCore();
-      let drained = false;
-      const work =
-        direction === "released caller"
-          ? carrier.run(scope, () => trackAsyncWork(() => finish.promise))
-          : scope.run(() => carrier.getStore()!.track(() => finish.promise));
-      const closing = scope.drain().then(() => {
-        drained = true;
-      });
-      try {
-        await nextTurn();
-        expect(drained).toBe(false);
-      } finally {
-        finish.resolve();
-        await work;
-        await closing;
-      }
-      expect(drained).toBe(true);
-    },
-  );
+const scopes: AsyncWorkScope[] = [];
+const gates: Deferred[] = [];
+const background: Promise<unknown>[] = [];
+const cleanups: (() => void)[] = [];
+afterEach(async () => {
+  // Release gates and join descendants before closing their owners.
+  gates.splice(0).forEach((gate) => gate.resolve());
+  while (background.length || scopes.length) {
+    await Promise.allSettled(background.splice(0));
+    await Promise.all(scopes.splice(0).map((scope) => scope.drain()));
+  }
+  cleanups.splice(0).forEach((cleanup) => cleanup());
+  vi.restoreAllMocks();
+});
+function keep<T>(collection: T[], value: T): T {
+  collection.push(value);
+  return value;
+}
+const makeScope = () => keep(scopes, new AsyncWorkScope());
+const makeGate = () => keep(gates, createDeferredCore());
+const makeHeldScope = () => ({ scope: makeScope(), gate: makeGate() });
+function own<T>(promise: Promise<T>): Promise<T> {
+  void promise.catch(() => {});
+  background.push(promise);
+  return promise;
+}
+function expectContext(signal: AbortSignal | undefined, ...active: [AsyncWorkScope, boolean][]) {
+  expect(getAsyncWorkSignal()).toBe(signal);
+  for (const [scope, expected] of active) {
+    expect(isAsyncWorkScopeActiveHere(scope)).toBe(expected);
+  }
+}
+async function expectClosed(track: typeof trackAsyncWork) {
+  const late = vi.fn();
+  await expect(track(late)).rejects.toThrow("Async work scope is closed");
+  expect(late).not.toHaveBeenCalled();
+}
+async function releaseHeld(
+  closing: Promise<unknown>,
+  gate: Deferred,
+  ...work: (Promise<unknown> | undefined)[]
+) {
+  const pending = Symbol("pending");
+  await expect(Promise.race([closing, nextTurn().then(() => pending)])).resolves.toBe(pending);
+  gate.resolve();
+  await Promise.all([closing, ...work]);
+}
+// Released chunks retain this carrier while package replacement drains their work.
+const carrier = resolveGlobalSingleton(
+  Symbol.for("openclaw.asyncWorkScope"),
+  () => new AsyncLocalStorage<AsyncWorkScope>(),
+);
 
-  it("does not inherit scope ancestry through a released detach helper", async () => {
-    const carrier = resolveGlobalSingleton(
-      Symbol.for("openclaw.asyncWorkScope"),
-      () => new AsyncLocalStorage<AsyncWorkScope>(),
-    );
-    const owner = new AsyncWorkScope();
-    const detached = new AsyncWorkScope();
-    await owner.track(() =>
-      carrier.exit(() => {
-        expect(isAsyncWorkScopeActiveHere(owner)).toBe(false);
-        return detached.track(() => {
-          expect(isAsyncWorkScopeActiveHere(owner)).toBe(false);
-          expect(isAsyncWorkScopeActiveHere(detached)).toBe(true);
-        });
+it.each([false, true])("restores synchronous context (throws=%s)", async (throws) => {
+  const scope = makeScope();
+  const caller = new AsyncLocalStorage<string>();
+  cleanups.push(() => caller.disable());
+  const failure = new Error("scope callback failed");
+  const readThen = vi.fn(() => {
+    throw new Error("Caller owns thenable inspection");
+  });
+  const thenable = {
+    // oxlint-disable-next-line unicorn/no-thenable -- Synchronous entry must not inspect the result.
+    get then() {
+      return readThen();
+    },
+  };
+  caller.run("caller", () => {
+    const invoke = vi.fn(() =>
+      scope.run(() => {
+        expectContext(scope.signal, [scope, true]);
+        caller.enterWith("scope continuation");
+        if (throws) {
+          throw failure;
+        }
+        return thenable;
       }),
     );
-    await Promise.all([owner.drain(), detached.drain()]);
+    if (throws) {
+      expect(invoke).toThrow();
+      expect(invoke.mock.results[0]?.value).toBe(failure);
+    } else {
+      expect(invoke() === thenable).toBe(true);
+    }
+    expect(caller.getStore()).toBe("caller");
+    expectContext(undefined, [scope, false]);
   });
+  await scope.drain();
+  expect(readThen).not.toHaveBeenCalled();
+});
 
-  it("excludes newly admitted disposal work while another owner enters its next phase", async () => {
-    const first = new AsyncWorkScope();
-    const second = new AsyncWorkScope();
-    const finishAbort = createDeferredCore();
-    const finishDisposal = createDeferredCore();
-    const disposalStarted = createDeferredCore();
-    let disposing = false;
-    let disposed = false;
-    let secondStarted = false;
-    const abortWork = first.track(() => finishAbort.promise);
-    const selectScopes = () => (disposing ? [second] : [first, second]);
-    const disposal = AsyncWorkScope.runWhenAllIdle(selectScopes, () =>
+it.each([false, true])(
+  "keeps cancellation and accepted work after foreground settlement (fails=%s)",
+  async (fails) => {
+    const { scope: owner, gate: finishWork } = makeHeldScope();
+    const requester = new AbortController();
+    const failure = new Error("foreground failed");
+    let operationSignal: AbortSignal | undefined;
+    let workSignal: AbortSignal | undefined;
+    const result = owner.run(() =>
+      runWithTrackedCancellation(requester.signal, (signal) => {
+        operationSignal = signal;
+        workSignal = getAsyncWorkSignal();
+        void trackAsyncWork(() => finishWork.promise);
+        if (fails) {
+          throw failure;
+        }
+        return "accepted";
+      }),
+    );
+    if (fails) {
+      await expect(result).rejects.toBe(failure);
+    } else {
+      expect(await result).toBe("accepted");
+    }
+    expect(owner.hasPendingWork).toBe(true);
+    expect(workSignal?.aborted).toBe(false);
+    const cancelReason = new Error("requester cancelled");
+    requester.abort(cancelReason);
+    expect(operationSignal?.reason).toBe(cancelReason);
+    const closeReason = new Error("owner closing");
+    owner.beginClose(closeReason);
+    expect(workSignal?.reason).toBe(closeReason);
+    expect(owner.hasPendingWork).toBe(true);
+    finishWork.resolve();
+    await owner.drain();
+    expect(owner.hasPendingWork).toBe(false);
+  },
+);
+
+it.each(["released caller", "released helper"])(
+  "joins work across the shipped scope carrier with a %s",
+  async (direction) => {
+    const { scope, gate: finish } = makeHeldScope();
+    const work =
+      direction === "released caller"
+        ? carrier.run(scope, () => trackAsyncWork(() => finish.promise))
+        : scope.run(() => carrier.getStore()!.track(() => finish.promise));
+    await releaseHeld(own(scope.drain()), finish, work);
+  },
+);
+
+it("does not inherit scope ancestry through a released detach helper", async () => {
+  const [owner, detached] = [makeScope(), makeScope()];
+  await owner.track(() =>
+    carrier.exit(() => {
+      expect(isAsyncWorkScopeActiveHere(owner)).toBe(false);
+      return detached.track(() => expectContext(detached.signal, [owner, false], [detached, true]));
+    }),
+  );
+});
+
+it("excludes newly admitted disposal work while another owner enters its next phase", async () => {
+  const [first, second] = [makeScope(), makeScope()];
+  const [finishAbort, finishDisposal, disposalStarted] = [makeGate(), makeGate(), makeGate()];
+  let disposing = false;
+  const events: string[] = [];
+  const abortWork = first.track(() => finishAbort.promise);
+  const selectScopes = () => (disposing ? [second] : [first, second]);
+  const disposal = own(
+    AsyncWorkScope.runWhenAllIdle(selectScopes, () =>
       first.track(async () => {
         disposing = true;
         disposalStarted.resolve();
         await finishDisposal.promise;
-        disposed = true;
+        events.push("disposed");
       }),
-    );
-    const nextPhase = AsyncWorkScope.runWhenAllIdle(selectScopes, () =>
-      second.track(() => {
-        secondStarted = true;
-      }),
-    );
-    finishAbort.resolve();
-    try {
-      await disposalStarted.promise;
-      await nextTurn();
-      expect(secondStarted).toBe(true);
-      expect(disposed).toBe(false);
-    } finally {
-      finishDisposal.resolve();
-      await Promise.all([abortWork, disposal, nextPhase]);
-      await Promise.all([first.drain(), second.drain()]);
-    }
-  });
+    ),
+  );
+  const nextPhase = own(
+    AsyncWorkScope.runWhenAllIdle(selectScopes, () => second.track(() => events.push("second"))),
+  );
+  finishAbort.resolve();
+  await disposalStarted.promise;
+  await nextTurn();
+  expect(events).toEqual(["second"]);
+  finishDisposal.resolve();
+  await Promise.all([abortWork, disposal, nextPhase]);
+});
 
-  it("preserves synchronous returns and throws without inspecting a thenable", async () => {
-    const scope = new AsyncWorkScope();
-    const readThen = vi.fn(() => {
-      throw new Error("The synchronous caller owns thenable inspection");
-    });
-    const thenable = {
-      // oxlint-disable-next-line unicorn/no-thenable -- The synchronous entry must leave this thenable untouched.
-      get then() {
-        return readThen();
-      },
-    };
-    const value = scope.run(() => {
-      expect(getAsyncWorkSignal()).toBe(scope.signal);
-      return thenable;
-    });
-    expect(value === thenable).toBe(true);
-    const failure = new Error("synchronous failure");
-    let caught: unknown;
-    try {
-      scope.run(() => {
-        throw failure;
-      });
-    } catch (error) {
-      caught = error;
+it.each([false, true])(
+  "joins synchronous descendants without duplicate pending work (settled=%s)",
+  async (settled) => {
+    const { scope, gate } = makeHeldScope();
+    // A settled promise still owns work until its queued cleanup reaction runs.
+    if (settled) {
+      void own(scope.track(() => undefined));
     }
-    expect(caught).toBe(failure);
-    await scope.drain();
-    expect(readThen).not.toHaveBeenCalled();
-  });
-
-  it("admits synchronous work before a reentrant drain and joins its descendant", async () => {
-    const scope = new AsyncWorkScope();
-    const gate = createDeferredCore();
-    let closing: Promise<void> | undefined;
+    // Supported runtimes provide this intrinsic; the shared ES2023 lib predates it.
+    const deferreds = vi.spyOn(
+      Promise as PromiseConstructor & { withResolvers: typeof createDeferredCore },
+      "withResolvers",
+    );
     let child: Promise<void> | undefined;
-    let drained = false;
-    scope.run(() => {
-      closing = scope.drain().then(() => {
-        drained = true;
-      });
-      child = trackAsyncWork(() => gate.promise);
+    const closing = scope.run(() => {
+      const drain = own(scope.drain());
+      child = trackAsyncWork(() =>
+        scope.run(() => {
+          expect(getAsyncWorkSignal()).toBe(scope.signal);
+          return gate.promise;
+        }),
+      );
+      return drain;
     });
-    try {
-      await nextTurn();
-      expect(drained).toBe(false);
-    } finally {
-      gate.resolve();
-      await child;
-      await closing;
-    }
+    const created = deferreds.mock.calls.length;
+    deferreds.mockRestore();
+    expect(scope.signal.aborted).toBe(true);
+    expect(getAsyncWorkSignal()).toBeUndefined();
+    await releaseHeld(closing, gate, child);
     const late = vi.fn();
     expect(() => scope.run(late)).toThrow("Async work scope is closed");
     expect(late).not.toHaveBeenCalled();
-  });
+    // Only the child needs new custody when an existing operation already holds drain.
+    expect(created).toBe(settled ? 1 : 2);
+  },
+);
 
-  it("settles work for cleanup without closing its captured tracker, then fences final drain", async () => {
-    const scope = new AsyncWorkScope();
-    const track = await scope.track(captureAsyncWorkTracker);
-    scope.beginClose();
-    const cleanup = vi.fn(async () => {
-      await Promise.resolve();
-    });
-    await scope.runWhenIdle(() => {
-      expect(getAsyncWorkSignal()).toBe(scope.signal);
-      return track(cleanup);
-    });
-    expect(cleanup).toHaveBeenCalledOnce();
-    const drained = scope.drain();
-    const late = vi.fn();
-    await expect(track(late)).rejects.toThrow("Async work scope is closed");
-    expect(late).not.toHaveBeenCalled();
-    await drained;
+it("settles work for cleanup without closing its captured tracker, then fences final drain", async () => {
+  const scope = makeScope();
+  const track = await scope.track(captureAsyncWorkTracker);
+  scope.beginClose();
+  const cleanup = vi.fn(() => Promise.resolve());
+  await scope.runWhenIdle(() => {
+    expect(getAsyncWorkSignal()).toBe(scope.signal);
+    return track(cleanup);
   });
+  expect(cleanup).toHaveBeenCalledOnce();
+  const drained = scope.drain();
+  await expectClosed(track);
+  await drained;
+});
 
-  it("joins an inherited descendant after its parent returns", async () => {
-    const scope = new AsyncWorkScope();
-    const gate = createDeferredCore();
-    let child: Promise<void> | undefined;
-    let drained = false;
-    await scope.track(async () => {
-      await Promise.resolve();
-      child = trackAsyncWork(async () => {
-        expect(getAsyncWorkSignal()).toBe(scope.signal);
-        await gate.promise;
-      });
-    });
-    const closing = scope.drain().then(() => {
-      drained = true;
-    });
-    try {
-      await nextTurn();
-      expect(scope.signal.aborted).toBe(true);
-      expect(drained).toBe(false);
-      expect(getAsyncWorkSignal()).toBeUndefined();
-    } finally {
-      gate.resolve();
-      await child;
-      await closing;
-    }
-    expect(drained).toBe(true);
-  });
-
-  it("does not close or drain an independent scope", async () => {
-    const first = new AsyncWorkScope();
-    const second = new AsyncWorkScope();
-    const gates = [createDeferredCore(), createDeferredCore()];
-    const completed: number[] = [];
-    await Promise.all(
-      [first, second].map((scope, index) =>
-        scope.track(async () => {
-          await Promise.resolve();
-          void trackAsyncWork(async () => {
-            await gates[index]!.promise;
-            completed.push(index);
-          });
-        }),
-      ),
-    );
-    try {
-      gates[0]!.resolve();
-      await first.drain();
-      expect(completed).toEqual([0]);
-      expect(second.signal.aborted).toBe(false);
-    } finally {
-      for (const gate of gates) {
-        gate.resolve();
-      }
-      await Promise.all([first.drain(), second.drain()]);
-    }
-  });
-
-  it("captures descendant work ownership without copying another async context", async () => {
-    const owner = new AsyncWorkScope();
-    const caller = new AsyncWorkScope();
+it.each([true, false])(
+  "captures work ownership without copying caller context (owned=%s)",
+  async (owned) => {
+    const [owner, caller] = [makeScope(), makeScope()];
     const authorization = new AsyncLocalStorage<string>();
-    const gate = createDeferredCore();
-    const track = await authorization.run("requested", () => owner.track(captureAsyncWorkTracker));
+    cleanups.push(() => authorization.disable());
+    const gate = makeGate();
+    const track = owned
+      ? await authorization.run("requested", () => owner.track(captureAsyncWorkTracker))
+      : captureAsyncWorkTracker();
     let producer: Promise<void> | undefined;
     let descendant: Promise<void> | undefined;
-    let drained = false;
-    try {
-      await authorization.run("invoker", () =>
-        caller.track(() => {
-          expect(isAsyncWorkScopeActiveHere(caller)).toBe(true);
-          expect(isAsyncWorkScopeActiveHere(owner)).toBe(false);
-          producer = track(async () => {
-            expect(authorization.getStore()).toBe("invoker");
+    await authorization.run("invoker", () =>
+      caller.track(() => {
+        expectContext(caller.signal, [caller, true], [owner, false]);
+        producer = track(async () => {
+          expect(authorization.getStore()).toBe("invoker");
+          expectContext(owned ? owner.signal : undefined, [owner, owned], [caller, owned]);
+          await Promise.resolve();
+          if (owned) {
+            await caller.track(() => expectContext(caller.signal, [owner, true]));
             expect(getAsyncWorkSignal()).toBe(owner.signal);
-            expect(isAsyncWorkScopeActiveHere(owner)).toBe(true);
-            expect(isAsyncWorkScopeActiveHere(caller)).toBe(true);
-            await Promise.resolve();
-            descendant = trackAsyncWork(() => gate.promise);
-          });
-        }),
-      );
-      expect(isAsyncWorkScopeActiveHere(caller)).toBe(false);
-      expect(isAsyncWorkScopeActiveHere(owner)).toBe(false);
-      await producer;
-      const closing = owner.drain().then(() => {
-        drained = true;
-      });
-      await caller.drain();
-      await nextTurn();
-      expect(drained).toBe(false);
-      gate.resolve();
-      await descendant;
-      await closing;
-      const staleProducer = vi.fn();
-      await expect(track(staleProducer)).rejects.toThrow("Async work scope is closed");
-      expect(staleProducer).not.toHaveBeenCalled();
-    } finally {
-      gate.resolve();
-      await producer;
-      await descendant;
-      await Promise.all([owner.drain(), caller.drain()]);
-      authorization.disable();
-    }
-  });
-
-  it("keeps an unscoped capture caller-owned when invoked inside a later scope", async () => {
-    const track = captureAsyncWorkTracker();
-    const caller = new AsyncWorkScope();
-    const gate = createDeferredCore();
-    let producer: Promise<void> | undefined;
-    let descendant: Promise<void> | undefined;
-    let descendantSettled = false;
-    try {
-      await caller.track(() => {
-        producer = track(() => {
-          expect(getAsyncWorkSignal()).toBeUndefined();
-          expect(isAsyncWorkScopeActiveHere(caller)).toBe(false);
-          descendant = trackAsyncWork(async () => {
-            await gate.promise;
-            descendantSettled = true;
-          });
+          }
+          descendant = own(trackAsyncWork(() => gate.promise));
         });
-      });
-      await producer;
-      await caller.drain();
-      expect(descendantSettled).toBe(false);
-    } finally {
-      gate.resolve();
-      await producer;
-      await descendant;
-      await caller.drain();
+      }),
+    );
+    expectContext(undefined, [caller, false], [owner, false]);
+    await producer;
+    await caller.drain();
+    expect(owner.signal.aborted).toBe(false);
+    expect(owner.hasPendingWork).toBe(owned);
+    const closing = own(owned ? owner.drain() : descendant!);
+    await releaseHeld(closing, gate, descendant);
+    if (owned) {
+      await expectClosed(track);
     }
+  },
+);
+
+it("rejects a late async continuation before invoking its producer", async () => {
+  const { scope, gate } = makeHeldScope();
+  const producer = vi.fn();
+  let continuation: Promise<unknown> | undefined;
+  await scope.track(() => {
+    continuation = gate.promise.then(() => trackAsyncWork(producer));
+  });
+  await scope.drain();
+  gate.resolve();
+  await expect(continuation).rejects.toThrow("Async work scope is closed");
+  expect(producer).not.toHaveBeenCalled();
+});
+
+describe("async work resources", () => {
+  it("releases settled results and producer data while accepted work remains", () => {
+    // This proves V8 retention even when the test runner uses Bun.
+    const output = execNodeEvalSync(
+      `import assert from "node:assert/strict";
+       import { setImmediate as nextTurn } from "node:timers/promises";
+       import { queryObjects } from "node:v8";
+       import { runWithAsyncWorkResources, runWithTrackedCancellation } from ${JSON.stringify(new URL("./async-work-resources.ts", import.meta.url).href)};
+       import { AsyncWorkScope, trackAsyncWork } from ${JSON.stringify(new URL("./async-work-scope.ts", import.meta.url).href)};
+
+       function createForegroundProducer(pendingWork) {
+         const input = { text: "synthetic transcript text" };
+         return {
+           input: new WeakRef(input),
+           run: () => {
+             void trackAsyncWork(pendingWork);
+             return { messagesSnapshot: [{ text: input.text }] };
+           },
+         };
+       }
+
+       async function completeForeground(mode, owner, signal, pendingWork, release) {
+         const producer = createForegroundProducer(pendingWork);
+         const output = await owner.run(() =>
+           mode === "resources"
+             ? runWithAsyncWorkResources(async (onAcquired) => {
+                 onAcquired({ release, releaseBeforeResultWhenIdle: true });
+                 return producer.run();
+               })
+             : runWithTrackedCancellation(signal, producer.run),
+         );
+         return { input: producer.input, output: new WeakRef(output) };
+       }
+
+       for (const mode of ["resources", "cancellation"]) {
+         const owner = new AsyncWorkScope();
+         const requester = new AbortController();
+         const finishWork = Promise.withResolvers();
+         let releases = 0;
+         try {
+           const references = await completeForeground(
+             mode, owner, requester.signal, () => finishWork.promise, () => releases++,
+           );
+           const control = new WeakRef({});
+           await nextTurn();
+           queryObjects(WeakRef);
+           assert.equal(control.deref(), undefined, mode + " GC control");
+           assert.equal(references.input.deref(), undefined, mode + " producer data");
+           assert.equal(references.output.deref(), undefined, mode + " settled result");
+           assert.equal(owner.hasPendingWork, true, mode + " accepted work remains");
+           assert.equal(releases, 0, mode + " cleanup waits for accepted work");
+         } finally {
+           finishWork.resolve();
+           await owner.drain();
+         }
+         assert.equal(releases, mode === "resources" ? 1 : 0, mode + " cleanup count");
+       }
+       console.log("foreground data released");`,
+      {
+        imports: ["./scripts/tsx.mjs"],
+        timeout: 10_000,
+      },
+    );
+    expect(output.trim()).toBe("foreground data released");
   });
 
-  it("rejects a late async continuation before invoking its producer", async () => {
-    const scope = new AsyncWorkScope();
-    const gate = createDeferredCore();
-    const producer = vi.fn();
-    let continuation: Promise<unknown> | undefined;
-    await scope.track(() => {
-      continuation = gate.promise.then(() => trackAsyncWork(producer));
+  it.each([
+    { eager: true, fails: false },
+    { eager: true, fails: true },
+    { eager: false, fails: true },
+  ])("releases idle resources once (eager=$eager, fails=$fails)", async ({ eager, fails }) => {
+    const owner = makeScope();
+    const cleanupStarted = makeGate();
+    const finishCleanup = makeGate();
+    const failure = new Error("resource cleanup failed");
+    const release = vi.fn(async () => {
+      cleanupStarted.resolve();
+      await finishCleanup.promise;
+      if (fails) {
+        throw failure;
+      }
     });
-    await scope.drain();
-    gate.resolve();
-    await expect(continuation).rejects.toThrow("Async work scope is closed");
-    expect(producer).not.toHaveBeenCalled();
+    let returned = false;
+    const result = owner
+      .run(() =>
+        runWithAsyncWorkResources(async (onAcquired) => {
+          onAcquired({ release, releaseBeforeResultWhenIdle: eager ? true : undefined });
+          return "completed";
+        }),
+      )
+      .then((value) => {
+        returned = true;
+        return value;
+      });
+    const outcome =
+      eager && fails
+        ? expect(result).rejects.toBe(failure)
+        : expect(result).resolves.toBe("completed");
+    await cleanupStarted.promise;
+    await nextTurn();
+    expect(returned).toBe(!eager);
+    if (!eager) {
+      expect(owner.hasPendingWork).toBe(true);
+    }
+    expect(release).toHaveBeenCalledOnce();
+    finishCleanup.resolve();
+    await owner.drain();
+    await outcome;
+    expect(release).toHaveBeenCalledOnce();
   });
 });

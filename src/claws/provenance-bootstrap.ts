@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 
-export function selectClawBootstrapProvenanceColumns(db: DatabaseSync): string {
+export function selectClawBootstrapProvenanceColumns(db: EngineConnection): string {
   const sourcePath = tableHasColumn(db, "claw_installs", "bootstrap_source_path")
     ? "bootstrap_source_path"
     : "NULL AS bootstrap_source_path";

@@ -1,20 +1,21 @@
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { chromium, type BrowserContext, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { isLiveTestEnabled } from "../../test-support.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { assertBrowserNavigationAllowed } from "./navigation-guard.js";
+import { readTargetId } from "./pw-chromium.test-support.js";
 import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
 import { downloadCurrentDocumentViaPlaywright } from "./pw-tools-core.downloads.js";
 
 // Only source DNS is synthetic. The real policy owner validates its public answer;
 // Chromium maps that test hostname to our loopback fixture, never the public Internet.
-vi.mock("../infra/net/ssrf.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/net/ssrf.js")>();
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
   return {
     ...actual,
     resolvePinnedHostnameWithPolicy: (
@@ -95,22 +96,10 @@ describe.skipIf(!isLiveTestEnabled())("uninspectable download policy (real Chrom
   beforeAll(async () => {
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-policy-live-"));
     bytes = await fs.readFile(new URL("../../assets/icon.png", import.meta.url));
-    destination.listen(0, "127.0.0.1");
-    await once(destination, "listening");
-    source.listen(0, "127.0.0.1");
-    await once(source, "listening");
-    const sourceAddress = source.address();
-    const destinationAddress = destination.address();
-    if (
-      !sourceAddress ||
-      typeof sourceAddress === "string" ||
-      !destinationAddress ||
-      typeof destinationAddress === "string"
-    ) {
-      throw new Error("Fixture servers did not bind");
-    }
-    sourceUrl = `http://${sourceHostname}:${sourceAddress.port}/asset.png`;
-    destinationUrl = `http://127.0.0.1:${destinationAddress.port}/redirected.png`;
+    const destinationPort = await listenOnLoopback(destination);
+    const sourcePort = await listenOnLoopback(source);
+    sourceUrl = `http://${sourceHostname}:${sourcePort}/asset.png`;
+    destinationUrl = `http://127.0.0.1:${destinationPort}/redirected.png`;
     const profileDir = path.join(rootDir, "chromium-profile");
     context = await chromium.launchPersistentContext(profileDir, {
       headless: true,
@@ -126,11 +115,7 @@ describe.skipIf(!isLiveTestEnabled())("uninspectable download policy (real Chrom
     )[0];
     cdpUrl = `http://127.0.0.1:${port}`;
     page = await context.newPage();
-    const session = await context.newCDPSession(page);
-    ({
-      targetInfo: { targetId },
-    } = await session.send("Target.getTargetInfo"));
-    await session.detach();
+    targetId = await readTargetId(page);
     // Exercise an already-active CDP session, not an unrelated connection-policy refusal.
     await getPageForTargetId({
       cdpUrl,

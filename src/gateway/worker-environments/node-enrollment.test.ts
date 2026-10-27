@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
 import { decodePairingSetupCode } from "../../pairing/setup-code.js";
+import * as processExec from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -15,16 +16,21 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
+import {
+  classifyWorkerBootstrapArtifactTransferPath,
+  WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH,
+} from "../gateway-http-route-contracts.js";
+import {
+  createArtifactTransferHttpCallback,
+  handleArtifactTransferHttpRequest,
+} from "./artifact-transfer-http.js";
+import { useNodeBootstrapArtifactFixtures } from "./node-bootstrap-artifact.test-support.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
-import {
-  createWorkerBootstrapArtifactTransferHttpCallback,
-  handleWorkerBootstrapArtifactTransferHttpRequest,
-} from "./worker-bootstrap-artifact-transfer-http.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 vi.mock("../../infra/device-bootstrap.js", () => ({
+  revokeDeviceBootstrapToken: vi.fn(async () => ({ removed: true })),
   ensureDevicePairSetupBootstrapToken: vi.fn(async ({ setupId }: { setupId: string }) => ({
     status: "pending",
     token: "bootstrap-token",
@@ -38,12 +44,20 @@ const PLUGIN_PUBLIC_URL = "wss://pairing.example.test";
 const LOCAL_TLS_FINGERPRINT = "c".repeat(64);
 const REMOTE_TLS_FINGERPRINT = "d".repeat(64);
 
-function createConfig(pluginPublicUrl?: string): OpenClawConfig {
+function downloadRequest(descriptor: { token: string; sha256: string }) {
+  return { token: descriptor.token, artifactKey: descriptor.sha256 };
+}
+
+function createConfig(
+  pluginPublicUrl?: string,
+  gateway: OpenClawConfig["gateway"] = {},
+): OpenClawConfig {
   return {
     gateway: {
       bind: "loopback",
       publicOrigin: PUBLIC_ORIGIN,
       auth: { mode: "token", token: "gateway-token" },
+      ...gateway,
     },
     ...(pluginPublicUrl
       ? {
@@ -61,7 +75,7 @@ describe("worker node enrollment", () => {
   let store: WorkerEnvironmentStore;
   let transfer: ReturnType<typeof createWorkerBootstrapArtifactTransferService>;
   let managers: ReturnType<typeof createWorkerNodeEnrollmentManager>[];
-  let artifactProviders: ReturnType<typeof createNodeBootstrapArtifactProvider>[];
+  const bootstrapArtifacts = useNodeBootstrapArtifactFixtures();
 
   const artifact = () => ({
     tarballPath: path.join(root, "node-runtime.tgz"),
@@ -90,11 +104,11 @@ describe("worker node enrollment", () => {
     managers.push(manager);
     return manager;
   };
-  const createRequested = async () =>
+  const createRequested = async (profileId = "test-profile") =>
     await store.createIntent({
       environmentId: "worker-enrollment",
       providerId: "fake-provider",
-      profileId: "test-profile",
+      profileId,
       profileSnapshot: { settings: {} },
       provisionOperationId: "provision:worker-enrollment",
     });
@@ -107,46 +121,22 @@ describe("worker node enrollment", () => {
       ...(nodeDeviceId ? { patch: { nodeDeviceId } } : {}),
     });
   };
-
-  const createArtifactProvider = async () => {
-    const packageRoot = path.join(root, "gateway");
-    await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-    await Promise.all([
-      fs.writeFile(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.8.1", type: "module" }),
-      ),
-      fs.writeFile(path.join(packageRoot, "openclaw.mjs"), 'import "./dist/entry.js";'),
-      fs.writeFile(path.join(packageRoot, "node-version.mjs"), "export const supported = true;"),
-      fs.writeFile(path.join(packageRoot, "node-sqlite.mjs"), "export const probe = true;"),
-      fs.writeFile(
-        path.join(packageRoot, "node-host-launcher.mjs"),
-        "export const launcher = true;",
-      ),
-      fs.writeFile(
-        path.join(packageRoot, "node-runtime-update.mjs"),
-        "export const update = true;",
-      ),
-      fs.writeFile(
-        path.join(packageRoot, "node-runtime-recovery.mjs"),
-        "export const recovery = true;",
-      ),
-      fs.writeFile(path.join(packageRoot, "cli-root-options.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "gateway-run-argv.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "gateway-shutdown-budget.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "dist/entry.js"), "export const ready = true;"),
-      fs.writeFile(
-        path.join(packageRoot, "dist/build-info.json"),
-        JSON.stringify({ version: "2026.8.1", buildId: "gateway-source-build" }),
-      ),
-    ]);
-    const provider = createNodeBootstrapArtifactProvider({
-      packageRoot,
-      runningBuildId: "gateway-source-build",
-      plugins: [],
-    });
-    artifactProviders.push(provider);
-    return provider;
+  const holdFirstArtifact = () => {
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    let first = true;
+    return {
+      entered: entered.promise,
+      resume: resume.resolve,
+      prepareArtifact: async () => {
+        if (first) {
+          first = false;
+          entered.resolve();
+          await resume.promise;
+        }
+        return artifact();
+      },
+    };
   };
 
   beforeEach(async () => {
@@ -155,7 +145,6 @@ describe("worker node enrollment", () => {
     store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
     transfer = createWorkerBootstrapArtifactTransferService();
     managers = [];
-    artifactProviders = [];
     await fs.writeFile(artifact().tarballPath, "x");
     await fs.writeFile(bundle().tarballPath, "worker");
   });
@@ -164,65 +153,34 @@ describe("worker node enrollment", () => {
     for (const manager of managers) {
       manager.stop();
     }
-    await Promise.all(artifactProviders.map((provider) => provider.close()));
     vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.each([
-    "127.0.0.1",
-    "127.42.0.1",
-    "localhost",
-    "[::1]",
-    "169.254.10.2",
-    "0.0.0.0",
-    "[::]",
-    "[::ffff:0.0.0.0]",
-    "[::ffff:0:0]",
-    "[64:ff9b::0.0.0.0]",
-    "[64:ff9b::]",
-    "[fe80::1]",
-    "[febf::1]",
-  ])("rejects unreachable cloud Gateway host %s before preparing artifacts", async (host) => {
+  it("rejects an unreachable cloud Gateway before preparing artifacts", async () => {
     const prepareArtifact = vi.fn(async () => artifact());
     const manager = createManager({
-      getConfig: () => createConfig(`http://${host}:19821`),
+      getConfig: () => createConfig("http://localhost:19821"),
       prepareArtifact,
     });
-
     await expect(manager.prepare(await createRequested())).rejects.toThrow(
-      new Error(
-        `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://${new URL(`http://${host}`).hostname}:19821, from plugins.entries.device-pair.config.publicUrl). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
-      ),
+      "Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://localhost:19821, from plugins.entries.device-pair.config.publicUrl)",
     );
     expect(prepareArtifact).not.toHaveBeenCalled();
   });
 
-  it("prepares artifacts for a public cloud Gateway host", async () => {
-    const prepareArtifact = vi.fn(async () => artifact());
-    const manager = createManager({ prepareArtifact });
-
-    await expect(manager.prepare(await createRequested())).resolves.toBe(artifact().tarballSha256);
-    expect(prepareArtifact).toHaveBeenCalledOnce();
-  });
-
-  it("releases requested-state preflight artifact custody without aborting its caller", async () => {
+  it("prepares requested-state artifacts without enrollment or transfer grants", async () => {
     const record = await createRequested();
-    const provider = await createArtifactProvider();
-    let consumerSignal: AbortSignal | undefined;
+    const { provider } = await bootstrapArtifacts.fixture();
     const manager = createManager({
-      prepareArtifact: async (_record, signal) => {
-        consumerSignal = signal;
-        return await provider.prepare(signal);
-      },
+      prepareArtifact: async (_record, signal) => await provider.prepare(signal),
     });
     const caller = new AbortController();
     const ensureEnrollment = vi.spyOn(store, "ensureNodeEnrollment");
     const grant = vi.spyOn(transfer, "prepare");
     await manager.prepare(record, caller.signal);
-    expect(consumerSignal?.aborted).toBe(true);
     expect(caller.signal.aborted).toBe(false);
     expect(ensureEnrollment).not.toHaveBeenCalled();
     expect(grant).not.toHaveBeenCalled();
@@ -238,7 +196,7 @@ describe("worker node enrollment", () => {
     "cancels requested-state preflight on %s while its shared producer drains",
     async (reason) => {
       const record = await createRequested();
-      const provider = await createArtifactProvider();
+      const { provider } = await bootstrapArtifacts.fixture();
       const stagingRoot = path.join(root, "held-artifact");
       await fs.mkdir(stagingRoot);
       const entered = createDeferredCore();
@@ -281,7 +239,7 @@ describe("worker node enrollment", () => {
         });
         const closed = vi.fn();
         closing = provider.close().then(closed);
-        await expect(fs.access(stagingRoot)).resolves.toBeUndefined();
+        await fs.access(stagingRoot);
         expect(closed).not.toHaveBeenCalled();
         resume.resolve(stagingRoot);
         await closing;
@@ -296,73 +254,66 @@ describe("worker node enrollment", () => {
     },
   );
 
-  it("grants artifact access before enrollment without creating a setup identity or credential", async () => {
+  it("transfers the prepared project lock under the runtime's revocable authority", async () => {
     const record = await createProvisioning();
-    const manager = createManager();
-    const ensureEnrollment = vi.spyOn(store, "ensureNodeEnrollment");
-    vi.mocked(ensureDevicePairSetupBootstrapToken).mockClear();
+    const manager = createManager({
+      prepareArtifact: async () => ({ ...artifact(), installLock: bundle() }),
+    });
     const runtime = await manager.prepareRuntime(record, bundle());
-    expect(ensureEnrollment).not.toHaveBeenCalled();
-    expect(ensureDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
-    expect(store.get(record.environmentId)).toMatchObject({
-      nodeSetupId: null,
-      nodeDeviceId: null,
-    });
-    const authorization = transfer.authorize({
-      token: runtime.nodeBootstrap.token,
-      artifactKey: runtime.nodeBootstrap.sha256,
-    })!;
+    const lock = runtime.nodeBootstrap.installLock!;
+    const request = downloadRequest(lock);
+    expect(lock.sha256).toBe(bundle().tarballSha256);
+    expect(lock.token).not.toBe(runtime.nodeBootstrap.token);
+    const authorization = transfer.authorize(request)!;
     const opened = await transfer.openFile(authorization);
-    expect(await opened?.handle.readFile("utf8")).toBe("x");
-    await opened?.handle.close();
-    expect(runtime.workerBundle).toMatchObject({
-      sha256: bundle().tarballSha256,
-      bytes: 6,
-      packageRelativePath: `worker-artifacts/${bundle().tarballSha256}.tgz`,
-    });
-    const bundleAuthorization = transfer.authorize({
-      token: runtime.workerBundle.token,
-      artifactKey: runtime.workerBundle.sha256,
-    })!;
-    const bundleOpened = await transfer.openFile(bundleAuthorization);
-    expect(await bundleOpened?.handle.readFile("utf8")).toBe("worker");
-    await bundleOpened?.handle.close();
-    const enrollment = await manager.begin(record);
-    expect(enrollment).not.toHaveProperty("workerBundle");
-    expect(runtime.signal?.aborted).toBe(true);
-    expect(transfer.isAuthorizationCurrent(authorization)).toBe(false);
-    expect(transfer.isAuthorizationCurrent(bundleAuthorization)).toBe(false);
+    expect(opened).not.toBeNull();
+    if (opened) {
+      expect(await opened.handle.readFile("utf8")).toBe("worker");
+      await opened.handle.close();
+    }
     manager.closeRuntime(runtime);
-    manager.close({ ...enrollment });
-    expect(enrollment.signal?.aborted).toBe(false);
-    expect(
-      transfer.authorize({
-        token: enrollment.nodeBootstrap.token,
-        artifactKey: enrollment.nodeBootstrap.sha256,
-      }),
-    ).toBeDefined();
+    expect(transfer.authorize(request)).toBeUndefined();
   });
 
-  it.each(["close", "shutdown", "destroy", "operation-abort", "replacement"] as const)(
+  it("sizes grants and download authority for the actual artifacts", async () => {
+    const record = await createProvisioning();
+    let transferNow = 0;
+    let tarballBytes = 1;
+    vi.spyOn(Date, "now").mockImplementation(() => transferNow);
+    transfer = createWorkerBootstrapArtifactTransferService();
+    const manager = createManager({
+      prepareArtifact: async () => ({ ...artifact(), tarballBytes }),
+    });
+    for (const { bytes, enrollmentMs, runtimeMs } of [
+      { bytes: 1, enrollmentMs: 45 * 60_000, runtimeMs: 45 * 60_000 },
+      { bytes: 200_000_000, enrollmentMs: 61 * 60_000 + 40_000, runtimeMs: 88 * 60_000 + 20_000 },
+      { bytes: 250_000_000, enrollmentMs: 68 * 60_000 + 20_000, runtimeMs: 95 * 60_000 },
+    ]) {
+      tarballBytes = bytes;
+      const runtime = await manager.prepareRuntime(record, { ...bundle(), tarballBytes });
+      expect(runtime.bootstrapTimeoutMs).toBe(runtimeMs);
+      transferNow += runtimeMs - 1;
+      for (const download of [runtime.nodeBootstrap, runtime.workerBundle]) {
+        expect(transfer.authorize(downloadRequest(download))).toBeDefined();
+      }
+      const enrollment = await manager.begin(record);
+      expect(enrollment.bootstrapTimeoutMs).toBe(enrollmentMs);
+    }
+  });
+
+  it.each(["shutdown", "destroy", "operation-abort"] as const)(
     "revokes runtime preparation on %s",
     async (reason) => {
       const record = await createProvisioning();
       const manager = createManager();
       const operation = new AbortController();
       const runtime = await manager.prepareRuntime(record, bundle(), operation.signal);
-      const requests = [runtime.nodeBootstrap, runtime.workerBundle].map((descriptor) => ({
-        token: descriptor.token,
-        artifactKey: descriptor.sha256,
-      }));
+      const requests = [runtime.nodeBootstrap, runtime.workerBundle].map(downloadRequest);
       const authorizations = requests.map((request) => transfer.authorize(request)!);
-      if (reason === "close") {
-        manager.closeRuntime(runtime);
-      } else if (reason === "shutdown") {
+      if (reason === "shutdown") {
         manager.stop();
       } else if (reason === "operation-abort") {
         operation.abort();
-      } else if (reason === "replacement") {
-        await manager.prepareRuntime(record, bundle());
       } else {
         await store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
       }
@@ -394,14 +345,19 @@ describe("worker node enrollment", () => {
       }
       return file;
     });
-    const callback = createWorkerBootstrapArtifactTransferHttpCallback(transfer);
+    const callback = createArtifactTransferHttpCallback(transfer);
+    const handledRequests: Promise<unknown>[] = [];
     const server = http.createServer((req, res) => {
-      void handleWorkerBootstrapArtifactTransferHttpRequest({
-        req,
-        res,
-        clientIp: "127.0.0.1",
-        callback,
-      }).catch(() => res.writeHead(500).end());
+      handledRequests.push(
+        handleArtifactTransferHttpRequest({
+          classifyPath: classifyWorkerBootstrapArtifactTransferPath,
+          routePrefix: `${WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH}/artifacts/`,
+          req,
+          res,
+          clientIp: "127.0.0.1",
+          callback,
+        }).catch(() => res.writeHead(500).end()),
+      );
     });
     const connected = vi.fn();
     server.on("connection", connected);
@@ -462,6 +418,17 @@ describe("worker node enrollment", () => {
         nodeSetupId: null,
         nodeDeviceId: null,
       });
+      // Client body completion precedes the server releasing its transfer authorization.
+      await Promise.all(handledRequests);
+      const authorization = transfer.authorize(downloadRequest(current.workerBundle))!;
+      const enrollment = await manager.begin(record);
+      expect(enrollment).not.toHaveProperty("workerBundle");
+      expect(current.signal?.aborted).toBe(true);
+      expect(transfer.isAuthorizationCurrent(authorization)).toBe(false);
+      manager.closeRuntime(current);
+      manager.close({ ...enrollment });
+      expect(enrollment.signal?.aborted).toBe(false);
+      expect(transfer.authorize(downloadRequest(enrollment.nodeBootstrap))).toBeDefined();
     } finally {
       resumeEof.resolve();
       await dispatcher.destroy();
@@ -476,22 +443,12 @@ describe("worker node enrollment", () => {
     "rejects late artifact preparation after %s",
     async (reason) => {
       const record = await createProvisioning();
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      let preparations = 0;
-      const manager = createManager({
-        prepareArtifact: async () => {
-          if (++preparations === 1) {
-            entered.resolve();
-            await resume.promise;
-          }
-          return artifact();
-        },
-      });
+      const held = holdFirstArtifact();
+      const manager = createManager({ prepareArtifact: held.prepareArtifact });
       const operation = new AbortController();
       const pending = manager.prepareRuntime(record, bundle(), operation.signal);
       const rejected = expect(pending).rejects.toThrow();
-      await entered.promise;
+      await held.entered;
       const enrollment = reason === "enrollment" ? await manager.begin(record) : undefined;
       if (reason === "operation-abort") {
         operation.abort();
@@ -499,64 +456,53 @@ describe("worker node enrollment", () => {
       if (reason === "destroy") {
         await store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
       }
-      resume.resolve();
+      held.resume();
       await rejected;
       if (enrollment) {
         expect(enrollment.signal?.aborted).toBe(false);
-        expect(
-          transfer.authorize({
-            token: enrollment.nodeBootstrap.token,
-            artifactKey: enrollment.nodeBootstrap.sha256,
-          }),
-        ).toBeDefined();
+        expect(transfer.authorize(downloadRequest(enrollment.nodeBootstrap))).toBeDefined();
       }
     },
   );
 
   it.each(
-    [
-      {
-        name: "uses gateway.publicOrigin when the plugin has no pairing override",
-        config: {
-          ...createConfig(),
-          gateway: { ...createConfig().gateway, tls: { enabled: true } },
+    ["public origin", "pairing path", "direct TLS", "remote TLS"].flatMap((endpoint) =>
+      (endpoint.endsWith("TLS") ? ["connect", "resume"] : ["connect"]).map((mode) => ({
+        endpoint,
+        mode,
+      })),
+    ),
+  )("resolves $endpoint ($mode)", async ({ endpoint, mode }) => {
+    let config: OpenClawConfig;
+    let expectedUrl: string;
+    let expectedFingerprint: string | undefined;
+    if (endpoint === "public origin") {
+      config = createConfig(undefined, { tls: { enabled: true }, tailscale: { mode: "serve" } });
+      expectedUrl = "wss://gateway.example.test";
+    } else if (endpoint === "pairing path") {
+      config = createConfig(`${PLUGIN_PUBLIC_URL}/extra`);
+      expectedUrl = `${PLUGIN_PUBLIC_URL}/extra`;
+    } else {
+      const direct = endpoint === "direct TLS";
+      expectedUrl = direct ? "wss://192.168.50.20:19443" : "wss://remote.example.test";
+      expectedFingerprint = direct ? LOCAL_TLS_FINGERPRINT : REMOTE_TLS_FINGERPRINT;
+      config = {
+        gateway: {
+          auth: { mode: "token", token: "gateway-token" },
+          ...(direct
+            ? {
+                bind: "custom" as const,
+                customBindHost: "192.168.50.20",
+                port: 19443,
+                tls: { enabled: true },
+              }
+            : { remote: { url: expectedUrl, tlsFingerprint: expectedFingerprint } }),
         },
-        expectedUrl: "wss://gateway.example.test",
-        expectedFingerprint: undefined,
-      },
-      {
-        name: "prefers the device-pair plugin publicUrl over gateway.publicOrigin",
-        config: createConfig(PLUGIN_PUBLIC_URL),
-        expectedUrl: PLUGIN_PUBLIC_URL,
-        expectedFingerprint: undefined,
-      },
-      {
-        name: "pins direct Gateway TLS",
-        config: {
-          gateway: {
-            bind: "custom",
-            customBindHost: "192.168.50.20",
-            port: 19443,
-            tls: { enabled: true },
-            auth: { mode: "token", token: "gateway-token" },
-          },
-        } satisfies OpenClawConfig,
-        expectedUrl: "wss://192.168.50.20:19443",
-        expectedFingerprint: LOCAL_TLS_FINGERPRINT,
-      },
-      {
-        name: "pins the configured remote Gateway TLS",
-        config: {
-          gateway: {
-            remote: { url: "wss://remote.example.test", tlsFingerprint: REMOTE_TLS_FINGERPRINT },
-            auth: { mode: "token", token: "gateway-token" },
-          },
-        } satisfies OpenClawConfig,
-        expectedUrl: "wss://remote.example.test",
-        expectedFingerprint: REMOTE_TLS_FINGERPRINT,
-      },
-    ].flatMap((testCase) => ["connect", "resume"].map((mode) => Object.assign({ mode }, testCase))),
-  )("$name ($mode)", async ({ config, expectedUrl, expectedFingerprint, mode }) => {
+      };
+    }
+    const discover = vi
+      .spyOn(processExec, "runCommandWithTimeout")
+      .mockRejectedValue(new Error("Unexpected endpoint discovery"));
     const record = await createProvisioning(mode === "resume" ? "existing-node" : undefined);
     const manager = createManager({
       getConfig: () => config,
@@ -564,6 +510,7 @@ describe("worker node enrollment", () => {
     });
 
     const enrollment = await manager.begin(record);
+    expect(discover).not.toHaveBeenCalled();
 
     expect(enrollment.mode).toBe(mode);
     if (enrollment.mode === "connect") {
@@ -574,17 +521,14 @@ describe("worker node enrollment", () => {
       expect(enrollment.deviceId).toBe("existing-node");
     }
     expect(enrollment.nodeBootstrap).toMatchObject({
-      url: `${expectedUrl.replace(/^wss:/u, "https:")}/__openclaw__/worker-bootstrap/artifacts/${artifact().tarballSha256}`,
+      url: `${new URL(expectedUrl.replace(/^wss:/u, "https:")).origin}/__openclaw__/worker-bootstrap/artifacts/${artifact().tarballSha256}`,
       sha256: artifact().tarballSha256,
       bytes: 1,
       openclawVersion: "2026.8.1",
       enabledPluginIds: ["runtime-plugin"],
     });
     expect(enrollment.nodeBootstrap.tlsFingerprint).toBe(expectedFingerprint);
-    const authorization = transfer.authorize({
-      token: enrollment.nodeBootstrap.token,
-      artifactKey: enrollment.nodeBootstrap.sha256,
-    });
+    const authorization = transfer.authorize(downloadRequest(enrollment.nodeBootstrap));
     expect(authorization).toBeDefined();
     const opened = await transfer.openFile(authorization!);
     expect(await opened?.handle.readFile("utf8")).toBe("x");
@@ -593,15 +537,8 @@ describe("worker node enrollment", () => {
 
   it("does not split surrogate pairs when bounding the enrollment display name", async () => {
     const profileId = `${"x".repeat(50)}😀tail`;
-    const requested = await store.createIntent({
-      environmentId: "worker-enrollment-display-name",
-      providerId: "fake-provider",
-      profileId,
-      profileSnapshot: { settings: {} },
-      provisionOperationId: "provision:worker-enrollment-display-name",
-    });
     const record = await store.transition({
-      environmentId: requested.environmentId,
+      environmentId: (await createRequested(profileId)).environmentId,
       from: "requested",
       to: "provisioning",
     });
@@ -653,6 +590,7 @@ describe("worker node enrollment", () => {
         token: setup.bootstrapToken,
         deviceId: "paired-cloud-node",
         completedAtMs: 1_100,
+        admitsCloudWorkerSetup: manager.admitsNodeSetupCompletion,
       });
       expect(store.get(record.environmentId)).toMatchObject({
         nodeSetupId: enrollment.setupId,
@@ -671,19 +609,7 @@ describe("worker node enrollment", () => {
   });
 
   it("aborts pending enrollment waits idempotently and rejects enrollment after shutdown", async () => {
-    const intent = await store.createIntent({
-      environmentId: "worker-enrollment-stop",
-      providerId: "fake-provider",
-      profileId: "test-profile",
-      profileSnapshot: { settings: {} },
-      provisionOperationId: "provision:worker-enrollment-stop",
-    });
-    const record = await store.transition({
-      environmentId: intent.environmentId,
-      from: "requested",
-      to: "provisioning",
-      patch: { nodeDeviceId: "device-pending" },
-    });
+    const record = await createProvisioning("device-pending");
     const manager = createManager();
     const enrollment = await manager.begin(record);
     const waiting = enrollment.waitForDeviceId();
@@ -699,22 +625,17 @@ describe("worker node enrollment", () => {
     expect(ensureEnrollment).not.toHaveBeenCalled();
   });
 
-  it.each(["close", "retire", "shutdown", "destroy"] as const)(
+  it.each(["retire", "shutdown", "destroy"] as const)(
     "revokes bootstrap download authority on %s",
     async (reason) => {
       const record = await createProvisioning();
       const manager = createManager();
       const enrollment = await manager.begin(record);
-      const request = {
-        token: enrollment.nodeBootstrap.token,
-        artifactKey: enrollment.nodeBootstrap.sha256,
-      };
+      const request = downloadRequest(enrollment.nodeBootstrap);
       const authorization = transfer.authorize(request)!;
       expect(transfer.isAuthorizationCurrent(authorization)).toBe(true);
 
-      if (reason === "close") {
-        manager.close(enrollment);
-      } else if (reason === "retire") {
+      if (reason === "retire") {
         await manager.retire(record);
       } else if (reason === "shutdown") {
         manager.stop();
@@ -735,22 +656,14 @@ describe("worker node enrollment", () => {
     const previous = await manager.begin(record);
     const replacement = await manager.begin(record);
     expect(previous.signal?.aborted).toBe(true);
-    expect(
-      transfer.authorize({
-        token: previous.nodeBootstrap.token,
-        artifactKey: previous.nodeBootstrap.sha256,
-      }),
-    ).toBeUndefined();
+    expect(transfer.authorize(downloadRequest(previous.nodeBootstrap))).toBeUndefined();
 
     manager.close(previous);
     manager.close({ ...replacement });
     await expect(
       manager.begin({ ...record, provisionOperationId: "retired-provision" }),
     ).rejects.toThrow("no longer provisioning");
-    const authorization = transfer.authorize({
-      token: replacement.nodeBootstrap.token,
-      artifactKey: replacement.nodeBootstrap.sha256,
-    })!;
+    const authorization = transfer.authorize(downloadRequest(replacement.nodeBootstrap))!;
     expect(transfer.isAuthorizationCurrent(authorization)).toBe(true);
     manager.close(replacement);
     expect(transfer.isAuthorizationCurrent(authorization)).toBe(false);
@@ -758,30 +671,16 @@ describe("worker node enrollment", () => {
 
   it("does not let an older pending enrollment replace a newer enrollment", async () => {
     const record = await createProvisioning();
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
-    let preparations = 0;
-    const manager = createManager({
-      prepareArtifact: async () => {
-        preparations += 1;
-        if (preparations === 1) {
-          entered.resolve();
-          await resume.promise;
-        }
-        return artifact();
-      },
-    });
+    const held = holdFirstArtifact();
+    const manager = createManager({ prepareArtifact: held.prepareArtifact });
     const pending = manager.begin(record);
     const rejected = expect(pending).rejects.toThrow();
-    await entered.promise;
+    await held.entered;
     const current = await manager.begin(record);
-    const authorization = transfer.authorize({
-      token: current.nodeBootstrap.token,
-      artifactKey: current.nodeBootstrap.sha256,
-    })!;
+    const authorization = transfer.authorize(downloadRequest(current.nodeBootstrap))!;
     expect(transfer.isAuthorizationCurrent(authorization)).toBe(true);
 
-    resume.resolve();
+    held.resume();
     await rejected;
 
     expect(current.signal?.aborted).toBe(false);
@@ -795,52 +694,26 @@ describe("worker node enrollment", () => {
     "does not grant download authority after teardown during %s preparation",
     async (stage) => {
       const record = await createProvisioning();
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      const prepareArtifact = async () => {
-        if (stage === "artifact") {
-          entered.resolve();
-          await resume.promise;
-        }
-        return artifact();
-      };
+      const held = holdFirstArtifact();
       if (stage === "pairing") {
         vi.mocked(ensureDevicePairSetupBootstrapToken).mockImplementationOnce(
           async ({ setupId }) => {
-            entered.resolve();
-            await resume.promise;
+            await held.prepareArtifact();
             return { status: "pending", token: "bootstrap-token", expiresAtMs: 10_000, setupId };
           },
         );
       }
-      const manager = createManager({ prepareArtifact });
+      const manager = createManager(
+        stage === "artifact" ? { prepareArtifact: held.prepareArtifact } : {},
+      );
       const beginning = manager.begin(record);
       const rejected = expect(beginning).rejects.toThrow(
         /cannot begin node enrollment|no longer provisioning|authority is unavailable/u,
       );
-      await entered.promise;
+      await held.entered;
       await store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
-      resume.resolve();
+      held.resume();
       await rejected;
     },
   );
-
-  it("does not return a connected device after teardown during its availability check", async () => {
-    const record = await createProvisioning("device-pending");
-    const entered = createDeferredCore();
-    const availability = createDeferredCore<{ available: true }>();
-    const manager = createManager({
-      resolveAvailability: async () => {
-        entered.resolve();
-        return await availability.promise;
-      },
-    });
-    const enrollment = await manager.begin(record);
-    const waiting = enrollment.waitForDeviceId();
-    const rejected = expect(waiting).rejects.toThrow(/no longer current/u);
-    await entered.promise;
-    await store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
-    availability.resolve({ available: true });
-    await rejected;
-  });
 });

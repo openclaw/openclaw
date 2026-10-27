@@ -7,67 +7,52 @@ import {
 } from "./update-runner-doctor.js";
 
 describe("resolveUpdateDoctorExecutionPolicy", () => {
-  it("keeps fix mode when service repair is authorized", () => {
+  it("supports external ownership from the first compatible prerelease", () => {
     expect(
       resolveUpdateDoctorExecutionPolicy({
-        targetVersion: "2026.4.1",
-        allowGatewayServiceRepair: true,
+        targetVersion: "2026.4.25-beta.1",
       }),
-    ).toEqual({ fix: true });
-  });
-
-  it("uses the external policy for targets that support it", () => {
-    for (const targetVersion of ["2026.4.25-beta.1", "2026.4.25-beta.11", "2026.4.25"]) {
-      expect(
-        resolveUpdateDoctorExecutionPolicy({
-          targetVersion,
-          allowGatewayServiceRepair: false,
-        }),
-      ).toEqual({ fix: true, serviceRepairPolicy: "external" });
-    }
-  });
-
-  it("does not run fix mode on older targets that cannot honor ownership", () => {
-    expect(
-      resolveUpdateDoctorExecutionPolicy({
-        targetVersion: "2026.4.24",
-        allowGatewayServiceRepair: false,
-      }),
-    ).toEqual({ fix: false });
+    ).toEqual({ fix: true, serviceRepairPolicy: "external" });
   });
 
   it.each([
     {
-      name: "authorized service repair",
+      name: "an older target with parent repair authorization",
       targetVersion: "2026.4.1",
       allowGatewayServiceRepair: true,
+      expectedFix: false,
       expectedPolicy: null,
     },
     {
       name: "an older target without service repair",
       targetVersion: "2026.4.24",
       allowGatewayServiceRepair: false,
+      expectedFix: false,
       expectedPolicy: null,
     },
     {
       name: "a supported target without service repair",
       targetVersion: "2026.4.25",
       allowGatewayServiceRepair: false,
+      expectedFix: true,
       expectedPolicy: "external",
     },
   ])(
     "passes the selected Doctor policy to a real child for $name",
-    async ({ targetVersion, allowGatewayServiceRepair, expectedPolicy }) => {
+    async ({ targetVersion, allowGatewayServiceRepair, expectedFix, expectedPolicy }) => {
       const policy = resolveUpdateDoctorExecutionPolicy({
         targetVersion,
-        allowGatewayServiceRepair,
+      });
+      expect(policy).toEqual({
+        fix: expectedFix,
+        ...(expectedPolicy === null ? {} : { serviceRepairPolicy: expectedPolicy }),
       });
       const result = await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, () =>
         runCommandWithTimeout(
           [
             process.execPath,
             "-e",
-            "process.stdout.write(JSON.stringify(process.env.OPENCLAW_SERVICE_REPAIR_POLICY ?? null))",
+            "process.stdout.write(JSON.stringify({policy:process.env.OPENCLAW_SERVICE_REPAIR_POLICY??null,repair:process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR}))",
           ],
           {
             timeoutMs: 5000,
@@ -81,7 +66,10 @@ describe("resolveUpdateDoctorExecutionPolicy", () => {
       );
 
       expect(result.code).toBe(0);
-      expect(result.stdout).toBe(JSON.stringify(expectedPolicy));
+      expect(JSON.parse(result.stdout)).toEqual({
+        policy: expectedPolicy,
+        repair: allowGatewayServiceRepair ? "1" : "0",
+      });
     },
   );
 });

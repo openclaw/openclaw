@@ -1,31 +1,47 @@
 import { execFileSync } from "node:child_process";
+import { once } from "node:events";
 import { readFile, writeFile } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  request as httpRequest,
+  type ServerResponse,
+} from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveOpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   type MockOpenAiRequestSnapshot,
+  createQaCrablineTransportAdapter,
   createQaGatewayChild,
   type QaGatewayChild,
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import { json } from "./candidate-test-support.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
-const DISCORD_CHANNEL_ID = "789";
+const DISCORD_CHANNEL_ID = "135000000000000789";
 const DISCORD_MESSAGE_ID = "1000000000000000001";
-const DISCORD_APPLICATION_ID = "123456789012345678";
 const DISCORD_COMPONENTS_V2_FLAG = 1 << 15;
 const DISCORD_SESSION_KEY = `agent:qa:discord:channel:${DISCORD_CHANNEL_ID}`;
 const INLINE_SESSION_KEY = "agent:qa:inline-widget-proof";
 const INVENTORY_MARKER = "DISCORD_WIDGET_PRESENTER_INVENTORY";
+const MESSAGE_PATH = `/api/v10/channels/${DISCORD_CHANNEL_ID}/messages`;
+const DISCORD_CONTEXT = {
+  accountId: "default",
+  messageChannel: "discord",
+  messageTo: `channel:${DISCORD_CHANNEL_ID}`,
+};
 
 type JsonRecord = Record<string, unknown>;
 type DiscordRestRequest = {
@@ -92,12 +108,48 @@ function writeJson(res: ServerResponse, statusCode: number, value: unknown): voi
   res.end(body);
 }
 
-async function startDiscordRestLoopback() {
+async function startDiscordRestLoopback(providerApiUrl: string) {
   const requests: DiscordRestRequest[] = [];
+  const gatewayUrl = () => `${baseUrl.replace(/^http/u, "ws")}/gateway`;
   const server = createServer((req, res) => {
     void (async () => {
       const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
       const method = req.method ?? "GET";
+      const channelPath = `/api/v10/channels/${DISCORD_CHANNEL_ID}`;
+      if (
+        method === "GET" &&
+        (pathname === "/api/v10/gateway" || pathname === "/api/v10/gateway/bot")
+      ) {
+        const response = await fetch(new URL(req.url ?? "/", providerApiUrl), {
+          headers: { authorization: req.headers.authorization ?? "" },
+        });
+        const metadata = (await response.json()) as JsonRecord;
+        writeJson(res, response.status, { ...metadata, url: gatewayUrl() });
+        return;
+      }
+      // Forward account startup to Crabline; record the fixture channel at the HTTP boundary.
+      if (pathname !== channelPath && !pathname.startsWith(`${channelPath}/`)) {
+        const target = new URL(req.url ?? "/", providerApiUrl);
+        await new Promise<void>((resolve, reject) => {
+          const upstream = httpRequest(
+            target,
+            { method, headers: { ...req.headers, host: target.host }, agent: false },
+            (response) => {
+              response.once("error", reject);
+              res.writeHead(response.statusCode ?? 502, response.headers);
+              response.pipe(res);
+            },
+          );
+          upstream.once("error", reject);
+          res.once("finish", resolve);
+          res.once("close", () => {
+            upstream.destroy();
+            resolve();
+          });
+          req.pipe(upstream);
+        });
+        return;
+      }
       const payload = await readRequestBody(req);
       requests.push({ method, pathname, ...payload });
       if (method === "GET" && pathname === `/api/v10/channels/${DISCORD_CHANNEL_ID}`) {
@@ -113,40 +165,62 @@ async function startDiscordRestLoopback() {
       writeJson(res, 500, { message: error instanceof Error ? error.message : String(error) });
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  await once(server.listen(0, "127.0.0.1"), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Discord REST loopback did not bind a TCP port");
   }
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const gatewayProxy = new WebSocketServer({ server });
+  gatewayProxy.on("connection", (client, req) => {
+    const target = new URL(req.url ?? "/gateway", providerApiUrl);
+    target.protocol = "ws:";
+    const upstream = new WebSocket(target);
+    const pending: Array<{ data: RawData; binary: boolean }> = [];
+    client.on("message", (data, binary) => {
+      if (upstream.readyState === WebSocket.OPEN) {
+        upstream.send(data, { binary });
+      } else {
+        pending.push({ data, binary });
+      }
+    });
+    upstream.once("open", () => {
+      for (const { data, binary } of pending.splice(0)) {
+        upstream.send(data, { binary });
+      }
+    });
+    upstream.on("message", (data, binary) => {
+      if (binary) {
+        client.send(data, { binary });
+        return;
+      }
+      const payload = JSON.parse(rawDataToString(data)) as { t?: string; d?: JsonRecord };
+      if (payload.t === "READY" && payload.d) {
+        payload.d.resume_gateway_url = gatewayUrl();
+      }
+      client.send(JSON.stringify(payload));
+    });
+    client.once("close", () => upstream.terminate());
+    client.once("error", () => upstream.terminate());
+    upstream.once("close", () => client.terminate());
+    upstream.once("error", () => client.terminate());
+  });
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl,
     requests,
-    stop: async () =>
+    stop: async () => {
+      for (const client of gatewayProxy.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve, reject) => {
+        gatewayProxy.close((error) => (error ? reject(error) : resolve()));
+      });
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
-      }),
+      });
+    },
   };
 }
-
-const discordTransport = {
-  requiredPluginIds: ["discord"],
-  createGatewayConfig: () => ({
-    channels: {
-      discord: {
-        enabled: true,
-        token: "qa-activities-token",
-        applicationId: DISCORD_APPLICATION_ID,
-        activities: {
-          clientSecret: "qa-activities-client-secret",
-          applicationId: DISCORD_APPLICATION_ID,
-        },
-      },
-    },
-  }),
-};
 
 async function writeDiscordFetchPreload(root: string): Promise<string> {
   const preloadPath = path.join(root, "discord-rest-preload.mjs");
@@ -171,14 +245,6 @@ globalThis.fetch = async (input, init) => {
     "utf8",
   );
   return preloadPath;
-}
-
-async function readMockRequests(baseUrl: string): Promise<MockOpenAiRequestSnapshot[]> {
-  const response = await fetch(`${baseUrl}/debug/requests`);
-  if (!response.ok) {
-    throw new Error(`mock request log failed with HTTP ${response.status}`);
-  }
-  return (await response.json()) as MockOpenAiRequestSnapshot[];
 }
 
 function countToolDeclarations(value: unknown, name: string): number {
@@ -207,37 +273,58 @@ function findOpenWidgetButton(value: unknown): JsonRecord | undefined {
   return Object.values(record).map(findOpenWidgetButton).find(Boolean);
 }
 
-async function postShowWidget(params: {
-  gateway: QaGatewayChild;
-  accountId: string;
-  messageChannel: string;
-  messageTo: string;
-}) {
-  const response = await fetch(`${params.gateway.baseUrl}/tools/invoke`, {
+async function invokeTool(
+  gateway: QaGatewayChild,
+  tool: string,
+  args: JsonRecord,
+  context = DISCORD_CONTEXT,
+  signal?: AbortSignal,
+) {
+  const response = await fetch(`${gateway.baseUrl}/tools/invoke`, {
     method: "POST",
+    signal,
     headers: {
-      authorization: `Bearer ${params.gateway.token}`,
+      authorization: `Bearer ${gateway.token}`,
       "content-type": "application/json",
-      "x-openclaw-account-id": params.accountId,
-      "x-openclaw-message-channel": params.messageChannel,
-      "x-openclaw-message-to": params.messageTo,
+      "x-openclaw-account-id": context.accountId,
+      "x-openclaw-message-channel": context.messageChannel,
+      "x-openclaw-message-to": context.messageTo,
     },
-    body: JSON.stringify({
-      tool: "show_widget",
-      sessionKey: DISCORD_SESSION_KEY,
-      args: { title: "Activity proof", widget_code: "<button>Proof</button>" },
-    }),
+    body: JSON.stringify({ tool, sessionKey: DISCORD_SESSION_KEY, args }),
   });
   return { status: response.status, body: (await response.json()) as JsonRecord };
 }
 
+function postShowWidget({
+  gateway,
+  ...context
+}: typeof DISCORD_CONTEXT & { gateway: QaGatewayChild }) {
+  return invokeTool(
+    gateway,
+    "show_widget",
+    { title: "Activity proof", widget_code: "<button>Proof</button>" },
+    context,
+  );
+}
+
+function proof(name: string, data: JsonRecord) {
+  process.stdout.write(`${JSON.stringify({ proof: name, ...data })}\n`);
+}
+
+function expectedFile(bytes: Buffer, name: string) {
+  return [{ field: "files[0]", name, type: "application/pdf", base64: bytes.toString("base64") }];
+}
+
+const fileBlock = { type: "file", file: "attachment://report.pdf" };
+const accent = { accentColor: 0x123456 };
+const textBlock = (content: string) => ({ type: 10, content });
+const linkButton = (url: string) => ({
+  type: "button",
+  button: { label: " Read ", style: "link", url: `https://example.com/${url}` },
+});
+
 async function connectInlineClient(gateway: QaGatewayChild): Promise<GatewayClient> {
-  let resolveConnected!: () => void;
-  let rejectConnected!: (error: Error) => void;
-  const connected = new Promise<void>((resolve, reject) => {
-    resolveConnected = resolve;
-    rejectConnected = reject;
-  });
+  const connected = Promise.withResolvers<void>();
   const client = new GatewayClient({
     url: gateway.wsUrl,
     token: gateway.token,
@@ -247,8 +334,8 @@ async function connectInlineClient(gateway: QaGatewayChild): Promise<GatewayClie
     scopes: ["operator.admin"],
     caps: ["inline-widgets"],
     requestTimeoutMs: 20_000,
-    onHelloOk: resolveConnected,
-    onConnectError: rejectConnected,
+    onHelloOk: () => connected.resolve(),
+    onConnectError: connected.reject,
   });
   client.start();
   const readiness = await startGatewayClientWhenEventLoopReady(client, { timeoutMs: 20_000 });
@@ -256,26 +343,14 @@ async function connectInlineClient(gateway: QaGatewayChild): Promise<GatewayClie
     await client.stopAndWait().catch(() => undefined);
     throw new Error("inline Gateway client event loop did not become ready");
   }
-  await connected;
+  await connected.promise;
   return client;
 }
 
 describe("Discord show_widget contextual presenter process proof", () => {
   const cleanups: Array<() => Promise<void>> = [];
 
-  afterAll(async () => {
-    const errors: unknown[] = [];
-    for (const cleanup of cleanups.splice(0).toReversed()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length > 0) {
-      throw new AggregateError(errors, "Discord show_widget process proof cleanup failed");
-    }
-  });
+  afterAll(() => runQaGatewayFixture(async () => {}, ...cleanups.splice(0).toReversed()));
 
   const tempDirs = useAutoCleanupTempDirTracker(afterAll);
   let discord: Awaited<ReturnType<typeof startDiscordRestLoopback>>;
@@ -289,7 +364,16 @@ describe("Discord show_widget contextual presenter process proof", () => {
   beforeAll(async () => {
     const startedAt = performance.now();
     const scratch = tempDirs.make("openclaw-discord-attachment-e2e-");
-    discord = await startDiscordRestLoopback();
+    const discordTransport = await createQaCrablineTransportAdapter({
+      outputDir: scratch,
+      selection: resolveOpenClawCrablineChannelDriverSelection({ channel: "discord" }),
+    });
+    cleanups.push(() => discordTransport.cleanupAfterGatewayStop());
+    const transportEnv = discordTransport.createRuntimeEnvPatch();
+    if (!transportEnv.DISCORD_API_URL) {
+      throw new Error("Crabline Discord transport did not provide its API endpoint");
+    }
+    discord = await startDiscordRestLoopback(transportEnv.DISCORD_API_URL);
     cleanups.push(() => discord.stop());
     const preloadPath = await writeDiscordFetchPreload(scratch);
     mock = await startQaMockOpenAiServer();
@@ -314,6 +398,16 @@ describe("Discord show_widget contextual presenter process proof", () => {
       controlUiEnabled: false,
       mutateConfig: (cfg) => ({
         ...cfg,
+        channels: {
+          ...cfg.channels,
+          discord: {
+            ...cfg.channels?.discord,
+            activities: {
+              clientSecret: "qa-activities-client-secret",
+              applicationId: cfg.channels?.discord?.applicationId,
+            },
+          },
+        },
         models: {
           ...cfg.models,
           catalogRefresh: { ...cfg.models?.catalogRefresh, enabled: false },
@@ -328,20 +422,22 @@ describe("Discord show_widget contextual presenter process proof", () => {
         },
         tools: {
           ...cfg.tools,
+          // This proof inspects the direct tool inventory sent to the model.
+          toolSearch: false,
           alsoAllow: [...(cfg.tools?.alsoAllow ?? []), "message", "show_widget"],
         },
       }),
       runtimeEnvPatch: {
-        DISCORD_BOT_TOKEN: "qa-activities-token",
+        ...transportEnv,
+        DISCORD_API_URL: `${discord.baseUrl}/api/v10`,
+        DISCORD_BOT_TOKEN: undefined,
         OPENCLAW_QA_DISCORD_REST_BASE: discord.baseUrl,
         OPENCLAW_SKIP_CANVAS_HOST: undefined,
-        OPENCLAW_SKIP_CHANNELS: "1",
       },
       runtimePreloads: [pathToFileURL(preloadPath).href],
     });
-    process.stdout.write(
-      `${JSON.stringify({ proof: "discord-gateway-shared-fixture", durationMs: performance.now() - startedAt })}\n`,
-    );
+    await discordTransport.waitReady({ gateway });
+    proof("discord-gateway-shared-fixture", { durationMs: performance.now() - startedAt });
   }, 180_000);
 
   it(
@@ -364,34 +460,22 @@ describe("Discord show_widget contextual presenter process proof", () => {
         ) as JsonRecord;
         expect(metadata[field], `dist/${file} source revision`).toBe(head);
       }
-      process.stdout.write(
-        `${JSON.stringify({ proof: "discord-gateway-built-revision", head })}\n`,
-      );
+      proof("discord-gateway-built-revision", { head });
       const invokeAction = async (label: string, args: JsonRecord) => {
         const before = discord.requests.length;
-        const response = await fetch(`${gateway.baseUrl}/tools/invoke`, {
-          method: "POST",
-          signal: AbortSignal.timeout(20_000),
-          headers: {
-            authorization: `Bearer ${gateway.token}`,
-            "content-type": "application/json",
-            "x-openclaw-account-id": "default",
-            "x-openclaw-message-channel": "discord",
-            "x-openclaw-message-to": `channel:${DISCORD_CHANNEL_ID}`,
+        const { status, body: result } = await invokeTool(
+          gateway,
+          "message",
+          {
+            action: "send",
+            channel: "discord",
+            target: `channel:${DISCORD_CHANNEL_ID}`,
+            ...args,
           },
-          body: JSON.stringify({
-            tool: "message",
-            sessionKey: DISCORD_SESSION_KEY,
-            args: {
-              action: "send",
-              channel: "discord",
-              target: `channel:${DISCORD_CHANNEL_ID}`,
-              ...args,
-            },
-          }),
-        });
-        const result = (await response.json()) as JsonRecord;
-        expect(response.status, JSON.stringify(result)).toBe(200);
+          DISCORD_CONTEXT,
+          AbortSignal.timeout(20_000),
+        );
+        expect(status, JSON.stringify(result)).toBe(200);
         expect(result).toMatchObject({ ok: true });
         expect(result).not.toHaveProperty("result.isError", true);
         const writes = discord.requests
@@ -400,173 +484,107 @@ describe("Discord show_widget contextual presenter process proof", () => {
         expect(
           writes.map(({ method, pathname }) => ({ method, pathname })),
           label,
-        ).toEqual([
-          { method: "POST", pathname: `/api/v10/channels/${DISCORD_CHANNEL_ID}/messages` },
-        ]);
-        process.stdout.write(
-          `${JSON.stringify({
-            proof: "gateway-discord-message-action",
-            action: args.action ?? "send",
-            case: label,
-            writes,
-          })}\n`,
-        );
+        ).toEqual([{ method: "POST", pathname: MESSAGE_PATH }]);
         return { result, writes };
       };
       const invokeMessage = async (label: string, args: JsonRecord) => {
         const { result, writes } = await invokeAction(label, args);
-        expect(result).toMatchObject({
-          ok: true,
-          result: {
-            details: {
-              channel: "discord",
-              deliveryStatus: "sent",
-              messageDelivery: {
-                status: "settled",
-                primaryPlatformMessageId: DISCORD_MESSAGE_ID,
-                partialDelivery: false,
-                createdThreadIds: [],
-              },
-            },
-          },
-        });
+        expect(result).toHaveProperty(
+          "result.details",
+          expect.objectContaining({
+            channel: "discord",
+            deliveryStatus: "sent",
+            messageDelivery: expect.objectContaining({
+              status: "settled",
+              primaryPlatformMessageId: DISCORD_MESSAGE_ID,
+              partialDelivery: false,
+              createdThreadIds: [],
+            }),
+          }),
+        );
         return writes[0];
       };
       const media = path.join(gateway.workspaceDir, "source.pdf");
       const bytes = Buffer.from("%PDF-1.4\nDiscord attachment filename proof\n%%EOF\n");
       await writeFile(media, bytes);
-      const cases = [
-        { label: "declared", declared: true, expected: "report.pdf" },
-        { label: "blank override", declared: true, filename: "  ", expected: "report.pdf" },
-        {
-          label: "explicit override",
-          declared: true,
-          filename: " operator.pdf ",
-          expected: "operator.pdf",
-        },
-        { label: "media-derived", declared: false, expected: "source.pdf" },
-        { label: "components V2", declared: true, v2: true, expected: "report.pdf" },
+      const cases: [string, boolean, string, string?, boolean?][] = [
+        ["declared", true, "report.pdf"],
+        ["blank override", true, "report.pdf", "  "],
+        ["explicit override", true, "operator.pdf", " operator.pdf "],
+        ["media-derived", false, "source.pdf"],
+        ["components V2", true, "report.pdf", undefined, true],
       ];
-      for (const testCase of cases) {
-        const post = await invokeMessage(testCase.label, {
-          message: `Attachment proof: ${testCase.label}`,
+      for (const [label, declared, expected, filename, v2 = false] of cases) {
+        const post = await invokeMessage(label, {
+          message: `Attachment proof: ${label}`,
           media,
-          filename: testCase.filename,
+          filename,
           components: {
-            blocks: testCase.declared ? [{ type: "file", file: "attachment://report.pdf" }] : [],
-            ...(testCase.v2 ? { container: { accentColor: 0x123456 } } : {}),
+            blocks: declared ? [fileBlock] : [],
+            ...(v2 ? { container: accent } : {}),
           },
         });
-        expect(post?.files).toEqual([
-          {
-            field: "files[0]",
-            name: testCase.expected,
-            type: "application/pdf",
-            base64: bytes.toString("base64"),
-          },
-        ]);
-        expect(post?.body?.attachments).toEqual([{ id: 0, filename: testCase.expected }]);
-        expect(Boolean(Number(post?.body?.flags ?? 0) & DISCORD_COMPONENTS_V2_FLAG)).toBe(
-          testCase.v2 === true,
-        );
-        process.stdout.write(
-          `${JSON.stringify({
-            proof: "gateway-message-action-to-discord-multipart",
-            case: testCase.label,
-            files: post?.files,
-            attachments: post?.body?.attachments,
-            componentsV2: testCase.v2 === true,
-          })}\n`,
-        );
+        expect(post?.files).toEqual(expectedFile(bytes, expected));
+        expect(post?.body?.attachments).toEqual([{ id: 0, filename: expected }]);
+        expect(Boolean(Number(post?.body?.flags ?? 0) & DISCORD_COMPONENTS_V2_FLAG)).toBe(v2);
       }
 
-      for (const testCase of [
-        {
-          label: "canonical body",
-          args: { message: "    canonical body" },
-          expected: "    canonical body",
-        },
-        {
-          label: "raw reasoning tag alias",
-          args: { text: "<think>private</think>    tag body" },
-          expected: "    tag body",
-        },
-        {
-          label: "mixed reasoning preamble alias",
-          args: { text: "<think>private</think>\nThinking\n_summary_\n    mixed body" },
-          expected: "    mixed body",
-        },
-        {
-          label: "fenced literal tag control",
-          args: { message: "```\n    <think>literal</think>\n```" },
-          expected: "```\n    <think>literal</think>\n```",
-        },
-      ]) {
-        const post = await invokeMessage(testCase.label, testCase.args);
-        expect(post?.files, testCase.label).toBeUndefined();
-        process.stdout.write(
-          `${JSON.stringify({
-            proof: "gateway-message-action-to-discord-text",
-            case: testCase.label,
-            content: post?.body?.content,
-          })}\n`,
-        );
-        expect.soft(post?.body?.content, testCase.label).toBe(testCase.expected);
+      const textCases: [string, JsonRecord, string][] = [
+        ["canonical body", { message: "    canonical body" }, "    canonical body"],
+        ["raw reasoning tag alias", { text: "<think>private</think>    tag body" }, "    tag body"],
+        [
+          "mixed reasoning preamble alias",
+          { text: "<think>private</think>\nThinking\n_summary_\n    mixed body" },
+          "    mixed body",
+        ],
+        [
+          "fenced literal tag control",
+          { message: "```\n    <think>literal</think>\n```" },
+          "```\n    <think>literal</think>\n```",
+        ],
+      ];
+      for (const [label, args, expected] of textCases) {
+        const post = await invokeMessage(label, args);
+        expect(post?.files, label).toBeUndefined();
+        expect.soft(post?.body?.content, label).toBe(expected);
       }
 
-      const caption = await invokeMessage("caption fallback", {
-        message: " \n ",
-        caption: "    caption body  ",
-        media,
-      });
-      expect(caption?.files).toEqual([
-        {
-          field: "files[0]",
-          name: "source.pdf",
-          type: "application/pdf",
-          base64: bytes.toString("base64"),
-        },
-      ]);
-      // Core reply normalization trims the suffix before Discord delivery.
-      expect.soft(caption?.body?.content).toBe("    caption body");
-
-      const classic = await invokeMessage("classic component file body", {
-        message: "    classic component body  ",
-        media,
-        components: { blocks: [{ type: "file", file: "attachment://report.pdf" }] },
-      });
-      expect(classic?.files).toEqual([
-        {
-          field: "files[0]",
-          name: "report.pdf",
-          type: "application/pdf",
-          base64: bytes.toString("base64"),
-        },
-      ]);
-      expect.soft(classic?.body?.content).toBe("    classic component body");
+      const mediaCases: [string, JsonRecord, string, string][] = [
+        [
+          "caption fallback",
+          { message: " \n ", caption: "    caption body  " },
+          "source.pdf",
+          "    caption body",
+        ],
+        [
+          "classic component file body",
+          { message: "    classic component body  ", components: { blocks: [fileBlock] } },
+          "report.pdf",
+          "    classic component body",
+        ],
+      ];
+      for (const [label, args, filename, content] of mediaCases) {
+        const post = await invokeMessage(label, { ...args, media });
+        expect(post?.files).toEqual(expectedFile(bytes, filename));
+        expect.soft(post?.body?.content).toBe(content);
+      }
 
       const componentText = await invokeMessage("explicit Components V2 body fields", {
         message: "fallback",
         components: {
           text: "    top-level body  ",
-          container: { accentColor: 0x123456 },
+          container: accent,
           blocks: [
             { type: "text", text: "    text-block body  " },
             {
               type: "section",
               text: "    section body  ",
-              accessory: {
-                type: "button",
-                button: { label: " Read ", style: "link", url: "https://example.com/section" },
-              },
+              accessory: linkButton("section"),
             },
             {
               type: "section",
               texts: ["    first body  ", "    second body  "],
-              accessory: {
-                type: "button",
-                button: { label: " Read ", style: "link", url: "https://example.com/texts" },
-              },
+              accessory: linkButton("texts"),
             },
           ],
         },
@@ -576,19 +594,16 @@ describe("Discord show_widget contextual presenter process proof", () => {
         {
           type: 17,
           components: [
-            { type: 10, content: "    top-level body  " },
-            { type: 10, content: "    text-block body  " },
+            textBlock("    top-level body  "),
+            textBlock("    text-block body  "),
             {
               type: 9,
-              components: [{ type: 10, content: "    section body  " }],
+              components: [textBlock("    section body  ")],
               accessory: { label: "Read" },
             },
             {
               type: 9,
-              components: [
-                { type: 10, content: "    first body  " },
-                { type: 10, content: "    second body  " },
-              ],
+              components: [textBlock("    first body  "), textBlock("    second body  ")],
               accessory: { label: "Read" },
             },
           ],
@@ -603,15 +618,14 @@ describe("Discord show_widget contextual presenter process proof", () => {
         pollDurationHours: 2,
         silent: true,
       });
-      expect(poll.result).toMatchObject({
-        result: {
-          details: {
-            channel: "discord",
-            via: "direct",
-            result: { messageId: DISCORD_MESSAGE_ID },
-          },
-        },
-      });
+      expect(poll.result).toHaveProperty(
+        "result.details",
+        expect.objectContaining({
+          channel: "discord",
+          via: "direct",
+          result: expect.objectContaining({ messageId: DISCORD_MESSAGE_ID }),
+        }),
+      );
       expect(poll.writes[0]?.body).toMatchObject({
         flags: (1 << 12) | (1 << 2),
         poll: {
@@ -649,21 +663,16 @@ describe("Discord show_widget contextual presenter process proof", () => {
         ),
       ).resolves.toMatchObject({ status: "ok" });
 
-      const request = (await readMockRequests(mock.baseUrl)).find((entry) =>
-        entry.allInputText.includes(INVENTORY_MARKER),
-      );
+      const request = (
+        await json<MockOpenAiRequestSnapshot[]>(`${mock.baseUrl}/debug/requests`)
+      ).find((entry) => entry.allInputText.includes(INVENTORY_MARKER));
       expect(request, gateway.logs()).toBeDefined();
       expect(
         countToolDeclarations([request?.body.tools, request?.body.dynamicTools], "show_widget"),
         gateway.logs(),
       ).toBe(1);
 
-      const presented = await postShowWidget({
-        gateway,
-        accountId: "default",
-        messageChannel: "discord",
-        messageTo: `channel:${DISCORD_CHANNEL_ID}`,
-      });
+      const presented = await postShowWidget({ gateway, ...DISCORD_CONTEXT });
       expect(presented.status, JSON.stringify(presented.body)).toBe(200);
       expect(presented.body).toMatchObject({
         ok: true,
@@ -692,19 +701,11 @@ describe("Discord show_widget contextual presenter process proof", () => {
 
       const postsAfterSuccess = discord.requests.filter((entry) => entry.method === "POST").length;
       for (const mismatch of [
-        {
-          accountId: "missing",
-          messageChannel: "discord",
-          messageTo: `channel:${DISCORD_CHANNEL_ID}`,
-        },
-        { accountId: "default", messageChannel: "discord", messageTo: "user:789" },
-        {
-          accountId: "default",
-          messageChannel: "slack",
-          messageTo: `channel:${DISCORD_CHANNEL_ID}`,
-        },
+        { accountId: "missing" },
+        { messageTo: `user:${DISCORD_CHANNEL_ID}` },
+        { messageChannel: "slack" },
       ]) {
-        const hidden = await postShowWidget({ gateway, ...mismatch });
+        const hidden = await postShowWidget({ gateway, ...DISCORD_CONTEXT, ...mismatch });
         expect(hidden.status, JSON.stringify({ mismatch, hidden: hidden.body })).toBe(404);
       }
       expect(discord.requests.filter((entry) => entry.method === "POST")).toHaveLength(

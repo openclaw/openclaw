@@ -1,4 +1,3 @@
-// Deepinfra provider module implements model/runtime integration.
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import {
   detectMime,
@@ -7,15 +6,12 @@ import {
   normalizeMimeType,
 } from "openclaw/plugin-sdk/media-mime";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
-  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   pollProviderOperationJson,
-  postJsonRequest,
-  readProviderJsonResponse,
-  resolveProviderHttpRequestConfig,
+  postJsonResponse,
+  resolveProviderApiKeyHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
@@ -26,18 +22,15 @@ import {
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
-  VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import {
   DEEPINFRA_BASE_URL,
-  DEEPINFRA_VIDEO_ASPECT_RATIOS,
-  DEEPINFRA_VIDEO_DURATIONS,
   DEEPINFRA_VIDEO_FALLBACK_MODELS,
   normalizeDeepInfraBaseUrl,
   normalizeDeepInfraModelRef,
 } from "./media-models.js";
 import type { DeepInfraSurfaceModel } from "./media-models.js";
-import { resolveDeepInfraVideoModelCapabilities } from "./surface-model-catalogs.js";
+import { buildDeepInfraVideoModelCapabilities } from "./surface-model-catalogs.js";
 
 // Per-poll request budget; the total operation budget comes from req.timeoutMs.
 const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
@@ -45,23 +38,14 @@ const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 
 // /v1/openai/videos is async: POST returns a job, GET /{id} polls until the
-// job leaves the queue. Mirrors the OpenAI Sora surface (extensions/openai).
-type DeepInfraVideoStatus = "queued" | "processing" | "succeeded" | "failed";
-
+// job succeeds or fails, then the result contains downloadable video URLs.
 type DeepInfraVideoJob = {
   id?: string;
-  status?: DeepInfraVideoStatus;
+  status?: "queued" | "processing" | "succeeded" | "failed";
   model?: string | null;
   data?: Array<{ url?: unknown } | null> | null;
   error?: string | null;
 };
-
-function normalizeDeepInfraVideoUrl(url: string, baseUrl: string): string {
-  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:")) {
-    return url;
-  }
-  return new URL(url, baseUrl).href;
-}
 
 async function parseVideoDataUrl(
   url: string,
@@ -105,103 +89,6 @@ async function parseVideoDataUrl(
   };
 }
 
-function resolveDurationSeconds(value: number | undefined): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return value <= 6.5 ? 5 : 8;
-}
-
-function resolveSeed(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0, max: 4_294_967_295 });
-}
-
-function buildDeepInfraVideoBody(
-  req: VideoGenerationRequest,
-  model: string,
-): Record<string, unknown> {
-  const options = req.providerOptions ?? {};
-  const body: Record<string, unknown> = {
-    model,
-    prompt: req.prompt,
-  };
-  const aspectRatio = normalizeOptionalString(req.aspectRatio);
-  if (aspectRatio) {
-    body.aspect_ratio = aspectRatio;
-  }
-  const duration = resolveDurationSeconds(req.durationSeconds);
-  if (duration) {
-    // /v1/openai/videos names the duration field `seconds` (VideoGenerationIn).
-    body.seconds = duration;
-  }
-  const seed = resolveSeed(options.seed);
-  if (seed != null) {
-    body.seed = seed;
-  }
-  const negativePrompt =
-    normalizeOptionalString(options.negative_prompt) ??
-    normalizeOptionalString(options.negativePrompt);
-  if (negativePrompt) {
-    body.negative_prompt = negativePrompt;
-  }
-  const style = normalizeOptionalString(options.style);
-  if (style) {
-    body.style = style;
-  }
-  return body;
-}
-
-function firstDeepInfraVideoUrl(job: DeepInfraVideoJob): string | undefined {
-  for (const entry of job.data ?? []) {
-    const videoUrl = entry ? normalizeOptionalString((entry as { url?: unknown }).url) : undefined;
-    if (videoUrl) {
-      return videoUrl;
-    }
-  }
-  return undefined;
-}
-
-async function extractDeepInfraVideoAsset(
-  job: DeepInfraVideoJob,
-  baseUrl: string,
-  maxBytes: number,
-): Promise<GeneratedVideoAsset> {
-  const videoUrl = firstDeepInfraVideoUrl(job);
-  if (!videoUrl) {
-    throw new Error("DeepInfra video response missing video URL");
-  }
-  const normalizedUrl = normalizeDeepInfraVideoUrl(videoUrl, baseUrl);
-  // Some models return the MP4 inline as a data: URL, others a hosted https URL.
-  const dataAsset = await parseVideoDataUrl(normalizedUrl, maxBytes);
-  if (dataAsset) {
-    return dataAsset;
-  }
-  return {
-    url: normalizedUrl,
-    mimeType: "video/mp4",
-    fileName: "video-1.mp4",
-  };
-}
-
-function resolveDeepInfraVideoBaseUrl(req: VideoGenerationRequest): string {
-  const providerConfig = req.cfg?.models?.providers?.deepinfra as
-    | (Record<string, unknown> & { baseUrl?: unknown })
-    | undefined;
-  // Canonical `baseUrl` only; legacy `nativeBaseUrl`/`/v1/inference` values are
-  // migrated by `openclaw doctor --fix` (doctor-contract-api.ts), never remapped here.
-  const baseUrl = normalizeDeepInfraBaseUrl(providerConfig?.baseUrl, DEEPINFRA_BASE_URL);
-  // The native /v1/inference video route is retired; appending the OpenAI
-  // videos path to it would target a URL no host serves, so fail closed before
-  // sending anything. The message must not echo the configured URL (it may
-  // carry credentials).
-  if (baseUrl.includes("/v1/inference")) {
-    throw new Error(
-      'DeepInfra video generation requires an OpenAI-compatible endpoint, but models.providers.deepinfra.baseUrl targets the retired native /v1/inference surface. Run "openclaw doctor --fix" (api.deepinfra.com migrates automatically; custom hosts must set baseUrl to an OpenAI-compatible videos endpoint).',
-    );
-  }
-  return baseUrl;
-}
-
 // First entry of videoGenModels is the default; rest fill the allowlist.
 export function buildDeepInfraVideoGenerationProvider(options?: {
   videoGenModels?: readonly DeepInfraSurfaceModel[];
@@ -211,32 +98,18 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
       ? options.videoGenModels.map((model) => model.id)
       : [...DEEPINFRA_VIDEO_FALLBACK_MODELS];
   const defaultModel = ids[0] ?? DEEPINFRA_VIDEO_FALLBACK_MODELS[0];
+  const { providerOptions, ...capabilities } = buildDeepInfraVideoModelCapabilities();
   return {
     id: "deepinfra",
     label: "DeepInfra",
     defaultModel,
     models: ids,
-    resolveModelCapabilities: resolveDeepInfraVideoModelCapabilities,
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "deepinfra", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "deepinfra", ...ctx }),
     capabilities: {
+      ...capabilities,
       generate: {
-        maxVideos: 1,
-        maxDurationSeconds: 8,
-        supportedDurationSeconds: [...DEEPINFRA_VIDEO_DURATIONS],
-        supportsAspectRatio: true,
-        aspectRatios: [...DEEPINFRA_VIDEO_ASPECT_RATIOS],
-        providerOptions: {
-          seed: "number",
-          negative_prompt: "string",
-          negativePrompt: "string",
-          style: "string",
-        },
-      },
-      imageToVideo: {
-        enabled: false,
-      },
-      videoToVideo: {
-        enabled: false,
+        ...capabilities.generate,
+        providerOptions,
       },
     },
     async generateVideo(req) {
@@ -246,41 +119,72 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
       if ((req.inputVideos?.length ?? 0) > 0) {
         throw new Error("DeepInfra video generation does not support video reference inputs.");
       }
-      const auth = await resolveApiKeyForProvider({
-        provider: "deepinfra",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("DeepInfra API key missing");
-      }
-
       const model = normalizeDeepInfraModelRef(req.model, defaultModel);
-      const deadline = createProviderOperationDeadline({
-        timeoutMs: req.timeoutMs,
-        label: "DeepInfra video generation",
-      });
+      const providerConfig = req.cfg?.models?.providers?.deepinfra;
+      // Canonical `baseUrl` only; legacy `nativeBaseUrl`/`/v1/inference` values are
+      // migrated by `openclaw doctor --fix` (doctor-contract-api.ts), never remapped here.
+      const configuredBaseUrl = normalizeDeepInfraBaseUrl(
+        providerConfig?.baseUrl,
+        DEEPINFRA_BASE_URL,
+      );
+      // The native /v1/inference video route is retired; appending the OpenAI
+      // videos path to it would target a URL no host serves, so fail closed before
+      // sending anything. The message must not echo the configured URL (it may
+      // carry credentials).
+      if (configuredBaseUrl.includes("/v1/inference")) {
+        throw new Error(
+          'DeepInfra video generation requires an OpenAI-compatible endpoint, but models.providers.deepinfra.baseUrl targets the retired native /v1/inference surface. Run "openclaw doctor --fix" (api.deepinfra.com migrates automatically; custom hosts must set baseUrl to an OpenAI-compatible videos endpoint).',
+        );
+      }
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveDeepInfraVideoBaseUrl(req),
+        await resolveProviderApiKeyHttpRequestConfig({
+          req,
+          missingApiKeyMessage: "DeepInfra API key missing",
+          baseUrl: configuredBaseUrl,
           defaultBaseUrl: DEEPINFRA_BASE_URL,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
           provider: "deepinfra",
           capability: "video",
-          transport: "http",
           request: sanitizeConfiguredModelProviderRequest(
             req.cfg?.models?.providers?.deepinfra?.request,
           ),
         });
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: "DeepInfra video generation",
+      });
 
-      const { response, release } = await postJsonRequest({
+      const bodyOptions = req.providerOptions ?? {};
+      const body: Record<string, unknown> = {
+        model,
+        prompt: req.prompt,
+      };
+      const aspectRatio = normalizeOptionalString(req.aspectRatio);
+      if (aspectRatio) {
+        body.aspect_ratio = aspectRatio;
+      }
+      const duration = req.durationSeconds;
+      if (typeof duration === "number" && Number.isFinite(duration)) {
+        // /v1/openai/videos names the duration field `seconds` (VideoGenerationIn).
+        body.seconds = duration <= 6.5 ? 5 : 8;
+      }
+      const seed = asSafeIntegerInRange(bodyOptions.seed, { min: 0, max: 4_294_967_295 });
+      if (seed != null) {
+        body.seed = seed;
+      }
+      const negativePrompt =
+        normalizeOptionalString(bodyOptions.negative_prompt) ??
+        normalizeOptionalString(bodyOptions.negativePrompt);
+      if (negativePrompt) {
+        body.negative_prompt = negativePrompt;
+      }
+      const style = normalizeOptionalString(bodyOptions.style);
+      if (style) {
+        body.style = style;
+      }
+      const submitted = await postJsonResponse<DeepInfraVideoJob>({
         url: `${baseUrl}/videos`,
         headers,
-        body: buildDeepInfraVideoBody(req, model),
+        body,
         timeoutMs: resolveProviderOperationTimeoutMs({
           deadline,
           defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
@@ -288,17 +192,8 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
         fetchFn: fetch,
         allowPrivateNetwork,
         dispatcherPolicy,
+        errorLabel: "DeepInfra video generation failed",
       });
-      let submitted: DeepInfraVideoJob;
-      try {
-        await assertOkOrThrowHttpError(response, "DeepInfra video generation failed");
-        submitted = await readProviderJsonResponse<DeepInfraVideoJob>(
-          response,
-          "DeepInfra video generation failed",
-        );
-      } finally {
-        await release();
-      }
 
       const jobId = normalizeOptionalString(submitted.id);
       if (!jobId) {
@@ -333,11 +228,32 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
                   : undefined,
             });
 
-      const video = await extractDeepInfraVideoAsset(
-        completed,
-        baseUrl,
+      let videoUrl: string | undefined;
+      for (const entry of completed.data ?? []) {
+        videoUrl = entry ? normalizeOptionalString(entry.url) : undefined;
+        if (videoUrl) {
+          break;
+        }
+      }
+      if (!videoUrl) {
+        throw new Error("DeepInfra video response missing video URL");
+      }
+      const normalizedUrl =
+        videoUrl.startsWith("http://") ||
+        videoUrl.startsWith("https://") ||
+        videoUrl.startsWith("data:")
+          ? videoUrl
+          : new URL(videoUrl, baseUrl).href;
+      // Some models return the MP4 inline as a data: URL, others a hosted https URL.
+      const dataAsset = await parseVideoDataUrl(
+        normalizedUrl,
         resolveGeneratedMediaMaxBytes(req.cfg, "video"),
       );
+      const video = dataAsset ?? {
+        url: normalizedUrl,
+        mimeType: "video/mp4",
+        fileName: "video-1.mp4",
+      };
       return {
         videos: [video],
         model: normalizeOptionalString(completed.model) ?? model,

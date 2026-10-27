@@ -1,51 +1,131 @@
-// Trajectory runtime tests cover event recording and runtime file handling.
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   inspectOpenClawAgentDatabaseOwner,
+  openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+// Trajectory runtime tests cover event recording and runtime file handling.
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { createLargeTrajectoryUsage } from "./export.test-helpers.js";
 import { TRAJECTORY_RUNTIME_EVENT_MAX_BYTES } from "./paths.js";
+import * as runtimeStoreWriter from "./runtime-store-writer.js";
 import {
   loadSqliteTrajectoryRuntimeEvents,
   loadSqliteTrajectoryRuntimeEventRowsSync,
 } from "./runtime-store.sqlite.js";
 import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
 
-type TrajectoryRuntimeRecorder = NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
+type TrajectoryRuntimeRecorder = NonNullable<
+  Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>
+>;
 
 const tempDirs = createTempDirTracker();
 
-afterEach(() => {
+afterEach(async () => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
 function expectTrajectoryRuntimeRecorder(
-  recorder: ReturnType<typeof createTrajectoryRuntimeRecorder>,
+  recorder: Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>,
 ): TrajectoryRuntimeRecorder {
-  if (recorder === null) {
-    throw new Error("Expected trajectory runtime recorder");
-  }
-  expect(typeof recorder.recordEvent).toBe("function");
-  return recorder;
+  return expectDefined(recorder, "Expected trajectory runtime recorder");
+}
+
+let writes: string[];
+beforeEach(() => {
+  writes = [];
+});
+
+async function createCapturedRuntimeRecorder(
+  params?: Partial<Parameters<typeof createTrajectoryRuntimeRecorder>[0]>,
+) {
+  vi.spyOn(runtimeStoreWriter, "createSqliteTrajectoryRuntimeSink").mockResolvedValueOnce({
+    write: (_event, line) => writes.push(line),
+    flush: async () => {},
+    describeFlushState: () => undefined,
+  });
+  return expectTrajectoryRuntimeRecorder(
+    await createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      ...params,
+    }),
+  );
+}
+
+function captured(index = 0) {
+  return JSON.parse(expectDefined(writes[index], "captured event"));
+}
+
+async function captureEvent(type: string, data: Record<string, unknown>) {
+  const recorder = await createCapturedRuntimeRecorder();
+  recorder.recordEvent(type, data);
+  return captured();
+}
+
+function expectBoundedCapture() {
+  expect(writes).toHaveLength(1);
+  expect(Buffer.byteLength(expectDefined(writes[0], "captured event"), "utf8")).toBeLessThanOrEqual(
+    TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1,
+  );
+}
+
+function oversizedMessages() {
+  return Array.from({ length: 12 }, (_value, index) => ({
+    role: index % 2 === 0 ? "user" : "assistant",
+    content: `message-${index} ${"x".repeat(32_000)}`,
+  }));
+}
+
+async function createMarkerRecorder() {
+  const storePath = path.join(
+    tempDirs.make("openclaw-trajectory-runtime-"),
+    "agents/main/sessions/sessions.json",
+  );
+  const target = {
+    agentId: "main",
+    sessionId: "session-1",
+    sessionKey: "agent:main:main",
+    storePath,
+  };
+  await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 10 });
+  const recorder = expectTrajectoryRuntimeRecorder(
+    await createTrajectoryRuntimeRecorder({
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      sessionFile: formatSqliteSessionFileMarker(target),
+    }),
+  );
+  return { recorder, storePath, sessionKey: target.sessionKey };
 }
 
 describe("trajectory runtime", () => {
-  it("records sanitized runtime events by default", () => {
-    const writes: string[] = [];
-    const recorder = createTrajectoryRuntimeRecorder({
+  it("records runtime payloads without credential masking by default", async () => {
+    const recorder = await createCapturedRuntimeRecorder({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       sessionFile: "/tmp/session.jsonl",
@@ -53,17 +133,9 @@ describe("trajectory runtime", () => {
       modelId: "gpt-5.4",
       modelApi: "responses",
       workspaceDir: "/tmp/workspace",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
     });
 
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
-    runtimeRecorder.recordEvent("context.compiled", {
+    recorder.recordEvent("context.compiled", {
       systemPrompt: "system prompt",
       headers: [{ name: "Authorization", value: "Bearer sk-test-secret-token" }],
       command: "curl -H 'Authorization: Bearer sk-other-secret-token'",
@@ -77,7 +149,7 @@ describe("trajectory runtime", () => {
     });
 
     expect(writes).toHaveLength(1);
-    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    const parsed = captured();
     expect(parsed.type).toBe("context.compiled");
     expect(parsed.source).toBe("runtime");
     expect(parsed.sessionId).toBe("session-1");
@@ -85,32 +157,14 @@ describe("trajectory runtime", () => {
       { name: "a-tool", description: "alpha", parameters: { a: 1 } },
       { name: "z-tool", parameters: { z: 1 } },
     ]);
-    expect(JSON.stringify(parsed.data)).not.toContain("sk-test-secret-token");
-    expect(JSON.stringify(parsed.data)).not.toContain("sk-other-secret-token");
-    expect(JSON.stringify(parsed.data)).not.toContain("ya29.fake-access-token");
-    expect(JSON.stringify(parsed.data)).not.toContain("abcd-efgh-ijkl-mnop");
+    expect(JSON.stringify(parsed.data)).toContain("sk-test-secret-token");
+    expect(JSON.stringify(parsed.data)).toContain("sk-other-secret-token");
+    expect(JSON.stringify(parsed.data)).toContain("ya29.fake-access-token");
+    expect(JSON.stringify(parsed.data)).toContain("abcd-efgh-ijkl-mnop");
   });
 
   it("records SQLite marker runtime events without active JSONL sidecars", async () => {
-    const tempDir = tempDirs.make("openclaw-trajectory-runtime-");
-    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-    const sessionKey = "agent:main:main";
-    await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionKey,
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: "session-1",
-        storePath,
-      }),
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "responses",
-      workspaceDir: "/tmp/workspace",
-    });
-
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    const { recorder: runtimeRecorder, storePath, sessionKey } = await createMarkerRecorder();
     runtimeRecorder.recordEvent("context.compiled", {
       prompt: "hello",
     });
@@ -118,7 +172,20 @@ describe("trajectory runtime", () => {
       usage: { input: 1, output: 2, total: 3 },
     });
     expect(runtimeRecorder.describeFlushState()).toContain("pendingRows=2");
-    await runtimeRecorder.flush();
+    const database = openOpenClawAgentDatabase(
+      toDatabaseOptions(resolveSqliteReadScope({ sessionKey, storePath })),
+    );
+    const statements = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["trajectory"],
+      (sql) => (sql.includes("trajectory_runtime_events") ? "trajectory" : null),
+    );
+    try {
+      await runtimeRecorder.flush();
+      expect.soft(statements.counts.trajectory).toBe(0);
+    } finally {
+      statements.restore();
+    }
 
     await expect(
       loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
@@ -131,72 +198,42 @@ describe("trajectory runtime", () => {
     );
   });
 
-  it("retains a failed SQLite flush batch for the next successful persistence attempt", async () => {
-    const storePath = path.join(tempDirs.make("openclaw-trajectory-retry-"), "shared.sqlite");
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:retry",
-      sessionId: "retry-session",
-      storePath,
-    };
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const recorder = expectTrajectoryRuntimeRecorder(
-      createTrajectoryRuntimeRecorder({
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
-      }),
-    );
-    recorder.recordEvent("before-failure");
-    const failure = new Error("synthetic SQLite persistence failure");
-    const store = await import("./runtime-store.sqlite.js");
-    const append = vi
-      .spyOn(store, "appendSqliteTrajectoryRuntimeEvents")
-      .mockImplementationOnce(() => {
-        throw failure;
+  it.each(["committed", "uncommitted"])(
+    "prepares a %s canonical target without caller-thread SQL",
+    async (state) => {
+      // Attempt dispatch stopped passing legacy `sqlite:` markers and now hands
+      // the canonical session key plus a complete target. Recording must not
+      // depend on the marker, or every harness capture silently disappears.
+      const tempDir = tempDirs.make("openclaw-trajectory-runtime-");
+      const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+      const sessionKey = "agent:main:main";
+      await replaceSessionEntry(
+        { sessionKey: state === "committed" ? sessionKey : "agent:main:other", storePath },
+        { sessionId: "session-1", updatedAt: 10 },
+      );
+      const sql = observeHostDataSql();
+      const recorder = await createTrajectoryRuntimeRecorder({
+        sessionId: "session-1",
+        sessionKey,
+        sessionFile: sessionKey,
+        sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "responses",
+        workspaceDir: "/tmp/workspace",
       });
-    try {
-      await expect(recorder.flush()).rejects.toBe(failure);
-      expect(recorder.describeFlushState()).toContain("pendingRows=1");
-    } finally {
-      append.mockRestore();
-    }
-    recorder.recordEvent("after-failure");
-    await recorder.flush();
-    expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
-      "before-failure",
-      "after-failure",
-    ]);
-    expect(recorder.describeFlushState()).toBeUndefined();
-  });
 
-  it("records runtime events for the canonical session-key target the dispatcher passes", async () => {
-    // Attempt dispatch stopped passing legacy `sqlite:` markers and now hands
-    // the canonical session key plus a complete target. Recording must not
-    // depend on the marker, or every harness capture silently disappears.
-    const tempDir = tempDirs.make("openclaw-trajectory-runtime-");
-    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-    const sessionKey = "agent:main:main";
-    await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionKey,
-      sessionFile: sessionKey,
-      sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "responses",
-      workspaceDir: "/tmp/workspace",
-    });
+      sql.restore();
+      expect(sql.queries).toEqual([]);
+      const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+      runtimeRecorder.recordEvent("session.started");
+      await runtimeRecorder.flush();
 
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
-    runtimeRecorder.recordEvent("session.started");
-    await runtimeRecorder.flush();
-
-    await expect(
-      loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
-    ).resolves.toEqual([expect.objectContaining({ source: "runtime", type: "session.started" })]);
-  });
+      await expect(
+        loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
+      ).resolves.toEqual([expect.objectContaining({ source: "runtime", type: "session.started" })]);
+    },
+  );
 
   it.each(["caller-env", "cwd"] as const)(
     "keeps queued logical-agent trajectory writes on their captured shared store (%s)",
@@ -225,7 +262,7 @@ describe("trajectory runtime", () => {
         };
         await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
         const recorder = expectTrajectoryRuntimeRecorder(
-          createTrajectoryRuntimeRecorder({
+          await createTrajectoryRuntimeRecorder({
             env,
             sessionId: target.sessionId,
             sessionKey: target.sessionKey,
@@ -234,6 +271,7 @@ describe("trajectory runtime", () => {
         );
         recorder.recordEvent("session.started");
         recorder.recordEvent("session.ended", { status: "success" });
+        await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
         const entered = createDeferredCore();
         const release = createDeferredCore();
@@ -296,98 +334,43 @@ describe("trajectory runtime", () => {
     },
   );
 
-  it("rejects a legacy SQLite marker for another session", () => {
-    const storePath = path.join(tempDirs.make("openclaw-trajectory-runtime-"), "sessions.json");
-
-    expect(
-      createTrajectoryRuntimeRecorder({
-        sessionId: "current-session",
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId: "main",
-          sessionId: "stale-session",
-          storePath,
-        }),
-      }),
-    ).toBeNull();
-  });
-
-  it.each([
-    ["requested key", "agent:main:other", "main", "agent:main:main"],
-    ["target key agent", undefined, "main", "agent:worker:main"],
-  ])(
-    "rejects a complete target that conflicts with the %s",
-    (_label, sessionKey, agentId, targetKey) => {
+  it.each(["marker", "requested key", "target agent", "stored session"] as const)(
+    "rejects a conflicting %s",
+    async (conflict) => {
       const storePath = path.join(tempDirs.make("openclaw-trajectory-runtime-"), "sessions.json");
-
+      const target = {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath,
+      };
+      if (conflict === "stored session") {
+        await replaceSessionEntry(target, { sessionId: "other-session", updatedAt: 1 });
+      }
+      const input =
+        conflict === "marker"
+          ? {
+              sessionFile: formatSqliteSessionFileMarker({ ...target, sessionId: "other-session" }),
+            }
+          : {
+              sessionKey: conflict === "requested key" ? "agent:main:other" : undefined,
+              sessionTarget: {
+                ...target,
+                sessionKey: conflict === "target agent" ? "agent:worker:main" : target.sessionKey,
+              },
+            };
       expect(
-        createTrajectoryRuntimeRecorder({
-          sessionId: "session-1",
-          ...(sessionKey ? { sessionKey } : {}),
-          sessionTarget: {
-            agentId,
-            sessionId: "session-1",
-            sessionKey: targetKey,
-            storePath,
-          },
-        }),
+        await createTrajectoryRuntimeRecorder({ sessionId: target.sessionId, ...input }),
       ).toBeNull();
     },
   );
 
-  it("rejects a complete target whose key maps to another session", async () => {
-    const storePath = path.join(tempDirs.make("openclaw-trajectory-runtime-"), "sessions.json");
-    const sessionKey = "agent:main:stored-session";
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      {
-        sessionId: "stored-session",
-        updatedAt: 1,
-      },
-    );
-
-    expect(
-      createTrajectoryRuntimeRecorder({
-        sessionId: "requested-session",
-        sessionKey,
-        sessionTarget: {
-          agentId: "main",
-          sessionId: "requested-session",
-          sessionKey,
-          storePath,
-        },
-      }),
-    ).toBeNull();
-  });
-
   it("stores bounded oversized runtime events in SQLite", async () => {
-    const tempDir = tempDirs.make("openclaw-trajectory-runtime-");
-    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-    const sessionKey = "agent:main:main";
-    const usage = {
-      input: 384_954,
-      output: 5_624,
-      cacheRead: 333_824,
-      reasoningTokens: 2_038,
-      total: 724_402,
-    };
-    await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionKey,
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: "session-1",
-        storePath,
-      }),
-    });
-
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    const { recorder: runtimeRecorder, storePath } = await createMarkerRecorder();
+    const usage = createLargeTrajectoryUsage();
     runtimeRecorder.recordEvent("model.completed", {
       usage,
-      messagesSnapshot: Array.from({ length: 12 }, (_value, index) => ({
-        role: index % 2 === 0 ? "user" : "assistant",
-        content: `message-${index} ${"x".repeat(32_000)}`,
-      })),
+      messagesSnapshot: oversizedMessages(),
     });
     await runtimeRecorder.flush();
 
@@ -406,49 +389,19 @@ describe("trajectory runtime", () => {
     );
   });
 
-  it("bounds oversized prompts before compact preservation", () => {
-    const writes: string[] = [];
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
-
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
-    runtimeRecorder.recordEvent("context.compiled", {
+  it("bounds oversized prompts before compact preservation", async () => {
+    const parsed = await captureEvent("context.compiled", {
       prompt: "x".repeat(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1),
     });
-
-    expect(writes).toHaveLength(1);
-    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expectBoundedCapture();
     expect(parsed.data.truncated).toBeUndefined();
     expect(parsed.data.prompt.truncated).toBe(true);
     expect(parsed.data.prompt.reason).toBe("trajectory-field-size-limit");
-    expect(
-      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
-    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
   });
 
-  it("keeps normal schema-v1 event payloads unchanged", () => {
-    const writes: string[] = [];
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
+  it("keeps normal schema-v1 event payloads unchanged", async () => {
     const data = {
+      finalPromptText: "inspect",
       prompt: "inspect",
       systemPrompt: "system prompt",
       messages: [{ role: "user", content: "inspect" }],
@@ -456,51 +409,156 @@ describe("trajectory runtime", () => {
       imagesCount: 0,
     };
 
-    expectTrajectoryRuntimeRecorder(recorder).recordEvent("prompt.submitted", data);
-
-    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    const recorder = await createCapturedRuntimeRecorder();
+    const slices = vi.spyOn(Array.prototype, "slice");
+    let copiedKeyLists: number;
+    try {
+      recorder.recordEvent("prompt.submitted", data);
+      copiedKeyLists = slices.mock.contexts.filter(
+        (keys) => Array.isArray(keys) && keys.includes("imagesCount"),
+      ).length;
+    } finally {
+      slices.mockRestore();
+    }
+    const parsed = captured();
+    expect(copiedKeyLists).toBe(0);
     expect(parsed.schemaVersion).toBe(1);
     expect(parsed.data).toEqual(data);
     expect(JSON.stringify(parsed.data)).toBe(JSON.stringify(data));
     expect(parsed.data.truncated).toBeUndefined();
   });
 
-  it("preserves usage when truncating oversized runtime events", () => {
-    const writes: string[] = [];
-    const usage = {
-      input: 384_954,
-      output: 5_624,
-      cacheRead: 333_824,
-      reasoningTokens: 2_038,
-      total: 724_402,
-    };
-    const promptCache = { readTokens: 333_824, writeTokens: 51_130 };
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
+  it("preserves non-JSON leaves and custom JSON results in captured events", async () => {
+    const recorder = await createCapturedRuntimeRecorder();
+    const error = new Error("synthetic failure");
+    error.stack = "synthetic stack";
+    recorder.recordEvent("tool.result", {
+      count: 123n,
+      callback: () => {},
+      values: [undefined, Number.NaN, 1n, () => {}],
+      custom: {
+        toJSON: () => ({
+          count: 456n,
+          error,
+          bytes: new Uint8Array([1, 2]),
+          callback: () => {},
+        }),
       },
     });
 
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
-    runtimeRecorder.recordEvent("model.completed", {
+    expect(captured().data).toEqual({
+      count: "123",
+      callback: "[Function]",
+      values: [null, null, "1", "[Function]"],
+      custom: {
+        count: "456",
+        error: { name: "Error", message: "synthetic failure", stack: "synthetic stack" },
+        bytes: { type: "Uint8Array", data: "AQI=" },
+        callback: "[Function]",
+      },
+    });
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    recorder.recordEvent("tool.result", { toJSON: () => circular });
+    recorder.recordEvent("session.ended", { status: "success" });
+    expect(writes).toHaveLength(2);
+    expect(captured(1).seq).toBe(2);
+  });
+
+  it("keeps structured tool output and usage below the event byte limit", async () => {
+    const recorder = await createCapturedRuntimeRecorder();
+    const contentItems = Array.from({ length: 64 }, (_, index) => ({
+      type: "inputText",
+      text: `line ${String(index)}`,
+    }));
+    const usage = { input: 120, output: 30, total: 150 };
+
+    recorder.recordEvent("tool.result", {
+      toolCallId: "call-1",
+      name: "exec",
+      success: true,
+      contentItems,
+    });
+    recorder.recordEvent("model.completed", { messagesSnapshot: contentItems, usage });
+    recorder.recordEvent("model.completed", { usage, messagesSnapshot: contentItems });
+
+    const events = writes.map((line) => JSON.parse(line));
+    expect(events[0].data.contentItems).toEqual(contentItems);
+    expect(events[1].data.usage).toEqual(usage);
+    expect(events[2].data.usage).toEqual(usage);
+    for (const line of writes) {
+      expect(Buffer.byteLength(line)).toBeLessThan(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES);
+      expect(line).not.toContain("[Truncated]");
+    }
+  });
+
+  it("retains explicit array and object capture-limit markers", async () => {
+    const event = await captureEvent("tool.result", {
+      contentItems: Array.from({ length: 65 }, () => ({ output: "line" })),
+      result: Object.fromEntries(
+        Array.from({ length: 65 }, (_, index) => [`field${String(index)}`, index]),
+      ),
+    });
+
+    expect(event.data.contentItems).toHaveLength(65);
+    expect(event.data.contentItems[0]).toEqual({ output: "line" });
+    expect(event.data.contentItems[64]).toMatchObject({
+      truncated: true,
+      reason: "trajectory-array-size-limit",
+      originalLength: 65,
+    });
+    expect(event.data.result["_truncated"]).toMatchObject({
+      truncated: true,
+      reason: "trajectory-object-size-limit",
+      originalKeys: 65,
+    });
+  });
+
+  it("preserves tool identity and outcome when oversized result content is dropped", async () => {
+    const outcome = {
+      toolCallId: "call-1",
+      name: "exec",
+      status: "completed",
+      success: true,
+      isError: false,
+    };
+    const parsed = await captureEvent("tool.result", {
+      ...outcome,
+      contentItems: Array.from({ length: 64 }, () => ({
+        type: "inputText",
+        text: "x".repeat(8192),
+      })),
+    });
+
+    const line = expectDefined(writes[0], "captured event");
+    expect(parsed.data).toMatchObject({
+      ...outcome,
+      truncated: true,
+      droppedFields: ["contentItems"],
+    });
+    expect(Buffer.byteLength(line)).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES);
+  });
+
+  it("preserves raw usage in oversized non-final completions", async () => {
+    const usage = {
+      ...createLargeTrajectoryUsage(),
+      note: "Authorization: Bearer sk-inline-secret-token",
+      apiKey: "sk-test-secret-token",
+      authorization: "Bearer sk-other-secret-token",
+    };
+    const promptCache = { readTokens: 333_824, writeTokens: 51_130 };
+    const recorder = await createCapturedRuntimeRecorder();
+
+    recorder.recordEvent("model.completed", {
       usage,
       promptCache,
       assistantTexts: ["done"],
       finalPromptText: "inspect",
-      messagesSnapshot: Array.from({ length: 12 }, (_value, index) => ({
-        role: index % 2 === 0 ? "user" : "assistant",
-        content: `message-${index} ${"x".repeat(32_000)}`,
-      })),
+      messagesSnapshot: oversizedMessages(),
     });
 
-    expect(writes).toHaveLength(1);
-    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expectBoundedCapture();
+    const parsed = captured();
     expect(parsed.type).toBe("model.completed");
     expect(parsed.data).toMatchObject({
       truncated: true,
@@ -510,42 +568,40 @@ describe("trajectory runtime", () => {
       assistantTexts: ["done"],
       finalPromptText: "inspect",
     });
+    expect(parsed.data.finalPromptTextOriginalLength).toBeUndefined();
     expect(parsed.data.messagesSnapshot).toBeUndefined();
     expect(parsed.data.droppedFields).toEqual(["messagesSnapshot"]);
-    expect(
-      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
-    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
+    const secondUsage = { input: 12, output: 3, total: 15 };
+    recorder.recordEvent("model.completed", {
+      usage: secondUsage,
+      assistantTexts: ["final answer"],
+    });
+    expect(writes).toHaveLength(2);
+    expect(captured().data.usage).toEqual(usage);
+    expect(captured(1).data).toMatchObject({
+      usage: secondUsage,
+      assistantTexts: ["final answer"],
+    });
+    expect(captured(1).data.truncated).toBeUndefined();
   });
-
-  it("preserves stopReason while dropping oversized preserved fields to keep runtime events bounded", () => {
-    const writes: string[] = [];
+  it("preserves stopReason while dropping oversized preserved fields to keep runtime events bounded", async () => {
     const oversizedUsage = Object.fromEntries(
       Array.from({ length: 64 }, (_value, index) => [`field-${index}`, "x".repeat(5_000)]),
     );
-    const promptCache = { readTokens: 333_824, writeTokens: 51_130 };
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
-
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
-    runtimeRecorder.recordEvent("model.completed", {
+    const outcome = {
       threadId: "thread-compact",
       turnId: "turn-compact",
       timedOut: true,
       yieldDetected: false,
       aborted: true,
       promptError: "terminal prompt error",
-      usage: oversizedUsage,
-      promptCache,
+      prompt: "summarize the incident timeline",
+      promptCache: { readTokens: 333_824, writeTokens: 51_130 },
       stopReason: "length",
+    };
+    const parsed = await captureEvent("model.completed", {
+      ...outcome,
+      usage: oversizedUsage,
       assistantTexts: Array.from(
         { length: 12 },
         (_value, index) => `assistant-${index} ${"x".repeat(32_000)}`,
@@ -553,90 +609,23 @@ describe("trajectory runtime", () => {
       messagesSnapshot: [{ role: "user", content: "x".repeat(32_000) }],
     });
 
-    expect(writes).toHaveLength(1);
-    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expectBoundedCapture();
     expect(parsed.data).toMatchObject({
       truncated: true,
       reason: "trajectory-event-size-limit",
-      threadId: "thread-compact",
-      turnId: "turn-compact",
-      timedOut: true,
-      yieldDetected: false,
-      aborted: true,
-      promptError: "terminal prompt error",
-      promptCache,
-      stopReason: "length",
+      ...outcome,
     });
     expect(parsed.data.usage).toBeUndefined();
     expect(parsed.data.assistantTexts).toBeUndefined();
     expect(parsed.data.droppedFields).toEqual(
       expect.arrayContaining(["usage", "assistantTexts", "messagesSnapshot"]),
     );
-    expect(
-      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
-    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
   });
 
-  it("preserves the prompt when an oversized event drops inlined conversation state", () => {
-    const writes: string[] = [];
-    const prompt = "summarize the incident timeline for the deploy that failed";
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
-
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
-    runtimeRecorder.recordEvent("context.compiled", {
-      prompt,
-      systemPrompt: "x".repeat(32_000),
-      messages: Array.from({ length: 12 }, (_value, index) => ({
-        role: index % 2 === 0 ? "user" : "assistant",
-        content: `message-${index} ${"x".repeat(32_000)}`,
-      })),
-    });
-
-    expect(writes).toHaveLength(1);
-    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
-    expect(parsed.data).toMatchObject({
-      truncated: true,
-      reason: "trajectory-event-size-limit",
-      prompt,
-      systemPrompt: "x".repeat(32_000),
-    });
-    expect(parsed.data.messages).toBeUndefined();
-    expect(parsed.data.droppedFields).toEqual(["messages"]);
-    expect(
-      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
-    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
-  });
-
-  it("drops repeated conversation fields in priority order", () => {
-    const writes: string[] = [];
+  it("drops repeated conversation fields in priority order", async () => {
     const prompt = "summarize the incident timeline";
-    const messageBlocks = Array.from({ length: 12 }, (_value, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
-      content: `message-${index} ${"x".repeat(32_000)}`,
-    }));
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
-
-    expectTrajectoryRuntimeRecorder(recorder).recordEvent("context.compiled", {
+    const messageBlocks = oversizedMessages();
+    const parsed = await captureEvent("context.compiled", {
       prompt,
       messagesSnapshot: messageBlocks,
       messages: messageBlocks,
@@ -647,229 +636,31 @@ describe("trajectory runtime", () => {
       })),
     });
 
-    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
     expect(parsed.data.prompt).toBe(prompt);
     expect(parsed.data.tools).toHaveLength(7);
     expect(parsed.data.messagesSnapshot).toBeUndefined();
     expect(parsed.data.messages).toBeUndefined();
     expect(parsed.data.systemPrompt).toBeUndefined();
     expect(parsed.data.droppedFields).toEqual(["messagesSnapshot", "messages", "systemPrompt"]);
-    expect(
-      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
-    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
+    expectBoundedCapture();
   });
 
-  it("preserves the prompt in the compact fallback for oversized events", () => {
-    const writes: string[] = [];
-    const prompt = "summarize the incident timeline for the deploy that failed";
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
-
-    expectTrajectoryRuntimeRecorder(recorder).recordEvent("context.compiled", {
-      prompt,
-      tools: Array.from({ length: 12 }, (_value, index) => ({
-        name: `tool-${index}`,
-        description: "x".repeat(32_000),
-      })),
-    });
-
-    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
-    expect(parsed.data).toMatchObject({
-      truncated: true,
-      reason: "trajectory-event-size-limit",
-      prompt,
-    });
-    expect(parsed.data.tools).toBeUndefined();
-    expect(parsed.data.droppedFields).toEqual(["tools"]);
-    expect(
-      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
-    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
-  });
-
-  it("preserves usage on non-final oversized runtime completions", () => {
-    const writes: string[] = [];
-    const firstUsage = {
-      input: 384_954,
-      output: 5_624,
-      cacheRead: 333_824,
-      reasoningTokens: 2_038,
-      total: 724_402,
-    };
-    const secondUsage = { input: 12, output: 3, total: 15 };
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
-
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
-    runtimeRecorder.recordEvent("model.completed", {
-      usage: firstUsage,
-      promptCache: { readTokens: 333_824 },
-      messagesSnapshot: Array.from({ length: 12 }, (_value, index) => ({
-        role: index % 2 === 0 ? "user" : "assistant",
-        content: `message-${index} ${"x".repeat(32_000)}`,
-      })),
-    });
-    runtimeRecorder.recordEvent("model.completed", {
-      usage: secondUsage,
-      assistantTexts: ["final answer"],
-    });
-
-    expect(writes).toHaveLength(2);
-    const first = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
-    const second = JSON.parse(expectDefined(writes[1], "writes[1] test invariant"));
-    expect(first.data).toMatchObject({
-      truncated: true,
-      usage: firstUsage,
-      promptCache: { readTokens: 333_824 },
-    });
-    expect(second.data).toMatchObject({
-      usage: secondUsage,
-      assistantTexts: ["final answer"],
-    });
-    expect(second.data.truncated).toBeUndefined();
-  });
-
-  it("caps large final prompts and records their original length", () => {
-    const writes: string[] = [];
+  it("caps large final prompts and records their original length", async () => {
     const finalPromptText = `prompt-${"🙂".repeat(4_096)}`;
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
-
-    expectTrajectoryRuntimeRecorder(recorder).recordEvent("model.completed", { finalPromptText });
-
-    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    const parsed = await captureEvent("model.completed", Object.freeze({ finalPromptText }));
     expect(Buffer.byteLength(parsed.data.finalPromptText, "utf8")).toBeLessThanOrEqual(4 * 1024);
     expect(Buffer.byteLength(parsed.data.finalPromptText, "utf8")).toBeGreaterThan(4 * 1024 - 4);
     expect(parsed.data.finalPromptTextOriginalLength).toBe(finalPromptText.length);
   });
 
-  it("leaves short final prompts unchanged", () => {
-    const writes: string[] = [];
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
-
-    expectTrajectoryRuntimeRecorder(recorder).recordEvent("trace.artifacts", {
-      finalPromptText: "short prompt",
-    });
-
-    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
-    expect(parsed.data.finalPromptText).toBe("short prompt");
-    expect(parsed.data.finalPromptTextOriginalLength).toBeUndefined();
-  });
-
-  it("redacts secrets before preserving usage in truncated runtime events", () => {
-    const writes: string[] = [];
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
-
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
-    runtimeRecorder.recordEvent("model.completed", {
-      usage: {
-        total: 1,
-        note: "Authorization: Bearer sk-inline-secret-token",
-        apiKey: "sk-test-secret-token",
-        authorization: "Bearer sk-other-secret-token",
-      },
-      messagesSnapshot: Array.from({ length: 12 }, (_value, index) => ({
-        role: index % 2 === 0 ? "user" : "assistant",
-        content: `message-${index} ${"x".repeat(32_000)}`,
-      })),
-    });
-
-    expect(writes).toHaveLength(1);
-    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
-    const preservedUsage = JSON.stringify(parsed.data.usage);
-    expect(parsed.data.truncated).toBe(true);
-    expect(preservedUsage).toContain("redacted");
-    expect(preservedUsage).not.toContain("sk-inline-secret-token");
-    expect(preservedUsage).not.toContain("sk-test-secret-token");
-    expect(preservedUsage).not.toContain("sk-other-secret-token");
-  });
-
-  it("describes queued writer state for cleanup timeout logs", () => {
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: () => "queued",
-        flush: async () => undefined,
-        describeQueue: () => ({
-          pendingWrites: 2,
-          queuedBytes: 256,
-          activeOperation: "file-append",
-          activeWriteBytes: 128,
-          maxFileBytes: 1024,
-          maxQueuedBytes: 1024,
-          yieldBeforeWrite: true,
-        }),
-      },
-    });
-
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
-
-    expect(runtimeRecorder.describeFlushState()).toBe(
-      "pendingWrites=2 queuedBytes=256 activeOperation=file-append yieldBeforeWrite=true activeWriteBytes=128 maxQueuedBytes=1024 maxFileBytes=1024",
-    );
-  });
-
-  it("does not record runtime events when explicitly disabled", () => {
-    const recorder = createTrajectoryRuntimeRecorder({
+  it("does not record runtime events when explicitly disabled", async () => {
+    const recorder = await createTrajectoryRuntimeRecorder({
       env: {
         OPENCLAW_TRAJECTORY: "0",
       },
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: () => undefined,
-        flush: async () => undefined,
-      },
     });
 
     expect(recorder).toBeNull();

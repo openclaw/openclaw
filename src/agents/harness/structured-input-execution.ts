@@ -92,11 +92,7 @@ async function runConfirmation(
     };
   }
   if (result.status !== "answered") {
-    const cancellation = cancellationFor(result, confirmation.subject);
-    if (cancellation.message) {
-      await showStatus(params, cancellation.message);
-    }
-    return cancellation;
+    return cancelInput(params, result, confirmation.subject);
   }
   const answer = result.answers.answers[question.id]?.[0];
   return answer?.toLowerCase() === confirmation.acceptLabel.toLowerCase()
@@ -116,50 +112,34 @@ async function runForm(
     if (!isActive(params)) {
       return { status: "cancelled", message: "Form input was cancelled before completion." };
     }
-    const field = fields[index]!;
-    if (field.question.isSecret) {
-      index += 1;
-      const result = await ask(params, [field.question], batch, intro);
-      batch += 1;
-      if (!isActive(params)) {
-        return { status: "cancelled", message: "Secret input was cancelled before commit." };
+    const secret = fields[index]!.question.isSecret;
+    const subject = secret ? "Secret input" : "Form input";
+    const batchFields: StructuredInputField[] = [];
+    if (secret) {
+      batchFields.push(fields[index++]!);
+    } else {
+      while (
+        index < fields.length &&
+        batchFields.length < QUESTION_BATCH_SIZE &&
+        !fields[index]?.question.isSecret
+      ) {
+        batchFields.push(fields[index++]!);
       }
-      if (result.status !== "answered") {
-        const cancellation = cancellationFor(result, "Secret input");
-        if (cancellation.message) {
-          await showStatus(params, cancellation.message);
-        }
-        return cancellation;
-      }
-      answers[field.question.id] = result.answers.answers[field.question.id] ?? [];
-      continue;
-    }
-    const ordinary: StructuredInputField[] = [];
-    while (
-      index < fields.length &&
-      ordinary.length < QUESTION_BATCH_SIZE &&
-      !fields[index]?.question.isSecret
-    ) {
-      ordinary.push(fields[index++]!);
     }
     const result = await ask(
       params,
-      ordinary.map((entry) => entry.question),
+      batchFields.map((entry) => entry.question),
       batch,
       intro,
     );
     batch += 1;
     if (!isActive(params)) {
-      return { status: "cancelled", message: "Form input was cancelled before commit." };
+      return { status: "cancelled", message: `${subject} was cancelled before commit.` };
     }
     if (result.status !== "answered") {
-      const cancellation = cancellationFor(result, "Form input");
-      if (cancellation.message) {
-        await showStatus(params, cancellation.message);
-      }
-      return cancellation;
+      return cancelInput(params, result, subject);
     }
-    for (const entry of ordinary) {
+    for (const entry of batchFields) {
       answers[entry.question.id] = result.answers.answers[entry.question.id] ?? [];
     }
   }
@@ -208,14 +188,14 @@ function isActive(params: StructuredInputExecutionParams): boolean {
   return params.signal?.aborted !== true && (params.isActive?.() ?? true);
 }
 
-function cancellationFor(
+async function cancelInput(
+  params: StructuredInputExecutionParams,
   result: Exclude<QuestionWaitAnswerResult, { status: "answered" }>,
   subject: string,
-): { status: "cancelled"; message: string } {
-  return {
-    status: "cancelled",
-    message: result.status === "expired" ? `${subject} expired.` : `${subject} was cancelled.`,
-  };
+): Promise<{ status: "cancelled"; message: string }> {
+  const message = result.status === "expired" ? `${subject} expired.` : `${subject} was cancelled.`;
+  await showStatus(params, message);
+  return { status: "cancelled", message };
 }
 
 async function showStatus(params: StructuredInputExecutionParams, message: string): Promise<void> {

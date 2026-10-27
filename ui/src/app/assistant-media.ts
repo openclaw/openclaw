@@ -1,12 +1,18 @@
 import { normalizeRouteBasePath } from "@openclaw/uirouter";
 
-export type AssistantMediaContext = { sessionKey?: string; agentId?: string; policyKey?: string };
+export type AssistantMediaContext = {
+  sessionKey?: string;
+  agentId?: string;
+  messageId?: string;
+  policyKey?: string;
+};
 
 export function buildAssistantMediaUrl(
   source: string,
   resourceBasePath = "",
   mediaTicket?: string | null,
   context?: AssistantMediaContext,
+  filename?: string,
 ): string {
   const params = new URLSearchParams({ source });
   const normalizedMediaTicket = mediaTicket?.trim();
@@ -16,8 +22,14 @@ export function buildAssistantMediaUrl(
   if (context?.sessionKey) {
     params.set("sessionKey", context.sessionKey);
   }
+  if (context?.messageId) {
+    params.set("messageId", context.messageId);
+  }
   if (context?.agentId) {
     params.set("agentId", context.agentId);
+  }
+  if (filename) {
+    params.set("filename", filename);
   }
   return `${normalizeRouteBasePath(resourceBasePath)}/__openclaw__/assistant-media?${params.toString()}`;
 }

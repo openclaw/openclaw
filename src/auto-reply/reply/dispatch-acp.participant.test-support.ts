@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect } from "vitest";
 import {
   listSessionParticipantsReadOnly,
@@ -11,20 +12,19 @@ export async function expectAcpSessionParticipantInput(
   dispatch: () => Promise<void>,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    await upsertSessionEntryCore(
-      { agentId: "codex-acp", env: state.env, sessionKey },
-      {
-        sessionId: "acp-participant-session",
-        updatedAt: 1,
-      },
-    );
+    const scope = {
+      agentId: "codex-acp",
+      env: state.env,
+      sessionKey,
+      storePath: path.join(state.sessionsDir("codex-acp"), "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: "acp-participant-session",
+      updatedAt: 1,
+    });
     await dispatch();
     await Promise.resolve();
     await runOpenClawAgentWriteAdmission({ agentId: "codex-acp", env: state.env }, () => undefined);
-    expect(
-      listSessionParticipantsReadOnly({ agentId: "codex-acp", env: state.env, sessionKey }).get(
-        sessionKey,
-      ),
-    ).toHaveLength(1);
+    expect(listSessionParticipantsReadOnly(scope).get(sessionKey)).toHaveLength(1);
   });
 }

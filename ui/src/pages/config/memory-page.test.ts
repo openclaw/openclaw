@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { setPluginEnabled, type PluginCatalogItem } from "../../lib/plugins/index.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
+  mountMemoryPage as mountPage,
   activeEngine,
   createMemoryTestAddon as addon,
   createMemoryTestDeferred as deferred,
@@ -12,19 +12,46 @@ import {
   createMemoryTestMutationResult as committed,
   addonStatus,
   addonSwitch,
-  createMemoryPage as createPage,
+  createMemoryPage as buildPage,
   memoryRoute,
   memoryTabRoute,
   selectEngine,
   toggleAddon,
-} from "./memory-page.test-support.ts";
+} from "./memory-page.test-support.tsx";
 import type { ConfigRouteData } from "./route-data.ts";
-import "./memory-page.ts";
+
+type PageOptions = Parameters<typeof buildPage>[0];
+function createPage(
+  params: Omit<PageOptions, "configObject"> & Partial<Pick<PageOptions, "configObject">> = {},
+  mount = true,
+) {
+  vi.mocked(setPluginEnabled).mockReset();
+  const page = buildPage({ configObject: {}, ...params });
+  if (mount) {
+    mountMemoryPage(page.element);
+  }
+  return page;
+}
 
 vi.mock("../../lib/plugins/index.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/plugins/index.ts")>();
   return { ...actual, setPluginEnabled: vi.fn() };
 });
+
+function mountMemoryPage(element: HTMLElement) {
+  onTestFinished(() => element.remove());
+  mountPage(element);
+}
+
+function waitText(element: HTMLElement, text: string, present = true) {
+  return waitForSolid(() => {
+    (present ? expect(element.textContent) : expect(element.textContent).not).toContain(text);
+  });
+}
+
+function waitAddon(element: HTMLElement, label: string, checked: boolean) {
+  return waitForSolid(() => expect(addonSwitch(element, label)?.checked).toBe(checked));
+}
 
 /** Which tab body is actually mounted, rather than what the tab strip claims. */
 function visibleTab(element: HTMLElement): "overview" | "memories" | "dreams" | "settings" | null {
@@ -32,986 +59,715 @@ function visibleTab(element: HTMLElement): "overview" | "memories" | "dreams" | 
   if (!panel) {
     return null;
   }
-  if (panel.querySelector("openclaw-memory-dreaming")) {
+  if (panel.querySelector("openclaw-agent-memory-panel")) {
     return "dreams";
   }
-  if (panel.querySelector("openclaw-memory-memories")) {
+  if (panel.querySelector('[data-settings-view="memory/memories"]')) {
     return "memories";
   }
-  return panel.querySelector(".memory-overview") ? "overview" : "settings";
+  return panel.querySelector('[data-settings-view="memory/overview"]') ? "overview" : "settings";
 }
 
-function selectTab(element: HTMLElement, tab: string) {
-  const target = element.querySelector(`#memory-tab-${tab}`);
-  target?.dispatchEvent(
-    new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
-  );
-  target?.dispatchEvent(new MouseEvent("click", { detail: 0, bubbles: true }));
-  dispatchTabShow(element, tab);
+function pressTab(element: HTMLElement, tab: string, key = "Enter") {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    bubbles: true,
+    cancelable: key !== "ArrowRight",
+  });
+  element.querySelector(`#memory-tab-${tab}`)?.dispatchEvent(event);
+  return event;
 }
 
-function dispatchTabShow(element: HTMLElement, tab: string) {
-  element.querySelector("wa-tab-group")?.dispatchEvent(
-    new CustomEvent("wa-tab-show", {
-      detail: { name: tab },
-      bubbles: true,
-    }),
-  );
+function dreamingInput(element: HTMLElement) {
+  const input = element.querySelector<HTMLInputElement>('input[aria-label="Dreaming frequency"]');
+  if (!input) {
+    throw new Error("Missing Dreaming frequency");
+  }
+  return input;
 }
 
-describe("MemorySettingsPage engine slot", () => {
-  it("resolves an unset slot to the slot default even when another engine is enabled", async () => {
-    // resolveSlotSelection (src/plugins/slots.ts) makes an unset slot memory-core
-    // regardless of catalog enablement, so the page must not report lancedb.
-    const { element } = createPage({
-      configObject: {},
-      catalog: [
-        engine("memory-lancedb", true, "Memory LanceDB"),
-        engine("memory-core", false, "memory-core"),
-      ],
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
-      expect(element.textContent).toContain("falls back to its default owner");
-      expect(
-        [
-          ...(element
-            .querySelector("wa-radio-group.settings-segmented")
-            ?.querySelectorAll("wa-radio") ?? []),
-        ].map((radio) => radio.textContent?.trim()),
-      ).toEqual(["OpenClaw Memory", "Memory LanceDB", "Off"]);
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("offers an enable action when the slot owner is disabled", async () => {
-    const setEnabled = vi.fn(() => Promise.resolve({}));
-    const { element } = createPage({
-      configObject: {},
-      catalog: [engine("memory-core", false)],
-      setEnabled,
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(element.textContent).toContain("This engine is disabled"));
-
-      // The control already shows memory-core selected, so re-picking it fires no
-      // change event; without this button the owner could never be re-enabled.
-      const enable = [...element.querySelectorAll("button")].find(
-        (button) => button.textContent?.trim() === "Enable",
-      );
-      enable?.click();
-      await waitForFast(() => expect(setEnabled).toHaveBeenCalled());
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("keeps the enable action hidden once the owner is running", async () => {
-    const { element } = createPage({
-      configObject: {},
-      catalog: [engine("memory-core", true)],
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
-      expect(element.textContent).not.toContain("This engine is disabled");
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("persists Off and drains its autosave before re-enabling memory", async () => {
-    const pendingWrites = deferred<void>();
-    const patchForm = vi.fn();
-    const setEnabled = vi.fn(() => Promise.resolve({}));
-    const { element } = createPage({
-      configObject: { plugins: { slots: { memory: "memory-lancedb" } } },
-      catalog: [engine("memory-core", false), engine("memory-lancedb", true)],
-      patchForm,
-      waitForPendingWrites: () => pendingWrites.promise,
-      setEnabled,
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(activeEngine(element)).toBe("memory-lancedb"));
-
-      selectEngine(element, "");
-      // Disabling the plugin would leave the slot pinned; only the explicit
-      // sentinel makes Off outlive a reload.
-      expect(patchForm).toHaveBeenCalledWith(["plugins", "slots", "memory"], "none");
-      expect(setEnabled).not.toHaveBeenCalled();
-
-      // Round-trip: the reloaded config carries the write back into the page.
-      element.configObject = { plugins: { slots: { memory: "none" } } };
-      await element.updateComplete;
-      expect(activeEngine(element)).toBe("");
-      expect(element.textContent).toContain("switched off");
-
-      selectEngine(element, "memory-core");
-      await Promise.resolve();
-      expect(setEnabled).not.toHaveBeenCalled();
-
-      pendingWrites.resolve();
-      await waitForFast(() => expect(setEnabled).toHaveBeenCalledOnce());
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("reports a rejected engine change instead of silently snapping back", async () => {
-    const { element } = createPage({
-      configObject: {},
-      catalog: [engine("memory-core", true), engine("memory-lancedb", false)],
-      setEnabled: () => Promise.reject(new Error("plugin not installed: memory-lancedb")),
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
-
-      selectEngine(element, "memory-lancedb");
-      await waitForFast(() =>
-        expect(element.textContent).toContain("plugin not installed: memory-lancedb"),
-      );
-      expect(element.textContent).toContain("Could not change the memory engine");
-    } finally {
-      element.remove();
-    }
-  });
-});
-
-describe("MemorySettingsPage catalog state", () => {
-  beforeEach(() => {
-    vi.mocked(setPluginEnabled).mockReset();
-  });
-
-  it("does not claim an add-on is disabled before the catalog is read", async () => {
-    const pending = deferred<{ plugins: readonly PluginCatalogItem[] }>();
-    const { element } = createPage({
-      configObject: {},
-      listCatalog: () => pending.promise,
-    });
-    document.body.append(element);
-    try {
-      await element.updateComplete;
-      // The catalog is still in flight: "Disabled" here would be a definite claim
-      // about a plugin whose entry was never read.
-      expect(addonStatus(element, "Active memory")).toBe("Loading…");
-
-      pending.resolve({ plugins: [addon("active-memory", true)] });
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
-      // Missing catalog entries are not installed, so the page must not offer a toggle.
-      expect(addonStatus(element, "Memory wiki")).toBe("Unknown");
-      expect(addonSwitch(element, "Memory wiki")).toBeNull();
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("reports unknown add-on state instead of disabled once the catalog read fails", async () => {
-    const { element } = createPage({
-      configObject: {},
-      listCatalog: () => Promise.reject(new Error("gateway is gone")),
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Unknown"));
-      expect(addonStatus(element, "Active memory")).not.toBe("Disabled");
-    } finally {
-      element.remove();
-    }
-  });
-
-  it.each(["connection", "plugin publication"])(
-    "drops a catalog completion superseded by %s",
-    async (change) => {
-      const first = deferred<{ plugins: readonly PluginCatalogItem[] }>();
-      const second = deferred<{ plugins: readonly PluginCatalogItem[] }>();
-      const { element, setPhase, publishPluginGeneration } = createPage({
-        configObject: {},
-        listCatalog: (call) => (call === 0 ? first.promise : second.promise),
-      });
-      document.body.append(element);
-      try {
-        await element.updateComplete;
-        // Same client object survives the drop and the reconnect, so only the
-        // per-connection request generation can tell the two loads apart.
-        if (change === "connection") {
-          setPhase("disconnected");
-          setPhase("connected");
-        } else {
-          publishPluginGeneration(1);
-        }
-        await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Loading…"));
-
-        second.resolve({ plugins: [addon("active-memory", true)] });
-        await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
-
-        first.resolve({ plugins: [addon("active-memory", false)] });
-        await first.promise;
-        await element.updateComplete;
-        expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
-      } finally {
-        element.remove();
-      }
-    },
-  );
-
-  it("marks add-ons unknown while disconnected", async () => {
-    const { element, setPhase } = createPage({
-      configObject: {},
-      catalog: [addon("active-memory", true)],
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
-      setPhase("disconnected");
-      await element.updateComplete;
-      expect(addonStatus(element, "Active memory")).toBe("Unknown");
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("keeps a catalogued but not-installed add-on muted and non-interactive", async () => {
-    const { element } = createPage({
-      configObject: {},
-      catalog: [
-        {
-          id: "active-memory",
-          name: "active-memory",
-          installed: false,
-          enabled: false,
-          state: "not-installed",
-        } as PluginCatalogItem,
-      ],
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Unknown"));
-      expect(addonSwitch(element, "Active memory")).toBeNull();
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("falls back to read-only add-on status rows without operator.admin", async () => {
-    const { element } = createPage({
-      configObject: {},
-      catalog: [addon("active-memory", true), addon("memory-wiki", false)],
-      scopes: ["operator.read"],
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Enabled"));
-      expect(addonStatus(element, "Memory wiki")).toBe("Disabled");
-      expect(addonSwitch(element, "Active memory")).toBeNull();
-      expect(addonSwitch(element, "Memory wiki")).toBeNull();
-      expect(element.querySelector("a.memory-page__link")?.textContent).toContain("Open Plugins");
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("falls back to read-only add-on status rows when plugin mutations are unavailable", async () => {
-    const { element } = createPage({
-      configObject: {},
-      catalog: [addon("active-memory", true), addon("memory-wiki", false)],
-      mutationAllowed: false,
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Enabled"));
-      expect(addonStatus(element, "Memory wiki")).toBe("Disabled");
-      expect(addonSwitch(element, "Active memory")).toBeNull();
-      expect(addonSwitch(element, "Memory wiki")).toBeNull();
-      const engineGroup = element.querySelector<HTMLElement & { disabled?: boolean }>(
-        "wa-radio-group.settings-segmented",
-      );
-      expect(engineGroup?.disabled).toBe(true);
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("toggles the requested add-on and refreshes config plus catalog on success", async () => {
-    const refresh = vi.fn(() => Promise.resolve());
-    const { element, request } = createPage({
-      configObject: {},
-      catalog: [addon("active-memory", true), addon("memory-wiki", false)],
-      refresh,
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
-      toggleAddon(element, "Active memory", false);
-
-      await waitForFast(() => expect(refresh).toHaveBeenCalledOnce());
-      expect(setPluginEnabled).toHaveBeenCalledWith(expect.anything(), "active-memory", false);
-      expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2);
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("ignores an older catalog reload from a parallel add-on mutation", async () => {
-    const firstReload = deferred<{ plugins: readonly PluginCatalogItem[] }>();
-    const secondReload = deferred<{ plugins: readonly PluginCatalogItem[] }>();
-    const initial = [addon("active-memory", true), addon("memory-wiki", false)];
-    const { element, request } = createPage({
-      configObject: {},
-      listCatalog: (call) => {
-        if (call === 0) {
-          return Promise.resolve({ plugins: initial });
-        }
-        return call === 1 ? firstReload.promise : secondReload.promise;
-      },
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
-      toggleAddon(element, "Active memory", false);
-      toggleAddon(element, "Memory wiki", true);
-      await waitForFast(() =>
-        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
-      );
-
-      secondReload.resolve({
-        plugins: [addon("active-memory", false), addon("memory-wiki", true)],
-      });
-      await waitForFast(() => expect(addonSwitch(element, "Memory wiki")?.checked).toBe(true));
-
-      firstReload.resolve({
-        plugins: [addon("active-memory", false), addon("memory-wiki", false)],
-      });
-      await firstReload.promise;
-      await element.updateComplete;
-      expect(addonSwitch(element, "Memory wiki")?.checked).toBe(true);
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("does not let a stale mutation supersede a reconnect catalog reload", async () => {
-    const mutation = deferred<unknown>();
-    const mutationReload = deferred<{ plugins: readonly PluginCatalogItem[] }>();
-    const initial = [addon("active-memory", true), addon("memory-wiki", false)];
-    const { element, request, setPhase } = createPage({
-      configObject: {},
-      listCatalog: (call) =>
-        call < 2 ? Promise.resolve({ plugins: initial }) : mutationReload.promise,
-      setEnabled: () => mutation.promise,
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
-      toggleAddon(element, "Active memory", false);
-      await waitForFast(() => expect(setPluginEnabled).toHaveBeenCalledOnce());
-
-      setPhase("disconnected");
-      setPhase("connected");
-      await waitForFast(() =>
-        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2),
-      );
-
-      mutation.resolve(committed("active-memory", false));
-      await waitForFast(() =>
-        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
-      );
-
-      mutationReload.resolve({
-        plugins: [addon("active-memory", false), addon("memory-wiki", false)],
-      });
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(false));
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("keeps a committed add-on change successful while making its failed refresh visible", async () => {
-    const refresh = vi.fn(() => Promise.reject(new Error("config refresh failed")));
-    const initial = [addon("active-memory", true), addon("memory-wiki", false)];
-    const updated = [addon("active-memory", false), addon("memory-wiki", false)];
-    const { element } = createPage({
-      configObject: {},
-      listCatalog: (call) => Promise.resolve({ plugins: call === 0 ? initial : updated }),
-      refresh,
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
-      toggleAddon(element, "Active memory", false);
-
-      await waitForFast(() => expect(refresh).toHaveBeenCalledOnce());
-      await waitForFast(() => expect(element.textContent).toContain("config refresh failed"));
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(false));
-      expect(element.textContent).toContain("Needs attention");
-      expect(element.textContent).not.toContain("Could not update Active memory");
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("retains runtime warnings through same-boot reconnects and publications, then clears a new boot", async () => {
-    const initial = [addon("active-memory", true), addon("memory-wiki", false)];
-    const updated = [addon("active-memory", true), addon("memory-wiki", true)];
-    const warning = "Review memory-wiki settings.";
-    let mutations = 0;
-    const { element, request, setPhase, setBootId, publishPluginGeneration } = createPage({
-      configObject: {},
-      listCatalog: (call) => Promise.resolve({ plugins: call === 0 ? initial : updated }),
-      setEnabled: (pluginId, enabled) =>
-        mutations++ === 0
-          ? Promise.resolve(committed(pluginId, enabled, [warning]))
-          : Promise.reject(new Error("follow-up rejected")),
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(addonSwitch(element, "Memory wiki")?.checked).toBe(false));
-      toggleAddon(element, "Memory wiki", true);
-      await waitForFast(() => expect(element.textContent).toContain(warning));
-      expect(element.textContent).toContain("Needs attention");
-      await waitForFast(() => expect(addonSwitch(element, "Memory wiki")?.checked).toBe(true));
-
-      await waitForFast(() =>
-        expect(addonSwitch(element, "Memory wiki")?.hasAttribute("disabled")).toBe(false),
-      );
-      toggleAddon(element, "Memory wiki", false);
-      await waitForFast(() => expect(element.textContent).toContain("follow-up rejected"));
-      expect(element.textContent).toContain(warning);
-
-      setPhase("disconnected");
-      setPhase("connected");
-      await waitForFast(() => expect(addonSwitch(element, "Memory wiki")?.checked).toBe(true));
-      expect(element.textContent).toContain(warning);
-      publishPluginGeneration(2);
-      await element.updateComplete;
-      expect(element.textContent).toContain(warning);
-      expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(0);
-
-      setBootId("memory-boot-b");
-      await waitForFast(() => expect(element.textContent).not.toContain(warning));
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("disables only the add-on whose mutation is in flight", async () => {
-    const pending = deferred<unknown>();
-    const { element } = createPage({
-      configObject: {},
-      catalog: [addon("active-memory", true), addon("memory-wiki", false)],
-      setEnabled: () => pending.promise,
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
-      toggleAddon(element, "Active memory", false);
-
-      await waitForFast(() =>
-        expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(true),
-      );
-      expect(addonSwitch(element, "Memory wiki")?.hasAttribute("disabled")).toBe(false);
-      pending.resolve(committed("active-memory", false));
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("renders and clears mutation errors on only the affected add-on", async () => {
-    const retry = deferred<unknown>();
-    let attempts = 0;
-    const { element } = createPage({
-      configObject: {},
-      catalog: [addon("active-memory", true), addon("memory-wiki", false)],
-      setEnabled: () =>
-        attempts++ === 0 ? Promise.reject(new Error("enablement rejected")) : retry.promise,
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
-      toggleAddon(element, "Active memory", false);
-      await waitForFast(() => expect(element.textContent).toContain("enablement rejected"));
-      expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
-      expect(element.textContent).toContain("Could not update Active memory");
-      expect(element.textContent).not.toContain("Could not update Memory wiki");
-
-      toggleAddon(element, "Active memory", false);
-      await waitForFast(() => expect(element.textContent).not.toContain("enablement rejected"));
-      retry.resolve(committed("active-memory", false));
-    } finally {
-      element.remove();
-    }
-  });
-});
-
-describe("MemorySettingsPage tab routing", () => {
-  it("probes embeddings through the guarded overview request and renders the result", async () => {
-    const probe = deferred<DoctorMemoryStatusPayload>();
-    const initial: DoctorMemoryStatusPayload = {
-      agentId: "main",
-      provider: "local",
-      embedding: { ok: false, checked: false },
-    };
-    const { element, request } = createPage({
-      configObject: {},
-      memoryStatus: (_agentId, shouldProbe) =>
-        shouldProbe ? probe.promise : Promise.resolve(initial),
-    });
-    element.routeData = memoryTabRoute("overview");
-    document.body.append(element);
-    try {
-      await waitForFast(() =>
-        expect(
-          [...element.querySelectorAll<HTMLButtonElement>("button")].some(
-            (button) => button.textContent?.trim() === "Test",
-          ),
-        ).toBe(true),
-      );
-      const testButton = [...element.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Test",
-      );
-      testButton?.click();
-
-      await waitForFast(() =>
-        expect(request).toHaveBeenCalledWith("doctor.memory.status", {
-          agentId: "main",
-          probe: true,
-        }),
-      );
-      await waitForFast(() =>
-        expect(
-          [...element.querySelectorAll<HTMLButtonElement>("button")].find(
-            (button) => button.textContent?.trim() === "Testing…",
-          )?.disabled,
-        ).toBe(true),
-      );
-
-      probe.resolve({
-        agentId: "main",
-        provider: "local",
-        embedding: { ok: false, checked: true, error: "embedding probe failed" },
-      });
-      await waitForFast(() => expect(element.textContent).toContain("embedding probe failed"));
-      expect(
-        [...element.querySelectorAll<HTMLButtonElement>("button")].some(
-          (button) => button.textContent?.trim() === "Test",
-        ),
-      ).toBe(false);
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("renders every canonical tab path and honors browser history restoration", async () => {
-    const navigate = vi.fn();
-    const { element } = createPage({ configObject: {}, catalog: [], navigate });
-    element.routeData = memoryTabRoute("settings");
-    document.body.append(element);
-    try {
-      await element.updateComplete;
-      expect(visibleTab(element)).toBe("settings");
-
-      // A manual click rewrites the URL rather than shadowing it with local state.
-      selectTab(element, "overview");
-      expect(navigate).toHaveBeenCalledWith("memory", { pathname: "/settings/memory" });
-      element.routeData = memoryTabRoute("overview");
-      await element.updateComplete;
-      expect(visibleTab(element)).toBe("overview");
-
-      // The router feeding an older history entry back must restore that tab.
-      element.routeData = memoryTabRoute("settings");
-      await element.updateComplete;
-      expect(visibleTab(element)).toBe("settings");
-
-      element.routeData = memoryTabRoute("memories");
-      await element.updateComplete;
-      expect(visibleTab(element)).toBe("memories");
-
-      element.routeData = memoryTabRoute("dreams");
-      await element.updateComplete;
-      expect(visibleTab(element)).toBe("dreams");
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("writes the chosen tab into the URL so history restores it", async () => {
-    const navigate = vi.fn();
-    const { element } = createPage({ configObject: {}, catalog: [], navigate });
-    element.routeData = memoryTabRoute("overview");
-    document.body.append(element);
-    try {
-      await element.updateComplete;
-      expect(visibleTab(element)).toBe("overview");
-
-      selectTab(element, "dreams");
-      expect(navigate).toHaveBeenCalledWith("memory", { pathname: "/settings/memory/dreams" });
-      // Nothing moves until the router feeds the new tab back in.
-      await element.updateComplete;
-      expect(visibleTab(element)).toBe("overview");
-
-      selectTab(element, "memories");
-      expect(navigate).toHaveBeenCalledWith("memory", {
-        pathname: "/settings/memory/memories",
-      });
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("handles Space directly so the browser cannot synthesize a second navigation", async () => {
-    const navigate = vi.fn();
-    const { element } = createPage({ configObject: {}, catalog: [], navigate });
-    element.routeData = memoryTabRoute("overview");
-    document.body.append(element);
-    try {
-      await element.updateComplete;
-      const space = new KeyboardEvent("keydown", {
-        key: " ",
-        bubbles: true,
-        cancelable: true,
-      });
-      element.querySelector("#memory-tab-dreams")?.dispatchEvent(space);
-
-      expect(space.defaultPrevented).toBe(true);
-      expect(navigate).toHaveBeenCalledOnce();
-      expect(navigate).toHaveBeenCalledWith("memory", {
-        pathname: "/settings/memory/dreams",
-      });
-    } finally {
-      element.remove();
-    }
-  });
-
-  it.each([
-    ["/settings/memory", null],
-    ["/settings/memory/memories", null],
-    ["/settings/memory/dreams", null],
-    ["/settings/memory/settings", null],
-    ["/settings/memory?tab=memories", "/settings/memory/memories"],
-    ["/settings/memory?tab=dreams", "/settings/memory/dreams"],
-    ["/settings/memory?tab=settings", "/settings/memory/settings"],
-    ["/settings/memory?tab=dreaming", "/settings/memory/dreams"],
-    ["/settings/memory?tab=search", "/settings/memory/settings"],
-    ["/settings/memory?tab=overview", "/settings/memory"],
-    ["/settings/memory?section=memory", "/settings/memory/settings"],
-    ["/settings/memory#config-section-memory", "/settings/memory/settings#config-section-memory"],
-    [
-      "/settings/memory#config-section-memory-search",
-      "/settings/memory/settings#config-section-memory-search",
+it("defaults to the disabled slot owner and offers Enable even when another engine is enabled", async () => {
+  const setEnabled = vi.fn(() => Promise.resolve({}));
+  const { element } = createPage({
+    catalog: [
+      engine("memory-lancedb", true, "Memory LanceDB"),
+      engine("memory-core", false, "memory-core"),
     ],
-  ] as const)(
-    "performs at most one replace for %s and never oscillates back to a query tab",
-    async (sourceUrl, expectedUrl) => {
-      const replace = vi.fn();
-      const navigate = vi.fn();
-      const { element } = createPage({
-        configObject: {},
-        catalog: [],
-        replace,
-        navigate,
-        routeData: memoryRoute(sourceUrl),
-      });
-      document.body.append(element);
-      try {
-        await element.updateComplete;
-        for (let cycle = 0; cycle < 3; cycle += 1) {
-          element.routeData = { ...element.routeData } as ConfigRouteData;
-          await element.updateComplete;
-        }
-        dispatchTabShow(element, "overview");
-        dispatchTabShow(element, "dreams");
-
-        expect(replace).toHaveBeenCalledTimes(expectedUrl ? 1 : 0);
-        expect(navigate).not.toHaveBeenCalled();
-        if (!expectedUrl) {
-          return;
-        }
-        const canonical = memoryRoute(expectedUrl);
-        expect(replace).toHaveBeenCalledWith("memory", {
-          pathname: canonical.pathname,
-          search: canonical.search,
-          hash: canonical.hash,
-        });
-
-        element.routeData = canonical;
-        await element.updateComplete;
-        for (let cycle = 0; cycle < 3; cycle += 1) {
-          element.routeData = { ...element.routeData } as ConfigRouteData;
-          await element.updateComplete;
-        }
-        expect(replace).toHaveBeenCalledOnce();
-      } finally {
-        element.remove();
-      }
-    },
+    setEnabled,
+  });
+  await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
+  expect(element.textContent).toContain("falls back to its default owner");
+  expect(
+    [
+      ...(element
+        .querySelector('.settings-segmented[role="radiogroup"]')
+        ?.querySelectorAll(".settings-segmented__btn") ?? []),
+    ].map((radio) => radio.textContent?.trim()),
+  ).toEqual(["OpenClaw Memory", "Memory LanceDB", "Off"]);
+  await waitText(element, "This engine is disabled");
+  const enable = [...element.querySelectorAll("button")].find(
+    (button) => button.textContent?.trim() === "Enable",
   );
+  enable?.click();
+  await waitForSolid(() => expect(setEnabled).toHaveBeenCalled());
+});
 
-  it("loads Overview status once per activation, Settings agent change, and reconnect", async () => {
-    const memoryStatus = vi.fn((agentId: string) =>
-      Promise.resolve({ agentId, provider: "none", embedding: { ok: false, checked: false } }),
-    );
-    const { element, request, setPhase, settingsAgentSelection } = createPage({
-      configObject: {},
-      agents: [{ id: "main" }, { id: "research" }],
-      selectedAgentId: "research",
-      memoryStatus,
+it("persists Off and drains its autosave before re-enabling memory", async () => {
+  const pendingWrites = deferred<void>();
+  const patchForm = vi.fn();
+  const setEnabled = vi.fn(() => Promise.resolve({}));
+  const { element, runExternalMutation } = createPage({
+    configObject: { plugins: { slots: { memory: "memory-lancedb" } } },
+    catalog: [engine("memory-core", false), engine("memory-lancedb", true)],
+    patchForm,
+    waitForPendingWrites: () => pendingWrites.promise,
+    setEnabled,
+  });
+  await waitForSolid(() => expect(activeEngine(element)).toBe("memory-lancedb"));
+
+  selectEngine(element, "");
+  // Disabling the plugin would leave the slot pinned; only the explicit
+  // sentinel makes Off outlive a reload.
+  expect(patchForm).toHaveBeenCalledWith(["plugins", "slots", "memory"], "none");
+  expect(setEnabled).not.toHaveBeenCalled();
+
+  element.configObject = { plugins: { slots: { memory: "none" } } };
+  flush();
+  expect(activeEngine(element)).toBe("");
+  expect(element.textContent).toContain("switched off");
+
+  selectEngine(element, "memory-core");
+  await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledOnce());
+  expect(setEnabled).not.toHaveBeenCalled();
+
+  pendingWrites.resolve();
+  await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
+});
+
+it.each(["connection", "plugin publication"])(
+  "drops a catalog completion superseded by %s",
+  async (change) => {
+    const first = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+    const second = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+    const { element, setPhase, publishPluginGeneration } = createPage({
+      listCatalog: (call) => (call === 0 ? first.promise : second.promise),
     });
-    element.routeData = memoryTabRoute("overview");
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(1));
-      expect(memoryStatus).toHaveBeenLastCalledWith("research", false);
-      await element.updateComplete;
-      expect(
-        request.mock.calls.filter(([method]) => method === "doctor.memory.status"),
-      ).toHaveLength(1);
-
-      expect(element.querySelectorAll("openclaw-agent-select")).toHaveLength(0);
-      expect(element.textContent).not.toContain("Agent view");
-      settingsAgentSelection.set("main");
-      await waitForFast(() => expect(memoryStatus).toHaveBeenLastCalledWith("main", false));
-      settingsAgentSelection.setScope(null);
-      await element.updateComplete;
-      expect(memoryStatus).toHaveBeenCalledTimes(2);
-      settingsAgentSelection.set("research");
-      await waitForFast(() => expect(memoryStatus).toHaveBeenLastCalledWith("research", false));
-
+    if (change === "connection") {
       setPhase("disconnected");
       setPhase("connected");
-      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(4));
-    } finally {
-      element.remove();
+    } else {
+      publishPluginGeneration(1);
     }
-  });
+    await waitForSolid(() => expect(addonStatus(element, "Active memory")).toBe("Loading…"));
 
-  it("reloads status when one pinned engine replaces another", async () => {
-    const memoryStatus = vi.fn((agentId: string) =>
-      Promise.resolve({ agentId, provider: "none", embedding: { ok: false, checked: false } }),
+    second.resolve({ plugins: [addon("active-memory", true)] });
+    await waitAddon(element, "Active memory", true);
+
+    first.resolve({ plugins: [addon("active-memory", false)] });
+    await first.promise;
+    flush();
+    expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
+  },
+);
+
+it("recovers a catalog failure without replacing the Dreaming draft", async () => {
+  const recovery = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+  const { element, publishPluginGeneration } = createPage({
+    listCatalog: (call) =>
+      call === 0 ? Promise.reject(new Error("catalog unavailable")) : recovery.promise,
+  });
+  const frequency = dreamingInput(element);
+  frequency.value = "0 4 * * *";
+  frequency.focus();
+  await waitForSolid(() => expect(addonStatus(element, "Active memory")).toBe("Unknown"));
+  expect(dreamingInput(element)).toBe(frequency);
+  expect(frequency.value).toBe("0 4 * * *");
+
+  publishPluginGeneration(1);
+  recovery.resolve({ plugins: [engine("memory-core", true), addon("active-memory", true)] });
+  await waitAddon(element, "Active memory", true);
+  expect(dreamingInput(element)).toBe(frequency);
+  expect(frequency.value).toBe("0 4 * * *");
+  expect(document.activeElement).toBe(frequency);
+});
+
+it("retains catalog controls during a plugin publication refresh", async () => {
+  const refresh = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+  const { element, publishPluginGeneration } = createPage({
+    listCatalog: (call) =>
+      call === 0
+        ? Promise.resolve({ plugins: [engine("memory-core", true), addon("active-memory", true)] })
+        : refresh.promise,
+  });
+  await waitAddon(element, "Active memory", true);
+  const engineControl = element.querySelector<HTMLInputElement>('input[value="memory-core"]');
+  const addonControl = addonSwitch(element, "Active memory");
+  engineControl!.focus();
+
+  publishPluginGeneration(1);
+  flush();
+  expect(element.querySelector('input[value="memory-core"]')).toBe(engineControl);
+  expect(addonSwitch(element, "Active memory")).toBe(addonControl);
+  expect(document.activeElement).toBe(engineControl);
+
+  refresh.resolve({ plugins: [engine("memory-core", true), addon("active-memory", false)] });
+  await waitAddon(element, "Active memory", false);
+  expect(element.querySelector('input[value="memory-core"]')).toBe(engineControl);
+  expect(addonSwitch(element, "Active memory")).toBe(addonControl);
+});
+
+it("falls back to read-only add-on status rows without operator.admin", async () => {
+  const { element } = createPage({
+    catalog: [addon("active-memory", true), addon("memory-wiki", false)],
+    scopes: ["operator.read"],
+  });
+  await waitForSolid(() => expect(addonStatus(element, "Active memory")).toBe("Enabled"));
+  expect(addonStatus(element, "Memory wiki")).toBe("Disabled");
+  expect(addonSwitch(element, "Active memory")).toBeNull();
+  expect(addonSwitch(element, "Memory wiki")).toBeNull();
+  expect(element.querySelector("a.memory-page__link")?.textContent).toContain("Open Plugins");
+});
+
+it("ignores an older catalog reload from a parallel add-on mutation", async () => {
+  const firstReload = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+  const secondReload = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+  const initial = [addon("active-memory", true), addon("memory-wiki", false)];
+  const { element, request } = createPage({
+    listCatalog: (call) => {
+      if (call === 0) {
+        return Promise.resolve({ plugins: initial });
+      }
+      return call === 1 ? firstReload.promise : secondReload.promise;
+    },
+  });
+  await waitAddon(element, "Active memory", true);
+  toggleAddon(element, "Active memory", false);
+  toggleAddon(element, "Memory wiki", true);
+  await waitForSolid(() =>
+    expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
+  );
+
+  secondReload.resolve({
+    plugins: [addon("active-memory", false), addon("memory-wiki", true)],
+  });
+  await waitAddon(element, "Memory wiki", true);
+
+  firstReload.resolve({
+    plugins: [addon("active-memory", false), addon("memory-wiki", false)],
+  });
+  await firstReload.promise;
+  flush();
+  expect(addonSwitch(element, "Memory wiki")?.checked).toBe(true);
+});
+
+it("does not let a stale mutation supersede a reconnect catalog reload", async () => {
+  const mutation = deferred<unknown>();
+  const mutationReload = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+  const initial = [addon("active-memory", true), addon("memory-wiki", false)];
+  const { element, request, setPhase } = createPage({
+    listCatalog: (call) =>
+      call < 2 ? Promise.resolve({ plugins: initial }) : mutationReload.promise,
+    setEnabled: () => mutation.promise,
+  });
+  await waitAddon(element, "Active memory", true);
+  toggleAddon(element, "Active memory", false);
+  await waitForSolid(() => expect(setPluginEnabled).toHaveBeenCalledOnce());
+
+  setPhase("disconnected");
+  setPhase("connected");
+  await waitForSolid(() =>
+    expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2),
+  );
+
+  mutation.resolve(committed("active-memory", false));
+  await waitForSolid(() =>
+    expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
+  );
+
+  mutationReload.resolve({
+    plugins: [addon("active-memory", false), addon("memory-wiki", false)],
+  });
+  await waitAddon(element, "Active memory", false);
+});
+
+it("retains runtime warnings through same-boot reconnects and publications, then clears a new boot", async () => {
+  const initial = [addon("active-memory", true), addon("memory-wiki", false)];
+  const updated = [addon("active-memory", true), addon("memory-wiki", true)];
+  const warning = "Review memory-wiki settings.";
+  let mutations = 0;
+  const { element, setPhase, setBootId, publishPluginGeneration } = createPage({
+    listCatalog: (call) => Promise.resolve({ plugins: call === 0 ? initial : updated }),
+    setEnabled: (pluginId, enabled) =>
+      mutations++ === 0
+        ? Promise.resolve(committed(pluginId, enabled, [warning]))
+        : Promise.reject(new Error("follow-up rejected")),
+  });
+  await waitAddon(element, "Memory wiki", false);
+  toggleAddon(element, "Memory wiki", true);
+  await waitText(element, warning);
+  expect(element.textContent).toContain("Needs attention");
+  await waitAddon(element, "Memory wiki", true);
+
+  await waitForSolid(() =>
+    expect(addonSwitch(element, "Memory wiki")?.hasAttribute("disabled")).toBe(false),
+  );
+  toggleAddon(element, "Memory wiki", false);
+  await waitText(element, "follow-up rejected");
+  expect(element.textContent).toContain(warning);
+
+  setPhase("disconnected");
+  setPhase("connected");
+  await waitAddon(element, "Memory wiki", true);
+  expect(element.textContent).toContain(warning);
+  publishPluginGeneration(2);
+  flush();
+  expect(element.textContent).toContain(warning);
+
+  setBootId("memory-boot-b");
+  await waitText(element, warning, false);
+});
+
+it("renders and clears mutation errors on only the affected add-on", async () => {
+  const retry = deferred<unknown>();
+  let attempts = 0;
+  const { element } = createPage({
+    catalog: [addon("active-memory", true), addon("memory-wiki", false)],
+    setEnabled: () =>
+      attempts++ === 0 ? Promise.reject(new Error("enablement rejected")) : retry.promise,
+  });
+  await waitForSolid(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+  toggleAddon(element, "Active memory", false);
+  await waitText(element, "enablement rejected");
+  expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
+  expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false);
+  expect(element.textContent).toContain("Could not update Active memory");
+  expect(element.textContent).not.toContain("Could not update Memory wiki");
+
+  toggleAddon(element, "Active memory", false);
+  await waitText(element, "enablement rejected", false);
+  await waitText(element, "Could not update Active memory", false);
+  retry.resolve(committed("active-memory", false));
+});
+
+it("renders every canonical tab path and honors browser history restoration", async () => {
+  const navigate = vi.fn();
+  const { element } = createPage({ catalog: [], navigate });
+  expect(visibleTab(element)).toBe("settings");
+
+  pressTab(element, "overview");
+  expect(navigate).toHaveBeenCalledWith("memory", { pathname: "/settings/memory" });
+  element.routeData = memoryTabRoute("overview");
+  flush();
+  await waitForSolid(() => expect(visibleTab(element)).toBe("overview"));
+
+  element.routeData = memoryTabRoute("settings");
+  flush();
+  expect(visibleTab(element)).toBe("settings");
+
+  element.routeData = memoryTabRoute("memories");
+  flush();
+  await waitForSolid(() => expect(visibleTab(element)).toBe("memories"));
+
+  element.routeData = memoryTabRoute("dreams");
+  flush();
+  expect(visibleTab(element)).toBe("dreams");
+  expect(element.querySelector("openclaw-agent-select")).toBeNull();
+  expect(element.textContent).not.toContain("Dreaming frequency");
+});
+
+it("keeps Dreams empty when no configured agent is available", async () => {
+  const { element } = createPage({
+    agents: [],
+    routeData: memoryTabRoute("dreams"),
+  });
+  expect(element.querySelector("openclaw-agent-memory-panel")).toBeNull();
+  expect(element.querySelector("openclaw-agent-select")).toBeNull();
+  expect(element.textContent).not.toContain("Dreaming frequency");
+});
+
+it("loads each Dreams target once when the existing agent key changes", async () => {
+  const { element, request, settingsAgentSelection } = createPage({
+    agents: [{ id: "main" }, { id: "support" }],
+    selectedAgentId: "main",
+    routeData: memoryTabRoute("dreams"),
+    methods: ["doctor.memory.status", "doctor.memory.dreamDiary"],
+    settingsRequest: async (method) =>
+      method === "doctor.memory.status" ? { dreaming: null } : { found: false, path: "DREAMS.md" },
+  });
+  const memoryCalls = () =>
+    request.mock.calls.filter(
+      ([method]) => method === "doctor.memory.status" || method === "doctor.memory.dreamDiary",
     );
+  await waitForSolid(() => expect(memoryCalls()).toHaveLength(2));
+  const originalPanel = element.querySelector("openclaw-agent-memory-panel");
+  expect(originalPanel).not.toBeNull();
+
+  settingsAgentSelection.set("support");
+  await waitForSolid(() => expect(memoryCalls()).toHaveLength(4));
+  expect(element.querySelector("openclaw-agent-memory-panel")).not.toBe(originalPanel);
+  for (const agentId of ["main", "support"]) {
+    expect(memoryCalls()).toEqual(
+      expect.arrayContaining([
+        ["doctor.memory.status", { agentId }],
+        ["doctor.memory.dreamDiary", { agentId }],
+      ]),
+    );
+  }
+});
+
+it("handles Space directly so the browser cannot synthesize a second navigation", async () => {
+  const navigate = vi.fn();
+  const { element } = createPage({
+    catalog: [],
+    navigate,
+    routeData: memoryTabRoute("overview"),
+  });
+  const space = pressTab(element, "dreams", " ");
+
+  expect(space.defaultPrevented).toBe(true);
+  expect(navigate).toHaveBeenCalledExactlyOnceWith("memory", {
+    pathname: "/settings/memory/dreams",
+  });
+});
+
+it.each([
+  ["/settings/memory?tab=dreaming", "/settings/memory/dreams"],
+  ["/settings/memory?tab=search", "/settings/memory/settings"],
+  ["/settings/memory?section=memory", "/settings/memory/settings"],
+  ["/settings/memory#config-section-memory", "/settings/memory/settings#config-section-memory"],
+] as const)(
+  "performs at most one replace for %s and never oscillates back to a query tab",
+  async (sourceUrl, expectedUrl) => {
+    const replace = vi.fn();
+    const navigate = vi.fn();
     const { element } = createPage({
-      configObject: { plugins: { slots: { memory: "engine-a" } } },
-      catalog: [engine("engine-a", true), engine("engine-b", true)],
-      memoryStatus,
+      catalog: [],
+      replace,
+      navigate,
+      routeData: memoryRoute(sourceUrl),
     });
-    element.routeData = memoryTabRoute("overview");
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(1));
-
-      element.configObject = { plugins: { slots: { memory: "engine-b" } } };
-      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(2));
-      expect(element.textContent).toContain("engine-b");
-    } finally {
-      element.remove();
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      element.routeData = { ...element.routeData } as ConfigRouteData;
+      flush();
     }
-  });
+    pressTab(element, "overview", "ArrowRight");
+    pressTab(element, "dreams", "ArrowRight");
 
-  it("preselects the navigation agent without resetting a later manual choice on rerender", async () => {
-    const { element, settingsAgentSelection, request } = createPage({
-      configObject: {},
-      agents: [{ id: "main" }, { id: "research" }],
-      routeData: memoryRoute("/settings/memory?agent=research"),
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() =>
-        expect(request).toHaveBeenCalledWith("doctor.memory.status", {
-          agentId: "research",
-        }),
-      );
-      expect(settingsAgentSelection.state.selectedId).toBe("research");
-      expect(request.mock.calls.filter(([method]) => method === "doctor.memory.status")).toEqual([
-        ["doctor.memory.status", { agentId: "research" }],
-      ]);
-      settingsAgentSelection.set("main");
-      element.routeData = memoryRoute("/settings/memory?agent=research");
-      await element.updateComplete;
-      expect(settingsAgentSelection.state.selectedId).toBe("main");
-      expect(element.querySelector("openclaw-agent-select")).toBeNull();
-    } finally {
-      element.remove();
+    expect(navigate).not.toHaveBeenCalled();
+    const canonical = memoryRoute(expectedUrl);
+    const { pathname, search, hash } = canonical;
+    expect(replace).toHaveBeenCalledExactlyOnceWith("memory", { pathname, search, hash });
+
+    element.routeData = canonical;
+    flush();
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      element.routeData = { ...element.routeData } as ConfigRouteData;
+      flush();
     }
+    expect(replace).toHaveBeenCalledOnce();
+  },
+);
+
+it("mounts the presentation for the Settings agent and keeps it through a same-client reconnect", async () => {
+  const page = createPage({
+    agents: [{ id: "main" }, { id: "research" }],
+    selectedAgentId: "research",
+    routeData: memoryTabRoute("overview"),
   });
+  const { element, settingsViews, setPhase, settingsAgentSelection } = page;
+  await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.agentId).toBe("research"));
+  const first = settingsViews.at(-1)!;
+  expect(element.querySelectorAll("openclaw-agent-select")).toHaveLength(0);
+  settingsAgentSelection.set("main");
+  await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main"));
+  expect(first.context.signal.aborted).toBe(true);
+  const current = settingsViews.at(-1)!;
+  settingsAgentSelection.setScope(null);
+  flush();
+  expect(settingsViews.at(-1)).toBe(current);
+  const epoch = current.snapshot.connectionEpoch;
+  setPhase("disconnected");
+  flush();
+  expect(current.snapshot.connected).toBe(false);
+  setPhase("connected");
+  await waitForSolid(() => expect(current.snapshot.connected).toBe(true));
+  expect(current.snapshot.connectionEpoch).toBeGreaterThan(epoch);
+  expect(current.context.signal.aborted).toBe(false);
+  expect(settingsViews.at(-1)).toBe(current);
+  page.replaceClient();
+  expect(current.context.signal.aborted).toBe(true);
+  await waitForSolid(() => expect(settingsViews.at(-1)).not.toBe(current));
+});
 
-  it.each([["main"], ["research", "main"]])(
-    "keeps newer sidebar intent when a pending Memory link mounts (%j)",
-    async (...choices: string[]) => {
-      const { element, settingsAgentSelection, request } = createPage({
-        configObject: {},
-        agents: [{ id: "main" }, { id: "research" }],
-        routeData: memoryRoute("/settings/memory?agent=research"),
-      });
-      Object.assign(element.routeData!, {
-        agentSelectionIntent: {
-          owner: settingsAgentSelection,
-          revision: settingsAgentSelection.intentRevision,
-        },
-      });
-      for (const agentId of choices) {
-        settingsAgentSelection.set(agentId);
-      }
-      document.body.append(element);
-      try {
-        await waitForFast(() =>
-          expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" }),
-        );
-        expect(settingsAgentSelection.state.selectedId).toBe("main");
-        expect(request).not.toHaveBeenCalledWith("doctor.memory.status", { agentId: "research" });
-      } finally {
-        element.remove();
-      }
-    },
-  );
+it("passes a replaced pinned engine to a new presentation", async () => {
+  const { element, settingsViews } = createPage({
+    configObject: { plugins: { slots: { memory: "engine-a" } } },
+    catalog: [engine("engine-a", true), engine("engine-b", true)],
+    routeData: memoryTabRoute("overview"),
+  });
+  await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.engine.id).toBe("engine-a"));
+  const first = settingsViews.at(-1)!;
+  element.configObject = { plugins: { slots: { memory: "engine-b" } } };
+  await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.engine.id).toBe("engine-b"));
+  expect(first.context.signal.aborted).toBe(true);
+});
 
-  it("honors a fresh explicit Memory navigation after the sidebar changed the same URL's agent", async () => {
-    const { element, settingsAgentSelection } = createPage({
-      configObject: {},
+it("publishes a completed catalog to the mounted Settings presentation", async () => {
+  const catalog = deferred<{ plugins: PluginCatalogItem[] }>();
+  const { settingsViews } = createPage({
+    configObject: { plugins: { slots: { memory: "synthetic-memory" } } },
+    routeData: memoryTabRoute("overview"),
+    listCatalog: () => catalog.promise,
+  });
+  try {
+    await waitForSolid(() =>
+      expect(settingsViews.at(-1)?.snapshot.engine.availability).toBe("loading"),
+    );
+    const view = settingsViews.at(-1)!;
+    catalog.resolve({ plugins: [] });
+    await waitForSolid(() => expect(view.snapshot.engine.availability).toBe("missing"));
+    expect(settingsViews.at(-1)).toBe(view);
+  } finally {
+    catalog.resolve({ plugins: [] });
+  }
+});
+
+it("retires callbacks and pending RPCs when Config admits a same-agent Memory route", async () => {
+  const reply = deferred<unknown>();
+  const { element, settingsViews } = createPage({
+    routeData: memoryRoute("/settings/memory?agent=main&filter=first"),
+    settingsRequest: () => reply.promise,
+  });
+  await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
+  const first = settingsViews.at(-1)!;
+  const pending = first.context.request("settings.test");
+  element.routeData = memoryRoute("/settings/memory?agent=main&filter=second");
+  // Raw route input is not admitted until Config's existing route effect applies it.
+  expect(first.context.signal.aborted).toBe(false);
+  flush();
+  expect(first.context.signal.aborted).toBe(true);
+  expect(() => first.context.navigate("settings")).toThrow();
+  reply.resolve("obsolete");
+  await expect(pending).rejects.toThrow();
+  await waitForSolid(() => expect(settingsViews.at(-1)?.context).not.toBe(first.context));
+  expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main");
+  expect(settingsViews.at(-1)?.snapshot.routeIntent).toContain("filter=second");
+});
+
+it.each([
+  { tab: "overview", change: "client" },
+  { tab: "memories", change: "method catalog" },
+  { tab: "memories", change: "agent" },
+] as const)(
+  "retires $tab callbacks and pending RPCs synchronously after $change changes",
+  async ({ tab, change }) => {
+    const pending = deferred<unknown>();
+    const fixture = createPage({
+      routeData: memoryTabRoute(tab),
       agents: [{ id: "main" }, { id: "research" }],
-      routeData: memoryRoute("/settings/memory?agent=research"),
+      methods: ["memory.search", "agents.workspace.get"],
+      settingsRequest: () => pending.promise,
     });
-    document.body.append(element);
+    const { element, settingsViews, request } = fixture;
     try {
-      await waitForFast(() => expect(settingsAgentSelection.state.selectedId).toBe("research"));
-      settingsAgentSelection.set("main");
-      element.routeData = {
-        ...memoryRoute("/settings/memory?agent=research"),
-        agentSelectionIntent: {
-          owner: settingsAgentSelection,
-          revision: settingsAgentSelection.intentRevision,
-        },
+      await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
+      const old = settingsViews.at(-1)!.context;
+      expect(old.props.advertisedMethods).toContain("memory.search");
+      const result = old.request("settings.test");
+      const invalidate = {
+        "method catalog": () => fixture.setMethods(["agents.workspace.get"]),
+        agent: () => fixture.settingsAgentSelection.set("research"),
+        client: () => fixture.replaceClient(),
       };
-      await waitForFast(() => expect(settingsAgentSelection.state.selectedId).toBe("research"));
+      invalidate[change]();
+      // No flush: authority retires synchronously.
+      expect(old.signal.aborted).toBe(true);
+      expect(() => old.navigate("settings")).toThrow();
+      const dispatches = request.mock.calls.length;
+      await expect(old.request("settings.test")).rejects.toThrow();
+      expect(request).toHaveBeenCalledTimes(dispatches);
+      pending.resolve("obsolete");
+      await expect(result).rejects.toThrow();
+      await waitForSolid(() => expect(settingsViews.at(-1)!.context).not.toBe(old));
     } finally {
+      pending.resolve("done");
       element.remove();
     }
-  });
+  },
+);
 
-  it("refreshes the current Overview after a same-connection plugin publication", async () => {
-    const first = deferred<DoctorMemoryStatusPayload>();
-    const second = deferred<DoctorMemoryStatusPayload>();
-    const memoryStatus = vi.fn().mockReturnValueOnce(first.promise).mockReturnValue(second.promise);
-    const { element, publishPluginGeneration } = createPage({ configObject: {}, memoryStatus });
-    element.routeData = memoryTabRoute("overview");
-    document.body.append(element);
+it.each(["plugin publication", "boot"] as const)(
+  "keeps the view after %s but rejects replies to earlier requests",
+  async (change) => {
+    const pending = deferred<unknown>();
+    const settingsRequest = vi
+      .fn<(method: string) => Promise<unknown>>()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue("current");
+    const fixture = createPage({
+      routeData: memoryTabRoute("memories"),
+      methods: ["memory.search", "agents.workspace.get"],
+      settingsRequest,
+    });
+    const { settingsViews } = fixture;
     try {
-      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledOnce());
-      publishPluginGeneration(1);
-      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(2));
-      second.resolve({
-        agentId: "main",
-        provider: "local",
-        embedding: { ok: false, checked: true, error: "current embedding status" },
-      });
-      await waitForFast(() => expect(element.textContent).toContain("current embedding status"));
-      first.resolve({
-        agentId: "main",
-        provider: "local",
-        embedding: { ok: false, checked: true, error: "obsolete embedding status" },
-      });
-      await first.promise;
-      await element.updateComplete;
-      expect(element.textContent).not.toContain("obsolete embedding status");
-      publishPluginGeneration(1);
-      await element.updateComplete;
-      expect(memoryStatus).toHaveBeenCalledTimes(2);
+      await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
+      const view = settingsViews.at(-1)!;
+      const result = view.context.request("settings.test");
+      if (change === "plugin publication") {
+        fixture.publishPluginGeneration(1);
+      } else {
+        fixture.setBootId("memory-boot-b");
+      }
+      pending.resolve("obsolete");
+      await expect(result).rejects.toThrow("connection changed");
+      expect(view.context.signal.aborted).toBe(false);
+      expect(settingsViews.at(-1)).toBe(view);
+      await expect(view.context.request("settings.test")).resolves.toBe("current");
     } finally {
-      first.resolve({
-        agentId: "main",
-        provider: "none",
-        embedding: { ok: false, checked: false },
-      });
-      second.resolve({
-        agentId: "main",
-        provider: "none",
-        embedding: { ok: false, checked: false },
-      });
-      element.remove();
+      pending.resolve("done");
     }
-  });
+  },
+);
 
-  it("shows the offline state when Overview is activated after disconnecting elsewhere", async () => {
-    const { element, setPhase } = createPage({ configObject: {} });
-    document.body.append(element);
-    try {
-      await element.updateComplete;
-      setPhase("disconnected");
-      element.routeData = memoryTabRoute("overview");
-      await waitForFast(() =>
-        expect(element.textContent).toContain(
-          "The gateway is offline, so memory status is unavailable.",
-        ),
-      );
-    } finally {
-      element.remove();
-    }
-  });
+it("passes offline state when Overview is activated after disconnecting elsewhere", async () => {
+  const { element, settingsViews, setPhase } = createPage();
+  setPhase("disconnected");
+  element.routeData = memoryTabRoute("overview");
+  await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.connected).toBe(false));
 });
 
-describe("MemorySettingsPage dreaming support", () => {
-  it("links the dreaming intro to its guide", async () => {
-    const { element } = createPage({
-      configObject: {},
-      routeData: memoryTabRoute("settings"),
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() =>
-        expect(
-          element.querySelector(
-            '.settings-page__intro a[href="https://docs.openclaw.ai/concepts/dreaming"]',
-          ),
-        ).not.toBeNull(),
-      );
-      const link = element.querySelector<HTMLAnchorElement>(
-        '.settings-page__intro a[href="https://docs.openclaw.ai/concepts/dreaming"]',
-      );
+it("makes a previously unsupported Dreaming schema unknown while a fresh probe is pending", async () => {
+  const refresh = deferred<unknown>();
+  const { element, lookupSchemaPath, publishPluginGeneration } = createPage({
+    lookupSchemaPath: (call) =>
+      call === 0
+        ? Promise.resolve({ schema: { additionalProperties: false }, children: [] })
+        : refresh.promise,
+  });
+  try {
+    await waitText(element, "Not available for this engine");
+    expect(element.querySelector('input[aria-label="Dreaming frequency"]')).toBeNull();
 
-      expect(link?.textContent?.trim()).toBe("Learn more");
-      expect(link?.href).toBe("https://docs.openclaw.ai/concepts/dreaming");
+    publishPluginGeneration(1);
+    await waitForSolid(() => {
+      expect(lookupSchemaPath).toHaveBeenCalledTimes(2);
+      expect(dreamingInput(element).isConnected).toBe(true);
+      expect(element.textContent).not.toContain("Not available for this engine");
+    });
+  } finally {
+    refresh.resolve({ schema: { type: "object" }, children: [{ key: "dreaming" }] });
+  }
+});
+
+it.each(["reconnect", "plugin publication"])(
+  "re-probes after %s and drops the abandoned capability result",
+  async (change) => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    const { element, lookupSchemaPath, setPhase, publishPluginGeneration } = createPage({
+      lookupSchemaPath: (call) => (call === 0 ? first.promise : second.promise),
+    });
+    try {
+      await waitForSolid(() => expect(lookupSchemaPath).toHaveBeenCalledTimes(1));
+
+      if (change === "reconnect") {
+        setPhase("disconnected");
+        setPhase("connected");
+      } else {
+        publishPluginGeneration(1);
+      }
+      await waitForSolid(() => expect(lookupSchemaPath).toHaveBeenCalledTimes(2));
+
+      first.resolve({ schema: { type: "object", additionalProperties: false }, children: [] });
+      await first.promise;
+      flush();
+      expect(element.textContent).not.toContain("Not available for this engine");
+
+      second.resolve({ type: "object" });
+      await second.promise;
+      flush();
+      expect(element.textContent).not.toContain("Not available for this engine");
     } finally {
+      first.resolve({ type: "object" });
+      second.resolve({ type: "object" });
       element.remove();
     }
-  });
+  },
+);
 
-  it.each(["reconnect", "plugin publication"])(
-    "re-probes after %s and drops the abandoned capability result",
-    async (change) => {
-      const first = deferred<unknown>();
-      const second = deferred<unknown>();
-      const { element, lookupSchemaPath, setPhase, publishPluginGeneration } = createPage({
-        configObject: {},
-        lookupSchemaPath: (call) => (call === 0 ? first.promise : second.promise),
-      });
-      document.body.append(element);
-      try {
-        await waitForFast(() => expect(lookupSchemaPath).toHaveBeenCalledTimes(1));
+it.each([
+  { configOwner: "custom-memory", catalog: "unavailable" },
+  { configOwner: "memory-core", catalog: "same-ID override" },
+])(
+  "keeps the complete presentation available for $configOwner with an unknown schema and $catalog catalog",
+  async ({ configOwner, catalog }) => {
+    const schema = deferred<unknown>();
+    const patchForm = vi.fn();
+    const config = { dreaming: { phases: { light: { limit: 0, enabled: false } } } };
+    const entries = { [configOwner]: { config } };
+    const { element, runtimeConfig } = createPage({
+      configObject: { plugins: { slots: { memory: configOwner }, entries } },
+      listCatalog: () =>
+        catalog === "unavailable"
+          ? Promise.reject(new Error("catalog unavailable"))
+          : Promise.resolve({
+              plugins: [{ ...engine("memory-core", true, "Local Memory"), origin: "local" }],
+            }),
+      lookupSchemaPath: () => schema.promise,
+      patchForm,
+    });
+    try {
+      if (catalog === "unavailable") {
+        await waitForSolid(() => expect(addonStatus(element, "Active memory")).toBe("Unknown"));
+      }
+      const frequency = dreamingInput(element);
+      expect(element.textContent).toContain(configOwner);
+      expect(element.textContent).toContain("REM phase");
+      const limit = element.querySelector<HTMLInputElement>('input[aria-label="Limit"]');
+      expect(limit?.value).toBe("0");
+      expect(patchForm).not.toHaveBeenCalled();
+      const frequencyPath = ["plugins", "entries", configOwner, "config", "dreaming", "frequency"];
+      frequency.value = "0 4 * * *";
+      frequency.dispatchEvent(new Event("change"));
+      expect(patchForm).toHaveBeenLastCalledWith(frequencyPath, "0 4 * * *");
+      frequency.value = "";
+      frequency.dispatchEvent(new Event("change"));
+      expect(runtimeConfig.removeFormValue).toHaveBeenCalledWith(frequencyPath);
+      schema.resolve({ schema: { type: "object", additionalProperties: false }, children: [] });
+      await waitText(element, "Not available for this engine");
+      expect(element.querySelector('input[aria-label="Dreaming frequency"]')).toBeNull();
+    } finally {
+      schema.resolve({ type: "object" });
+      element.remove();
+    }
+  },
+);
 
-        if (change === "reconnect") {
-          setPhase("disconnected");
-          setPhase("connected");
-        } else {
-          publishPluginGeneration(1);
-        }
-        await waitForFast(() => expect(lookupSchemaPath).toHaveBeenCalledTimes(2));
-
-        first.resolve({ type: "object", additionalProperties: false, properties: {} });
-        await first.promise;
-        await element.updateComplete;
-        expect(element.textContent).not.toContain("Not available for this engine");
-
-        second.resolve({ type: "object" });
-        await second.promise;
-        await element.updateComplete;
-        expect(element.textContent).not.toContain("Not available for this engine");
-      } finally {
-        first.resolve({ type: "object" });
-        second.resolve({ type: "object" });
+it.each(["owner", "disconnect", "read-only", "unmount"] as const)(
+  "rejects an already mounted edit after %s changes",
+  async (change) => {
+    const patchForm = vi.fn();
+    const { element, runtimeConfig, setPhase, setScopes } = createPage({ patchForm });
+    try {
+      const input = await waitForSolid(() => dreamingInput(element));
+      const invalidate = {
+        owner: () => {
+          runtimeConfig.state.configForm = { plugins: { slots: { memory: "custom-memory" } } };
+        },
+        disconnect: () => setPhase("disconnected"),
+        "read-only": () => setScopes(["operator.read"]),
+        unmount: () => element.remove(),
+      };
+      invalidate[change]();
+      input.value = "0 5 * * *";
+      input.dispatchEvent(new Event("change"));
+      expect(patchForm).not.toHaveBeenCalled();
+      expect(runtimeConfig.removeFormValue).not.toHaveBeenCalled();
+    } finally {
+      if (element.isConnected) {
         element.remove();
       }
-    },
-  );
-});
+    }
+  },
+);

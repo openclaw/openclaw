@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { nextFrame } from "../../test-helpers/modal-dialog.ts";
 import "../../styles/base.css";
 import "../../styles/layout.css";
 import "../../styles/settings.css";
@@ -15,114 +16,74 @@ afterEach(() => {
   host = undefined;
 });
 
+function mountMemory(settings = false) {
+  host = document.createElement("div");
+  host.className = "shell shell--settings";
+  host.innerHTML = `
+    <main class="content content--memory-page ${settings ? "content--settings-page" : ""}"
+      style="box-sizing: border-box; width: 1152px; ${settings ? "" : "height: 600px; overflow-y: auto"}">
+      <section class="memory-page">
+        <section class="content-header content-header--page hub-page-header"
+          ${settings ? 'style="width: 100%; max-width: 1120px; margin-inline: auto"' : ""}>
+          <div class="hub-page-header__title">Memory</div>
+          <div class="hub-page-header__tabs">Overview Memories Dreams Settings</div>
+          <div class="hub-page-header__actions">Agent</div>
+        </section>
+        <div class="memory-page__panel" ${settings ? "" : 'style="height: 200px"'}>
+          ${settings ? '<div class="settings-page"></div>' : ""}
+        </div>
+      </section>
+    </main>`;
+  document.body.append(host);
+  return (selector: string) => expectDefined(host?.querySelector<HTMLElement>(selector), selector);
+}
+
+const expectFixed = (before: number, after: number) =>
+  expect(Math.abs(after - before)).toBeLessThanOrEqual(layoutTolerancePx);
+
 describe.skipIf(!hasBrowserLayout)("Memory page browser layout", () => {
   it("keeps header children fixed when Dreams drops the settings-page marker", async () => {
-    host = document.createElement("div");
-    host.className = "shell shell--settings";
-    host.innerHTML = `
-      <main class="content" style="box-sizing: border-box; width: 1152px">
-        <section class="memory-page">
-          <section
-            class="content-header content-header--page hub-page-header"
-            style="width: 100%; max-width: 1120px; margin-inline: auto"
-          >
-            <div class="hub-page-header__title">Memory</div>
-            <div class="hub-page-header__tabs">Overview Memories Dreams Settings</div>
-            <div class="hub-page-header__actions">Agent</div>
-          </section>
-          <div class="memory-page__panel"><div class="settings-page"></div></div>
-        </section>
-      </main>
-    `;
-    document.body.append(host);
-
-    const header = expectDefined(
-      host.querySelector<HTMLElement>(".hub-page-header"),
-      "Memory header",
-    );
-    const title = expectDefined(
-      host.querySelector<HTMLElement>(".hub-page-header__title"),
-      "Memory title",
-    );
-    const actions = expectDefined(
-      host.querySelector<HTMLElement>(".hub-page-header__actions"),
-      "Memory actions",
-    );
-    const before = {
+    const find = mountMemory(true);
+    const header = find(".hub-page-header");
+    const title = find(".hub-page-header__title");
+    const actions = find(".hub-page-header__actions");
+    const measure = () => ({
       paddingInlineStart: getComputedStyle(header).paddingInlineStart,
       title: title.getBoundingClientRect(),
       actions: actions.getBoundingClientRect(),
-    };
-
-    expectDefined(host.querySelector<HTMLElement>(".settings-page"), "settings page").remove();
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
     });
+    const before = measure();
 
-    const after = {
-      paddingInlineStart: getComputedStyle(header).paddingInlineStart,
-      title: title.getBoundingClientRect(),
-      actions: actions.getBoundingClientRect(),
-    };
+    find(".settings-page").remove();
+    find(".content").classList.remove("content--settings-page");
+    await nextFrame();
+
+    const after = measure();
     expect(after.paddingInlineStart).toBe(before.paddingInlineStart);
-    expect(Math.abs(after.title.left - before.title.left)).toBeLessThanOrEqual(layoutTolerancePx);
-    expect(Math.abs(after.actions.right - before.actions.right)).toBeLessThanOrEqual(
-      layoutTolerancePx,
-    );
+    expectFixed(before.title.left, after.title.left);
+    expectFixed(before.actions.right, after.actions.right);
   });
 
   it("keeps horizontal hero geometry fixed when a subview changes scrollbar state", async () => {
-    host = document.createElement("div");
-    host.className = "shell shell--settings";
-    host.innerHTML = `
-      <main class="content" style="box-sizing: border-box; width: 1152px; height: 600px; overflow-y: auto">
-        <section class="memory-page">
-          <section class="content-header content-header--page hub-page-header">
-            <div class="hub-page-header__title">Memory</div>
-            <div class="hub-page-header__tabs">Overview Memories Dreams Settings</div>
-            <div class="hub-page-header__actions">Agent</div>
-          </section>
-          <div class="memory-page__panel" style="height: 200px"></div>
-        </section>
-      </main>
-    `;
-    document.body.append(host);
-
-    const content = expectDefined(host.querySelector<HTMLElement>(".content"), "content");
-    const header = expectDefined(
-      host.querySelector<HTMLElement>(".hub-page-header"),
-      "Memory header",
-    );
-    const tabs = expectDefined(
-      host.querySelector<HTMLElement>(".hub-page-header__tabs"),
-      "Memory tabs",
-    );
-    const before = {
+    const find = mountMemory();
+    const content = find(".content");
+    const header = find(".hub-page-header");
+    const tabs = find(".hub-page-header__tabs");
+    const measure = () => ({
       clientWidth: content.clientWidth,
       header: header.getBoundingClientRect(),
       tabs: tabs.getBoundingClientRect(),
-    };
-
-    const panel = expectDefined(
-      host.querySelector<HTMLElement>(".memory-page__panel"),
-      "Memory panel",
-    );
-    panel.style.height = "1200px";
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
     });
+    const before = measure();
 
-    const after = {
-      clientWidth: content.clientWidth,
-      header: header.getBoundingClientRect(),
-      tabs: tabs.getBoundingClientRect(),
-    };
+    find(".memory-page__panel").style.height = "1200px";
+    await nextFrame();
+
+    const after = measure();
     expect(getComputedStyle(content).scrollbarGutter).toBe("stable");
     expect(after.clientWidth).toBe(before.clientWidth);
-    expect(Math.abs(after.header.left - before.header.left)).toBeLessThanOrEqual(layoutTolerancePx);
-    expect(Math.abs(after.header.right - before.header.right)).toBeLessThanOrEqual(
-      layoutTolerancePx,
-    );
-    expect(Math.abs(after.tabs.left - before.tabs.left)).toBeLessThanOrEqual(layoutTolerancePx);
+    expectFixed(before.header.left, after.header.left);
+    expectFixed(before.header.right, after.header.right);
+    expectFixed(before.tabs.left, after.tabs.left);
   });
 });

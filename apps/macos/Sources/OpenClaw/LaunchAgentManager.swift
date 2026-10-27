@@ -134,8 +134,7 @@ final class LaunchAgentManager {
             try FileManager.default.createDirectory(
                 at: plistURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
-            let plist = self.plistContents(bundlePath: bundlePath)
-            try plist.write(to: plistURL, atomically: true, encoding: .utf8)
+            try self.plistContents(bundlePath: bundlePath).write(to: plistURL, options: .atomic)
         } else {
             // Removing future autostart must not terminate the running login job.
             do {
@@ -148,69 +147,30 @@ final class LaunchAgentManager {
 
     nonisolated static func plistContents(
         bundlePath: String,
-        preferredPaths: [String] = CommandResolver.preferredPaths()) -> String
+        preferredPaths: [String] = CommandResolver.preferredPaths()) throws -> Data
     {
-        let path = self.escapePlistText(preferredPaths.joined(separator: ":"))
-        let profileEnvironment = self.profileEnvironmentPlistEntries()
-        return """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-          <key>Label</key>
-          <string>ai.openclaw.mac</string>
-          <key>ProgramArguments</key>
-          <array>
-            <string>\(self.escapePlistText(bundlePath))/Contents/MacOS/OpenClaw</string>
-          </array>
-          <key>WorkingDirectory</key>
-          <string>\(self.escapePlistText(FileManager().homeDirectoryForCurrentUser.path))</string>
-          <key>RunAtLoad</key>
-          <true/>
-          <key>EnvironmentVariables</key>
-          <dict>
-            <key>PATH</key>
-            <string>\(path)</string>\(profileEnvironment)
-          </dict>
-          <key>StandardOutPath</key>
-          <string>\(self.escapePlistText(LogLocator.launchdLogPath))</string>
-          <key>StandardErrorPath</key>
-          <string>\(self.escapePlistText(LogLocator.launchdLogPath))</string>
-        </dict>
-        </plist>
-        """
-    }
-
-    private nonisolated static func profileEnvironmentPlistEntries() -> String {
-        ["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"].compactMap { key in
-            guard let value = OpenClawEnv.path(key) else { return nil }
-            return """
-
-                        <key>\(key)</key>
-                        <string>\(self.escapePlistText(value))</string>
-            """
-        }.joined()
-    }
-
-    private nonisolated static func escapePlistText(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&apos;")
+        var environment = ["PATH": preferredPaths.joined(separator: ":")]
+        for key in ["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"] {
+            environment[key] = OpenClawEnv.path(key)
+        }
+        let plist: [String: Any] = [
+            "Label": "ai.openclaw.mac",
+            "ProgramArguments": ["\(bundlePath)/Contents/MacOS/OpenClaw"],
+            "WorkingDirectory": FileManager().homeDirectoryForCurrentUser.path,
+            "RunAtLoad": true,
+            "EnvironmentVariables": environment,
+            "StandardOutPath": LogLocator.launchdLogPath,
+            "StandardErrorPath": LogLocator.launchdLogPath,
+        ]
+        return try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
     }
 
     @discardableResult
     @concurrent
     private static func executeLaunchctl(_ args: [String]) async -> Int32 {
-        do {
-            return try await BoundedProcess.run(
-                path: "/bin/launchctl",
-                arguments: args,
-                timeout: 5).terminationStatus
-        } catch {
-            return -1
-        }
+        await (try? BoundedProcess.run(
+            path: "/bin/launchctl",
+            arguments: args,
+            timeout: 5).terminationStatus) ?? -1
     }
 }

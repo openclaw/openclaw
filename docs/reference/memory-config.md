@@ -84,7 +84,7 @@ The retrieval boundary is narrower than general session search:
 - only the same agent's recognized private conversations are eligible
 - the conversation being answered is excluded
 - groups and channels are excluded as sources and destinations
-- unknown conversation kinds fail closed
+- unknown conversation kinds block recall
 - sandboxed recall cannot use the special cross-conversation authorization
 
 The setting does not change `tools.sessions.visibility`, session keys,
@@ -97,17 +97,32 @@ reply.
 
 ## Provider selection
 
-| Key        | Type      | Default          | Description                                                                                                                                                                                                                                                                                 |
-| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                                                                             |
-| `provider` | `string`  | `"openai"`       | Embedding adapter ID such as `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `openai-compatible`, or `voyage`; may also be a configured `models.providers.<id>` whose `api` points at a memory embedding adapter or OpenAI-compatible model API |
-| `model`    | `string`  | provider default | Embedding model name                                                                                                                                                                                                                                                                        |
-| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                                                                                                                                                                                  |
+Use `openclaw configure --section memory` for optional interactive provider/model
+and credential setup. Local guided and classic onboarding offer the same step.
+The selected cloud or local HTTP route must return a valid vector for synthetic text before
+you can save it. Existing settings and per-agent overrides survive skipping or
+failed verification; SecretRefs stay references in the saved config. The check
+does not open the memory index, download a local model, or re-index your files.
+Ollama and LM Studio use their running servers and already-downloaded embedding
+models; see [interactive memory setup](/cli/configure#memory-section).
+
+| Key        | Type      | Default          | Description                                                                                                                                                                                                                                                                                         |
+| ---------- | --------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                                                                                     |
+| `provider` | `string`  | `"openai"`       | Embedding adapter ID such as `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `omlx`, `openai`, `openai-compatible`, or `voyage`; may also be a configured `models.providers.<id>` whose `api` points at a memory embedding adapter or OpenAI-compatible model API |
+| `model`    | `string`  | provider default | Embedding model name                                                                                                                                                                                                                                                                                |
+| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                                                                                                                                                                                          |
 
 When `provider` is not set, OpenClaw uses OpenAI embeddings. Set `provider`
 explicitly to use Bedrock, DeepInfra, Gemini, GitHub Copilot, Mistral, Ollama,
 Voyage, a local GGUF model, or an OpenAI-compatible `/v1/embeddings` endpoint.
 Legacy configs that still say `provider: "auto"` resolve to `openai`.
+
+For [oMLX](/providers/omlx), set `provider: "omlx"` and an explicit embedding
+model ID from the server's `/v1/models` endpoint. Chat and memory share
+`models.providers.omlx.baseUrl` and optional credentials saved by setup. For
+an authenticated memory-only connection, set `memory.search.remote.apiKey`
+explicitly, for example to `"${OMLX_API_KEY}"`.
 
 <Warning>
 Changing the embedding provider, model, provider settings, sources, scope,
@@ -118,11 +133,18 @@ automatically re-embedding everything. Rebuild when you are ready with
 `openclaw memory index --force --agent <id>`.
 </Warning>
 
+If an outage activates a fallback that cannot read the existing index, later
+searches retry the configured primary, with a 30-second cooldown between recovery
+attempts. Once the primary responds and matches the stored provider, model, and
+provider settings, search resumes without restarting the Gateway or rebuilding
+the index. An index already built with the fallback stays on that compatible
+provider; recovery never silently replaces its embeddings.
+
 When `provider` is unset, legacy `provider: "auto"` is present, or
 `provider: "none"` intentionally selects FTS-only mode, memory recall can still
 use lexical FTS ranking when embeddings are unavailable.
 
-Explicit non-local providers fail closed. If you set `memory.search.provider` to
+Explicit non-local providers do not fall back to FTS-only recall. If you set `memory.search.provider` to
 a concrete remote-backed provider such as Bedrock, DeepInfra, Gemini, GitHub
 Copilot, LM Studio, Mistral, Ollama, OpenAI, Voyage, or an OpenAI-compatible
 custom provider, and that provider is unavailable at runtime, `memory_search`
@@ -131,6 +153,12 @@ provider/auth configuration, switch to a reachable provider, or set
 `provider: "none"` if you want deliberate FTS-only recall.
 
 ### Custom provider ids
+
+For Azure OpenAI deployments, set the custom provider's `baseUrl` to the
+deployment URL and configure `api-version` in its `headers`. Embedding requests
+to Azure OpenAI and Azure AI Foundry hosts move that header into the URL query;
+an existing non-empty `api-version` query value takes precedence. Other
+OpenAI-compatible hosts keep the configured header unchanged.
 
 `memory.search.provider` can point at a custom `models.providers.<id>` entry for memory-specific provider adapters such as `ollama`, or for OpenAI-compatible model APIs such as `openai-responses` / `openai-completions`. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
 
@@ -157,7 +185,7 @@ provider/auth configuration, switch to a reachable provider, or set
 
 ### API key resolution
 
-Remote embeddings require an API key. Bedrock uses the AWS SDK default credential chain instead (instance roles, SSO, access keys, or a Bedrock API key).
+Remote embedding authentication depends on the provider. Bedrock uses the AWS SDK default credential chain (instance roles, SSO, access keys, or a Bedrock API key).
 
 | Provider       | Env var                                             | Config key                          |
 | -------------- | --------------------------------------------------- | ----------------------------------- |
@@ -167,6 +195,7 @@ Remote embeddings require an API key. Bedrock uses the AWS SDK default credentia
 | GitHub Copilot | `COPILOT_GITHUB_TOKEN`                              | Auth profile via device login       |
 | Mistral        | `MISTRAL_API_KEY`                                   | `models.providers.mistral.apiKey`   |
 | Ollama         | `OLLAMA_API_KEY` (placeholder)                      | --                                  |
+| oMLX           | `OMLX_API_KEY` (via setup or `remote.apiKey`)       | `models.providers.omlx.apiKey`      |
 | OpenAI         | `OPENAI_API_KEY`                                    | `models.providers.openai.apiKey`    |
 | Voyage         | `VOYAGE_API_KEY`                                    | `models.providers.voyage.apiKey`    |
 
@@ -176,7 +205,9 @@ such as `my-embeddings:default`. Literal keys keep their configured value even
 when other profiles are saved for the provider. Empty keys do not select a saved profile.
 
 <Note>
-Codex OAuth covers chat/completions only and does not satisfy embedding requests.
+OpenAI embeddings can use a stored Codex OAuth profile when the account grants
+embedding access. The separate Sign in with ChatGPT token-sharing grant does not
+authorize embeddings. Run `openclaw memory status --deep` to check your account.
 </Note>
 
 ---
@@ -189,12 +220,34 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 <ParamField path="remote.baseUrl" type="string">
   Custom API base URL. Provider credentials and headers are inherited only when this resolves to the provider's configured destination.
 </ParamField>
+
+OpenAI-compatible, Gemini, and LM Studio embeddings use the same private-network policy as model inference.
+For OpenAI-compatible and Gemini embeddings, configured custom and local origins are
+trusted by default, without extending that trust to redirects to another origin.
+LM Studio defaults to allowing private-network requests, including redirects, matching
+its inference behavior. The selected provider's
+`models.providers.<id>.request.allowPrivateNetwork` also applies: `false` blocks private
+destinations, while `true` explicitly permits private-network requests. Known provider hostnames
+that resolve to private addresses (for example, Azure OpenAI private endpoints or
+split-horizon DNS) require `models.providers.<id>.request.allowPrivateNetwork: true`
+after upgrading. Set this on the embedding provider's ID: `openai` for OpenAI,
+`google` for Gemini, or the configured LM Studio provider ID. A setting on a
+differently named chat provider does not carry over.
+
 <ParamField path="remote.apiKey" type="string">
   API key owned by the remote destination. Set this when `remote.baseUrl` points somewhere other than the provider's configured destination.
 </ParamField>
 <ParamField path="remote.headers" type="object">
   Extra HTTP headers owned by the remote destination. Provider defaults are merged only for the provider's configured destination.
 </ParamField>
+
+Header values must be strings. Environment references in memory headers are
+resolved during secret preparation; an unresolved reference stops indexing or
+search with an error naming the setting, before any embedding request is sent.
+Already-resolved values are used literally. LM Studio and generic OpenAI-compatible
+servers that do not require authentication still work without credentials,
+including on LAN hosts; configuring a broken reference is different from omitting
+authentication.
 
 ```json5
 {
@@ -213,10 +266,99 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
 ---
 
+## Query instructions
+
+Set `memory.search.queryInstruction` when your embedding model requires a text
+prefix for retrieval queries, especially when a local server exposes the model
+under an alias that OpenClaw cannot recognize:
+
+```json5
+{
+  memory: {
+    search: {
+      provider: "openai-compatible",
+      model: "my-nomic-alias",
+      remote: { baseUrl: "http://127.0.0.1:1234/v1" },
+      queryInstruction: "search_query: ",
+    },
+  },
+}
+```
+
+The instruction is prepended literally to query text. Include any required
+spaces or newlines; OpenClaw does not trim it, add a separator, or expand
+placeholders. This changes query embeddings only. Document text, stored
+embeddings, and index identity stay unchanged, so changing the instruction does
+not require reindexing. The `queryInputType` setting is separate: it sends an
+API `input_type` label rather than changing text.
+
+A non-empty instruction replaces `inputFormat.query` and automatic query formatting,
+including native Ollama's model-family templates, so the prefix is applied once.
+When unset or empty, `inputFormat.query` applies if configured; otherwise existing
+provider behavior is preserved. Per-agent overrides use
+`agents.entries.<id>.memory.search.queryInstruction`; an empty string suppresses
+an inherited instruction.
+
+## Query and document prefixes
+
+OpenClaw automatically formats text for EmbeddingGemma and the Nemotron-3-Embed
+and Nemotron-3.5-Embed families when their model names are recognizable. NVIDIA's
+[Nemotron-3 model card](https://huggingface.co/nvidia/Nemotron-3-Embed-8B-BF16#usage)
+and [Nemotron-3.5 saved prompts](https://huggingface.co/nvidia/Nemotron-3.5-Embed-8B-BF16/blob/main/config_sentence_transformers.json)
+specify `"query: "` for queries and `"passage: "` for documents, each with one trailing
+space. Other Nemotron models can use different formats.
+
+Use `memory.search.inputFormat` to supply both prefixes when an embedding model
+runs under an alias or needs a different text format:
+
+```json5
+{
+  memory: {
+    search: {
+      provider: "ollama",
+      model: "my-embedding-alias:latest",
+      inputFormat: { query: "query: ", document: "passage: " },
+    },
+  },
+}
+```
+
+Both strings are required. OpenClaw prepends them literally, preserving spaces
+and newlines without adding a separator. An empty string selects raw text and
+disables automatic formatting for that side. A non-empty `queryInstruction`
+still takes precedence over `inputFormat.query`. A per-agent `inputFormat`
+replaces the complete inherited pair.
+
+Setting or changing the explicit document prefix changes the index and embedding-cache
+identity, including an empty prefix that disables provider formatting. Existing indexes pause semantic search until you run
+`openclaw memory index --force`; vectors from the previous format are not reused.
+Built-in model-format upgrades rebuild affected indexes automatically once.
+Changing only the query prefix does not require reindexing.
+
+These prefixes change the embedded text. The separate `inputType`,
+`queryInputType`, and `documentInputType` options send API `input_type` labels;
+they do not add text prefixes.
+
+Native Ollama checks the model digest from `/api/tags` when the embedding
+provider opens. A changed digest invalidates the index and embedding cache.
+On upgrade, compatible indexes built without a digest adopt the first observed
+digest and preserve cached vectors. Document-format changes still re-embed.
+The old index cannot establish whether an alias changed before that first
+observation; reset memory before indexing if it did.
+An already-open provider must reopen to detect an alias's new target. If the
+server does not expose tags or a digest, as with some embedding-only proxies,
+OpenClaw retains the configured model and endpoint identity. Run
+`openclaw memory reset` after retargeting an alias on those servers, then index
+again to avoid reusing vectors from the previous model.
+
 ## Provider-specific config
 
 <AccordionGroup>
   <Accordion title="Gemini">
+    Set `provider: "gemini"` or its alias `provider: "google"`. Both use the
+    same Google credentials and canonical Gemini index identity; switching
+    between these names does not require reindexing.
+
     | Key                    | Type     | Default                | Description                                |
     | ---------------------- | -------- | ---------------------- | ------------------------------------------- |
     | `model`                | `string` | `gemini-embedding-001` | Also supports `gemini-embedding-2`         |
@@ -273,6 +415,31 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     Changing these values affects embedding cache identity for provider batch indexing and should be followed by a memory reindex when the upstream model treats the labels differently.
 
   </Accordion>
+  <Accordion title="OpenAI-compatible output dimensions">
+    Providers that use the OpenAI-compatible embeddings transport (`openai-compatible`, `omlx`, and custom `models.providers` entries with an OpenAI-compatible API) receive `outputDimensionality` as the `dimensions` request field. Set it only when the server supports that field for the configured model, for example a Matryoshka embedding model served by a runtime that shortens vectors server-side.
+
+    | Key                    | Type     | Default       | Description                                    |
+    | ---------------------- | -------- | ------------- | ---------------------------------------------- |
+    | `outputDimensionality` | `number` | model default | Requested vector size, sent as `dimensions`    |
+
+    ```json5
+    {
+      memory: {
+        search: {
+          provider: "openai-compatible",
+          remote: { baseUrl: "http://127.0.0.1:8000/v1" },
+          model: "local-embedder",
+          outputDimensionality: 512,
+        },
+      },
+    }
+    ```
+
+    OpenClaw checks every returned vector against the requested size. When an endpoint returns a different size, the request fails with `expected <requested> dimensions, got <returned>` instead of storing those vectors under the requested size. The failure is not retried or split into smaller batches. Some servers ignore `dimensions` and always return the model's native size; for those, remove `outputDimensionality` or use a runtime that honors it. The managed `local` provider instead truncates the native vector to the requested size and L2-normalizes it locally. Use a model that supports this projection; requesting more dimensions than the model returns fails.
+
+    `outputDimensionality` is part of the index identity. After changing or removing it, rebuild with `openclaw memory index --force --agent <id>`. Also rebuild existing managed-local indexes if they were created with `outputDimensionality` but still contain native-size vectors.
+
+  </Accordion>
   <Accordion title="Bedrock">
     ### Bedrock embedding config
 
@@ -288,6 +455,8 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
       },
     }
     ```
+
+    Concurrent embedding requests share an in-flight AWS credential refresh so a batch does not resolve instance-role credentials separately for every chunk. Later requests refresh through the SDK again, picking up rotated profile files and role selections without restarting the Gateway.
 
     | Key                    | Type     | Default                        | Description                     |
     | ---------------------- | -------- | ------------------------------- | -------------------------------- |
@@ -344,7 +513,7 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     | ----------------- | -------- | --------------- | ----------------------- |
     | `local.modelPath` | `string` | auto-downloaded | Path to GGUF model file |
 
-    Install the official llama.cpp provider, then choose llama.cpp once in
+    Install the official [llama.cpp provider](/plugins/llama-cpp), then choose llama.cpp once in
     interactive setup. OpenClaw installs a pinned, verified `llama-server` and
     writes its loopback `localService` configuration. Default model:
     `embeddinggemma-300m-qat-Q8_0.gguf` (~0.3 GB, auto-downloaded).
@@ -381,6 +550,9 @@ Remove unnecessary `memory.search.extraPaths` entries or narrow their directory
 roots. Global entries and `agents.entries.<id>.memory.search.extraPaths` entries
 are combined: an empty per-agent list does not remove global roots. Changing only
 an entry's `pattern` filters indexed files, not the directory tree being watched.
+Events outside every applicable pattern are ignored when they cannot affect an
+indexed file or directory. Events with no path or an unknown entry type remain
+conservative when indexed content could have changed.
 
 Removing extra-path entries does not exclude files that still belong to the
 default `MEMORY.md`, `USER.md`, or `memory/` roots. If reducing extra paths is
@@ -397,10 +569,10 @@ it and the active profile or container hint. See [memory index](/cli/memory#memo
 
 All under `memory.search.query`:
 
-| Key          | Type     | Default | Description                               |
-| ------------ | -------- | ------- | ----------------------------------------- |
-| `maxResults` | `number` | `6`     | Max memory hits returned before injection |
-| `minScore`   | `number` | `0.35`  | Minimum relevance score to include a hit  |
+| Key          | Type     | Default | Description                                                                              |
+| ------------ | -------- | ------- | ---------------------------------------------------------------------------------------- |
+| `maxResults` | `number` | `6`     | Max memory hits returned before injection                                                |
+| `minScore`   | `number` | `0.35`  | Minimum relevance score before recency decay, including importance and project weighting |
 
 Without a per-call `maxResults`, primary-only `memory_search` calls use this
 configured limit, including `corpus=memory` and `corpus=sessions`. Wiki and
@@ -438,15 +610,18 @@ auto-injected.
 
 ## Additional memory paths
 
-| Key          | Type                                                  | Description                              |
-| ------------ | ----------------------------------------------------- | ---------------------------------------- |
-| `extraPaths` | `Array<string \| { path: string; pattern?: string }>` | Additional directories or files to index |
+| Key          | Type                                                                       | Description                              |
+| ------------ | -------------------------------------------------------------------------- | ---------------------------------------- |
+| `extraPaths` | `Array<string \| { path: string; pattern?: string; evergreen?: boolean }>` | Additional directories or files to index |
 
 ```json5
 {
   memory: {
     search: {
-      extraPaths: ["../team-docs", { path: "/srv/shared-notes", pattern: "runbooks/**/*.md" }],
+      extraPaths: [
+        "../team-docs",
+        { path: "/srv/shared-notes", pattern: "runbooks/**/*.md", evergreen: true },
+      ],
     },
   },
 }
@@ -454,12 +629,26 @@ auto-injected.
 
 Paths can be absolute or workspace-relative. Directories are scanned recursively for supported
 files. Object entries narrow a directory with a root-relative glob using `/` separators; direct
-file entries are indexed exactly. The builtin engine skips symlinks. When a configured root is a
+file entries are indexed exactly. Entries with the same resolved directory share one scan, and
+scans skip subdirectories that their patterns can prove irrelevant. Complex patterns retain
+conservative traversal. The builtin engine skips symlinks. When a configured root is a
 symlink, `openclaw memory status` names the skipped root in text and JSON output and recommends
-configuring its canonical absolute directory instead.
+configuring its resolved absolute directory instead.
+
+Set `evergreen: true` only for stable reference sources whose relevance should not fall as their
+filesystem modification time ages. The option disables temporal decay for matching `extraPaths`
+files while leaving semantic/keyword relevance, trust, provenance, and automatic-injection
+eligibility unchanged. It does not override date-based decay for canonical `memory/YYYY-MM-DD*.md`
+daily notes. If duplicate entries use the same path and pattern, the last entry's `evergreen` value
+wins. Changing only this flag changes query-time ranking; it does not rebuild the index or
+re-embed unchanged content.
+
+Before downgrading to a version that does not support `evergreen`, remove that property from
+every global and per-agent `extraPaths` object. Older strict configuration schemas reject the
+unknown property, including `evergreen: false`; removing it restores the older decay policy.
 
 For shared notes, keep each workspace's `memory/` directory local and add the shared directory's
-canonical path to `extraPaths`. This setting indexes notes; it does not authorize legacy host-event
+resolved filesystem path to `extraPaths`. This setting indexes notes; it does not authorize legacy host-event
 migration through a symlink.
 
 If `openclaw doctor --fix` reports an unsafe Memory Core host-event source, check the named path and
@@ -514,6 +703,13 @@ Available for `gemini`, `openai`, and `voyage`. OpenAI batch is typically fastes
 
 Batch enablement is the only remote batching setting. Concurrency, polling, and timeout behavior are provider-owned.
 
+For ordinary embedding requests, a recognized error with one explicit item cap
+sizes the retry batches directly. Unusable or conflicting caps, and aggregate
+limits reported without a count (Mistral's "Too many tokens overall, split into
+more batches."), fall back to halving the rejected batch. Successful slices
+retain their input order and cache entries. A single input that still exceeds a
+per-input limit fails the pass and is reported.
+
 ---
 
 <a id="session-memory-search-experimental" />
@@ -525,11 +721,18 @@ Index session transcripts and surface them via `memory_search`:
 | Key                           | Type       | Default                                                    | Description                              |
 | ----------------------------- | ---------- | ---------------------------------------------------------- | ---------------------------------------- |
 | `rememberAcrossConversations` | `boolean`  | On for personal installs; off with configured DM isolation | Permit private cross-conversation recall |
-| `sources`                     | `string[]` | `["memory"]`                                               | Add `"sessions"` to include transcripts  |
+| `sources`                     | `string[]` | `["memory"]`                                               | Add `"sessions"` to request transcripts  |
 
 <Warning>
 Session indexing is opt-in and runs asynchronously. Results can be slightly stale. Active transcripts live in the agent's SQLite database, while retained transcript artifacts can live on disk. Treat access to both as part of the same trust boundary.
 </Warning>
+
+Requesting `"sessions"` in `sources` does not enable transcript indexing by
+itself. Set `memory.search.experimental.sessionMemory: true` to index sessions,
+or enable `memory.search.rememberAcrossConversations` for private
+cross-conversation recall. `openclaw memory status` and `openclaw doctor` report
+when an explicit `"sessions"` source is excluded by this gate.
+This informational Doctor note does not fail `openclaw doctor --lint`.
 
 Internal dreaming-narrative, cron, and heartbeat session transcripts are not
 indexed, including retained compressed narrative archives whose live session
@@ -765,7 +968,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 
 <Note>
 - Dreaming writes machine state to `memory/.dreams/`.
-- Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
+- Dreaming combines Light, REM, and promoted Deep memories into at most one diary entry per workspace per sweep in `DREAMS.md` (or existing `dreams.md`). Phase reports remain separate, and sweeps without new material produce no diary entry.
 - Deep consolidation stores the prior `MEMORY.md` in SQLite-backed plugin state and records rewrite counts and highlights in `DREAMS.md`.
 - Untrusted and system-derived candidates are structurally excluded before consolidation and durable promotion.
 - `dreaming.model` uses the existing plugin subagent trust gate; set `plugins.entries.memory-core.subagent.allowModelOverride: true` before enabling it.

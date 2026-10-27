@@ -1,4 +1,3 @@
-// Best-effort inbound session metadata recorder for channel plugin command handlers.
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -8,9 +7,6 @@ const loadInboundSessionRuntime = createLazyRuntimeModule(
   () => import("../config/sessions/inbound.runtime.js"),
 );
 
-/**
- * Best-effort inbound session metadata recorder for channel plugin command handlers.
- */
 export async function recordInboundSessionMetaSafe(params: {
   cfg: OpenClawConfig;
   agentId: string;

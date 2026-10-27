@@ -1,5 +1,4 @@
 // Exposes lifecycle-owned file lock managers with fs-safe defaults.
-import "./fs-safe-defaults.js";
 import type { Root as FsSafeRoot } from "@openclaw/fs-safe/root";
 
 // Process-local file lock manager used by code that needs explicit lifecycle

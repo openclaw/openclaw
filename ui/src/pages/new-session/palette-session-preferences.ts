@@ -1,5 +1,5 @@
 import type { ApplicationContext } from "../../app/context.ts";
-import type { NewSessionDraftController } from "./draft-controller.ts";
+import type { NewSessionDraft } from "./draft.ts";
 import type { PaletteIdentityPreferences } from "./palette-identity-preferences.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
 
@@ -16,10 +16,20 @@ export class PaletteSessionPreferences {
   private source: ApplicationContext["gateway"] | undefined;
   private generation = 0;
   private pending: PaletteSessionPreference | null = null;
+  private presentation = Promise.withResolvers<void>();
+
+  get presentationLifetime() {
+    return this.presentation.promise;
+  }
+
+  retirePresentation() {
+    this.presentation.resolve();
+    this.presentation = Promise.withResolvers<void>();
+  }
 
   constructor(
     private readonly read: () => {
-      draft: NewSessionDraftController | undefined;
+      draft: NewSessionDraft | undefined;
       context: ApplicationContext | undefined;
     },
     private readonly restore: (preference: PaletteSessionPreference | null) => void,
@@ -60,6 +70,7 @@ export class PaletteSessionPreferences {
       gateway.snapshot.phase === "connected" &&
       (this.scope !== scope || this.source !== gateway)
     ) {
+      this.retirePresentation();
       this.scope = scope;
       this.source = gateway;
       this.generation += 1;
@@ -73,6 +84,7 @@ export class PaletteSessionPreferences {
     }
     const binding = draft.gateway.preferenceState;
     if (binding !== this.binding) {
+      this.retirePresentation();
       const interrupted = this.saving;
       this.binding = binding;
       this.observed = undefined;
@@ -120,7 +132,7 @@ export class PaletteSessionPreferences {
 
   setRemember(value: boolean) {
     if (!this.available) {
-      return;
+      return undefined;
     }
     this.edited = true;
     this.remember = value;
@@ -129,14 +141,21 @@ export class PaletteSessionPreferences {
     if (!value) {
       this.restore(null);
     }
-    void this.save(this.selection);
+    const pending = this.save(this.selection);
     this.notify();
+    return pending;
   }
 
   retry() {
     if (this.failed && this.available) {
-      void this.save(this.pending);
+      return this.save(this.pending);
     }
+    return undefined;
+  }
+
+  reportFailure() {
+    this.failed = true;
+    this.notify();
   }
 
   private capture(): PaletteSessionPreference | null {
@@ -160,7 +179,7 @@ export class PaletteSessionPreferences {
     this.pending = preference;
     this.saving = true;
     this.failed = false;
-    const saved = await draft.gateway.savePalettePreference(preference);
+    const saved = await draft.gateway.savePalettePreference(preference).catch(() => false);
     if (generation !== this.generation || binding !== draft.gateway.preferenceState) {
       return;
     }

@@ -26,13 +26,29 @@ The shared catalog and tool bridge retain policy ownership. Executors
 own JavaScript execution and continuation state. Node's `node:vm` is trusted
 execution, not a sandbox security boundary.
 
+Rebuilding `before_tool_call` hooks must retain the surrounding execution
+wrappers in their original order. Caller authority, cancellation, activity, and
+run-lifetime checks enclose preparation and result finalization as well as the
+tool body. Execution wrappers register their rebuild function when copying tool
+metadata; schema-only copies preserve that registration.
+
+Tool Search treats each published catalog entries array as an immutable descriptor
+snapshot. Registration, restriction, and executor rebinding replace that array;
+publish schema or description changes through the catalog owner. Search text is
+rendered lazily once per snapshot, and warm searches reuse the content-addressed
+lexical index. Visibility is checked on every search, including mutable permission
+sets, and BM25 statistics use only that effective inventory. Cached lexical data
+contains no tool executors.
+
 ## Validation checklist
 
 Code mode coverage should prove:
 
 - disabled config without an enabling override leaves existing tool exposure unchanged
-- omitted `enabled`, including object config that sets other fields, stays
-  disabled unless an agent or model override enables it
+- omitted `tools.codeMode` activates automatically for preferred catalog models
+  on eligible runs without overrides, and remains direct for capable or unflagged models
+- an authored global options object without `enabled` stays disabled unless an
+  agent or model override enables it
 - per-model `true`, `false`, and unset values preserve activation precedence,
   fallback-model selection, and limits from the enclosing options
 - enabled config exposes `exec`, `wait`, and only required direct-only tools to

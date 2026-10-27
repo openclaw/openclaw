@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.gateway.GatewaySession
 import androidx.room3.Room
 import kotlinx.coroutines.CoroutineScope
@@ -37,6 +38,8 @@ internal fun CoroutineScope.createChatController(
   cacheScope: () -> ChatCacheScope? = { ChatCacheScope("gateway-test", 1L) },
   currentDefaultAgentId: () -> String? = { "main" },
   currentDefaultAgentRevision: () -> Long = { 0L },
+  loadGatewayImageArtifact: suspend (String?, String, String?, String) -> GatewayLoadedImage? = { _, _, _, _ -> null },
+  loadGatewayInboundImage: suspend (String?, String, String?, String) -> GatewayLoadedImage? = { _, _, _, _ -> null },
   gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
   gatewayAdvertisesCapability: (capability: String) -> Boolean? = { it == "session-scoped-model-catalog" },
   recordModelRecent: (String) -> Unit = {},
@@ -69,6 +72,8 @@ internal fun CoroutineScope.createChatController(
     commandOutbox = createChatCommandOutbox(),
     currentDefaultAgentId = currentDefaultAgentId,
     currentDefaultAgentRevision = currentDefaultAgentRevision,
+    loadGatewayImageArtifact = loadGatewayImageArtifact,
+    loadGatewayInboundImage = loadGatewayInboundImage,
     gatewayAdvertisesMethod = gatewayAdvertisesMethod,
     gatewayAdvertisesCapability = gatewayAdvertisesCapability,
     recordModelRecent = recordModelRecent,

@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { normalizeChannel } from "./conversation-binding-session-key.js";
 import type { PluginBindingApprovalEntry } from "./conversation-binding-state.types.js";
@@ -8,7 +8,7 @@ import type { PluginBindingApprovalEntry } from "./conversation-binding-state.ty
 type PluginBindingApprovalsDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_binding_approvals">;
 
 export function readPluginBindingApprovalsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
 ): PluginBindingApprovalEntry[] {
   const approvalsDb = getNodeSqliteKysely<PluginBindingApprovalsDatabase>(db);
   const rows = executeSqliteQuerySync(
@@ -31,7 +31,7 @@ export function readPluginBindingApprovalsInDatabase(
 }
 
 export function upsertPluginBindingApprovalInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   entry: PluginBindingApprovalEntry,
 ): void {
   const row = {

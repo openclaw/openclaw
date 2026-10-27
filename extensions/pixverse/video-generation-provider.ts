@@ -1,38 +1,35 @@
-// Pixverse provider module implements model/runtime integration.
 import { randomUUID } from "node:crypto";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   pollProviderOperationJson,
-  postJsonRequest,
+  postJsonResponse,
   postMultipartRequest,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
-  type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   asFiniteNumber,
   asSafeIntegerInRange,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  GeneratedVideoAsset,
-  VideoGenerationProvider,
-  VideoGenerationRequest,
-  VideoGenerationSourceAsset,
+import {
+  normalizeVideoGenerationDuration,
+  type VideoGenerationModeCapabilities,
+  type VideoGenerationProvider,
 } from "openclaw/plugin-sdk/video-generation";
 import {
   DEFAULT_PIXVERSE_MODEL_ID,
   DEFAULT_PIXVERSE_REGION,
+  normalizePixVerseRegion,
   PIXVERSE_BASE_URL_BY_REGION,
   PIXVERSE_PROVIDER_ID,
-  type PixVerseApiRegion,
 } from "./constants.js";
 
 const DEFAULT_PIXVERSE_BASE_URL = PIXVERSE_BASE_URL_BY_REGION[DEFAULT_PIXVERSE_REGION];
@@ -61,17 +58,7 @@ type PixVerseEnvelope<T> = {
   Resp?: T;
 };
 
-type PixVerseUploadImageResponse = {
-  img_id?: unknown;
-  img_url?: unknown;
-};
-
-type PixVerseVideoCreateResponse = {
-  video_id?: unknown;
-};
-
 type PixVerseVideoResultResponse = {
-  id?: unknown;
   status?: unknown;
   url?: unknown;
   outputWidth?: unknown;
@@ -80,83 +67,8 @@ type PixVerseVideoResultResponse = {
   size?: unknown;
 };
 
-function resolvePixVerseBaseUrl(req: VideoGenerationRequest): string {
-  const provider = req.cfg?.models?.providers?.[PIXVERSE_PROVIDER_ID];
-  const configuredBaseUrl = normalizeOptionalString(provider?.baseUrl);
-  if (configuredBaseUrl) {
-    return configuredBaseUrl;
-  }
-  const region = resolvePixVerseApiRegion(provider?.region);
-  return PIXVERSE_BASE_URL_BY_REGION[region];
-}
-
-function resolvePixVerseApiRegion(value: unknown): PixVerseApiRegion {
-  const region = normalizeOptionalString(value)?.toLowerCase();
-  switch (region) {
-    case "cn":
-    case "china":
-    case "mainland":
-    case "pai":
-      return "cn";
-    case "global":
-    case "intl":
-    case "international":
-    case undefined:
-      return DEFAULT_PIXVERSE_REGION;
-    default:
-      throw new Error(`Unsupported PixVerse API region "${region}". Use "international" or "cn".`);
-  }
-}
-
-function normalizePixVerseModel(model: string | undefined): string {
-  const normalized = normalizeOptionalString(model)?.replace(/^pixverse\//iu, "");
-  return normalized?.toLowerCase() || DEFAULT_PIXVERSE_MODEL_ID;
-}
-
-function resolvePixVerseQuality(req: VideoGenerationRequest): string {
-  const optionQuality =
-    normalizeOptionalString(req.providerOptions?.quality) ??
-    normalizeOptionalString(req.resolution);
-  const requested = optionQuality ?? normalizeOptionalString(req.size);
-  if (!requested) {
-    return DEFAULT_PIXVERSE_QUALITY;
-  }
-  const normalized = requested.toLowerCase() === "480p" ? "540p" : requested.toLowerCase();
-  return PIXVERSE_QUALITIES.includes(normalized as (typeof PIXVERSE_QUALITIES)[number])
-    ? normalized
-    : DEFAULT_PIXVERSE_QUALITY;
-}
-
-function resolvePixVerseDurationSeconds(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return 5;
-  }
-  return Math.max(1, Math.min(MAX_DURATION_SECONDS, Math.round(value)));
-}
-
-function appendOptionalNumber(body: Record<string, unknown>, key: string, value: unknown): void {
-  const numberValue = asFiniteNumber(value);
-  if (numberValue != null) {
-    body[key] = numberValue;
-  }
-}
-
-function appendOptionalInt32Seed(body: Record<string, unknown>, value: unknown): void {
-  const seed = asSafeIntegerInRange(value, { min: 0, max: PIXVERSE_SEED_MAX });
-  if (seed !== undefined) {
-    body.seed = seed;
-  }
-}
-
 function readPixVerseSeed(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0, max: PIXVERSE_SEED_MAX });
-}
-
-function appendOptionalString(body: Record<string, unknown>, key: string, value: unknown): void {
-  const stringValue = normalizeOptionalString(value);
-  if (stringValue) {
-    body[key] = stringValue;
-  }
 }
 
 function buildPixVerseHeaders(headers: Headers, contentType?: string): Headers {
@@ -185,158 +97,57 @@ function readPixVerseSuccess<T>(payload: PixVerseEnvelope<T>, label: string): T 
   return payload.Resp;
 }
 
-// Reads a PixVerse JSON response through the shared provider JSON reader so a
-// provider that streams an unbounded body cannot force the runtime to buffer the
-// whole payload before parsing it on the success path. The shared helper applies
-// the established 16 MiB provider JSON cap and the standard malformed-JSON
-// wrapping; PixVerse envelope validation stays local via readPixVerseSuccess.
 async function readPixVerseJson<T>(response: Response, label: string): Promise<T> {
-  const payload = await readProviderJsonResponse(response, label);
-  return readPixVerseSuccess(payload as PixVerseEnvelope<T>, label);
+  const payload = await readProviderJsonResponse<PixVerseEnvelope<T>>(response, label);
+  return readPixVerseSuccess(payload, label);
 }
 
-function readPixVerseVideoId(payload: PixVerseVideoCreateResponse): number {
-  const videoId = asSafeIntegerInRange(payload.video_id, { min: 0 });
-  if (videoId == null) {
-    throw new Error("PixVerse video generation response missing video_id");
+function readPixVerseInteger(value: unknown, label: string): number {
+  const integer = asSafeIntegerInRange(value, { min: 0 });
+  if (integer === undefined) {
+    throw new Error(label);
   }
-  return videoId;
-}
-
-function readPixVerseImageId(payload: PixVerseUploadImageResponse): number {
-  const imageId = asSafeIntegerInRange(payload.img_id, { min: 0 });
-  if (imageId == null) {
-    throw new Error("PixVerse image upload response missing img_id");
-  }
-  return imageId;
+  return integer;
 }
 
 function readPixVerseStatus(payload: PixVerseVideoResultResponse): number {
-  const status = asSafeIntegerInRange(payload.status, { min: 0 });
-  if (status == null) {
-    throw new Error("PixVerse video status response missing status");
-  }
-  return status;
-}
-
-function buildUploadImageForm(asset: VideoGenerationSourceAsset): FormData {
-  const form = new FormData();
-  const url = normalizeOptionalString(asset.url);
-  if (url) {
-    form.set("image_url", url);
-    return form;
-  }
-  if (!asset.buffer) {
-    throw new Error("PixVerse image-to-video input is missing image data.");
-  }
-  const mimeType = normalizeOptionalString(asset.mimeType) ?? "image/png";
-  const extension = extensionForMime(mimeType)?.slice(1) ?? "png";
-  const fileName = normalizeOptionalString(asset.fileName) ?? `image.${extension}`;
-  const file = new File([bufferToBlobPart(asset.buffer)], fileName, { type: mimeType });
-  form.set("image", file);
-  return form;
-}
-
-function buildVideoBody(
-  req: VideoGenerationRequest,
-  model: string,
-  imageId?: number,
-): Record<string, unknown> {
-  const options = req.providerOptions ?? {};
-  const body: Record<string, unknown> = {
-    duration: resolvePixVerseDurationSeconds(req.durationSeconds),
-    model,
-    prompt: req.prompt,
-    quality: resolvePixVerseQuality(req),
-  };
-  if (imageId !== undefined) {
-    body.img_id = imageId;
-    body.motion_mode =
-      normalizeOptionalString(options.motion_mode) ??
-      normalizeOptionalString(options.motionMode) ??
-      "normal";
-  } else {
-    body.aspect_ratio = normalizeOptionalString(req.aspectRatio) ?? "16:9";
-  }
-  appendOptionalString(
-    body,
-    "negative_prompt",
-    normalizeOptionalString(options.negative_prompt) ??
-      normalizeOptionalString(options.negativePrompt),
+  const status = readPixVerseInteger(
+    payload.status,
+    "PixVerse video status response missing status",
   );
-  appendOptionalString(
-    body,
-    "camera_movement",
-    normalizeOptionalString(options.camera_movement) ??
-      normalizeOptionalString(options.cameraMovement),
-  );
-  appendOptionalNumber(
-    body,
-    "template_id",
-    asFiniteNumber(options.template_id) ?? asFiniteNumber(options.templateId),
-  );
-  appendOptionalInt32Seed(body, options.seed);
-  if (req.audio !== undefined) {
-    body.generate_audio_switch = req.audio;
-  }
-  return body;
-}
-
-function readPixVerseFailureMessage(payload: PixVerseVideoResultResponse): string | undefined {
-  switch (readPixVerseStatus(payload)) {
+  switch (status) {
     case 7:
-      return "PixVerse video generation failed content moderation";
+      throw new Error("PixVerse video generation failed content moderation");
     case 8:
-      return "PixVerse video generation failed";
+      throw new Error("PixVerse video generation failed");
     case 6:
-      return "PixVerse video generation was deleted before completion";
+      throw new Error("PixVerse video generation was deleted before completion");
     default:
-      return undefined;
+      return status;
   }
 }
 
-async function pollPixVerseVideo(params: {
-  videoId: number;
-  baseUrl: string;
-  deadline: ProviderOperationDeadline;
-  fetchFn: typeof fetch;
-  allowPrivateNetwork: boolean;
-  dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
-  headers: Headers;
-}): Promise<PixVerseVideoResultResponse> {
-  const readResult = (payload: PixVerseEnvelope<PixVerseVideoResultResponse>) =>
-    readPixVerseSuccess(payload, "PixVerse video status request failed");
-  const payload = await pollProviderOperationJson<PixVerseEnvelope<PixVerseVideoResultResponse>>({
-    url: `${params.baseUrl}/video/result/${params.videoId}`,
-    headers: () => buildPixVerseHeaders(params.headers),
-    deadline: params.deadline,
-    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-    fetchFn: params.fetchFn,
-    maxAttempts: MAX_POLL_ATTEMPTS,
-    pollIntervalMs: POLL_INTERVAL_MS,
-    requestFailedMessage: "PixVerse video status request failed",
-    timeoutMessage: `PixVerse video generation task ${params.videoId} did not finish in time`,
-    isComplete: (candidate) => readPixVerseStatus(readResult(candidate)) === 1,
-    getFailureMessage: (candidate) => readPixVerseFailureMessage(readResult(candidate)),
-    allowPrivateNetwork: params.allowPrivateNetwork,
-    dispatcherPolicy: params.dispatcherPolicy,
-  });
-  return readResult(payload);
-}
-
-function extractPixVerseVideo(payload: PixVerseVideoResultResponse): GeneratedVideoAsset {
-  const url = normalizeOptionalString(payload.url);
-  if (!url) {
-    throw new Error("PixVerse video generation completed without output URL");
-  }
+function buildPixVerseModeCapabilities(imageToVideo = false): VideoGenerationModeCapabilities {
   return {
-    url,
-    mimeType: "video/mp4",
-    fileName: "video-1.mp4",
-    metadata: {
-      sourceUrl: url,
-      outputWidth: asFiniteNumber(payload.outputWidth),
-      outputHeight: asFiniteNumber(payload.outputHeight),
+    maxVideos: 1,
+    ...(imageToVideo ? { maxInputImages: 1 } : {}),
+    maxDurationSeconds: MAX_DURATION_SECONDS,
+    supportedDurationSeconds: Array.from({ length: MAX_DURATION_SECONDS }, (_, index) => index + 1),
+    ...(!imageToVideo ? { aspectRatios: [...PIXVERSE_TEXT_ASPECT_RATIOS] } : {}),
+    resolutions: ["360P", "540P", "720P", "1080P"],
+    ...(!imageToVideo ? { supportsAspectRatio: true } : {}),
+    supportsResolution: true,
+    supportsAudio: true,
+    providerOptions: {
+      seed: "number",
+      negative_prompt: "string",
+      negativePrompt: "string",
+      quality: "string",
+      ...(imageToVideo ? { motion_mode: "string" as const, motionMode: "string" as const } : {}),
+      camera_movement: "string",
+      cameraMovement: "string",
+      template_id: "number",
+      templateId: "number",
     },
   };
 }
@@ -348,55 +159,13 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
     defaultModel: DEFAULT_PIXVERSE_MODEL_ID,
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models: [...PIXVERSE_VIDEO_MODELS],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: PIXVERSE_PROVIDER_ID, ...ctx }),
+    isConfiguredAsync: (ctx) =>
+      isProviderApiKeyConfiguredAsync({ provider: PIXVERSE_PROVIDER_ID, ...ctx }),
     capabilities: {
-      generate: {
-        maxVideos: 1,
-        maxDurationSeconds: MAX_DURATION_SECONDS,
-        supportedDurationSeconds: Array.from(
-          { length: MAX_DURATION_SECONDS },
-          (_, index) => index + 1,
-        ),
-        aspectRatios: [...PIXVERSE_TEXT_ASPECT_RATIOS],
-        resolutions: ["360P", "540P", "720P", "1080P"],
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsAudio: true,
-        providerOptions: {
-          seed: "number",
-          negative_prompt: "string",
-          negativePrompt: "string",
-          quality: "string",
-          camera_movement: "string",
-          cameraMovement: "string",
-          template_id: "number",
-          templateId: "number",
-        },
-      },
+      generate: buildPixVerseModeCapabilities(),
       imageToVideo: {
         enabled: true,
-        maxVideos: 1,
-        maxInputImages: 1,
-        maxDurationSeconds: MAX_DURATION_SECONDS,
-        supportedDurationSeconds: Array.from(
-          { length: MAX_DURATION_SECONDS },
-          (_, index) => index + 1,
-        ),
-        resolutions: ["360P", "540P", "720P", "1080P"],
-        supportsResolution: true,
-        supportsAudio: true,
-        providerOptions: {
-          seed: "number",
-          negative_prompt: "string",
-          negativePrompt: "string",
-          quality: "string",
-          motion_mode: "string",
-          motionMode: "string",
-          camera_movement: "string",
-          cameraMovement: "string",
-          template_id: "number",
-          templateId: "number",
-        },
+        ...buildPixVerseModeCapabilities(true),
       },
       videoToVideo: {
         enabled: false,
@@ -420,16 +189,30 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
         throw new Error("PixVerse API key missing");
       }
 
-      const model = normalizePixVerseModel(req.model);
+      const model =
+        normalizeOptionalString(req.model)
+          ?.replace(/^pixverse\//iu, "")
+          .toLowerCase() || DEFAULT_PIXVERSE_MODEL_ID;
       const fetchFn = fetch;
       const providerConfig = req.cfg?.models?.providers?.[PIXVERSE_PROVIDER_ID];
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs,
         label: "PixVerse video generation",
       });
+      let configuredBaseUrl = normalizeOptionalString(providerConfig?.baseUrl);
+      if (!configuredBaseUrl) {
+        const region = normalizeOptionalString(providerConfig?.region)?.toLowerCase();
+        const normalized = normalizePixVerseRegion(region);
+        if (!normalized && region !== undefined) {
+          throw new Error(
+            `Unsupported PixVerse API region "${region}". Use "international" or "cn".`,
+          );
+        }
+        configuredBaseUrl = PIXVERSE_BASE_URL_BY_REGION[normalized ?? DEFAULT_PIXVERSE_REGION];
+      }
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
-          baseUrl: resolvePixVerseBaseUrl(req),
+          baseUrl: configuredBaseUrl,
           defaultBaseUrl: DEFAULT_PIXVERSE_BASE_URL,
           request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
           defaultHeaders: {
@@ -443,10 +226,25 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
       const image = req.inputImages?.[0];
       let imageId: number | undefined;
       if (image) {
+        const uploadHeaders = buildPixVerseHeaders(headers);
+        const form = new FormData();
+        const imageUrl = normalizeOptionalString(image.url);
+        if (imageUrl) {
+          form.set("image_url", imageUrl);
+        } else {
+          if (!image.buffer) {
+            throw new Error("PixVerse image-to-video input is missing image data.");
+          }
+          const mimeType = normalizeOptionalString(image.mimeType) ?? "image/png";
+          const extension = extensionForMime(mimeType)?.slice(1) ?? "png";
+          const fileName = normalizeOptionalString(image.fileName) ?? `image.${extension}`;
+          const file = new File([bufferToBlobPart(image.buffer)], fileName, { type: mimeType });
+          form.set("image", file);
+        }
         const upload = await postMultipartRequest({
           url: `${baseUrl}/image/upload`,
-          headers: buildPixVerseHeaders(headers),
-          body: buildUploadImageForm(image),
+          headers: uploadHeaders,
+          body: form,
           timeoutMs: resolveProviderOperationTimeoutMs({
             deadline,
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
@@ -457,22 +255,79 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
         });
         try {
           await assertOkOrThrowHttpError(upload.response, "PixVerse image upload failed");
-          imageId = readPixVerseImageId(
-            await readPixVerseJson<PixVerseUploadImageResponse>(
-              upload.response,
-              "PixVerse image upload failed",
-            ),
+          const uploaded = await readPixVerseJson<{ img_id?: unknown }>(
+            upload.response,
+            "PixVerse image upload failed",
+          );
+          imageId = readPixVerseInteger(
+            uploaded.img_id,
+            "PixVerse image upload response missing img_id",
           );
         } finally {
           await upload.release();
         }
       }
 
+      const options = req.providerOptions ?? {};
+      const duration = Math.min(
+        MAX_DURATION_SECONDS,
+        normalizeVideoGenerationDuration({ durationSeconds: req.durationSeconds }) ?? 5,
+      );
+      const requestedQuality =
+        normalizeOptionalString(req.providerOptions?.quality) ??
+        normalizeOptionalString(req.resolution) ??
+        normalizeOptionalString(req.size);
+      const normalizedQuality =
+        requestedQuality?.toLowerCase() === "480p" ? "540p" : requestedQuality?.toLowerCase();
+      const body: Record<string, unknown> = {
+        duration,
+        model,
+        prompt: req.prompt,
+        quality:
+          normalizedQuality &&
+          PIXVERSE_QUALITIES.includes(normalizedQuality as (typeof PIXVERSE_QUALITIES)[number])
+            ? normalizedQuality
+            : DEFAULT_PIXVERSE_QUALITY,
+      };
+      if (imageId !== undefined) {
+        body.img_id = imageId;
+        body.motion_mode =
+          normalizeOptionalString(options.motion_mode) ??
+          normalizeOptionalString(options.motionMode) ??
+          "normal";
+      } else {
+        body.aspect_ratio = normalizeOptionalString(req.aspectRatio) ?? "16:9";
+      }
+      const negativePrompt =
+        normalizeOptionalString(options.negative_prompt) ??
+        normalizeOptionalString(options.negativePrompt);
+      if (negativePrompt) {
+        body.negative_prompt = negativePrompt;
+      }
+      const cameraMovement =
+        normalizeOptionalString(options.camera_movement) ??
+        normalizeOptionalString(options.cameraMovement);
+      if (cameraMovement) {
+        body.camera_movement = cameraMovement;
+      }
+      const templateId = asFiniteNumber(options.template_id) ?? asFiniteNumber(options.templateId);
+      if (templateId != null) {
+        body.template_id = templateId;
+      }
+      const seed = readPixVerseSeed(options.seed);
+      if (seed !== undefined) {
+        body.seed = seed;
+      }
+      if (req.audio !== undefined) {
+        body.generate_audio_switch = req.audio;
+      }
+
       const endpoint = imageId === undefined ? "/video/text/generate" : "/video/img/generate";
-      const create = await postJsonRequest({
+      const submittedEnvelope = await postJsonResponse<PixVerseEnvelope<{ video_id?: unknown }>>({
         url: `${baseUrl}${endpoint}`,
+        errorLabel: "PixVerse video generation failed",
         headers: buildPixVerseHeaders(headers, "application/json"),
-        body: buildVideoBody(req, model, imageId),
+        body,
         timeoutMs: resolveProviderOperationTimeoutMs({
           deadline,
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
@@ -481,37 +336,55 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
         allowPrivateNetwork,
         dispatcherPolicy,
       });
-      try {
-        await assertOkOrThrowHttpError(create.response, "PixVerse video generation failed");
-        const videoId = readPixVerseVideoId(
-          await readPixVerseJson<PixVerseVideoCreateResponse>(
-            create.response,
-            "PixVerse video generation failed",
-          ),
-        );
-        const completed = await pollPixVerseVideo({
-          videoId,
-          baseUrl,
-          deadline,
-          fetchFn,
-          allowPrivateNetwork,
-          dispatcherPolicy,
-          headers,
-        });
-        return {
-          videos: [extractPixVerseVideo(completed)],
-          model,
-          metadata: {
-            endpoint,
-            videoId,
-            status: readPixVerseStatus(completed),
-            seed: readPixVerseSeed(completed.seed),
-            size: asFiniteNumber(completed.size),
-          },
-        };
-      } finally {
-        await create.release();
+      const submitted = readPixVerseSuccess(submittedEnvelope, "PixVerse video generation failed");
+      const videoId = readPixVerseInteger(
+        submitted.video_id,
+        "PixVerse video generation response missing video_id",
+      );
+      const readResult = (payload: PixVerseEnvelope<PixVerseVideoResultResponse>) =>
+        readPixVerseSuccess(payload, "PixVerse video status request failed");
+      const completedEnvelope = await pollProviderOperationJson<
+        PixVerseEnvelope<PixVerseVideoResultResponse>
+      >({
+        url: `${baseUrl}/video/result/${videoId}`,
+        headers: () => buildPixVerseHeaders(headers),
+        deadline,
+        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+        fetchFn,
+        maxAttempts: MAX_POLL_ATTEMPTS,
+        pollIntervalMs: POLL_INTERVAL_MS,
+        requestFailedMessage: "PixVerse video status request failed",
+        timeoutMessage: `PixVerse video generation task ${videoId} did not finish in time`,
+        isComplete: (candidate) => readPixVerseStatus(readResult(candidate)) === 1,
+        allowPrivateNetwork,
+        dispatcherPolicy,
+      });
+      const completed = readResult(completedEnvelope);
+      const url = normalizeOptionalString(completed.url);
+      if (!url) {
+        throw new Error("PixVerse video generation completed without output URL");
       }
+      const video = {
+        url,
+        mimeType: "video/mp4",
+        fileName: "video-1.mp4",
+        metadata: {
+          sourceUrl: url,
+          outputWidth: asFiniteNumber(completed.outputWidth),
+          outputHeight: asFiniteNumber(completed.outputHeight),
+        },
+      };
+      return {
+        videos: [video],
+        model,
+        metadata: {
+          endpoint,
+          videoId,
+          status: readPixVerseStatus(completed),
+          seed: readPixVerseSeed(completed.seed),
+          size: asFiniteNumber(completed.size),
+        },
+      };
     },
   };
 }

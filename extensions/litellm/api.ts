@@ -1,4 +1,3 @@
-// Litellm API module exposes the plugin public contract.
 export {
   applyLitellmConfig,
   applyLitellmProviderConfig,

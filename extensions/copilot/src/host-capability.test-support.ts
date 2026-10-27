@@ -7,15 +7,15 @@ export function createCopilotTestHostCapabilities(
   createToolSurface?: HostCapabilities["createToolSurface"],
   bindToolSurface: HostCapabilities["bindToolSurface"] = (tools) => tools,
 ): HostCapabilities {
-  const construct: HostCapabilities["createToolSurface"] = createToolSurface
-    ? (options, binding) => bindToolSurface(createToolSurface(options), binding)
+  const construct: HostCapabilities["createToolSurfaceAsync"] = createToolSurface
+    ? async (options, binding) => bindToolSurface(createToolSurface(options), binding)
     : undefined;
   return Object.freeze({
     kind: "agent-harness-host-capability",
     version: 1,
     assertActive: () => {},
     bindToolSurface,
-    ...(construct ? { createToolSurface: construct } : {}),
+    ...(construct ? { createToolSurfaceAsync: construct } : {}),
     runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
     requestApproval: async () => undefined,
     waitForApproval: async () => undefined,

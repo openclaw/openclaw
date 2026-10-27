@@ -1,0 +1,12 @@
+{
+  "pluginId": "telegram",
+  "titleKey": "channels.telegram.title",
+  "subtitleKey": "channels.telegram.subtitle",
+  "extraFacts": ["mode"],
+  "accounts": {
+    "minimumCount": 2,
+    "titleSource": "botUsername",
+    "showConfigured": true,
+    "status": "running"
+  }
+}

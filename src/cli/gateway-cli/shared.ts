@@ -1,4 +1,3 @@
-// Shared gateway CLI helpers for supervised-service stop guidance.
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -7,29 +6,6 @@ import {
 import { resolveGatewayService } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
-
-function renderGatewayServiceStopHints(env: NodeJS.ProcessEnv = process.env): string[] {
-  const profile = env.OPENCLAW_PROFILE;
-  switch (process.platform) {
-    case "darwin":
-      return [
-        `Tip: ${formatCliCommand("openclaw gateway stop")}`,
-        `Or: launchctl bootout gui/$UID/${resolveGatewayLaunchAgentLabel(profile)}`,
-      ];
-    case "linux":
-      return [
-        `Tip: ${formatCliCommand("openclaw gateway stop")}`,
-        `Or: systemctl --user stop ${resolveGatewaySystemdServiceName(profile)}.service`,
-      ];
-    case "win32":
-      return [
-        `Tip: ${formatCliCommand("openclaw gateway stop")}`,
-        `Or: schtasks /End /TN "${resolveGatewayWindowsTaskName(profile)}"`,
-      ];
-    default:
-      return [`Tip: ${formatCliCommand("openclaw gateway stop")}`];
-  }
-}
 
 export async function maybeExplainGatewayServiceStop() {
   // Direct `gateway run` should not race a managed service on the same port.
@@ -48,7 +24,23 @@ export async function maybeExplainGatewayServiceStop() {
       ? `Gateway service appears ${service.loadedText}. Stop it first.`
       : "Gateway service status unknown; if supervised, stop it first.",
   );
-  for (const hint of renderGatewayServiceStopHints()) {
+  const env = process.env;
+  const profile = env.OPENCLAW_PROFILE;
+  const hints = [`Tip: ${formatCliCommand("openclaw gateway stop")}`];
+  switch (process.platform) {
+    case "darwin":
+      hints.push(`Or: launchctl bootout gui/$UID/${resolveGatewayLaunchAgentLabel(profile)}`);
+      break;
+    case "linux":
+      hints.push(`Or: systemctl --user stop ${resolveGatewaySystemdServiceName(profile)}.service`);
+      break;
+    case "win32":
+      hints.push(`Or: schtasks /End /TN "${resolveGatewayWindowsTaskName(profile)}"`);
+      break;
+    default:
+      break;
+  }
+  for (const hint of hints) {
     defaultRuntime.error(hint);
   }
 }

@@ -1,0 +1,914 @@
+{
+  "format": 1,
+  "cases": [
+    {
+      "name": "fixed identity",
+      "operation": {
+        "kind": "identity.create",
+        "identity": {
+          "identity_key": "primary",
+          "device_id": "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
+          "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=\n-----END PUBLIC KEY-----\n",
+          "private_key_pem": "synthetic:ed25519-seed-0-through-31",
+          "created_at_ms": 123,
+          "updated_at_ms": 456
+        }
+      },
+      "result": {
+        "kind": "identity",
+        "identity": {
+          "identity_key": "primary",
+          "device_id": "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
+          "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=\n-----END PUBLIC KEY-----\n",
+          "private_key_pem": "synthetic:ed25519-seed-0-through-31",
+          "created_at_ms": 123,
+          "updated_at_ms": 456
+        }
+      }
+    },
+    {
+      "name": "socket first ensure",
+      "operation": {
+        "kind": "socket.ensure",
+        "fallback": {
+          "socket_key": "current",
+          "socket_path": "/synthetic/exec.sock",
+          "socket_token": "socket/é雪",
+          "updated_at_ms": 10
+        }
+      },
+      "result": {
+        "kind": "socket",
+        "socket": {
+          "socket_key": "current",
+          "socket_path": "/synthetic/exec.sock",
+          "socket_token": "socket/é雪",
+          "updated_at_ms": 10
+        }
+      }
+    },
+    {
+      "name": "socket preserves bytes and timestamp",
+      "operation": {
+        "kind": "socket.ensure",
+        "fallback": {
+          "socket_key": "current",
+          "socket_path": "/other.sock",
+          "socket_token": "discarded",
+          "updated_at_ms": 20
+        }
+      },
+      "result": {
+        "kind": "socket",
+        "socket": {
+          "socket_key": "current",
+          "socket_path": "/synthetic/exec.sock",
+          "socket_token": "socket/é雪",
+          "updated_at_ms": 10
+        }
+      }
+    },
+    {
+      "name": "socket requested replacement",
+      "operation": {
+        "kind": "socket.ensure",
+        "fallback": {
+          "socket_key": "current",
+          "socket_path": "/synthetic/exec.sock",
+          "socket_token": "socket/é雪",
+          "updated_at_ms": 30
+        },
+        "requested": {
+          "path": " /synthetic/replaced.sock ",
+          "token": " replacement/é "
+        }
+      },
+      "result": {
+        "kind": "socket",
+        "socket": {
+          "socket_key": "current",
+          "socket_path": "/synthetic/replaced.sock",
+          "socket_token": "replacement/é",
+          "updated_at_ms": 30
+        }
+      }
+    },
+    {
+      "name": "token unconditional create omitted expected",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": "initial/token/é雪",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "token null means absent",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": "must-not-win",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        },
+        "expectedToken": null
+      },
+      "result": {
+        "kind": "changed",
+        "changed": false
+      }
+    },
+    {
+      "name": "token stale expected",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": "must-not-win",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        },
+        "expectedToken": "stale"
+      },
+      "result": {
+        "kind": "changed",
+        "changed": false
+      }
+    },
+    {
+      "name": "token matching expected",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": "refreshed/é",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        },
+        "expectedToken": "initial/token/é雪"
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "token stale observation cannot revoke",
+      "operation": {
+        "kind": "token.remove",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "observedToken": "initial/token/é雪"
+      },
+      "result": {
+        "kind": "changed",
+        "changed": false
+      }
+    },
+    {
+      "name": "normalized expected accepts exact raw observation: seed",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": " cached-token ",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "normalized expected accepts exact raw observation",
+      "operation": {
+        "kind": "token.remove",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "expectedToken": "cached-token",
+        "observedToken": " cached-token "
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "normalized expected accepts exact raw observation: durable result",
+      "operation": {
+        "kind": "token.read",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        }
+      },
+      "result": {
+        "kind": "token",
+        "token": null
+      }
+    },
+    {
+      "name": "normalized expected rejects a different raw token with the same trim: seed",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": "\tcached-token\n",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "normalized expected rejects a different raw token with the same trim",
+      "operation": {
+        "kind": "token.remove",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "expectedToken": "cached-token",
+        "observedToken": " cached-token "
+      },
+      "result": {
+        "kind": "changed",
+        "changed": false
+      }
+    },
+    {
+      "name": "normalized expected rejects a different raw token with the same trim: durable result",
+      "operation": {
+        "kind": "token.read",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        }
+      },
+      "result": {
+        "kind": "token",
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": "\tcached-token\n",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      }
+    },
+    {
+      "name": "raw observation must normalize to expected: seed",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": "unrelated-token",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "raw observation must normalize to expected",
+      "operation": {
+        "kind": "token.remove",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "expectedToken": "cached-token",
+        "observedToken": "unrelated-token"
+      },
+      "result": {
+        "kind": "changed",
+        "changed": false
+      }
+    },
+    {
+      "name": "raw observation must normalize to expected: durable result",
+      "operation": {
+        "kind": "token.read",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        }
+      },
+      "result": {
+        "kind": "token",
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": "unrelated-token",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      }
+    },
+    {
+      "name": "exact expected does not require a matching observation: seed",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": "cached-token",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "exact expected does not require a matching observation",
+      "operation": {
+        "kind": "token.remove",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "expectedToken": "cached-token",
+        "observedToken": "unrelated-token"
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "exact expected does not require a matching observation: durable result",
+      "operation": {
+        "kind": "token.read",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        }
+      },
+      "result": {
+        "kind": "token",
+        "token": null
+      }
+    },
+    {
+      "name": "observed-only removal rejects trim-equivalent bytes: seed",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": "cached-token",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "observed-only removal rejects trim-equivalent bytes",
+      "operation": {
+        "kind": "token.remove",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "observedToken": " cached-token "
+      },
+      "result": {
+        "kind": "changed",
+        "changed": false
+      }
+    },
+    {
+      "name": "observed-only removal rejects trim-equivalent bytes: durable result",
+      "operation": {
+        "kind": "token.read",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        }
+      },
+      "result": {
+        "kind": "token",
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": "cached-token",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      }
+    },
+    {
+      "name": "observed-only removal accepts exact bytes: seed",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": " cached-token ",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "observed-only removal accepts exact bytes",
+      "operation": {
+        "kind": "token.remove",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "observedToken": " cached-token "
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "observed-only removal accepts exact bytes: durable result",
+      "operation": {
+        "kind": "token.read",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        }
+      },
+      "result": {
+        "kind": "token",
+        "token": null
+      }
+    },
+    {
+      "name": "explicit null does not allow a raw observation fallback: seed",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": " cached-token ",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "explicit null does not allow a raw observation fallback",
+      "operation": {
+        "kind": "token.remove",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "expectedToken": null,
+        "observedToken": " cached-token "
+      },
+      "result": {
+        "kind": "changed",
+        "changed": false
+      }
+    },
+    {
+      "name": "explicit null does not allow a raw observation fallback: durable result",
+      "operation": {
+        "kind": "token.read",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        }
+      },
+      "result": {
+        "kind": "token",
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": " cached-token ",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      }
+    },
+    {
+      "name": "omitted expected and observation remove unconditionally: seed",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": " cached-token ",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "omitted expected and observation remove unconditionally",
+      "operation": {
+        "kind": "token.remove",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        }
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "omitted expected and observation remove unconditionally: durable result",
+      "operation": {
+        "kind": "token.read",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        }
+      },
+      "result": {
+        "kind": "token",
+        "token": null
+      }
+    },
+    {
+      "name": "normalization preserves composed and decomposed UTF8 bytes: seed",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": " é ",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "normalization preserves composed and decomposed UTF8 bytes",
+      "operation": {
+        "kind": "token.remove",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "expectedToken": "é",
+        "observedToken": " é "
+      },
+      "result": {
+        "kind": "changed",
+        "changed": false
+      }
+    },
+    {
+      "name": "normalization preserves composed and decomposed UTF8 bytes: durable result",
+      "operation": {
+        "kind": "token.read",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        }
+      },
+      "result": {
+        "kind": "token",
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": " é ",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      }
+    },
+    {
+      "name": "raw observation uses ECMAScript BOM trimming: seed",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": "﻿cached-token﻿",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "raw observation uses ECMAScript BOM trimming",
+      "operation": {
+        "kind": "token.remove",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "expectedToken": "cached-token",
+        "observedToken": "﻿cached-token﻿"
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "raw observation uses ECMAScript BOM trimming: durable result",
+      "operation": {
+        "kind": "token.read",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        }
+      },
+      "result": {
+        "kind": "token",
+        "token": null
+      }
+    },
+    {
+      "name": "raw observation does not trim Unicode next-line: seed",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": "cached-token",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "raw observation does not trim Unicode next-line",
+      "operation": {
+        "kind": "token.remove",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        },
+        "expectedToken": "cached-token",
+        "observedToken": "cached-token"
+      },
+      "result": {
+        "kind": "changed",
+        "changed": false
+      }
+    },
+    {
+      "name": "raw observation does not trim Unicode next-line: durable result",
+      "operation": {
+        "kind": "token.read",
+        "key": {
+          "device_id": "wire-device",
+          "role": "operator"
+        }
+      },
+      "result": {
+        "kind": "token",
+        "token": {
+          "device_id": "wire-device",
+          "role": "operator",
+          "token": "cached-token",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 40
+        }
+      }
+    },
+    {
+      "name": "native unscoped token",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "opérateur"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "opérateur",
+          "token": "native/token/雪",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 50
+        }
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "native Unicode claim",
+      "operation": {
+        "kind": "native.token.claim",
+        "device_id": "wire-device",
+        "role": "opérateur",
+        "gateway": "wss://例.invalid/é"
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "native independently encoded key",
+      "operation": {
+        "kind": "token.read",
+        "key": {
+          "device_id": "wire-device",
+          "role": "v2.d3NzOi8v5L6LLmludmFsaWQvw6k.b3DDqXJhdGV1cg"
+        }
+      },
+      "result": {
+        "kind": "token",
+        "token": {
+          "device_id": "wire-device",
+          "role": "v2.d3NzOi8v5L6LLmludmFsaWQvw6k.b3DDqXJhdGV1cg",
+          "token": "native/token/雪",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 50
+        }
+      }
+    },
+    {
+      "name": "native new unscoped token",
+      "operation": {
+        "kind": "token.replace",
+        "key": {
+          "device_id": "wire-device",
+          "role": "opérateur"
+        },
+        "token": {
+          "device_id": "wire-device",
+          "role": "opérateur",
+          "token": "must-not-replace-scoped",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 50
+        }
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "native scoped winner claim",
+      "operation": {
+        "kind": "native.token.claim",
+        "device_id": "wire-device",
+        "role": "opérateur",
+        "gateway": "wss://例.invalid/é"
+      },
+      "result": {
+        "kind": "changed",
+        "changed": true
+      }
+    },
+    {
+      "name": "native scoped winner survives",
+      "operation": {
+        "kind": "token.read",
+        "key": {
+          "device_id": "wire-device",
+          "role": "v2.d3NzOi8v5L6LLmludmFsaWQvw6k.b3DDqXJhdGV1cg"
+        }
+      },
+      "result": {
+        "kind": "token",
+        "token": {
+          "device_id": "wire-device",
+          "role": "v2.d3NzOi8v5L6LLmludmFsaWQvw6k.b3DDqXJhdGV1cg",
+          "token": "native/token/雪",
+          "scopes_json": "[ \"operator/read\", \"opérateur.é\" ]",
+          "updated_at_ms": 50
+        }
+      }
+    },
+    {
+      "name": "native unscoped consumed",
+      "operation": {
+        "kind": "token.read",
+        "key": {
+          "device_id": "wire-device",
+          "role": "opérateur"
+        }
+      },
+      "result": {
+        "kind": "token",
+        "token": null
+      }
+    }
+  ]
+}

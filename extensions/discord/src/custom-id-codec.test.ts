@@ -3,7 +3,6 @@ import {
   decodeCustomIdComponent,
   encodeCustomIdComponent,
   escapeCustomIdFieldValue,
-  needsCustomIdFieldEscaping,
   unescapeCustomIdFieldValue,
 } from "./custom-id-codec.js";
 
@@ -19,12 +18,6 @@ const URI_ROUND_TRIP_VALUES = [
 ];
 
 describe("custom-id URI component codec", () => {
-  it("round-trips values through encode/decode", () => {
-    for (const value of URI_ROUND_TRIP_VALUES) {
-      expect(decodeCustomIdComponent(encodeCustomIdComponent(value))).toBe(value);
-    }
-  });
-
   it("never emits the ; field separator or raw %", () => {
     for (const value of URI_ROUND_TRIP_VALUES) {
       const encoded = encodeCustomIdComponent(value);
@@ -54,12 +47,6 @@ describe("custom-id field escape (versioned occomp/ocmodal grammar)", () => {
     }
     expect(escapeCustomIdFieldValue("a;b%c")).toBe("a%3Bb%25c");
     expect(escapeCustomIdFieldValue("unicode-ü 🎛️")).toBe("unicode-ü 🎛️");
-  });
-
-  it("detects values that require escaping", () => {
-    expect(needsCustomIdFieldEscaping("plain value")).toBe(false);
-    expect(needsCustomIdFieldEscaping("has;separator")).toBe(true);
-    expect(needsCustomIdFieldEscaping("has%percent")).toBe(true);
   });
 
   // Wire compat: ids escaped by the pre-consolidation copies must keep

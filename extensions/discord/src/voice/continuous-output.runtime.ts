@@ -49,7 +49,9 @@ export class DiscordContinuousOutput {
           return;
         }
         if (message.type === "audio") {
-          this.append(Buffer.from(message.audio));
+          // The port transferred ownership; keep the exact view without copying its storage.
+          const { audio } = message;
+          this.append(Buffer.from(audio.buffer, audio.byteOffset, audio.byteLength));
         } else if (message.type === "clear") {
           this.clear();
         }

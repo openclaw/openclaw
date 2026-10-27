@@ -2,6 +2,30 @@ import Testing
 @testable import OpenClaw
 
 struct TextSummarySupportTests {
+    private static let recoveryDiagnostics: [(String, String)] = [
+        (
+            "Gateway uninstall failed: service inspection unavailable\n[openclaw] The CLI command failed.\n" +
+                "[openclaw] For help, run `openclaw --profile example doctor`.",
+            "Gateway uninstall failed: service inspection unavailable"),
+        (
+            "[openclaw] OpenClaw needs a manual recovery step.\n" +
+                "[openclaw] Reason: Agent database schema 2147483646 is newer than supported.\n" +
+                "[openclaw] Help: openclaw --help",
+            "[openclaw] Reason: Agent database schema 2147483646 is newer than supported."),
+        (
+            "[openclaw] The CLI command failed.\n[openclaw] Reason: Service ownership changed.\n" +
+                "[openclaw] Stack:\n[openclaw] Error: Service ownership changed.\n" +
+                "[openclaw]     at checkCurrent (service.js:12:3)\n" +
+                "[openclaw] Try: openclaw doctor\n[openclaw] Help: openclaw --help",
+            "[openclaw] Reason: Service ownership changed."),
+        ("Error: old failure\nHelp: normal application output", "Help: normal application output"),
+    ]
+
+    @Test(arguments: Self.recoveryDiagnostics)
+    func `surfaces CLI diagnostics before recovery footers`(output: String, expected: String) {
+        #expect(TextSummarySupport.summarizeLastLine(output) == expected)
+    }
+
     @Test func `keeps the last line for plain output`() {
         #expect(TextSummarySupport.summarizeLastLine("first\nsecond") == "second")
     }

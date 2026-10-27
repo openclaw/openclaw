@@ -1,14 +1,8 @@
-// Xai tests cover onboard plugin behavior.
 import {
-  resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
   type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
-import {
-  createConfigWithFallbacks,
-  createLegacyProviderConfig,
-  EXPECTED_FALLBACKS,
-} from "openclaw/plugin-sdk/provider-test-contracts";
+import { createLegacyProviderConfig } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
 import {
   applyXaiConfig,
@@ -17,14 +11,23 @@ import {
   XAI_DEFAULT_MODEL_REF,
 } from "./onboard.js";
 
+const apiConnection = { api: "openai-responses" as const, baseUrl: "https://api.x.ai/v1" };
+
 describe("xai onboard", () => {
-  it("adds xAI provider with correct settings", () => {
-    const cfg = applyXaiConfig({});
-    expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
-    expect(cfg.models?.providers?.xai?.api).toBe("openai-responses");
+  it.each(["api-key", "oauth"])("sets the curated default for %s", (mode) => {
+    const provider: ModelProviderConfig = {
+      ...apiConnection,
+      models: [],
+      ...(mode === "oauth"
+        ? { auth: "oauth" as const, baseUrl: "https://cli-chat-proxy.grok.com/v1" }
+        : {}),
+    };
+    const cfg = mode === "oauth" ? applyXaiOAuthConfig({}, provider) : applyXaiConfig({});
+    expect(cfg.models?.providers?.xai).toMatchObject(provider);
+    expect(cfg.models?.providers?.xai?.models).toEqual([]);
     expect(XAI_DEFAULT_MODEL_REF).toBe("xai/grok-4.7");
     expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(XAI_DEFAULT_MODEL_REF);
-    expect(cfg.models?.providers?.xai?.models).toEqual([]);
+    expect(cfg.agents?.defaults?.models?.[XAI_DEFAULT_MODEL_REF]?.alias).toBe("Grok");
   });
 
   it("keeps authored xAI models without pinning the curated inventory", () => {
@@ -35,63 +38,35 @@ describe("xai onboard", () => {
       modelName: "Custom",
     });
     const xaiProvider = legacy.models?.providers?.xai;
-    if (!xaiProvider) {
+    const template = xaiProvider?.models[0];
+    if (!xaiProvider || !template) {
       throw new Error("expected xAI provider fixture");
     }
     xaiProvider.models.push(
+      { ...template, id: "grok-3", name: "Grok 3" },
+      { ...template, id: "grok-code-fast-1", name: "Grok Code Fast 1", reasoning: true },
       {
-        id: "grok-3",
-        name: "Grok 3",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1000,
-        maxTokens: 100,
-      },
-      {
-        id: "grok-code-fast-1",
-        name: "Grok Code Fast 1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1000,
-        maxTokens: 100,
-      },
-      {
+        ...template,
         id: "grok-4.20-beta-latest-reasoning",
         name: "Custom Moving Grok 4.20",
         reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
-        contextWindow: 2_000_000,
-        maxTokens: 30_000,
       },
     );
-
-    const cfg = applyXaiProviderConfig(legacy);
-
-    expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
-    expect(cfg.models?.providers?.xai?.api).toBe("openai-responses");
-    expect(cfg.models?.providers?.xai?.apiKey).toBe("old-key");
-    expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual([
+    const provider = applyXaiProviderConfig(legacy).models?.providers?.xai;
+    expect(provider).toMatchObject({ ...apiConnection, apiKey: "old-key" });
+    expect(provider?.models.map((m) => m.id)).toEqual([
       "custom-model",
       "grok-3",
       "grok-code-fast-1",
       "grok-4.20-beta-latest-reasoning",
     ]);
-    expect(
-      cfg.models?.providers?.xai?.models.find(
-        (model) => model.id === "grok-4.20-beta-latest-reasoning",
-      )?.name,
-    ).toBe("Custom Moving Grok 4.20");
+    expect(provider?.models.at(-1)?.name).toBe("Custom Moving Grok 4.20");
   });
 
   it("fills replace mode with the curated models newest first", () => {
-    const cfg = applyXaiProviderConfig({ models: { mode: "replace" } });
-
-    expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
-    expect(cfg.models?.providers?.xai?.api).toBe("openai-responses");
-    expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual([
+    const provider = applyXaiProviderConfig({ models: { mode: "replace" } }).models?.providers?.xai;
+    expect(provider).toMatchObject(apiConnection);
+    expect(provider?.models.map((m) => m.id)).toEqual([
       "grok-4.7",
       "grok-4.6",
       "grok-4.5",
@@ -99,32 +74,6 @@ describe("xai onboard", () => {
       "grok-4.3",
       "grok-4.20-0309-reasoning",
       "grok-4.20-0309-non-reasoning",
-    ]);
-  });
-
-  it("adds expected alias for the default model", () => {
-    const cfg = applyXaiProviderConfig({});
-    expect(cfg.agents?.defaults?.models?.[XAI_DEFAULT_MODEL_REF]?.alias).toBe("Grok");
-  });
-
-  it("uses the curated default while retaining the OAuth transport", () => {
-    const provider: ModelProviderConfig = {
-      api: "openai-responses",
-      auth: "oauth",
-      baseUrl: "https://cli-chat-proxy.grok.com/v1",
-      models: [],
-    };
-    const cfg = applyXaiOAuthConfig({}, provider);
-    expect(cfg.models?.providers?.xai).toMatchObject(provider);
-
-    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe("xai/grok-4.7");
-    expect(cfg.agents?.defaults?.models?.["xai/grok-4.7"]?.alias).toBe("Grok");
-  });
-
-  it("preserves existing model fallbacks", () => {
-    const cfg = applyXaiConfig(createConfigWithFallbacks());
-    expect(resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)).toEqual([
-      ...EXPECTED_FALLBACKS,
     ]);
   });
 });

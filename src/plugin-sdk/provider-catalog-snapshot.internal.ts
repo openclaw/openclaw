@@ -79,6 +79,7 @@ export function listProviderCatalogSnapshotEntries(
     provider: model.provider,
     id: model.id,
     name: model.name,
+    ...(model.parameterCount !== undefined ? { parameterCount: model.parameterCount } : {}),
     api: model.api,
     baseUrl: model.baseUrl,
     reasoning: model.reasoning,

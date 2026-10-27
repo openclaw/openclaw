@@ -22,6 +22,7 @@ function createCoordinator(params: {
   suppressBlockUserDelivery?: boolean;
 }) {
   return createAcpDispatchDeliveryCoordinator({
+    preparedTtsPreferences: {},
     cfg: createAcpTestConfig({ tts: { enabled: true } }),
     ctx: buildTestCtx({
       Provider: "visiblechat",

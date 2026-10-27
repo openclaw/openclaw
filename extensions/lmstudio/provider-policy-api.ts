@@ -8,12 +8,12 @@ export function resolveToolSearchMode(): "tools" {
 
 /** Normalize saved reasoning metadata without activating provider runtime or changing transport. */
 export function normalizeConfig({ provider, providerConfig }: ProviderNormalizeConfigContext) {
-  if (provider.trim().toLowerCase() !== "lmstudio" || !Array.isArray(providerConfig.models)) {
+  if (provider.trim().toLowerCase() !== "lmstudio" || !providerConfig.models) {
     return providerConfig;
   }
   const models = providerConfig.models.map((model) => {
     const compat = model.compat;
-    if (!compat || typeof compat !== "object" || Array.isArray(compat)) {
+    if (!compat) {
       return model;
     }
     const normalized = normalizeLmstudioTransportReasoningCompat(compat);

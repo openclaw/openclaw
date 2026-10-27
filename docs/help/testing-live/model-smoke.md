@@ -21,6 +21,14 @@ page.
 
 MiniMax M3 uses `minimax/MiniMax-M3` as its default provider/model reference.
 
+Explicit `provider/model` selections use the agent's shared model resolver,
+including configured models and accepted bundled aliases. Ambiguous model-only
+selectors continue to enumerate matching discovered models. Invalid selectors and
+requested models that cannot be resolved are reported before checks run. Provider
+allowlists still narrow the selection, and intentional model caps still limit how
+many candidates run. Resolving every applicable selector proves availability, not
+inference for models omitted by a cap.
+
 ### Layer 1: Direct model completion (no gateway)
 
 - Test: `src/agents/models.profiles.live.test.ts`
@@ -39,7 +47,7 @@ MiniMax M3 uses `minimax/MiniMax-M3` as its default provider/model reference.
   - Local Ollama small-model runs default to `http://127.0.0.1:11434`; set `OPENCLAW_LIVE_OLLAMA_BASE_URL` only for LAN, custom, or Ollama Cloud endpoints.
   - Modern/all and small sweeps default to their curated-list length as a cap; set `OPENCLAW_LIVE_MAX_MODELS=0` for an exhaustive selected-profile sweep or a positive number for a smaller cap.
   - Exhaustive sweeps use `OPENCLAW_LIVE_TEST_TIMEOUT_MS` for the whole direct-model test timeout. Default: 60 minutes.
-  - Direct-model probes run with 20-way parallelism by default; set `OPENCLAW_LIVE_MODEL_CONCURRENCY` to override.
+  - Direct-model checks run with 20-way parallelism by default; set `OPENCLAW_LIVE_MODEL_CONCURRENCY` to override.
 - How to select providers:
   - `OPENCLAW_LIVE_PROVIDERS="google,google-gemini-cli"` (comma allowlist)
 - Where keys come from:
@@ -57,13 +65,13 @@ MiniMax M3 uses `minimax/MiniMax-M3` as its default provider/model reference.
   - Create/patch an `agent:dev:*` session (model override per run)
   - Iterate models-with-keys and assert:
     - "meaningful" response (no tools)
-    - a real tool invocation works (read probe)
-    - optional extra tool probes (exec+read probe)
+    - a real tool invocation works (read check)
+    - optional extra tool checks (exec+read check)
     - OpenAI regression paths (tool-call-only -> follow-up) keep working
-- Probe details (so you can explain failures quickly):
-  - `read` probe: the test writes a nonce file in the workspace and asks the agent to `read` it and echo the nonce back.
-  - `exec+read` probe: the test asks the agent to `exec`-write a nonce into a temp file, then `read` it back.
-  - image probe: the test attaches a generated PNG (cat + randomized code) and expects the model to return `cat <CODE>`.
+- Check details (so you can explain failures quickly):
+  - `read` check: the test writes a nonce file in the workspace and asks the agent to `read` it and echo the nonce back.
+  - `exec+read` check: the test asks the agent to `exec`-write a nonce into a temp file, then `read` it back.
+  - image check: the test attaches a generated PNG (cat + randomized code) and expects the model to return `cat <CODE>`.
   - Implementation reference: `src/gateway/gateway-models.profiles.live.test.ts` and `test/helpers/live-image-probe.ts`.
 - How to enable:
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
@@ -75,9 +83,9 @@ MiniMax M3 uses `minimax/MiniMax-M3` as its default provider/model reference.
   - Modern/all and small gateway sweeps default to their curated-list length as a cap; set `OPENCLAW_LIVE_GATEWAY_MAX_MODELS=0` for an exhaustive selected sweep or a positive number for a smaller cap.
 - How to select providers (avoid "OpenRouter everything"):
   - `OPENCLAW_LIVE_GATEWAY_PROVIDERS="google,google-gemini-cli,openai,anthropic,zai,minimax"` (comma allowlist)
-- Tool + image probes are always on in this live test:
-  - `read` probe + `exec+read` probe (tool stress)
-  - image probe runs when the model advertises image input support
+- Tool + image checks are always on in this live test:
+  - `read` check + `exec+read` check (tool stress)
+  - image check runs when the model advertises image input support
   - Flow (high level):
     - Test generates a tiny PNG with "CAT" + random code (`test/helpers/live-image-probe.ts`)
     - Sends it via `agent` `attachments: [{ mimeType: "image/png", content: "<base64>" }]`

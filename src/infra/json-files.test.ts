@@ -8,6 +8,7 @@ import {
   createAsyncLock,
   readDurableJsonFile,
   readJsonFile,
+  tryReadJsonObjectSync,
   writeJsonAtomic,
   writeTextAtomic,
 } from "./json-files.js";
@@ -22,6 +23,24 @@ afterEach(() => {
 });
 
 describe("json file helpers", () => {
+  it.each([
+    { content: '{"ok":true}', expected: { ok: true } },
+    { content: "[]", expected: null },
+    { content: '"text"', expected: null },
+    { content: "1", expected: null },
+    { content: "null", expected: null },
+    { content: "{not-json}", expected: null },
+    { content: undefined, expected: null },
+  ])("reads only JSON objects synchronously from $content", async ({ content, expected }) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "object.json");
+      if (content !== undefined) {
+        await fsPromises.writeFile(filePath, content);
+      }
+      expect(tryReadJsonObjectSync(filePath)).toEqual(expected);
+    });
+  });
+
   it.each([
     {
       name: "reads valid json",
@@ -150,6 +169,44 @@ describe("json file helpers", () => {
         ),
       ).toBe(true);
       expect(stagedTemps.some((name) => name.startsWith(".fs-safe-replace"))).toBe(false);
+    });
+  });
+
+  it("keeps empty stage prefixes as the default and ignores unrelated options", async () => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "note.txt");
+      const options = {
+        tempPrefix: "",
+        beforeRename: undefined,
+        get encoding() {
+          throw new Error("unrelated options must not be read");
+        },
+      };
+
+      await writeTextAtomic(filePath, "café", options);
+
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe("café");
+      await expect(fsPromises.readdir(base)).resolves.toEqual(["note.txt"]);
+    });
+  });
+
+  it("preserves the destination when the pre-publication hook rejects", async () => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "note.txt");
+      const refusal = new Error("publication refused");
+      await fsPromises.writeFile(filePath, "old");
+
+      await expect(
+        writeTextAtomic(filePath, "new", {
+          beforeRename: async ({ tempPath }) => {
+            await expect(fsPromises.readFile(tempPath, "utf8")).resolves.toBe("new");
+            throw refusal;
+          },
+        }),
+      ).rejects.toBe(refusal);
+
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe("old");
+      await expect(fsPromises.readdir(base)).resolves.toEqual(["note.txt"]);
     });
   });
 

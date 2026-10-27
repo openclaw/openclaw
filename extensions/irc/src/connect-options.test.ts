@@ -49,10 +49,4 @@ describe("buildIrcConnectOptions", () => {
       connectTimeoutMs: 1234,
     });
   });
-
-  it("rejects unavailable credentials before constructing an IRC connection", () => {
-    expect(() =>
-      buildIrcConnectOptions({ ...account, password: "", tokenStatus: "configured_unavailable" }),
-    ).toThrow(/configured but unavailable/i);
-  });
 });

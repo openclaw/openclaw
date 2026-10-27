@@ -17,7 +17,7 @@ export type PreparedStreamRuntime = {
   promptActiveSession: (
     prompt: string,
     options?: Parameters<
-      Parameters<typeof prepareEmbeddedAttemptStream>[0]["activeSession"]["prompt"]
+      Parameters<typeof prepareEmbeddedAttemptStream>[0]["agentSession"]["activeSession"]["prompt"]
     >[1],
   ) => Promise<void>;
   stream: ReturnType<typeof prepareEmbeddedAttemptStream>;

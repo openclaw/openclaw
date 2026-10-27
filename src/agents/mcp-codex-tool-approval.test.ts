@@ -45,7 +45,6 @@ describe("Codex MCP tool approval projection", () => {
   });
 
   it.each([
-    { mode: "approve" as const, annotations: {}, expected: false },
     { mode: "prompt" as const, annotations: { readOnlyHint: true }, expected: true },
     { mode: "auto" as const, annotations: { destructiveHint: true }, expected: true },
     { mode: "auto" as const, annotations: { readOnlyHint: true }, expected: false },

@@ -52,44 +52,41 @@ async function showResult(task, success) {
   await refresh();
 }
 
-automaticSetup.addEventListener("change", () => {
-  void showResult(
-    () =>
-      chrome.runtime.sendMessage({
-        type: "setNativeBootstrapEnabled",
-        enabled: automaticSetup.checked,
-      }),
-    automaticSetup.checked ? "Automatic setup enabled." : "Automatic setup disabled.",
-  );
-});
-useLocal.addEventListener("click", () => {
-  void showResult(
-    () => chrome.runtime.sendMessage({ type: "setNativeBootstrapEnabled", enabled: true }),
-    "Looking for local OpenClaw…",
-  );
-});
-accessMode.addEventListener("change", () => {
-  void showResult(
-    () => chrome.runtime.sendMessage({ type: "setAccessMode", accessMode: accessMode.value }),
-    "Access mode updated.",
-  );
-});
-pair.addEventListener("click", () => {
-  void showResult(
-    () =>
-      chrome.runtime.sendMessage({
-        type: "pair",
-        pairingString: pairingString.value,
-        accessMode: accessMode.value,
-      }),
-    "Manual pairing saved.",
-  );
-});
-disconnect.addEventListener("click", () => {
-  void showResult(
-    () => chrome.runtime.sendMessage({ type: "unpair" }),
-    "Disconnected. Automatic setup is disabled.",
-  );
-});
+for (const [element, event, request, success] of [
+  [
+    automaticSetup,
+    "change",
+    () => ({ type: "setNativeBootstrapEnabled", enabled: automaticSetup.checked }),
+    () => (automaticSetup.checked ? "Automatic setup enabled." : "Automatic setup disabled."),
+  ],
+  [
+    useLocal,
+    "click",
+    () => ({ type: "setNativeBootstrapEnabled", enabled: true }),
+    () => "Looking for local OpenClaw…",
+  ],
+  [
+    accessMode,
+    "change",
+    () => ({ type: "setAccessMode", accessMode: accessMode.value }),
+    () => "Access mode updated.",
+  ],
+  [
+    pair,
+    "click",
+    () => ({ type: "pair", pairingString: pairingString.value, accessMode: accessMode.value }),
+    () => "Manual pairing saved.",
+  ],
+  [
+    disconnect,
+    "click",
+    () => ({ type: "unpair" }),
+    () => "Disconnected. Automatic setup is disabled.",
+  ],
+]) {
+  element.addEventListener(event, () => {
+    void showResult(() => chrome.runtime.sendMessage(request()), success());
+  });
+}
 
 void refresh();

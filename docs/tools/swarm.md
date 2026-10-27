@@ -57,7 +57,7 @@ include values you want to change:
 {
   tools: {
     swarm: {
-      maxConcurrent: 8,
+      maxConcurrent: 32,
       maxChildrenPerGroup: 50,
       maxTotalPerGroup: 200,
       waitTimeoutSecondsMax: 600,
@@ -70,7 +70,7 @@ include values you want to change:
 | Field                   | Default | Description                                                                                                                    |
 | ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `enabled`               | `true`  | Enables collector features subject to tool policy; set `false` to opt out. Code Mode has additional requirements below.        |
-| `maxConcurrent`         | `8`     | Maximum collector children running concurrently in one swarm group. Additional accepted children queue in FIFO order.          |
+| `maxConcurrent`         | `32`    | Maximum collector children running concurrently in one swarm group's execution lane. Additional accepted children queue FIFO.  |
 | `maxChildrenPerGroup`   | `50`    | Maximum live collector children in one group.                                                                                  |
 | `maxTotalPerGroup`      | `200`   | Maximum collector children a group may spawn over its lifetime. This is the runaway-spawn backstop.                            |
 | `waitTimeoutSecondsMax` | `600`   | Maximum timeout accepted by one `agents_wait` call. The call default is 30 seconds.                                            |
@@ -80,6 +80,11 @@ Numeric values must be positive integers. OpenClaw bounds
 `maxConcurrent` to `1`–`1000`, `maxChildrenPerGroup` to `1`–`10000`,
 `maxTotalPerGroup` to `1`–`100000`, and `waitTimeoutSecondsMax` to
 `1`–`86400`.
+
+Each group has its own execution lane, independent of the parent's ordinary
+sub-agent limit. Budget for one model stream and one Code Mode worker isolate
+per running child. Raising `maxConcurrent` increases model and Gateway resource
+use; it does not raise `maxChildrenPerGroup` or `maxTotalPerGroup`.
 
 You can override Swarm for one configured agent with
 `agents.entries.*.tools.swarm`. Per-agent values merge over the top-level
@@ -151,7 +156,7 @@ Spawn or bridge failures can reject with other errors. Read the exact generated
 declarations and short orchestration idioms from `API.read("agents.d.ts")`
 inside Code Mode.
 
-Use `label` for a recognizable child name in transcript activity and Tasks views. Use
+Use `label` for a recognizable child name in session transcripts. Use
 `phase` in the options to publish a phase immediately before that child
 starts, or call `phase()` when several children belong to the same stage.
 `log()` publishes a short progress note. Progress calls are fire-and-forget.
@@ -299,6 +304,27 @@ The accepted spawn receipt describes this path: collect the result with
 `agents_wait`, or await `agents.run()` in OpenClaw Code Mode. Do not use
 `sessions_yield` to wait for collector children. They do not send completion notifications.
 
+The collected result is the child's complete final answer, read from its recorded
+transcript, including after delete-mode cleanup archives the session. Run lifecycle
+events carry only a 4,096-character preview of a reply; the collected result does
+not stop there. One result is bounded at 100 KB. A longer answer keeps its first
+100 KB and ends with a `[truncated: frozen completion output exceeded 100KB ...]`
+notice. If the complete answer is no longer available, the result is the preview
+followed by a `[truncated: the complete child answer is unavailable ...]` notice.
+Both cases set `resultTruncated: true` on the `agents_wait` item. For reports that
+may exceed the bound, have the child write the report to a file and return its path.
+
+Collector children are one-shot. They accept no steering or follow-up input, including
+after they finish or time out. A `sessions_send` to a collector child fails with an
+error that says so, and no run starts. To continue the work, start a new child with
+the context it needs. Give it a larger `runTimeoutSeconds` if the previous child timed
+out, and omit `collect` if the work needs follow-up turns: ordinary children accept
+`sessions_send` follow-ups after they finish.
+
+If OpenClaw cannot recover the requester for a queued collector after a restart,
+it records a failed launch and asks you to submit the task again. This can affect
+queued collectors created by older versions.
+
 Embedded and CLI-backed collector turns are not offered `sessions_yield`. If an
 override reaches the tool, it returns an error explaining that collector results
 are collected explicitly. A collector that nevertheless yields through another
@@ -321,26 +347,36 @@ it can be spawned but cannot start swarms from its own top-level sessions:
 {
   tools: { swarm: { enabled: true, defaultAgentId: "worker" } },
   agents: {
+    ownership: "explicit",
+    defaults: {
+      systemAgent: { agentId: "main" },
+    },
     entries: {
       main: {
-        default: true,
+        workspace: "~/.openclaw/workspace",
         subagents: { allowAgents: ["worker"] },
       },
       worker: { tools: { swarm: false } },
     },
   },
+  talk: { agentId: "main" },
 }
 ```
 
-Collector approvals fail closed. A child never opens an operator approval
+Collectors deny actions that require approval. A child never opens an operator approval
 prompt. A tool action that would require approval is denied, and the child can
 report that denial in its result so the script can decide what to do next.
 
 For structured output, OpenClaw adds a synthetic `structured_output` tool to
-the child and validates its payload against the supplied JSON Schema. An
-invalid payload gets one corrective nudge. If no payload is submitted, or the
+the child and validates its payload against the supplied JSON Schema. If a
+string-valued `result` fails validation, OpenClaw decodes it once as JSON and accepts
+the decoded value only if it matches the schema. Valid string results stay unchanged;
+integer literals outside JavaScript's safe range are preserved as strings.
+An invalid payload gets one corrective nudge. If no payload is submitted, or the
 retry still does not validate, the collector completion keeps the child's raw
-text, leaves `structured` unset, and includes `schemaError`. The low-level `agents_wait`
+text, leaves `structured` unset, and includes `schemaError`. Later `structured_output`
+calls in that run are not evaluated; they return `reason: "retry_budget_exhausted"`
+rather than a verdict on the new payload. The low-level `agents_wait`
 result exposes those fields for explicit recovery logic.
 
 ### Keep collector groups flat
@@ -371,10 +407,14 @@ collector children. Collector children use only `maxChildrenPerGroup` and
 `maxTotalPerGroup`. They do not consume the per-session child budget. The spawn
 depth guard still applies to both modes.
 
-After admission, children above `maxConcurrent` queue FIFO within their swarm
-group, nested inside the global sub-agent lane. These concurrency layers queue
-work rather than rejecting it. A collector spawn that exceeds either group cap
-is rejected with the relevant config key in the error.
+After admission, collector children execute in
+`subagent:swarm:<schedulerGroupKey>`, capped by the group's resolved
+`tools.swarm.maxConcurrent` (default `32`). Additional children queue FIFO.
+They do not consume the parent's ordinary `subagent:<immediate session>` slots,
+which remain capped by `agents.defaults.subagents.maxConcurrent` (default `8`).
+An ordinary child spawned by a collector uses the collector's own session lane.
+A collector spawn that exceeds either group admission cap is rejected with the
+relevant config key in the error.
 
 ## Observe a Swarm
 
@@ -406,8 +446,7 @@ identify each child's status. Native clients present killed and timed-out childr
 as failed. Native groups leave the widget when none of their children are queued
 or running. The native widget disappears when no active groups remain.
 
-Collector children appear in inline transcript activity rows, the chat **Tasks**
-tab, and the [Tasks page](/automation/tasks#control-ui). They have no session-sidebar
+Collector children appear in their session transcripts. They have no session-sidebar
 rows. Their activity and unread failures still contribute to the parent’s sidebar
 ring and attention signals. Persistent spawned sessions and forks keep their
 normal sidebar nesting.
@@ -432,10 +471,13 @@ nested descendants. Collector mode changes result delivery, not cancellation
 scope. Successful cancellation prevents selected queued children from starting
 as running siblings stop. It does not cancel work from unrelated parent turns.
 
-If Stop reports incomplete descendant cancellation, inspect the remaining work
-on the [Tasks page](/automation/tasks#control-ui) and retry cancellation for
+Stop also waits for the selected children's execution and queued-launch cleanup.
+A child's task can show a terminal status while that cleanup is still settling.
+
+If Stop times out or reports incomplete descendant cancellation, inspect the remaining work
+with `subagents` using `action: "list"` and retry cancellation for
 those children. A stopped parent alone does not confirm that every child stopped,
-and a cancellation acknowledgment does not promise instantaneous runtime cleanup.
+and a failed request can leave cleanup pending.
 
 Already-accepted children remain independent when the parent completes normally,
 yields, or times out. If the parent is no longer active, cancel the child tasks
@@ -540,7 +582,15 @@ failures. A rejected launch or failed child must not discard results from other
 accepted children. Keep the returned run IDs for recovery. Do not repeat
 successful launches or automatically rerun failed work.
 
-Each `agents_wait` call accepts 1–1000 run ids. It returns:
+Each `agents_wait` call accepts 1–1000 run ids. Use `awaitResults: true` to keep
+collection owned until **all** authorized requested collectors settle, without
+an observer polling timeout. It is mutually exclusive with `timeoutSeconds`;
+child and agent-run deadlines, tool watchdogs, cancellation, and ownership
+checks still apply. In OpenClaw Code Mode this also makes the enclosing cell
+required, so the runtime—not repeated model calls—waits for registry completion
+events. An ordinary call keeps its existing first-completion and timeout behavior.
+
+It returns:
 
 ```typescript
 type AgentsWaitResult = {
@@ -548,9 +598,11 @@ type AgentsWaitResult = {
     runId: string;
     status: "done" | "failed" | "killed" | "timeout";
     result: string;
+    resultTruncated?: true;
     structured?: unknown;
     error?: string;
     schemaError?: string;
+    reason?: "yielded_without_result";
     sessionKey: string;
     label?: string;
     usage?: { inputTokens: number; outputTokens: number };
@@ -569,14 +621,23 @@ A completed item can contain partial `structured` data and still have
 nonblank `error`, then `schemaError`, then a nonblank `result`, and finally a
 run/status fallback.
 
+`reason: "yielded_without_result"` marks a collector that the registry settled as
+failed after a legacy yield with no recorded outcome. Branch on it rather than on
+`error` text; every other completion omits it.
+
+`resultTruncated: true` marks a `result` that may be incomplete: the child's answer
+exceeded the 100 KB result bound, or its complete answer was no longer available and
+only the 4,096-character preview remained. Each case ends `result` with a
+`[truncated: ...]` notice. Do not treat a truncated result as the child's whole report,
+and do not parse it as complete structured data.
+
 Individual failed items do not make a mixed `agents_wait` poll a top-level tool
 error. The poll remains a successful JSON result so callers can process its
 `completed`, `pending`, and `errors` arrays independently.
 
 The call returns immediately when any requested child is already complete,
 when at least one pending child completes, when no valid pending ids remain,
-or when its timeout expires. Completed records are idempotent, so passing an
-already-completed run id returns its result again. Only the spawning session
+or when its timeout expires. Passing an already-completed run id returns the same saved result again. Only the spawning session
 or its authorized parent chain can wait on a collector.
 
 This is bounded long polling, not a busy status loop. Keep passing only the
@@ -589,7 +650,7 @@ sessions, or persistent session mode.
 ## Limits
 
 Swarm runs one-shot collector children. There is no stateful multi-turn worker
-API. Children run on the local Gateway's sub-agent lane, and spawns have no
+API. Children run on the local Gateway in their group's Swarm lane, and spawns have no
 cloud-placement option. Saved workflow definitions and a graph DSL are not part
 of Swarm's current direction.
 

@@ -174,8 +174,7 @@ const rules: Array<DeprecatedRule & { id: string }> = [
     message: "extensions must use focused non-deprecated plugin SDK subpaths",
   },
   {
-    // Deprecated facades stay exported for third-party plugins, but internal code
-    // must not reach them via package specifier or relative import.
+    // Internal code must not reach deprecated or retired facades by any import form.
     id: "facade-internal-imports",
     roots: ["src", "extensions"],
     collectFile: collectBannedInternalFacadeImportViolations,
@@ -187,7 +186,6 @@ const rules: Array<DeprecatedRule & { id: string }> = [
     allowedFiles: [
       "src/infra/outbound/deliver-runtime.ts",
       "src/infra/outbound/deliver.ts",
-      "src/plugin-sdk/channel-message.ts",
       "src/plugin-sdk/inbound-reply-dispatch.ts",
     ],
     message: "use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext",

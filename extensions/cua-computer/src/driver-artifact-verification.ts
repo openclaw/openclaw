@@ -1,6 +1,7 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { sha256FileSync } from "@openclaw/fs-safe/durability";
+import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DRIVER_PACKAGE = "@trycua/cua-driver";
 
@@ -19,37 +20,25 @@ type CuaDriverManifest = {
   cuaDriverArtifacts?: Partial<Record<SupportedArtifactPlatform, DriverArtifactRecord>>;
 };
 
-type CuaDriverArtifactDiagnosticCode =
-  | "COMPUTER_DRIVER_DIGEST_MISMATCH"
-  | "COMPUTER_DRIVER_MANIFEST_INVALID"
-  | "COMPUTER_DRIVER_PACKAGE_MISSING"
-  | "COMPUTER_DRIVER_PLATFORM_UNSUPPORTED"
-  | "COMPUTER_DRIVER_VERSION_MISMATCH";
-
 export type CuaDriverArtifactVerification =
-  | { ok: true; applicable: false }
-  | { ok: true; applicable: true; version: string; platformPackage: string }
+  | { ok: true }
   | {
       ok: false;
-      code: CuaDriverArtifactDiagnosticCode;
       diagnostic: string;
       fixHint: string;
     };
 
-type CuaDriverArtifactInspectionOptions = {
-  platform: NodeJS.Platform;
-  arch: string;
-  linuxLibc?: "gnu" | "musl";
-  pluginManifest: unknown;
-  resolvePackageJson: (packageName: string) => string | undefined;
-};
-
 function failure(
-  code: CuaDriverArtifactDiagnosticCode,
+  code:
+    | "COMPUTER_DRIVER_DIGEST_MISMATCH"
+    | "COMPUTER_DRIVER_MANIFEST_INVALID"
+    | "COMPUTER_DRIVER_PACKAGE_MISSING"
+    | "COMPUTER_DRIVER_PLATFORM_UNSUPPORTED"
+    | "COMPUTER_DRIVER_VERSION_MISMATCH",
   message: string,
   fixHint: string,
 ): CuaDriverArtifactVerification {
-  return { ok: false, code, diagnostic: `${code}: ${message} Fix: ${fixHint}`, fixHint };
+  return { ok: false, diagnostic: `${code}: ${message} Fix: ${fixHint}`, fixHint };
 }
 
 function resolveArtifactPlatform(
@@ -75,19 +64,14 @@ function resolveArtifactPlatform(
   return { kind: "not-applicable" };
 }
 
-function readJson(pathname: string): unknown {
-  return JSON.parse(fs.readFileSync(pathname, "utf8"));
-}
-
 export function readPackageIdentity(pathname: string): { name?: string; version?: string } {
-  const value = readJson(pathname);
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const record = asOptionalRecord(JSON.parse(fs.readFileSync(pathname, "utf8")));
+  if (!record) {
     return {};
   }
-  const record = value as Record<string, unknown>;
   return {
-    name: typeof record.name === "string" ? record.name : undefined,
-    version: typeof record.version === "string" ? record.version : undefined,
+    name: readStringField(record, "name"),
+    version: readStringField(record, "version"),
   };
 }
 
@@ -117,16 +101,16 @@ function loadArtifactRecord(
   return { version, artifact };
 }
 
-function hashFile(pathname: string): string {
-  return createHash("sha256").update(fs.readFileSync(pathname)).digest("hex");
-}
-
-export function inspectCuaDriverArtifacts(
-  options: CuaDriverArtifactInspectionOptions,
-): CuaDriverArtifactVerification {
+export function inspectCuaDriverArtifacts(options: {
+  platform: NodeJS.Platform;
+  arch: string;
+  linuxLibc?: "gnu" | "musl";
+  pluginManifest: unknown;
+  resolvePackageJson: (packageName: string) => string | undefined;
+}): CuaDriverArtifactVerification {
   const selected = resolveArtifactPlatform(options.platform, options.arch, options.linuxLibc);
   if (selected.kind === "not-applicable") {
-    return { ok: true, applicable: false };
+    return { ok: true };
   }
   if (selected.kind === "unsupported") {
     const fixHint = "Run this node host on Windows x64/ARM64 or glibc-based Linux x64/ARM64.";
@@ -210,7 +194,7 @@ export function inspectCuaDriverArtifacts(
         fixHint,
       );
     }
-    if (!stat.isFile() || stat.isSymbolicLink()) {
+    if (!stat.isFile()) {
       const fixHint = "Reinstall OpenClaw; the native driver files must be regular package files.";
       return failure(
         "COMPUTER_DRIVER_DIGEST_MISMATCH",
@@ -220,7 +204,7 @@ export function inspectCuaDriverArtifacts(
     }
     let actualDigest: string;
     try {
-      actualDigest = hashFile(pathname);
+      actualDigest = sha256FileSync(pathname).digest;
     } catch {
       const fixHint = `Reinstall OpenClaw on this node host to restore ${platformPackage} ${accepted.version}.`;
       return failure(
@@ -240,5 +224,5 @@ export function inspectCuaDriverArtifacts(
     }
   }
 
-  return { ok: true, applicable: true, version: accepted.version, platformPackage };
+  return { ok: true };
 }

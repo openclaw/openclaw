@@ -3,15 +3,16 @@ summary: "Use OpenRouter's unified API to access many models in OpenClaw"
 read_when:
   - You want a single API key for many LLMs
   - You want to run models via OpenRouter in OpenClaw
+  - You want to use Jev for typed decisions through OpenRouter
   - You want to use OpenRouter for image generation
   - You want to use OpenRouter for music generation
   - You want to use OpenRouter for video generation
 title: "OpenRouter"
 ---
 
-OpenRouter routes requests to many models behind one API and one key. It is
-OpenAI-compatible, so OpenClaw talks to it over the same
-`openai-completions`-style transport used for other proxy providers.
+OpenRouter routes requests to many models behind one API and one key. Chat uses
+the OpenAI-compatible `openai-completions` transport. Typed Jev decisions use the
+separate System One API.
 
 ## Getting started
 
@@ -123,6 +124,82 @@ Discovered models use OpenRouter's advertised tool support. When a model's
 definitions or tool choice. Models without that metadata keep the default tool
 behavior.
 
+On public `openrouter.ai` chat-completions routes, OpenClaw sends
+`function.strict: false` for tool definitions and preserves the schema's required
+fields, so optional inputs stay optional. Custom proxy endpoints keep their
+existing compatibility policy. An explicit `compat.supportsStrictMode: false`
+omits the strict field.
+
+## Typed decisions with Jev
+
+Select Jev as the [decision model](/concepts/decision-models), using your existing
+OpenRouter connection and auth profiles. No separate TypeSafe login is needed:
+
+```json5
+{
+  agents: {
+    defaults: { decisionModel: "openrouter/typesafe/jev-1.14" },
+  },
+}
+```
+
+The canonical catalog includes `openrouter/typesafe/jev-1.13`, `openrouter/typesafe/jev-1.14`, and
+`openrouter/~typesafe/jev-latest` as **decision-only** routes. They do not appear as chat
+choices, and selecting a decision model does not change your primary or utility
+model. The latest alias follows future releases; it is not a version pin. Pin 1.14 for
+reproducible model selection.
+
+The OpenClaw adapter accepts text, structured JSON objects/arrays, or one inline
+PNG/JPEG image with optional text. Both versions support Boolean, Choice, and Score
+questions. Jev 1.14 and the latest alias also support Box questions. Supply
+instructions for every question. Choice
+supports 2–255 options; Score supports 2–10 non-null levels. Boolean criteria are optional, but when
+provided must describe both true and false. Sorting, tags and explicit
+reasoning controls are rejected before inference. Omit reasoning or use `auto`.
+Jev returns no free-form prose or reasoning trace.
+
+OpenClaw sends one request to `/systemone` appended to the effective OpenRouter
+API base URL, including a declared custom proxy path prefix. A `baseUrl` override
+alone does not declare native decision support: the owning plugin must publish
+that route and protocol in its [manifest model catalog](/plugins/manifest/models#modelcatalog-reference).
+Foreign endpoints without that declaration are refused. It preserves normal prepared
+auth and provider routing preferences (including privacy restrictions). Unsupported
+chat-only parameters are rejected rather than silently dropped. No session IDs,
+user identity or trace fields are added to the request body.
+
+This integration declares a 262,144-token state-plus-questions budget. Images are
+limited to 4 MiB decoded and must meet TypeSafe's current dimension requirements;
+OpenClaw does not fetch remote images or resize them. Image and Box support are
+experimental upstream. Jev's
+published input price is $0.042 per million tokens; output tokens are free.
+The adapter preserves reported token
+counts and actual `usage.cost`, including explicit zero. Missing actual cost stays
+missing; the adapter never invents a bill or finalizes usage a second time.
+
+Use `contractVersion: 2` with the `decision_evaluate` core tool and tagged state
+(for example, `{ type: "text", text: "Ticket contents" }`). Plugin consumers
+should use `api.runtime.decisions.evaluateV2`. V1-only consumers cannot
+automatically consume OpenRouter results carrying native USD billing or provider
+metadata. Native model identity, upstream provider,
+selected labels, fractional scores and rounded distributions remain unchanged.
+The legacy V1 adapter succeeds only when the response is representable without
+losing billing or metadata; otherwise it returns `unsupported-input` rather than
+silently discarding those facts.
+
+For an image, pass tagged state `{ type: "image", dataUri: "data:image/png;base64,...", text: "Listing photo" }`
+and a question such as `{ type: "box", instructions: "the product in the listing photo" }`.
+Box answers contain `box: { top, bottom, left, right }`, measured from the top-left
+corner and normalized to image width and height. A Box answer does not mean the
+target exists: ask a Boolean presence question in the same batch. See
+[Multimodal Decisions](https://openrouter.ai/docs/guides/community/multimodal-decisions)
+and [Box](https://docs.typesafe.ai/primitives/box) for upstream behavior.
+
+The known Jev routes are bounded canonical manifest declarations. The ordinary
+live text catalog does not turn `decisions` output rows into synthetic chat
+models. See [Jev on OpenRouter](https://openrouter.ai/docs/guides/community/jev)
+and the [System One API](https://openrouter.ai/docs/api/api-reference/systemone/submit-a-system-one-request)
+for the upstream contract.
+
 ## Image generation
 
 OpenRouter can back the `image_generate` tool. Set an OpenRouter image model
@@ -144,7 +221,7 @@ under `agents.defaults.mediaModels.image`:
 }
 ```
 
-OpenClaw sends canonical OpenRouter image requests to the dedicated image API
+OpenClaw sends standard OpenRouter image requests to the dedicated image API
 (`POST /api/v1/images`). Gemini image models additionally receive
 `aspect_ratio` and `resolution` hints, and image edits pass source images as
 `input_references`. Generated images come back as base64 (`b64_json`) with an
@@ -354,18 +431,19 @@ openclaw models auth login --provider openrouter --method oauth
 openclaw models auth login --provider openrouter --method api-key
 ```
 
-On verified OpenRouter requests (`https://openrouter.ai/api/v1`), OpenClaw adds
-OpenRouter's documented app-attribution headers:
+On requests to OpenRouter endpoints (`openrouter.ai`), OpenClaw adds OpenRouter's
+documented app-attribution headers. This applies to the bundled `openrouter`
+provider and to custom provider ids whose `baseUrl` points at OpenRouter:
 
-| Header                    | Value                                                                                                  |
-| ------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `HTTP-Referer`            | `https://openclaw.ai`                                                                                  |
-| `X-OpenRouter-Title`      | `OpenClaw`                                                                                             |
-| `X-OpenRouter-Categories` | `cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent` |
+| Header                    | Value                      |
+| ------------------------- | -------------------------- |
+| `HTTP-Referer`            | `https://openclaw.ai`      |
+| `X-OpenRouter-Title`      | `OpenClaw`                 |
+| `X-OpenRouter-Categories` | `personal-agent,cli-agent` |
 
 <Warning>
 If you repoint the OpenRouter provider at some other proxy or base URL, OpenClaw
-does **not** inject those OpenRouter-specific headers or Anthropic cache markers.
+does **not** inject those OpenRouter-specific headers or prompt-cache markers.
 </Warning>
 
 ## Advanced configuration
@@ -397,9 +475,10 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     aliases (`response_cache`, `response_cache_ttl_seconds`,
     `response_cache_clear`) are accepted, as is `responseCacheTtl` /
     `response_cache_ttl` without the `Seconds` suffix.
+    TTL values are truncated and clamped to 1–86400 seconds; non-finite values are ignored.
 
     This is separate from provider prompt caching and from OpenRouter's
-    Anthropic `cache_control` markers. It only applies on verified
+    `cache_control` prompt-cache markers. It only applies on verified
     `openrouter.ai` routes, not custom proxy base URLs.
 
   </Accordion>
@@ -455,6 +534,15 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     Gemini-backed OpenRouter refs stay on the proxy-Gemini path: OpenClaw keeps
     Gemini thought-signature sanitation there, but does not enable native
     Gemini replay validation or bootstrap rewrites.
+
+    On verified OpenRouter routes, `google/gemini*` refs (including `~google/`
+    aliases and `:variant` suffixes) receive one `cache_control: { type:
+    "ephemeral" }` marker on the stable system/developer prompt prefix. Gemini
+    uses only the last breakpoint, so OpenClaw does not mark tools or history.
+    `cacheRetention: "none"` disables it; `"short"` and `"long"` keep the
+    provider's default cache window. The model's minimum cacheable prompt size
+    still applies. See [Prompt caching](/reference/prompt-caching#openrouter).
+
   </Accordion>
 
   <Accordion title="Provider routing metadata">

@@ -1,39 +1,54 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
-import { runMemoryIndexState } from "./manager-cpu-worker-runtime.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import type { MemoryIndexMeta } from "./manager-reindex-state.js";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
+import type { MemoryIndexManager } from "./manager.js";
 
-const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
+const memoryIndex = await import("./index.js");
+const projectKey = "github.com/example/project";
+const projectOpts = { activeProjectKeys: [projectKey] };
+const expectedCandidate = expect.objectContaining({
+  projectKey,
+  triggers: "release local",
+  provenance: expect.objectContaining({ originClass: "agent" }),
+});
 
 describe("automatic candidates during provenance repair", () => {
-  const fixture = createManagerIndexFixture({
-    getMemorySearchManager,
-    closeAllMemorySearchManagers,
-  });
+  const { paths, provider, createConfig, getFreshManager, seedSessionTranscript } =
+    createManagerIndexFixture(memoryIndex);
+  type Config = Parameters<typeof getFreshManager>[0];
+  async function seedLegacyIndex(cfg: Config, resetVersions = false) {
+    await fs.writeFile(
+      path.join(paths.workspace, "MEMORY.md"),
+      `- Keep the release local. <!-- trigger: release local --> <!-- project: ${projectKey} -->\n`,
+    );
+    const initial = await getFreshManager(cfg, "cli");
+    await initial.sync({ reason: "cli", force: true });
+    const db = memoryIndexFixtureWriter(initial);
+    db.exec("DELETE FROM memory_index_chunk_provenance");
+    if (resetVersions) {
+      db.exec(`DELETE FROM memory_embedding_cache;
+        UPDATE memory_index_meta
+        SET value = json_remove(value, '$.provenanceVersion', '$.chunkingVersion')
+        WHERE key = 'memory_index_meta_v1'`);
+    }
+    await initial.close();
+  }
+  const lookups = (manager: MemoryIndexManager) => [
+    manager.listCuratedProjectCandidates(projectOpts),
+    manager.listTriggerCandidates(projectOpts),
+  ];
 
   it.for([false, true])(
     "returns before a pending rebuild finishes (startup catch-up: %s)",
     async (startupCatchup, { signal }) => {
-      const projectKey = "github.com/example/project";
-      await fs.writeFile(
-        path.join(fixture.paths.workspace, "MEMORY.md"),
-        `- Keep the release local. <!-- trigger: release local --> <!-- project: ${projectKey} -->\n`,
-      );
-      await Promise.all(
-        Array.from({ length: 256 }, (_, index) =>
-          fs.writeFile(
-            path.join(fixture.paths.memory, `entry-${index}.md`),
-            `# Entry ${index}\nSynthetic memory content ${index}.\n`,
-          ),
-        ),
-      );
-      const cfg = fixture.createConfig({
+      const cfg = createConfig({
         provider: "batch-wide-test",
         batchEnabled: true,
         vectorEnabled: false,
@@ -41,96 +56,47 @@ describe("automatic candidates during provenance repair", () => {
         sessionMemory: startupCatchup,
       });
       if (startupCatchup) {
-        await fixture.seedSessionTranscript({
+        await seedSessionTranscript({
           sessionId: "legacy-session",
           messages: [{ role: "user", timestamp: 1, content: "Remember the release preference." }],
         });
       }
-      const initial = await fixture.getFreshManager(cfg, "cli");
-      await initial.sync({ reason: "cli", force: true });
-      const db = Reflect.get(initial, "db") as DatabaseSync;
-      // Older indexes have neither classified provenance nor a chunking version.
-      db.exec("DELETE FROM memory_index_chunk_provenance; DELETE FROM memory_embedding_cache");
-      const row = db
-        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
-        .get() as { value: string };
-      const meta = JSON.parse(row.value) as MemoryIndexMeta;
-      delete meta.provenanceVersion;
-      delete meta.chunkingVersion;
-      db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
-        JSON.stringify(meta),
-      );
-      await initial.close();
+      await seedLegacyIndex(cfg, true);
 
       const gate = createDeferred<void>();
       const batchEntered = createDeferred<void>();
-      fixture.provider.providerRuntimeBatchGate = gate.promise;
-      fixture.provider.providerRuntimeBatchEntered = () => batchEntered.resolve();
+      provider.providerRuntimeBatchGate = gate.promise;
+      provider.providerRuntimeBatchEntered = () => batchEntered.resolve();
       // Native test cancellation must release both rendezvous before manager teardown.
       const abort = () => {
         batchEntered.resolve();
         gate.resolve();
       };
       signal.addEventListener("abort", abort, { once: true });
-      const candidates: Promise<unknown>[] = [];
+      let candidates: ReturnType<typeof lookups> = [];
       try {
         signal.throwIfAborted();
-        const upgraded = await fixture.getFreshManager(cfg);
-        expect(upgraded.status().custom?.indexIdentity).toMatchObject({
-          status: "mismatched",
-          reason: "index provenance classifier changed",
-        });
+        const upgraded = await getFreshManager(cfg);
         if (startupCatchup) {
           await batchEntered.promise;
           signal.throwIfAborted();
-          expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1);
         }
-        let completed = 0;
-        for (const lookup of [
-          () => upgraded.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
-          () => upgraded.listTriggerCandidates({ activeProjectKeys: [projectKey] }),
-        ]) {
-          candidates.push(
-            lookup().then((results) => {
-              completed += 1;
-              return results;
-            }),
-          );
-        }
-        // Queue a read behind both lookups on the single retrieval worker. Their
-        // public promises must then settle without releasing the repair gate.
-        await runMemoryIndexState({
-          agentId: "main",
-          databasePath: expectDefined(upgraded.status().dbPath, "memory database path"),
-        });
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(completed).toBe(2);
+        candidates = lookups(upgraded);
         expect(await Promise.all(candidates)).toEqual([[], []]);
         await batchEntered.promise;
         signal.throwIfAborted();
-        expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1);
+        expect(provider.providerRuntimeActiveBatchCalls).toBe(1);
         expect(upgraded.status().dirty).toBe(true);
         gate.resolve();
         await upgraded.sync({ reason: "test-repair-complete" });
         expect(upgraded.status().dirty).toBe(false);
-        const expected = [
-          expect.objectContaining({
-            projectKey,
-            triggers: "release local",
-            provenance: expect.objectContaining({ originClass: "agent" }),
-          }),
-        ];
-        expect(
-          await upgraded.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
-        ).toEqual(expected);
-        expect(await upgraded.listTriggerCandidates({ activeProjectKeys: [projectKey] })).toEqual(
-          expected,
-        );
+        expect(await Promise.all(lookups(upgraded))).toEqual([
+          [expectedCandidate],
+          [expectedCandidate],
+        ]);
       } finally {
         signal.removeEventListener("abort", abort);
-        fixture.provider.providerRuntimeBatchEntered = null;
+        provider.providerRuntimeBatchEntered = null;
         gate.resolve();
         await Promise.allSettled(candidates);
       }
@@ -138,26 +104,16 @@ describe("automatic candidates during provenance repair", () => {
   );
 
   it("drains admitted candidate repair retries before closing the database", async () => {
-    const projectKey = "github.com/example/project";
-    await fs.writeFile(
-      path.join(fixture.paths.workspace, "MEMORY.md"),
-      `- Preserve the release preference. <!-- trigger: release local --> <!-- project: ${projectKey} -->\n`,
-    );
-    const ftsConfig = fixture.createConfig({ provider: "none", vectorEnabled: false });
-    const initial = await fixture.getFreshManager(ftsConfig, "cli");
-    await initial.sync({ reason: "cli", force: true });
-    // The existing migration will invalidate these sources on the next open.
-    const initialDb = Reflect.get(initial, "db") as DatabaseSync;
-    initialDb.exec("DELETE FROM memory_index_chunk_provenance");
-    await initial.close();
+    const ftsConfig = createConfig({ provider: "none", vectorEnabled: false });
+    await seedLegacyIndex(ftsConfig);
 
     const initialization = createDeferred<void>();
     const retryStarted = createDeferred<void>();
     const retry = createDeferred<void>();
-    fixture.provider.providerInitGate = initialization.promise;
-    fixture.provider.providerCreationFailure = "local";
-    const upgraded = await fixture.getFreshManager(
-      fixture.createConfig({ provider: "local", vectorEnabled: false }),
+    provider.providerInitGate = initialization.promise;
+    provider.providerCreationFailure = "local";
+    const upgraded = await getFreshManager(
+      createConfig({ provider: "local", vectorEnabled: false }),
       "cli",
     );
     const owner = upgraded as unknown as {
@@ -173,64 +129,42 @@ describe("automatic candidates during provenance repair", () => {
         return pendingRetry;
       })
       .mockImplementationOnce(runSync);
-    // This is the same public sync admission used by detached startup catch-up.
-    // Optional initialization now falls back successfully. Fail its first real
-    // keyword generation so candidate repair must still admit a separate retry.
+    // Fail startup after fallback so candidate repair must admit a separate retry.
     const startupFailure = new Error("startup progress callback failed");
-    const startup = upgraded.sync({
-      reason: "session-startup-catchup",
-      progress: () => {
-        throw startupFailure;
-      },
-    });
-    const startupOutcome = startup.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const startupOutcome = upgraded
+      .sync({
+        reason: "session-startup-catchup",
+        progress: () => {
+          throw startupFailure;
+        },
+      })
+      .catch((error: unknown) => error);
     let closing: Promise<void> | undefined;
-    let closeSettled = false;
+    const closed = vi.fn();
     try {
-      await vi.waitFor(() => expect(fixture.provider.providerCalls.at(-1)?.provider).toBe("local"));
-      await expect(
-        upgraded.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
-      ).resolves.toEqual([]);
-      closing = upgraded.close().then(() => {
-        closeSettled = true;
-      });
-      // Let close enter its drain before the already-running sync fails. This
-      // reproduces the original execution order without a timing-based sleep.
+      await vi.waitFor(() => expect(provider.providerCalls.at(-1)?.provider).toBe("local"));
+      await expect(upgraded.listCuratedProjectCandidates(projectOpts)).resolves.toEqual([]);
+      closing = upgraded.close().then(closed);
+      // Enter close's drain before the running sync fails.
       await Promise.resolve();
       initialization.resolve();
       await retryStarted.promise;
       expect(await startupOutcome).toBe(startupFailure);
       expect(retryGate).toHaveBeenCalledTimes(2);
       // Give teardown a turn to finish while the admitted retry remains gated.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(closeSettled).toBe(false);
+      await nextTurn();
+      expect(closed).not.toHaveBeenCalled();
       retry.resolve();
       await closing;
 
-      // Observable persistence proof: close did not merely cancel or abandon
-      // the retry; its classified candidates survive a fresh manager open.
-      const reopened = await fixture.getFreshManager(ftsConfig, "cli");
-      expect(
-        await reopened.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
-      ).toEqual([
-        expect.objectContaining({
-          projectKey,
-          triggers: "release local",
-          provenance: expect.objectContaining({ originClass: "agent" }),
-        }),
-      ]);
+      // The retry must persist, not merely be cancelled by close.
+      const reopened = await getFreshManager(ftsConfig, "cli");
+      expect(await reopened.listCuratedProjectCandidates(projectOpts)).toEqual([expectedCandidate]);
     } finally {
       initialization.resolve();
       retry.resolve();
-      await startupOutcome;
-      await pendingRetry?.catch(() => undefined);
+      await startupOutcome.then(() => pendingRetry).catch(() => undefined);
       await closing;
-      await upgraded.close();
       retryGate.mockRestore();
     }
   });

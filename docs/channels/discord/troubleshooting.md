@@ -4,15 +4,34 @@ read_when:
   - The Discord bot does not reply in a guild channel or DM
   - Discord gateway timeouts, duplicate replies, or bot-to-bot loops appear
   - Voice speech-to-text drops with a decryption failure
+  - The Discord plugin fails during register with ERR_MODULE_NOT_FOUND
 title: "Discord troubleshooting"
 sidebarTitle: "Troubleshooting"
 ---
 
 Symptom-first checks for a Discord account that is not behaving.
 
+Each account start logs `[account] starting account (reason: ...)` at info level.
+The reason distinguishes startup, manual starts, automatic retries, health recovery,
+config/plugin/secret reloads, and host-thaw recovery. A Discord socket reconnect or
+resume stays inside the existing account lifetime and does not produce this line.
+An event-loop stall label identifies work while its named operation is active; it
+does not by itself establish that an account restarted.
+
 ## Troubleshooting
 
 <AccordionGroup>
+  <Accordion title="Plugin fails during register with ERR_MODULE_NOT_FOUND">
+    On OpenClaw 2026.9.33 and later, the Discord channel can fail to start on every Gateway restart with a log line like:
+
+```text
+plugin failed during register: runtime dependencies are missing for externally distributed plugin discord; reinstall or update the plugin package, then restart the Gateway. (Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'mdast-util-to-string' imported from .../plugin-captures/.../node_modules/@openclaw/discord/node_modules/mdast-util-from-markdown/lib/index.js)
+```
+
+    Reinstalling the plugin does not fix it. This happens when the Gateway's Node process runs with `--preserve-symlinks` or `NODE_PRESERVE_SYMLINKS=1`. Remove the flag from the Gateway service, then restart the Gateway. See [Nested dependency missing under preserve-symlinks](/plugins/dependency-resolution#nested-dependency-missing-under-preserve-symlinks) for how to check the service and apply the workaround.
+
+  </Accordion>
+
   <Accordion title="Used disallowed intents or bot sees no guild messages">
 
     - enable Message Content Intent
@@ -87,7 +106,7 @@ openclaw logs --follow
   <Accordion title="Permissions audit mismatches">
     `channels status --probe` permission checks only work for numeric channel IDs.
 
-    If you use slug keys, runtime matching can still work, but probe cannot fully verify permissions.
+    If you use slug keys, runtime matching can still work, but check cannot fully verify permissions.
 
   </Accordion>
 
@@ -100,15 +119,14 @@ openclaw logs --follow
   </Accordion>
 
   <Accordion title="Bot to bot loops">
-    By default bot-authored messages are ignored.
+    Bot-authored messages are accepted by default under normal mention and access rules.
 
-    If you set `channels.discord.allowBots=true`, use strict mention and allowlist rules to avoid loop behavior.
-    Prefer `channels.discord.allowBots="mentions"` to only accept bot messages that mention the bot.
+    Keep mention and allowlist rules appropriate for the room. Set `channels.discord.allowBots=false` to disable bot-triggered turns, or `channels.discord.allowBots="mentions"` to only accept bot messages that mention the bot. These settings do not hide accessible bot-authored history or human-selected reply context.
     In `"mentions"` mode, reply-ping metadata alone does not count. Bot replies need an active native mention or a configured text/transcript mention outside Markdown code.
 
-    OpenClaw also ships shared [bot loop protection](/channels/bot-loop-protection). Whenever `allowBots` lets bot-authored messages reach dispatch, Discord maps the inbound event to `(account, channel, bot pair)` facts and the generic pair guard suppresses the pair after it crosses the configured event budget. The guard prevents runaway two-bot loops that previously had to be stopped by Discord rate limits; it does not affect single-bot deployments or one-shot bot replies that stay under the budget.
+    OpenClaw also ships shared [bot loop protection](/channels/bot-loop-protection). Whenever `allowBots` lets bot-authored messages reach dispatch, Discord maps the inbound event to `(account, channel, bot pair)` facts and the generic pair guard suppresses the pair after it crosses the configured event budget. The guard bounds rapid two-bot loops; exchanges below the budget can continue. It does not affect human messages or one-shot bot replies that stay under the budget.
 
-    Default settings (active when `allowBots` is set):
+    Default settings (active whenever bot-authored messages are admitted):
 
     - `maxEventsPerWindow: 20` -- bot pair can exchange 20 messages within the sliding window
     - `windowSeconds: 60` -- sliding window length

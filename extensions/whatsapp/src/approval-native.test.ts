@@ -5,10 +5,10 @@ import { whatsappApprovalCapability } from "./approval-native.js";
 const fixture = createNativeApprovalTestFixture({
   channel: "whatsapp",
   capability: whatsappApprovalCapability,
-  buildConfig: ({ channel, approvals } = {}) => ({
-    channels: { whatsapp: { enabled: true, ...channel } },
-    approvals,
-  }),
+  buildConfig: (options = {}) => {
+    const { channel, approvals } = options;
+    return { channels: { whatsapp: { enabled: true, ...channel } }, approvals };
+  },
 });
 const { buildConfig, buildExecRequest, buildPluginRequest, checks } = fixture;
 
@@ -66,24 +66,9 @@ describe("whatsapp approval capability", () => {
       blocks: [
         {
           type: "buttons",
-          buttons: [
-            {
-              action: {
-                type: "approval",
-                approvalId: "exec-1",
-                approvalKind: "exec",
-                decision: "allow-once",
-              },
-            },
-            {
-              action: {
-                type: "approval",
-                approvalId: "exec-1",
-                approvalKind: "exec",
-                decision: "deny",
-              },
-            },
-          ],
+          buttons: ["allow-once", "deny"].map((decision) => ({
+            action: { type: "approval", approvalId: "exec-1", approvalKind: "exec", decision },
+          })),
         },
       ],
     });
@@ -125,32 +110,14 @@ describe("whatsapp approval capability", () => {
       blocks: [
         {
           type: "buttons",
-          buttons: [
-            {
-              action: {
-                type: "approval",
-                approvalId: "plugin:approval-1",
-                approvalKind: "plugin",
-                decision: "allow-once",
-              },
+          buttons: ["allow-once", "allow-always", "deny"].map((decision) => ({
+            action: {
+              type: "approval",
+              approvalId: "plugin:approval-1",
+              approvalKind: "plugin",
+              decision,
             },
-            {
-              action: {
-                type: "approval",
-                approvalId: "plugin:approval-1",
-                approvalKind: "plugin",
-                decision: "allow-always",
-              },
-            },
-            {
-              action: {
-                type: "approval",
-                approvalId: "plugin:approval-1",
-                approvalKind: "plugin",
-                decision: "deny",
-              },
-            },
-          ],
+          })),
         },
       ],
     });
@@ -188,30 +155,20 @@ describe("whatsapp approval capability", () => {
     checks.defaultAccountBothTarget,
   );
 
-  it("allows group-origin emoji approvals only after exec forwarding and approvers are configured", () => {
+  it("allows group-origin emoji approvals only after exec forwarding and approvers are configured", async () => {
     const request = buildExecRequest("120363401234567890@g.us");
-    const withoutApprovers = buildConfig({ approvals: { exec: { enabled: true } } });
-    const withApprovers = buildConfig({
-      channel: { allowFrom: ["+15551230000"] },
-      approvals: { exec: { enabled: true } },
-    });
-
-    expect(
-      whatsappApprovalCapability.native?.resolveOriginTarget?.({
-        cfg: withoutApprovers,
+    const resolveOrigin = (allowFrom?: string[]) =>
+      whatsappApprovalCapability.nativeAsync?.resolveOriginTarget?.({
+        cfg: buildConfig({
+          channel: allowFrom ? { allowFrom } : undefined,
+          approvals: { exec: { enabled: true } },
+        }),
         accountId: "default",
         approvalKind: "exec",
         request,
-      }),
-    ).toBeNull();
-    expect(
-      whatsappApprovalCapability.native?.resolveOriginTarget?.({
-        cfg: withApprovers,
-        accountId: "default",
-        approvalKind: "exec",
-        request,
-      }),
-    ).toEqual({
+      });
+    expect(await resolveOrigin()).toBeNull();
+    expect(await resolveOrigin(["+15551230000"])).toEqual({
       to: "120363401234567890@g.us",
       accountId: "default",
     });

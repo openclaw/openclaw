@@ -34,13 +34,14 @@ export async function createImportedCodexSession(params: {
   ) => Promise<{ pluginExtensions: CreatedCodexImportedSession["entry"]["pluginExtensions"] }>;
 }): Promise<CreatedCodexImportedSession> {
   const spawnedCwd = params.thread.cwd?.trim() || undefined;
-  const createParams = {
+  return await params.runtime.agent.session.createSessionEntry({
     cfg: params.config,
     key: params.key,
     agentId: params.agentId,
     ...(params.displayName !== undefined ? { displayName: params.displayName } : {}),
     ...(spawnedCwd ? { spawnedCwd } : {}),
     initialEntry: params.initialEntry,
+    ...(params.recoverMatchingInitialEntry ? { recoverMatchingInitialEntry: true } : {}),
     afterCreate: async (
       entry: CreatedCodexImportedSession & {
         initialization?: Parameters<typeof prepareCodexSessionInitialization>[0]["initialization"];
@@ -80,11 +81,5 @@ export async function createImportedCodexSession(params: {
       entry.initialization.assertCurrent();
       return await params.afterImport(entry, initialization);
     },
-  };
-  return params.recoverMatchingInitialEntry
-    ? await params.runtime.agent.session.createSessionEntry({
-        ...createParams,
-        recoverMatchingInitialEntry: true,
-      })
-    : await params.runtime.agent.session.createSessionEntry(createParams);
+  });
 }

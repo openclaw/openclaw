@@ -67,15 +67,6 @@ export function resolveBundledPublicSurfaceLocation(
   return location;
 }
 
-function getModuleLoader(modulePath: string) {
-  return getCachedPluginModuleLoader({
-    modulePath,
-    importerUrl: import.meta.url,
-    preferBuiltDist: true,
-    loaderFilename: import.meta.url,
-  });
-}
-
 /** Create a lazy object view over a library or the current managed facade. */
 export function createLazyFacadeObjectValue<T extends object>(load: () => T): T {
   let resolvedValue: T | undefined;
@@ -266,7 +257,15 @@ export function loadFacadeModuleAtLocationSync<T extends object>(params: {
     ...(params.boundary ?? resolveFacadeBoundaryOpenParams(location.boundaryRoot)),
     surfaceLabel: params.surfaceLabel ?? `bundled plugin public surface ${location.modulePath}`,
     pluginId: params.pluginId ?? location.pluginId,
-    loadModule: params.loadModule ?? ((modulePath) => getModuleLoader(modulePath)(modulePath)),
+    loadModule:
+      params.loadModule ??
+      ((modulePath) =>
+        getCachedPluginModuleLoader({
+          modulePath,
+          importerUrl: import.meta.url,
+          preferBuiltDist: true,
+          loaderFilename: import.meta.url,
+        })(modulePath)),
   });
   if (params.trackedPluginId !== undefined) {
     trackFacadeModule(location.modulePath, params.trackedPluginId);

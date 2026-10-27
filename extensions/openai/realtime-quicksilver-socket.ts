@@ -1,15 +1,17 @@
 import { EventEmitter } from "node:events";
-import { Worker, type MessagePort } from "node:worker_threads";
+import type { Worker, MessagePort } from "node:worker_threads";
 import {
+  createCpuTrackedWorker,
+  createPluginRuntimeProcessEntrypoint,
   resolveRuntimeWorkerUrl,
   resolveRuntimeWorkerArgv,
 } from "openclaw/plugin-sdk/process-runtime";
 import type { RealtimeVoiceAudioOutputPort } from "openclaw/plugin-sdk/realtime-voice";
+import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 import {
   QUICKSILVER_SOCKET_AUDIO_BATCH_BYTES,
   QUICKSILVER_SOCKET_CONTROL_BYTES,
   QUICKSILVER_SOCKET_CONTROL_LIMIT,
-  QuicksilverSocketAudioQueue,
   type QuicksilverMediaSocket,
   type QuicksilverMediaSocketFactory,
   type QuicksilverSocketCallbacks,
@@ -26,16 +28,10 @@ export class OpenAIQuicksilverWorkerSocket extends EventEmitter implements Quick
     media: Parameters<QuicksilverMediaSocketFactory>[2],
     callbacks: QuicksilverSocketCallbacks,
   ): OpenAIQuicksilverWorkerSocket {
-    const workerUrl = resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "realtime-quicksilver-socket.worker",
-      distWorkerPath: "extensions/openai/realtime-quicksilver-socket.worker.js",
-      package: {
-        name: "@openclaw/openai-provider",
-        distWorkerPath: "realtime-quicksilver-socket.worker.js",
-      },
-    });
-    const worker = new Worker(workerUrl, {
+    const workerUrl = resolveRuntimeWorkerUrl(
+      createPluginRuntimeProcessEntrypoint("openAiRealtimeSocket", import.meta.url),
+    );
+    const worker = createCpuTrackedWorker(workerUrl, {
       workerData: {
         url,
         options: { headers: options.headers, maxPayload: options.maxPayload },
@@ -58,7 +54,7 @@ export class OpenAIQuicksilverWorkerSocket extends EventEmitter implements Quick
   private sendInFlight = false;
   private failed = false;
   private exited = false;
-  private readonly pending: QuicksilverSocketAudioQueue;
+  private readonly pending: OpenAIQuicksilverPendingAudio;
   private readonly sends: string[] = [];
   private sendBytes = 0;
   private closeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -71,7 +67,8 @@ export class OpenAIQuicksilverWorkerSocket extends EventEmitter implements Quick
     private readonly telephony: boolean,
   ) {
     super();
-    this.pending = new QuicksilverSocketAudioQueue(telephony ? 40_000 : 240_000);
+    // Capture is still raw here, including odd-length mu-law chunks.
+    this.pending = new OpenAIQuicksilverPendingAudio(telephony ? 40_000 : 240_000, 1);
     worker.on("message", (message: QuicksilverSocketMessage) => this.receive(message));
     worker.on("error", () => {
       if (!this.closePosted) {

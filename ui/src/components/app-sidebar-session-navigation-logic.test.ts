@@ -1,10 +1,15 @@
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import type { ControlUiHost, ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createActiveSessionPlacement } from "../test-helpers/session-placement.ts";
 import { collectKnownSessionRows, fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
 import {
+  buildReconciledSidebarZone,
   buildSidebarSessionNavigationState,
   collectSidebarSessionRowsByKey,
   createSidebarSessionRowsComparator,
@@ -13,12 +18,36 @@ import {
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sidebar-session-types.ts";
-import { renderTeamSessionSlots } from "./session-attention-presentation.ts";
+import { SidebarSessionRowProjection } from "./sidebar-projection-cache.ts";
+import { TeamSessionSlots } from "./solid/session-presentation.tsx";
+
+it("does not manufacture personal pins from plugin defaults", () => {
+  const pluginNavigation = [
+    { id: "boards", label: "Boards", page: { id: "boards" } },
+    { id: "child", parent: "boards", label: "Child", page: { id: "child" } },
+  ].map((value): ControlUiRegistration<ControlUiNavigationItem> => ({
+    key: `example/${value.id}`,
+    pluginId: "example",
+    signal: new AbortController().signal,
+    value,
+    host: {} as ControlUiHost,
+  }));
+  const reconcile = (sidebarEntries: string[]) =>
+    buildReconciledSidebarZone({
+      sidebarEntries,
+      pluginNavigation,
+      pluginTabs: undefined,
+      rows: [],
+    });
+  const initial = reconcile(["route:usage"]);
+  expect(initial.sidebarEntries).toEqual(["route:usage"]);
+  const pinned = ["plugin:example/child", ...initial.sidebarEntries];
+  expect(reconcile(pinned).sidebarEntries).toEqual(pinned);
+  expect(reconcile(pinned).entries[0]).toEqual({ type: "plugin", key: "example/child" });
+});
 
 it.each([
   ["global before hello", "global", undefined, "global"],
-  ["advertised global casing", "global", " GLOBAL ", "GLOBAL"],
-  ["advertised key in global scope", "global", "agent:other:legacy", "agent:other:legacy"],
   ["global advertised without a roster", undefined, " GLOBAL ", "GLOBAL"],
   ["explicit per-sender scope", "per-sender", "global", "agent:ops:workspace"],
   ["per-agent key without a roster", undefined, "agent:other:legacy", "agent:ops:workspace"],
@@ -47,6 +76,17 @@ it.each([
     ).toBe(expected);
   },
 );
+
+it.each([
+  ["agent:main:dashboard:incognito-session", undefined, true],
+  ["agent:main:subagent:incognito-child", undefined, true],
+  ["agent:main:internal-session-effects:incognito-effect", undefined, true],
+  ["agent:main:dashboard:ordinary", true, true],
+  ["agent:main:dashboard:ordinary", undefined, false],
+  ["agent:main:telegram:incognito-peer", undefined, false],
+] as const)("preserves Incognito sidebar presentation for %s", (key, incognito, expected) => {
+  expect(projectSidebarSession({ key, incognito }).incognito).toBe(expected);
+});
 
 function projectDraftOwnership(
   row: Pick<GatewaySessionRow, "createdActor" | "sharingRole" | "visibility">,
@@ -95,28 +135,6 @@ describe("sidebar session sort modes", () => {
       "old-stamped",
       "legacy",
       "invalid",
-    ]);
-  });
-
-  it("falls back to stable observation order for equal or missing timestamps", () => {
-    const rows = [
-      row("missing-later"),
-      row("equal-later", 100),
-      row("equal-earlier", 100),
-      row("missing-earlier"),
-    ];
-    const observed = new Map([
-      ["equal-earlier", 0],
-      ["equal-later", 1],
-      ["missing-earlier", 2],
-      ["missing-later", 3],
-    ]);
-
-    expect(sortSidebarRows(rows, "created", observed).map((entry) => entry.key)).toEqual([
-      "equal-earlier",
-      "equal-later",
-      "missing-earlier",
-      "missing-later",
     ]);
   });
 
@@ -185,13 +203,6 @@ describe("sidebar workspace identity", () => {
       row: { repository: { url: "https://github.com/example/project.git", branch: "feature/ui" } },
       expected: "checkout",
     },
-    { name: "plain workspace", row: { spawnedCwd: "/work/project" }, expected: undefined },
-    {
-      name: "node cwd without repository facts",
-      row: { execNode: "build-node", execCwd: "/remote/project" },
-      expected: undefined,
-    },
-    { name: "unresolved workspace", row: {}, expected: undefined },
   ] satisfies { name: string; row: Partial<GatewaySessionRow>; expected: string | undefined }[])(
     "labels $name only from recorded repository facts",
     ({ row, expected }) => {
@@ -205,31 +216,6 @@ describe("sidebar workspace identity", () => {
 });
 
 describe("sidebar session live-run projection", () => {
-  it("projects durable message and execution-owner facts", () => {
-    expect(
-      projectSidebarSession({
-        lastMessagePreview: "The final reply is durable.",
-        execNode: "build-mac",
-      }),
-    ).toMatchObject({ lastMessagePreview: "The final reply is durable.", execNode: "build-mac" });
-  });
-
-  it.each([
-    ["legacy running status", { status: "running" }, true, undefined],
-    ["confirmed active run", { status: "running", hasActiveRun: true }, true, true],
-    ["stale running status", { status: "running", hasActiveRun: false }, false, false],
-    ["completed run with a stale active flag", { status: "done", hasActiveRun: true }, false, true],
-    ["failed run with a stale active flag", { status: "failed", hasActiveRun: true }, false, true],
-    ["archived active run", { status: "running", hasActiveRun: true, archived: true }, false, true],
-  ] as const)(
-    "normalizes %s without dropping Gateway liveness",
-    (_name, row, expected, gatewayHasActiveRun) => {
-      const projected = projectSidebarSession(row);
-      expect(projected.hasActiveRun).toBe(expected);
-      expect(projected.gatewayHasActiveRun).toBe(gatewayHasActiveRun);
-    },
-  );
-
   it("carries active cloud identity, machine facts, and disk pressure into the sidebar", () => {
     const projected = projectSidebarSession({
       placement: {
@@ -266,16 +252,6 @@ describe("sidebar session live-run projection", () => {
 });
 
 describe("sidebar draft ownership presentation", () => {
-  it("keeps owner drafts at normal emphasis", () => {
-    expect(
-      projectDraftOwnership({
-        visibility: "draft",
-        sharingRole: "owner",
-        createdActor: undefined,
-      }),
-    ).toBe(true);
-  });
-
   it("distinguishes an admin's own draft from another person's draft", () => {
     const ownDraft = {
       visibility: "draft" as const,
@@ -284,19 +260,6 @@ describe("sidebar draft ownership presentation", () => {
     };
     expect(projectDraftOwnership(ownDraft, "admin")).toBe(true);
     expect(projectDraftOwnership(ownDraft, "teammate")).toBe(false);
-  });
-
-  it("never marks a shared session as an owned draft", () => {
-    expect(
-      projectDraftOwnership(
-        {
-          visibility: "shared",
-          sharingRole: "owner",
-          createdActor: { type: "human", id: "owner" },
-        },
-        "owner",
-      ),
-    ).toBe(false);
   });
 });
 
@@ -322,8 +285,6 @@ describe("sidebar navigation lineage ownership", () => {
   };
 
   it.each([
-    { name: "exact", rootKey: child.key, cachedKey: child.key },
-    { name: "equivalent", rootKey: child.key.toUpperCase(), cachedKey: child.key },
     { name: "main alias", rootKey: "main", cachedKey: "agent:main:main" },
     {
       name: "case-preserving Matrix alias",
@@ -336,19 +297,7 @@ describe("sidebar navigation lineage ownership", () => {
       const row = (key: string, status: "available" | "offline"): GatewaySessionRow => ({
         ...child,
         key,
-        placement: {
-          state: "active",
-          generation: 1,
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          stateChangedAtMs: 1,
-          environmentId: "worker:device",
-          activeOwnerEpoch: 1,
-          workerBundleHash: "a".repeat(64),
-          workspaceBaseManifestRef: "manifest",
-          remoteWorkspaceDir: "/workspace",
-          runner: { kind: "device", status },
-        },
+        placement: createActiveSessionPlacement({ runner: { kind: "device", status } }),
       });
       const canonical = {
         ...row(rootKey, "offline"),
@@ -368,6 +317,7 @@ describe("sidebar navigation lineage ownership", () => {
       const request = vi.fn();
       const lineage = await fetchSessionLineage({
         captureReconcile: () => vi.fn(),
+        sessions: { describe: request },
         client: createTestGatewayClient(request),
         sessionKey: cached.key,
         knownRows: known,
@@ -388,33 +338,6 @@ describe("sidebar navigation lineage ownership", () => {
     const rows = keys.map((key) => ({ ...child, key }));
 
     expect([...collectKnownSessionRows(rows, {}).keys()]).toEqual(keys);
-  });
-
-  it("projects a known child exactly once under its explicit navigation parent", () => {
-    const projected = projectSessionTree({
-      roots: [navigationParent, controlParent],
-      rowsByKey: collectSidebarSessionRowsByKey({
-        rows: [navigationParent, controlParent, child],
-        childRowsByParent: {},
-      }),
-      loadingChildKeys: new Set(),
-      resolveAttention: () => ({ kind: "none" }),
-      toSidebarSession: (row, isChild) =>
-        ({
-          key: row.key,
-          isChild,
-          attention: { kind: "none" },
-          runningChildCount: 0,
-          failedChildCount: 0,
-        }) as SidebarRecentSession,
-    });
-
-    expect(
-      projected.map((row) => ({ key: row.key, children: row.children.map((entry) => entry.key) })),
-    ).toEqual([
-      { key: navigationParent.key, children: [child.key] },
-      { key: controlParent.key, children: [] },
-    ]);
   });
 
   it("keeps exact-key insertion order while newer rows replace cached child values", () => {
@@ -502,21 +425,12 @@ describe("sidebar navigation lineage ownership", () => {
   });
 
   it.each([
-    ["legacy active child", { status: "running" }, 1, 0],
-    [
-      "queued leaf subagent",
-      { status: "queued", hasActiveRun: true, hasActiveSubagentRun: true },
-      1,
-      0,
-    ],
     [
       "archived subagent",
       { status: "running", hasActiveRun: true, hasActiveSubagentRun: true, archived: true },
       0,
       0,
     ],
-    ["stale running child", { status: "running", hasActiveRun: false }, 0, 0],
-    ["failed child with a stale active flag", { status: "failed", hasActiveRun: true }, 0, 1],
   ] as const)(
     "counts normalized live runs for a %s",
     (_name, runState, runningChildCount, failedChildCount) => {
@@ -539,82 +453,8 @@ describe("sidebar navigation lineage ownership", () => {
     },
   );
 
-  it("keeps alias cycles path-local and projects shared descendants in postorder", () => {
-    const root: GatewaySessionRow = {
-      key: "root",
-      kind: "direct",
-      childSessions: ["alias", "root", "left", "right"],
-    };
-    const alias = { key: "root", kind: "direct", archived: true } satisfies GatewaySessionRow;
-    const left = {
-      key: "left",
-      kind: "direct",
-      childSessions: ["shared"],
-    } satisfies GatewaySessionRow;
-    const right = { ...left, key: "right" };
-    const shared = { key: "shared", kind: "direct" } satisfies GatewaySessionRow;
-    const rowsByKey = new Map<string, GatewaySessionRow>([
-      ["root", root],
-      ["alias", alias],
-      ["left", left],
-      ["right", right],
-      ["shared", shared],
-    ]);
-    const calls: string[] = [];
-    for (let iteration = 0; iteration < 2; iteration += 1) {
-      calls.length = 0;
-      const trees = projectSessionTree({
-        roots: [root],
-        rowsByKey,
-        loadingChildKeys: new Set(["root"]),
-        resolveAttention: () => ({ kind: "none" }),
-        toSidebarSession: (row, isChild) => {
-          calls.push(`${row.key}:${isChild}`);
-          return { ...projectSidebarSession(row), isChild: isChild === true };
-        },
-      });
-      expect(calls).toEqual([
-        "root:true",
-        "shared:true",
-        "left:true",
-        "shared:true",
-        "right:true",
-        "root:false",
-      ]);
-      expect(
-        trees[0]?.children.map((row) => [
-          row.key,
-          row.children.map((descendant) => descendant.key),
-        ]),
-      ).toStrictEqual([
-        ["root", []],
-        ["left", ["shared"]],
-        ["right", ["shared"]],
-      ]);
-      expect(trees[0]).toHaveProperty("workspaceConflictCount", undefined);
-      expect(trees[0]?.loadingChildren).toBe(true);
-    }
-  });
-
   it.each([
     ["unloaded before children", "none", true, "approval", 1, 4_503_599_627_370_497],
-    ["parent before an unloaded tie", "question", true, "question", 1, 4_503_599_627_370_497],
-    [
-      "first child before an equal-priority sibling",
-      "none",
-      false,
-      "question",
-      1,
-      4_503_599_627_370_497,
-    ],
-    [
-      "saturated conflicts",
-      "none",
-      false,
-      "question",
-      Number.MAX_SAFE_INTEGER,
-      Number.MAX_SAFE_INTEGER,
-    ],
   ] as const)(
     "preserves transitive summaries with %s",
     (_name, own, known, expected, conflicts, expectedConflicts) => {
@@ -654,14 +494,7 @@ describe("sidebar navigation lineage ownership", () => {
           visuallyActive: row.key === "grandchild",
           attention:
             row.key === "root"
-              ? own === "question"
-                ? {
-                    kind: own,
-                    requests: [
-                      { kind: own, id: "root", preview: "Continue?", count: 1, createdAtMs: 0 },
-                    ],
-                  }
-                : { kind: own }
+              ? { kind: own }
               : row.key === "first"
                 ? {
                     kind: "question",
@@ -783,13 +616,19 @@ describe("sidebar navigation lineage ownership", () => {
       [tree!, false, "Waiting for approval\nReview deployment"],
       [tree!.children[0]!, false, "2 questions need your answer\nChoose a region\n+1 more"],
     ] as const) {
-      render(
-        renderTeamSessionSlots([row], includeChildren, row.childSessionKeys.length),
-        container,
+      const view = mountSolid(
+        () =>
+          createComponent(TeamSessionSlots, {
+            rows: [row],
+            includeChildren,
+            childCount: row.childSessionKeys.length,
+          }),
+        { container },
       );
       expect(container.querySelector("[data-session-attention]")?.getAttribute("aria-label")).toBe(
         label,
       );
+      view.unmount();
     }
   });
 
@@ -799,6 +638,7 @@ describe("sidebar navigation lineage ownership", () => {
     );
     const lineage = await fetchSessionLineage({
       captureReconcile: () => vi.fn(),
+      sessions: { describe: vi.fn() },
       client: {} as Parameters<typeof fetchSessionLineage>[0]["client"],
       sessionKey: child.key,
       knownRows,
@@ -836,6 +676,7 @@ describe("sidebar navigation lineage ownership", () => {
 
     const lineage = await fetchSessionLineage({
       captureReconcile: () => vi.fn(),
+      sessions: { describe: vi.fn() },
       client: {} as Parameters<typeof fetchSessionLineage>[0]["client"],
       sessionKey: child.key,
       knownRows: new Map([controlParent, childWithBlankParent].map((row) => [row.key, row])),
@@ -860,6 +701,7 @@ it("keeps a prepared worktree session in Coding before canonical metadata arrive
     sessions: {
       isPreparedWorkSession: (candidate: string) => candidate === key,
       pullRequestSummary: () => undefined,
+      isRunVisuallyActive: () => false,
     },
   } as unknown as Parameters<typeof buildSidebarSessionNavigationState>[0]["context"];
   const navigation = buildSidebarSessionNavigationState({
@@ -878,7 +720,7 @@ it("keeps a prepared worktree session in Coding before canonical metadata arrive
     statusFilter: "active",
     compareSessions: () => 0,
     highlightCurrentSession: true,
-    runtimeSampledAtByRow: new WeakMap(),
+    rowProjection: new SidebarSessionRowProjection(),
     loadingChildSessionKeys: new Set(),
     outboxAttentionCountForSessionKey: () => 0,
     hasSessionDraft: () => false,

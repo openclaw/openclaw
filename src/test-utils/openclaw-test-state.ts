@@ -2,16 +2,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import * as configRuntime from "../config/runtime-snapshot.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js";
-import {
-  captureStateDatabaseCoordinatorRuntime,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
+import { acquireStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { captureEnv } from "./env.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureEnv, withEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 type ConfigRuntimeResettable = typeof configRuntime & {
@@ -35,6 +34,7 @@ type OpenClawTestStateOptions = {
   scenario?: OpenClawTestStateScenario;
   agentEnv?: "clear" | "main";
   applyEnv?: boolean;
+  prepareProfileCatalog?: boolean;
   env?: Record<string, string | undefined>;
   verifyCleanup?: (cleanup: () => Promise<void>) => Promise<void>;
   gateway?: {
@@ -76,6 +76,8 @@ const ENV_KEYS = [
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_AGENT_DIR",
   "OPENCLAW_SERVICE_REPAIR_POLICY",
+  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
 ] as const;
 
 function resetConfigRuntimeStateForTest(): void {
@@ -311,6 +313,7 @@ export async function createOpenClawTestState(
     let envApplied = false;
     let releasePromise: Promise<void> | undefined;
     let cleanupPromise: Promise<void> | undefined;
+    let releaseProfileCatalog: (() => void) | undefined;
     const restoreAppliedEnv = () => {
       if (envApplied) {
         for (const snapshot of snapshots) {
@@ -352,11 +355,23 @@ export async function createOpenClawTestState(
             import("../agents/auth-profiles/external-auth.js"),
           ]);
         const { saveAuthProfileStore } = createAuthProfileStoreRuntime(
-          createExternalAuthRuntime(() => []),
+          createExternalAuthRuntime(
+            () => [],
+            async (_params, run) => run(),
+          ),
         );
-        saveAuthProfileStore(store as AuthProfileStore, targetAgentDir, {
-          filterExternalAuthProfiles: false,
-          syncExternalCli: false,
+        withEnv(env, () => {
+          const lease = acquireStateDatabaseSchemaLease(resolveOpenClawStateSqlitePath(env));
+          try {
+            lease.run(() =>
+              saveAuthProfileStore(store as AuthProfileStore, targetAgentDir, {
+                filterExternalAuthProfiles: false,
+                syncExternalCli: false,
+              }),
+            );
+          } finally {
+            lease.release();
+          }
         });
         return resolveAuthProfileDatabasePath(targetAgentDir);
       },
@@ -388,6 +403,7 @@ export async function createOpenClawTestState(
       // including failure, so no concurrent caller can restore selectors early.
       restoreEnv: () =>
         (releasePromise ??= Promise.resolve().then(async () => {
+          releaseProfileCatalog?.();
           await cleanupSessionStateForTest({ stateDir: paths.stateDir, rootPath: root });
           restoreAppliedEnv();
         })),
@@ -415,6 +431,17 @@ export async function createOpenClawTestState(
       state.applyEnv();
     }
 
+    if (options.prepareProfileCatalog) {
+      try {
+        const { prepareUserProfileCatalogForTest } = await import("./user-profile-catalog.js");
+        const catalog = await prepareUserProfileCatalogForTest({ env });
+        releaseProfileCatalog = catalog.release;
+      } catch (error) {
+        await state.cleanup();
+        throw error;
+      }
+    }
+
     return state;
   } catch (error) {
     // Acquisition has no session/auth work to drain or close. Only undo this fixture.
@@ -437,18 +464,25 @@ export async function withOpenClawTestState<T>(
   fn: (state: OpenClawTestState) => Promise<T>,
 ): Promise<T> {
   const state = await createOpenClawTestState(options);
-  // On Windows the coordinator directory lives beneath this temporary home.
-  // Keep its location, but never lend fixture handles to the process idle pool.
-  return await withStateDatabaseCoordinatorRuntimeDirectory(
-    { ...captureStateDatabaseCoordinatorRuntime(), keepAlive: false },
-    async () => {
-      const work = new AsyncWorkScope();
-      try {
-        return await work.track(() => fn(state));
-      } finally {
-        await work.drain();
-        await state.cleanup();
-      }
-    },
-  );
+  const failures = new Set<unknown>();
+  const work = new AsyncWorkScope(failures);
+  const [outcome] = await Promise.allSettled([work.track(() => fn(state))]);
+  await work.drain();
+  if ([...failures].some(hasUnjoinedWork)) {
+    // Promise settlement does not prove that an external child released its inputs.
+    try {
+      await state.restoreEnv();
+    } catch (error) {
+      failures.add(error);
+    }
+    const retained = [...failures];
+    throw retained.length === 1
+      ? retained[0]
+      : new AggregateError(retained, `Fixture cleanup unverified; retained ${state.root}`);
+  }
+  await state.cleanup();
+  if (outcome.status === "rejected") {
+    throw outcome.reason;
+  }
+  return outcome.value;
 }

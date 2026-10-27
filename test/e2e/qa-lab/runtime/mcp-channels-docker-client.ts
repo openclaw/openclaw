@@ -12,11 +12,11 @@ import {
   extractTextFromGatewayPayload,
   type ClaudeChannelNotification,
   type GatewayRpcClient,
-  maybeApprovePendingBridgePairing,
   waitFor,
 } from "./mcp-channels.fixture.ts";
 import {
   connectMcpClientWithPairingReconnect,
+  maybeApprovePendingBridgePairing,
   createMcpClientTempState,
 } from "./mcp-client-temp-state.fixture.ts";
 
@@ -101,7 +101,6 @@ async function waitForGatewaySeededConversation(gateway: GatewayRpcClient) {
 async function main() {
   const gatewayUrl = process.env.GW_URL?.trim();
   const gatewayToken = process.env.GW_TOKEN?.trim();
-  const frozenTarget = process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy";
   assert(gatewayUrl, "missing GW_URL");
   assert(gatewayToken, "missing GW_TOKEN");
 
@@ -143,7 +142,7 @@ async function main() {
     const connectedMcp = mcpHandle;
     const mcp = connectedMcp.client;
     const callTool = <T>(params: Parameters<typeof mcp.callTool>[0]) =>
-      mcp.callTool(params, undefined, { timeout: 240_000 }) as Promise<T>;
+      mcp.callTool(params, { timeout: 240_000 }) as Promise<T>;
 
     let lastMcpConversationList: unknown;
     const conversation = await waitFor(
@@ -236,7 +235,7 @@ async function main() {
       "expected one seeded attachment",
     );
     assert(
-      hasExpectedSeededMcpAttachment(attachments.structuredContent?.attachments?.[0], frozenTarget),
+      hasExpectedSeededMcpAttachment(attachments.structuredContent?.attachments?.[0]),
       `expected persisted media attachment: ${JSON.stringify(attachments.structuredContent)}`,
     );
 
@@ -515,6 +514,26 @@ async function main() {
         2,
       ) + "\n",
     );
+  } catch (error) {
+    process.stderr.write(
+      `[mcp-channels] failure ${JSON.stringify({
+        error: formatUnknownError(error),
+        mcpConnected: Boolean(mcpHandle),
+        gatewayEvents: gateway.events.slice(-10).map((entry) => ({
+          event: entry.event,
+          sessionKey: entry.payload.sessionKey,
+        })),
+        channelNotifications: (mcpHandle?.rawMessages ?? [])
+          .map((entry) => ClaudeChannelNotificationSchema.safeParse(entry))
+          .flatMap((entry) => (entry.success ? [entry.data.params] : []))
+          .slice(-5),
+        permissionNotifications: (mcpHandle?.rawMessages ?? [])
+          .map((entry) => ClaudePermissionNotificationSchema.safeParse(entry))
+          .flatMap((entry) => (entry.success ? [entry.data.params] : []))
+          .slice(-5),
+      })}\n`,
+    );
+    throw error;
   } finally {
     const closeTasks: Array<Promise<unknown>> = [gateway.close()];
     if (nonOwnerGateway) {

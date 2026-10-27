@@ -1,0 +1,3 @@
+{
+  "extends": "../../../config/tsconfig/oxlint.source.json"
+}

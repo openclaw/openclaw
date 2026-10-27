@@ -1,9 +1,8 @@
-// Detects node-only hosts for status output.
 // On these machines the local gateway daemon is absent by design, but the node service may point at a remote gateway.
 
 import { DEFAULT_GATEWAY_PORT } from "../config/paths.js";
 import type { GatewayServiceLoadState } from "../daemon/service-types.js";
-import { loadNodeHostConfigReadOnly } from "../node-host/config.js";
+import { loadNodeHostConfig } from "../node-host/config.js";
 
 type NodeOnlyServiceLike = {
   installed: boolean | null;
@@ -23,23 +22,6 @@ export type NodeOnlyGatewayInfo = {
   connectionDetails: string;
 };
 
-function resolveNodeGatewayTarget(gateway?: { host?: string; port?: number }): string {
-  return gateway?.host
-    ? `${gateway.host}:${gateway.port ?? DEFAULT_GATEWAY_PORT}`
-    : "(gateway address unknown)";
-}
-
-function hasRunningRuntime(
-  runtime:
-    | {
-        status?: string;
-        pid?: number;
-      }
-    | undefined,
-): boolean {
-  return runtime?.status === "running" || typeof runtime?.pid === "number";
-}
-
 function isNodeServiceActive(node: NodeOnlyServiceLike): boolean {
   if (node.installed !== true) {
     return false;
@@ -51,7 +33,7 @@ function isNodeServiceActive(node: NodeOnlyServiceLike): boolean {
   if (node.loadState?.status === "loaded") {
     return true;
   }
-  return hasRunningRuntime(node.runtime);
+  return node.runtime?.status === "running" || typeof node.runtime?.pid === "number";
 }
 
 /** Returns node-only gateway context when node is active and the local gateway is intentionally absent. */
@@ -63,7 +45,10 @@ export async function resolveNodeOnlyGatewayInfo(params: {
     return null;
   }
 
-  const gatewayTarget = resolveNodeGatewayTarget((await loadNodeHostConfigReadOnly())?.gateway);
+  const gateway = (await loadNodeHostConfig())?.gateway;
+  const gatewayTarget = gateway?.host
+    ? `${gateway.host}:${gateway.port ?? DEFAULT_GATEWAY_PORT}`
+    : "(gateway address unknown)";
   return {
     gatewayTarget,
     gatewayValue: `node → ${gatewayTarget} · no local gateway`,

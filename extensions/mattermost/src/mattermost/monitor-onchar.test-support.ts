@@ -1,30 +1,18 @@
-// Mattermost test support covers monitor onchar plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
 
-describe("mattermost monitor onchar", () => {
-  it("uses defaults when prefixes are missing or empty after trimming", () => {
+describe("Mattermost onchar activation", () => {
+  it("uses defaults for absent or blank prefixes", () => {
     expect(resolveOncharPrefixes(undefined)).toEqual([">", "!"]);
     expect(resolveOncharPrefixes([" ", ""])).toEqual([">", "!"]);
   });
-
-  it("trims configured prefixes and preserves order", () => {
-    expect(resolveOncharPrefixes(["  ?? ", " !", " /bot "])).toEqual(["??", "!", "/bot"]);
-  });
-
-  it("strips the first matching prefix after leading whitespace", () => {
-    expect(stripOncharPrefix("   ! hello world", ["!", ">"])).toEqual({
+  it("strips the first configured prefix after normalization", () => {
+    expect(stripOncharPrefix("   ??hello", resolveOncharPrefixes([" ?? ", " ? "]))).toEqual({
       triggered: true,
-      stripped: "hello world",
-    });
-
-    expect(stripOncharPrefix("??multi prefix", ["??", "?"])).toEqual({
-      triggered: true,
-      stripped: "multi prefix",
+      stripped: "hello",
     });
   });
-
-  it("returns the original text when no prefix matches", () => {
+  it("preserves text when no prefix matches", () => {
     expect(stripOncharPrefix("hello world", ["!", ">"])).toEqual({
       triggered: false,
       stripped: "hello world",

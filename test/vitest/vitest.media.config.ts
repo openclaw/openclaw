@@ -6,6 +6,7 @@ export function createMediaVitestConfig(env?: Record<string, string | undefined>
   return createScopedVitestConfig(["src/media/**/*.test.ts"], {
     dir: "src",
     env,
+    intersectIncludeFile: true,
     exclude: databaseWorkerCoreTestFiles,
     name: "media",
     passWithNoTests: true,

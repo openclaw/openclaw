@@ -22,7 +22,6 @@ import java.util.Locale
 
 internal fun providerIconSlug(provider: String): String? {
   val normalized = provider.trim().lowercase(Locale.US)
-  if (normalized.isEmpty()) return null
   return when (normalized) {
     "anthropic", "claude-cli" -> "claude"
     "amazon", "amazon-bedrock", "aws", "aws-bedrock" -> "bedrock"

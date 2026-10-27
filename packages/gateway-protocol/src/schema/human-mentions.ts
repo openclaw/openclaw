@@ -1,11 +1,18 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import {
+  MAX_HUMAN_MENTIONS,
+  MAX_MENTIONABLE_USERS,
+  MENTION_INBOX_MAX_ITEMS,
+} from "../human-mention-limits.js";
 import { closedObject } from "./closed-object.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
-export const MAX_HUMAN_MENTIONS = 10;
-export const MAX_MENTIONABLE_USERS = 100;
-export const MENTION_INBOX_MAX_ITEMS = 100;
+export {
+  MAX_HUMAN_MENTIONS,
+  MAX_MENTIONABLE_USERS,
+  MENTION_INBOX_MAX_ITEMS,
+} from "../human-mention-limits.js";
 
 const MentionReferenceSchema = Type.String({ minLength: 1, maxLength: 256 });
 const MentionLabelSchema = Type.String({ minLength: 1, maxLength: 256 });

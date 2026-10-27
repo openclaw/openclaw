@@ -1,4 +1,3 @@
-// Cron issue regression helpers share mocks for service regression tests.
 import { vi } from "vitest";
 import {
   createDefaultIsolatedRunner,
@@ -6,6 +5,8 @@ import {
   setupCronRegressionFixtures,
   topOfHourOffsetMs,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
+// Cron issue regression helpers share mocks for service regression tests.
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 
 type CronServiceOptions = ConstructorParameters<typeof CronService>[0];
@@ -20,23 +21,23 @@ export async function startCronForStore(params: {
   storePath: string;
   cronEnabled?: boolean;
   enqueueSystemEvent?: CronServiceOptions["enqueueSystemEvent"];
-  requestHeartbeat?: CronServiceOptions["requestHeartbeat"];
+  runSessionEvent?: CronServiceOptions["runSessionEvent"];
   runIsolatedAgentJob?: CronServiceOptions["runIsolatedAgentJob"];
   onEvent?: CronServiceOptions["onEvent"];
 }) {
   const enqueueSystemEvent =
     params.enqueueSystemEvent ?? (vi.fn() as unknown as CronServiceOptions["enqueueSystemEvent"]);
-  const requestHeartbeat =
-    params.requestHeartbeat ?? (vi.fn() as unknown as CronServiceOptions["requestHeartbeat"]);
   const runIsolatedAgentJob = params.runIsolatedAgentJob ?? createDefaultIsolatedRunner();
 
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     cronEnabled: params.cronEnabled ?? true,
     storePath: params.storePath,
     log: noopLogger,
     enqueueSystemEvent,
-    requestHeartbeat,
     runIsolatedAgentJob,
+    runSessionEvent: params.runSessionEvent ?? vi.fn(async () => ({ status: "ok" as const })),
     ...(params.onEvent ? { onEvent: params.onEvent } : {}),
   });
   await cron.start();

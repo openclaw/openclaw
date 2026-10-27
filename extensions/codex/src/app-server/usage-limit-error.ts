@@ -1,7 +1,3 @@
-/**
- * Enriches Codex usage-limit failures with current rate-limit information and
- * marks blocked auth profiles when Codex exposes a reset time.
- */
 import {
   embeddedAgentLog,
   formatErrorMessage,
@@ -82,7 +78,6 @@ export function resolveCodexPromptError(
       });
 }
 
-/** Marks a Codex auth profile blocked until the reset time advertised by rate limits. */
 export async function markCodexAuthProfileBlockedFromRateLimits(params: {
   params: EmbeddedRunAttemptParams;
   authProfileId?: string;
@@ -114,29 +109,30 @@ export async function markCodexAuthProfileBlockedFromRateLimits(params: {
   }
 }
 
-/** Formats a turn-start usage-limit error, refreshing rate limits when needed. */
-export async function formatCodexTurnStartUsageLimitError(params: {
+export async function resolveCodexTurnStartError(params: {
   client: CodexAppServerClient;
   error: unknown;
   errorNotification?: CodexServerNotification;
   rateLimitsRevisionBeforeTurnStart?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
-}): Promise<CodexUsageLimitErrorResult | undefined> {
-  return refreshCodexUsageLimitError({
-    client: params.client,
-    source: readCodexTurnStartUsageLimitErrorSource(
-      params.client,
-      params.error,
-      params.errorNotification,
-      params.rateLimitsRevisionBeforeTurnStart,
-    ),
-    timeoutMs: params.timeoutMs,
-    signal: params.signal,
-  });
+}): Promise<(CodexUsageLimitErrorResult & { promptError: Error }) | undefined> {
+  const source = readCodexTurnStartUsageLimitErrorSource(
+    params.client,
+    params.error,
+    params.errorNotification,
+    params.rateLimitsRevisionBeforeTurnStart,
+  );
+  const usageLimit = await refreshCodexUsageLimitError({ ...params, source });
+  if (usageLimit) {
+    return { ...usageLimit, promptError: new CodexUsageLimitPromptError(usageLimit.message) };
+  }
+  // Startup RPC errors carry the same provider facts as terminal notifications.
+  // Normalize them before the generic runner loses the native error envelope.
+  const promptError = resolveCodexPromptError(source);
+  return promptError instanceof Error ? { message: promptError.message, promptError } : undefined;
 }
 
-/** Refreshes a generic prompt usage-limit message into a reset-aware message. */
 export async function refreshCodexUsageLimitPromptError(params: {
   client: CodexAppServerClient;
   message: string | undefined;
@@ -147,14 +143,12 @@ export async function refreshCodexUsageLimitPromptError(params: {
     return undefined;
   }
   return refreshCodexUsageLimitError({
-    client: params.client,
+    ...params,
     source: {
       message: params.message,
       codexErrorInfo: "usageLimitExceeded",
       rateLimits: readRecentCodexRateLimits(params.client),
     },
-    timeoutMs: params.timeoutMs,
-    signal: params.signal,
   });
 }
 
@@ -165,39 +159,24 @@ async function refreshCodexUsageLimitError(params: {
   signal?: AbortSignal;
 }): Promise<CodexUsageLimitErrorResult | undefined> {
   const initialMessage = formatCodexUsageLimitErrorMessage(params.source);
-  if (!shouldRefreshCodexRateLimitsForUsageLimitMessage(initialMessage)) {
-    return initialMessage
-      ? {
-          message: initialMessage,
-          ...(params.source.rateLimitsTrustedForProfile
-            ? { rateLimitsForProfile: params.source.rateLimits }
-            : {}),
-        }
-      : undefined;
-  }
-  const rateLimits = await readCodexRateLimitsFromAppServerForUsageLimitError({
-    client: params.client,
-    timeoutMs: params.timeoutMs,
-    signal: params.signal,
-  });
-  if (!rateLimits) {
-    return initialMessage
-      ? {
-          message: initialMessage,
-          ...(params.source.rateLimitsTrustedForProfile
-            ? { rateLimitsForProfile: params.source.rateLimits }
-            : {}),
-        }
-      : undefined;
-  }
-  const refreshedMessage = formatCodexUsageLimitErrorMessage({
-    message: params.source.message,
-    codexErrorInfo: params.source.codexErrorInfo,
-    rateLimits,
-    rateLimitsAuthoritative: true,
-  });
-  const message = refreshedMessage ?? initialMessage;
-  return message ? { message, rateLimitsForProfile: rateLimits } : undefined;
+  const rateLimits = shouldRefreshCodexRateLimitsForUsageLimitMessage(initialMessage)
+    ? await readCodexRateLimitsFromAppServerForUsageLimitError(params)
+    : undefined;
+  const message = rateLimits
+    ? (formatCodexUsageLimitErrorMessage({
+        ...params.source,
+        rateLimits,
+        rateLimitsAuthoritative: true,
+      }) ?? initialMessage)
+    : initialMessage;
+  return message
+    ? {
+        message,
+        ...(rateLimits || params.source.rateLimitsTrustedForProfile
+          ? { rateLimitsForProfile: rateLimits || params.source.rateLimits }
+          : {}),
+      }
+    : undefined;
 }
 
 async function readCodexRateLimitsFromAppServerForUsageLimitError(params: {
@@ -278,7 +257,7 @@ function readCodexErrorPayload(error: unknown): {
   if (!error || typeof error !== "object" || !("data" in error)) {
     return { message };
   }
-  const data = (error as { data?: unknown }).data as JsonValue | undefined;
+  const data = error.data;
   if (!isJsonObject(data)) {
     return { message };
   }

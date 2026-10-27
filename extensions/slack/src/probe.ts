@@ -42,7 +42,9 @@ export async function probeSlack(
           error: result.error ?? "unknown",
         };
       }
-      if (opts?.identity === "user") {
+      const userIdentity = opts?.identity === "user";
+      let userId = result.user_id;
+      if (userIdentity) {
         if (result.bot_id?.trim()) {
           return {
             ok: false,
@@ -51,7 +53,7 @@ export async function probeSlack(
               "Slack auth.test identified a bot token; user identity requires a user OAuth token",
           };
         }
-        const userId = result.user_id?.trim();
+        userId = result.user_id?.trim();
         if (!userId) {
           return {
             ok: false,
@@ -59,22 +61,15 @@ export async function probeSlack(
             error: "Slack auth.test returned no human user_id for user identity",
           };
         }
-        return {
-          ok: true,
-          status: 200,
-          user: { id: userId, name: result.user },
-          team: { id: result.team_id, name: result.team },
-        };
       }
-      const warning = formatSlackBotTokenIdentityWarning({
-        auth: result,
-        accountId: opts?.accountId,
-      });
-      const authIdentity = { id: result.user_id, name: result.user };
+      const warning = userIdentity
+        ? undefined
+        : formatSlackBotTokenIdentityWarning({ auth: result, accountId: opts?.accountId });
+      const authIdentity = { id: userId, name: result.user };
       return {
         ok: true,
         status: 200,
-        bot: authIdentity,
+        ...(userIdentity ? { user: authIdentity } : { bot: authIdentity }),
         team: { id: result.team_id, name: result.team },
         ...(warning ? { warning } : {}),
       };

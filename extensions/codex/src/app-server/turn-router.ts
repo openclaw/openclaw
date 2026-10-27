@@ -1,45 +1,34 @@
-/** Keyed routing for all turn traffic on one shared Codex app-server client. */
 import { AsyncResource } from "node:async_hooks";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { CodexAppServerClient } from "./client.js";
 import { redactCodexEventKind } from "./event-projector-diagnostics.js";
-import {
-  readCodexNotificationThreadId,
-  readCodexNotificationTurnId,
-} from "./notification-correlation.js";
-import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
-import {
-  isJsonObject,
-  type CodexServerNotification,
-  type JsonValue,
-  type RpcRequest,
+import { CodexMcpRequestRoutes, type CodexMcpToolCallOptions } from "./mcp-request-route.js";
+import { readCodexNotificationScope } from "./notification-correlation.js";
+import { prepareCodexServerNotification } from "./protocol-validators.js";
+import type {
+  CodexPreparedServerNotification,
+  CodexServerNotification,
+  JsonValue,
 } from "./protocol.js";
 import { abortReason, waitForPromiseOrAbort } from "./timeout.js";
+import type {
+  CodexAppServerServerRequest,
+  CodexThreadRouteScope,
+  CodexThreadRequestHandler,
+} from "./turn-router.types.js";
 
 const DEFAULT_PREBIND_NOTIFICATION_LIMIT = 256;
 const DEFAULT_GLOBAL_WARNING_LIMIT = 32;
 export const CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS = 30_000;
 
-export type CodexAppServerServerRequest = Required<Pick<RpcRequest, "id" | "method">> & {
-  params?: JsonValue;
-};
-export type CodexThreadRouteScope = {
-  threadId: string;
-  turnId?: string;
-};
-type CodexThreadRequestHandler = (
-  request: CodexAppServerServerRequest,
-  scope: CodexThreadRouteScope,
-  signal: AbortSignal,
-  setExecutionTimeoutMs?: (timeoutMs: number) => void,
-) => Promise<JsonValue | undefined> | JsonValue | undefined;
+export type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.types.js";
 type CodexThreadNotificationHandler = (
-  notification: CodexServerNotification,
+  notification: CodexPreparedServerNotification,
   scope: CodexThreadRouteScope,
 ) => Promise<void> | void;
 type CodexThreadNotificationReceivedHandler = (
-  notification: CodexServerNotification,
+  notification: CodexPreparedServerNotification,
   scope: CodexThreadRouteScope,
   receivedAtMs: number,
 ) => void;
@@ -70,16 +59,10 @@ type RouteOptions = Partial<CodexThreadRouteHandlers> & {
   releaseOn?: AbortSignal;
 };
 
-export type CodexAppServerTurnRouter = {
-  reserveThread: (options: RouteOptions) => CodexThreadRouteReservation;
-  watchNativeTurnCompletion: (options: {
-    threadId: string;
-    turnId: string;
-    timeoutMs: number;
-    signal?: AbortSignal;
-    onStarted?: () => void;
-  }) => CodexNativeTurnCompletionWatch;
-};
+export type CodexAppServerTurnRouter = Pick<
+  ClientTurnRouter,
+  "withMcpToolCall" | "reserveThread" | "watchNativeTurnCompletion"
+>;
 
 type CodexNativeTurnCompletionWatch = {
   completion: Promise<boolean>;
@@ -91,7 +74,7 @@ type CodexNativeTurnCompletionWatch = {
 
 type Deferred = ReturnType<typeof createDeferred<void>>;
 type PendingNotification = {
-  notification: CodexServerNotification;
+  notification: CodexPreparedServerNotification;
   receivedAtMs: number;
   scope: CodexThreadRouteScope;
   receiptObserved?: true;
@@ -129,7 +112,6 @@ export function hasCodexAppServerSiblingRouteWork(
   return routers.get(client)?.hasSiblingWork(threadId) ?? false;
 }
 
-/** Returns the sole router installed on a physical app-server client. */
 export function getCodexAppServerTurnRouter(
   client: CodexAppServerClient,
 ): CodexAppServerTurnRouter {
@@ -142,9 +124,10 @@ export function getCodexAppServerTurnRouter(
   return router;
 }
 
-class ClientTurnRouter implements CodexAppServerTurnRouter {
+class ClientTurnRouter {
   private readonly routes = new Map<string, Route>();
-  private readonly globalWarnings: CodexServerNotification[] = [];
+  private readonly mcpRequests = new CodexMcpRequestRoutes();
+  private readonly globalWarnings: CodexPreparedServerNotification[] = [];
   private readonly nativeTurnCompletionWatchers = new Map<
     string,
     Set<NativeTurnCompletionWatcher>
@@ -152,15 +135,15 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
   private closeError?: Error;
 
   hasSiblingWork(threadId: string): boolean {
-    for (const routedThreadId of this.routes.keys()) {
-      if (routedThreadId !== threadId) {
-        return true;
-      }
+    if (this.mcpRequests.hasSiblingWork(threadId)) {
+      return true;
     }
     // A released route can still be waiting for native interruption to settle.
-    for (const watchedThreadId of this.nativeTurnCompletionWatchers.keys()) {
-      if (watchedThreadId !== threadId) {
-        return true;
+    for (const threads of [this.routes, this.nativeTurnCompletionWatchers]) {
+      for (const siblingThreadId of threads.keys()) {
+        if (siblingThreadId !== threadId) {
+          return true;
+        }
       }
     }
     return false;
@@ -172,6 +155,11 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       this.routeRequest(request, signal, setExecutionTimeoutMs),
     );
     client.addCloseHandler((closedClient) => this.dispose(closedClient.getCloseError()));
+  }
+
+  async withMcpToolCall<T>(options: CodexMcpToolCallOptions, run: () => Promise<T>): Promise<T> {
+    this.assertActive();
+    return await this.mcpRequests.run(options, run);
   }
 
   reserveThread(options: RouteOptions): CodexThreadRouteReservation {
@@ -236,20 +224,15 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     this.assertActive();
     const threadId = requireId(options.threadId, "thread id");
     const turnId = requireId(options.turnId, "turn id");
-    if (options.signal?.aborted) {
-      return {
-        completion: Promise.resolve(false),
-        state: "unconfirmed",
-        settledSignal: AbortSignal.abort(),
-        cancel: () => {},
-      };
-    }
     // Resume discovers the active turn only after its route starts buffering;
     // preserve an exact completion that arrived before the watcher could exist.
-    if (this.routes.get(threadId)?.completedNativeTurnIds.has(turnId)) {
+    const confirmed =
+      !options.signal?.aborted &&
+      this.routes.get(threadId)?.completedNativeTurnIds.has(turnId) === true;
+    if (options.signal?.aborted || confirmed) {
       return {
-        completion: Promise.resolve(true),
-        state: "confirmed",
+        completion: Promise.resolve(confirmed),
+        state: confirmed ? "confirmed" : "unconfirmed",
         settledSignal: AbortSignal.abort(),
         cancel: () => {},
       };
@@ -298,6 +281,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       ? new Error("codex app-server turn router closed", { cause })
       : new Error("codex app-server turn router closed");
     this.closeError = closeError;
+    this.mcpRequests.close(closeError);
     for (const route of this.routes.values()) {
       this.release(route, closeError);
     }
@@ -415,15 +399,16 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
 
   // Returns the route's serialized tail so awaiting the client's notification
   // fan-out observes queued processing, not just enqueueing.
-  private routeNotification(notification: CodexServerNotification): Promise<void> | undefined {
+  private routeNotification(rawNotification: CodexServerNotification): Promise<void> | undefined {
     if (this.closeError) {
       return undefined;
     }
-    const scope = readScope(notification.params);
+    const scope = readCodexNotificationScope(rawNotification.params);
     if (
       !scope.threadId &&
-      (notification.method === "configWarning" || notification.method === "warning")
+      (rawNotification.method === "configWarning" || rawNotification.method === "warning")
     ) {
+      const notification = prepareCodexServerNotification(rawNotification, scope);
       if (this.globalWarnings.length === DEFAULT_GLOBAL_WARNING_LIMIT) {
         this.globalWarnings.shift();
       }
@@ -445,9 +430,8 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     if (!watchers && !route) {
       return undefined;
     }
-    const completedTurn =
-      notification.method === "turn/completed" &&
-      readCodexTurnCompletedNotification(notification.params) !== undefined;
+    const notification = prepareCodexServerNotification(rawNotification, scope);
+    const completedTurn = notification.completedTurn !== undefined;
     if (scope.turnId && watchers) {
       for (const watcher of watchers) {
         if (watcher.turnId === scope.turnId && completedTurn) {
@@ -509,14 +493,23 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
   private async routeRequest(
     request: CodexAppServerServerRequest,
     signal: AbortSignal = new AbortController().signal,
-    setExecutionTimeoutMs?: (timeoutMs: number) => void,
+    setExecutionTimeoutMs?: (timeoutMs: number | null) => void,
   ): Promise<JsonValue | undefined> {
     if (this.closeError || signal.aborted) {
       return undefined;
     }
-    const scope = readScope(request.params);
+    const scope = readCodexNotificationScope(request.params);
     if (!scope.threadId) {
       return undefined;
+    }
+    const manual = this.mcpRequests.route(
+      request,
+      { threadId: scope.threadId, ...(scope.turnId ? { turnId: scope.turnId } : {}) },
+      signal,
+      setExecutionTimeoutMs,
+    );
+    if (manual) {
+      return await manual;
     }
     const route = this.routes.get(scope.threadId);
     if (!route) {
@@ -528,10 +521,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     if (!route.handlers && !(await waitForPromiseOrAbort(route.activated.promise, requestSignal))) {
       return undefined;
     }
-    if (requestSignal.aborted || !route.handlers) {
-      return undefined;
-    }
-    const handler = route.handlers.onRequest;
+    const handler = !requestSignal.aborted && route.handlers?.onRequest;
     if (!handler) {
       return undefined;
     }
@@ -539,20 +529,21 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     // new OpenClaw turn, whose requests must wait for its accepted turn id.
     while (route.gate === "armed") {
       const binding = route.binding?.promise;
-      if (!binding || !(await waitForPromiseOrAbort(binding, requestSignal))) {
-        return undefined;
-      }
-      if (requestSignal.aborted) {
+      if (
+        !binding ||
+        !(await waitForPromiseOrAbort(binding, requestSignal)) ||
+        requestSignal.aborted
+      ) {
         return undefined;
       }
     }
     if (route.gate === "bound" && scope.turnId && scope.turnId !== route.turnId) {
       return undefined;
     }
-    if (!(await waitForPromiseOrAbort(this.waitForNotifications(route), requestSignal))) {
-      return undefined;
-    }
-    if (requestSignal.aborted) {
+    if (
+      !(await waitForPromiseOrAbort(this.waitForNotifications(route), requestSignal)) ||
+      requestSignal.aborted
+    ) {
       return undefined;
     }
     try {
@@ -589,7 +580,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
         route.gate !== "bound" &&
         (pending.notification.method === "configWarning" ||
           (pending.notification.method === "warning" &&
-            !readScope(pending.notification.params).threadId))
+            !readCodexNotificationScope(pending.notification.params).threadId))
       ) {
         // The attempt projector does not exist until turn binding; releasing a
         // process-wide warning during route activation would silently lose it.
@@ -623,7 +614,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
 
   private warnDroppedStaleTurnNotification(
     route: Route,
-    notification: CodexServerNotification,
+    notification: CodexPreparedServerNotification,
     scope: CodexThreadRouteScope,
   ): void {
     if (notification.method === "turn/completed" || !scope.turnId || !route.turnId) {
@@ -648,7 +639,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
 
   private bufferNotification(
     route: Route,
-    notification: CodexServerNotification,
+    notification: CodexPreparedServerNotification,
     scope: CodexThreadRouteScope,
     receivedAtMs: number,
   ): void {
@@ -670,7 +661,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
   private enqueueNotification(
     route: Route,
     handler: CodexThreadNotificationHandler,
-    notification: CodexServerNotification,
+    notification: CodexPreparedServerNotification,
     scope: CodexThreadRouteScope,
   ): void {
     if (route.released && !this.canDrainClosedTurn(route, route.turnId)) {
@@ -737,15 +728,6 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       throw route.released;
     }
   }
-}
-
-function readScope(value: JsonValue | undefined) {
-  if (!isJsonObject(value)) {
-    return {};
-  }
-  const threadId = readCodexNotificationThreadId(value);
-  const turnId = readCodexNotificationTurnId(value);
-  return { ...(threadId ? { threadId } : {}), ...(turnId ? { turnId } : {}) };
 }
 
 function requireId(value: string, label: string): string {

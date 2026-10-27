@@ -21,8 +21,8 @@ the OpenClaw tool-result format, and exposes static metadata that
 `configSchema`).
 
 ```typescript
-import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { Type } from "typebox";
 
 export default defineToolPlugin({
   id: "stock-quotes",
@@ -67,6 +67,18 @@ export default defineToolPlugin({
 - Runtime loading stays strict: installed plugins still need
   `openclaw.plugin.json` and `package.json` `openclaw.extensions`. OpenClaw
   never executes plugin code to infer missing manifest data.
+
+## Dictionary schemas and preparation validation
+
+The same `openclaw/plugin-sdk/tool-plugin` entry point exports:
+
+- `openRecord(description)`: an explicitly open dictionary schema that preserves
+  arbitrary JSON keys through native OpenAI compatibility normalization.
+- `ToolArgumentValidationError`: throw from a concrete tool's `prepareArguments`
+  to report an argument-validation rejection instead of a generic preparation failure.
+
+See [Provider-portable dictionaries and validation](/plugins/tool-plugins#provider-portable-dictionaries-and-validation)
+for provider differences, diagnostic surfaces, and examples.
 
 ## Input-dependent output schemas
 

@@ -1,6 +1,6 @@
 import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
-import { normalizeWhatsAppTarget } from "./normalize.js";
+import { normalizeWhatsAppTarget } from "./normalize-target.js";
 
 function normalizeWhatsAppApproverId(value: string | number): string | undefined {
   const normalized = normalizeWhatsAppTarget(String(value));

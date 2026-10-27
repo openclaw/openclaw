@@ -9,12 +9,10 @@ type BrowserTabToolBinding = {
   targetId: string;
 };
 
-type BindingResult = { ok: true; binding: BrowserTabToolBinding } | { ok: false; error: string };
-
 /** Validate the plugin-owned run binding before any browser route is resolved. */
-export function parseBrowserTabToolBinding(value: unknown): BindingResult {
+export function parseBrowserTabToolBinding(value: unknown): BrowserTabToolBinding {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { ok: false, error: "browser tool binding must be an object" };
+    throw new Error("invalid browser run binding: browser tool binding must be an object");
   }
   const record = value as Record<string, unknown>;
   const target = record.target === "host" || record.target === "node" ? record.target : undefined;
@@ -22,49 +20,30 @@ export function parseBrowserTabToolBinding(value: unknown): BindingResult {
   const profile = normalizeOptionalString(record.profile);
   const targetId = normalizeOptionalString(record.targetId);
   if (record.kind !== "tab") {
-    return { ok: false, error: 'browser tool binding kind must be "tab"' };
+    throw new Error('invalid browser run binding: browser tool binding kind must be "tab"');
   }
   if (!Number.isSafeInteger(record.tabId) || Number(record.tabId) < 0) {
-    return { ok: false, error: "browser tool binding tabId must be a non-negative integer" };
+    throw new Error(
+      "invalid browser run binding: browser tool binding tabId must be a non-negative integer",
+    );
   }
   if (!target || !profile || !targetId || (target === "node" && !node)) {
-    return { ok: false, error: "browser tool binding requires target, profile, and targetId" };
+    throw new Error(
+      "invalid browser run binding: browser tool binding requires target, profile, and targetId",
+    );
   }
   if (target === "host" && node) {
-    return { ok: false, error: "browser host binding cannot include node" };
+    throw new Error("invalid browser run binding: browser host binding cannot include node");
   }
   return {
-    ok: true,
-    binding: {
-      kind: "tab",
-      tabId: Number(record.tabId),
-      target,
-      ...(node ? { node } : {}),
-      profile,
-      targetId,
-    },
+    kind: "tab",
+    tabId: Number(record.tabId),
+    target,
+    ...(node ? { node } : {}),
+    profile,
+    targetId,
   };
 }
-
-export const BROWSER_TAB_BOUND_ACTIONS = [
-  "act",
-  "close",
-  "console",
-  "requests",
-  "errors",
-  "text",
-  "emulate",
-  "dialog",
-  "download",
-  "focus",
-  "navigate",
-  "pdf",
-  "screenshot",
-  "snapshot",
-  "tabs",
-  "upload",
-  "waitfordownload",
-] as const;
 
 function bindTargetId(record: Record<string, unknown>, targetId: string): Record<string, unknown> {
   const requestedTargetId = normalizeOptionalString(record.targetId);
@@ -86,17 +65,15 @@ export function applyBrowserTabToolBinding(
   input: Record<string, unknown>,
   binding: BrowserTabToolBinding,
 ): Record<string, unknown> {
-  const requestedTarget = normalizeOptionalString(input.target);
-  const requestedNode = normalizeOptionalString(input.node);
-  const requestedProfile = normalizeOptionalString(input.profile);
-  if (requestedTarget && requestedTarget !== binding.target) {
-    throw new Error("browser action cannot override its run-bound target");
-  }
-  if (requestedNode && requestedNode !== binding.node) {
-    throw new Error("browser action cannot override its run-bound node");
-  }
-  if (requestedProfile && requestedProfile !== binding.profile) {
-    throw new Error("browser action cannot override its run-bound profile");
+  const requested = {
+    target: normalizeOptionalString(input.target),
+    node: normalizeOptionalString(input.node),
+    profile: normalizeOptionalString(input.profile),
+  };
+  for (const field of ["target", "node", "profile"] as const) {
+    if (requested[field] && requested[field] !== binding[field]) {
+      throw new Error(`browser action cannot override its run-bound ${field}`);
+    }
   }
   const bound = bindTargetId(input, binding.targetId);
   const request =

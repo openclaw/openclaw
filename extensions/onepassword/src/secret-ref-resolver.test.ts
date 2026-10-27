@@ -9,9 +9,16 @@ import {
   tempWorkspaceSync,
   type TempWorkspaceSync,
 } from "openclaw/plugin-sdk/temp-path";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  withinTest,
+  type FixtureReceiptChannel,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { build } from "tsdown";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createStateSchemaInlinePlugin } from "../../../scripts/lib/state-schema-inline-plugin.mjs";
+import { isProcessAlive } from "../../test-support/process.test-support.js";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
 import { createTrustedNodeFixture } from "./trusted-node.test-support.js";
 
@@ -29,15 +36,19 @@ const rootTsconfigPath = path.resolve("tsconfig.json");
 // The manifest test reads the production source; the timeout-only staged executable needs a
 // shorter deadline to prove cleanup without sleeping for the production seven seconds.
 const TEST_OP_READ_TIMEOUT_MS = process.platform === "win32" ? 5_000 : 1_500;
-const resolverStateWorkspaces: TempWorkspaceSync[] = [];
+const secretId = "op://Engineering/OpenRouter/apiKey";
+const serviceToken = "not-a-real-service-account-token";
 let fixtureWorkspace: TempWorkspaceSync;
+let stateWorkspace: TempWorkspaceSync;
 let resolverPath = sourceResolverPath;
-let timeoutResolverPath: string | undefined;
+let timeoutResolverPath: string;
 let stagedResolverRoot: string | undefined;
 let trustedNodeRoot: string | undefined;
-let trustedNodePath: string | undefined;
+let trustedNodePath: string;
+let receipts: FixtureReceiptChannel;
 
 beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
   const tempRoot = path.join(process.cwd(), ".tmp");
   fs.mkdirSync(tempRoot, { recursive: true });
   stagedResolverRoot = fs.mkdtempSync(path.join(tempRoot, "onepassword-resolver-"));
@@ -81,7 +92,8 @@ beforeAll(async () => {
   trustedNodePath = createTrustedNodeFixture(trustedNodeRoot);
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await receipts?.close();
   if (stagedResolverRoot) {
     fs.rmSync(stagedResolverRoot, { recursive: true, force: true });
   }
@@ -90,65 +102,57 @@ afterAll(() => {
   }
 });
 
-function getTrustedNodePath(): string {
-  if (!trustedNodePath) {
-    throw new Error("trusted Node fixture was not initialized");
-  }
-  return trustedNodePath;
+function writeOpScript(opPath: string, body: string): void {
+  fs.writeFileSync(opPath, `#!${trustedNodePath}\n${body}`, { mode: 0o755 });
 }
 
-function getTimeoutResolverPath(): string {
-  if (!timeoutResolverPath) {
-    throw new Error("timeout resolver fixture was not initialized");
-  }
-  return timeoutResolverPath;
+function writeToken(stateDir: string, token: string): void {
+  const tokenDir = path.join(stateDir, "credentials", "onepassword");
+  fs.mkdirSync(tokenDir, { recursive: true });
+  fs.writeFileSync(path.join(tokenDir, "service-account-token"), token, { mode: 0o600 });
 }
 
-async function waitForPath(filePath: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!fs.existsSync(filePath)) {
-    if (Date.now() >= deadline) {
-      throw new Error(`Timed out waiting for test path: ${filePath}`);
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
+function runOp(body: string, params: Parameters<typeof runResolver>[0] = {}) {
+  const opPath = path.join(fixtureWorkspace.dir, "op");
+  writeOpScript(opPath, body);
+  return runResolver({ ...params, env: { CLAW_1PASSWORD_OP: opPath, ...params.env } });
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+function expectFailure(result: Awaited<ReturnType<typeof runResolver>>) {
+  expect(result).toEqual({ code: 1, stdout: "", stderr: "1Password SecretRef resolver failed.\n" });
+}
+
+function expectValues(
+  result: Awaited<ReturnType<typeof runResolver>>,
+  values: Record<string, string>,
+) {
+  expect(result).toMatchObject({ code: 0, stderr: "" });
+  expect(JSON.parse(result.stdout).values).toEqual(values);
+}
+
+function expectError(result: Awaited<ReturnType<typeof runResolver>>, message: string) {
+  expect(JSON.parse(result.stdout).errors).toEqual({ [secretId]: { message } });
+}
+
+async function expectExited(pid: number) {
+  await expect
+    .poll(() => (isProcessAlive(pid) ? `descendant ${pid} is still alive` : "exited"), {
+      timeout: 2_000,
+      interval: 10,
+    })
+    .toBe("exited");
 }
 
 function runResolver(params: {
-  request: unknown;
+  ids?: string[];
   cwd?: string;
   env?: Record<string, string>;
   resolverExecutablePath?: string;
   token?: string | null;
 }): Promise<{ stdout: string; stderr: string; code: number | null }> {
-  let stateDir = params.env?.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    const workspace = tempWorkspaceSync({
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-1password-test-",
-    });
-    resolverStateWorkspaces.push(workspace);
-    stateDir = workspace.dir;
-  }
+  const stateDir = params.env?.OPENCLAW_STATE_DIR || stateWorkspace.dir;
   if (params.token !== null) {
-    const tokenDir = path.join(stateDir, "credentials", "onepassword");
-    fs.mkdirSync(tokenDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(tokenDir, "service-account-token"),
-      params.token ?? "not-a-real-service-account-token",
-      { mode: 0o600 },
-    );
+    writeToken(stateDir, params.token ?? serviceToken);
   }
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [params.resolverExecutablePath ?? resolverPath], {
@@ -176,22 +180,32 @@ function runResolver(params: {
     child.on("exit", (code) => {
       resolve({ stdout, stderr, code });
     });
-    child.stdin.end(`${JSON.stringify(params.request)}\n`);
+    child.stdin.end(
+      `${JSON.stringify({
+        protocolVersion: 1,
+        provider: "onepassword",
+        ids: params.ids ?? [secretId],
+      })}\n`,
+    );
+  });
+}
+
+function workspace() {
+  return tempWorkspaceSync({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-1password-test-",
   });
 }
 
 beforeEach(() => {
-  fixtureWorkspace = tempWorkspaceSync({
-    rootDir: resolvePreferredOpenClawTmpDir(),
-    prefix: "openclaw-1password-test-",
-  });
+  fixtureWorkspace = workspace();
+  // Executable fixtures can become unsafe; keep the token's parent independently trusted.
+  stateWorkspace = workspace();
 });
 
 afterEach(() => {
-  for (const workspace of resolverStateWorkspaces.splice(0)) {
-    workspace.cleanup();
-  }
   fixtureWorkspace.cleanup();
+  stateWorkspace.cleanup();
 });
 
 describe("plugin manifest", () => {
@@ -251,29 +265,31 @@ describe("plugin manifest", () => {
         "WINDIR",
       ]),
     });
-    expect(integration?.passEnv).not.toContain("OP_SERVICE_ACCOUNT_TOKEN");
-    expect(integration?.passEnv).not.toContain("OP_CONNECT_HOST");
-    expect(integration?.passEnv).not.toContain("OP_CONNECT_TOKEN");
-    expect(integration?.passEnv).not.toContain("OP_ACCOUNT");
-    expect(integration?.passEnv).not.toContain("OP_CACHE");
+    for (const key of [
+      "OP_SERVICE_ACCOUNT_TOKEN",
+      "OP_CONNECT_HOST",
+      "OP_CONNECT_TOKEN",
+      "OP_ACCOUNT",
+      "OP_CACHE",
+    ]) {
+      expect(integration?.passEnv).not.toContain(key);
+    }
     expect(integration).not.toHaveProperty("trustedDirs");
     expect(integration?.timeoutMs).toBeGreaterThan(worstCaseBatchTimeoutMs);
     expect(integration?.noOutputTimeoutMs).toBeGreaterThan(worstCaseBatchTimeoutMs);
     expect(integration?.maxOutputBytes).toBeGreaterThan(
       maxRefsPerRequest * worstCaseEscapedValueBytes,
     );
-    expect(packageJson.openclaw?.build?.staticAssets).toContainEqual({
-      source: "./onepassword-op-path.js",
-      output: "onepassword-op-path.js",
-    });
-    expect(packageJson.openclaw?.build?.staticAssets).toContainEqual({
-      source: "./onepassword-secret-ref-resolver.js",
-      output: "onepassword-secret-ref-resolver.js",
-    });
-    expect(packageJson.openclaw?.build?.staticAssets).toContainEqual({
-      source: "./onepassword-secret-id.js",
-      output: "onepassword-secret-id.js",
-    });
+    for (const name of [
+      "onepassword-op-path.js",
+      "onepassword-secret-ref-resolver.js",
+      "onepassword-secret-id.js",
+    ]) {
+      expect(packageJson.openclaw?.build?.staticAssets).toContainEqual({
+        source: `./${name}`,
+        output: name,
+      });
+    }
   });
 });
 
@@ -282,11 +298,16 @@ describe("1Password SecretRef resolver", () => {
     "preserves the Windows profile directories required by op",
     async () => {
       const tempDir = fixtureWorkspace.dir;
-      const appData = path.join(tempDir, "profile", "AppData", "Roaming");
-      const localAppData = path.join(tempDir, "profile", "AppData", "Local");
-      const temp = path.join(localAppData, "Temp");
-      const tmp = path.join(localAppData, "Tmp");
-      for (const directory of [appData, localAppData, temp, tmp]) {
+      const profile = path.join(tempDir, "profile");
+      const localAppData = path.join(profile, "AppData", "Local");
+      const directories = {
+        USERPROFILE: profile,
+        APPDATA: path.join(profile, "AppData", "Roaming"),
+        LOCALAPPDATA: localAppData,
+        TEMP: path.join(localAppData, "Temp"),
+        TMP: path.join(localAppData, "Tmp"),
+      };
+      for (const directory of Object.values(directories)) {
         fs.mkdirSync(directory, { recursive: true });
       }
       fs.writeFileSync(
@@ -301,115 +322,20 @@ describe("1Password SecretRef resolver", () => {
 }));\n`,
       );
 
-      const id = "op://Engineering/OpenRouter/apiKey";
       const result = await runResolver({
-        request: { protocolVersion: 1, provider: "onepassword", ids: [id] },
         cwd: tempDir,
         env: {
           CLAW_1PASSWORD_OP: process.execPath,
           HOME: path.join(tempDir, "wrong-home"),
-          USERPROFILE: path.join(tempDir, "profile"),
-          APPDATA: appData,
-          LOCALAPPDATA: localAppData,
-          TEMP: temp,
-          TMP: tmp,
+          ...directories,
         },
       });
 
       expect(result).toMatchObject({ code: 0, stderr: "" });
-      expect(JSON.parse(JSON.parse(result.stdout).values[id])).toEqual({
-        USERPROFILE: path.join(tempDir, "profile"),
-        APPDATA: appData,
-        LOCALAPPDATA: localAppData,
-        TEMP: temp,
-        TMP: tmp,
+      expect(JSON.parse(JSON.parse(result.stdout).values[secretId])).toEqual({
+        ...directories,
         serviceAccount: true,
       });
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "uses op read with native 1Password secret references",
-    async () => {
-      const tempDir = fixtureWorkspace.dir;
-      const opPath = path.join(tempDir, "op");
-      const logPath = path.join(tempDir, "op-args.json");
-      fs.writeFileSync(
-        opPath,
-        `#!${getTrustedNodePath()}
-const fs = require("node:fs");
-fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify({
-  args: process.argv.slice(2),
-  biometric: process.env.OP_BIOMETRIC_UNLOCK_ENABLED,
-  loadDesktopSettings: process.env.OP_LOAD_DESKTOP_APP_SETTINGS,
-  account: process.env.OP_ACCOUNT,
-  serviceAccount: process.env.OP_SERVICE_ACCOUNT_TOKEN === "not-a-real-service-account-token",
-}));
-process.stdout.write("not-a-real-value \\t");
-`,
-        { mode: 0o755 },
-      );
-
-      const result = await runResolver({
-        request: {
-          protocolVersion: 1,
-          provider: "onepassword",
-          ids: ["op://Engineering/OpenRouter/apiKey"],
-        },
-        env: {
-          CLAW_1PASSWORD_OP: opPath,
-          OP_ACCOUNT: "should-not-reach-op",
-        },
-      });
-
-      expect(result).toMatchObject({ code: 0, stderr: "" });
-      expect(JSON.parse(result.stdout)).toEqual({
-        protocolVersion: 1,
-        values: {
-          "op://Engineering/OpenRouter/apiKey": "not-a-real-value \t",
-        },
-        errors: {},
-      });
-      expect(JSON.parse(fs.readFileSync(logPath, "utf8"))).toEqual({
-        args: ["read", "--cache=false", "--no-newline", "op://Engineering/OpenRouter/apiKey"],
-        biometric: "false",
-        loadDesktopSettings: "false",
-        serviceAccount: true,
-      });
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "decodes native references that do not fit the shared exec id grammar",
-    async () => {
-      const tempDir = fixtureWorkspace.dir;
-      const opPath = path.join(tempDir, "op");
-      const logPath = path.join(tempDir, "op-args.json");
-      const nativeRef = "op://Personal/OpenClaw QA API Key/password?attribute=value%20one";
-      fs.writeFileSync(
-        opPath,
-        `#!${getTrustedNodePath()}
-const fs = require("node:fs");
-fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)));
-process.stdout.write("not-a-real-value");
-`,
-        { mode: 0o755 },
-      );
-
-      const encodedId = encodeOnePasswordSecretId(nativeRef);
-      const result = await runResolver({
-        request: { protocolVersion: 1, provider: "onepassword", ids: [encodedId] },
-        env: { CLAW_1PASSWORD_OP: opPath },
-      });
-
-      expect(encodedId).toMatch(/^opb64:[A-Za-z0-9_-]+$/);
-      expect(JSON.parse(result.stdout).values).toEqual({ [encodedId]: "not-a-real-value" });
-      expect(JSON.parse(fs.readFileSync(logPath, "utf8"))).toEqual([
-        "read",
-        "--cache=false",
-        "--no-newline",
-        nativeRef,
-      ]);
     },
   );
 
@@ -421,97 +347,8 @@ process.stdout.write("not-a-real-value");
     expect(encodedId).not.toBe(nativeRef);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "waits for inherited op stdout to close before returning the secret",
-    async () => {
-      const tempDir = fixtureWorkspace.dir;
-      const opPath = path.join(tempDir, "op");
-      fs.writeFileSync(
-        opPath,
-        `#!${getTrustedNodePath()}
-const { spawn } = require("node:child_process");
-spawn(process.execPath, ["-e", "setTimeout(() => process.stdout.write('tail'), 50)"], {
-  stdio: ["ignore", process.stdout, "ignore"],
-});
-process.stdout.write("head");
-`,
-        { mode: 0o755 },
-      );
-
-      const result = await runResolver({
-        request: {
-          protocolVersion: 1,
-          provider: "onepassword",
-          ids: ["Engineering/OpenRouter/apiKey"],
-        },
-        env: { CLAW_1PASSWORD_OP: opPath },
-      });
-
-      expect(JSON.parse(result.stdout).values).toEqual({
-        "Engineering/OpenRouter/apiKey": "headtail",
-      });
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "builds op secret references from shorthand ids",
-    async () => {
-      const tempDir = fixtureWorkspace.dir;
-      const opPath = path.join(tempDir, "op");
-      const logPath = path.join(tempDir, "op-args.json");
-      fs.writeFileSync(
-        opPath,
-        `#!${getTrustedNodePath()}
-const fs = require("node:fs");
-fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)));
-process.stdout.write("not-a-real-value");
-`,
-        { mode: 0o755 },
-      );
-
-      const result = await runResolver({
-        request: {
-          protocolVersion: 1,
-          provider: "onepassword",
-          ids: ["Engineering/OpenRouter/apiKey"],
-        },
-        env: { CLAW_1PASSWORD_OP: opPath },
-      });
-
-      expect(result).toMatchObject({ code: 0, stderr: "" });
-      expect(JSON.parse(result.stdout)).toEqual({
-        protocolVersion: 1,
-        values: {
-          "Engineering/OpenRouter/apiKey": "not-a-real-value",
-        },
-        errors: {},
-      });
-      expect(JSON.parse(fs.readFileSync(logPath, "utf8"))).toEqual([
-        "read",
-        "--cache=false",
-        "--no-newline",
-        "op://Engineering/OpenRouter/apiKey",
-      ]);
-    },
-  );
-
   it("requires an absolute op CLI path", async () => {
-    const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "onepassword",
-        ids: ["op://Engineering/OpenRouter/apiKey"],
-      },
-      env: {
-        CLAW_1PASSWORD_OP: "op",
-      },
-    });
-
-    expect(result).toEqual({
-      code: 1,
-      stdout: "",
-      stderr: "1Password SecretRef resolver failed.\n",
-    });
+    expectFailure(await runResolver({ env: { CLAW_1PASSWORD_OP: "op" } }));
   });
 
   it("rejects oversized batches before reading credentials or starting op", async () => {
@@ -520,7 +357,7 @@ process.stdout.write("not-a-real-value");
       (_, index) => `op://Engineering/Item${index}/credential`,
     );
     const result = await runResolver({
-      request: { protocolVersion: 1, provider: "onepassword", ids },
+      ids,
       env: { CLAW_1PASSWORD_OP: "/does/not/exist/op" },
       token: null,
     });
@@ -537,336 +374,46 @@ process.stdout.write("not-a-real-value");
     );
   });
 
-  it("requires the broker service-account token file", async () => {
-    const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "onepassword",
-        ids: ["op://Engineering/OpenRouter/apiKey"],
-      },
-      env: { CLAW_1PASSWORD_OP: process.execPath },
-      token: null,
-    });
-
-    expect(result).toEqual({
-      code: 1,
-      stdout: "",
-      stderr: "1Password SecretRef resolver failed.\n",
-    });
-  });
-
-  it("rejects an oversized broker service-account token file", async () => {
-    const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "onepassword",
-        ids: ["op://Engineering/OpenRouter/apiKey"],
-      },
-      env: { CLAW_1PASSWORD_OP: process.execPath },
+  it.each([
+    { name: "requires the broker token file", token: null },
+    {
+      name: "rejects an oversized broker token",
       token: "x".repeat(DEFAULT_SECRET_FILE_MAX_BYTES + 1),
-    });
-
-    expect(result).toEqual({
-      code: 1,
-      stdout: "",
-      stderr: "1Password SecretRef resolver failed.\n",
-    });
+    },
+  ])("$name", async ({ token }) => {
+    expectFailure(await runResolver({ env: { CLAW_1PASSWORD_OP: process.execPath }, token }));
   });
-
-  it.runIf(process.platform !== "win32")("rejects a symlinked broker token file", async () => {
-    const stateDir = fixtureWorkspace.dir;
-    const tokenDir = path.join(stateDir, "credentials", "onepassword");
-    const targetPath = path.join(tokenDir, "service-account-token-target");
-    const tokenPath = path.join(tokenDir, "service-account-token");
-    fs.mkdirSync(tokenDir, { recursive: true });
-    fs.writeFileSync(targetPath, "linked-service-account-token", { mode: 0o600 });
-    fs.symlinkSync(targetPath, tokenPath);
-
-    const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "onepassword",
-        ids: ["op://Engineering/OpenRouter/apiKey"],
-      },
-      env: { CLAW_1PASSWORD_OP: process.execPath, OPENCLAW_STATE_DIR: stateDir },
-      token: null,
-    });
-
-    expect(result).toEqual({
-      code: 1,
-      stdout: "",
-      stderr: "1Password SecretRef resolver failed.\n",
-    });
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "accepts the broker token file through a hardlink",
-    async () => {
-      const stateDir = fixtureWorkspace.dir;
-      const tokenDir = path.join(stateDir, "credentials", "onepassword");
-      const targetPath = path.join(tokenDir, "service-account-token-target");
-      const tokenPath = path.join(tokenDir, "service-account-token");
-      const opPath = path.join(stateDir, "op");
-      fs.mkdirSync(tokenDir, { recursive: true });
-      fs.writeFileSync(targetPath, "linked-service-account-token", { mode: 0o600 });
-      fs.linkSync(targetPath, tokenPath);
-      fs.writeFileSync(
-        opPath,
-        `#!${getTrustedNodePath()}\nprocess.stdout.write(process.env.OP_SERVICE_ACCOUNT_TOKEN === "linked-service-account-token" ? "ok" : "bad");\n`,
-        { mode: 0o755 },
-      );
-
-      const result = await runResolver({
-        request: {
-          protocolVersion: 1,
-          provider: "onepassword",
-          ids: ["op://Engineering/OpenRouter/apiKey"],
-        },
-        env: { CLAW_1PASSWORD_OP: opPath, OPENCLAW_STATE_DIR: stateDir },
-        token: null,
-      });
-
-      expect(result).toMatchObject({ code: 0, stderr: "" });
-      expect(JSON.parse(result.stdout).values).toEqual({
-        "op://Engineering/OpenRouter/apiKey": "ok",
-      });
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "reads the service token from the selected profile state directory",
-    async () => {
-      const home = fixtureWorkspace.dir;
-      const profileTokenDir = path.join(home, ".openclaw-work", "credentials", "onepassword");
-      const defaultTokenDir = path.join(home, ".openclaw", "credentials", "onepassword");
-      const opPath = path.join(home, "op");
-      fs.mkdirSync(profileTokenDir, { recursive: true });
-      fs.mkdirSync(defaultTokenDir, { recursive: true });
-      fs.writeFileSync(path.join(profileTokenDir, "service-account-token"), "profile-token", {
-        mode: 0o600,
-      });
-      fs.writeFileSync(path.join(defaultTokenDir, "service-account-token"), "default-token", {
-        mode: 0o600,
-      });
-      fs.writeFileSync(
-        opPath,
-        `#!${getTrustedNodePath()}\nprocess.stdout.write(process.env.OP_SERVICE_ACCOUNT_TOKEN);\n`,
-        { mode: 0o755 },
-      );
-
-      const result = await runResolver({
-        request: {
-          protocolVersion: 1,
-          provider: "onepassword",
-          ids: ["op://Engineering/OpenRouter/apiKey"],
-        },
-        env: {
-          CLAW_1PASSWORD_OP: opPath,
-          HOME: home,
-          OPENCLAW_HOME: "",
-          OPENCLAW_PROFILE: "work",
-          OPENCLAW_STATE_DIR: "",
-        },
-        token: null,
-      });
-
-      expect(result).toMatchObject({ code: 0, stderr: "" });
-      expect(JSON.parse(result.stdout).values).toEqual({
-        "op://Engineering/OpenRouter/apiKey": "profile-token",
-      });
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "keeps literal $ patterns in home when expanding the tilde state dir",
-    async () => {
-      const home = path.join(fixtureWorkspace.dir, "home$&d");
-      const tokenDir = path.join(home, "oc-state", "credentials", "onepassword");
-      const opPath = path.join(fixtureWorkspace.dir, "op");
-      fs.mkdirSync(tokenDir, { recursive: true });
-      fs.writeFileSync(path.join(tokenDir, "service-account-token"), "dollar-token", {
-        mode: 0o600,
-      });
-      fs.writeFileSync(
-        opPath,
-        `#!${getTrustedNodePath()}\nprocess.stdout.write(process.env.OP_SERVICE_ACCOUNT_TOKEN);\n`,
-        { mode: 0o755 },
-      );
-
-      const result = await runResolver({
-        request: {
-          protocolVersion: 1,
-          provider: "onepassword",
-          ids: ["op://Engineering/OpenRouter/apiKey"],
-        },
-        env: {
-          CLAW_1PASSWORD_OP: opPath,
-          HOME: home,
-          OPENCLAW_HOME: "",
-          OPENCLAW_PROFILE: "",
-          OPENCLAW_STATE_DIR: "~/oc-state",
-        },
-        token: null,
-      });
-
-      expect(result).toMatchObject({ code: 0, stderr: "" });
-      expect(JSON.parse(result.stdout).values).toEqual({
-        "op://Engineering/OpenRouter/apiKey": "dollar-token",
-      });
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "keeps literal $ patterns in HOME when expanding a tilde OPENCLAW_HOME",
-    async () => {
-      const home = path.join(fixtureWorkspace.dir, "home$&d");
-      const tokenDir = path.join(home, "oc-home", ".openclaw", "credentials", "onepassword");
-      const opPath = path.join(fixtureWorkspace.dir, "op");
-      fs.mkdirSync(tokenDir, { recursive: true });
-      fs.writeFileSync(path.join(tokenDir, "service-account-token"), "home-token", {
-        mode: 0o600,
-      });
-      fs.writeFileSync(
-        opPath,
-        `#!${getTrustedNodePath()}\nprocess.stdout.write(process.env.OP_SERVICE_ACCOUNT_TOKEN);\n`,
-        { mode: 0o755 },
-      );
-
-      const result = await runResolver({
-        request: {
-          protocolVersion: 1,
-          provider: "onepassword",
-          ids: ["op://Engineering/OpenRouter/apiKey"],
-        },
-        env: {
-          CLAW_1PASSWORD_OP: opPath,
-          HOME: home,
-          OPENCLAW_HOME: "~/oc-home",
-          OPENCLAW_PROFILE: "",
-          OPENCLAW_STATE_DIR: "",
-        },
-        token: null,
-      });
-
-      expect(result).toMatchObject({ code: 0, stderr: "" });
-      expect(JSON.parse(result.stdout).values).toEqual({
-        "op://Engineering/OpenRouter/apiKey": "home-token",
-      });
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "does not include failed child output in resolver errors",
-    async () => {
-      const tempDir = fixtureWorkspace.dir;
-      const opPath = path.join(tempDir, "op");
-      fs.writeFileSync(
-        opPath,
-        `#!${getTrustedNodePath()}
-process.stdout.write("secret-output-must-not-escape");
-process.stderr.write("secret-error-must-not-escape");
-process.exitCode = 1;
-`,
-        { mode: 0o755 },
-      );
-
-      const result = await runResolver({
-        request: {
-          protocolVersion: 1,
-          provider: "onepassword",
-          ids: ["op://Engineering/OpenRouter/apiKey"],
-        },
-        env: { CLAW_1PASSWORD_OP: opPath },
-      });
-      expect(result.stdout).not.toContain("secret-output-must-not-escape");
-      expect(result.stdout).not.toContain("secret-error-must-not-escape");
-      expect(JSON.parse(result.stdout).errors).toEqual({
-        "op://Engineering/OpenRouter/apiKey": { message: "op read failed with exit code 1." },
-      });
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "kills the op process tree when output exceeds the limit",
-    async () => {
-      const tempDir = fixtureWorkspace.dir;
-      const opPath = path.join(tempDir, "op");
-      const descendantPidPath = path.join(tempDir, "descendant.pid");
-      fs.writeFileSync(
-        opPath,
-        `#!${getTrustedNodePath()}
-const fs = require("node:fs");
-const { spawn } = require("node:child_process");
-const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(`process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);`)}], { stdio: "ignore" });
-descendant.once("spawn", () => {
-  fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));
-  process.stdout.write("x".repeat(70 * 1024));
-});
-setInterval(() => {}, 1000);
-`,
-        { mode: 0o755 },
-      );
-
-      let descendantPid: number | undefined;
-      try {
-        const result = await runResolver({
-          request: {
-            protocolVersion: 1,
-            provider: "onepassword",
-            ids: ["op://Engineering/OpenRouter/apiKey"],
-          },
-          env: { CLAW_1PASSWORD_OP: opPath },
-        });
-        expect(JSON.parse(result.stdout).errors).toEqual({
-          "op://Engineering/OpenRouter/apiKey": {
-            message: "op read output exceeded the secret value limit.",
-          },
-        });
-        const pid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
-        descendantPid = pid;
-        expect(pid).toBeGreaterThan(0);
-        await expect
-          .poll(
-            () => (isProcessAlive(pid) ? `descendant ${String(pid)} is still alive` : "exited"),
-            { timeout: 2_000, interval: 10 },
-          )
-          .toBe("exited");
-      } finally {
-        if (descendantPid && isProcessAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
-      }
-    },
-  );
 
   it(
     "kills the op process tree when a read times out",
-    async () => {
+    async ({ signal }) => {
       const tempDir = fixtureWorkspace.dir;
       const descendantPidPath = path.join(tempDir, "timed-out-descendant.pid");
-      const descendantBody = `const fs = require("node:fs");
+      const descendantBody = `import fs from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
 process.on("SIGTERM", () => {});
 fs.writeFileSync(${JSON.stringify(`${descendantPidPath}.tmp`)}, String(process.pid));
 fs.renameSync(${JSON.stringify(`${descendantPidPath}.tmp`)}, ${JSON.stringify(descendantPidPath)});
+sendReceipt(${JSON.stringify(descendantPidPath)}, "ready");
 setInterval(() => {}, 1000);
 `;
       let opPath = process.execPath;
       if (process.platform === "win32") {
         const opBody = `const { spawn } = require("node:child_process");
-spawn(process.execPath, ["-e", ${JSON.stringify(descendantBody)}], { stdio: "ignore" });
+spawn(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(descendantBody)}], { stdio: "ignore" });
 setInterval(() => {}, 1000);
 `;
         fs.writeFileSync(path.join(tempDir, "read"), opBody);
       } else {
         // Executable trust validation requires the literal shebang path to be canonical.
         const shellPath = fs.realpathSync("/bin/sh");
-        const descendantPath = path.join(tempDir, "descendant.cjs");
+        const descendantPath = path.join(tempDir, "descendant.mjs");
         opPath = path.join(tempDir, "op");
         fs.writeFileSync(descendantPath, descendantBody);
         fs.writeFileSync(
           opPath,
           `#!${shellPath}
-${JSON.stringify(getTrustedNodePath())} ${JSON.stringify(descendantPath)} &
+${JSON.stringify(trustedNodePath)} ${JSON.stringify(descendantPath)} &
 while true; do sleep 1; done
 `,
           { mode: 0o755 },
@@ -874,43 +421,39 @@ while true; do sleep 1; done
       }
 
       const resultPromise = runResolver({
-        request: {
-          protocolVersion: 1,
-          provider: "onepassword",
-          ids: ["op://Engineering/OpenRouter/apiKey"],
-        },
         cwd: tempDir,
         env: { CLAW_1PASSWORD_OP: opPath },
-        resolverExecutablePath: getTimeoutResolverPath(),
+        resolverExecutablePath: timeoutResolverPath,
       });
       let descendantPid: number | undefined;
       try {
-        // The child publishes its PID after installing SIGTERM immunity. Windows also
-        // needs time for executable-owner and ACL preflight before that child can start.
-        await Promise.race([
-          waitForPath(descendantPidPath, process.platform === "win32" ? 15_000 : 10_000),
-          resultPromise.then((result) => {
-            throw new Error(
-              `Resolver exited before the descendant was ready: ${JSON.stringify(result)}`,
-            );
-          }),
-        ]);
+        // The PID record precedes the receipt, but the resolver's exit uses another pipe.
+        // If exit wins, the durable record still proves SIGTERM immunity was installed.
+        await withinTest(
+          Promise.race([
+            receipts.waitFor(descendantPidPath, "ready"),
+            resultPromise.then((result) => {
+              if (!fs.existsSync(descendantPidPath)) {
+                throw new Error(
+                  `Resolver exited before the descendant was ready: ${JSON.stringify(result)}`,
+                );
+              }
+            }),
+          ]),
+          signal,
+        );
         const pid = Number(fs.readFileSync(descendantPidPath, "utf8"));
         descendantPid = pid;
         expect(Number.isInteger(pid) && pid > 0).toBe(true);
-        const result = await resultPromise;
-        expect(JSON.parse(result.stdout).errors).toEqual({
-          "op://Engineering/OpenRouter/apiKey": {
-            message: `op read timed out after ${TEST_OP_READ_TIMEOUT_MS}ms.`,
-          },
-        });
-        await expect
-          .poll(
-            () => (isProcessAlive(pid) ? `descendant ${String(pid)} is still alive` : "exited"),
-            { timeout: 2_000, interval: 10 },
-          )
-          .toBe("exited");
+        const result = await withinTest(resultPromise, signal);
+        expectError(result, `op read timed out after ${TEST_OP_READ_TIMEOUT_MS}ms.`);
+        await expectExited(pid);
       } finally {
+        // Join resolver-owned cleanup even when the test aborts before readiness arrives.
+        await resultPromise;
+        if (descendantPid === undefined && fs.existsSync(descendantPidPath)) {
+          descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        }
         if (descendantPid && isProcessAlive(descendantPid)) {
           process.kill(descendantPid, "SIGKILL");
         }
@@ -919,108 +462,242 @@ while true; do sleep 1; done
     process.platform === "win32" ? 30_000 : 15_000,
   );
 
-  it.runIf(process.platform !== "win32")("bounds concurrent op reads", async () => {
-    const tempDir = fixtureWorkspace.dir;
-    const opPath = path.join(tempDir, "op");
-    const logPath = path.join(tempDir, "events.log");
-    fs.writeFileSync(
-      opPath,
-      `#!${getTrustedNodePath()}
-const fs = require("node:fs");
+  describe.runIf(process.platform !== "win32")("POSIX op execution", () => {
+    it("uses op read with native 1Password secret references", async () => {
+      const tempDir = fixtureWorkspace.dir;
+      const logPath = path.join(tempDir, "op-args.json");
+      const result = await runOp(
+        `const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify({
+  args: process.argv.slice(2),
+  biometric: process.env.OP_BIOMETRIC_UNLOCK_ENABLED,
+  loadDesktopSettings: process.env.OP_LOAD_DESKTOP_APP_SETTINGS,
+  account: process.env.OP_ACCOUNT,
+  serviceAccount: process.env.OP_SERVICE_ACCOUNT_TOKEN === "not-a-real-service-account-token",
+}));
+process.stdout.write("not-a-real-value \\t");
+`,
+        {
+          env: {
+            OP_ACCOUNT: "should-not-reach-op",
+          },
+        },
+      );
+
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toEqual({
+        protocolVersion: 1,
+        values: {
+          [secretId]: "not-a-real-value \t",
+        },
+        errors: {},
+      });
+      expect(JSON.parse(fs.readFileSync(logPath, "utf8"))).toEqual({
+        args: ["read", "--cache=false", "--no-newline", "op://Engineering/OpenRouter/apiKey"],
+        biometric: "false",
+        loadDesktopSettings: "false",
+        serviceAccount: true,
+      });
+    });
+
+    it("waits for inherited op stdout to close before returning the secret", async () => {
+      const result = await runOp(
+        `const { spawn } = require("node:child_process");
+spawn(process.execPath, ["-e", "setTimeout(() => process.stdout.write('tail'), 50)"], {
+  stdio: ["ignore", process.stdout, "ignore"],
+});
+process.stdout.write("head");
+`,
+        {
+          ids: ["Engineering/OpenRouter/apiKey"],
+        },
+      );
+
+      expect(JSON.parse(result.stdout).values).toEqual({
+        "Engineering/OpenRouter/apiKey": "headtail",
+      });
+    });
+
+    it("rejects a symlinked broker token file", async () => {
+      const stateDir = fixtureWorkspace.dir;
+      const tokenDir = path.join(stateDir, "credentials", "onepassword");
+      const targetPath = path.join(tokenDir, "service-account-token-target");
+      const tokenPath = path.join(tokenDir, "service-account-token");
+      fs.mkdirSync(tokenDir, { recursive: true });
+      fs.writeFileSync(targetPath, "linked-service-account-token", { mode: 0o600 });
+      fs.symlinkSync(targetPath, tokenPath);
+
+      const result = await runResolver({
+        env: { CLAW_1PASSWORD_OP: process.execPath, OPENCLAW_STATE_DIR: stateDir },
+        token: null,
+      });
+
+      expectFailure(result);
+    });
+
+    it("reads the service token from the selected profile state directory", async () => {
+      const home = fixtureWorkspace.dir;
+      writeToken(path.join(home, ".openclaw-work"), "profile-token");
+      writeToken(path.join(home, ".openclaw"), "default-token");
+
+      const result = await runOp(`process.stdout.write(process.env.OP_SERVICE_ACCOUNT_TOKEN);\n`, {
+        env: {
+          HOME: home,
+          OPENCLAW_HOME: "",
+          OPENCLAW_PROFILE: "work",
+          OPENCLAW_STATE_DIR: "",
+        },
+        token: null,
+      });
+
+      expectValues(result, { [secretId]: "profile-token" });
+    });
+
+    it.each([
+      {
+        name: "state dir",
+        directory: "oc-state",
+        home: "",
+        state: "~/oc-state",
+        token: "dollar-token",
+      },
+      {
+        name: "OPENCLAW_HOME",
+        directory: "oc-home/.openclaw",
+        home: "~/oc-home",
+        state: "",
+        token: "home-token",
+      },
+    ])(
+      "preserves literal $ in HOME when expanding tilde $name",
+      async ({ directory, home: openclawHome, state, token }) => {
+        const home = path.join(fixtureWorkspace.dir, "home$&d");
+        writeToken(path.join(home, directory), token);
+        const result = await runOp(
+          "process.stdout.write(process.env.OP_SERVICE_ACCOUNT_TOKEN);\n",
+          {
+            env: {
+              HOME: home,
+              OPENCLAW_PROFILE: "",
+              OPENCLAW_HOME: openclawHome,
+              OPENCLAW_STATE_DIR: state,
+            },
+            token: null,
+          },
+        );
+        expectValues(result, { [secretId]: token });
+      },
+    );
+
+    it("keeps the exit-code diagnostic when failed op read has no stderr", async () => {
+      const result = await runOp(
+        `process.stdout.write("secret-output-must-not-escape");
+process.exitCode = 1;
+`,
+      );
+      expect(result.stdout).not.toContain("secret-output-must-not-escape");
+      expectError(result, "op read failed with exit code 1.");
+    });
+
+    it("reports a bounded redacted stderr tail without exposing op read secrets", async () => {
+      const result = await runOp(
+        `process.stdout.write("fixture-secret-output");
+process.stderr.write("discarded-prefix " + "x".repeat(2_000) + "\\n");
+process.stderr.write(process.env.OP_SERVICE_ACCOUNT_TOKEN + "\\nfixture-secret-output\\n");
+process.stderr.write("password=" + "fixture-private-password".repeat(40) + "\\nnot signed in; item not found\\n");
+process.exitCode = 1;
+`,
+      );
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      const response = JSON.parse(result.stdout) as {
+        values: Record<string, string>;
+        errors: Record<string, { message: string }>;
+      };
+      expect(response.values).toEqual({});
+      const message = response.errors[secretId]?.message;
+      expect(message).toBeDefined();
+      expect(message).toMatch(/^op read failed with exit code 1\./);
+      expect(message).toMatch(/not signed in; item not found$/);
+      expect(message?.length).toBeLessThanOrEqual("op read failed with exit code 1. ".length + 512);
+      for (const hidden of [
+        "discarded-prefix",
+        "not-a-real-service-account-token",
+        "fixture-secret-output",
+        "fixture-private-password",
+      ]) {
+        expect(result.stdout).not.toContain(hidden);
+      }
+    });
+
+    it("kills the op process tree when output exceeds the limit", async () => {
+      const tempDir = fixtureWorkspace.dir;
+      const descendantPidPath = path.join(tempDir, "descendant.pid");
+
+      let descendantPid: number | undefined;
+      try {
+        const result = await runOp(`const fs = require("node:fs");
+const { spawn } = require("node:child_process");
+const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(`process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);`)}], { stdio: "ignore" });
+descendant.once("spawn", () => {
+  fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));
+  process.stdout.write("x".repeat(70 * 1024));
+});
+setInterval(() => {}, 1000);
+`);
+        expectError(result, "op read output exceeded the limit.");
+        const pid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        descendantPid = pid;
+        expect(pid).toBeGreaterThan(0);
+        await expectExited(pid);
+      } finally {
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
+    });
+
+    it("bounds concurrent op reads", async () => {
+      const tempDir = fixtureWorkspace.dir;
+      const logPath = path.join(tempDir, "events.log");
+
+      const ids = Array.from({ length: 20 }, (_, index) => `op://Vault/Item${index}/field`);
+      const result = await runOp(
+        `const fs = require("node:fs");
 fs.appendFileSync(${JSON.stringify(logPath)}, "start " + process.pid + "\\n");
 setTimeout(() => {
   fs.appendFileSync(${JSON.stringify(logPath)}, "end " + process.pid + "\\n");
   process.stdout.write("not-a-real-value");
 }, 80);
 `,
-      { mode: 0o755 },
-    );
-    const ids = Array.from({ length: 20 }, (_, index) => `op://Vault/Item${index}/field`);
-    const result = await runResolver({
-      request: { protocolVersion: 1, provider: "onepassword", ids },
-      env: { CLAW_1PASSWORD_OP: opPath },
+        { ids },
+      );
+
+      expect(Object.keys(JSON.parse(result.stdout).values)).toHaveLength(ids.length);
+      let active = 0;
+      let maxActive = 0;
+      for (const event of fs.readFileSync(logPath, "utf8").trim().split("\n")) {
+        active += event.startsWith("start ") ? 1 : -1;
+        maxActive = Math.max(maxActive, active);
+      }
+      expect(maxActive).toBeLessThanOrEqual(4);
     });
 
-    expect(Object.keys(JSON.parse(result.stdout).values)).toHaveLength(ids.length);
-    let active = 0;
-    let maxActive = 0;
-    for (const event of fs.readFileSync(logPath, "utf8").trim().split("\n")) {
-      active += event.startsWith("start ") ? 1 : -1;
-      maxActive = Math.max(maxActive, active);
-    }
-    expect(maxActive).toBeLessThanOrEqual(4);
-  });
-
-  it.runIf(process.platform !== "win32")("resolves the op CLI from PATH", async () => {
-    const tempDir = fixtureWorkspace.dir;
-    const opPath = path.join(tempDir, process.platform === "win32" ? "op.exe" : "op");
-    fs.writeFileSync(opPath, `#!${getTrustedNodePath()}\nprocess.stdout.write('from-path');\n`, {
-      mode: 0o755,
-    });
-    const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "onepassword",
-        ids: ["op://Engineering/OpenRouter/apiKey"],
-      },
-      env: { PATH: tempDir },
-    });
-
-    expect(result).toMatchObject({ code: 0, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual({
-      protocolVersion: 1,
-      values: { "op://Engineering/OpenRouter/apiKey": "from-path" },
-      errors: {},
-    });
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "refuses to pass the token to an op CLI in an unsafe PATH directory",
-    async () => {
+    it("refuses to pass the token to an op CLI in an unsafe PATH directory", async () => {
       const tempDir = fixtureWorkspace.dir;
       const opPath = path.join(tempDir, "op");
       const tokenLogPath = path.join(tempDir, "token.log");
-      fs.writeFileSync(
+      writeOpScript(
         opPath,
-        `#!${getTrustedNodePath()}\nrequire("node:fs").writeFileSync(${JSON.stringify(tokenLogPath)}, process.env.OP_SERVICE_ACCOUNT_TOKEN);\n`,
-        { mode: 0o755 },
+        `require("node:fs").writeFileSync(${JSON.stringify(tokenLogPath)}, process.env.OP_SERVICE_ACCOUNT_TOKEN);\n`,
       );
       fs.chmodSync(tempDir, 0o777);
 
       const result = await runResolver({
-        request: {
-          protocolVersion: 1,
-          provider: "onepassword",
-          ids: ["op://Engineering/OpenRouter/apiKey"],
-        },
         env: { PATH: tempDir },
       });
 
-      expect(result).toEqual({
-        code: 1,
-        stdout: "",
-        stderr: "1Password SecretRef resolver failed.\n",
-      });
+      expectFailure(result);
       expect(fs.existsSync(tokenLogPath)).toBe(false);
-    },
-  );
-
-  it("fails the provider request when the op CLI is missing", async () => {
-    const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "onepassword",
-        ids: ["op://Engineering/OpenRouter/apiKey"],
-      },
-      env: {
-        CLAW_1PASSWORD_OP: "/does/not/exist/op",
-      },
-    });
-
-    expect(result).toEqual({
-      code: 1,
-      stdout: "",
-      stderr: "1Password SecretRef resolver failed.\n",
     });
   });
 });

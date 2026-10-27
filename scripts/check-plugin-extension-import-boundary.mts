@@ -3,7 +3,10 @@
 // Inventories core plugin imports that cross into bundled extension files.
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { createExtensionImportBoundaryChecker } from "./lib/extension-import-boundary-checker.mts";
+import {
+  compareEntries,
+  createExtensionImportBoundaryChecker,
+} from "./lib/extension-import-boundary-checker.mts";
 import {
   formatGroupedInventoryHuman,
   resolveRepoSpecifier,
@@ -28,16 +31,6 @@ type PluginExtensionInventoryEntry = {
   resolvedPath: string | null;
   reason: string;
 };
-function compareEntries(left: PluginExtensionInventoryEntry, right: PluginExtensionInventoryEntry) {
-  return (
-    left.file.localeCompare(right.file) ||
-    left.line - right.line ||
-    left.kind.localeCompare(right.kind) ||
-    left.specifier.localeCompare(right.specifier) ||
-    left.reason.localeCompare(right.reason)
-  );
-}
-
 function classifyResolvedExtensionReason(kind: string, resolvedPath: string | null) {
   const verb =
     kind === "export"
@@ -116,9 +109,6 @@ const formatInventoryHuman = (inventory: PluginExtensionInventoryEntry[]) =>
     inventory,
   );
 
-/**
- * Runs the plugin-extension import boundary check.
- */
 async function runPluginExtensionImportBoundaryCheck(): Promise<0 | 1> {
   const actual = await collectPluginExtensionImportBoundaryInventory();
 
@@ -130,8 +120,6 @@ async function runPluginExtensionImportBoundaryCheck(): Promise<0 | 1> {
   return 1;
 }
 
-async function main(): Promise<void> {
+runAsScript(import.meta.url, async () => {
   process.exitCode = await runPluginExtensionImportBoundaryCheck();
-}
-
-runAsScript(import.meta.url, main);
+});

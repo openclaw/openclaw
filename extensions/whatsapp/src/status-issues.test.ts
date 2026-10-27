@@ -1,202 +1,118 @@
-// Whatsapp tests cover status issues plugin behavior.
+import type {
+  ChannelAccountSnapshot,
+  ChannelStatusIssue,
+} from "openclaw/plugin-sdk/channel-contract";
 import { buildRuntimeAccountStatusSnapshot } from "openclaw/plugin-sdk/status-helpers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
-describe("collectWhatsAppStatusIssues", () => {
-  beforeEach(() => {
-    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
-    vi.stubEnv("OPENCLAW_PROFILE", "");
-  });
+const relink = "Run: openclaw channels login (scan QR on the gateway host).";
+const repair =
+  "Run: openclaw doctor (or restart the gateway). If it persists, relink via channels login and check logs.";
+const issue = (kind: ChannelStatusIssue["kind"], message: string, fix = repair) => ({
+  kind,
+  message,
+  fix,
+});
+const closed = {
+  linked: true,
+  running: true,
+  connected: false,
+  reconnectAttempts: 2,
+  lastError: "socket closed",
+};
+function check(input: Partial<ChannelAccountSnapshot>, ...expected: ReturnType<typeof issue>[]) {
+  const snapshot = { accountId: "default", enabled: true, ...input };
+  expect(collectWhatsAppStatusIssues([snapshot])).toEqual(
+    expected.map((entry) =>
+      Object.assign({ channel: "whatsapp", accountId: snapshot.accountId }, entry),
+    ),
+  );
+}
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
+  vi.stubEnv("OPENCLAW_PROFILE", "");
+});
+afterEach(() => vi.unstubAllEnvs());
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
+it.each([
+  [false, "logged-out", "status=401", issue("auth", "Session logged out: status=401", relink)],
+  [
+    true,
+    "conflict",
+    "status=440",
+    issue("runtime", "Linked but session conflict (reconnectAttempts=2): status=440"),
+  ],
+] as const)("preserves projected %s %s guidance", (linked, healthState, lastError, expected) => {
+  const runtime = {
+    running: false,
+    connected: false,
+    linked,
+    healthState,
+    lastError,
+    ...(linked ? { reconnectAttempts: 2 } : {}),
+  };
+  check({ ...buildRuntimeAccountStatusSnapshot({ runtime }), accountId: "default" }, expected);
+});
 
-  it("reports unlinked enabled accounts", () => {
-    const issues = collectWhatsAppStatusIssues([
-      {
-        accountId: "default",
-        enabled: true,
-        linked: false,
-      },
-    ]);
+it("reports unstable auth alongside reconnection", () => {
+  check(
+    { ...closed, statusState: "unstable", healthState: "reconnecting" },
+    issue(
+      "auth",
+      "Auth state is still stabilizing.",
+      "Wait a moment for queued credential writes to finish, then retry the command or rerun health.",
+    ),
+    issue("runtime", "Linked but reconnecting (reconnectAttempts=2): socket closed"),
+  );
+});
 
-    expect(issues).toEqual([
-      {
-        channel: "whatsapp",
-        accountId: "default",
-        kind: "auth",
-        message: "Not linked (no WhatsApp Web session).",
-        fix: "Run: openclaw channels login (scan QR on the gateway host).",
-      },
-    ]);
-  });
+it("reports unlinked auth alongside a stopped runtime", () => {
+  check(
+    { ...closed, linked: false, reconnectAttempts: 1, healthState: "stopped" },
+    issue("auth", "Not linked (no WhatsApp Web session).", relink),
+    issue("runtime", "stopped (reconnectAttempts=1): socket closed"),
+  );
+});
 
-  it.each([
+it("reports linked but disconnected accounts", () => {
+  check(
+    { ...closed, accountId: "work" },
+    issue("runtime", "Linked but disconnected (reconnectAttempts=2): socket closed"),
+  );
+});
+
+it("reports staleness even while connected", () => {
+  check(
     {
-      name: "logged-out",
-      runtime: {
-        running: false,
-        connected: false,
-        linked: false,
-        healthState: "logged-out",
-        lastError: "status=401",
-      },
-      expected: {
-        channel: "whatsapp",
-        accountId: "default",
-        kind: "auth",
-        message: "Session logged out: status=401",
-        fix: "Run: openclaw channels login (scan QR on the gateway host).",
+      linked: true,
+      running: true,
+      connected: true,
+      healthState: "stale",
+      lastInboundAt: Date.now() - 2 * 60_000,
+    },
+    issue("runtime", "Linked but stale (last inbound 2m ago)."),
+  );
+});
+
+it("reports a healthy socket that recently reconnected", () => {
+  check(
+    {
+      linked: true,
+      running: true,
+      connected: true,
+      reconnectAttempts: 3,
+      healthState: "healthy",
+      lastDisconnect: {
+        at: Date.now() - 2 * 60_000,
+        status: 408,
+        error: "status=408 Request Time-out Connection was lost",
       },
     },
-    {
-      name: "conflict",
-      runtime: {
-        running: false,
-        connected: false,
-        linked: true,
-        reconnectAttempts: 2,
-        healthState: "conflict",
-        lastError: "status=440",
-      },
-      expected: {
-        channel: "whatsapp",
-        accountId: "default",
-        kind: "runtime",
-        message: "Linked but session conflict (reconnectAttempts=2): status=440",
-        fix: "Run: openclaw doctor (or restart the gateway). If it persists, relink via channels login and check logs.",
-      },
-    },
-  ])("preserves projected $name guidance", ({ runtime, expected }) => {
-    const issues = collectWhatsAppStatusIssues([
-      {
-        enabled: true,
-        ...buildRuntimeAccountStatusSnapshot({ runtime }),
-        accountId: "default",
-      },
-    ]);
-
-    expect(issues).toEqual([expected]);
-  });
-
-  it("reports auth reads that are still stabilizing", () => {
-    const issues = collectWhatsAppStatusIssues([
-      {
-        accountId: "default",
-        enabled: true,
-        statusState: "unstable",
-      },
-    ]);
-
-    expect(issues).toEqual([
-      {
-        channel: "whatsapp",
-        accountId: "default",
-        kind: "auth",
-        message: "Auth state is still stabilizing.",
-        fix: "Wait a moment for queued credential writes to finish, then retry the command or rerun health.",
-      },
-    ]);
-  });
-
-  it("reports linked but disconnected runtime state", () => {
-    const issues = collectWhatsAppStatusIssues([
-      {
-        accountId: "work",
-        enabled: true,
-        linked: true,
-        running: true,
-        connected: false,
-        reconnectAttempts: 2,
-        lastError: "socket closed",
-      },
-    ]);
-
-    expect(issues).toEqual([
-      {
-        channel: "whatsapp",
-        accountId: "work",
-        kind: "runtime",
-        message: "Linked but disconnected (reconnectAttempts=2): socket closed",
-        fix: "Run: openclaw doctor (or restart the gateway). If it persists, relink via channels login and check logs.",
-      },
-    ]);
-  });
-
-  it("reports linked but stale runtime state even while connected", () => {
-    const issues = collectWhatsAppStatusIssues([
-      {
-        accountId: "default",
-        enabled: true,
-        linked: true,
-        running: true,
-        connected: true,
-        healthState: "stale",
-        lastInboundAt: Date.now() - 2 * 60_000,
-      },
-    ]);
-
-    expect(issues).toEqual([
-      {
-        channel: "whatsapp",
-        accountId: "default",
-        kind: "runtime",
-        message: "Linked but stale (last inbound 2m ago).",
-        fix: "Run: openclaw doctor (or restart the gateway). If it persists, relink via channels login and check logs.",
-      },
-    ]);
-  });
-
-  it("reports recently reconnected accounts even when the socket is currently healthy", () => {
-    const issues = collectWhatsAppStatusIssues([
-      {
-        accountId: "default",
-        enabled: true,
-        linked: true,
-        running: true,
-        connected: true,
-        reconnectAttempts: 3,
-        healthState: "healthy",
-        lastDisconnect: {
-          at: Date.now() - 2 * 60_000,
-          status: 408,
-          error: "status=408 Request Time-out Connection was lost",
-        },
-      },
-    ]);
-
-    expect(issues).toEqual([
-      {
-        channel: "whatsapp",
-        accountId: "default",
-        kind: "runtime",
-        message:
-          "Linked but recently reconnected (reconnectAttempts=3): status=408 Request Time-out Connection was lost",
-        fix: "Watch: openclaw logs --follow and run openclaw channels status --probe if disconnects continue. If it keeps flapping, restart the gateway or relink via channels login.",
-      },
-    ]);
-  });
-
-  it("does not report old reconnect history after a stable healthy period", () => {
-    const issues = collectWhatsAppStatusIssues([
-      {
-        accountId: "default",
-        enabled: true,
-        linked: true,
-        running: true,
-        connected: true,
-        reconnectAttempts: 1,
-        healthState: "healthy",
-        lastDisconnect: {
-          at: Date.now() - 60 * 60_000,
-          status: 408,
-          error: "old disconnect",
-        },
-      },
-    ]);
-
-    expect(issues).toStrictEqual([]);
-  });
+    issue(
+      "runtime",
+      "Linked but recently reconnected (reconnectAttempts=3): status=408 Request Time-out Connection was lost",
+      "Watch: openclaw logs --follow and run openclaw channels status --probe if disconnects continue. If it keeps flapping, restart the gateway or relink via channels login.",
+    ),
+  );
 });

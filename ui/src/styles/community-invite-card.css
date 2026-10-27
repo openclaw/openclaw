@@ -1,33 +1,12 @@
-.sidebar-shell__invite {
-  --community-invite-surface-current: var(--sidebar-bg, var(--bg));
-  --community-invite-fade-height-current: 36px;
-  --community-invite-fade-opacity-20-current: 6%;
-  --community-invite-fade-opacity-45-current: 22%;
-  --community-invite-fade-opacity-70-current: 60%;
-  --community-invite-fade-opacity-88-current: 80%;
-  --community-invite-photo-base-shade-current: rgb(0 0 0 / 30%);
-}
-
-:root[data-theme-mode="light"] .sidebar-shell__invite {
-  --community-invite-surface-current: color-mix(
-    in srgb,
-    var(--sidebar-bg, var(--bg)) 70%,
-    var(--bg-hover) 30%
-  );
-  --community-invite-fade-height-current: 0px;
-  --community-invite-fade-gradient-current: linear-gradient(
-    to bottom,
-    transparent,
-    var(--community-invite-surface-current)
-  );
-}
-
 .community-invite-card {
+  --community-invite-copy-inset: 12px;
+  --community-invite-surface-current: var(--sidebar-bg, var(--bg));
+
   display: block;
   flex: none;
-  margin: 0;
+  margin-inline: calc(-1 * var(--sidebar-pad-x));
+  margin-block-end: calc(-1 * var(--sidebar-pad-bottom));
   border-block-start: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-  animation: community-invite-enter var(--duration-normal, 180ms) var(--ease-out, ease-out) both;
 
   .invite {
     display: flex;
@@ -42,67 +21,10 @@
 
   .invite__header {
     position: relative;
-    height: 100px;
+    aspect-ratio: 12 / 5;
+    background: inherit;
     flex: none;
     overflow: hidden;
-  }
-
-  .invite__header::before,
-  .invite__header::after {
-    content: "";
-    position: absolute;
-    z-index: 1;
-    pointer-events: none;
-  }
-
-  .invite__header::before {
-    inset: 0;
-    background: linear-gradient(
-      to bottom,
-      transparent 45%,
-      var(--community-invite-photo-base-shade-current, transparent) 100%
-    );
-  }
-
-  .invite__header::after {
-    inset: auto 0 0;
-    height: var(--community-invite-fade-height-current, 48px);
-    background: var(
-      --community-invite-fade-gradient-current,
-      linear-gradient(
-        to bottom,
-        transparent 0%,
-        color-mix(
-            in srgb,
-            var(--community-invite-surface-current, var(--sidebar-bg, var(--bg)))
-              var(--community-invite-fade-opacity-20-current, 6%),
-            transparent
-          )
-          20%,
-        color-mix(
-            in srgb,
-            var(--community-invite-surface-current, var(--sidebar-bg, var(--bg)))
-              var(--community-invite-fade-opacity-45-current, 22%),
-            transparent
-          )
-          45%,
-        color-mix(
-            in srgb,
-            var(--community-invite-surface-current, var(--sidebar-bg, var(--bg)))
-              var(--community-invite-fade-opacity-70-current, 60%),
-            transparent
-          )
-          70%,
-        color-mix(
-            in srgb,
-            var(--community-invite-surface-current, var(--sidebar-bg, var(--bg)))
-              var(--community-invite-fade-opacity-88-current, 86%),
-            transparent
-          )
-          88%,
-        var(--community-invite-surface-current, var(--sidebar-bg, var(--bg))) 100%
-      )
-    );
   }
 
   .invite__art {
@@ -110,44 +32,91 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
-    object-position: center 87%;
+    object-position: center;
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      rgb(0 0 0) calc(100% - 34px),
+      transparent calc(100% - 2px)
+    );
+    mask-image: linear-gradient(
+      to bottom,
+      rgb(0 0 0) calc(100% - 34px),
+      transparent calc(100% - 2px)
+    );
+  }
+
+  .invite__marks {
+    position: absolute;
+    z-index: 1;
+    bottom: 19px;
+    left: var(--community-invite-copy-inset);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    /* Brand marks remain white over either photograph. */
+    color: rgb(255 255 255);
+    pointer-events: none;
+  }
+
+  .invite__marks svg {
+    width: 19px;
+    height: 19px;
+    fill: currentcolor;
+    stroke: none;
+    filter: drop-shadow(0 1px 1px rgb(0 0 0 / 87%)) drop-shadow(0 0 3px rgb(0 0 0 / 47%));
   }
 
   .invite__close {
+    --community-invite-close-visual-inset: 3px;
+
     position: absolute;
     z-index: 2;
-    inset-block-start: var(--space-2, 8px);
-    inset-inline-end: var(--space-2, 8px);
-    display: grid;
+    inset-block-start: 5px;
+    inset-inline-end: 5px;
     width: 28px;
     height: 28px;
-    place-items: center;
     padding: 0;
     border: 0;
-    border-radius: 50%;
-    /* These fixed translucent colors belong to photo chrome, not the theme surface. */
-    background: rgb(0 0 0 / 42%);
-    color: rgb(255 255 255 / 76%);
+    background: transparent;
+    color: var(--media-foreground);
     cursor: var(--cursor-action, default);
-    transition:
-      background 120ms ease,
-      color 120ms ease;
+    transition: color 120ms ease;
   }
 
-  .invite__close:hover {
-    background: rgb(255 255 255 / 14%);
-    color: rgb(255 255 255);
+  .invite__close::before {
+    content: "";
+    position: absolute;
+    inset-block-start: var(--community-invite-close-visual-inset);
+    inset-inline-end: var(--community-invite-close-visual-inset);
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    /* Keep photo chrome compact while the transparent button remains easy to tap. */
+    background: color-mix(in srgb, var(--media-control-bg) 65%, transparent);
+    pointer-events: none;
+    transition: background 120ms ease;
+  }
+
+  .invite__close:hover::before {
+    background: color-mix(in srgb, var(--media-control-bg-hover) 75%, transparent);
   }
 
   .invite__close:focus-visible {
-    outline: 2px solid rgb(255 255 255 / 70%);
-    outline-offset: 1px;
+    outline: none;
+  }
+
+  .invite__close:focus-visible::before {
+    outline: 2px solid var(--media-foreground);
+    outline-offset: 2px;
   }
 
   .invite__close svg {
+    position: absolute;
+    inset-block-start: calc(var(--community-invite-close-visual-inset) + 4px);
+    inset-inline-end: calc(var(--community-invite-close-visual-inset) + 4px);
     display: block;
-    width: 15px;
-    height: 15px;
+    width: 14px;
+    height: 14px;
     fill: none;
     stroke: currentcolor;
     stroke-width: 1.8;
@@ -159,7 +128,7 @@
     display: flex;
     flex-direction: column;
     gap: 5px;
-    padding: 11px 18px 20px;
+    padding: 11px var(--community-invite-copy-inset) 20px;
   }
 
   .invite__title {
@@ -183,24 +152,31 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    min-height: 38px;
-    margin-top: var(--space-3, 12px);
-    padding: 6px var(--space-2, 8px);
+    flex-wrap: wrap;
+    gap: 4px;
+    min-width: 0;
+    min-height: 40px;
+    padding: 3px 1px;
+    border: 1px solid var(--border);
     border-radius: var(--radius-md, 10px);
-    background: var(--text-strong);
-    color: var(--bg);
+    background: var(--bg);
+    color: var(--text);
     cursor: pointer;
     font-size: var(--control-ui-text-sm, 12px);
     font-weight: 600;
+    line-height: 1.2;
+    text-align: center;
+    overflow-wrap: anywhere;
     transition:
       background 120ms ease,
+      border-color 120ms ease,
       transform 120ms ease;
   }
 
   .invite__cta:hover {
-    background: color-mix(in srgb, var(--text) 92%, var(--bg-hover) 8%);
-    color: var(--bg);
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+    color: var(--text);
   }
 
   .invite__cta:active {
@@ -213,9 +189,18 @@
   }
 
   .invite__cta svg {
-    width: 17px;
-    height: 17px;
+    width: 16px;
+    height: 16px;
     flex: none;
+    fill: currentcolor;
+    stroke: none;
+  }
+
+  .invite__links {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: var(--space-3, 12px);
   }
 
   @supports (corner-shape: superellipse(1.5)) {
@@ -225,19 +210,41 @@
     }
   }
 
+  @media (pointer: coarse) {
+    a.invite__cta {
+      min-height: 44px;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
-    &,
     .invite__close,
+    .invite__close::before,
     .invite__cta {
-      animation: none;
       transition: none;
     }
   }
 }
 
-@keyframes community-invite-enter {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
+/* The existing footer bleeds into the shell's bottom padding. */
+.sidebar-shell__footer + .community-invite-card {
+  margin-block-start: var(--sidebar-pad-bottom);
+}
+
+.shell--mobile-nav .community-invite-card {
+  .invite__header {
+    aspect-ratio: 3 / 1;
+  }
+
+  .invite__body {
+    padding-block-end: max(12px, env(safe-area-inset-bottom));
+  }
+
+  .invite__close {
+    --community-invite-close-visual-inset: 8px;
+
+    inset-block-start: 0;
+    inset-inline-end: 0;
+    width: 44px;
+    height: 44px;
   }
 }

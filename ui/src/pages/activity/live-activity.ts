@@ -1,88 +1,149 @@
-import type { GatewayEventFrame } from "../../api/gateway.ts";
-import { notifyGatewayObservers } from "../../app/gateway-observers.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { currentWorkIdentity } from "./current-work.ts";
 import { parseActivityEvent, updateToolActivity, type ActivityEntry } from "./tool-activity.ts";
 
 type LiveActivitySnapshot = {
   readonly entries: readonly ActivityEntry[];
   /** Retires page-local expansion and follow state without resetting it on each event. */
   readonly revision: number;
+  readonly error: string | null;
 };
 
-export type LiveActivity = {
-  readonly snapshot: LiveActivitySnapshot;
-  subscribe: (listener: (snapshot: LiveActivitySnapshot) => void) => () => void;
-  clear: () => void;
-  dispose: () => void;
-};
-
-export function createLiveActivity(gateway: ApplicationGateway): LiveActivity {
+export function createLiveActivity(gateway: ApplicationGateway, sessions: SessionCapability) {
   let entries: ActivityEntry[] = [];
-  let snapshot: LiveActivitySnapshot = { entries, revision: 0 };
+  let snapshot: LiveActivitySnapshot = { entries, revision: 0, error: null };
+  const errors = new Map<string, string>();
   let eventLogRevision = gateway.eventLogRevision;
+  let presentationScope = gatewayPresentationScope(gateway);
   let disposed = false;
-  const listeners = new Set<(snapshot: LiveActivitySnapshot) => void>();
+  let rows: readonly GatewaySessionRow[] = [];
+  let client = gateway.snapshot.client;
+  let visible = document.visibilityState !== "hidden";
+  const subscriptions = new Map<string, ReturnType<SessionCapability["subscribeMessages"]>>();
+  const release = (key: string) => {
+    const pending = subscriptions.get(key);
+    subscriptions.delete(key);
+    if (errors.delete(key)) {
+      publish(entries);
+    }
+    const releaseClient = client;
+    void pending?.then(
+      (lease) =>
+        sessions.unsubscribeMessages(lease).catch(() => {
+          // A rejected final release retains the wire observer in the shared coordinator.
+          if (gateway.snapshot.client === releaseClient && gateway.snapshot.phase === "connected") {
+            gateway.connect();
+          }
+        }),
+      () => undefined,
+    );
+  };
+  const syncSubscriptions = () => {
+    const connected = gateway.snapshot.phase === "connected";
+    if (!connected) {
+      rows = [];
+    }
+    const desired = new Map(
+      (visible && connected && !disposed ? rows.slice(0, 100) : []).map((row) => [
+        currentWorkIdentity({ key: row.key, agentId: row.agentId }),
+        row,
+      ]),
+    );
+    for (const key of subscriptions.keys()) {
+      if (!desired.has(key) || client !== gateway.snapshot.client) {
+        release(key);
+      }
+    }
+    client = gateway.snapshot.client;
+    for (const [key, row] of desired) {
+      if (!subscriptions.has(key)) {
+        const pending = sessions.subscribeMessages(row.key, {
+          agentId: parseAgentSessionKey(row.key) ? undefined : row.agentId,
+        });
+        subscriptions.set(key, pending);
+        void pending.catch((cause: unknown) => {
+          if (subscriptions.get(key) === pending) {
+            errors.set(key, cause instanceof Error ? cause.message : String(cause));
+            publish(entries);
+          }
+        });
+      }
+    }
+  };
+  const handleVisibility = (event: Event) => {
+    visible = event.type !== "pagehide" && document.visibilityState !== "hidden";
+    syncSubscriptions();
+  };
+  const stopVisibility = listen(document, "visibilitychange", handleVisibility);
+  const stopPageHide = listen(globalThis, "pagehide", handleVisibility);
+  const stopPageShow = listen(globalThis, "pageshow", handleVisibility);
+  let render: ((snapshot: LiveActivitySnapshot) => void) | undefined;
 
   const publish = (next: ActivityEntry[], reset = false) => {
-    if (next === entries && !reset) {
+    const error = errors.values().next().value ?? null;
+    if (next === entries && !reset && snapshot.error === error) {
       return;
     }
     entries = next;
-    snapshot = { entries, revision: snapshot.revision + (reset ? 1 : 0) };
-    notifyGatewayObservers(
-      listeners,
-      snapshot,
-      "activity",
-      (current) => !disposed && current === snapshot,
-    );
-  };
-
-  const reduce = (
-    current: ActivityEntry[],
-    eventName: string,
-    payload: unknown,
-    receivedAt: number,
-  ): ActivityEntry[] => {
-    if (eventName !== "agent" && eventName !== "session.tool") {
-      return current;
+    snapshot = { entries, revision: snapshot.revision + (reset ? 1 : 0), error };
+    if (!disposed) {
+      try {
+        render?.(snapshot);
+      } catch (handlerError) {
+        console.error("[gateway] activity handler error:", handlerError);
+      }
     }
-    const event = parseActivityEvent(payload, receivedAt);
-    if (!event) {
-      return current;
-    }
-    return updateToolActivity(current, event);
   };
 
   const retireChangedContext = () => {
     const revision = gateway.eventLogRevision;
-    if (revision === eventLogRevision) {
-      return false;
+    const nextPresentationScope = gatewayPresentationScope(gateway);
+    if (revision === eventLogRevision && nextPresentationScope === presentationScope) {
+      return;
     }
     eventLogRevision = revision;
-    // Log notification precedes event delivery; replay would apply the next event twice.
+    presentationScope = nextPresentationScope;
+    rows = [];
+    syncSubscriptions();
     publish([], true);
-    return true;
   };
 
-  // Gateway delivery owns visibility; Activity is independent of the selected chat.
-  let initialEntries: ActivityEntry[] = [];
-  for (const event of gateway.eventLog.toReversed()) {
-    initialEntries = reduce(initialEntries, event.event, event.payload, event.ts);
-  }
-  publish(initialEntries, true);
+  // Every connection transition retires stale activity and rebinds the owned message leases synchronously.
   const stopGateway = gateway.subscribe(() => {
     if (!disposed) {
       retireChangedContext();
+      syncSubscriptions();
     }
   });
-  const stopEventLog = gateway.subscribeEventLog(() => {
-    if (!disposed) {
-      retireChangedContext();
+  const stopEvents = gateway.subscribeEvents((event) => {
+    if (disposed || (event.event !== "agent" && event.event !== "session.tool")) {
+      return;
     }
-  });
-  const stopEvents = gateway.subscribeEvents((event: GatewayEventFrame) => {
-    if (!disposed) {
-      publish(reduce(entries, event.event, event.payload, Date.now()));
+    const eventClient = gateway.snapshot.client;
+    const revision = gateway.eventLogRevision;
+    const eventPresentationScope = gatewayPresentationScope(gateway);
+    retireChangedContext();
+    if (
+      disposed ||
+      eventClient !== gateway.snapshot.client ||
+      eventPresentationScope !== gatewayPresentationScope(gateway) ||
+      revision !== gateway.eventLogRevision
+    ) {
+      return;
+    }
+    const activityEvent = parseActivityEvent(event.payload, Date.now());
+    if (
+      activityEvent?.sessionKey &&
+      subscriptions.has(
+        currentWorkIdentity({ key: activityEvent.sessionKey, agentId: activityEvent.agentId }),
+      )
+    ) {
+      publish(updateToolActivity(entries, activityEvent));
     }
   });
 
@@ -90,21 +151,39 @@ export function createLiveActivity(gateway: ApplicationGateway): LiveActivity {
     get snapshot() {
       return snapshot;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+    subscribe(listener: (snapshot: LiveActivitySnapshot) => void) {
+      render = listener;
+      return () => {
+        render = undefined;
+      };
+    },
+    syncSessions(nextRows: readonly GatewaySessionRow[]) {
+      if (rows === nextRows) {
+        return;
+      }
+      rows = nextRows;
+      syncSubscriptions();
+    },
+    retry() {
+      for (const key of errors.keys()) {
+        release(key);
+      }
+      syncSubscriptions();
     },
     clear() {
       publish([], true);
     },
     dispose() {
       disposed = true;
+      syncSubscriptions();
+      stopVisibility();
+      stopPageHide();
+      stopPageShow();
       stopGateway();
-      stopEventLog();
       stopEvents();
       entries = [];
-      snapshot = { entries, revision: snapshot.revision + 1 };
-      listeners.clear();
+      snapshot = { entries, revision: snapshot.revision + 1, error: null };
+      render = undefined;
     },
   };
 }

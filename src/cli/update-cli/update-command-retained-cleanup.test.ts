@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -10,6 +11,7 @@ import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import * as processExec from "../../process/exec.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { createPackageRuntimeRecovery } from "./update-command-node-runtime.js";
@@ -18,20 +20,12 @@ import { runUpdatedInstallGatewayCommand } from "./update-command-service-comman
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+const cases = ["native", "installer", "receiver"].flatMap((kind) => [
+  { kind, code: 0, cleanup: "forced" as const },
+  { kind, code: 7, cleanup: "uncertain" as const },
+]);
 
-it.skipIf(process.platform === "win32").each(
-  [
-    { code: 0, cleanup: "forced" as const },
-    { code: 7, cleanup: "forced" as const },
-    { code: 7, cleanup: "uncertain" as const },
-  ].flatMap((outcome) =>
-    ["native", "installer", "receiver"].map((kind) => ({
-      code: outcome.code,
-      cleanup: outcome.cleanup,
-      kind,
-    })),
-  ),
-)(
+it.skipIf(process.platform === "win32").each(cases)(
   "retains A and B custody for $kind code=$code cleanup=$cleanup",
   async ({ code, cleanup, kind }) => {
     const home = fs.realpathSync(dirs.make("retained-cleanup-"));
@@ -42,31 +36,20 @@ it.skipIf(process.platform === "win32").each(
       fs.mkdirSync(dir);
     }
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-    // A real bound child establishes persistent custody. The result injection
-    // exercises cleanup classifications without leaving any live test process.
+    // Bind a real child for custody, then inject cleanup status after it exits.
     vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (_argv, options) => {
       const child = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
         stdio: ["pipe", "ignore", "ignore"],
       });
       const closed = once(child, "close");
       try {
-        if (!child.pid || typeof options === "number") {
-          throw new Error("missing child binding");
-        }
+        assert(child.pid && typeof options !== "number", "missing child binding");
         options.beforeInput?.(child.pid, child.spawnargs);
       } finally {
         child.stdin.end();
         await closed;
       }
-      return {
-        code,
-        cleanup,
-        termination: "exit",
-        signal: null,
-        killed: cleanup === "forced",
-        stdout: "",
-        stderr: "",
-      };
+      return createCommandResult({ code, cleanup, killed: cleanup === "forced" });
     });
     const run: NonNullable<UpdateCommandOptions["run"]> = { runId: randomUUID(), env: {} };
     const operation = withUpdateCommandExecutor(run.runId, async (executor) => {
@@ -82,9 +65,7 @@ it.skipIf(process.platform === "win32").each(
       }
       if (kind === "installer") {
         const recovery = createPackageRuntimeRecovery({ root: b, opts: { run }, timeoutMs: 5000 });
-        if (!recovery.installCommand) {
-          throw new Error("missing admitted runtime installer");
-        }
+        assert(recovery.installCommand, "missing admitted runtime installer");
         await recovery.installCommand(process.execPath, ["-e", ""], {});
         return;
       }
@@ -92,9 +73,7 @@ it.skipIf(process.platform === "win32").each(
         { run, root: a, assertCurrent: () => {} },
         async () => {
           const command = getGatewayServiceUpdateNativeCommand();
-          if (!command) {
-            throw new Error("missing retained native command");
-          }
+          assert(command, "missing retained native command");
           await command([process.execPath, "-e", ""], { timeoutMs: 5000 });
         },
       );

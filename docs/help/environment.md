@@ -45,6 +45,14 @@ The variables below are the supported environment contract for operators. Undocu
 | `OPENCLAW_INCLUDE_ROOTS`  | Allow `$include` to resolve from additional roots.                                                   |
 | `OPENCLAW_SQLITE_LIBRARY` | Override the SQLite library for [Bun on macOS](/install/bun-compatibility#sqlite-library-selection). |
 
+A named `OPENCLAW_PROFILE` uses `~/.openclaw-<profile>` for state and config defaults, even before that profile has a config file. Explicit `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` values take precedence. An explicit CLI `--profile` selects the requested profile as described in [Global flags](/cli#global-flags).
+
+After startup environment selection, the Gateway pins the default home-based state
+directory when the config directory matches it. Named profiles and separate config
+directories keep their existing selection behavior. Foreground child restarts
+inherit a pinned directory. To select a different home, profile, or state directory, stop the
+Gateway and launch it with the new environment.
+
 #### `OPENCLAW_HOME`
 
 When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for internal OpenClaw path defaults. This includes the default state directory, config path, agent directories, credentials, installer onboarding workspace, and the default dev checkout used by `openclaw update --channel dev`.
@@ -69,20 +77,56 @@ Blank values and the literal strings `undefined` and `null` (after trimming) are
 
 Explicit path variables such as `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, and `OPENCLAW_GIT_DIR` still take precedence. OS-account tasks such as shell startup file detection, package-manager setup, and host `~` expansion may still use the real system home.
 
+### Temporary compile cache
+
+Packaged OpenClaw uses `NODE_COMPILE_CACHE/openclaw/<version>/<build>` when
+`NODE_COMPILE_CACHE` is set, or `node-compile-cache/openclaw` under the OS temporary
+directory otherwise. Gateway workers and child processes reuse the same build
+namespace, including when running a built source checkout. The Gateway main
+thread stays uncached: Node's synchronous cache flush can stall its event loop
+at startup or shutdown. Workers retain their existing flush boundaries on their
+own threads. An inherited active cache requires a startup respawn; on platforms
+with `execve`, the serving process keeps its PID. Node permission mode retains
+an already-active caller cache because it can forbid process replacement.
+
+Short-lived CLI commands keep their existing policy: caching is opt-in through
+`NODE_COMPILE_CACHE`, and source CLI entrypoints remain uncached. Explicit release
+prewarming still populates the cache. `NODE_DISABLE_COMPILE_CACHE` disables caching
+for both the Gateway and its workers.
+
+Release builds use a stable 16-character hash of the build ID. On Windows,
+OpenClaw skips cache paths longer than 200 characters with a warning and disables
+unsafe inherited caches for child processes, avoiding a Node startup hang.
+
+The compile-cache bootstrap owner starts best-effort maintenance in a detached
+process, so cleanup can finish after a short CLI command exits. Node permission
+mode skips maintenance because a child process cannot inherit its filesystem
+restrictions. Other applications' caches outside the `openclaw` subtree are preserved.
+
+Cleanup streams the combined release caches in bounded passes, evicting the oldest
+observed files to target 512 MiB and 4,096 files, and removing bytecode older than
+seven days. Each pass visits at most 16,384 entries and stops scheduling filesystem
+work after 30 seconds. A filesystem lock serializes cleanup; an abandoned lock
+can be reclaimed after five minutes. Only a completed pass advances the hourly
+maintenance timestamp. An incomplete pass leaves the next invocation eligible to
+continue pruning. These are maintenance targets, not hard disk quotas: concurrent
+writes can temporarily exceed them, and a large backlog may need several invocations.
+
 ### Gateway and authentication
 
-| Variable                    | Purpose                                                         |
-| --------------------------- | --------------------------------------------------------------- |
-| `OPENCLAW_GATEWAY_URL`      | Override the remote Gateway URL used by clients.                |
-| `OPENCLAW_GATEWAY_PORT`     | Override the local Gateway port.                                |
-| `OPENCLAW_GATEWAY_TOKEN`    | Supply token authentication for Gateway servers and clients.    |
-| `OPENCLAW_GATEWAY_PASSWORD` | Supply password authentication for Gateway servers and clients. |
+| Variable                                  | Purpose                                                                                                                                                                                                                  |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `OPENCLAW_GATEWAY_URL`                    | Override the remote Gateway URL used by clients.                                                                                                                                                                         |
+| `OPENCLAW_GATEWAY_PORT`                   | Override the local Gateway port.                                                                                                                                                                                         |
+| `OPENCLAW_GATEWAY_TOKEN`                  | Supply token authentication for Gateway servers and clients.                                                                                                                                                             |
+| `OPENCLAW_GATEWAY_PASSWORD`               | Supply password authentication for Gateway servers and clients.                                                                                                                                                          |
+| `OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP` | Cap outstanding unauthenticated WebSocket connections per resolved client IP (default `128`; positive integer). See [pre-auth connection limits](/gateway/security/rate-limiting#unauthenticated-websocket-connections). |
 
 ### Provider credentials
 
 Core and bundled provider plugins recognize the following credential and provider-selection variables. Prefer each provider's config or SecretRef fields when you need scoped credentials rather than one process-wide value.
 
-`AI_GATEWAY_API_KEY`, `ANTHROPIC_ADMIN_API_KEY`, `ANTHROPIC_ADMIN_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN`, `ARCEEAI_API_KEY`, `AZURE_OPENAI_API_KEY`, `AZURE_SPEECH_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `BASETEN_API_KEY`, `BRAVE_API_KEY`, `BYTEPLUS_API_KEY`, `BYTEPLUS_SEED_SPEECH_API_KEY`, `CEREBRAS_API_KEY`, `CHUTES_API_KEY`, `CHUTES_OAUTH_TOKEN`, `CLAWROUTER_API_KEY`, `CLOUDFLARE_AI_GATEWAY_API_KEY`, `CODEX_API_KEY`, `COHERE_API_KEY`, `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY`, `COPILOT_GITHUB_TOKEN`, `DASHSCOPE_API_KEY`, `DEEPGRAM_API_KEY`, `DEEPINFRA_API_KEY`, `DEEPSEEK_API_KEY`, `ELEVENLABS_API_KEY`, `EXA_API_KEY`, `FAL_API_KEY`, `FAL_KEY`, `FEATHERLESS_API_KEY`, `FIRECRAWL_API_KEY`, `FIREWORKS_API_KEY`, `FISH_API_KEY`, `FISH_AUDIO_API_KEY`, `GCLOUD_PROJECT`, `GEMINI_API_KEY`, `GMI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_API_KEY`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_CLOUD_PROJECT`, `GRADIUM_API_KEY`, `GROQ_API_KEY`, `HF_TOKEN`, `HUGGINGFACE_HUB_TOKEN`, `INWORLD_API_KEY`, `KILOCODE_API_KEY`, `KIMICODE_API_KEY`, `KIMI_API_KEY`, `LITELLM_API_KEY`, `LLAMA_SERVER_API_KEY`, `LM_API_TOKEN`, `LONGCAT_API_KEY`, `MINIMAX_API_KEY`, `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, `MINIMAX_OAUTH_TOKEN`, `MISTRAL_API_KEY`, `MODELSTUDIO_API_KEY`, `MODEL_API_KEY`, `MOONSHOT_API_KEY`, `NOVITA_API_KEY`, `NVIDIA_API_KEY`, `OLLAMA_API_KEY`, `OPENAI_ADMIN_KEY`, `OPENAI_API_KEY`, `OPENCODE_API_KEY`, `OPENCODE_ZEN_API_KEY`, `OPENROUTER_API_KEY`, `PARALLEL_API_KEY`, `PERPLEXITY_API_KEY`, `PIXVERSE_API_KEY`, `QIANFAN_API_KEY`, `QWEN_API_KEY`, `QWEN_TOKEN_PLAN_API_KEY`, `RUNWAYML_API_SECRET`, `RUNWAY_API_KEY`, `SENSEAUDIO_API_KEY`, `SGLANG_API_KEY`, `SPEECH_KEY`, `SPEECH_REGION`, `STEPFUN_API_KEY`, `SYNTHETIC_API_KEY`, `TAVILY_API_KEY`, `TOGETHER_API_KEY`, `TOKENHUB_API_KEY`, `TOKENPLAN_API_KEY`, `VENICE_API_KEY`, `VLLM_API_KEY`, `VOLCANO_ENGINE_API_KEY`, `VOLCENGINE_TTS_API_KEY`, `VOLCENGINE_TTS_APPID`, `VOLCENGINE_TTS_TOKEN`, `VOYAGE_API_KEY`, `VYDRA_API_KEY`, `XAI_API_KEY`, `XIAOMI_API_KEY`, `XIAOMI_TOKEN_PLAN_API_KEY`, `XI_API_KEY`, `ZAI_API_KEY`, and `Z_AI_API_KEY`.
+`ABLITERATION_API_KEY`, `ABLIT_KEY`, `AI_GATEWAY_API_KEY`, `ANTHROPIC_ADMIN_API_KEY`, `ANTHROPIC_ADMIN_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN`, `ARCEEAI_API_KEY`, `AZURE_OPENAI_API_KEY`, `AZURE_SPEECH_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `BASETEN_API_KEY`, `BRAVE_API_KEY`, `BYTEPLUS_API_KEY`, `BYTEPLUS_SEED_SPEECH_API_KEY`, `CEREBRAS_API_KEY`, `CHUTES_API_KEY`, `CHUTES_OAUTH_TOKEN`, `CLAWROUTER_API_KEY`, `CLOUDFLARE_AI_GATEWAY_API_KEY`, `CODEX_API_KEY`, `COHERE_API_KEY`, `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY`, `COPILOT_GITHUB_TOKEN`, `DASHSCOPE_API_KEY`, `DEEPGRAM_API_KEY`, `DEEPINFRA_API_KEY`, `DEEPSEEK_API_KEY`, `ELEVENLABS_API_KEY`, `EXA_API_KEY`, `FAL_API_KEY`, `FAL_KEY`, `FEATHERLESS_API_KEY`, `FIRECRAWL_API_KEY`, `FIREWORKS_API_KEY`, `FISH_API_KEY`, `FISH_AUDIO_API_KEY`, `GCLOUD_PROJECT`, `GEMINI_API_KEY`, `GMI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_API_KEY`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_CLOUD_PROJECT`, `GRADIUM_API_KEY`, `GROQ_API_KEY`, `HF_TOKEN`, `HUGGINGFACE_HUB_TOKEN`, `INWORLD_API_KEY`, `KILOCODE_API_KEY`, `KIMICODE_API_KEY`, `KIMI_API_KEY`, `LITELLM_API_KEY`, `LLAMA_SERVER_API_KEY`, `LM_API_TOKEN`, `LONGCAT_API_KEY`, `MINIMAX_API_KEY`, `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, `MINIMAX_OAUTH_TOKEN`, `MISTRAL_API_KEY`, `MODELSTUDIO_API_KEY`, `MODEL_API_KEY`, `MOONSHOT_API_KEY`, `NOVITA_API_KEY`, `NVIDIA_API_KEY`, `OLLAMA_API_KEY`, `OPENAI_ADMIN_KEY`, `OPENAI_API_KEY`, `OPENCODE_API_KEY`, `OPENCODE_ZEN_API_KEY`, `OPENROUTER_API_KEY`, `PARALLEL_API_KEY`, `PERPLEXITY_API_KEY`, `PIXVERSE_API_KEY`, `QIANFAN_API_KEY`, `QWEN_API_KEY`, `QWEN_TOKEN_PLAN_API_KEY`, `RUNWAYML_API_SECRET`, `RUNWAY_API_KEY`, `SENSEAUDIO_API_KEY`, `SGLANG_API_KEY`, `SPEECH_KEY`, `SPEECH_REGION`, `STEPFUN_API_KEY`, `SYNTHETIC_API_KEY`, `TAVILY_API_KEY`, `TOGETHER_API_KEY`, `TOKENHUB_API_KEY`, `TOKENPLAN_API_KEY`, `VENICE_API_KEY`, `VLLM_API_KEY`, `VOLCANO_ENGINE_API_KEY`, `VOLCENGINE_TTS_API_KEY`, `VOLCENGINE_TTS_APPID`, `VOLCENGINE_TTS_TOKEN`, `VOYAGE_API_KEY`, `VYDRA_API_KEY`, `XAI_API_KEY`, `XIAOMI_API_KEY`, `XIAOMI_TOKEN_PLAN_API_KEY`, `XI_API_KEY`, `ZAI_API_KEY`, and `Z_AI_API_KEY`.
 
 Installed third-party plugins may declare additional credential variables in their plugin manifests. Those variables are contracts of the plugin that declares them, not core OpenClaw variables.
 
@@ -93,7 +137,7 @@ Installed third-party plugins may declare additional credential variables in the
 | `OPENCLAW_LOG_LEVEL`                 | Override file and console log levels.                         |
 | `OPENCLAW_DEBUG_MODEL_TRANSPORT`     | Enable model transport timing diagnostics.                    |
 | `OPENCLAW_DEBUG_MODEL_PAYLOAD`       | Select redacted model payload diagnostics.                    |
-| `OPENCLAW_DEBUG_SSE`                 | Select SSE timing or event-peek diagnostics.                  |
+| `OPENCLAW_DEBUG_SSE`                 | Select content-free SSE timing diagnostics.                   |
 | `OPENCLAW_DEBUG_CODE_MODE`           | Enable code-mode surface diagnostics.                         |
 | `OPENCLAW_DIAGNOSTICS`               | Enable named diagnostic flags, or disable all flags with `0`. |
 | `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH` | Select the JSONL path for timeline diagnostics.               |
@@ -115,6 +159,53 @@ Installed third-party plugins may declare additional credential variables in the
 | `OPENCLAW_ALLOW_MULTI_GATEWAY`       | Allow multiple Gateway processes while preserving per-state ownership locks.                 |
 | `OPENCLAW_SKIP_CHANNELS`             | Start the Gateway without channel transports for troubleshooting.                            |
 | `OPENCLAW_THEME`                     | Force the TUI palette to `light` or `dark`.                                                  |
+
+### Filesystem observation
+
+Config hot reload, skills refresh, memory indexing, and the development watch
+supervisor use `@openclaw/fs-safe/watch`. The existing `CHOKIDAR_*` variable
+names remain supported for Docker, virtual machines, and other deployments
+that need an observation preference:
+
+| Variable              | Value                                   | Behavior                                                                                    |
+| --------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `CHOKIDAR_USEPOLLING` | Unset, `false`, `0`, or an empty string | `auto`: prefer native events, with polling fallback when no event backend is available.     |
+| `CHOKIDAR_USEPOLLING` | Any other nonempty value                | Select `poll`. Values are case-insensitive.                                                 |
+| `CHOKIDAR_INTERVAL`   | Positive integer in milliseconds        | Polling interval for explicit polling and automatic fallback; overrides the defaults below. |
+
+Native events are supported on Node.js on Linux, macOS, and Windows. In `auto`
+mode, Bun and runtimes without the native backend use polling with the same
+`CHOKIDAR_INTERVAL` setting as explicit polling. Native events retain fs-safe's
+30-second reconciliation interval. Config hot reload and the development
+supervisor default to `100` ms polling; Memory indexing and skills refresh default
+to `30000` ms to bound idle background scanning. A valid explicit
+`CHOKIDAR_INTERVAL` overrides those defaults, with a `20` ms minimum and
+`2147483647` ms maximum. Invalid or nonpositive values use the owner's default.
+Native event hints still trigger prompt updates; Memory and Skills log one warning
+per watcher when automatic polling fallback is used.
+
+Recovery remains specific to each owner. Config hot reload retries a failed
+subscription with its existing backoff. With `CHOKIDAR_USEPOLLING` unset, native
+watch failures can additionally trigger a fresh polling subscription after those
+retries. Explicit overrides keep the existing retry limit. Memory indexing switches to
+refresh-on-search when native watch capacity is exhausted (`watch-limit`).
+Each Memory subscription admits up to 1,000,000 directories and 1,000,000
+examined entries per scan, including excluded entries. Larger trees also fall
+back to refresh-on-search after observation retries are exhausted.
+Skills refreshes during agent preparation after capacity exhaustion, and the
+development supervisor stops its child if observation fails.
+
+## ClawHub install telemetry
+
+Authenticated skill or plugin installs from ClawHub send a best-effort install report.
+See [ClawHub telemetry](/clawhub/telemetry) for what is sent, when it is sent, and
+what is never included.
+
+| Variable                    | Purpose                                                             |
+| --------------------------- | ------------------------------------------------------------------- |
+| `CLAWHUB_DISABLE_TELEMETRY` | Disable ClawHub install reporting with `1`, `true`, `yes`, or `on`. |
+
+`CLAWDHUB_DISABLE_TELEMETRY` is accepted when `CLAWHUB_DISABLE_TELEMETRY` is unset or blank.
 
 ## Provider credentials and workspace `.env`
 
@@ -203,12 +294,12 @@ before login startup files run. Bash reads `/etc/profile` and the first availabl
 profile (`~/.bash_profile`, `~/.bash_login`, or `~/.profile`). Many login profiles also source
 `~/.bashrc`. Keep those files quiet and bounded because their output, long-running work, or
 failures can affect OpenClaw startup. Other shells use noninteractive login startup (`-l -c`).
-The probe runs in its own session, detached from your terminal, so startup files get no job
+The check runs in its own session, detached from your terminal, so startup files get no job
 control and cannot take over the terminal that runs OpenClaw.
 This interactive Bash mode is limited to explicit shell env imports. Automatic executable PATH
 discovery during ordinary Gateway commands remains noninteractive.
 
-Successful probes are cached. If a probe fails, the next shell environment or PATH lookup tries again.
+Successful checks are cached. If a check fails, the next shell environment or PATH lookup tries again.
 
 ## Exec shell snapshots
 
@@ -219,7 +310,7 @@ snapshots or redirect the snapshot cache.
 
 ## Runtime-injected env vars
 
-Gateway port-listener diagnostics and lock-owner identity probes run native utilities with
+Gateway port-listener diagnostics and lock-owner identity checks run native utilities with
 a limited environment containing executable paths, OS bootstrap and account directories,
 temporary directories, and known locale and timezone settings. These children do not inherit provider credentials,
 application tokens, proxies, runtime injection variables, or arbitrary application settings.
@@ -301,8 +392,8 @@ unavailable instead of triggering a network request.
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OPENCLAW_LOG_LEVEL`             | Override log level for both file and console (e.g. `debug`, `trace`). Takes precedence over `logging.level` and `logging.consoleLevel` in config. Invalid values are ignored with a warning. |
 | `OPENCLAW_DEBUG_MODEL_TRANSPORT` | Emit targeted model request/response timing diagnostics at `info` level without enabling global debug logs.                                                                                  |
-| `OPENCLAW_DEBUG_MODEL_PAYLOAD`   | Model payload diagnostics: `summary`, `tools`, or `full-redacted`. `full-redacted` is capped and redacted but may include prompt/message text.                                               |
-| `OPENCLAW_DEBUG_SSE`             | Streaming diagnostics: `events` for first/done timing, `peek` to include the first five redacted SSE events.                                                                                 |
+| `OPENCLAW_DEBUG_MODEL_PAYLOAD`   | Content-free model request diagnostics: `summary`, `tools`, or `full-redacted`. `tools` and `full-redacted` include the complete tool-name list, never prompts, messages, or tool content.   |
+| `OPENCLAW_DEBUG_SSE`             | Streaming timing diagnostics: `events` or `peek`. Neither mode logs SSE event bodies.                                                                                                        |
 | `OPENCLAW_DEBUG_CODE_MODE`       | Code-mode model-surface diagnostics, including provider-tool hiding and compact control/direct enforcement.                                                                                  |
 
 ## nvm users: web_fetch TLS failures
@@ -330,9 +421,10 @@ Do not rely on writing only to `~/.openclaw/.env` for this variable. Node reads
 
 ## Legacy environment variables
 
-OpenClaw only reads `OPENCLAW_*` environment variables. The legacy
+OpenClaw-specific runtime controls use the `OPENCLAW_*` prefix. The legacy
 `CLAWDBOT_*` and `MOLTBOT_*` prefixes from earlier releases are silently
-ignored.
+ignored. Supported provider and filesystem-observation variables retain their
+documented names.
 
 If any are still set on the Gateway process at startup, OpenClaw emits a
 single Node deprecation warning (`OPENCLAW_LEGACY_ENV_VARS`) listing the

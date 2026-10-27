@@ -1,4 +1,3 @@
-// Voice Call plugin module defines provider-facing realtime call controls.
 import {
   resolveRealtimeVoiceAgentConsultTools,
   type RealtimeVoiceAgentConsultToolPolicy,

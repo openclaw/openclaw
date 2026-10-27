@@ -15,7 +15,7 @@ OpenClaw IRC channel plugin.
 ## Distribution
 
 - Package: `@openclaw/irc`
-- Install route: npm or ClawHub: `clawhub:@openclaw/irc`
+- Install route: npm or ClawHub: `@openclaw/irc`
 
 ## Surface
 

@@ -241,20 +241,6 @@ function projectPageCapabilities(
   };
 }
 
-function projectAdoptedSessions(
-  page: SessionCatalogPage,
-  adopted: ReadonlyMap<string, string>,
-  localHostId: string,
-): SessionCatalogPage {
-  return {
-    ...page,
-    sessions: page.sessions.map((session) => {
-      const sessionKey = adopted.get(sessionCatalogAdoptedSourceKey(localHostId, session.threadId));
-      return sessionKey ? { ...session, sessionKey } : session;
-    }),
-  };
-}
-
 async function listNodeHost(
   options: SessionCatalogFamilyOptions,
   query: SessionCatalogListProviderParams,
@@ -327,6 +313,12 @@ async function listHosts(
     (await options.local.available(query))
   ) {
     let host: SessionCatalogHost;
+    const common = {
+      hostId: options.local.hostId,
+      label: options.local.label,
+      kind: "gateway" as const,
+      connected: true,
+    };
     try {
       query.signal?.throwIfAborted();
       const capabilities = await options.capabilities.local();
@@ -337,26 +329,22 @@ async function listHosts(
       query.signal?.throwIfAborted();
       const localPage = await options.local.list(query);
       query.signal?.throwIfAborted();
-      const page = projectAdoptedSessions(
-        projectPageCapabilities(localPage, capabilities, options.capabilities.project),
-        adopted,
-        options.local.hostId,
-      );
+      const page = projectPageCapabilities(localPage, capabilities, options.capabilities.project);
+      page.sessions = page.sessions.map((session) => {
+        const sessionKey = adopted.get(
+          sessionCatalogAdoptedSourceKey(options.local.hostId, session.threadId),
+        );
+        return sessionKey ? { ...session, sessionKey } : session;
+      });
       query.signal?.throwIfAborted();
       host = {
-        hostId: options.local.hostId,
-        label: options.local.label,
-        kind: "gateway",
-        connected: true,
+        ...common,
         ...page,
       };
     } catch {
       query.signal?.throwIfAborted();
       host = {
-        hostId: options.local.hostId,
-        label: options.local.label,
-        kind: "gateway",
-        connected: true,
+        ...common,
         sessions: [],
         error: { code: "LOCAL_READ_FAILED", message: options.messages.localReadFailed },
       };
@@ -639,24 +627,15 @@ export function createSessionCatalogNodeHostBindings(
   };
   return {
     commands: [
-      {
-        command: options.listCommand,
+      ...(["list", "read"] as const).map((operation): OpenClawPluginNodeHostCommand => ({
+        command: options[`${operation}Command`],
         cap: options.capability,
         dangerous: false,
         hasActiveWork: options.hasActiveWork,
         isAvailable: options.listAvailable,
         handle: async (paramsJSON) =>
-          JSON.stringify(await options.list(options.parseParams(paramsJSON))),
-      },
-      {
-        command: options.readCommand,
-        cap: options.capability,
-        dangerous: false,
-        hasActiveWork: options.hasActiveWork,
-        isAvailable: options.listAvailable,
-        handle: async (paramsJSON) =>
-          JSON.stringify(await options.read(options.parseParams(paramsJSON))),
-      },
+          JSON.stringify(await options[operation](options.parseParams(paramsJSON))),
+      })),
       terminal,
     ],
     policies: [

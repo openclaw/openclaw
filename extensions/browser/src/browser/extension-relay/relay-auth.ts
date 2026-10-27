@@ -10,10 +10,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { createSecretFileAtomic, tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file";
+import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
-import { extractErrorCode } from "../../infra/errors.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
 
@@ -23,6 +24,20 @@ const RELAY_SECRET_REREAD_DELAY_MS = 10;
 const PRIVATE_SECRET_FILE_MODE = 0o600;
 // Keep the existing secret-file reader's byte limit when reading our pinned descriptor.
 const MAX_RELAY_SECRET_BYTES = 16 * 1024;
+
+/**
+ * Outcome of one private read. `empty` and `changing` can be a concurrent first
+ * writer still publishing, so ensure waits on them; `rejected` is a persistent
+ * file state that only the operator can resolve.
+ */
+type RelaySecretInspection =
+  | { status: "token"; token: string }
+  | { status: "missing" }
+  | { status: "empty" }
+  | { status: "changing" }
+  | { status: "rejected"; problem: string };
+
+const CHANGING: RelaySecretInspection = { status: "changing" };
 
 // resolveOAuthDir returns `${stateDir}/credentials`, the shared credentials dir.
 function resolveExtensionRelaySecretPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -34,23 +49,56 @@ function normalizeToken(raw: string): string | null {
   return /^[0-9a-f]{64}$/.test(value) ? value : null;
 }
 
-/** Read the host-local relay token, or null when it has not been created yet. */
-export function readExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): string | null {
-  const secretPath = resolveExtensionRelaySecretPath(env);
+function inspectContent(raw: string): RelaySecretInspection {
+  if (!raw.trim()) {
+    return { status: "empty" };
+  }
+  const token = normalizeToken(raw);
+  return token
+    ? { status: "token", token }
+    : { status: "rejected", problem: "does not contain a 64-character lowercase hex token" };
+}
+
+function describeRejectedShape(stat: fs.Stats, uid: number | undefined): string | null {
+  if (stat.isSymbolicLink()) {
+    return "is a symlink";
+  }
+  if (!stat.isFile()) {
+    return "is not a regular file";
+  }
+  if (stat.uid !== uid) {
+    return `is owned by another user (uid ${stat.uid})`;
+  }
+  if (stat.nlink !== 1) {
+    return `has ${stat.nlink} hard links`;
+  }
+  return null;
+}
+
+function inspectExtensionRelaySecret(secretPath: string): RelaySecretInspection {
   if (process.platform === "win32") {
-    return normalizeToken(
-      tryReadSecretFileSync(secretPath, "browser extension relay secret", {
-        rejectSymlink: true,
-      }) ?? "",
-    );
+    try {
+      fs.lstatSync(secretPath);
+    } catch (error) {
+      if (extractErrorCode(error) === "ENOENT") {
+        return { status: "missing" };
+      }
+    }
+    const raw = tryReadSecretFileSync(secretPath, "browser extension relay secret", {
+      rejectSymlink: true,
+    });
+    return raw === undefined
+      ? { status: "rejected", problem: "could not be read privately" }
+      : inspectContent(raw);
   }
   const uid = process.getuid?.();
   let fd: number | undefined;
   let raw: string;
   try {
     const before = fs.lstatSync(secretPath);
-    if (!before.isFile() || before.uid !== uid || before.nlink !== 1) {
-      return null;
+    const shapeProblem = describeRejectedShape(before, uid);
+    if (shapeProblem) {
+      return { status: "rejected", problem: shapeProblem };
     }
     // Permission checks, tightening, and reading must concern the same inode.
     // NONBLOCK also prevents a file-to-pipe swap from hanging the native host.
@@ -66,10 +114,17 @@ export function readExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): s
       stat.ino === before.ino;
     const opened = fs.fstatSync(fd);
     if (!sameFile(opened) || !sameFile(fs.lstatSync(secretPath))) {
-      return null;
+      return CHANGING;
     }
     if ((opened.mode & 0o077) !== 0) {
-      fs.fchmodSync(fd, PRIVATE_SECRET_FILE_MODE);
+      try {
+        fs.fchmodSync(fd, PRIVATE_SECRET_FILE_MODE);
+      } catch {
+        return {
+          status: "rejected",
+          problem: "is readable by other users and its permissions could not be tightened to 0600",
+        };
+      }
       log.warn("tightened extension relay secret permissions to 0600");
     }
     const buffer = Buffer.alloc(MAX_RELAY_SECRET_BYTES + 1);
@@ -81,32 +136,51 @@ export function readExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): s
       }
       length += count;
     }
+    if (length > MAX_RELAY_SECRET_BYTES) {
+      return { status: "rejected", problem: "is larger than 16 KiB" };
+    }
     const after = fs.fstatSync(fd);
-    if (
-      length > MAX_RELAY_SECRET_BYTES ||
-      !sameFile(after) ||
-      (after.mode & 0o077) !== 0 ||
-      !sameFile(fs.lstatSync(secretPath))
-    ) {
-      return null;
+    if (!sameFile(after) || (after.mode & 0o077) !== 0 || !sameFile(fs.lstatSync(secretPath))) {
+      return CHANGING;
     }
     raw = buffer.subarray(0, length).toString("utf8");
   } catch (error) {
-    if (extractErrorCode(error) !== "ENOENT") {
-      log.warn("ignoring extension relay secret: file changed or could not be read privately");
+    const code = extractErrorCode(error);
+    if (fd === undefined && code === "ENOENT") {
+      return { status: "missing" };
     }
-    return null;
+    // The path was replaced between inspection and open (removed or swapped for a symlink).
+    if (code === "ENOENT" || code === "ELOOP") {
+      return CHANGING;
+    }
+    log.warn("ignoring extension relay secret: file could not be read privately");
+    return { status: "rejected", problem: `could not be read (${code ?? "unknown error"})` };
   } finally {
     if (fd !== undefined) {
       fs.closeSync(fd);
     }
   }
+  return inspectContent(raw);
+}
+
+/** Read the host-local relay token, or null when it is missing or unusable. */
+export function readExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): string | null {
+  const secret = inspectExtensionRelaySecret(resolveExtensionRelaySecretPath(env));
   // An exclusive first writer can still be filling an empty file. Preserve the
-  // reader's throwing outcome so ensure retries adoption instead of creating.
-  if (!raw.trim()) {
+  // reader's throwing outcome so callers never treat it as a usable absence.
+  if (secret.status === "empty") {
     throw new Error("extension relay secret is empty");
   }
-  return normalizeToken(raw);
+  return secret.status === "token" ? secret.token : null;
+}
+
+async function relaySecretError(secretPath: string, problem: string): Promise<Error> {
+  // Loaded only on failure: the relay daemon and native host import this module.
+  const { formatCliCommand } = await import("openclaw/plugin-sdk/setup-tools");
+  return new Error(
+    `Browser extension relay secret ${secretPath} ${problem}. Move it aside, then run ` +
+      `\`${formatCliCommand("openclaw browser extension pair")}\` to create a new secret and re-pair the Chrome extension.`,
+  );
 }
 
 /**
@@ -118,27 +192,27 @@ export function readExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): s
  * are separate processes that can race on a fresh host, and a non-atomic
  * read-then-write would let each mint a distinct token (relay expects one, the
  * printed pairing string carries the other → 401). On EEXIST the winner's token
- * is re-read.
+ * is re-read. An existing file the reader rejects is never replaced: it fails
+ * immediately with the reason so the operator can move it aside.
  */
 export async function ensureExtensionRelayToken(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
   const secretPath = resolveExtensionRelaySecretPath(env);
-  let lastError: unknown;
+  let problem = "did not become readable";
   for (let attempt = 0; attempt < RELAY_SECRET_REREAD_ATTEMPTS; attempt += 1) {
-    let canCreate = false;
-    try {
-      const winner = readExtensionRelayToken(env);
-      if (winner) {
-        return winner;
-      }
-      canCreate = attempt === 0;
-    } catch (err) {
-      // An exclusive writer can expose an empty final file before ensure starts;
-      // retry adoption without invoking the stricter credential creation guards.
-      lastError = err;
+    const secret = inspectExtensionRelaySecret(secretPath);
+    if (secret.status === "token") {
+      return secret.token;
     }
-    if (canCreate) {
+    if (secret.status === "rejected") {
+      throw await relaySecretError(secretPath, secret.problem);
+    }
+    if (secret.status === "empty") {
+      problem = "is empty";
+    } else if (secret.status === "changing") {
+      problem = "kept changing while it was read";
+    } else if (attempt === 0) {
       const token = crypto.randomBytes(32).toString("hex");
       try {
         await createSecretFileAtomic({
@@ -151,14 +225,9 @@ export async function ensureExtensionRelayToken(
         if (extractErrorCode(err) !== "secret-exists") {
           throw err;
         }
-        lastError = err;
       }
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, RELAY_SECRET_REREAD_DELAY_MS);
-    });
+    await sleepWithAbort(RELAY_SECRET_REREAD_DELAY_MS);
   }
-  throw new Error("extension relay secret exists but is unreadable/malformed", {
-    cause: lastError,
-  });
+  throw await relaySecretError(secretPath, problem);
 }

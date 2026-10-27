@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
@@ -8,8 +9,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import * as transcriptPreview from "../session-transcript-preview.js";
@@ -50,7 +55,7 @@ async function seedMetadataReads(prepareProjection = false) {
     },
   } satisfies Record<string, GatewayOperatorRoleDefinition>;
   let cfg: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+    agents: { defaults: { sessionStore: { agentId: "main" } }, entries: { main: {}, work: {} } },
     session: { store: storePath },
     gateway: {
       roles: {
@@ -59,6 +64,7 @@ async function seedMetadataReads(prepareProjection = false) {
       },
     },
   };
+  setRuntimeConfigSnapshot(cfg);
   for (const [agentId, name, visibility, incognito, content] of [
     ["main", "first", "shared", false, "needle alpha"],
     ["main", "second", "shared", false, `needle beta ${"context ".repeat(20)}`],
@@ -78,7 +84,9 @@ async function seedMetadataReads(prepareProjection = false) {
     });
     await seedLinearSessionTranscript({ ...scope, sessionId, contents: [content] });
   }
-  closeOpenClawAgentDatabasesForTest();
+  // Cold reads must start after the seed workers release the same physical stores.
+  await closeOpenClawAgentDatabasesAsync(stateDir);
+  closeOpenClawAgentDatabasesForTest(stateDir);
   const context = { ...requestContext(cfg), getRuntimeConfig: () => cfg };
   if (prepareProjection) {
     await initializeSessionReadContext(context);
@@ -114,7 +122,7 @@ test.each([
 ] as const)(
   "$method ($scope) retains visible results without decoding saved prompts",
   async ({ method, sessionKeys }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const { opts, storePath } = await seedMetadataReads(method === "sessions.preview");
       const parse = JSON.parse;
       let decodedPromptBytes = 0;
@@ -244,7 +252,7 @@ test.each([
     restrict: "config",
   },
 ] as const)("sessions.preview rechecks $change before publishing the batch", async (scenario) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const { opts, storePath, viewerId, restrictRuntimeConfig } = await seedMetadataReads(true);
     const firstRead = createDeferred();
     const read = transcriptPreview.readSessionPreviewItemsFromTranscriptAsync;

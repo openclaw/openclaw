@@ -1,7 +1,5 @@
-// Plugin Package Contract tests cover index behavior.
 import { describe, expect, it } from "vitest";
 import {
-  EXTERNAL_CODE_PLUGIN_REQUIRED_FIELD_PATHS,
   PLUGIN_CATEGORY_SLUGS,
   listMissingExternalCodePluginFieldPaths,
   normalizeExternalPluginCompatibility,
@@ -9,32 +7,15 @@ import {
   validateExternalCodePluginPackageJson,
 } from "./index.js";
 
+const gatewayVersion = "2026.3.24-beta.2";
+
 describe("@openclaw/plugin-package-contract", () => {
   it("publishes the controlled plugin category taxonomy", () => {
-    expect(PLUGIN_CATEGORY_SLUGS).toEqual([
-      "channels",
-      "models",
-      "agent-runtimes",
-      "memory",
-      "context",
-      "voice",
-      "web",
-      "media",
-      "security",
-      "integrations",
-      "developer-tools",
-      "infrastructure",
-      "documents-files",
-      "inbox-collaboration",
-      "productivity",
-      "scheduling",
-      "finance-payments",
-      "sales-marketing",
-      "data-analytics",
-      "agent-orchestration",
-      "research",
-      "other",
-    ]);
+    expect(PLUGIN_CATEGORY_SLUGS).toEqual(
+      "channels models agent-runtimes memory context voice web computer-use media security integrations developer-tools infrastructure documents-files inbox-collaboration productivity scheduling finance-payments sales-marketing data-analytics agent-orchestration research other".split(
+        " ",
+      ),
+    );
   });
 
   it("validates ordered package-owned plugin categories", () => {
@@ -54,21 +35,15 @@ describe("@openclaw/plugin-package-contract", () => {
       normalizeExternalPluginCompatibility({
         version: "1.2.3",
         openclaw: {
-          compat: {
-            pluginApi: ">=2026.3.24-beta.2",
-            minGatewayVersion: "2026.3.24-beta.2",
-          },
-          build: {
-            openclawVersion: "2026.3.24-beta.2",
-            pluginSdkVersion: "0.9.0",
-          },
+          compat: { pluginApi: `>=${gatewayVersion}`, minGatewayVersion: gatewayVersion },
+          build: { openclawVersion: gatewayVersion, pluginSdkVersion: "0.9.0" },
         },
       }),
     ).toEqual({
       pluginApiRange: ">=2026.3.24-beta.2",
-      builtWithOpenClawVersion: "2026.3.24-beta.2",
+      builtWithOpenClawVersion: gatewayVersion,
       pluginSdkVersion: "0.9.0",
-      minGatewayVersion: "2026.3.24-beta.2",
+      minGatewayVersion: gatewayVersion,
     });
   });
 
@@ -77,35 +52,19 @@ describe("@openclaw/plugin-package-contract", () => {
       normalizeExternalPluginCompatibility({
         version: "1.2.3",
         openclaw: {
-          compat: {
-            pluginApi: ">=1.0.0",
-          },
-          install: {
-            minHostVersion: "2026.3.24-beta.2",
-          },
+          compat: { pluginApi: ">=1.0.0" },
+          install: { minHostVersion: gatewayVersion },
         },
       }),
     ).toEqual({
       pluginApiRange: ">=1.0.0",
       builtWithOpenClawVersion: "1.2.3",
-      minGatewayVersion: "2026.3.24-beta.2",
+      minGatewayVersion: gatewayVersion,
     });
   });
 
-  it("lists the required external code-plugin fields", () => {
-    expect(EXTERNAL_CODE_PLUGIN_REQUIRED_FIELD_PATHS).toEqual([
-      "openclaw.compat.pluginApi",
-      "openclaw.build.openclawVersion",
-    ]);
-  });
-
   it("reports missing required fields with stable field paths", () => {
-    const packageJson = {
-      openclaw: {
-        compat: {},
-        build: {},
-      },
-    };
+    const packageJson = { openclaw: { compat: {}, build: {} } };
 
     expect(listMissingExternalCodePluginFieldPaths(packageJson)).toEqual([
       "openclaw.compat.pluginApi",

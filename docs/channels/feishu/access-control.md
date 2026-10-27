@@ -47,6 +47,38 @@ openclaw pairing approve feishu <CODE>
 
 Mentions of other people stay readable in the text sent to the agent,
 including when consecutive messages are combined.
+The receiving bot's own mention is kept as well. Command matching ignores addressing
+without removing it from the agent's context.
+
+### Mentions in bot-started threads
+
+Set `requireMentionInBotThreads: false` to accept messages without an @mention in
+threads or topics whose root message was sent by this bot. Set it to `true` to
+require an @mention in those threads, even when `requireMention` is `false`.
+Omitting the setting preserves the existing mention behavior.
+
+```json5
+{
+  channels: {
+    feishu: {
+      requireMention: true,
+      requireMentionInBotThreads: false,
+    },
+  },
+}
+```
+
+Configure the setting at `channels.feishu`, under `accounts.<id>`, or under
+`groups.<chat_id>`. The selected group entry takes precedence over the account
+setting, which takes precedence over the top-level setting. `groups["*"]` supplies
+the group entry when no exact group entry exists, matching `requireMention`.
+
+This applies only to actual threads and topics owned by the current bot. Ordinary
+quoted replies, threads started by someone else, and roots that cannot be read or
+verified keep the regular mention policy. Group access, sender allowlists, and
+bot-message restrictions still apply. Receiving unmentioned group messages also
+requires the app's `im:message.group_msg` scope and group message event delivery;
+this setting does not change which events Feishu sends.
 
 ## Group configuration examples
 
@@ -126,6 +158,8 @@ In `allowlist` mode, you can also admit a group by adding an explicit `groups.<c
 ```
 
 `channels.feishu.groupSenderAllowFrom` sets the same sender allowlist for all groups; a per-group `allowFrom` takes precedence.
+
+With command access groups enabled, group text commands also require authorization. A denied command receives a short explanation. Ask an admin to add your user ID to the selected Feishu account's `allowFrom` list or the group's `allowFrom` list to grant command access.
 
 ### Bot-authored messages
 

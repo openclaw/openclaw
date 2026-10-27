@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "../../llm/types.js";
 import { isTerminalAssistantError } from "../../llm/utils/retry.js";
 import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
+import { failoverReasonFromClassification } from "../failover/classification-rules.js";
 import {
   classifyFailoverSignal,
   isAuthErrorMessage,
@@ -15,7 +16,13 @@ export function buildAssistantFailoverSignal(
   msg: AssistantMessage,
   opts?: { provider?: string },
 ): FailoverSignal {
-  const retryAfterMs = resolveRetryAfterMs(msg.errorMessage, Date.now(), msg.errorBody);
+  const textRetryAfterMs = resolveRetryAfterMs(msg.errorMessage, Date.now(), msg.errorBody);
+  const retryAfterMs =
+    msg.retryAfterMs === null
+      ? Infinity
+      : msg.retryAfterMs === undefined
+        ? textRetryAfterMs
+        : Math.max(msg.retryAfterMs, textRetryAfterMs ?? 0);
   return {
     status: extractErrorHttpStatus(msg.errorMessage?.trim() ?? "")?.code,
     ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
@@ -40,11 +47,7 @@ export function classifyAssistantFailoverReason(
     buildAssistantFailoverSignal(msg, { provider: providerOwner?.id ?? opts?.provider }),
     { providerPlugin: providerOwner },
   );
-  return classification?.kind === "reason"
-    ? classification.reason
-    : classification
-      ? "context_overflow"
-      : null;
+  return failoverReasonFromClassification(classification);
 }
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
   return msg?.stopReason === "error" && isRateLimitErrorMessage(msg.errorMessage ?? "");

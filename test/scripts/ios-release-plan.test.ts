@@ -1,315 +1,196 @@
-// iOS release plan tests cover deterministic App Store version and build allocation.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   cutIosReleaseChangelog,
-  decodeIosAppStoreVersion,
   resolveIosReleasePlan,
   type IosReleasePlanInput,
 } from "../../scripts/lib/ios-release-plan.ts";
-import { installIosFixtureCleanup, writeIosFixture } from "./ios-version.test-support.ts";
-
-installIosFixtureCleanup();
 
 function input(overrides: Partial<IosReleasePlanInput> = {}): IosReleasePlanInput {
-  const rootDir = writeIosFixture({
-    packageVersion: "2026.7.2",
-    changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nRetry notes.\n",
-  });
+  const published =
+    overrides.appStoreVersions?.find((version) => version.state === "READY_FOR_DISTRIBUTION")
+      ?.versionString ?? null;
   return {
     appStoreVersions: [],
     buildUploads: [],
     gatewayVersion: "2026.7.2",
-    rootDir,
+    releaseNotesBaselines: [{ audience: "ios", version: published, build: published ? "5" : null }],
     ...overrides,
   };
 }
+const version = (id: string, state: string, v = "2026.7.21") => ({ id, state, versionString: v });
+const upload = (buildNumber: string, shortVersion: string, state: string) => ({
+  buildNumber,
+  shortVersion,
+  state,
+});
+const legacy = version("legacy", "READY_FOR_DISTRIBUTION", "2026.7.2");
+const editable = version("editable", "READY_FOR_REVIEW");
+const store = (...appStoreVersions: ReturnType<typeof version>[]) => ({ appStoreVersions });
+type PlanCase = [Partial<IosReleasePlanInput>, Partial<ReturnType<typeof resolveIosReleasePlan>>];
+type InvalidPlanCase = [Partial<IosReleasePlanInput>, string | RegExp];
+const newRevision = {
+  appStoreRevision: 1,
+  appStoreVersion: "2026.7.21",
+  buildNumber: 1,
+  decision: "new-revision",
+} as const;
+const revisionZero = { appStoreRevision: 0, appStoreVersion: "2026.7.20" };
 
-describe("resolveIosReleasePlan", () => {
-  it("starts a new gateway at revision zero and build one", () => {
-    expect(resolveIosReleasePlan(input())).toMatchObject({
-      appStoreRevision: 0,
-      appStoreVersion: "2026.7.20",
-      buildNumber: 1,
-      changelogStatus: "needs-cut",
-      decision: "new-revision",
-    });
-  });
-
-  it("treats a legacy released gateway version as consumed revision zero", () => {
-    const plan = resolveIosReleasePlan(
-      input({
-        appStoreVersions: [
-          { id: "legacy", state: "READY_FOR_DISTRIBUTION", versionString: "2026.7.2" },
-        ],
-      }),
-    );
-
-    expect(plan).toMatchObject({
+it.each<PlanCase>([
+  [
+    {},
+    {
+      ...newRevision,
+      ...revisionZero,
+      destination: "app-store",
+      releaseNotesBaselines: [{ audience: "ios", version: null, build: null }],
+    },
+  ],
+  [store(legacy), newRevision],
+  [{ buildUploads: [upload("4", "2026.7.2", "COMPLETE")] }, newRevision],
+  [
+    {
+      destination: "testflight",
+      appStoreVersions: [
+        version("public", "READY_FOR_DISTRIBUTION", "2026.7.20"),
+        version("store", "IN_REVIEW"),
+      ],
+      buildUploads: [upload("7", "2026.7.21", "FAILED"), upload("90", "2026.7.20", "COMPLETE")],
+    },
+    {
+      destination: "testflight",
       appStoreRevision: 1,
       appStoreVersion: "2026.7.21",
-      buildNumber: 1,
-      decision: "new-revision",
-    });
-  });
-
-  it("treats legacy build-upload-only history as consumed revision zero", () => {
-    const plan = resolveIosReleasePlan(
-      input({
-        buildUploads: [
-          {
-            buildNumber: "4",
-            shortVersion: "2026.7.2",
-            state: "COMPLETE",
-          },
-        ],
-      }),
-    );
-
-    expect(plan).toMatchObject({
-      appStoreRevision: 1,
-      appStoreVersion: "2026.7.21",
-      buildNumber: 1,
-      decision: "new-revision",
-    });
-  });
-
-  it("reuses the one editable revision", () => {
-    const plan = resolveIosReleasePlan(
-      input({
-        appStoreVersions: [
-          { id: "editable", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.21" },
-        ],
-      }),
-    );
-
-    expect(plan).toMatchObject({
+      appStoreVersionId: null,
+      appStoreVersionState: null,
+      buildNumber: 8,
+      decision: "resume-testflight",
+      releaseNotesBaselines: [{ audience: "ios", version: "2026.7.20", build: "5" }],
+    },
+  ],
+  [
+    {
+      destination: "testflight",
+      appStoreVersions: [version("other", "IN_REVIEW", "2026.7.30")],
+      buildUploads: [upload("4", "2026.7.20", "PROCESSING"), upload("90", "2026.7.30", "COMPLETE")],
+    },
+    {
+      destination: "testflight",
+      ...revisionZero,
+      appStoreVersionId: null,
+      appStoreVersionState: null,
+      buildNumber: 5,
+      decision: "retry-upload",
+    },
+  ],
+  [
+    {
+      appStoreVersions: [legacy],
+      buildUploads: [upload("1", "2026.7.21", "FAILED")],
+    },
+    { appStoreRevision: 1, buildNumber: 2, decision: "retry-upload" },
+  ],
+  [
+    {
+      appStoreVersions: [version("older", "READY_FOR_DISTRIBUTION")],
+      gatewayVersion: "2026.7.21",
+    },
+    { appStoreRevision: 0, appStoreVersion: "2026.7.210", decision: "new-revision" },
+  ],
+  [
+    {
+      ...store(legacy, editable),
+      buildUploads: [upload("19", "2026.7.21", "FAILED"), upload("3", "2026.7.21", "COMPLETE")],
+      releaseNotesBaselines: [{ audience: "ios", version: "2026.7.2", build: "3" }],
+    },
+    {
+      buildNumber: 20,
       appStoreRevision: 1,
       appStoreVersionId: "editable",
-      appStoreVersionState: "PREPARE_FOR_SUBMISSION",
+      appStoreVersionState: "READY_FOR_REVIEW",
       decision: "resume-editable",
-    });
-  });
-
-  it("retries an uploaded but unreleased revision after its version record is removed", () => {
-    const plan = resolveIosReleasePlan(
-      input({
-        appStoreVersions: [
-          { id: "legacy", state: "READY_FOR_DISTRIBUTION", versionString: "2026.7.2" },
-        ],
-        buildUploads: [
-          {
-            buildNumber: "1",
-            shortVersion: "2026.7.21",
-            state: "FAILED",
-          },
-        ],
-      }),
-    );
-
-    expect(plan).toMatchObject({
-      appStoreRevision: 1,
-      buildNumber: 2,
-      decision: "retry-upload",
-    });
-  });
-
-  it("rejects multiple upload-only unreleased revisions", () => {
-    expect(() =>
-      resolveIosReleasePlan(
-        input({
-          appStoreVersions: [
-            { id: "legacy", state: "READY_FOR_DISTRIBUTION", versionString: "2026.7.2" },
-          ],
-          buildUploads: [
-            { buildNumber: "1", shortVersion: "2026.7.21", state: "FAILED" },
-            { buildNumber: "1", shortVersion: "2026.7.22", state: "FAILED" },
-          ],
-        }),
-      ),
-    ).toThrow("Multiple unreleased App Store build-upload revisions");
-  });
-
-  it.each(["AWAITING_UPLOAD", "PROCESSING", "FAILED", "COMPLETE"])(
-    "increments after %s build uploads",
-    (state) => {
-      const plan = resolveIosReleasePlan(
-        input({
-          appStoreVersions: [
-            { id: "editable", state: "READY_FOR_REVIEW", versionString: "2026.7.21" },
-          ],
-          buildUploads: [
-            { buildNumber: "7", shortVersion: "2026.7.21", state },
-            { buildNumber: "3", shortVersion: "2026.7.21", state: "COMPLETE" },
-          ],
-        }),
-      );
-
-      expect(plan.buildNumber).toBe(8);
+      releaseNotesBaselines: [{ audience: "ios", version: "2026.7.2", build: "3" }],
     },
-  );
-
-  it("rejects locked and mismatched active versions", () => {
-    expect(() =>
-      resolveIosReleasePlan(
-        input({
-          appStoreVersions: [{ id: "locked", state: "IN_REVIEW", versionString: "2026.7.21" }],
-        }),
-      ),
-    ).toThrow("locked in state IN_REVIEW");
-
-    expect(() =>
-      resolveIosReleasePlan(
-        input({
-          appStoreVersions: [
-            { id: "other", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.30" },
-          ],
-        }),
-      ),
-    ).toThrow("does not belong to gateway 2026.7.2");
-  });
-
-  it("rejects multiple active versions and unknown upload states", () => {
-    expect(() =>
-      resolveIosReleasePlan(
-        input({
-          appStoreVersions: [
-            { id: "one", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.21" },
-            { id: "two", state: "READY_FOR_REVIEW", versionString: "2026.7.22" },
-          ],
-        }),
-      ),
-    ).toThrow("multiple active iOS versions");
-
-    expect(() =>
-      resolveIosReleasePlan(
-        input({
-          buildUploads: [{ buildNumber: "1", shortVersion: "2026.7.20", state: "NEW_APPLE_STATE" }],
-        }),
-      ),
-    ).toThrow("Unknown App Store build upload state");
-  });
-
-  it("fails after revision 9 is distributed", () => {
-    expect(() =>
-      resolveIosReleasePlan(
-        input({
-          appStoreVersions: [
-            { id: "last", state: "READY_FOR_DISTRIBUTION", versionString: "2026.7.29" },
-          ],
-        }),
-      ),
-    ).toThrow("exhausted App Store revisions 0 through 9");
-  });
-
-  it("rejects a planned version older than released history from another gateway", () => {
-    expect(() =>
-      resolveIosReleasePlan(
-        input({
-          appStoreVersions: [
-            { id: "newer", state: "READY_FOR_DISTRIBUTION", versionString: "2026.7.2" },
-          ],
-          gatewayVersion: "2026.6.11",
-        }),
-      ),
-    ).toThrow("must be greater than latest released version 2026.7.2");
-  });
-
-  it("rejects explicit selections that disagree with remote state", () => {
-    expect(() => resolveIosReleasePlan(input({ explicitRevision: 4 }))).toThrow(
-      "does not match the deterministic revision 0",
-    );
-    expect(() => resolveIosReleasePlan(input({ explicitBuildNumber: "4" }))).toThrow(
-      "does not match the deterministic next build 1",
-    );
-  });
-
-  it("decodes only legacy or single-digit revision versions for the selected gateway", () => {
-    expect(decodeIosAppStoreVersion("2026.7.2", "2026.7.2")).toEqual({
-      legacy: true,
-      revision: 0,
-    });
-    expect(decodeIosAppStoreVersion("2026.7.2", "2026.7.20")).toEqual({
-      legacy: false,
-      revision: 0,
-    });
-    expect(decodeIosAppStoreVersion("2026.7.2", "2026.7.21")).toEqual({
-      legacy: false,
-      revision: 1,
-    });
-    expect(decodeIosAppStoreVersion("2026.7.2", "2026.7.29")).toEqual({
-      legacy: false,
-      revision: 9,
-    });
-    expect(decodeIosAppStoreVersion("2026.7.2", "2026.7.201")).toBeNull();
-    expect(decodeIosAppStoreVersion("2026.7.2", "2026.7.30")).toBeNull();
-    expect(decodeIosAppStoreVersion("2026.7.3", "2026.7.3")).toBeNull();
-    expect(decodeIosAppStoreVersion("2026.7.21", "2026.7.21")).toBeNull();
-    expect(decodeIosAppStoreVersion("2026.7.21", "2026.7.210")).toEqual({
-      legacy: false,
-      revision: 0,
-    });
-  });
-
-  it("does not mistake an appended version for a future gateway's legacy release", () => {
-    const plan = resolveIosReleasePlan(
-      input({
-        appStoreVersions: [
-          { id: "older", state: "READY_FOR_DISTRIBUTION", versionString: "2026.7.21" },
-        ],
-        gatewayVersion: "2026.7.21",
-      }),
-    );
-
-    expect(plan).toMatchObject({
-      appStoreRevision: 0,
-      appStoreVersion: "2026.7.210",
-      decision: "new-revision",
-    });
-  });
-
-  it("requires another cut when retry notes remain Unreleased", () => {
-    const rootDir = writeIosFixture({
-      packageVersion: "2026.7.2",
-      changelog:
-        "# OpenClaw iOS Changelog\n\n## Unreleased\n\nRetry notes.\n\n## 2026.7.21\n\nOriginal notes.\n",
-    });
-    const plan = resolveIosReleasePlan({
-      appStoreVersions: [
-        { id: "editable", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.21" },
-      ],
-      buildUploads: [],
-      gatewayVersion: "2026.7.2",
-      rootDir,
-    });
-
-    expect(plan.changelogStatus).toBe("needs-cut");
-  });
+  ],
+])("plans %j", (overrides, expected) => {
+  const plan = resolveIosReleasePlan(input(overrides));
+  expect(plan).toMatchObject(expected);
+  if (expected.releaseNotesBaselines) {
+    expect(plan.releaseNotesBaselines).toEqual(expected.releaseNotesBaselines);
+  }
 });
 
-describe("cutIosReleaseChangelog", () => {
-  it("cuts Unreleased notes into a new exact App Store version section", () => {
-    const current =
-      "# OpenClaw iOS Changelog\n\n## Unreleased\n\nNew notes.\n\n## 2026.7.2\n\nOld notes.\n";
-    const updated = cutIosReleaseChangelog(current, "2026.7.21");
+it.each<InvalidPlanCase>([
+  [
+    {
+      destination: "testflight",
+      appStoreVersions: [version("store", "PREPARE_FOR_SUBMISSION")],
+      buildUploads: [upload("4", "2026.7.22", "COMPLETE")],
+    },
+    "Multiple unreleased TestFlight revisions",
+  ],
+  [
+    {
+      appStoreVersions: [legacy],
+      buildUploads: [upload("1", "2026.7.21", "FAILED"), upload("1", "2026.7.22", "FAILED")],
+    },
+    "Multiple unreleased App Store build-upload revisions",
+  ],
+  [store(version("locked", "IN_REVIEW")), "locked in state IN_REVIEW"],
+  [
+    store(version("other", "PREPARE_FOR_SUBMISSION", "2026.7.30")),
+    "does not belong to gateway 2026.7.2",
+  ],
+  [
+    store(version("invalid-revision", "PREPARE_FOR_SUBMISSION", "2026.7.201")),
+    "does not belong to gateway 2026.7.2",
+  ],
+  ...(["app-store", "testflight"] as const).map((destination): InvalidPlanCase => [
+    {
+      destination,
+      appStoreVersions: [
+        version("one", "PREPARE_FOR_SUBMISSION"),
+        version("two", "READY_FOR_REVIEW", "2026.7.22"),
+      ],
+    },
+    "multiple active iOS versions",
+  ]),
+  [
+    { buildUploads: [upload("1", "2026.7.20", "NEW_APPLE_STATE")] },
+    "Unknown App Store build upload state",
+  ],
+  [
+    store(version("last", "READY_FOR_DISTRIBUTION", "2026.7.29")),
+    "exhausted App Store revisions 0 through 9",
+  ],
+  [
+    { ...store(legacy), gatewayVersion: "2026.6.11" },
+    "must be greater than latest released version 2026.7.2",
+  ],
+  [{ explicitRevision: 4 }, "does not match the planned revision 0"],
+  [{ explicitBuildNumber: "4" }, "does not match the planned next build 1"],
+  ...[
+    { version: null, build: null },
+    { version: "2026.7.2", build: null },
+    { version: "2026.7.21", build: "3" },
+    { version: "2026.7.2", build: "unknown" },
+  ].map((baseline): InvalidPlanCase => [
+    { appStoreVersions: [legacy], releaseNotesBaselines: [{ audience: "ios", ...baseline }] },
+    /baseline|build number/,
+  ]),
+])("rejects %j", (overrides, error) => {
+  expect(() => resolveIosReleasePlan(input(overrides))).toThrow(error);
+});
 
-    expect(updated).toContain("## Unreleased\n\n## 2026.7.21\n\nNew notes.");
-    expect(updated).toContain("## 2026.7.2\n\nOld notes.");
-    expect(cutIosReleaseChangelog(updated, "2026.7.21")).toBe(updated);
-  });
-
-  it("merges retry notes into the existing release section", () => {
-    const current =
-      "# OpenClaw iOS Changelog\n\n## Unreleased\n\nRetry fix.\n\n## 2026.7.21\n\nOriginal notes.\n";
-    const updated = cutIosReleaseChangelog(current, "2026.7.21");
-
-    expect(updated).toContain("## 2026.7.21\n\nRetry fix.\n\nOriginal notes.");
-  });
-
-  it("preserves an existing release heading suffix", () => {
-    const current =
-      "# OpenClaw iOS Changelog\n\n## Unreleased\n\nRetry fix.\n\n## 2026.7.21 - 2026-07-23\n\nOriginal notes.\n";
-    const updated = cutIosReleaseChangelog(current, "2026.7.21");
-
-    expect(updated).toContain("## 2026.7.21 - 2026-07-23\n\nRetry fix.\n\nOriginal notes.");
-  });
+it.each([
+  ["2026.7.2", ["## Unreleased\n\n## 2026.7.21\n\nNew notes.", "## 2026.7.2\n\nOld notes."]],
+  ["2026.7.21", ["## 2026.7.21\n\nNew notes.\n\nOld notes."]],
+  ["2026.7.21 - 2026-07-23", ["## 2026.7.21 - 2026-07-23\n\nNew notes.\n\nOld notes."]],
+] as const)("cuts idempotent release notes for %s", (heading, expected) => {
+  const current = `# OpenClaw iOS Changelog\n\n## Unreleased\n\nNew notes.\n\n## ${heading}\n\nOld notes.\n`;
+  const updated = cutIosReleaseChangelog(current, "2026.7.21");
+  for (const fragment of expected) {
+    expect(updated).toContain(fragment);
+  }
+  expect(cutIosReleaseChangelog(updated, "2026.7.21")).toBe(updated);
 });

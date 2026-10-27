@@ -94,7 +94,7 @@ function render({
   elements.installHint.textContent =
     firstRunBuild?.platform === "freebsd"
       ? "Installs the CLI in ~/.openclaw using your system Node.js and npm."
-      : "Installs the CLI and managed Node runtime in ~/.openclaw.";
+      : "Installs OpenClaw and its managed runtime in ~/.openclaw.";
   show(elements.installControls, showInstall);
   show(elements.actionControls, false);
   show(elements.editConnection, false);
@@ -190,12 +190,6 @@ function gatewayHost(gateway) {
   return (gateway.host || "").trim().replace(/\.$/, "");
 }
 
-function canConnectDirect(gateway) {
-  return (
-    gateway.tls || gateway.directReachable || gatewayHost(gateway).toLowerCase().endsWith(".ts.net")
-  );
-}
-
 function renderGateways(gateways) {
   elements.gatewayList.replaceChildren();
   elements.discoveryStatus.textContent = gateways.length ? `${gateways.length} FOUND` : "SEARCHING";
@@ -214,7 +208,9 @@ function renderGateways(gateways) {
     const button = document.createElement("button");
     button.className = "gateway-card";
     button.type = "button";
-    button.disabled = !canConnectDirect(gateway);
+    button.disabled = !(
+      gateway.tls || gateway.directReachable || gatewayHost(gateway).toLowerCase().endsWith(".ts.net")
+    );
     if (button.disabled) {
       button.title = "This gateway does not advertise a direct connection.";
     }
@@ -284,13 +280,22 @@ async function refreshGateways() {
   }
 }
 
-async function connect() {
-  render({
+async function connect(action) {
+  render(action ? {
+    activity: `${action === "restart" ? "Restarting" : "Starting"} gateway…`,
+    description: "OpenClaw is waiting for the local gateway to become healthy.",
+    eyebrow: "GATEWAY",
+    title: "One moment",
+  } : {
     activity: "Checking local services…",
     description: "Finding your gateway and preparing the Control UI.",
     title: "Connecting to OpenClaw",
   });
   try {
+    if (action) {
+      await invoke("gateway_action", { action });
+      return;
+    }
     const snapshot = await invoke("bootstrap");
     if (snapshot.phase === "missingCli" || snapshot.phase === "unconfigured") {
       firstRunPhase = snapshot.phase;
@@ -298,7 +303,11 @@ async function connect() {
       if (firstRunBuild?.releaseBuild === false) {
         elements.channel.value = "dev";
       }
-      renderWelcome();
+      if (snapshot.setupError) {
+        renderConnectionChoices(snapshot.setupError);
+      } else {
+        renderWelcome();
+      }
     } else if (snapshot.phase === "remoteError") {
       renderRemoteRetry(snapshot.detail);
     }
@@ -319,16 +328,16 @@ function renderWelcome() {
   show(elements.welcomeScreen, true);
 }
 
-function renderConnectionChoices() {
+function renderConnectionChoices(error = null) {
   const freebsd = firstRunBuild?.platform === "freebsd";
   elements.localSubtitle.textContent = freebsd
     ? "Connect to a Gateway you start with the FreeBSD service or in a terminal."
     : "Private to this computer. Installs and starts automatically.";
   render({
-    description: freebsd
+    description: error || (freebsd
       ? "On FreeBSD, install the CLI if needed, then start your Gateway with the openclaw package service or run openclaw gateway run in a terminal. Connect here using the same account you used for onboarding."
-      : "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background.",
-    dot: "idle",
+      : "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background."),
+    dot: error ? "error" : "idle",
     eyebrow: "CHOOSE YOUR GATEWAY",
     title: "Where should your assistant live?",
   });
@@ -587,7 +596,7 @@ async function install() {
     description:
       firstRunBuild?.platform === "freebsd"
         ? "Installing the CLI requires a compatible system Node.js and npm. Start the Gateway with the package service or in a terminal after installation."
-        : "A managed CLI and Node runtime are being installed in your home directory.",
+        : "OpenClaw and its managed runtime are being installed in your home directory.",
     eyebrow: "INSTALLING",
     title: "Preparing your companion",
   });
@@ -611,20 +620,6 @@ async function install() {
   }
 }
 
-async function runGatewayAction(action) {
-  render({
-    activity: `${action === "restart" ? "Restarting" : "Starting"} gateway…`,
-    description: "OpenClaw is waiting for the local gateway to become healthy.",
-    eyebrow: "GATEWAY",
-    title: "One moment",
-  });
-  try {
-    await invoke("gateway_action", { action });
-  } catch (error) {
-    renderRetry(friendlyError(error));
-  }
-}
-
 function renderRetry(message) {
   show(elements.logWrap, false);
   renderAction(
@@ -645,7 +640,7 @@ function renderRetry(message) {
 elements.installButton.addEventListener("click", () => {
   void install();
 });
-elements.welcomeContinue.addEventListener("click", renderConnectionChoices);
+elements.welcomeContinue.addEventListener("click", () => renderConnectionChoices());
 elements.connectionLocal.addEventListener("click", () => selectConnection("local"));
 elements.connectionRemote.addEventListener("click", () => selectConnection("remote"));
 elements.setupBack.addEventListener("click", () =>
@@ -705,7 +700,7 @@ await listen("updater://not-available", () => {
 await listen("updater://available", ({ payload }) => {
   elements.updateProgress.removeAttribute("value");
   renderUpdate({
-    message: payload.notes || "Downloading in the background…",
+    message: "Downloading in the background…",
     progress: true,
     title: `Update available v${payload.version} — downloading…`,
   });
@@ -729,23 +724,33 @@ await listen("updater://ready", ({ payload }) => {
   });
 });
 await listen("updater://available-manual", ({ payload }) => {
-  const openDownloadPage = () =>
-    invoke("open_release_page").catch((error) => {
-      if (updateAction !== openDownloadPage || elements.updateBanner.classList.contains("hidden")) {
-        return;
-      }
-      renderUpdate({
-        action: openDownloadPage,
-        actionLabel: "Open download page",
+  const availableUpdate = {
+    message: "Install the latest system package from the release page.",
+    title: `Update available v${payload.version}`,
+  };
+  const openDownloadPage = async () => {
+    let result = availableUpdate;
+    try {
+      await invoke("open_release_page");
+    } catch (error) {
+      result = {
         message: friendlyError(error),
         title: "Could not open release page",
-      });
+      };
+    }
+    if (updateAction !== openDownloadPage || elements.updateBanner.classList.contains("hidden")) {
+      return;
+    }
+    renderUpdate({
+      ...result,
+      action: openDownloadPage,
+      actionLabel: "Open download page",
     });
+  };
   renderUpdate({
+    ...availableUpdate,
     action: openDownloadPage,
     actionLabel: "Open download page",
-    message: payload.notes || "Install the latest system package from the release page.",
-    title: `Update available v${payload.version}`,
   });
 });
 await listen("updater://error", ({ payload }) => {
@@ -790,7 +795,7 @@ if (mode === "connectionSettings") {
       eyebrow: "GATEWAY STOPPED",
       title: "OpenClaw is standing by",
     },
-    () => runGatewayAction("start"),
+    () => connect("start"),
   );
 } else if (mode === "error") {
   renderRetry("The last gateway action failed. Check the service, then retry.");

@@ -1,4 +1,3 @@
-// Plugin SDK barrel for mention-gating policy helpers used by channel plugins.
 export type {
   InboundImplicitMentionKind,
   InboundMentionDecision,
@@ -10,6 +9,7 @@ export type {
 } from "../channels/mention-gating.js";
 export {
   implicitMentionKindWhen,
+  resolveBotThreadMentionPolicy,
   resolveInboundMentionDecision,
 } from "../channels/mention-gating.js";
 export {

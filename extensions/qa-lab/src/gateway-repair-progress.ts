@@ -8,12 +8,17 @@ const FINALIZATION_PHASES = [
   "plugins",
   "targetConfigConvergence",
   "completionCache",
-];
+] as const;
 const PREFIX = "[update finalize] ";
 const MAX_LINE_LENGTH = 8_192;
 
 /** Only new finalizer phase boundaries renew repair's bounded inactivity deadline. */
-export function createQaRepairProgressObserver(onProgress: () => void) {
+export function createQaRepairProgressObserver(
+  onProgress: (progress: {
+    phase: (typeof FINALIZATION_PHASES)[number];
+    status: "in_progress" | "completed";
+  }) => void,
+) {
   const decoder = new StringDecoder("utf8");
   let pending = "";
   let discarded = false;
@@ -59,7 +64,11 @@ export function createQaRepairProgressObserver(onProgress: () => void) {
       // Repeated steps, warnings, partial lines and arbitrary output are not progress.
       if (boundary > lastBoundary) {
         lastBoundary = boundary;
-        onProgress();
+        // Forward only canonical phase boundaries, never producer detail/output.
+        onProgress({
+          phase: FINALIZATION_PHASES[phase]!,
+          status: value.status,
+        });
       }
     }
   };

@@ -1,19 +1,14 @@
 import { stableStringify } from "@openclaw/normalization-core";
-/**
- * Builds structured observations for embedded-agent API/text failures.
- */
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readLoggingConfig } from "../logging/config.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
-import {
-  classifyProviderRuntimeFailureKind,
-  getApiErrorPayloadFingerprint,
-  parseApiErrorInfo,
-  type ProviderRuntimeFailureKind,
-} from "./embedded-agent-helpers.js";
+import { parseApiErrorInfo } from "../shared/assistant-error-format.js";
+import { classifyProviderRuntimeFailureKind } from "./embedded-agent-helpers/provider-runtime-failure.js";
 import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
+import { getApiErrorPayloadFingerprint } from "./failover/user-copy.js";
 
 const MAX_OBSERVATION_INPUT_CHARS = 64_000;
 const MAX_FINGERPRINT_MESSAGE_CHARS = 8_000;
@@ -25,20 +20,6 @@ const OBSERVATION_EXTRA_REDACT_PATTERNS = [
   String.raw`"(?:api[-_]?key|api_key)"\s*:\s*"([^"]+)"`,
   String.raw`(?:\bCookie\b\s*[:=]\s*[^;=\s]+=|;\s*[^;=\s]+=)([^;\s\r\n]+)`,
 ];
-const RAW_ERROR_CONSOLE_SUPPRESSED_FAILURE_KINDS = new Set<ProviderRuntimeFailureKind>([
-  "auth_html",
-  "auth_refresh",
-  "auth_scope",
-  "upstream_html",
-]);
-
-function resolveConfiguredRedactPatterns(): string[] {
-  const configured = readLoggingConfig()?.redactPatterns;
-  if (!Array.isArray(configured)) {
-    return [];
-  }
-  return configured.filter((pattern): pattern is string => typeof pattern === "string");
-}
 
 function truncateForObservation(text: string | undefined, maxChars: number): string | undefined {
   const trimmed = text?.trim();
@@ -49,13 +30,8 @@ function truncateForObservation(text: string | undefined, maxChars: number): str
 }
 
 function boundObservationInput(text: string | undefined): string | undefined {
-  const trimmed = text?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.length > MAX_OBSERVATION_INPUT_CHARS
-    ? truncateUtf16Safe(trimmed, MAX_OBSERVATION_INPUT_CHARS)
-    : trimmed;
+  const trimmed = normalizeOptionalString(text);
+  return trimmed ? truncateUtf16Safe(trimmed, MAX_OBSERVATION_INPUT_CHARS) : undefined;
 }
 
 function replaceRequestIdPreview(
@@ -72,9 +48,10 @@ function redactObservationText(text: string | undefined): string | undefined {
   if (!text) {
     return text;
   }
-  // Observation logs must stay redacted even when operators disable general-purpose
-  // log redaction, otherwise raw provider payloads leak back into always-on logs.
-  const configuredPatterns = resolveConfiguredRedactPatterns();
+  // Client-visible error observations retain masking even when general-purpose
+  // log redaction is disabled. Include the default programmatic matchers as well
+  // as configured string patterns.
+  const configuredPatterns = filterStringEntries(readLoggingConfig()?.redactPatterns);
   return redactSensitiveText(text, {
     mode: "tools",
     patterns: [
@@ -85,55 +62,10 @@ function redactObservationText(text: string | undefined): string | undefined {
   });
 }
 
-export function shouldSuppressRawErrorConsoleSuffix(
-  providerRuntimeFailureKind?: ProviderRuntimeFailureKind,
-): boolean {
-  return providerRuntimeFailureKind
-    ? RAW_ERROR_CONSOLE_SUPPRESSED_FAILURE_KINDS.has(providerRuntimeFailureKind)
-    : false;
-}
-
-function buildObservationFingerprint(params: {
-  raw: string;
-  requestId?: string;
-  httpCode?: string;
-  type?: string;
-  message?: string;
-}): string | null {
-  const boundedMessage =
-    params.message && params.message.length > MAX_FINGERPRINT_MESSAGE_CHARS
-      ? truncateUtf16Safe(params.message, MAX_FINGERPRINT_MESSAGE_CHARS)
-      : params.message;
-  const structured =
-    params.httpCode || params.type || boundedMessage
-      ? stableStringify({
-          httpCode: params.httpCode,
-          type: params.type,
-          message: boundedMessage,
-        })
-      : null;
-  if (structured) {
-    return structured;
-  }
-  if (params.requestId) {
-    return params.raw.split(params.requestId).join("<request_id>");
-  }
-  return getApiErrorPayloadFingerprint(params.raw);
-}
-
 export function buildApiErrorObservationFields(
   rawError?: string,
-  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner },
-): {
-  rawErrorPreview?: string;
-  rawErrorHash?: string;
-  rawErrorFingerprint?: string;
-  httpCode?: string;
-  providerRuntimeFailureKind?: ProviderRuntimeFailureKind;
-  providerErrorType?: string;
-  providerErrorMessagePreview?: string;
-  requestIdHash?: string;
-} {
+  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner; code?: string },
+) {
   const trimmed = boundObservationInput(rawError);
   if (!trimmed) {
     return {};
@@ -143,13 +75,21 @@ export function buildApiErrorObservationFields(
     const requestId =
       parsed?.requestId ?? normalizeOptionalString(trimmed.match(REQUEST_ID_RE)?.[1]);
     const requestIdHash = requestId ? redactIdentifier(requestId, { len: 12 }) : undefined;
-    const rawFingerprint = buildObservationFingerprint({
-      raw: trimmed,
-      requestId,
-      httpCode: parsed?.httpCode,
-      type: parsed?.type,
-      message: parsed?.message,
-    });
+    const boundedMessage =
+      parsed?.message && truncateUtf16Safe(parsed.message, MAX_FINGERPRINT_MESSAGE_CHARS);
+    const structured =
+      parsed?.httpCode || parsed?.type || boundedMessage
+        ? stableStringify({
+            httpCode: parsed?.httpCode,
+            type: parsed?.type,
+            message: boundedMessage,
+          })
+        : null;
+    const rawFingerprint =
+      structured ||
+      (requestId
+        ? trimmed.split(requestId).join("<request_id>")
+        : getApiErrorPayloadFingerprint(trimmed));
     const redactedRawPreview = replaceRequestIdPreview(redactObservationText(trimmed), requestId);
     const redactedProviderMessage = replaceRequestIdPreview(
       redactObservationText(parsed?.message),
@@ -171,6 +111,7 @@ export function buildApiErrorObservationFields(
         },
         { providerPlugin: opts?.providerOwner ?? null },
       ),
+      providerErrorCode: redactObservationText(opts?.code ?? parsed?.code),
       providerErrorType: redactObservationText(parsed?.type),
       providerErrorMessagePreview: truncateForObservation(
         redactedProviderMessage,
@@ -186,16 +127,7 @@ export function buildApiErrorObservationFields(
 export function buildTextObservationFields(
   text?: string,
   opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner },
-): {
-  textPreview?: string;
-  textHash?: string;
-  textFingerprint?: string;
-  httpCode?: string;
-  providerRuntimeFailureKind?: ProviderRuntimeFailureKind;
-  providerErrorType?: string;
-  providerErrorMessagePreview?: string;
-  requestIdHash?: string;
-} {
+) {
   const observed = buildApiErrorObservationFields(text, opts);
   return {
     textPreview: observed.rawErrorPreview,

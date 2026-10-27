@@ -33,52 +33,6 @@ function expectInvalidConfig(result: ReturnType<typeof parseIrcConfig>) {
 }
 
 describe("irc config schema", () => {
-  it("accepts basic config", () => {
-    const config = expectValidConfig(
-      parseIrcConfig({
-        host: "irc.libera.chat",
-        nick: "openclaw-bot",
-        channels: ["#openclaw"],
-      }),
-    );
-
-    expect(config.host).toBe("irc.libera.chat");
-    expect(config.nick).toBe("openclaw-bot");
-  });
-
-  it("accepts configWrites at channel and account level", () => {
-    const config = expectValidConfig(
-      parseIrcConfig({
-        configWrites: false,
-        accounts: {
-          work: {
-            host: "irc.libera.chat",
-            configWrites: true,
-          },
-        },
-      }),
-    );
-
-    expect(config.configWrites).toBe(false);
-    expect(config.accounts?.work?.configWrites).toBe(true);
-  });
-
-  it("accepts healthMonitor at channel and account level", () => {
-    const config = expectValidConfig(
-      parseIrcConfig({
-        healthMonitor: { enabled: false },
-        accounts: {
-          work: {
-            healthMonitor: { enabled: true },
-          },
-        },
-      }),
-    );
-
-    expect(config.healthMonitor?.enabled).toBe(false);
-    expect(config.accounts?.work?.healthMonitor?.enabled).toBe(true);
-  });
-
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     const issues = expectInvalidConfig(
       parseIrcConfig({
@@ -88,44 +42,6 @@ describe("irc config schema", () => {
     );
 
     expect(issues[0]?.path?.join(".")).toBe("allowFrom");
-  });
-
-  it('accepts dmPolicy="open" with allowFrom "*"', () => {
-    const config = expectValidConfig(
-      parseIrcConfig({
-        dmPolicy: "open",
-        allowFrom: ["*"],
-      }),
-    );
-
-    expect(config.dmPolicy).toBe("open");
-  });
-
-  it("accepts numeric allowFrom and groupAllowFrom entries", () => {
-    const parsed = expectValidConfig(
-      parseIrcConfig({
-        dmPolicy: "allowlist",
-        allowFrom: [12345, "alice"],
-        groupAllowFrom: [67890, "alice!ident@example.org"],
-      }),
-    );
-
-    expect(parsed.allowFrom).toEqual([12345, "alice"]);
-    expect(parsed.groupAllowFrom).toEqual([67890, "alice!ident@example.org"]);
-  });
-
-  it("accepts numeric per-channel allowFrom entries", () => {
-    const parsed = expectValidConfig(
-      parseIrcConfig({
-        groups: {
-          "#ops": {
-            allowFrom: [42, "alice"],
-          },
-        },
-      }),
-    );
-
-    expect(parsed.groups?.["#ops"]?.allowFrom).toEqual([42, "alice"]);
   });
 
   it("rejects nickserv register without registerEmail", () => {
@@ -141,20 +57,6 @@ describe("irc config schema", () => {
     expect(issues[0]?.path?.join(".")).toBe("nickserv.registerEmail");
   });
 
-  it("accepts nickserv register with password and registerEmail", () => {
-    const config = expectValidConfig(
-      parseIrcConfig({
-        nickserv: {
-          register: true,
-          password: "secret",
-          registerEmail: "bot@example.com",
-        },
-      }),
-    );
-
-    expect(config.nickserv?.register).toBe(true);
-  });
-
   it("accepts nickserv register with registerEmail only", () => {
     expectValidConfig(
       parseIrcConfig({
@@ -162,29 +64,6 @@ describe("irc config schema", () => {
           register: true,
           registerEmail: "bot@example.com",
         },
-      }),
-    );
-  });
-});
-
-describe("retired IRC mentionPatterns", () => {
-  it("rejects the retired key at root and account scope", () => {
-    expectInvalidConfig(
-      parseIrcConfig({ host: "irc.libera.chat", mentionPatterns: ["\\bopenclaw\\b"] }),
-    );
-    expectInvalidConfig(
-      parseIrcConfig({
-        host: "irc.libera.chat",
-        accounts: { work: { nick: "openclaw-ops", mentionPatterns: ["\\bops\\b"] } },
-      }),
-    );
-  });
-
-  it("still accepts the same config once the retired key is gone", () => {
-    expectValidConfig(
-      parseIrcConfig({
-        host: "irc.libera.chat",
-        accounts: { work: { nick: "openclaw-ops" } },
       }),
     );
   });

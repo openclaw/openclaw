@@ -3,182 +3,24 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { fromMarkdown, type Extension, type Handle } from "mdast-util-from-markdown";
 import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
 import { gfmTable } from "micromark-extension-gfm-table";
+export {
+  parseReasoningTagAt,
+  parseReasoningTagName,
+  reduceReasoningText,
+  scanReasoningTags,
+  findNextLineEnding,
+  isInsideCode,
+} from "./reasoning-tag-syntax.js";
+export type { ReasoningTagTextDelta, ReductionState } from "./reasoning-tag-syntax.js";
 
-export type ReasoningTagTextDelta =
-  | { kind: "text"; text: string }
-  | { kind: "thinking"; text: string };
-
-export const REASONING_TAG_NAMES = [
-  "think",
-  "thinking",
-  "thought",
-  "reasoning",
-  "internal",
-  "antthinking",
-  "antml:think",
-  "antml:thinking",
-  "antml:thought",
-  "antml:reasoning",
-  "mm:think",
-  "mm:thinking",
-  "mm:thought",
-  "mm:reasoning",
-] as const;
-export const REASONING_TAG_NAME_SET = new Set<string>(REASONING_TAG_NAMES);
 const DISABLE_HTML_MARKDOWN = {
   disable: { null: ["htmlFlow", "htmlText"] },
 };
 
-type ReasoningTagMatch = {
-  index: number;
-  text: string;
-  isClose: boolean;
-  isSelfClosing: boolean;
-  isPrivate: boolean;
-};
-
-type ReasoningTagScan = {
-  tags: ReasoningTagMatch[];
-  pendingStart?: number;
-};
-
-/** Scans quote-aware provider reasoning tags with iterative malformed recovery. */
-export function scanReasoningTags(text: string, final = true): ReasoningTagScan {
-  const tags: ReasoningTagMatch[] = [];
-  let cursor = 0;
-  while (cursor < text.length) {
-    const start = text.indexOf("<", cursor);
-    if (start === -1) {
-      break;
-    }
-    const parsed = parseReasoningTagAt(text, start, final);
-    if (parsed.kind === "tag") {
-      tags.push(parsed.tag);
-      cursor = parsed.tag.index + parsed.tag.text.length;
-      continue;
-    }
-    if (parsed.kind === "pending") {
-      return { tags, pendingStart: start };
-    }
-    cursor = parsed.next;
-  }
-  return { tags };
-}
-
-type ParsedReasoningTag =
-  | { kind: "tag"; tag: ReasoningTagMatch }
-  | { kind: "pending" }
-  | { kind: "invalid"; next: number };
-
-export function parseReasoningTagAt(
-  text: string,
-  start: number,
-  final: boolean,
-): ParsedReasoningTag {
-  let cursor = skipTagWhitespace(text, start + 1);
-  let isClose = false;
-  if (text.charAt(cursor) === "/") {
-    isClose = true;
-    cursor = skipTagWhitespace(text, cursor + 1);
-  }
-
-  const nameStart = cursor;
-  while (cursor < text.length && isTagNameCharacter(text.charCodeAt(cursor))) {
-    cursor += 1;
-  }
-  const partialName = text.slice(nameStart, cursor).toLowerCase();
-  if (!partialName) {
-    return cursor === text.length && !final ? { kind: "pending" } : invalidTag(text, start);
-  }
-  if (!REASONING_TAG_NAME_SET.has(partialName)) {
-    const canBecomeKnown = REASONING_TAG_NAMES.some((name) => name.startsWith(partialName));
-    return cursor === text.length && !final && canBecomeKnown
-      ? { kind: "pending" }
-      : invalidTag(text, start);
-  }
-  if (cursor === text.length) {
-    return final ? invalidTag(text, start) : { kind: "pending" };
-  }
-  const boundary = text.charAt(cursor);
-  if (!isTagWhitespace(boundary) && boundary !== "/" && boundary !== ">") {
-    return invalidTag(text, start);
-  }
-
-  let quote: '"' | "'" | undefined;
-  let lastSignificant = "";
-  for (; cursor < text.length; cursor += 1) {
-    const char = text.charAt(cursor);
-    if (quote) {
-      if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (char === "<") {
-      return invalidTag(text, start);
-    }
-    if (char === ">") {
-      const end = cursor + 1;
-      return {
-        kind: "tag",
-        tag: {
-          index: start,
-          text: text.slice(start, end),
-          isClose,
-          isSelfClosing: !isClose && lastSignificant === "/",
-          isPrivate: partialName === "internal",
-        },
-      };
-    }
-    if (!isTagWhitespace(char)) {
-      lastSignificant = char;
-    }
-  }
-  return final ? invalidTag(text, start) : { kind: "pending" };
-}
-
-function invalidTag(text: string, start: number): ParsedReasoningTag {
-  const nested = text.indexOf("<", start + 1);
-  return { kind: "invalid", next: nested === -1 ? text.length : nested };
-}
-
-export function skipTagWhitespace(text: string, start: number): number {
-  let cursor = start;
-  while (cursor < text.length && isTagWhitespace(text.charAt(cursor))) {
-    cursor += 1;
-  }
-  return cursor;
-}
-
-export function isTagWhitespace(char: string): boolean {
-  return /\s/u.test(char);
-}
-
-export function isTagNameCharacter(code: number): boolean {
-  return (
-    (code >= 0x30 && code <= 0x39) ||
-    (code >= 0x41 && code <= 0x5a) ||
-    (code >= 0x61 && code <= 0x7a) ||
-    code === 0x3a
-  );
-}
-
-export function findNextLineEnding(text: string, start: number): number {
-  const carriageReturn = text.indexOf("\r", start);
-  const lineFeed = text.indexOf("\n", start);
-  if (carriageReturn === -1) {
-    return lineFeed;
-  }
-  return lineFeed === -1 ? carriageReturn : Math.min(carriageReturn, lineFeed);
-}
-
 type PositionedNode = {
   type?: string;
   value?: string;
+  identifier?: string;
   position?: {
     start?: { offset?: number; line?: number };
     end?: { offset?: number; line?: number };
@@ -222,6 +64,21 @@ type MarkdownOwnershipOptions = {
   syntax?: "commonmark" | "gfm";
 };
 
+function appendMarkdownSource(
+  source: Pick<MarkdownInlineSource, "value" | "offsets">,
+  start: number,
+  token: Parameters<Handle>[0],
+  value: string,
+): void {
+  // A tab partly consumed by a container contributes virtual spaces to its first source unit.
+  const extra = value.length - (token.end.offset - token.start.offset);
+  for (let cursor = start + source.offsets.length; cursor < token.end.offset; cursor += 1) {
+    const consumed = cursor - token.start.offset;
+    source.offsets.push(source.value.length + (consumed > 0 ? consumed + extra : 0));
+  }
+  source.value += value;
+}
+
 function captureInlineSources(text: string, sources: Map<number, MarkdownInlineSource>): Extension {
   const observe: Handle = function (token) {
     const start = this.stack.findLast((entry) => entry.type === "inlineCode")?.position?.start
@@ -263,14 +120,7 @@ function captureInlineSources(text: string, sources: Map<number, MarkdownInlineS
       };
       sources.set(start, source);
     }
-    const value = this.sliceSerialize(token);
-    // A tab partly consumed by a container can contribute virtual spaces to the first source unit.
-    const extra = value.length - (token.end.offset - token.start.offset);
-    for (let cursor = start + source.offsets.length; cursor < token.end.offset; cursor += 1) {
-      const consumed = cursor - token.start.offset;
-      source.offsets.push(source.value.length + (consumed > 0 ? consumed + extra : 0));
-    }
-    source.value += value;
+    appendMarkdownSource(source, start, token, this.sliceSerialize(token));
   };
   return {
     enter: {
@@ -312,13 +162,7 @@ function captureIndentedSources(
       };
       sources.set(start, source);
     }
-    const value = this.sliceSerialize(token);
-    const extra = value.length - (token.end.offset - token.start.offset);
-    for (let cursor = start + source.offsets.length; cursor < token.end.offset; cursor += 1) {
-      const consumed = cursor - token.start.offset;
-      source.offsets.push(source.value.length + (consumed > 0 ? consumed + extra : 0));
-    }
-    source.value += value;
+    appendMarkdownSource(source, start, token, this.sliceSerialize(token));
   };
   return {
     enter: {
@@ -344,6 +188,8 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       textSpans: [],
       retainStart: 0,
       completedParagraphs: [],
+      definitions: [],
+      unsettledDefinitionStarts: [],
       ...(paragraphs ? { paragraphs } : {}),
     };
   }
@@ -368,13 +214,17 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
   const completedParagraphs: MarkdownCompletedParagraph[] = [];
   const regions: MarkdownCodeRegion[] = [];
   const textSpans: Array<[number, number]> = [];
+  const definitions: Array<{ identifier: string; start: number; end: number }> = [];
+  let unresolvedImageCodeStart: number | undefined;
   const blocks = tree.children ?? [];
+  let retainStart = findListItemRetentionStart(text, blocks);
   for (let index = 0; index < blocks.length; index += 1) {
     const block = expectDefined(blocks[index], "Markdown block");
     const next = blocks[index + 1]?.position?.start;
     const blockStart = block.position?.start?.offset;
     const endLine = block.position?.end?.line;
     const blockEnd = block.position?.end?.offset;
+    retainStart = retainTableParagraph(retainStart, text.length, block, blocks[index - 1]);
     if (
       paragraphs &&
       block.type === "paragraph" &&
@@ -402,13 +252,28 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       completedParagraphs.push(paragraph);
     }
     const pending: PositionedNode[] = [block];
+    const regionStart = regions.length;
+    let hasReferenceCandidate = false;
+    let hasInlineCode = false;
     while (pending.length > 0) {
       const node = expectDefined(pending.pop(), "Markdown ownership node");
-      if (paragraph && node.type === "text" && node.value?.includes("[")) {
-        paragraph.hasReferenceCandidate = true;
+      if (node.type === "text" && node.value?.includes("[")) {
+        hasReferenceCandidate = true;
+        if (paragraph) {
+          paragraph.hasReferenceCandidate = true;
+        }
       }
+      hasInlineCode ||= node.type === "inlineCode";
       const start = node.position?.start?.offset;
       const end = node.position?.end?.offset;
+      if (
+        node.type === "definition" &&
+        node.identifier !== undefined &&
+        start !== undefined &&
+        end !== undefined
+      ) {
+        definitions.push({ identifier: node.identifier, start, end });
+      }
       if (
         options?.includeText &&
         node.type === "text" &&
@@ -450,14 +315,31 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
         pending.push(child);
       }
     }
+    // A later image reference definition can turn inline code into unprotected alt text.
+    if (
+      hasReferenceCandidate &&
+      hasInlineCode &&
+      blockStart !== undefined &&
+      blockEnd !== undefined &&
+      hasUnresolvedImageCode(text, blockStart, blockEnd, regions, regionStart)
+    ) {
+      unresolvedImageCodeStart = blockStart;
+      retainStart = Math.min(retainStart, blockStart);
+    }
   }
+  const { unsettledDefinitionStarts, retainStart: referenceStart } =
+    findReferenceDefinitionRetention(text, definitions);
+  retainStart = findListItemRetentionStart(text, blocks, Math.min(retainStart, referenceStart));
   regions.sort((left, right) => left.start - right.start);
   return {
     regions,
     codeSpans: regions.map(({ start, end }): [number, number] => [start, end]),
     textSpans,
-    retainStart: tree.children?.at(-1)?.position?.start?.offset ?? text.length,
+    retainStart,
+    ...(unresolvedImageCodeStart === undefined ? {} : { unresolvedImageCodeStart }),
     completedParagraphs,
+    definitions,
+    unsettledDefinitionStarts,
     ...(paragraphs ? { paragraphs } : {}),
   };
 }
@@ -470,236 +352,224 @@ export function findMarkdownCodeRegions(
   return /[`~\t]| {4}/u.test(text) ? parseMarkdownOwnership(text, options).regions : [];
 }
 
-/** Returns parser-owned CommonMark/GFM code ranges, including their delimiters. */
-export function findMarkdownCodeSpans(text: string): Array<[number, number]> {
-  // CommonMark code needs a literal delimiter or indentation, even inside containers.
-  if (!/[`~\t]| {4}/u.test(text)) {
-    return [];
-  }
-  return parseMarkdownOwnership(text).codeSpans;
-}
-
-export function isInsideCode(index: number, spans: Array<[number, number]>): boolean {
-  let low = 0;
-  let high = spans.length - 1;
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2);
-    const span = spans[middle];
-    if (!span) {
-      return false;
-    }
-    if (index < span[0]) {
-      high = middle - 1;
-    } else if (index >= span[1]) {
-      low = middle + 1;
-    } else {
+function hasUnresolvedImageCode(
+  text: string,
+  start: number,
+  end: number,
+  regions: readonly { start: number; end: number; block: boolean }[],
+  regionStart: number,
+): boolean {
+  let regionIndex = regionStart;
+  const brackets: Array<{ image: boolean; code: boolean }> = [];
+  for (let cursor = start; cursor < end; cursor += 1) {
+    const region = regions[regionIndex];
+    if (region?.start === cursor) {
+      if (!region.block) {
+        for (const bracket of brackets) {
+          bracket.code ||= bracket.image;
+        }
+      }
+      cursor = region.end - 1;
+      regionIndex += 1;
+    } else if (text[cursor] === "\\") {
+      cursor += 1;
+    } else if (text[cursor] === "!" && text[cursor + 1] === "[") {
+      brackets.push({ image: true, code: false });
+      cursor += 1;
+    } else if (text[cursor] === "[") {
+      brackets.push({ image: false, code: false });
+    } else if (text[cursor] === "]" && brackets.pop()?.code) {
       return true;
     }
   }
-  return false;
+  return brackets.some((bracket) => bracket.image && bracket.code);
 }
 
-type RecoveryMode = "hide" | "visible" | "static-strict" | "static-preserve";
-
-export type ReductionState = {
-  depth: number;
-  visibleEver: boolean;
-  pending?: {
-    content: string;
-    containsPrivate: boolean;
-    openTag: string;
-    protectedClose: boolean;
-    visibleBefore: boolean;
-  };
-};
-
-type ReductionOptions = {
-  final: boolean;
-  mode: RecoveryMode;
-  scope: "all" | "leading";
-  start?: number;
-};
-
-export function reduceReasoningText(
+/** Retain the current item, including any container framing an earlier reference needs. */
+function findListItemRetentionStart(
   text: string,
-  codeSpans: Array<[number, number]>,
-  state: ReductionState,
-  options: ReductionOptions,
-): ReasoningTagTextDelta[] {
-  const output: ReasoningTagTextDelta[] = [];
-  const emit = (kind: ReasoningTagTextDelta["kind"], value: string) => {
-    if (!value) {
-      return;
-    }
-    const previous = output.at(-1);
-    if (previous?.kind === kind) {
-      previous.text += value;
-    } else {
-      output.push({ kind, text: value });
-    }
-    if (kind === "text" && value.trim()) {
-      state.visibleEver = true;
-    }
-  };
-  const append = (value: string) => {
-    if (!value) {
-      return;
-    }
-    if (state.depth > 0 && state.pending) {
-      state.pending.content += value;
-      state.pending.protectedClose ||= scanReasoningTags(value).tags.some((tag) => tag.isClose);
-    } else {
-      emit("text", value);
-    }
-  };
+  blocks: readonly PositionedNode[],
+  retainStart?: number,
+): number {
+  const offset = retainStart ?? blocks.at(-1)?.position?.start?.offset ?? text.length;
+  const block = blocks.findLast((entry) => (entry.position?.start?.offset ?? Infinity) <= offset);
+  if (block?.type !== "list") {
+    return offset;
+  }
+  // A partial marker can still become continuation text; keep it with its predecessor.
+  const completeLineEnd = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r"));
+  return (
+    block.children?.findLast((item) => {
+      const start = item.position?.start?.offset;
+      return (
+        start !== undefined && start <= (retainStart ?? text.length) && start < completeLineEnd
+      );
+    })?.position?.start?.offset ?? offset
+  );
+}
 
-  const start = options.start ?? 0;
-  const scan = scanReasoningTags(text.slice(start), options.final);
-  const tags: ReasoningTagMatch[] = [];
-  for (const scannedTag of scan.tags) {
-    const tag = {
-      index: scannedTag.index + start,
-      isClose: scannedTag.isClose,
-      isSelfClosing: scannedTag.isSelfClosing,
-      isPrivate: scannedTag.isPrivate,
-      text: scannedTag.text,
-    };
-    if (!isInsideCode(tag.index, codeSpans)) {
-      tags.push(tag);
-    }
-  }
-  const mustParseRemainder: boolean[] = [];
-  if (options.scope === "leading") {
-    let mustParse = false;
-    for (let index = tags.length - 1; index >= 0; index -= 1) {
-      mustParse ||= tags[index]?.isPrivate === true;
-      mustParseRemainder[index] = mustParse;
-      mustParse ||= tags[index]?.isClose === true;
-    }
-  }
+function findReferenceDefinitionRetention(
+  text: string,
+  definitions: readonly { identifier: string; start: number; end: number }[],
+) {
+  const unsettledDefinitionStarts = definitions
+    .filter((definition) => canStillHaveReferenceTitle(text, definition.end))
+    .map(({ start }) => start);
+  // Expanded labels cannot be serialized as carried CommonMark definitions (999 source
+  // characters maximum); keep their original source just like unfinished titles.
+  const retainStart = definitions.reduce(
+    (offset, { identifier, start }) => (identifier.length > 999 ? Math.min(offset, start) : offset),
+    Math.min(text.length, ...unsettledDefinitionStarts),
+  );
+  return { unsettledDefinitionStarts, retainStart };
+}
+
+function canStillHaveReferenceTitle(text: string, start: number): boolean {
   let cursor = start;
-
-  for (let tagIndex = 0; tagIndex < tags.length; tagIndex += 1) {
-    const tag = tags[tagIndex];
-    if (!tag) {
-      continue;
-    }
-    const beforeTag = text.slice(cursor, tag.index);
-    append(beforeTag);
-    const tagEnd = tag.index + tag.text.length;
-
-    if (tag.isSelfClosing) {
-      if (state.depth === 0 && options.scope === "leading" && state.visibleEver) {
-        emit("text", text.slice(tag.index));
-        cursor = text.length;
-        break;
-      }
-      cursor = tagEnd;
-      continue;
-    }
-
-    if (!tag.isClose) {
-      if (
-        state.depth === 0 &&
-        options.scope === "leading" &&
-        state.visibleEver &&
-        !mustParseRemainder[tagIndex]
-      ) {
-        emit("text", text.slice(tag.index));
-        cursor = text.length;
-        break;
-      }
-      if (state.depth === 0) {
-        state.pending = {
-          content: "",
-          containsPrivate: tag.isPrivate,
-          openTag: tag.text,
-          protectedClose: false,
-          visibleBefore: state.visibleEver,
-        };
-      } else if (state.pending) {
-        // A nested private block makes the enclosing reasoning non-emitting.
-        state.pending.containsPrivate ||= tag.isPrivate;
-      }
-      state.depth += 1;
-      cursor = tagEnd;
-      continue;
-    }
-
-    if (state.depth > 0) {
-      state.depth -= 1;
-      if (state.depth === 0 && state.pending) {
-        if (!state.pending.containsPrivate) {
-          emit("thinking", state.pending.content);
-        }
-        state.pending = undefined;
-      } else if (state.pending) {
-        state.pending.protectedClose = true;
-      }
-      cursor = tagEnd;
-      continue;
-    }
-
-    if (options.mode === "visible") {
-      append(tag.text);
-    } else {
-      const after = text.slice(tagEnd);
-      if (beforeTag.trim() && after.trim()) {
-        const thinking = output.filter((delta) => delta.kind === "thinking");
-        output.splice(0, output.length, ...thinking);
-        state.visibleEver = false;
-      }
-    }
-    cursor = tagEnd;
+  while (text[cursor] === " " || text[cursor] === "\t") {
+    cursor += 1;
+  }
+  if (cursor === text.length) {
+    return true;
   }
 
-  append(text.slice(cursor));
-  if (options.final && state.depth > 0 && state.pending) {
-    const pending = state.pending;
-    if (!pending.containsPrivate) {
-      const recoverAsText =
-        options.mode === "static-preserve" ||
-        (options.mode === "static-strict" && !pending.visibleBefore && !pending.protectedClose) ||
-        (options.mode === "visible" && !pending.protectedClose);
-      if (recoverAsText) {
-        const value =
-          options.mode === "visible" && pending.visibleBefore
-            ? pending.openTag + pending.content
-            : pending.content;
-        emit("text", value);
-      } else {
-        emit("thinking", pending.content);
-      }
+  const lineEndingWidth = getLineEndingWidth(text, cursor);
+  if (lineEndingWidth > 0) {
+    cursor += lineEndingWidth;
+    if (cursor === text.length) {
+      return true;
     }
-    state.depth = 0;
-    state.pending = undefined;
   }
-  return output;
+
+  const titleStart = findPossibleTitleStart(text, cursor);
+  if (titleStart === undefined) {
+    return false;
+  }
+  return hasUnclosedTitle(text, titleStart);
 }
 
-type ReasoningTagStripOptions = {
-  mode: "strict" | "preserve";
-  scope: "all" | "leading";
-  recoverUnclosed?: boolean;
-};
+function findPossibleTitleStart(text: string, start: number): number | undefined {
+  let cursor = skipContainerPrefixes(text, start);
 
-/** Strips reasoning tags using the same reducer as streamed partitioning. */
-export function stripReasoningTagsFromMarkdown(
-  text: string,
-  options: ReasoningTagStripOptions,
-): string {
-  const state: ReductionState = { depth: 0, visibleEver: false };
-  return reduceReasoningText(text, findMarkdownCodeSpans(text), state, {
-    final: true,
-    mode:
-      options.recoverUnclosed === false
-        ? "hide"
-        : options.mode === "preserve"
-          ? "static-preserve"
-          : "static-strict",
-    scope: options.scope,
-  })
-    .filter((delta) => delta.kind === "text")
-    .map((delta) => delta.text)
-    .join("");
+  while (text[cursor] === " " || text[cursor] === "\t") {
+    cursor += 1;
+  }
+  if (cursor === text.length) {
+    return cursor;
+  }
+  const opening = text[cursor];
+  return opening === '"' || opening === "'" || opening === "(" ? cursor : undefined;
+}
+
+function skipContainerPrefixes(text: string, start: number) {
+  let cursor = start;
+  while (cursor < text.length) {
+    let markerStart = cursor;
+    while (text[markerStart] === " " || text[markerStart] === "\t") {
+      markerStart += 1;
+    }
+
+    if (text[markerStart] === ">") {
+      cursor = markerStart + 1;
+      if (text[cursor] === " " || text[cursor] === "\t") {
+        cursor += 1;
+      }
+      continue;
+    }
+
+    const markerEnd = listMarkerEnd(text, markerStart);
+    if (markerEnd > markerStart) {
+      cursor = markerEnd;
+      while (text[cursor] === " " || text[cursor] === "\t") {
+        cursor += 1;
+      }
+      continue;
+    }
+    break;
+  }
+  return cursor;
+}
+
+function listMarkerEnd(text: string, start: number) {
+  const first = text[start] ?? "";
+  let markerEnd = start;
+  if (first === "-" || first === "+" || first === "*") {
+    markerEnd += 1;
+  } else if (first >= "0" && first <= "9") {
+    while ((text[markerEnd] ?? "") >= "0" && (text[markerEnd] ?? "") <= "9") {
+      markerEnd += 1;
+    }
+    const delimiter = text[markerEnd] ?? "";
+    if (markerEnd - start > 9 || (delimiter !== "." && delimiter !== ")")) {
+      return start;
+    }
+    markerEnd += 1;
+  } else {
+    return start;
+  }
+  const trailingSpace = text[markerEnd];
+  return trailingSpace === " " || trailingSpace === "\t" ? markerEnd : start;
+}
+
+function hasUnclosedTitle(text: string, start: number): boolean {
+  if (start === text.length) {
+    return true;
+  }
+  const opening = text[start];
+  if (opening !== '"' && opening !== "'" && opening !== "(") {
+    return false;
+  }
+  const closing = opening === "(" ? ")" : opening;
+  let escaped = false;
+  for (let cursor = start + 1; cursor < text.length; cursor += 1) {
+    const character = text[cursor];
+    if (escaped) {
+      escaped = false;
+    } else if (character === "\\") {
+      escaped = true;
+    } else if (character === closing) {
+      return false;
+    }
+
+    const lineEndingWidth = getLineEndingWidth(text, cursor);
+    if (lineEndingWidth > 0) {
+      let nextLine = cursor + lineEndingWidth;
+      while (text[nextLine] === " " || text[nextLine] === "\t") {
+        nextLine += 1;
+      }
+      if (getLineEndingWidth(text, nextLine) > 0) {
+        return false;
+      }
+      cursor += lineEndingWidth - 1;
+    }
+  }
+  return true;
+}
+
+function getLineEndingWidth(text: string, index: number): number {
+  if (text[index] === "\n") {
+    return 1;
+  }
+  if (text[index] !== "\r") {
+    return 0;
+  }
+  return text[index + 1] === "\n" ? 2 : 1;
+}
+
+/** An unfinished table delimiter can still rejoin its preceding paragraph. */
+function retainTableParagraph(
+  retainStart: number,
+  textLength: number,
+  block: PositionedNode,
+  previous: PositionedNode | undefined,
+): number {
+  const startLine = block.position?.start?.line;
+  return block.type === "table" &&
+    block.children?.length === 1 &&
+    block.position?.end?.offset === textLength &&
+    previous?.type === "paragraph" &&
+    startLine !== undefined &&
+    previous.position?.end?.line === startLine - 1
+    ? Math.min(retainStart, previous.position?.start?.offset ?? retainStart)
+    : retainStart;
 }

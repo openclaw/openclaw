@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 
@@ -9,7 +9,9 @@ export type ClawInstallSchemaVersionRow = {
   agentConfigDigest: string;
 };
 
-export function readClawInstallSchemaVersionRows(db: DatabaseSync): ClawInstallSchemaVersionRow[] {
+export function readClawInstallSchemaVersionRows(
+  db: EngineConnection,
+): ClawInstallSchemaVersionRow[] {
   if (!tableExists(db, "claw_installs")) {
     return [];
   }

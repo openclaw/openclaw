@@ -13,6 +13,7 @@ vi.mock("../agents/tools/gateway.js", async (original) => ({
 }));
 afterEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
 });
 
 it("carries the private argv owner and exact logical key into the real automations tool", async () => {
@@ -21,7 +22,8 @@ it("carries the private argv owner and exact logical key into the real automatio
     agentId: "work",
     sessionKey: "global",
   });
-  const [tool] = resolveOpenClawToolsForMcp({ agentId, agentSessionKey: "global" });
+  vi.stubEnv("OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", "global");
+  const [tool] = await resolveOpenClawToolsForMcp({ agentId });
   callGatewayTool.mockImplementationOnce(async () => {
     expect(getGatewayToolCallerIdentity()).toMatchObject({
       agentId: "work",
@@ -31,9 +33,10 @@ it("carries the private argv owner and exact logical key into the real automatio
   });
   await tool!.execute("owner-proof", { action: "status" });
   expect(callGatewayTool).toHaveBeenCalledOnce();
-  expect(() =>
-    resolveOpenClawToolsForMcp({ agentId: "main", agentSessionKey: "agent:work:main" }),
-  ).toThrow("matching explicit");
+  vi.stubEnv("OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", "agent:work:main");
+  await expect(resolveOpenClawToolsForMcp({ agentId: "main" })).rejects.toThrow(
+    "matching explicit",
+  );
 });
 
 it("rejects missing or duplicate private argv owners", () => {

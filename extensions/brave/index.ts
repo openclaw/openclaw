@@ -5,7 +5,6 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createBraveWebSearchProvider } from "./src/brave-web-search-provider.js";
 
-/** Plugin entry for Brave Search. */
 export default definePluginEntry({
   id: "brave",
   name: "Brave Plugin",

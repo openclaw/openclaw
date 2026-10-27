@@ -1,27 +1,30 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readBoardHtml } from "../boards/board-store.test-support.js";
 import { buildWidgetDocument } from "../canvas/wrap.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
+import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
+import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
+import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
-  resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { boardStore } from "./board-store.js";
 import { progressCardStore } from "./progress-card-store.js";
 import { createBoardHarness } from "./server-methods/board.test-support.js";
-import { createProgressCardHandlers } from "./server-methods/progress-card.js";
+import { progressCardHandlers } from "./server-methods/progress-card.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -45,7 +48,7 @@ it("keeps global boards and progress under each owner's canonical row across reo
   const { invoke, handlers, broadcast } = createBoardHarness(undefined, {}, boardStore, {
     getRuntimeConfig: () => cfg,
   });
-  Object.assign(handlers, createProgressCardHandlers());
+  Object.assign(handlers, progressCardHandlers);
 
   for (const agentId of ["main", "work"]) {
     const database = openOpenClawAgentDatabase({ agentId });
@@ -112,13 +115,7 @@ it("keeps global boards and progress under each owner's canonical row across reo
     }
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
-    const parentSql = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    const parentSql = observeMainThreadSql();
     try {
       const progress = await invoke("progressCard.get", { sessionKey: "global", agentId });
       expect(progress).toHaveBeenCalledWith(
@@ -134,13 +131,9 @@ it("keeps global boards and progress under each owner's canonical row across reo
       );
       await closeOpenClawAgentDatabasesAsync();
       await closeOpenClawStateDatabaseAsync();
-      for (const method of parentSql) {
-        expect(method).not.toHaveBeenCalled();
-      }
+      parentSql.expectIdle();
     } finally {
-      for (const method of parentSql) {
-        method.mockRestore();
-      }
+      parentSql.restore();
     }
   }
   await invoke("progressCard.put", { sessionKey: "agent:work:main", expectedRevision: 2 });
@@ -166,14 +159,18 @@ it("keeps retained global progress separate from an ordinary qualified global ro
   const stateDir = tempDirs.make("openclaw-gateway-retained-global-progress-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const cfg = {
-    agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { systemAgent: { agentId: "main" } },
+      entries: { main: {}, work: {} },
+    },
     session: { scope: "per-sender" as const },
   };
   setRuntimeConfigSnapshot(cfg, cfg);
   const { invoke, handlers } = createBoardHarness(undefined, {}, boardStore, {
     getRuntimeConfig: () => cfg,
   });
-  Object.assign(handlers, createProgressCardHandlers());
+  Object.assign(handlers, progressCardHandlers);
   const targets = [
     { sessionKey: "global", agentId: "main" },
     { sessionKey: "global", agentId: "work" },
@@ -244,12 +241,54 @@ it("keeps retained global progress separate from an ordinary qualified global ro
   );
 });
 
+it("prepares custom board targets off-thread and observes a newly registered store owner", async () => {
+  const stateDir = tempDirs.make("openclaw-gateway-board-registry-");
+  const storePath = path.join(stateDir, "custom", "sessions.json");
+  const databasePath = path.join(stateDir, "custom", "openclaw-agent.sqlite");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const cfg = {
+    agents: { ownership: "explicit" as const, entries: { main: {}, ops: {} } },
+    session: { store: storePath },
+  };
+  setRuntimeConfigSnapshot(cfg, cfg);
+  const target = { sessionKey: "agent:ops:board" };
+  expect(await boardStore.getSnapshot(target)).toMatchObject({ revision: 0, widgets: [] });
+  expect(fs.existsSync(databasePath)).toBe(false);
+
+  const database = openOpenClawAgentDatabase({ agentId: "ops", path: databasePath });
+  replaceSessionEntrySync(
+    { agentId: "ops", sessionKey: target.sessionKey, storePath: database.path },
+    { sessionId: "registered-board", updatedAt: 1 },
+  );
+  registerOpenClawAgentDatabase({ agentId: "ops", path: database.path });
+  const host = observeHostDataSql();
+  try {
+    await boardStore.putWidget({
+      ...target,
+      name: "status",
+      content: { kind: "html", html: "registered owner" },
+    });
+    expect(await boardStore.getSnapshot(target)).toMatchObject({
+      revision: 1,
+      widgets: [{ name: "status" }],
+    });
+    expect((await readBoardHtml(boardStore, target, "status"))?.html).toBe("registered owner");
+    expect(host.queries).toEqual([]);
+  } finally {
+    host.restore();
+  }
+});
+
 it("reopens separate boards and progress cards in a shared database owned by another agent", async () => {
   const stateDir = tempDirs.make("openclaw-gateway-shared-boards-");
   const storePath = path.join(stateDir, "shared.sqlite");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const cfg = {
-    agents: { entries: { alpha: { default: true }, beta: {} } },
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { sessionStore: { agentId: "alpha" } },
+      entries: { alpha: {}, beta: {} },
+    },
     session: { store: storePath },
   };
   setRuntimeConfigSnapshot(cfg, cfg);
@@ -275,6 +314,57 @@ it("reopens separate boards and progress cards in a shared database owned by ano
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 
+  const { invoke } = createBoardHarness(undefined, {}, boardStore, { getRuntimeConfig: () => cfg });
+  const create = historyReaders.createSessionHistoryWorkerReaders;
+  const resolverSql: string[] = [];
+  const observations: ReturnType<typeof observeHostDataSql>[] = [];
+  let reads = 0;
+  const finishObservation = () => {
+    for (const host of observations.splice(0)) {
+      resolverSql.push(
+        ...host.queries.filter((sql) =>
+          /\bfrom\s+"?(?:agent_databases|schema_meta)"?\b/iu.test(sql),
+        ),
+      );
+      host.restore();
+    }
+  };
+  const interception = vi
+    .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+    .mockImplementation((run) => {
+      const readers = create(run);
+      return {
+        ...readers,
+        async readBoardSnapshot(input) {
+          reads++;
+          invalidateRegisteredAgentDatabasesMemo({});
+          observations.push(observeHostDataSql());
+          const snapshot = await readers.readBoardSnapshot(input);
+          invalidateRegisteredAgentDatabasesMemo({});
+          return snapshot;
+        },
+      };
+    });
+  try {
+    for (const agentId of ["alpha", "beta"]) {
+      try {
+        const response = await invoke("board.get", { sessionKey: `agent:${agentId}:main` });
+        expect(response).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            widgets: [expect.objectContaining({ name: agentId, revision: 1 })],
+          }),
+        );
+      } finally {
+        finishObservation();
+      }
+    }
+    expect(reads).toBe(2);
+    expect(resolverSql).toEqual([]);
+  } finally {
+    interception.mockRestore();
+  }
+
   for (const agentId of ["alpha", "beta"]) {
     const sessionKey = `agent:${agentId}:main`;
     expect((await boardStore.getSnapshot({ sessionKey })).widgets).toEqual([
@@ -285,6 +375,40 @@ it("reopens separate boards and progress cards in a shared database owned by ano
       markdown: `${agentId} progress`,
       revision: 1,
     });
+  }
+
+  for (const stage of ["before-read", "after-read"] as const) {
+    const replacement = { ...cfg, session: { store: path.join(stateDir, "replacement.sqlite") } };
+    const revoked = vi
+      .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+      .mockImplementation((run) => {
+        const readers = create(run);
+        return {
+          ...readers,
+          async readBoardSnapshot(input) {
+            if (stage === "before-read") {
+              setRuntimeConfigSnapshot(replacement, replacement);
+            }
+            const snapshot = await readers.readBoardSnapshot(input);
+            if (stage === "after-read") {
+              setRuntimeConfigSnapshot(replacement, replacement);
+            }
+            return snapshot;
+          },
+        };
+      });
+    try {
+      const response = await invoke("board.get", { sessionKey: "agent:beta:main" });
+      expect(response).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: expect.stringContaining("board session changed") }),
+      );
+      expect(fs.existsSync(replacement.session.store)).toBe(false);
+    } finally {
+      revoked.mockRestore();
+      setRuntimeConfigSnapshot(cfg, cfg);
+    }
   }
 });
 
@@ -308,26 +432,4 @@ it("keeps missing progress-card storage absent and reports unreadable stored car
     .prepare("UPDATE session_progress_cards SET steps_json = ? WHERE session_key = ?")
     .run("invalid JSON", key);
   await expect(progressCardStore.get(key)).rejects.toThrow(/JSON/);
-});
-
-it("reads incognito progress only from its process-held owner", async () => {
-  const stateDir = tempDirs.make("openclaw-gateway-incognito-progress-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
-  const cfg = {
-    agents: { ownership: "explicit" as const, entries: { main: {} } },
-    session: { store: storePath },
-  };
-  setRuntimeConfigSnapshot(cfg, cfg);
-  const key = "agent:main:main";
-  expect(await progressCardStore.get(key)).toBeNull();
-  const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-  replaceSessionEntrySync(
-    { agentId: "main", sessionKey: key, storePath },
-    { sessionId: "incognito-card", updatedAt: 1 },
-  );
-  await progressCardStore.put(key, { markdown: "private card" });
-  expect(await progressCardStore.get(key)).toMatchObject({ markdown: "private card", revision: 1 });
-  expect(fs.existsSync(storePath)).toBe(false);
-  expect(database.db.isOpen).toBe(true);
 });

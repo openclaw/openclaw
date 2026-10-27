@@ -1,12 +1,42 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { AsyncWorkScope, captureAsyncWorkTracker, getAsyncWorkSignal } from "./async-work-scope.js";
-import { createDeferredCore } from "./deferred.js";
+import { createDeferredCore, type Deferred } from "./deferred.js";
 
 type AsyncWorkResources = {
   release: () => void | Promise<void>;
   /** Preserve synchronous operation settlement unless admitted work still owns it. */
   releaseBeforeResultWhenIdle?: true;
 };
+
+// The retained release callback must not capture the foreground producer or result.
+function createContextualCancellationRelay(signal: AbortSignal) {
+  const controller = new AbortController();
+  const context = AsyncLocalStorage.snapshot();
+  const abort = () => context(() => controller.abort(signal.reason));
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) {
+    abort();
+  }
+  return {
+    signal: controller.signal,
+    release: () => signal.removeEventListener("abort", abort),
+  };
+}
+
+/** Preserves cancellation context until cooperating work ends, without delaying its result. */
+export async function runWithTrackedCancellation<T>(
+  signal: AbortSignal,
+  run: (signal: AbortSignal) => T | Promise<T>,
+): Promise<T> {
+  if (!getAsyncWorkSignal()) {
+    return await run(signal);
+  }
+  return await runWithAsyncWorkResources(async (onAcquired) => {
+    const relay = createContextualCancellationRelay(signal);
+    onAcquired({ release: relay.release });
+    return run(relay.signal);
+  });
+}
 
 /** Returns the logical result while retaining resources through owned cleanup. */
 export async function runWithAsyncWorkResources<T>(
@@ -16,7 +46,10 @@ export async function runWithAsyncWorkResources<T>(
   ) => Promise<T>,
   options?: { cancelOnError: boolean },
 ): Promise<T> {
-  const result = createDeferredCore<T>();
+  // Cleanup owns resources, not the settled foreground promise or its producer.
+  let settlement: Deferred<T> | undefined = createDeferredCore<T>();
+  const result = settlement.promise;
+  let foreground: typeof run | undefined = run;
   const trackOwner = captureAsyncWorkTracker();
   const parentSignal = getAsyncWorkSignal();
   void trackOwner(async () => {
@@ -29,30 +62,35 @@ export async function runWithAsyncWorkResources<T>(
       closeFromParent();
     }
     try {
-      const value = await work.track(() =>
-        run(
+      let value: T | undefined = await work.track(() => {
+        const invoke = foreground!;
+        foreground = undefined;
+        return invoke(
           (acquired) => {
             resources = acquired;
           },
           () => {
             runInContext = AsyncLocalStorage.snapshot();
           },
-        ),
-      );
+        );
+      });
       if (resources?.releaseBeforeResultWhenIdle && !work.hasPendingWork) {
         const completedResources = resources;
         resources = undefined;
         await runInContext(() => work.drain());
         await completedResources.release();
       }
-      result.resolve(value);
+      settlement?.resolve(value);
+      settlement = undefined;
+      value = undefined;
     } catch (error) {
       // Callers abandoning work on failure must join its cleanup before retrying.
       if (options?.cancelOnError) {
         runInContext(() => work.beginClose(error));
         await runInContext(() => work.drain());
       }
-      result.reject(error);
+      settlement?.reject(error);
+      settlement = undefined;
     } finally {
       try {
         await AsyncWorkScope.runWhenAllIdle(
@@ -64,6 +102,9 @@ export async function runWithAsyncWorkResources<T>(
         await resources?.release();
       }
     }
-  }).catch(result.reject);
-  return await result.promise;
+  }).catch((error: unknown) => {
+    settlement?.reject(error);
+    settlement = undefined;
+  });
+  return await result;
 }

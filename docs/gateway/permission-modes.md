@@ -7,7 +7,7 @@ read_when:
 title: Session permission modes
 ---
 
-Session permission modes set one session's filesystem boundary and exec escalation reviewer. The boundary is the session's recorded canonical `sessionRoot`, or the selected agent's canonical workspace when no root is recorded. The mode determines what may happen inside or outside that boundary.
+Session permission modes set one session's filesystem boundary and exec escalation reviewer. The boundary is the session's recorded resolved `sessionRoot`, or the selected agent's resolved workspace when no root is recorded. The mode determines what may happen inside or outside that boundary.
 
 | Mode        | Filesystem access                                         | Exec escalation reviewer                |
 | ----------- | --------------------------------------------------------- | --------------------------------------- |
@@ -20,6 +20,8 @@ These tool-visibility and exec rules describe OpenClaw-managed tools. Native har
 
 Required workspace roots and sandbox restrictions still constrain file tools in `full` mode. Memory-flush runs expose only `read` and append-only `write`.
 
+Control UI file previews follow this filesystem boundary; opening files outside the session root also requires current permission to start a turn in that session.
+
 In `workspace` mode, an exec reviewer denial returns a reason to the agent without creating a human approval card. The agent must choose a materially safer alternative or ask the user; it must not work around the denial. Reviewer `ask` verdicts and review failures request human approval. Three consecutive gateway reviewer denials also escalate to a human. Existing command-binding checks and explicit human-approval requirements remain in force; see [Exec modes](/tools/exec#modes).
 
 Gateway approval-backed commands bind every resolved command-segment executable before review and re-check it before launch: protected executables use resolved real-path identity only, while writable executables also use a content hash. Node identity checks cover local policy evaluation through dispatch, with a [remote shell-wrapper approval limitation](/tools/exec-approvals-advanced#interpreter%2Fruntime-commands). POSIX login or interactive shell wrappers skip auto-review and require human approval when binding succeeds; existing binding rejections remain denied. Their implicit startup files are outside operand binding.
@@ -28,7 +30,7 @@ Gateway approval-backed commands bind every resolved command-segment executable 
 
 ## Session root and defaults
 
-A permission mode can be set on any session. When a session has a recorded `sessionRoot`, that canonical path is its filesystem boundary. An explicit working directory and a managed worktree each pin their session's root. When no root is recorded, the boundary defaults to the selected agent's canonical workspace when the run is prepared.
+A permission mode can be set on any session. When a session has a recorded `sessionRoot`, that resolved path is its filesystem boundary. An explicit working directory and a managed worktree each pin their session's root. When no root is recorded, the boundary defaults to the selected agent's resolved workspace when the run is prepared.
 
 Managed worktree sessions use the worktree checkout as `sessionRoot`. A nested working directory remains the runtime `cwd`, so relative paths start there while filesystem containment covers the whole checkout.
 
@@ -46,8 +48,11 @@ When a regular agent delegates a persistent change through its `openclaw` tool,
 the host applies the requesting run's effective permission policy to the exact
 proposed operation. Full Access applies it automatically without an approval
 prompt, including when Full Access comes from the configured default rather than
-an explicit session mode. Restricted runs still require human approval in the
-OpenClaw operator UI; conversational claims of approval never authorize the change.
+an explicit session mode. Restricted runs from messaging channels ask the
+requesting chat for approval: native approval cards where the channel supports
+them, otherwise a `/approve <id> allow-once|deny` reply. Webchat and terminal runs
+decide in the Control UI or apps, which can also decide any chat's approval.
+Free-text replies such as "yes" never authorize the change.
 The requesting tool waits for the human decision and application outcome. Stopping
 the run cancels its pending approval; approving later cannot revive that run.
 
@@ -59,7 +64,7 @@ handoffs still need a direct operator session. See
 
 ## Change permissions during a task
 
-Choose a mode from the chat composer's **Execution permissions** menu. The picker immediately shows the selected mode's icon and label while the change settles, and temporarily blocks another selection for that session. Other clients see the mode after the Gateway publishes the updated session. If the change fails, the picker reconciles with the authoritative session state and shows an error; if that state cannot be refreshed yet, it keeps the optimistic selection until a fresh permission read or update for that session confirms the saved mode.
+Choose a mode from the chat composer's **Execution permissions** menu. The icon-only picker immediately shows the selected mode's icon while the change settles, and temporarily blocks another selection for that session. Other clients see the mode after the Gateway publishes the updated session. If the change fails, the picker reconciles with the authoritative session state and shows an error; if that state cannot be refreshed yet, it keeps the optimistic selection until a fresh permission read or update for that session confirms the saved mode.
 
 - **Codex:** OpenClaw interrupts the active native turn and stops its background terminals, then continues in the same conversation with the new permissions and an internal **Permission change** notice. It does not reset the conversation or replay the original request.
 - **OpenClaw native runtime:** OpenClaw refreshes the active tool policy without restarting the conversation. Subsequent tool calls use the updated permissions.
@@ -74,7 +79,7 @@ Session-wide exec policy belongs to the permission mode. When the mode is unset,
 
 Before resuming sessions after upgrading a store with legacy session exec policy, run `openclaw doctor --fix`; the runtime no longer reads that policy. Missing policy values inherit the layered global and per-agent exec policy. When historical sandbox availability is unknown, migration uses the stricter sandbox base for automatic host selection. Restrictive policies migrate without broadening exec access to `read-only` or `guarded`. Existing permission modes remain unchanged. Legacy full-access policy is removed with a notice so configuration applies, never converted into a `full` permission grant.
 
-The retired `execSecurity` and `execAsk` fields remain in the protocol v4 schemas for `sessions.patch` and `sessions.patchMany`. Requests containing either field, including `null`, are rejected with `INVALID_REQUEST` and guidance to set `permissionMode` (`read-only`, `guarded`, `workspace`, or `full`) or use `/exec` for one run. Neither field is stored as runtime session policy.
+The retired `execSecurity` and `execAsk` fields remain in the wire schemas for `sessions.patch` and `sessions.patchMany`. Requests containing either field, including `null`, are rejected with `INVALID_REQUEST` and guidance to set `permissionMode` (`read-only`, `guarded`, `workspace`, or `full`) or use `/exec` for one run. Neither field is stored as runtime session policy.
 
 An explicit `full` mode is the admin-authorized exception to host approval-file floors: its OpenClaw exec policy remains `full` with approvals off unless a turn-scoped override tightens it. Approval-file floors continue to tighten config-driven exec policy, unset modes, and every non-full session mode. Tightening a full session's security restores those floors; tightening only `ask` does not. Sandbox restrictions and tool allow/deny policy remain independent, and a harness may clamp an unsupported mode to a compatible safer policy tuple. Codex also continues to honor externally enforced `requirements.toml` constraints.
 

@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { McpServerToolFilterConfig } from "../config/types.mcp.js";
+import { matchesStarSegments } from "../shared/star-pattern.js";
 
 /** Match the documented MCP tool-filter glob syntax: exact text plus `*`. */
 function matchesMcpToolFilterPattern(pattern: string, value: string): boolean {
@@ -13,28 +14,14 @@ function matchesMcpToolFilterPattern(pattern: string, value: string): boolean {
   }
 
   const parts = trimmed.split("*");
-  const first = parts[0] ?? "";
-  const last = parts.at(-1) ?? "";
-  if (first && !value.startsWith(first)) {
-    return false;
-  }
-  let cursor = first.length;
-  const endBound = last ? value.length - last.length : value.length;
-  if (last && (!value.endsWith(last) || endBound < cursor)) {
-    return false;
-  }
-
-  for (const part of parts.slice(1, -1)) {
-    if (!part) {
-      continue;
-    }
-    const index = value.indexOf(part, cursor);
-    if (index === -1 || index + part.length > endBound) {
-      return false;
-    }
-    cursor = index + part.length;
-  }
-  return true;
+  return matchesStarSegments(
+    {
+      first: parts[0] ?? "",
+      last: parts.at(-1) ?? "",
+      interior: parts.slice(1, -1).filter(Boolean),
+    },
+    value,
+  );
 }
 
 /** Normalizes open-world MCP tool filters into the runtime policy shape. */

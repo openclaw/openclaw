@@ -14,7 +14,10 @@ import {
   SetupTargetLockedError,
   withSetupMigrationTargetLock,
 } from "../../wizard/setup.migration-snapshot.js";
-import type { RespondFn } from "./types.js";
+import { captureOperatorToolGatewayContinuationContext } from "../server-plugin-in-process-authority.js";
+import { bindWizardLoginOwner } from "../server-wizard-sessions.js";
+import { retainGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import type { GatewayRequestOptions, RespondFn } from "./types.js";
 
 const SETUP_ADMISSION_BUSY_MESSAGE =
   "OpenClaw setup is already in progress; try again when it finishes.";
@@ -40,12 +43,11 @@ export async function runExclusiveSystemAgentSetupActivation<T>(
   task: () => Promise<T>,
 ): Promise<T> {
   let admitted = false;
-  const admittedTask = async () => {
-    admitted = true;
-    return await task();
-  };
   try {
-    return await withSetupMigrationTargetLock(resolveStateDir(), admittedTask);
+    return await withSetupMigrationTargetLock(resolveStateDir(), async () => {
+      admitted = true;
+      return await task();
+    });
   } catch (error) {
     if (!admitted && error instanceof SetupTargetLockedError) {
       throw new SetupAdmissionBusyError(SETUP_ADMISSION_BUSY_MESSAGE);
@@ -69,7 +71,7 @@ export async function createAdmittedWizardSession(
     return undefined;
   }
   wizardSessionInProgress = true;
-  // Capture this generation before target-lock acquisition can yield or reset.
+  // Keep the runner attached to the Gateway shutdown that admitted it.
   const gatewaySignal = getAsyncWorkSignal();
   const drainSignal = getGatewayRestartDrainSignal();
   const signal = gatewaySignal ? AbortSignal.any([gatewaySignal, drainSignal]) : drainSignal;
@@ -92,10 +94,6 @@ export async function createAdmittedWizardSession(
         );
       signal.addEventListener("abort", close, { once: true });
       removeCloseListener = () => signal.removeEventListener("abort", close);
-      // Construction can commit or close the Gateway before the listener exists.
-      if (signal.aborted) {
-        close();
-      }
       return session;
     };
     let admissionSettled: Promise<unknown> | undefined;
@@ -123,4 +121,102 @@ export async function createAdmittedWizardSession(
     }
     throw error;
   }
+}
+
+/**
+ * Owns every Gateway-started background wizard. The runner outlives its start
+ * reply, so the starting operator's grant is retained before that reply and
+ * stays revocable until the runner settles. Connection-bound wizards (browser
+ * sign-in) also stop when the starting connection closes.
+ */
+export async function startGatewayWizard(params: {
+  request: GatewayRequestOptions;
+  sessionId: string;
+  connectionBound?: boolean;
+  lockSetupTarget?: boolean;
+  /** Caller-specific facts that must stay unchanged, such as the selected login. */
+  assertCurrent?: () => void;
+  admit?: (
+    create: () => WizardSession,
+    assertCurrent: () => void,
+  ) => Promise<WizardSession | undefined>;
+  createSession: (assertCurrent: () => void) => WizardSession;
+  /** Replaces the default running reply, after the session is registered. */
+  respondStarted?: (session: WizardSession) => Promise<void>;
+}): Promise<void> {
+  const { client, context, respond } = params.request;
+  const reject = (message: string) =>
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+  if (context.wizardSessions.has(params.sessionId)) {
+    reject("wizard session already exists");
+    return;
+  }
+  const connection = params.connectionBound ? client : undefined;
+  if (params.connectionBound && !connection) {
+    reject("Client required");
+    return;
+  }
+  let authority: ReturnType<typeof retainGatewayRequestMutationAuthority> | undefined;
+  let continuation: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
+  const release = () => {
+    authority?.release();
+    continuation?.release();
+  };
+  const assertCurrent = () => {
+    connection?.connectionSignal?.throwIfAborted();
+    params.assertCurrent?.();
+    continuation?.assertCurrent();
+    authority?.assertCurrent();
+  };
+  let session: WizardSession | undefined;
+  try {
+    authority = retainGatewayRequestMutationAuthority(params.request);
+    continuation = await captureOperatorToolGatewayContinuationContext();
+    const create = () => {
+      assertCurrent();
+      // The runner starts in its constructor and inherits this retained scope.
+      const createSession = () => params.createSession(assertCurrent);
+      return continuation ? continuation.run(createSession) : createSession();
+    };
+    session = await (params.admit?.(create, assertCurrent) ??
+      createAdmittedWizardSession(create, params.lockSetupTarget));
+  } catch (error) {
+    release();
+    throw error;
+  }
+  if (!session) {
+    release();
+    respondSetupAdmissionBusy(respond);
+    return;
+  }
+  const started = session;
+  void whenAdmittedWizardSessionSettled(started).then(release, release);
+  try {
+    assertCurrent();
+  } catch {
+    started.close(new Error("Setup is no longer available on this connection."));
+    await whenAdmittedWizardSessionSettled(started);
+    reject("Setup is no longer available on this connection.");
+    return;
+  }
+  if (connection) {
+    bindWizardLoginOwner(started, connection);
+    const signal = connection.connectionSignal;
+    const cancel = () => started.close(new Error("Login connection closed."));
+    signal?.addEventListener("abort", cancel, { once: true });
+    const settled = () => {
+      signal?.removeEventListener("abort", cancel);
+      if (signal?.aborted || connection.invalidated) {
+        context.purgeWizardSession(params.sessionId);
+      }
+    };
+    void whenAdmittedWizardSessionSettled(started).then(settled, settled);
+  }
+  context.wizardSessions.set(params.sessionId, started);
+  if (params.respondStarted) {
+    await params.respondStarted(started);
+    return;
+  }
+  // Return ownership before any prompt so cancellation survives a lost start reply.
+  respond(true, { sessionId: params.sessionId, done: false, status: "running" }, undefined);
 }

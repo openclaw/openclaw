@@ -1,0 +1,363 @@
+import {
+  bindPublishedSessionSourceAdmission,
+  releaseSessionSourceAuthorities,
+  type PreparedSessionSourceAuthority,
+  type SessionSourceAssertion,
+  type SessionSourcePredicate,
+  type SessionSourcePredicateFacts,
+} from "../config/sessions/session-source-authority.js";
+import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
+import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
+import {
+  createSessionSharingLookupCaches,
+  findPreparedSharingTarget,
+  sessionMutationTargetChanged,
+  type AuthorizedSessionMutationTarget,
+  type SessionSharingLookupCaches,
+  type SessionMutationAuthorizationParams,
+} from "./session-sharing-authorization.js";
+import { captureSessionSharingMemoryFacts } from "./session-sharing-incognito.js";
+import {
+  authorizeOwnSessionMutation,
+  type SessionSharingTarget,
+} from "./session-sharing-policy.js";
+import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
+import type { createSessionSharingConsumption } from "./session-sharing-read.js";
+import { captureSessionSharingStore } from "./session-sharing-source-store.js";
+import type {
+  SessionMutationTarget,
+  resolveTalkSessionTargetInput,
+} from "./session-sharing-target-input.js";
+import type { PreparedTalkSessionTarget } from "./talk/session-target.types.js";
+
+/** Hold the existing reader only until the prepared writer operation settles. */
+export async function prepareSessionSharingSource(
+  target: Pick<
+    SessionSharingTarget,
+    "agentId" | "canonicalKey" | "storeKey" | "storePath" | "readSource"
+  >,
+  assertCallerCurrent: () => void,
+  memoryFacts?: NonNullable<ReturnType<typeof captureSessionSharingMemoryFacts>>,
+) {
+  const read =
+    memoryFacts ??
+    captureSessionSharingMemoryFacts(
+      {
+        agentId: target.agentId,
+        sessionKey: target.storeKey,
+        resolved: target,
+      },
+      assertCallerCurrent,
+    );
+  if (read) {
+    if (target.agentId !== read.location.agentId || target.storePath !== read.location.path) {
+      throw new Error("Session sharing source changed");
+    }
+    let active = true;
+    const assertCurrent = () => {
+      if (!active) {
+        throw new Error("Session sharing source is no longer retained");
+      }
+      assertCallerCurrent();
+      read.assertCurrent();
+    };
+    assertCurrent();
+    return {
+      actorSource: true as const,
+      source: undefined,
+      get target() {
+        return read.readCurrent().target;
+      },
+      get members() {
+        return [...read.readCurrent().membership];
+      },
+      assertCurrent,
+      async release() {
+        active = false;
+      },
+    };
+  }
+  const env = captureSessionTranscriptStorageEnvironment(process.env);
+  const prepareSource = captureSessionSharingStore(target, env, assertCallerCurrent);
+  const { source, assertCurrent: assertSourceCurrent } = await prepareSource();
+  const retained = retainSessionHistoryWorkerDatabase({
+    agentId: source.agentId,
+    path: source.path,
+    env,
+  });
+  const assertCurrent = () => {
+    assertCallerCurrent();
+    assertSourceCurrent();
+    retained.owner.assertCurrent();
+  };
+  try {
+    const result = await retained.owner.readExactEntries({
+      sessionKeys: [target.storeKey],
+      projection: "sharing",
+      includeAuthorization: true,
+      env,
+    });
+    assertCurrent();
+    if (
+      result.databaseIdentity?.identity !== source.databaseIdentity ||
+      result.databaseIdentity?.birthtime !== source.databaseBirthtime
+    ) {
+      throw new Error("Session sharing source changed");
+    }
+    const entry = result.entries.find(({ sessionKey }) => sessionKey === target.storeKey)?.entry;
+    return {
+      actorSource: false as const,
+      source,
+      target: entry ? { ...target, readSource: source, storeKeys: [target.storeKey], entry } : null,
+      members:
+        result.sharing?.members.find((row) => row.sessionKey === target.storeKey)?.identityIds ??
+        [],
+      assertCurrent,
+      release: retained.release,
+    };
+  } catch (error) {
+    await releaseSessionSourceAuthorities([retained], [error]);
+    throw error;
+  }
+}
+
+/** Storage facts are prepared here; the sharing owner supplies every access decision. */
+export function withPreparedSessionSharingSource(params: {
+  targets: AuthorizedSessionMutationTarget[];
+  sourceConfig: OpenClawConfig;
+  request: SessionMutationAuthorizationParams;
+  ownSessionProfileId?: string;
+  talk: ReturnType<typeof resolveTalkSessionTargetInput>;
+  assertTalkTargetCurrent: (cfg: OpenClawConfig) => PreparedTalkSessionTarget | undefined;
+  assertTargetCurrent: (
+    target: SessionMutationTarget,
+    expected: AuthorizedSessionMutationTarget | undefined,
+    cfg: OpenClawConfig,
+    caches?: SessionSharingLookupCaches,
+    ensuredSessionId?: string,
+    prepared?: { target: SessionSharingTarget | null; members: readonly string[] },
+    currentTalkTarget?: PreparedTalkSessionTarget,
+  ) => void;
+}): SessionSourceAssertion {
+  const boundSources = new Map<
+    AuthorizedSessionMutationTarget,
+    NonNullable<ReturnType<typeof captureSessionSharingMemoryFacts>>
+  >();
+  const targetChanged = (key: string) => sessionMutationTargetChanged(params.request.method, key);
+  const assertSource = () => {
+    const error = authorizeOwnSessionMutation({
+      client: params.request.client,
+      target: null,
+      expectedProfileId: params.ownSessionProfileId,
+    });
+    if (error) {
+      throw new SessionMutationAuthorizationChangedError(error);
+    }
+    return params.request.context.getRuntimeConfig();
+  };
+  const assertCurrent = () => {
+    const cfg = assertSource();
+    const currentTalkTarget = params.assertTalkTargetCurrent(cfg);
+    const caches = createSessionSharingLookupCaches();
+    for (const target of params.targets) {
+      const bound = boundSources.get(target)?.readCurrent();
+      params.assertTargetCurrent(
+        target,
+        target,
+        cfg,
+        caches,
+        undefined,
+        bound && {
+          target: bound.target,
+          members: [...bound.membership],
+        },
+        currentTalkTarget,
+      );
+    }
+  };
+  const changed = () => targetChanged(params.targets[0]?.sessionKey ?? "");
+  const assertRoutingCurrent = captureSessionMutationRouting(
+    params.sourceConfig,
+    changed,
+    params.targets,
+  );
+  const assertSourceCurrent = () => {
+    const cfg = assertSource();
+    assertRoutingCurrent(cfg);
+    if (params.talk?.kind === "relay" && !params.talk.isCurrent()) {
+      throw changed();
+    }
+    return cfg;
+  };
+  for (const target of params.targets) {
+    const facts = captureSessionSharingMemoryFacts(target, assertSourceCurrent);
+    if (facts) {
+      boundSources.set(target, facts);
+    }
+  }
+  const prepare = async (): Promise<PreparedSessionSourceAuthority> => {
+    if (params.targets.every((target) => !target.resolved && !target.absentTarget)) {
+      assertCurrent();
+      return { assertCurrent, checks: [], release: async () => {} };
+    }
+    const prepared: Awaited<ReturnType<typeof prepareSessionSharingSource>>[] = [];
+    const release = () => releaseSessionSourceAuthorities(prepared);
+    try {
+      assertSourceCurrent();
+      const targets = params.targets.map((expected) => {
+        const route = expected.resolved ?? expected.absentTarget;
+        if (!route) {
+          throw targetChanged(expected.sessionKey);
+        }
+        return { ...route, storeKey: expected.resolved?.storeKey ?? route.canonicalKey };
+      });
+      for (const [index, target] of targets.entries()) {
+        const bound = boundSources.get(params.targets[index]!);
+        prepared.push(await prepareSessionSharingSource(target, assertSourceCurrent, bound));
+      }
+      const assertPrepared = (index: number, facts?: SessionSourcePredicateFacts) => {
+        const read = prepared[index]!;
+        if (!facts) {
+          read.assertCurrent();
+        }
+        assertSourceCurrent();
+        const expected = params.targets[index]!;
+        params.assertTargetCurrent(expected, expected, assertSource(), undefined, undefined, {
+          target: facts
+            ? facts.entry
+              ? {
+                  ...targets[index]!,
+                  storeKeys: [targets[index]!.storeKey],
+                  readSource: read.source,
+                  entry: facts.entry,
+                }
+              : null
+            : read.target,
+          members: facts?.members ?? read.members,
+        });
+      };
+      const assertPreparedCurrent = () => {
+        assertSourceCurrent();
+        for (let index = 0; index < prepared.length; index += 1) {
+          assertPrepared(index);
+        }
+      };
+      assertPreparedCurrent();
+      return {
+        assertCurrent: assertPreparedCurrent,
+        checks: prepared.flatMap((read, index) => {
+          if (read.actorSource) {
+            return [];
+          }
+          const expected = params.targets[index]!;
+          const predicate: SessionSourcePredicate = {
+            source: read.source,
+            sessionKey: targets[index]!.storeKey,
+            fields: [
+              "sessionId",
+              "lifecycleRevision",
+              "createdActor",
+              "visibility",
+              "incognito",
+              "sandbox",
+            ],
+            expected: read.target?.entry,
+            members: read.members,
+          };
+          if (findPreparedSharingTarget(params.request, expected)) {
+            bindPublishedSessionSourceAdmission(predicate, () => {
+              params.assertTargetCurrent(expected, expected, assertSourceCurrent());
+            });
+          }
+          return [
+            {
+              predicate,
+              refuse: (facts: SessionSourcePredicateFacts) => {
+                assertPrepared(index, facts);
+                throw targetChanged(expected.sessionKey);
+              },
+            },
+          ];
+        }),
+        release,
+      };
+    } catch (error) {
+      await releaseSessionSourceAuthorities(prepared, [error]);
+      throw error;
+    }
+  };
+  return Object.assign(assertCurrent, {
+    prepareSessionSource: prepare,
+    ...(boundSources.size ? { prepareSessionSourceScope: prepare } : {}),
+  });
+}
+
+export function captureSessionSharingTalkAuthority({
+  request,
+  input,
+  target,
+  authorizesAgentRun,
+  preparedPolicy,
+}: {
+  request: SessionMutationAuthorizationParams;
+  input: ReturnType<typeof resolveTalkSessionTargetInput>;
+  target: PreparedTalkSessionTarget | undefined;
+  authorizesAgentRun: boolean;
+  preparedPolicy: ReturnType<typeof createSessionSharingConsumption>["policy"];
+}) {
+  return (cfg: OpenClawConfig): PreparedTalkSessionTarget | undefined => {
+    if (!input || !target) {
+      return undefined;
+    }
+    try {
+      if (input.kind === "relay" && !input.isCurrent()) {
+        throw sessionMutationTargetChanged(request.method, target.sessionKey);
+      }
+      target.assertCurrent(cfg);
+    } catch {
+      throw sessionMutationTargetChanged(request.method, target.sessionKey);
+    }
+    if (authorizesAgentRun) {
+      const policyConfig = request.context.getCommittedRuntimeConfig?.() ?? cfg;
+      const policy = preparedPolicy(policyConfig);
+      const error = authorizeGatewaySessionCreation(
+        { cfg: policyConfig, client: request.client, agentId: target.agentId },
+        policy ? { policy: policy.policy } : undefined,
+      );
+      if (error) {
+        throw new SessionMutationAuthorizationChangedError(error);
+      }
+    }
+    return target;
+  };
+}
+
+export function isSameSessionSharingSource(
+  current: Pick<SessionSharingTarget, "readSource" | "storePath">,
+  expected: Pick<SessionSharingTarget, "readSource" | "storePath">,
+): boolean {
+  const source = expected.readSource;
+  return source
+    ? current.readSource?.databaseIdentity === source.databaseIdentity &&
+        current.readSource.databaseBirthtime === source.databaseBirthtime &&
+        current.readSource.agentId === source.agentId
+    : current.storePath === expected.storePath;
+}
+
+export function resolveSessionSharingMembership(
+  target: SessionSharingTarget,
+  identityId: string | undefined,
+  members: readonly string[] | undefined,
+  projection: SessionRowProjection | undefined,
+): boolean | undefined {
+  return members
+    ? Boolean(identityId && members.includes(identityId))
+    : projection &&
+        Boolean(
+          identityId && projection.hasMembership(target.storePath, target.storeKey, identityId),
+        );
+}

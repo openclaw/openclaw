@@ -4,17 +4,7 @@ import { hasPersistedMedia } from "./user-turn-media.js";
 describe("hasPersistedMedia", () => {
   it.each([
     ["facts-only", { __openclaw: { media: [{ path: "/media/fact.png" }] } }],
-    [
-      "both-equal",
-      { MediaPath: "/media/equal.png", __openclaw: { media: [{ path: "/media/equal.png" }] } },
-    ],
-    [
-      "both-conflict",
-      {
-        MediaPath: "/media/legacy.png",
-        __openclaw: { media: [{ path: "/media/canonical.png" }] },
-      },
-    ],
+    ["url-only", { __openclaw: { media: [{ url: "https://example.test/image.png" }] } }],
     ["sparse", { __openclaw: { media: [{}, { path: "/media/sparse.png" }] } }],
     ["type-only", { __openclaw: { media: [{ contentType: "image/png" }] } }],
     ["media-only", { role: "user", content: "", __openclaw: { media: [{ kind: "image" }] } }],
@@ -26,5 +16,10 @@ describe("hasPersistedMedia", () => {
     expect(hasPersistedMedia({ MediaPath: "/media/legacy.png" })).toBe(false);
     expect(hasPersistedMedia({ role: "user", content: "" })).toBe(false);
     expect(hasPersistedMedia({ __openclaw: { media: [{}] } })).toBe(false);
+    expect(hasPersistedMedia({ __openclaw: { media: [null] } })).toBe(false);
+    expect(hasPersistedMedia({ __openclaw: { media: [{ path: " ", contentType: "\t" }] } })).toBe(
+      false,
+    );
+    expect(hasPersistedMedia({ __openclaw: { media: [{ kind: "unknown" }] } })).toBe(false);
   });
 });

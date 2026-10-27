@@ -7,16 +7,12 @@ const APPROVAL_ALREADY_RESOLVED = "APPROVAL_ALREADY_RESOLVED";
 const LEGACY_APPROVAL_NOT_FOUND_RE =
   /\b(?:unknown or expired approval id|approval expired or not found)\b/i;
 
-function readErrorCode(value: unknown): string | null {
-  return typeof value === "string" ? (normalizeOptionalString(value) ?? null) : null;
-}
-
 function readApprovalErrorDetailsReason(value: unknown): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
   const reason = (value as { reason?: unknown }).reason;
-  return typeof reason === "string" ? (normalizeOptionalString(reason) ?? null) : null;
+  return normalizeOptionalString(reason) ?? null;
 }
 
 /**
@@ -27,7 +23,7 @@ export function isApprovalNotFoundError(err: unknown): boolean {
   if (!(err instanceof Error)) {
     return false;
   }
-  const gatewayCode = readErrorCode((err as { gatewayCode?: unknown }).gatewayCode);
+  const gatewayCode = normalizeOptionalString((err as { gatewayCode?: unknown }).gatewayCode);
   if (gatewayCode === APPROVAL_NOT_FOUND) {
     return true;
   }
@@ -46,7 +42,7 @@ export function isApprovalStaleError(err: unknown): boolean {
   if (!(err instanceof Error)) {
     return false;
   }
-  const gatewayCode = readErrorCode((err as { gatewayCode?: unknown }).gatewayCode);
+  const gatewayCode = normalizeOptionalString((err as { gatewayCode?: unknown }).gatewayCode);
   const detailsReason = readApprovalErrorDetailsReason((err as { details?: unknown }).details);
   return (
     (gatewayCode === INVALID_REQUEST && detailsReason === APPROVAL_ALREADY_RESOLVED) ||

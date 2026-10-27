@@ -15,7 +15,6 @@ export async function resolveTieredModel(params: {
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   provider: string;
-  fallbackProvider?: string;
   modelId: string;
   requestedRouteResolution?: ModelFallbackRouteResolution;
   agentDir: string;
@@ -27,11 +26,7 @@ export async function resolveTieredModel(params: {
   staticCatalogOwnsTransport?: boolean;
 }): Promise<{ provider: string; resolution: ModelResolution }> {
   const result = await withSqliteReadOnlyWorkerScope(async () => {
-    const providers =
-      params.fallbackProvider && params.fallbackProvider !== params.provider
-        ? [params.provider, params.fallbackProvider]
-        : [params.provider];
-    const resolveCandidates = async (options: Parameters<typeof resolveModelAsync>[4]) => {
+    const resolve = async (options: Parameters<typeof resolveModelAsync>[4]) => {
       const modelOptions: Parameters<typeof resolveModelAsync>[4] = {
         ...options,
         abortSignal: params.abortSignal,
@@ -41,23 +36,19 @@ export async function resolveTieredModel(params: {
         authProfileMode: params.authProfileMode,
         modelIdSource: params.requestedRouteResolution === "resolved" ? "selected" : "input",
       };
-      let firstFailure: { provider: string; resolution: ModelResolution } | undefined;
-      for (const provider of providers) {
-        const resolution = await resolveModelAsync(
-          provider,
-          params.modelId,
-          params.agentDir,
-          params.config,
-          modelOptions,
-        );
-        if (resolution.model) {
-          return { provider: resolution.logicalRef.provider, resolution };
-        }
-        firstFailure ??= { provider, resolution };
-      }
-      return firstFailure!;
+      const resolution = await resolveModelAsync(
+        params.provider,
+        params.modelId,
+        params.agentDir,
+        params.config,
+        modelOptions,
+      );
+      return {
+        provider: resolution.model ? resolution.logicalRef.provider : params.provider,
+        resolution,
+      };
     };
-    const firstTier = await resolveCandidates({
+    const firstTier = await resolve({
       skipAgentDiscovery: true,
       allowBundledStaticCatalogFallback: params.staticCatalogOwnsTransport,
       preferBundledStaticCatalogTransport: params.staticCatalogOwnsTransport,
@@ -76,7 +67,7 @@ export async function resolveTieredModel(params: {
       }));
     // The prepared tier owns the final failure; an earlier discovery miss lacks
     // the route metadata needed to explain a provider-declared retirement.
-    return await resolveCandidates({
+    return await resolve({
       ...preparedModelRuntime.createStores(),
       allowBundledStaticCatalogFallback: true,
       preparedModelRuntime,

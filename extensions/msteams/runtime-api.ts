@@ -2,12 +2,7 @@
 // Keep this barrel thin and aligned with the local extension surface.
 
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-export type { AllowlistMatch } from "openclaw/plugin-sdk/allow-from";
-export {
-  mergeAllowlist,
-  resolveAllowlistMatchSimple,
-  summarizeMapping,
-} from "openclaw/plugin-sdk/allow-from";
+export { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from";
 export type {
   BaseProbeResult,
   ChannelDirectoryEntry,
@@ -18,7 +13,6 @@ export type {
 export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-outbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export { resolveToolsBySender } from "openclaw/plugin-sdk/channel-policy";
 export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export {
   PAIRING_APPROVED_MESSAGE,
@@ -32,7 +26,6 @@ export {
   resolveNestedAllowlistDecision,
 } from "openclaw/plugin-sdk/channel-targets";
 export type {
-  GroupPolicy,
   GroupToolPolicyConfig,
   MSTeamsChannelConfig,
   MSTeamsCloudName,
@@ -44,8 +37,6 @@ export type {
 } from "openclaw/plugin-sdk/config-contracts";
 export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 export { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-export { withFileLock } from "openclaw/plugin-sdk/file-lock";
-export { keepHttpServerTaskAlive } from "openclaw/plugin-sdk/channel-outbound";
 export {
   detectMime,
   extensionForMime,

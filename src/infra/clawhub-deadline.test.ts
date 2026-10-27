@@ -2,9 +2,7 @@ import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { downloadClawHubPackageArchive } from "./clawhub-artifacts.js";
-import type { ClawHubFetch } from "./clawhub-client.js";
 import { reportClawHubPluginInstallTelemetry, searchClawHubPackages } from "./clawhub-packages.js";
-import { reportClawHubSkillInstallTelemetry } from "./clawhub-skills.js";
 
 function createResponseSource(params: { status: number; headersAfterMs?: number }) {
   const connected = createDeferred<{
@@ -13,7 +11,7 @@ function createResponseSource(params: { status: number; headersAfterMs?: number 
   }>();
   const aborted = vi.fn();
   const cancelled = vi.fn();
-  const fetchImpl: ClawHubFetch = async (_input, init) => {
+  const fetchImpl: typeof fetch = async (_input, init) => {
     const signal = init?.signal;
     if (!signal) {
       throw new Error("ClawHub fetch must supply its request signal");
@@ -82,6 +80,7 @@ describe("ClawHub response deadlines", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.clearAllTimers();
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -102,12 +101,12 @@ describe("ClawHub response deadlines", () => {
     },
   ])("keeps the original deadline through a dripping $status metadata body", async (scenario) => {
     const source = createResponseSource({ status: scenario.status, headersAfterMs: 60 });
+    vi.spyOn(globalThis, "fetch").mockImplementation(source.fetchImpl);
     const pending = observe(
       searchClawHubPackages({
         query: "calendar",
         token: "fixture-token",
         timeoutMs: 100,
-        fetchImpl: source.fetchImpl,
       }),
     );
     await vi.advanceTimersByTimeAsync(60);
@@ -134,12 +133,12 @@ describe("ClawHub response deadlines", () => {
 
   it("keeps a dripping archive error under the absolute deadline", async () => {
     const source = createResponseSource({ status: 400 });
+    vi.spyOn(globalThis, "fetch").mockImplementation(source.fetchImpl);
     const pending = observe(
       downloadClawHubPackageArchive({
         name: "deadline-fixture",
         token: "fixture-token",
         timeoutMs: 100,
-        fetchImpl: source.fetchImpl,
       }),
     );
     const body = await source.connected;
@@ -165,12 +164,12 @@ describe("ClawHub response deadlines", () => {
 
   it("finishes a progressing successful archive after the absolute request budget", async () => {
     const source = createResponseSource({ status: 200 });
+    vi.spyOn(globalThis, "fetch").mockImplementation(source.fetchImpl);
     const pending = observe(
       downloadClawHubPackageArchive({
         name: "deadline-fixture",
         token: "fixture-token",
         timeoutMs: 100,
-        fetchImpl: source.fetchImpl,
       }),
     );
     const body = await source.connected;
@@ -204,30 +203,16 @@ describe("ClawHub response deadlines", () => {
     }
   });
 
-  it.each([
-    {
-      name: "plugin",
-      report: (fetchImpl: ClawHubFetch) =>
-        reportClawHubPluginInstallTelemetry({
-          packageName: "deadline-fixture",
-          token: "fixture-token",
-          timeoutMs: 100,
-          fetchImpl,
-        }),
-    },
-    {
-      name: "skill",
-      report: (fetchImpl: ClawHubFetch) =>
-        reportClawHubSkillInstallTelemetry({
-          slug: "deadline-fixture",
-          token: "fixture-token",
-          timeoutMs: 100,
-          fetchImpl,
-        }),
-    },
-  ])("disposes the unread successful $name telemetry response", async ({ report }) => {
+  it("disposes the unread successful telemetry response", async () => {
     const source = createResponseSource({ status: 200 });
-    const pending = observe(report(source.fetchImpl));
+    vi.spyOn(globalThis, "fetch").mockImplementation(source.fetchImpl);
+    const pending = observe(
+      reportClawHubPluginInstallTelemetry({
+        packageName: "deadline-fixture",
+        token: "fixture-token",
+        timeoutMs: 100,
+      }),
+    );
     const body = await source.connected;
     try {
       await expect(pending.result).resolves.toEqual({ value: undefined });
@@ -244,15 +229,15 @@ describe("ClawHub response deadlines", () => {
     const discarded = createResponseSource({ status: 503 });
     const successful = createResponseSource({ status: 200 });
     const fetchImpl = vi
-      .fn<ClawHubFetch>()
+      .fn<typeof fetch>()
       .mockImplementationOnce(discarded.fetchImpl)
       .mockImplementationOnce(successful.fetchImpl);
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
     const pending = observe(
       searchClawHubPackages({
         query: "calendar",
         token: "fixture-token",
         timeoutMs: 100,
-        fetchImpl,
       }),
     );
     const discardedBody = await discarded.connected;

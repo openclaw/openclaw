@@ -1,6 +1,10 @@
+import path from "node:path";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { isPathInside } from "../infra/path-guards.js";
 import type { PluginRuntimeRecovery } from "./loader-types.js";
 /** Binds selected artifacts and completed registration to their loaded runtime record. */
 import type { OpenClawPackageManifest } from "./manifest.js";
+import { pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import {
   resolvePluginRuntimeArtifactSelection,
@@ -17,6 +21,7 @@ type RuntimeArtifactSelection = {
   setupEntry?: PluginRuntimeArtifact;
   preferBuiltPluginArtifacts?: boolean;
   runtimeRegistrationComplete: boolean;
+  canonicalDistribution: boolean;
 };
 type ArtifactBoundRecord = PluginRecord & {
   [RUNTIME_ARTIFACT_SELECTION]?: RuntimeArtifactSelection;
@@ -27,7 +32,49 @@ type RuntimeArtifactSelectionInput = {
   setupSource?: string;
   packageManifest?: OpenClawPackageManifest;
   preferBuiltPluginArtifacts?: boolean;
+  rootDir?: string;
+  source?: string;
 };
+
+function isCanonicalDistribution(
+  record: PluginRecord,
+  params: RuntimeArtifactSelectionInput & { runtimeEntry: PluginRuntimeArtifact },
+): boolean {
+  if (
+    record.origin !== "bundled" ||
+    params.sourcePreferred ||
+    params.packageManifest?.build?.bundledDist === false ||
+    !params.rootDir ||
+    !params.source
+  ) {
+    return false;
+  }
+  const resolvedPackageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+  const packageRoot = resolvedPackageRoot && pluginCacheRealpathSync(resolvedPackageRoot, true);
+  const expectedCompiledRoot = packageRoot && path.join(packageRoot, "dist", "extensions");
+  const compiledRoot = expectedCompiledRoot && pluginCacheRealpathSync(expectedCompiledRoot, true);
+  if (!compiledRoot || compiledRoot !== expectedCompiledRoot) {
+    return false;
+  }
+  const original = resolvePluginRuntimeExecutionArtifact({
+    rootDir: params.rootDir,
+    source: params.source,
+  });
+  const originalRoot = pluginCacheRealpathSync(original.rootDir, true);
+  const selectedRoot = pluginCacheRealpathSync(params.runtimeEntry.rootDir, true);
+  const originalSource = pluginCacheRealpathSync(original.source, true);
+  const selectedSource = pluginCacheRealpathSync(params.runtimeEntry.source, true);
+  return Boolean(
+    originalRoot &&
+    selectedRoot &&
+    originalSource &&
+    selectedSource &&
+    path.dirname(originalRoot) === compiledRoot &&
+    originalRoot === selectedRoot &&
+    originalSource === selectedSource &&
+    isPathInside(selectedRoot, selectedSource),
+  );
+}
 
 /** Preserve selection inputs on the loaded owner, outside status/protocol serialization. */
 export function bindPluginRuntimeArtifactSelection(
@@ -44,6 +91,7 @@ export function bindPluginRuntimeArtifactSelection(
     setupEntry: params.setupEntry,
     preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts,
     runtimeRegistrationComplete: false,
+    canonicalDistribution: isCanonicalDistribution(record, params),
   };
   Object.defineProperty(record, RUNTIME_ARTIFACT_SELECTION, { value: selection });
   return selection;
@@ -58,6 +106,24 @@ export function hasCompletedPluginRuntimeRegistration(record: ArtifactBoundRecor
 
 export function getPluginRuntimeEntrySource(record: ArtifactBoundRecord): string | undefined {
   return record[RUNTIME_ARTIFACT_SELECTION]?.runtimeEntry.source;
+}
+
+/** Sidecars share the selected setup/runtime artifact, not the discovery source tree. */
+export function getPluginLoadedEntry(
+  record: ArtifactBoundRecord,
+): PluginRuntimeArtifact | undefined {
+  const selection = record[RUNTIME_ARTIFACT_SELECTION];
+  return selection?.runtimeRegistrationComplete
+    ? selection.runtimeEntry
+    : (selection?.setupEntry ?? selection?.runtimeEntry);
+}
+
+/** Only the loaded runtime owner can authorize the matching UI-origin distribution. */
+export function hasCanonicalPluginDistribution(record: ArtifactBoundRecord): boolean {
+  return (
+    hasCompletedPluginRuntimeRegistration(record) &&
+    record[RUNTIME_ARTIFACT_SELECTION]?.canonicalDistribution === true
+  );
 }
 
 /** Acquire recovery custody before shutdown revokes the previous runtime's module loader. */

@@ -141,12 +141,6 @@ struct ComputerActionServiceTests {
             postEvent: .granted,
             screenCapture: .granted)
 
-        #expect(permissions.diagnostic == .accessibilityGrantMayBeStale)
-        #expect(permissions.diagnostic.detailText == """
-        OpenClaw may already appear enabled under System Settings → Privacy & Security → Accessibility. \
-        If so, the grant is pinned to an older build: select OpenClaw, remove it with −, then re-add \
-        /Applications/OpenClaw.app.
-        """)
         #expect(permissions.inputAccess == .accessibilityGrantMayBeStale)
         let error = self.validationError {
             try ComputerActionService.validateInputPermissions(permissions)
@@ -162,11 +156,6 @@ struct ComputerActionServiceTests {
             postEvent: .granted,
             screenCapture: .missing)
 
-        #expect(permissions.diagnostic == .missing([.accessibility, .screenCapture]))
-        #expect(permissions.diagnostic.detailText == """
-        Missing: Accessibility, Screen Recording. \
-        Grant access in System Settings → Privacy & Security, then reopen OpenClaw.
-        """)
         #expect(permissions.inputAccess == .accessibilityMissing)
         let error = self.validationError {
             try ComputerActionService.validateInputPermissions(permissions)
@@ -182,7 +171,6 @@ struct ComputerActionServiceTests {
             postEvent: .missing,
             screenCapture: .granted)
 
-        #expect(permissions.diagnostic == .missing([.postEvent]))
         #expect(permissions.inputAccess == .postEventMissing)
         #expect(throws: ComputerActionService.ComputerActionError.self) {
             try ComputerActionService.validateInputPermissions(permissions)
@@ -752,7 +740,9 @@ struct ComputerActionServiceTests {
         #expect(cancellationHop.pendingCount == 0)
         #expect(releaseAttempts == 2)
     }
+}
 
+extension ComputerActionServiceTests {
     @Test func `typing posts exactly one event pair per Swift grapheme`() async throws {
         var posted: [Character] = []
         let service = ComputerActionService(
@@ -954,7 +944,11 @@ struct ComputerActionServiceTests {
             })
 
         do {
-            try await screen.rawDragForTesting()
+            try await screen.rawDrag(
+                from: .zero,
+                to: CGPoint(x: 24, y: 24),
+                flags: [],
+                checkExecutionAllowed: {})
             Issue.record("raw drag unexpectedly succeeded")
         } catch is SyntheticPostError {
             // Expected injected move failure.
@@ -965,6 +959,33 @@ struct ComputerActionServiceTests {
         #expect(postedTypes.first == .leftMouseDown)
         #expect(postedTypes.contains(.leftMouseDragged))
         #expect(postedTypes.last == .leftMouseUp)
+    }
+
+    @Test func `raw drag stops and releases when an approval becomes pending`() async {
+        let approvals = ApprovalPromptState()
+        let prompt = UUID()
+        var postedTypes: [CGEventType] = []
+        let screen = ComputerScreenActionExecutor(mouseEventPoster: { event in
+            postedTypes.append(event.type)
+            if event.type == .leftMouseDown {
+                approvals.setPending(true, source: prompt)
+            } else if event.type == .leftMouseDragged {
+                throw SyntheticPostError.failed
+            }
+        })
+
+        do {
+            try await screen.rawDrag(from: .zero, to: CGPoint(x: 24, y: 24), flags: []) {
+                try approvals.checkComputerAction(.leftClickDrag)
+            }
+            Issue.record("Expected approval refusal")
+        } catch let ComputerActionService.ComputerActionError.refused(message) {
+            #expect(message == "A human approval prompt is open on this Mac; wait for the user to answer it")
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+
+        #expect(postedTypes == [.leftMouseDown, .leftMouseUp])
     }
 
     @Test func `raw drag posts release when cancelled between moves`() async {
@@ -988,7 +1009,11 @@ struct ComputerActionServiceTests {
             })
 
         let drag = Task { @MainActor in
-            try await screen.rawDragForTesting()
+            try await screen.rawDrag(
+                from: .zero,
+                to: CGPoint(x: 24, y: 24),
+                flags: [],
+                checkExecutionAllowed: {})
         }
         while !postedTypes.contains(.leftMouseDragged) {
             await Task.yield()

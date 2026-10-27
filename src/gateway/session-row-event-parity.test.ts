@@ -1,105 +1,99 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { createActiveRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
+import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import {
   initializeSessionReadContext,
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
-import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { beginSessionPermissionChange } from "./session-permission-change.js";
+import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
+import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import { publishTranscriptFields } from "./session-row-projection-record.js";
+import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 it("delivers nested event rows identical to the full list for each viewer and clock without SQLite", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const now = 1_000_000;
-    vi.spyOn(Date, "now").mockReturnValue(now);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const profiles = [
       ensureProfileForEmail("owner@row-parity.test"),
       ensureProfileForEmail("viewer@row-parity.test"),
+      ensureProfileForEmail("other-viewer@row-parity.test"),
     ];
     const cfg = {
       ...rolePolicyConfig(),
       agents: { entries: { main: {} }, defaults: { model: { primary: "openai/gpt-5.4" } } },
     };
+    setRuntimeConfigSnapshot(cfg);
     const key = "agent:main:parent";
     const childKey = "agent:main:child";
+    const lineageKey = "agent:main:completed-lineage";
+    const controller = "agent:main:unloaded-controller";
+    const navigationParent = "agent:main:unloaded-navigation";
     const creator = { type: "human" as const, source: "profile" as const, id: profiles[0]!.id };
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: key },
-      {
-        sessionId: "parent-session",
-        updatedAt: now - 100,
-        status: "done",
-        visibility: "shared",
-        createdActor: creator,
-        agentHarnessId: "codex",
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        label: "Parent",
-        startedAt: now - 100,
-      },
-    );
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: childKey },
-      {
-        sessionId: "child-session",
-        updatedAt: now - 50,
-        visibility: "draft",
-        createdActor: creator,
-        parentSessionKey: key,
-      },
-    );
-    const connection = createGatewayConnectionState({ bootId: "row-parity", cfg });
+    const writeRow = (
+      sessionKey: string,
+      sessionId: string,
+      fields: Partial<InternalSessionEntry>,
+    ) =>
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId, updatedAt: now - 100, createdActor: creator, visibility: "shared", ...fields },
+      );
+    writeRow(key, "parent-session", {
+      status: "done",
+      agentHarnessId: "codex",
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      label: "Parent",
+      startedAt: now - 100,
+    });
+    writeRow(childKey, "child-session", {
+      updatedAt: now - 50,
+      visibility: "draft",
+      parentSessionKey: key,
+    });
+    writeRow(lineageKey, "lineage-session", {
+      endedAt: now - 100,
+      status: "done",
+      spawnedBy: controller,
+      parentSessionKey: navigationParent,
+    });
+    const connection = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "row-parity",
+      cfg,
+    });
     const context = requestContext(cfg);
-    context.chatAbortControllers = connection.chatAbortControllers;
-    connection.chatAbortControllers.set("current-run", {
-      controller: new AbortController(),
-      sessionKey: key,
-      sessionId: "parent-session",
-      agentId: "main",
-      startedAtMs: now - 100,
-      expiresAtMs: now + 1000,
-    });
-    const peers = profiles.map((profile, index) => {
-      const send = vi.fn();
-      const client = {
-        ...sharingPolicyClient({ user: profile.id }),
-        connId: `row-parity-${index}`,
-        usesSharedGatewayAuth: false,
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: profile.displayName,
-          avatarRevision: "1",
-          hasAvatar: false,
-          updatedAt: now,
+    rpcSourceTesting.set(
+      "current-run",
+      await createActiveRpcSourceForTest(
+        {},
+        {
+          sessionKey: key,
+          sessionId: "parent-session",
+          agentId: "main",
+          storeScope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
         },
-        socket: {
-          readyState: WebSocket.OPEN,
-          bufferedAmount: 0,
-          send,
-          close: vi.fn(),
-          terminate: vi.fn(),
-          on: vi.fn(),
-          off: vi.fn(),
-          once: vi.fn(),
-        },
-      } satisfies GatewayWsClient;
-      prepareGatewayRecipientProfile(client);
-      connection.clients.add(client);
-      connection.sessionMessageSubscribers.subscribe(client.connId, key);
-      return { client, send };
-    });
+      ),
+    );
     subagentRuns.set("row-parity-child", {
       runId: "row-parity-child",
       childSessionKey: childKey,
@@ -119,6 +113,13 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       collectorCompletion: { status: "done" },
     });
     await initializeSessionReadContext(context);
+    const peers = profiles.map((profile, index) => {
+      const { client, send } = createSessionRowEventPeer(profile, `row-parity-${index}`, now);
+      connection.clients.add(client);
+      connection.sessionMessageSubscribers.subscribe(client.connId, key);
+      connection.sessionMessageSubscribers.subscribe(client.connId, lineageKey);
+      return { client, send };
+    });
     const projection = getSessionRowProjection(context)!;
     const detach = connection.attachSessionRowProjection(projection);
     try {
@@ -133,11 +134,7 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       const exec = vi.spyOn(DatabaseSync.prototype, "exec");
       const expected = await Promise.all(
         peers.map(async ({ client }) => {
-          const result = await listSessions({
-            client,
-            context,
-            request,
-          });
+          const result = await listSessions({ client, context, request });
           return result.sessions.find((row) => row.key === key)!;
         }),
       );
@@ -157,7 +154,6 @@ it("delivers nested event rows identical to the full list for each viewer and cl
         const source = {
           ...buildGatewaySessionSnapshot({
             sessionRow: projection.snapshot({ key, agentId: "main" }).row,
-            includeSession: true,
             lifecycle: true,
           }),
           sessionKey: key,
@@ -169,7 +165,11 @@ it("delivers nested event rows identical to the full list for each viewer and cl
           activeRunIds: null,
           label: null,
         };
+        const presentations = vi.spyOn(projection, "present");
         connection.broadcast(event, source);
+        // Three independently authorized recipients need only the owner and viewer rows.
+        expect(presentations.mock.calls.length).toBeLessThanOrEqual(2);
+        presentations.mockRestore();
         for (const [index, peer] of peers.entries()) {
           expect(peer.send).toHaveBeenCalled();
           const frame = JSON.parse(peer.send.mock.lastCall![0]);
@@ -286,6 +286,92 @@ it("delivers nested event rows identical to the full list for each viewer and cl
           }
         }
       }
+      let finishPermissionChange: (() => void) | undefined;
+      peers[1]!.send.mockImplementationOnce(() => {
+        finishPermissionChange = beginSessionPermissionChange("parent-session");
+      });
+      try {
+        connection.broadcast("sessions.changed", { sessionKey: key, agentId: "main" });
+        for (const [index, peer] of peers.entries()) {
+          expect(
+            JSON.parse(peer.send.mock.lastCall![0]).payload.session.permissionModePending,
+          ).toBe(index === 2);
+        }
+      } finally {
+        finishPermissionChange?.();
+      }
+      const captured = projection.describe({ key, agentId: "main" })!;
+      const originalPreview = captured.lastMessagePreview;
+      const preview = "Unchanged preview 🦞 ".repeat(1024);
+      const publishPreview = (lastMessagePreview: string | undefined) =>
+        publishTranscriptFields(
+          captured,
+          { lastMessagePreview, fallbackModel: captured.fallbackModel },
+          cfg,
+          projection.state.rowContext,
+        );
+      const publication = prepareSessionRowPublication(projection, now);
+      const projectRun = createVisibleActiveSessionRunProjector(
+        projection.state.rowContext.projectedAgentRuns,
+      );
+      const present = (index: number) =>
+        publication(peers[index]!.client, projectRun).getPresentation().present(captured, request);
+      publishPreview(preview);
+      const stringify = vi.spyOn(JSON, "stringify");
+      try {
+        const first = present(1);
+        expect(first?.lastMessagePreview).toBe(preview);
+        expect(present(2)).toBe(first);
+        // Recipient cache lookups must not encode the unchanged large preview again.
+        expect(
+          stringify.mock.calls.some(([value]) => Array.isArray(value) && value.includes(preview)),
+        ).toBe(false);
+        publishPreview("Published replacement preview");
+        const replacement = present(1);
+        expect(replacement).not.toBe(first);
+        expect(replacement?.lastMessagePreview).toBe("Published replacement preview");
+        expect(present(2)).toBe(replacement);
+      } finally {
+        stringify.mockRestore();
+        publishPreview(originalPreview);
+      }
+      const compactRequest = { ...request, rowMode: "compact" as const };
+      const expiresAt = now - 100 + 30 * 60_000;
+      for (const [sampledAt, owners, snapshotAt] of [
+        [now, [navigationParent], now],
+        [expiresAt, [navigationParent], now],
+        [expiresAt + 1, [], expiresAt + 1],
+      ] as const) {
+        clock.mockReturnValue(sampledAt);
+        const children = await listSessions({
+          client: peers[0]!.client,
+          context,
+          request: { ...compactRequest, spawnedBy: navigationParent },
+        });
+        expect(children.sessions.map((row) => row.key)).toEqual(owners.length ? [lineageKey] : []);
+        const listed = await listSessions({
+          client: peers[0]!.client,
+          context,
+          request: compactRequest,
+        });
+        expect(listed.sessions.find((row) => row.key === lineageKey)).toMatchObject({
+          childOwnerSessionKeys: owners,
+          snapshotAt,
+        });
+        for (const event of ["sessions.changed", "session.message"]) {
+          connection.broadcast(event, { sessionKey: lineageKey, agentId: "main" });
+          for (const peer of peers) {
+            const frame = JSON.parse(peer.send.mock.lastCall![0]);
+            expect(frame.event).toBe(event);
+            expect(frame.payload.session).toMatchObject({
+              key: lineageKey,
+              childOwnerSessionKeys: owners,
+              snapshotAt,
+            });
+          }
+        }
+      }
+      clock.mockReturnValue(now);
       expect(prepares).not.toHaveBeenCalled();
       expect(exec).not.toHaveBeenCalled();
       prepares.mockRestore();
@@ -300,11 +386,13 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       });
       for (const [index, peer] of peers.entries()) {
         const frame = JSON.parse(peer.send.mock.lastCall![0]);
+        expect(frame.event).toBe("sessions.changed");
+        expect(frame.payload.sessionKey).toBe(key);
         expect(frame.payload.childSessions).toEqual(expected[index]?.childSessions);
       }
     } finally {
       detach();
-      connection.mentionInbox.dispose();
+      await connection.mentionInbox.dispose();
       projection.dispose();
       subagentRuns.delete("row-parity-child");
     }

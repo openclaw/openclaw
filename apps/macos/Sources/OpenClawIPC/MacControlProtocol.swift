@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawNativeState
 
 public struct MacControlRequest: Codable, Sendable {
     public var operation: String
@@ -17,6 +18,8 @@ public struct MacControlRequest: Codable, Sendable {
     public var browser: Bool?
     public var idOrName: String?
     public var deadline: Date?
+    public var credentialRoot: String?
+    public var credentialOperation: ClientCredentialOperation?
 
     public init(operation: String) {
         self.operation = operation
@@ -70,10 +73,6 @@ public struct MacControlPrimaryStatus: Codable, Sendable {
         self.remotePort = remotePort
         self.tunnel = tunnel
         self.connection = connection
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case mode, transport, sshTarget, url, remotePort, tunnel, connection
     }
 
     public func encode(to encoder: Encoder) throws {

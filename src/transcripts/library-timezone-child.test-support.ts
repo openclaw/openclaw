@@ -14,8 +14,10 @@ const store = new TranscriptsStore(path.join(stateDir, "transcripts"));
 const local = session("local", { startedAt: "2026-08-20T06:00:00" });
 const earlier = session("earlier", { startedAt: "2026-08-20T06:30:00Z" });
 try {
-  await store.writeSession(local);
-  await store.writeSession(earlier);
+  if (process.argv[3] === "write") {
+    await store.writeSession(local);
+    await store.writeSession(earlier);
+  }
   const first = await listTranscriptLibrary(store, { limit: 1 });
   assert.deepEqual(
     first.sessions.map((row) => row.sessionId),
@@ -28,15 +30,17 @@ try {
     ["earlier"],
   );
   assert.equal(next.nextCursor, null);
-  assert.deepEqual(
-    (
-      await listTranscriptLibrary(store, {
-        startedAfter: "2026-08-20T06:00:00",
-        startedBefore: "2026-08-20T13:00:00.001Z",
-      })
-    ).sessions.map((row) => row.sessionId),
-    ["local"],
-  );
+  if (process.argv[3] === "write") {
+    assert.deepEqual(
+      (
+        await listTranscriptLibrary(store, {
+          startedAfter: "2026-08-20T06:00:00",
+          startedBefore: "2026-08-20T13:00:00.001Z",
+        })
+      ).sessions.map((row) => row.sessionId),
+      ["local"],
+    );
+  }
   assert.deepEqual(
     (
       await listTranscriptLibrary(store, {
@@ -46,7 +50,22 @@ try {
     ).sessions.map((row) => row.sessionId),
     ["local"],
   );
-  assert.deepEqual(await store.readSession(transcriptSessionSelector(local)), local);
+  process.env.TZ = "UTC";
+  await store.writeSession({ ...local, title: "Updated after timezone change" });
+  assert.deepEqual(
+    (await listTranscriptLibrary(store, { limit: 1 })).sessions.map((row) => row.sessionId),
+    ["local"],
+  );
+  assert.deepEqual(
+    (await listTranscriptLibrary(store, { limit: 1, cursor: first.nextCursor })).sessions.map(
+      (row) => row.sessionId,
+    ),
+    ["earlier"],
+  );
+  assert.deepEqual(await store.readSession(transcriptSessionSelector(local)), {
+    ...local,
+    title: "Updated after timezone change",
+  });
 } finally {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();

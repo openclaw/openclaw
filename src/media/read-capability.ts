@@ -1,7 +1,9 @@
-// Media read capability helpers gate file reads by configured media access rules.
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveGroupToolPolicy } from "../agents/agent-tools.policy.js";
+import {
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+} from "../agents/agent-tools.policy.js";
 import { resolvePathFromInput } from "../agents/path-policy.js";
 import { resolveManagedMediaRoot } from "../agents/sandbox-paths.js";
 import { resolveSenderToolPolicy } from "../agents/sender-tool-policy.js";
@@ -10,15 +12,22 @@ import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { captureAgentWorkspaceOutboundMedia } from "../agents/workspace-access.js";
 import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenResult } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveConfigDir } from "../utils.js";
 import { createBoundedOutboundMediaReadFile, readOutboundMediaFile } from "./bounded-read-file.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "./load-options.js";
-import { readLocalMediaFile } from "./local-media-access.js";
+import { openLocalMediaFile, readLocalMediaFile } from "./local-media-access.js";
 import {
   getAgentScopedMediaLocalRoots,
   getAgentScopedMediaLocalRootsForSources,
 } from "./local-roots.js";
+
+/** Internal host access; native descriptors are not part of the plugin SDK. */
+export type HostOutboundMediaAccess = OutboundMediaAccess & {
+  /** A native descriptor, or undefined when a transport reader owns this path. */
+  openFile?: (filePath: string, options: { maxBytes: number }) => Promise<OpenResult | undefined>;
+};
 
 type OutboundHostMediaPolicyContext = {
   sessionKey?: string;
@@ -33,12 +42,79 @@ type OutboundHostMediaPolicyContext = {
   requesterSenderE164?: string | null;
 };
 
-function isAgentScopedMediaReadAllowedByToolPolicy(
-  params: {
-    cfg: OpenClawConfig;
-    agentId?: string;
-  } & OutboundHostMediaPolicyContext,
-): boolean {
+function getManagedMediaLocalRoots(mediaSources?: readonly string[]): readonly string[] {
+  const roots = new Set([path.join(resolveConfigDir(), "media", "outbound")]);
+  for (const source of mediaSources ?? []) {
+    const managedRoot = resolveManagedMediaRoot(source);
+    if (managedRoot) {
+      roots.add(managedRoot);
+    }
+  }
+  return Array.from(roots);
+}
+
+function appendWorkspaceDirToLocalRoots(
+  roots: readonly string[],
+  workspaceDir?: string,
+): readonly string[] {
+  if (!workspaceDir) {
+    return roots;
+  }
+  const resolvedWorkspaceDir = path.resolve(workspaceDir);
+  if (roots.some((root) => path.resolve(root) === resolvedWorkspaceDir)) {
+    return roots;
+  }
+  return [...roots, resolvedWorkspaceDir];
+}
+
+function workspaceOwnsMediaPath(access: OutboundMediaAccess | undefined, filePath: string) {
+  return (
+    access?.readFile &&
+    access.localRoots?.some((root) => isPathInside(path.resolve(root), path.resolve(filePath)))
+  );
+}
+
+type AgentScopedOutboundMediaAccessParams = {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  mediaSources?: readonly string[];
+  workspaceDir?: string;
+  sessionWorkspaceDir?: string;
+  workspaceOnly?: boolean;
+  /** False when local execution paths belong to another host. */
+  allowHostWorkspace?: boolean;
+  mediaAccess?: OutboundMediaAccess;
+  /** Workspace-bounded transport reader; sender policy remains owned by this resolver. */
+  workspaceMediaAccess?: OutboundMediaAccess;
+  mediaReadFile?: OutboundMediaReadFile;
+} & OutboundHostMediaPolicyContext;
+
+/** Resolves roots and optional host read capability for outbound media in an agent context. */
+export function resolveAgentScopedOutboundMediaAccess(
+  params: AgentScopedOutboundMediaAccessParams,
+): OutboundMediaAccess {
+  return resolveAgentScopedMediaAccess(params, false);
+}
+
+/** Adds a bounded native opener for host-owned media staging. */
+export function resolveAgentScopedHostOutboundMediaAccess(
+  params: AgentScopedOutboundMediaAccessParams,
+): HostOutboundMediaAccess {
+  return resolveAgentScopedMediaAccess(params, true);
+}
+
+function resolveAgentScopedMediaAccess(
+  params: AgentScopedOutboundMediaAccessParams,
+  includeHostOpener: boolean,
+): HostOutboundMediaAccess {
+  if (params.allowHostWorkspace === false) {
+    return { localRoots: getManagedMediaLocalRoots(params.mediaSources) };
+  }
+  const resolvedWorkspaceDir =
+    params.workspaceDir ??
+    params.mediaAccess?.workspaceDir ??
+    params.workspaceMediaAccess?.workspaceDir ??
+    (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
   const groupPolicy = resolveGroupToolPolicy({
     config: params.cfg,
     sessionKey: params.sessionKey,
@@ -62,126 +138,19 @@ function isAgentScopedMediaReadAllowedByToolPolicy(
     senderUsername: params.requesterSenderUsername,
     senderE164: params.requesterSenderE164,
   });
-  if (!isToolAllowedByPolicies("read", [groupPolicy, senderPolicy])) {
-    return false;
-  }
-  return true;
-}
-
-/** Creates a host reader bound to the agent workspace and configured local-file safety checks. */
-function createAgentScopedHostMediaReadFile(
-  params: {
-    cfg: OpenClawConfig;
-    agentId?: string;
-    localRoots: readonly string[];
-    workspaceDir?: string;
-    excludedLocalRoots?: readonly string[];
-    workspaceOnly?: boolean;
-  } & OutboundHostMediaPolicyContext,
-): OutboundMediaReadFile | undefined {
-  if (
-    !resolveEffectiveToolFsRootExpansionAllowed(params) ||
-    !isAgentScopedMediaReadAllowedByToolPolicy(params)
-  ) {
-    return undefined;
-  }
-  const inferredWorkspaceDir =
-    params.workspaceDir ??
-    (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
-  const workspaceRoot = resolveWorkspaceRoot(inferredWorkspaceDir);
-  return createBoundedOutboundMediaReadFile(async (filePath, options) => {
-    const resolvedPath = resolvePathFromInput(filePath, workspaceRoot);
-    return await readLocalMediaFile(resolvedPath, params.localRoots, {
-      maxBytes: options?.maxBytes ?? Number.MAX_SAFE_INTEGER,
-      excludedRoots: params.excludedLocalRoots,
-    });
+  const { globalPolicy, agentPolicy } = resolveEffectiveToolPolicy({
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
   });
-}
-
-function getManagedMediaLocalRoots(mediaSources?: readonly string[]): readonly string[] {
-  const roots = new Set([path.join(resolveConfigDir(), "media", "outbound")]);
-  for (const source of mediaSources ?? []) {
-    const managedRoot = resolveManagedMediaRoot(source);
-    if (managedRoot) {
-      roots.add(managedRoot);
-    }
-  }
-  return Array.from(roots);
-}
-
-function appendWorkspaceDirToLocalRoots(
-  roots: readonly string[] | undefined,
-  workspaceDir?: string,
-): readonly string[] | undefined {
-  if (!workspaceDir) {
-    return roots;
-  }
-  const resolvedWorkspaceDir = path.resolve(workspaceDir);
-  if (!roots?.length) {
-    return [resolvedWorkspaceDir];
-  }
-  if (roots.some((root) => path.resolve(root) === resolvedWorkspaceDir)) {
-    return roots;
-  }
-  return [...roots, resolvedWorkspaceDir];
-}
-
-function createWorkspaceAwareMediaReadFile(params: {
-  workspaceMediaAccess?: OutboundMediaAccess;
-  hostReadFile?: OutboundMediaReadFile;
-  localRoots: readonly string[];
-  excludedLocalRoots?: readonly string[];
-}): OutboundMediaReadFile | undefined {
-  const workspaceReadFile = params.workspaceMediaAccess?.readFile;
-  const workspaceLocalRoots = params.workspaceMediaAccess?.localRoots ?? [];
-  if (!workspaceReadFile || workspaceLocalRoots.length === 0) {
-    return params.hostReadFile;
-  }
-  return createBoundedOutboundMediaReadFile(async (filePath, options) => {
-    const resolvedPath = path.resolve(filePath);
-    if (workspaceLocalRoots.some((root) => isPathInside(path.resolve(root), resolvedPath))) {
-      return await readOutboundMediaFile(workspaceReadFile, filePath, {
-        maxBytes: options?.maxBytes ?? Number.MAX_SAFE_INTEGER,
-      });
-    }
-    if (params.hostReadFile) {
-      return await readOutboundMediaFile(params.hostReadFile, filePath, {
-        maxBytes: options?.maxBytes ?? Number.MAX_SAFE_INTEGER,
-      });
-    }
-    return await readLocalMediaFile(filePath, params.localRoots, {
-      maxBytes: options?.maxBytes ?? Number.MAX_SAFE_INTEGER,
-      excludedRoots: params.excludedLocalRoots,
-    });
-  });
-}
-
-/** Resolves roots and optional host read capability for outbound media in an agent context. */
-export function resolveAgentScopedOutboundMediaAccess(
-  params: {
-    cfg: OpenClawConfig;
-    agentId?: string;
-    mediaSources?: readonly string[];
-    workspaceDir?: string;
-    sessionWorkspaceDir?: string;
-    workspaceOnly?: boolean;
-    /** False when local execution paths belong to another host. */
-    allowHostWorkspace?: boolean;
-    mediaAccess?: OutboundMediaAccess;
-    /** Workspace-bounded transport reader; sender policy remains owned by this resolver. */
-    workspaceMediaAccess?: OutboundMediaAccess;
-    mediaReadFile?: OutboundMediaReadFile;
-  } & OutboundHostMediaPolicyContext,
-): OutboundMediaAccess {
-  if (params.allowHostWorkspace === false) {
-    return { localRoots: getManagedMediaLocalRoots(params.mediaSources) };
-  }
-  const resolvedWorkspaceDir =
-    params.workspaceDir ??
-    params.mediaAccess?.workspaceDir ??
-    params.workspaceMediaAccess?.workspaceDir ??
-    (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
-  const mediaReadAllowed = isAgentScopedMediaReadAllowedByToolPolicy(params);
+  // Denied readers must lose workspace roots as well as callbacks: loaders can
+  // otherwise fall back to native reads from those roots.
+  const mediaReadAllowed = isToolAllowedByPolicies("read", [
+    globalPolicy,
+    agentPolicy,
+    groupPolicy,
+    senderPolicy,
+  ]);
   const registeredMedia = resolvedWorkspaceDir
     ? captureAgentWorkspaceOutboundMedia(resolvedWorkspaceDir)
     : undefined;
@@ -223,54 +192,82 @@ export function resolveAgentScopedOutboundMediaAccess(
     mediaReadAllowed && !registeredMedia
       ? appendWorkspaceDirToLocalRoots(baseLocalRoots, resolvedWorkspaceDir)
       : baseLocalRoots;
-  const hostReadFile =
-    params.mediaAccess?.readFile ??
-    params.mediaReadFile ??
-    createAgentScopedHostMediaReadFile({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      localRoots: localRoots ?? [],
-      workspaceDir: resolvedWorkspaceDir,
-      excludedLocalRoots: registeredRoots,
-      workspaceOnly: params.workspaceOnly,
-      sessionKey: params.sessionKey,
-      messageProvider: params.messageProvider,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      accountId: params.accountId,
-      requesterSenderId: params.requesterSenderId,
-      requesterSenderName: params.requesterSenderName,
-      requesterSenderUsername: params.requesterSenderUsername,
-      requesterSenderE164: params.requesterSenderE164,
+  let hostReadFile = params.mediaAccess?.readFile ?? params.mediaReadFile;
+  if (!hostReadFile && mediaReadAllowed && resolveEffectiveToolFsRootExpansionAllowed(params)) {
+    const workspaceRoot = resolveWorkspaceRoot(resolvedWorkspaceDir);
+    hostReadFile = createBoundedOutboundMediaReadFile(async (filePath, options) => {
+      const resolvedPath = resolvePathFromInput(filePath, workspaceRoot);
+      return await readLocalMediaFile(resolvedPath, localRoots, {
+        maxBytes: options?.maxBytes ?? Number.MAX_SAFE_INTEGER,
+        excludedRoots: registeredRoots,
+      });
     });
+  }
+  const createWorkspaceAwareMediaReadFile = (
+    workspaceMediaAccess: OutboundMediaAccess | undefined,
+    fallbackReadFile: OutboundMediaReadFile | undefined,
+  ): OutboundMediaReadFile | undefined => {
+    const workspaceReadFile = workspaceMediaAccess?.readFile;
+    const readRoots = workspaceMediaAccess?.localRoots ?? [];
+    if (!workspaceReadFile || readRoots.length === 0) {
+      return fallbackReadFile;
+    }
+    return createBoundedOutboundMediaReadFile(async (filePath, options) => {
+      const selectedReadFile = workspaceOwnsMediaPath(workspaceMediaAccess, filePath)
+        ? workspaceReadFile
+        : fallbackReadFile;
+      const maxBytes = options?.maxBytes ?? Number.MAX_SAFE_INTEGER;
+      if (selectedReadFile) {
+        return await readOutboundMediaFile(selectedReadFile, filePath, { maxBytes });
+      }
+      return await readLocalMediaFile(filePath, localRoots, {
+        maxBytes,
+        excludedRoots: registeredRoots,
+      });
+    });
+  };
   const registeredReadFile =
     mediaReadAllowed && registeredMedia
-      ? createWorkspaceAwareMediaReadFile({
-          workspaceMediaAccess: {
+      ? createWorkspaceAwareMediaReadFile(
+          {
             localRoots: registeredRoots,
             readFile: createBoundedOutboundMediaReadFile((filePath, options) =>
               registeredMedia.readFile(filePath, options?.maxBytes ?? Number.MAX_SAFE_INTEGER),
             ),
           },
           hostReadFile,
-          localRoots: localRoots ?? [],
-          excludedLocalRoots: registeredRoots,
-        })
+        )
       : hostReadFile;
   // An explicit sandbox capability owns its declared roots for this turn, even
   // when an rw sandbox uses the same host path as the registered agent workspace.
   const readFile = mediaReadAllowed
-    ? createWorkspaceAwareMediaReadFile({
-        workspaceMediaAccess: params.workspaceMediaAccess,
-        hostReadFile: registeredReadFile,
-        localRoots: localRoots ?? [],
-        excludedLocalRoots: registeredRoots,
-      })
+    ? createWorkspaceAwareMediaReadFile(params.workspaceMediaAccess, registeredReadFile)
     : undefined;
-  return {
-    ...(localRoots?.length ? { localRoots } : {}),
+  const mediaAccess: OutboundMediaAccess = {
+    ...(localRoots.length ? { localRoots } : {}),
     ...(readFile ? { readFile } : {}),
     ...(resolvedWorkspaceDir ? { workspaceDir: resolvedWorkspaceDir } : {}),
   };
+  if (!includeHostOpener) {
+    return mediaAccess;
+  }
+  const openFile: HostOutboundMediaAccess["openFile"] = async (filePath, options) => {
+    // Paths owned by a transport or caller reader stay on that buffered reader: a native
+    // copy must never read a stale local mirror of a sandbox or remotely owned workspace.
+    if (
+      (mediaReadAllowed &&
+        (workspaceOwnsMediaPath(params.workspaceMediaAccess, filePath) ||
+          params.mediaAccess?.readFile ||
+          params.mediaReadFile)) ||
+      (registeredMedia &&
+        registeredRoots.some((root) => isPathInside(root, path.resolve(filePath))))
+    ) {
+      return undefined;
+    }
+    return await openLocalMediaFile(filePath, localRoots, {
+      ...options,
+      excludedRoots: registeredRoots,
+    });
+  };
+  return { ...mediaAccess, openFile };
 }

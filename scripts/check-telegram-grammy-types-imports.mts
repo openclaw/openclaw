@@ -32,7 +32,7 @@ function collectTypeScriptFiles(root: string): string[] {
       files.push(...collectTypeScriptFiles(entryPath));
       continue;
     }
-    if (entry.isFile() && entry.name.endsWith(".ts")) {
+    if (entry.isFile() && /\.tsx?$/u.test(entry.name)) {
       files.push(entryPath);
     }
   }

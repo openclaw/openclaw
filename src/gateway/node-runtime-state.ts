@@ -8,7 +8,6 @@ import { invalidateNodeWakeState } from "./node-wake-state.js";
 
 export type PendingNodeAction = {
   id: string;
-  nodeId: string;
   pairingGeneration: string;
   command: string;
   paramsJSON?: string;
@@ -71,9 +70,8 @@ export function enqueuePendingNodeAction(params: {
   idempotencyKey: string;
   ttlMs: number;
   maxPerNode: number;
-  nowMs?: number;
 }): { action: PendingNodeAction; created: boolean } {
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = Date.now();
   const queue = prunePendingNodeActions({
     nodeId: params.nodeId,
     nowMs,
@@ -86,7 +84,6 @@ export function enqueuePendingNodeAction(params: {
   }
   const action: PendingNodeAction = {
     id: randomUUID(),
-    nodeId: params.nodeId,
     pairingGeneration: params.pairingGeneration,
     command: params.command,
     paramsJSON: params.paramsJSON,
@@ -111,11 +108,10 @@ export function listPendingNodeActions(params: {
   nodeId: string;
   pairingGeneration?: string;
   ttlMs: number;
-  nowMs?: number;
 }): PendingNodeAction[] {
   return prunePendingNodeActions({
     nodeId: params.nodeId,
-    nowMs: params.nowMs ?? Date.now(),
+    nowMs: Date.now(),
     ttlMs: params.ttlMs,
     pairingGeneration: params.pairingGeneration,
   });
@@ -167,17 +163,13 @@ export function removePendingNodeAction(params: {
   });
 }
 
-function clearPendingNodeActions(nodeId: string): void {
-  pendingNodeActionsById.delete(nodeId);
-}
-
 export function clearRemovedNodeRuntimeState(params: {
   nodeId: string;
   context: {
     nodeRegistry: Pick<NodeRegistry, "updateSurface">;
   };
 }) {
-  clearPendingNodeActions(params.nodeId);
+  pendingNodeActionsById.delete(params.nodeId);
   clearNodePendingWork(params.nodeId);
   invalidateNodeWakeState(params.nodeId);
   params.context.nodeRegistry.updateSurface(params.nodeId, {

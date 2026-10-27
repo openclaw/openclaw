@@ -1,0 +1,97 @@
+openclaw-custodian-setup-card {
+  display: contents;
+}
+
+.custodian-setup {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 14px;
+  margin-bottom: 20px;
+  padding: 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  overflow-wrap: anywhere;
+}
+
+.custodian-setup__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.custodian-setup h2,
+.custodian-setup h3,
+.custodian-setup p {
+  margin: 0;
+}
+
+.custodian-setup h2 {
+  color: var(--text-strong);
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+.custodian-setup h3 {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.custodian-setup p,
+.custodian-setup__attempts {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.custodian-setup > .btn {
+  justify-self: start;
+}
+
+.custodian-setup__progress,
+.custodian-setup__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.custodian-setup__actions {
+  flex-wrap: wrap;
+}
+
+.custodian-setup__actions .btn {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.custodian-setup__alternatives,
+.custodian-setup__wizard,
+.custodian-setup__error {
+  display: grid;
+  gap: 10px;
+}
+
+.custodian-setup__attempts {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.custodian-setup__error {
+  color: var(--danger);
+}
+
+.custodian-setup__error .btn {
+  justify-self: start;
+}
+
+.custodian-setup__native-actions {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.custodian-setup .custodian-setup__safety {
+  color: var(--muted);
+  font-size: 12px;
+}

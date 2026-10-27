@@ -7,6 +7,7 @@ import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { isReleaseChangelogPath } from "./lib/release-changelog.mjs";
+import { isChangedTsgoCoreTestInput } from "./lib/tsgo-core-test-shards.mts";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
@@ -95,6 +96,32 @@ export function hasConfigDocInput(changedPaths: string[]): boolean {
   );
 }
 
+/** Line-cap ratchet inputs: counted sources plus the Oxlint cap configuration. */
+export function hasLineCapRatchetInput(changedPaths: string[]): boolean {
+  return changedPaths.some(
+    (file) => /\.(?:ts|tsx|mts|mjs)$/u.test(file) || file === ".oxlintrc.json",
+  );
+}
+
+/** Markdown that CI's check-docs lints; config/markdownlint-cli2.jsonc still applies its ignores. */
+export function isDocsMarkdownLintPath(file: string): boolean {
+  return /^(?:docs\/.+\.mdx?|README\.md)$/u.test(file);
+}
+
+/** Native app sources and generators that feed apps/.i18n/native-source.json. */
+export function hasNativeI18nInput(changedPaths: string[]): boolean {
+  return changedPaths.some((file) =>
+    /^(?:apps\/|scripts\/(?:native-app-i18n|native-i18n-(?:inventory|locales)|android-app-i18n|apple-app-i18n)\.ts$)/u.test(
+      file,
+    ),
+  );
+}
+
+/** Agent instruction files bounded by the workspace bootstrap cap. */
+export function hasAgentsInstructionInput(changedPaths: string[]): boolean {
+  return changedPaths.some((file) => /(?:^|\/)AGENTS\.md$/u.test(file));
+}
+
 /**
  * Files whose changes are treated as release metadata only.
  * @internal Shared repository-script contract.
@@ -107,7 +134,6 @@ export const RELEASE_METADATA_PATHS = new Set([
   "apps/android/version.json",
   "apps/ios/CHANGELOG.md",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
-  "apps/mobile/version.json",
   ...CONFIG_DOC_BASELINE_PATHS,
   "docs/install/updating.md",
   "docs/install/updating/automatic-updates.md",
@@ -126,20 +152,17 @@ export type ChangedLaneResult = {
   reasons: string[];
 };
 
-/** Eligible leaf inputs; compiler inventories still decide all consuming graphs. */
+/** Eligible source inputs; compiler inventories still decide all consuming graphs. */
 export function getChangedCoreTestPaths(result: ChangedLaneResult): string[] | undefined {
   const { lanes } = result;
-  if (lanes.all || lanes.core || lanes.tooling || lanes.liveDockerTooling) {
+  if (lanes.all || lanes.liveDockerTooling) {
     return undefined;
   }
   // Styles keep their UI and lint gates but do not change compiler input types.
   const paths = result.paths.filter(
     (file) => getChangedPathFacts(file).surface !== "docs" && !/^ui\/.+\.css$/u.test(file),
   );
-  return paths.length > 0 &&
-    paths.every((file) => /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file))
-    ? paths
-    : undefined;
+  return paths.length > 0 && paths.every(isChangedTsgoCoreTestInput) ? paths : undefined;
 }
 
 type DetectChangedLanesOptions = {
@@ -233,7 +256,9 @@ export function detectChangedLanes(
     if (
       facts.isRootTestSource ||
       changedPath === "test/tsconfig.json" ||
-      changedPath === "test/tsconfig/tsconfig.test.root.json"
+      /^test\/tsconfig\/tsconfig\.test\.root(?:\.(?:tooling|scripts|e2e|other))?\.json$/u.test(
+        changedPath,
+      )
     ) {
       lanes.testRoot = true;
     }
@@ -463,7 +488,8 @@ export function listChangedPathsFromGit(params: {
 }
 
 function runGitNameOnlyDiff(extraArgs: string[], cwd = process.cwd()): string[] {
-  const output = execFileSync("git", ["diff", "--name-only", "-z", ...extraArgs], {
+  // Keep rename sources so checks still cover the removed path's consumers.
+  const output = execFileSync("git", ["diff", "--no-renames", "--name-only", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",

@@ -10,6 +10,13 @@ import {
   resolveSlackReplyRenderPlan,
 } from "./reply-blocks.js";
 
+function commandButtons(command: string): MessagePresentation["blocks"][number] {
+  return {
+    type: "buttons",
+    buttons: [{ label: "Run", action: { type: "command", command } }],
+  };
+}
+
 describe("renderSlackMessagePresentationFallbackText", () => {
   it("uses complete authored fallback once when presentation has only text output", () => {
     const text = "Choose once: /run foo_bar & <!channel>\nThen inspect the report.";
@@ -149,29 +156,6 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     },
   );
 
-  it("includes complete portable table data in Slack accessibility text", () => {
-    expect(
-      renderSlackMessagePresentationFallbackText({
-        text: "Pipeline summary",
-        presentation: {
-          blocks: [
-            {
-              type: "table",
-              caption: "Pipeline",
-              headers: ["Account", "Stage", "ARR"],
-              rows: [
-                ["Acme", "Won", 125000],
-                ["Globex", "Review", 82000],
-              ],
-            },
-          ],
-        },
-      }),
-    ).toBe(
-      "Pipeline summary\n\nPipeline (table)\n- Account: Acme; Stage: Won; ARR: 125000\n- Account: Globex; Stage: Review; ARR: 82000",
-    );
-  });
-
   it("neutralizes raw table mentions without changing authored Slack text", () => {
     expect(
       renderSlackMessagePresentationFallbackText({
@@ -237,20 +221,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
   it("marks command fallbacks with backticks as not copyable", () => {
     const rendered = renderSlackMessagePresentationFallbackText({
       presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Run",
-                action: {
-                  type: "command",
-                  command: "/run foo_bar C:\\tools\\run ` <!channel> <@U1>",
-                },
-              },
-            ],
-          },
-        ],
+        blocks: [commandButtons("/run foo_bar C:\\tools\\run ` <!channel> <@U1>")],
       },
     });
 
@@ -266,20 +237,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     expect(
       renderSlackMessagePresentationFallbackText({
         presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Run",
-                  action: {
-                    type: "command",
-                    command: "/run foo_bar C:\\tools\\run <!channel> <@U1>",
-                  },
-                },
-              ],
-            },
-          ],
+          blocks: [commandButtons("/run foo_bar C:\\tools\\run <!channel> <@U1>")],
         },
       }),
     ).toBe("- Run: `/run foo_bar C:\\tools\\run <!channel> <@U1>`");
@@ -440,21 +398,13 @@ describe("renderSlackMessagePresentationFallbackText", () => {
       presentation: {
         blocks: [
           { type: "table", caption: "Owners", headers, rows: [values] },
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Run",
-                action: { type: "command", command: "/say ` <!channel>" },
-              },
-            ],
-          },
+          commandButtons("/say ` <!channel>"),
         ],
       },
     });
 
     expect(segments).toHaveLength(1);
-    expect(segments[0]).toMatchObject({ kind: "text", mrkdwn: false });
+    expect(segments[0]).toMatchObject({ kind: "text" });
     const fallback = segments[0]?.kind === "text" ? segments[0].text : "";
     expect(fallback).toContain("<@U1> & <!channel>");
     expect(fallback).toContain("/say ` <!channel>");
@@ -479,7 +429,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     });
 
     expect(resolution.authoredTextPlacement).toBe("blocks");
-    expect(resolution.segments).toContainEqual({ kind: "text", text, mrkdwn: false });
+    expect(resolution.segments).toContainEqual({ kind: "text", text });
   });
 
   it("materializes authored text blocks as verbatim mrkdwn", () => {

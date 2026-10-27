@@ -1,7 +1,9 @@
+import { flush } from "solid-js";
 import { i18n } from "../../../i18n/index.ts";
-import type { TranslationMap } from "../../../i18n/lib/types.ts";
+import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { en } from "../../../i18n/locales/en.ts";
-import type { renderDreaming } from "./view.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { renderDreaming } from "./view.tsx";
 
 export const fullDreamingViewAccess: Parameters<typeof renderDreaming>[0]["access"] = {
   canOpenConfig: true,
@@ -12,73 +14,71 @@ export const fullDreamingViewAccess: Parameters<typeof renderDreaming>[0]["acces
   canRepairDreamingArtifacts: true,
 };
 
-const asTranslationMap = (value: string | TranslationMap | undefined): TranslationMap =>
-  value && typeof value === "object" ? value : {};
+type DreamingProps = Parameters<typeof renderDreaming>[0];
+
+export function createDreamingViewProps(
+  viewState: DreamingProps["viewState"],
+  overrides: Partial<DreamingProps> = {},
+): DreamingProps {
+  const props: DreamingProps = {
+    access: fullDreamingViewAccess,
+    viewState,
+    active: true,
+    selectedAgentId: "main",
+    statusError: null,
+    readStatus: () => null,
+    readStatusData: () => ({
+      shortTermCount: 0,
+      promotedCount: 0,
+      shortTermEntries: [],
+      promotedEntries: [],
+      phases: undefined,
+      nextCycle: null,
+      timezone: null,
+    }),
+    readDiary: () => props.dreamDiaryContent,
+    readImports: () => props.wikiImportInsights,
+    readOverview: () => props.wikiOverview,
+    modeSaving: false,
+    dreamDiaryLoading: false,
+    dreamDiaryActionLoading: false,
+    dreamDiaryActionMessage: null,
+    dreamDiaryActionArchivePath: null,
+    dreamDiaryContent: null,
+    memoryWikiEnabled: true,
+    wikiImportInsightsLoading: false,
+    wikiImportInsights: null,
+    wikiOverviewLoading: false,
+    wikiOverview: null,
+    onRefreshDiary: () => {},
+    onRefreshImports: () => {},
+    onRefreshWikiOverview: () => {},
+    onOpenConfig: async () => {},
+    onOpenWikiPage: async () => {},
+    onCloseWikiPreview: () => {},
+    wikiPreview: null,
+    onBackfillDiary: () => {},
+    onCopyDreamingArchivePath: () => {},
+    onDedupeDreamDiary: () => {},
+    onResetDiary: () => {},
+    onResetGroundedShortTerm: () => {},
+    onRepairDreamingArtifacts: () => {},
+    onViewStateChange: (update) => update(viewState),
+    ...overrides,
+  };
+  return props;
+}
 
 export function installDreamingViewTestTranslations(): () => void {
-  const dreaming = asTranslationMap(en.dreaming);
-  const wiki = asTranslationMap(dreaming.wiki);
-  i18n.registerTranslation("en", {
-    ...en,
-    dreaming: {
-      ...dreaming,
-      wiki: {
-        ...wiki,
-        pageTypes: {
-          entity: "entity",
-          concept: "concept",
-          source: "source",
-          synthesis: "synthesis",
-          report: "report",
-        },
-        pageGroups: {
-          sources: "Sources",
-          syntheses: "Syntheses",
-          reports: "Reports",
-          entities: "Entities",
-          concepts: "Concepts",
-        },
-        counts: {
-          pageOne: "{count} page",
-          pages: "{count} pages",
-          claimRowOne: "{count} claim row",
-          claimRows: "{count} claim rows",
-          openQuestionOne: "{count} open question",
-          openQuestions: "{count} open questions",
-          contradictionOne: "{count} contradiction",
-          contradictions: "{count} contradictions",
-          chats: "{count} chats",
-          sensitive: "{count} sensitive",
-          signals: "{count} signals",
-          messages: "{count} messages",
-          userMessages: "{count} user",
-          assistantMessages: "{count} assistant",
-        },
-        pageGroupSummary: "{label} · {count}",
-        noPagesYet: "No pages yet",
-        sectionPageSummary: "{label}: {count}",
-        questionCountOnPages: "{questionCount} on {pageCount}",
-        risk: {
-          needsReview: "needs review",
-          low: "low risk",
-          medium: "medium risk",
-          high: "high risk",
-          unknown: "unknown risk",
-        },
-        pageNotFound: "No wiki page found for {lookup}.",
-        previewTruncated: "Showing the first chunk of this page.",
-        previewTruncatedWithTotal: "Showing the first chunk of this page ({count} total lines).",
-        importedClusterSummary: "Imported chats clustered around {label}.",
-        withheldDigestOne: "{count} digest was withheld pending review.",
-        withheldDigests: "{count} digests were withheld pending review.",
-        details: "Details",
-        hideDetails: "Hide details",
-        vault: "Vault",
-        fullVaultBreakdown: "Full vault breakdown: {breakdown}.",
-        selectedSection: "Selected section: {summary}.",
-        latestUpdate: "Latest update {date}.",
-      },
-    },
-  });
+  i18n.registerTranslation("en", { ...en, ...registerDreamingEnglish.catalog });
   return () => i18n.registerTranslation("en", en);
+}
+
+const mounts = new WeakMap<HTMLElement, () => void>();
+
+export function renderDreamingView(props: DreamingProps, container: HTMLElement) {
+  mounts.get(container)?.();
+  const mounted = mountSolid(() => renderDreaming(props), { container });
+  mounts.set(container, mounted.unmount);
+  flush();
 }

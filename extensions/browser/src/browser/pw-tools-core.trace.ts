@@ -1,11 +1,7 @@
-/**
- * Playwright trace lifecycle helpers for Browser plugin diagnostics.
- */
 import { writeExternalFileWithinOutputRoot } from "./output-files.js";
 import { DEFAULT_TRACE_DIR } from "./paths.js";
 import { ensureContextState, getPageForTargetId } from "./pw-session.js";
 
-/** Starts Playwright tracing for the target page context. */
 export async function traceStartViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -27,7 +23,6 @@ export async function traceStartViaPlaywright(opts: {
   ctxState.traceActive = true;
 }
 
-/** Stops Playwright tracing and returns the committed trace zip path. */
 export async function traceStopViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

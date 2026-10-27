@@ -1,18 +1,11 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { identityFixture } from "./session-identity.test-support.ts";
 import {
   activateSelfRemovingControl,
-  captureUiProofEnabled,
-  controlUiSessionUrl,
   createSessionManagementE2eSuite,
-  installMockGateway,
   openSessionMenuSubmenu,
   requireRecord,
-  sessionsListResponse,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -21,59 +14,10 @@ suite.define(() => {
   it.each(["sessions", "sidebar", "selection", "header"] as const)(
     "keeps a replacement unchanged during a pending %s new-group assignment",
     async (surface) => {
-      const viewport = { width: 1280, height: 900 };
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport,
-        recordVideo: captureUiProofEnabled
-          ? { dir: path.join(suite.artifactDir, "group-identity-20260827"), size: viewport }
-          : undefined,
-      });
-      const page = await context.newPage();
-      const video = page.video();
-      const original = sessionRow("agent:main:group-identity", "Original session", Date.now(), {
-        sessionId: "original-session",
-      });
-      const survivor = sessionRow("agent:main:group-survivor", "Surviving session", Date.now());
-      const replacement = {
-        ...original,
-        sessionId: "replacement-session",
-        label: "Replacement session",
-        displayName: "Replacement session",
-        updatedAt: original.updatedAt + 1_000,
-      };
-      const group = "Selected work";
-      const batch = surface === "selection";
-      const method = batch ? "sessions.patchMany" : "sessions.patch";
-      const gateway = await installMockGateway(page, {
-        deferredMethods: ["sessions.groups.put", method],
-        methodResponses: { "sessions.list": sessionsListResponse([original, survivor]) },
-        sessionKey: original.key,
-      });
-      const capture = async (stage: string, proofSurface: Locator, content: readonly Locator[]) => {
-        if (captureUiProofEnabled) {
-          await mkdir(path.join(suite.artifactDir, "group-identity-20260827"), { recursive: true });
-          await writeFile(
-            path.join(
-              path.join(suite.artifactDir, "group-identity-20260827"),
-              `${surface}-${stage}.png`,
-            ),
-            await takeControlUiViewportScreenshot(page, proofSurface, content),
-          );
-        }
-      };
-      try {
-        await page.goto(
-          surface === "sessions"
-            ? `${suite.server.baseUrl}sessions`
-            : controlUiSessionUrl(suite.server.baseUrl, original.key),
-        );
-        const row =
-          surface === "sessions"
-            ? page.locator(".sessions-table tbody tr", { hasText: original.key })
-            : page.locator(`.sidebar-recent-session[data-session-key="${original.key}"]`);
-        await row.waitFor({ state: "visible" });
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const { original, survivor, replacement, gateway, row, batch, method, replace } =
+          await identityFixture(page, suite.server.baseUrl, surface, "group");
+        const group = "Selected work";
         if (batch) {
           for (const key of [original.key, survivor.key]) {
             await page
@@ -94,18 +38,11 @@ suite.define(() => {
         await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
         const input = page.getByLabel("New group name");
         await input.fill(group);
-        await capture("editing", page.locator("openclaw-modal-dialog dialog"), [input]);
         await input.press("Enter");
         await gateway.waitForRequest("sessions.groups.put");
 
         // Deletion/recreation changes the durable identity, unlike ordinary reset.
-        await gateway.setSessionsListResponse(sessionsListResponse([replacement, survivor]));
-        await gateway.emitGatewayEvent("sessions.changed", {
-          ...replacement,
-          sessionKey: original.key,
-          reason: "create",
-        });
-        await expect.poll(() => row.textContent()).toContain(replacement.label);
+        await replace();
         await gateway.resolveDeferred("sessions.groups.put");
         const request = await gateway.waitForRequest(method);
         const params = requireRecord(request.params);
@@ -143,25 +80,8 @@ suite.define(() => {
           surface === "header"
             ? page.getByText(/changed before patch\. Retry\./).first()
             : page.locator('openclaw-modal-dialog [role="alert"]');
-        if (acceptedKeys.includes(original.key)) {
-          await input.waitFor({ state: "detached" });
-          await page
-            .locator(
-              `[data-session-section="category:${group}"] [data-session-key="${original.key}"]`,
-            )
-            .waitFor({ state: "visible" });
-        } else {
-          await failure.waitFor({ state: "visible" });
-        }
-        await capture(
-          acceptedKeys.includes(original.key) ? "incorrectly-moved" : "rejected",
-          !acceptedKeys.includes(original.key) && surface !== "header"
-            ? page.locator("openclaw-modal-dialog dialog")
-            : page.locator(".shell"),
-          [acceptedKeys.includes(original.key) ? row : failure],
-        );
-
         expect(acceptedKeys).not.toContain(original.key);
+        await failure.waitFor({ state: "visible" });
         expect(targets.find((target) => target.key === original.key)).toMatchObject({
           expectedSessionId: original.sessionId,
         });
@@ -181,19 +101,11 @@ suite.define(() => {
             )
             .count(),
         ).toBe(0);
-        if (surface !== "header") {
-          await page.getByRole("button", { name: "Cancel", exact: true }).click();
-        }
+        expect(await input.inputValue()).toBe(group);
+        expect(await input.isEnabled()).toBe(true);
+        await page.getByRole("button", { name: "Cancel", exact: true }).click();
         await input.waitFor({ state: "detached" });
-        await capture("unchanged", page.locator(".shell"), [row]);
-      } finally {
-        await suite.closeBrowserContext(context);
-        if (video) {
-          await video.saveAs(
-            path.join(path.join(suite.artifactDir, "group-identity-20260827"), `${surface}.webm`),
-          );
-        }
-      }
+      });
     },
   );
 });

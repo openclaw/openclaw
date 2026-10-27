@@ -53,6 +53,7 @@ export async function writeWorkspaceGitInput(params: {
   entries: readonly WorkerWorkspaceManifestEntry[];
   readVerifiedContent: (entry: WorkerWorkspaceManifestEntry) => Promise<Uint8Array>;
   message?: { chunks: readonly Uint8Array[]; byteLength: number };
+  parentCommit?: string;
   assertBeforeMutation?: () => void;
 }): Promise<void> {
   const entries = params.entries.toSorted((left, right) => left.path.localeCompare(right.path));
@@ -64,10 +65,10 @@ export async function writeWorkspaceGitInput(params: {
       yield Buffer.from("\n");
     }
     yield Buffer.from(
-      `commit ${params.ref}\nauthor OpenClaw <openclaw@localhost> 0 +0000\ncommitter OpenClaw <openclaw@localhost> 0 +0000\ndata ${params.message?.byteLength ?? 0}\n`,
+      `commit ${params.ref}\nmark :${entries.length + 1}\nauthor OpenClaw <openclaw@localhost> 0 +0000\ncommitter OpenClaw <openclaw@localhost> 0 +0000\ndata ${params.message?.byteLength ?? 0}\n`,
     );
     yield* params.message?.chunks ?? [];
-    yield Buffer.from("\ndeleteall\n");
+    yield Buffer.from(`\n${params.parentCommit ? `from ${params.parentCommit}\n` : ""}deleteall\n`);
     for (let offset = 0; offset < entries.length; offset += 256) {
       yield Buffer.from(
         entries
@@ -84,7 +85,7 @@ export async function writeWorkspaceGitInput(params: {
           .join(""),
       );
     }
-    yield Buffer.from("done\n");
+    yield Buffer.from(`\nget-mark :${entries.length + 1}\ndone\n`);
   }
   const directory = await fsRoot(path.dirname(params.inputPath));
   await directory.create(path.basename(params.inputPath), chunks(), {

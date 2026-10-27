@@ -1,11 +1,10 @@
-import type { FaceTimeCallRegistry } from "./call-lifecycle.js";
 import type { FaceTimeHelperSupervisorStatus } from "./helper-supervisor.js";
 import type { PendingFaceTimeDial } from "./outbound-call.js";
-import type { ActiveFaceTimeCall, FaceTimeRuntimeStatus } from "./runtime-state.js";
+import type { FaceTimeCallRegistry, FaceTimeRuntimeStatus } from "./runtime-state.js";
 import { summarizeRecentTalkEvents } from "./talk-events-summary.js";
 
 export function buildFaceTimeRuntimeStatus(params: {
-  calls: FaceTimeCallRegistry<ActiveFaceTimeCall>;
+  calls: FaceTimeCallRegistry;
   helperConnected: boolean;
   helperTargets: FaceTimeHelperSupervisorStatus;
   driverInstall: FaceTimeRuntimeStatus["driverInstall"];

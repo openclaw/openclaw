@@ -1,4 +1,3 @@
-// Mattermost plugin module owns draft-preview final delivery.
 import {
   createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
@@ -44,26 +43,8 @@ type MattermostDraftPreviewDeliverParams = {
   // place (onPreviewFinalized) without ever calling deliverPayload; this lets the
   // caller record thread participation on that path too.
   recordThreadParticipation?: () => Promise<void> | void;
+  findPostAfterPreview?: (previewPostId: string) => Promise<string | undefined>;
 };
-
-function combineMattermostVisibleDeliveryResults(
-  results: readonly (LivePreviewDeliveryResult | undefined)[],
-  outcome: "text" | "media",
-): MattermostReplyDeliveryResult | undefined {
-  const visibleResults = results.filter(
-    (result): result is LivePreviewDeliveryResult => result?.visibleReplySent === true,
-  );
-  if (visibleResults.length === 0) {
-    return undefined;
-  }
-  return {
-    outcome,
-    ...createAcceptedChannelDeliveryResult({
-      deliveryResults: visibleResults,
-      content: joinMattermostVisibleContent(visibleResults.map((result) => result.content)),
-    }),
-  };
-}
 
 export async function deliverMattermostReplyWithDraftPreview(
   params: MattermostDraftPreviewDeliverParams,
@@ -130,6 +111,23 @@ export async function deliverMattermostReplyWithDraftPreview(
           return { message: previewFinalText };
         },
         editFinal: async (previewPostId, edit) => {
+          // Mattermost lists posts by create_at, and an edit neither moves a post nor notifies.
+          // Once anything was posted after the preview, decline the edit: core then sends a
+          // fresh final that lands last and notifies, and deletes the preview.
+          const newerPostId = await params
+            .findPostAfterPreview?.(previewPostId)
+            .catch((err: unknown) => {
+              params.logVerboseMessage(
+                `mattermost preview order check failed; finalizing in place (${String(err)})`,
+              );
+              return undefined;
+            });
+          if (newerPostId) {
+            params.logVerboseMessage(
+              `mattermost preview ${previewPostId} is above newer post ${newerPostId}; sending the final as a new post`,
+            );
+            return { visibleReplySent: false };
+          }
           const post = await updateMattermostPost(params.client, previewPostId, edit);
           const receipt = createPreviewMessageReceipt({ id: post.id ?? previewPostId });
           return {
@@ -179,7 +177,7 @@ export async function deliverMattermostReplyWithDraftPreview(
                   ...payload,
                   text: resolvedDeliveryText?.trim() ? resolvedDeliveryText : supplement.spokenText,
                 }
-              : payload.isError !== true && typeof resolvedDeliveryText === "string"
+              : payload.isError !== true && resolvedDeliveryText !== undefined
                 ? { ...payload, text: resolvedDeliveryText }
                 : payload;
         const delivered = await params.deliverPayload(deliveryPayload);
@@ -191,16 +189,23 @@ export async function deliverMattermostReplyWithDraftPreview(
       onNormalDelivered: params.recordThreadParticipation,
     });
 
-    return (
-      combineMattermostVisibleDeliveryResults(
-        [confirmedPreviewDelivery, finalization.deliveryResult],
-        outcome,
-      ) ?? {
+    const visibleResults = [confirmedPreviewDelivery, finalization.deliveryResult].filter(
+      (result): result is LivePreviewDeliveryResult => result?.visibleReplySent === true,
+    );
+    if (visibleResults.length === 0) {
+      return {
         outcome: "empty",
         visibleReplySent: false,
         suppression: { reason: "no_visible_result" },
-      }
-    );
+      };
+    }
+    return {
+      outcome,
+      ...createAcceptedChannelDeliveryResult({
+        deliveryResults: visibleResults,
+        content: joinMattermostVisibleContent(visibleResults.map((result) => result.content)),
+      }),
+    };
   } catch (error: unknown) {
     // Core owns receipts from this delivery. Only prepend earlier sealed
     // assistant generations that were not part of its send/edit operation.

@@ -1,68 +1,88 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
 import type { SessionTranscriptReadScope } from "../../config/sessions/session-accessor.js";
-import { readTranscriptDisplayDelta } from "../../config/sessions/session-accessor.sqlite-history-events.js";
 import type { SessionTranscriptDisplayDeltaResult } from "../../config/sessions/session-accessor.sqlite-history-query.js";
-import { readRestoredSessionTranscript } from "../../config/sessions/session-cold-storage-read.js";
-import {
-  projectAgentHistoryActivity,
-  type AgentHistoryActivity,
-} from "../../infra/agent-activity-events.js";
+import { captureSessionActorTranscriptRead } from "../../config/sessions/session-actor-transcript-read.js";
+import { projectAgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import { jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
-import type { SubagentCoordinationDisplayResolver } from "../chat-display-projection.history.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
 import {
   createCurrentUserProfileMessageProjector,
   isAssistantTtsSupplementMessage,
 } from "../chat-display-projection.js";
+import {
+  chatHistoryActivityBytes,
+  createChatHistoryActivityProjection,
+  createChatHistoryDeltaByteCounter,
+} from "../chat-history-budget.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
   createPreparedSessionHistorySubagentProjection,
   isAppendOnlySessionHistoryDelta,
 } from "../session-history-delta-visibility.js";
-import { createSessionHistorySubagentProjection } from "../session-history-subagent-projection.js";
 import { projectTranscriptEntryMessage } from "../session-transcript-entry-message.js";
+import { createSessionActorTranscriptReader } from "../session-transcript-memory-reader.js";
 import {
   projectSessionMessagePayload,
   type SessionMessageProjectionState,
 } from "../session-transcript-message.js";
-import {
-  chatHistoryActivityBytes,
-  createChatHistoryActivityProjection,
-} from "./chat-history-budget.js";
+import type { SubagentCoordinationDisplayResolver } from "../session-transcript-read.types.js";
 
 const CHAT_HISTORY_DELTA_MAX_EVENTS = 200;
 const CHAT_HISTORY_DELTA_MAX_BYTES = 1_000_000;
-
-type ChatHistoryDeltaRead =
-  | { kind: "reset" }
-  | {
-      activeLeafEntryId: string | null;
-      deltaCursor: string;
-      kind: "delta";
-      messages: Record<string, unknown>[];
-      activity: AgentHistoryActivity[];
-      messagesBytes: number;
-      activityBytes: number;
-    };
 
 type ChatHistoryDeltaParams = {
   agentId: string;
   cursor: string;
   maxBytes?: number;
+  maxChars?: number;
+  toolResultMaxChars?: number;
+  includePluginSteering?: boolean;
   scope: SessionTranscriptReadScope;
   sessionKey: string;
   sessionSnapshot: Record<string, unknown>;
 };
 
+function chatHistoryDeltaLimits(params: ChatHistoryDeltaParams) {
+  return {
+    cursor: params.cursor,
+    maxBytes: Math.min(params.maxBytes ?? Infinity, CHAT_HISTORY_DELTA_MAX_BYTES),
+    maxEvents: CHAT_HISTORY_DELTA_MAX_EVENTS,
+  };
+}
+
 export async function readChatHistoryDelta(
   params: ChatHistoryDeltaParams & { incognito?: boolean },
   signal?: AbortSignal,
-): Promise<ChatHistoryDeltaRead> {
+) {
   signal?.throwIfAborted();
+  const memory = captureSessionActorTranscriptRead(params.scope, signal);
+  if (memory) {
+    if (memory.missing) {
+      return { kind: "reset" as const };
+    }
+    const delta = await memory.read("session.history.delta", {
+      options: chatHistoryDeltaLimits(params),
+    });
+    const readers = createSessionActorTranscriptReader(memory);
+    if (delta.kind === "page") {
+      await readers.prepareVisibility(
+        delta.events.flatMap((row) =>
+          row.messageSeq === undefined
+            ? []
+            : [projectTranscriptEntryMessage(row.event, row.messageSeq, row.displayPosition)],
+        ),
+      );
+    }
+    const result = await projectChatHistoryDelta(params, delta, readers.subagentCoordination);
+    signal?.throwIfAborted();
+    memory.assertCurrent();
+    return result;
+  }
   if (params.incognito || isIncognitoSessionKey(params.sessionKey)) {
-    return readRestoredSessionTranscript(params.scope, () => readLocalChatHistoryDelta(params));
+    return { kind: "reset" as const };
   }
   const target: SessionTranscriptReadScope = {
     ...params.scope,
@@ -77,11 +97,7 @@ export async function readChatHistoryDelta(
       kind: "delta",
       params: {
         target,
-        limits: {
-          cursor: params.cursor,
-          maxBytes: Math.min(params.maxBytes ?? Infinity, CHAT_HISTORY_DELTA_MAX_BYTES),
-          maxEvents: CHAT_HISTORY_DELTA_MAX_EVENTS,
-        },
+        limits: chatHistoryDeltaLimits(params),
       },
     },
     signal,
@@ -96,34 +112,24 @@ export async function readChatHistoryDelta(
   );
 }
 
-function readLocalChatHistoryDelta(params: ChatHistoryDeltaParams): ChatHistoryDeltaRead {
-  const maxBytes = Math.min(params.maxBytes ?? Infinity, CHAT_HISTORY_DELTA_MAX_BYTES);
-  const result = readTranscriptDisplayDelta(params.scope, {
-    cursor: params.cursor,
-    maxBytes,
-    maxEvents: CHAT_HISTORY_DELTA_MAX_EVENTS,
-  });
-  if (!isAppendOnlySessionHistoryDelta(result)) {
-    return { kind: "reset" };
-  }
-  return projectChatHistoryDelta(
-    params,
-    result,
-    createSessionHistorySubagentProjection(params.scope),
-  );
-}
-
-function projectChatHistoryDelta(
+async function projectChatHistoryDelta(
   params: ChatHistoryDeltaParams,
   result: SessionTranscriptDisplayDeltaResult,
   subagentCoordination: SubagentCoordinationDisplayResolver,
-): ChatHistoryDeltaRead {
+) {
   const maxBytes = Math.min(params.maxBytes ?? Infinity, CHAT_HISTORY_DELTA_MAX_BYTES);
   subagentCoordination.assertCurrent?.();
   if (!isAppendOnlySessionHistoryDelta(result)) {
-    return { kind: "reset" };
+    return { kind: "reset" as const };
   }
-
+  const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+    result.events.flatMap((row) =>
+      row.messageSeq === undefined
+        ? []
+        : [projectTranscriptEntryMessage(row.event, row.messageSeq, row.displayPosition)],
+    ),
+  );
+  subagentCoordination.assertCurrent?.();
   let projectionState: SessionMessageProjectionState = {
     assistantErrorPending: false,
     turnBoundaryPending: false,
@@ -135,6 +141,10 @@ function projectChatHistoryDelta(
   const activityMessages: Array<{ messageId: string; message: unknown }> = [];
   // Include array brackets and separators without serializing the whole page.
   let messagesBytes = 2;
+  const envelopeBytes =
+    result.events.length > 1
+      ? createChatHistoryDeltaByteCounter(params.sessionSnapshot)
+      : undefined;
   for (const row of result.events) {
     if (row.messageSeq === undefined) {
       continue;
@@ -153,16 +163,19 @@ function projectChatHistoryDelta(
         "channel-final"
     ) {
       // Mirror suppression needs the preceding reply, which can be before this cursor.
-      return { kind: "reset" };
+      return { kind: "reset" as const };
     }
     if (isAssistantTtsSupplementMessage(entryMessage)) {
       // Full history owns merging audio into a reply that can precede this cursor.
-      return { kind: "reset" };
+      return { kind: "reset" as const };
     }
     const messageId = asOptionalRecord(row.event)?.id;
     const projected = projectSessionMessagePayload({
       agentId: params.agentId,
       historyDelta: true,
+      includePluginSteering: params.includePluginSteering,
+      maxChars: params.maxChars,
+      toolResultMaxChars: params.toolResultMaxChars,
       message: entryMessage,
       ...(typeof messageId === "string" && messageId ? { messageId } : {}),
       messageSeq: row.messageSeq,
@@ -170,22 +183,26 @@ function projectChatHistoryDelta(
       projectionState,
       projectCurrentUserProfile,
       subagentCoordination,
+      resolveCronJobName,
       sessionKey: params.sessionKey,
       sessionSnapshot: params.sessionSnapshot,
     });
     if (projected.requiresHistoryReset) {
-      return { kind: "reset" };
+      return { kind: "reset" as const };
     }
     projectionState = projected.projectionState;
     // Recovery can remove this row from history, which an append-only delta cannot express.
     // Keep the last accepted cursor before the error and let a full tail own reconciliation.
     if (projectionState.assistantErrorPending) {
-      return { kind: "reset" };
+      return { kind: "reset" as const };
     }
     if (projected.payload) {
-      messagesBytes += jsonUtf8BytesOrInfinity(projected.payload) + (messages.length > 0 ? 1 : 0);
+      messagesBytes +=
+        (envelopeBytes
+          ? envelopeBytes(projected.payload)
+          : jsonUtf8BytesOrInfinity(projected.payload)) + (messages.length > 0 ? 1 : 0);
       if (messagesBytes > maxBytes) {
-        return { kind: "reset" };
+        return { kind: "reset" as const };
       }
       messages.push(projected.payload);
       if (typeof messageId === "string") {
@@ -202,12 +219,12 @@ function projectChatHistoryDelta(
   ];
   const activityBytes = chatHistoryActivityBytes(activity);
   if (messagesBytes + activityBytes > maxBytes) {
-    return { kind: "reset" };
+    return { kind: "reset" as const };
   }
   return {
     activeLeafEntryId: result.activeLeafEntryId,
     deltaCursor: result.cursor,
-    kind: "delta",
+    kind: "delta" as const,
     activity,
     messages: composeTranscriptDisplay(messages, (envelope) => envelope.message),
     messagesBytes,

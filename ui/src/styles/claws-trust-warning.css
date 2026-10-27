@@ -1,0 +1,24 @@
+.claws-trust-warning {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.claws-trust-warning__title {
+  display: block;
+}
+
+.claws-trust-warning div strong {
+  margin-right: 3px;
+}
+
+.claws-trust-warning a {
+  color: inherit;
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+}
+
+.claws-trust-warning__plain {
+  white-space: pre-wrap;
+}

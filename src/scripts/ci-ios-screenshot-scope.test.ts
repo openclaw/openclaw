@@ -33,7 +33,7 @@ describe("shouldRunIosScreenshots", () => {
     for (const changedPath of [
       "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt",
       "docs/ci.md",
-      "ui/src/pages/activity/activity-page.ts",
+      "ui/src/pages/activity/activity-page.tsx",
     ]) {
       expect(shouldRunIosScreenshots([changedPath]), changedPath).toBe(false);
     }

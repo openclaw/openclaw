@@ -72,7 +72,6 @@ final class CuaDriverStderrRelay: @unchecked Sendable {
     private var buffer = Data()
     private var reader: PipeReadStream?
     private var stopped = false
-    private var emittedManagedModeNotice = false
 
     init(emit: @escaping @Sendable (CuaDriverStderrEvent) -> Void) {
         self.emit = emit
@@ -90,14 +89,8 @@ final class CuaDriverStderrRelay: @unchecked Sendable {
     }
 
     func reportManagedMode() {
-        let shouldEmit = self.lock.withLock {
-            guard !self.stopped, !self.emittedManagedModeNotice else { return false }
-            self.emittedManagedModeNotice = true
-            return true
-        }
-        if shouldEmit {
-            self.emit(.notice(Self.managedModeNotice))
-        }
+        guard self.lock.withLock({ !self.stopped }) else { return }
+        self.emit(.notice(Self.managedModeNotice))
     }
 
     func finishReading() async {

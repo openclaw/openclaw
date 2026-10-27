@@ -1,72 +1,114 @@
-import type { SessionProviderReviewComparison } from "../config/sessions/provider-review.types.js";
+import type { SessionActorOperations } from "../config/sessions/session-actor-contract.js";
 import type {
-  SessionEntryReplacementCommit,
-  SessionEntryReplacementCommitted,
-} from "../config/sessions/session-accessor.sqlite-replacement-state.js";
+  SqliteWalPeriodicRequest,
+  SqliteWalPeriodicResult,
+} from "../infra/sqlite-wal-write-admission.js";
+import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
+import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import type { AgentCreationClaimWitness } from "./agent-creation-claim.js";
+import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
 import type {
-  PublishedSessionTranscriptArchive,
-  SessionLegacyArchiveRemovalResult,
-} from "../config/sessions/session-history-archive-pruning.types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
-import type { SqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
-import type {
-  SqliteWorkerAdmissionFactory,
-  SqliteWorkerAdmissionRequest,
-} from "../infra/sqlite-worker-operation-admission.js";
+  AgentDatabaseGenerationClaim,
+  AgentDatabaseRequestExecutionSource,
+  OpenClawAgentDatabaseAdmissionExecution,
+} from "./openclaw-agent-execution-admission-contract.js";
 import type { AgentDatabaseDomainOperations } from "./openclaw-agent-execution-domain.js";
+import type { AgentDatabaseExecutionFileIdentity } from "./openclaw-agent-execution-identity.types.js";
+import type { RegisteredAgentWorkerOperations } from "./openclaw-agent-execution-operations.js";
 
-/** Recorded by the native owner; a descriptor never grants access to that owner. */
-export type AgentDatabaseExecutionIdentity = {
-  kind: "file";
-  physicalIdentity: string;
-  incarnation: string;
-  nativeLocation: string;
+export type {
+  AgentDatabaseFileExecutionIdentity,
+  AgentDatabaseExecutionFileIdentity,
+} from "./openclaw-agent-execution-identity.types.js";
+
+export type AgentDatabaseNativeStore = SqliteWorkerStore<AgentDatabaseOperations>;
+export type AgentDatabaseExecutionScope = Pick<AgentDatabaseNativeStore, "execute">;
+
+export type OpenClawAgentDatabaseExecution = OpenClawAgentDatabaseAdmissionExecution & {
+  /** Observe the next terminal native/admission loss after accepted work settles; excludes idle retirement. */
+  onTerminal(listener: (reason: Error) => void): () => void;
+  /** The accepted native receipt; reading this never adopts the current pathname. */
+  readonly fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
+  /** Accept the admitted native handle used by a synchronous SDK operation. */
+  adoptNativeDatabase(database: OpenClawAgentDatabase): Promise<void>;
+  /** Reuse only a native generation whose preparation and registration publication settled. */
+  capturePreparedGenerationClaim(): AgentDatabaseGenerationClaim | undefined;
+  /** Admit a write against existing storage; a missing store remains missing. */
+  runExisting<T>(
+    source: AgentDatabaseRequestExecutionSource,
+    operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
+    options?:
+      | { retireNativeOnFailure: true; withAdmission?: never }
+      | {
+          retireNativeOnFailure?: never;
+          /** Track read admission; cancellation removes only a waiting host-queue task. */
+          withAdmission: <Result>(
+            run: () => Promise<Result>,
+            signal: AbortSignal,
+          ) => Promise<Result>;
+        },
+  ): Promise<T | undefined>;
+  /**
+   * Join this reference's work; native cleanup failures remain with its resource owner.
+   * The owner may retain one bounded idle generation.
+   */
+  release(): Promise<void>;
 };
 
-export type AgentDatabaseExecutionFileIdentity = Pick<
-  AgentDatabaseExecutionIdentity,
-  "kind" | "physicalIdentity" | "nativeLocation"
->;
+export type AgentDatabaseFileExecutionOwner = {
+  readonly kind: "file";
+  readonly agentId: string;
+  readonly sharedDatabaseKey: string;
+  readonly creationIdentity?: DatabasePathIdentity;
+  getPendingPreparation(): Promise<void> | undefined;
+  borrow(
+    pathname: string,
+    expectedIdentity?: AgentDatabaseExecutionFileIdentity,
+    expectedCreationIdentity?: DatabasePathIdentity,
+    requestedPath?: string,
+  ): OpenClawAgentDatabaseExecution;
+  closeIdle(): Promise<void>;
+  retireForCleanup(): Promise<void>;
+  close(): Promise<void>;
+};
 
-export type AgentDatabaseExecutionOpen = {
+export type AgentDatabaseNativeGeneration = {
+  /** Established worker loss permits later native replacement; fatal opening failure does not. */
+  failure(): "open-refused" | "native" | "lost" | undefined;
+  isPrepared(): boolean;
+  /** Settle a canceled caller's initial open before a successor can replace its generation. */
+  getPendingNativeOpen(): Promise<void> | undefined;
+  getPendingPreparation(): Promise<void> | undefined;
+  captureClaim(assertBorrowed: () => void): AgentDatabaseGenerationClaim;
+  run<T>(
+    source: AgentDatabaseRequestExecutionSource,
+    operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
+    assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
+    createIfMissing?: boolean,
+    signal?: AbortSignal,
+  ): Promise<T | undefined>;
+  close(): Promise<void>;
+};
+
+export type AgentDatabaseFileExecutionOpen = {
+  kind?: "file";
   leaseId: string;
   agentId: string;
   databasePath: string;
   stateDatabasePath: string;
-  environment: { OPENCLAW_STATE_DIR: string; OPENCLAW_SUPERVISOR_MODE?: "external" };
+  environment: SqliteWorkerStateContext["environment"];
   expectedIdentity?: AgentDatabaseExecutionFileIdentity;
+  /** Captured before a creating request yields; absence is an identity too. */
+  creatingIdentity?: DatabasePathIdentity;
+  creationClaim?: AgentCreationClaimWitness;
 };
 
-export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
-  "database.prepareWrite": { input: undefined; output: void };
-  "session.entries.replace": {
-    input: SessionEntryReplacementCommit;
-    output: SessionEntryReplacementCommitted;
-  };
-  "session.providerReview.compare": {
-    input: SessionProviderReviewComparison;
-    output: SessionEntry;
-  };
-  "session.archivePruning.deletePublished": {
-    input: PublishedSessionTranscriptArchive;
-    output: void;
-  };
-  "session.archivePruning.removeLegacy": {
-    input: { filePath: string };
-    output: SessionLegacyArchiveRemovalResult;
-  };
-  "session.archivePruning.reclaimPages": {
-    input: { maxPages?: number };
-    output: SqliteWalReclamationResult;
-  };
-};
+export type AgentDatabaseExecutionOpen = AgentDatabaseFileExecutionOpen;
 
-/** A request owner composes its retained admission with the native owner's validation. */
-export type AgentDatabaseRequestExecutionSource = {
-  assertCurrent(): void;
-  createAdmission(params: {
-    nativeLocations: readonly string[];
-    authorize(request: SqliteWorkerAdmissionRequest): void;
-    assertCurrent(): void;
-  }): SqliteWorkerAdmissionFactory;
-};
+export type AgentDatabaseOperations = AgentDatabaseDomainOperations &
+  SessionActorOperations &
+  RegisteredAgentWorkerOperations & {
+    "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
+    "database.prepareWrite": { input: undefined; output: void };
+  };

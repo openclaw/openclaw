@@ -1,4 +1,3 @@
-// Voice Call plugin module implements cli call log commands.
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -38,7 +37,10 @@ async function* readLogLines(file: string, last: number, pollMs?: number): Async
   for (;;) {
     let fd: number;
     try {
-      fd = fs.openSync(file, "r");
+      // These diagnostics seek through retained records; opening a FIFO must not wait for a writer.
+      const flags =
+        process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
+      fd = fs.openSync(file, flags);
     } catch (error) {
       if (initial || pollMs === undefined || !isRecord(error) || error.code !== "ENOENT") {
         throw error;
@@ -49,6 +51,9 @@ async function* readLogLines(file: string, last: number, pollMs?: number): Async
     }
     try {
       const stat = fs.fstatSync(fd);
+      if (!stat.isFile()) {
+        throw new Error("Voice-call log must be a regular file.");
+      }
       if (
         previous &&
         (stat.ino !== previous.ino || stat.dev !== previous.dev || stat.size < previous.size)
@@ -105,39 +110,21 @@ async function* readLogLines(file: string, last: number, pollMs?: number): Async
   }
 }
 
-function percentile(values: number[], p: number): number {
-  if (values.length === 0) {
-    return 0;
-  }
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
-  return sorted[idx] ?? 0;
-}
-
-function summarizeSeries(values: number[]): {
-  count: number;
-  minMs: number;
-  maxMs: number;
-  avgMs: number;
-  p50Ms: number;
-  p95Ms: number;
-} {
+function summarizeSeries(values: number[]) {
   if (values.length === 0) {
     return { count: 0, minMs: 0, maxMs: 0, avgMs: 0, p50Ms: 0, p95Ms: 0 };
   }
 
-  // Reduce instead of Math.min(...values): spread throws past V8's argument
-  // cap, and `latency --last <n>` can scan an unbounded JSONL history.
-  const minMs = values.reduce((min, value) => (value < min ? value : min));
-  const maxMs = values.reduce((max, value) => (value > max ? value : max));
+  const sorted = values.toSorted((a, b) => a - b);
+  const percentile = (fraction: number) => sorted[Math.ceil(fraction * sorted.length) - 1] ?? 0;
   const avgMs = values.reduce((sum, value) => sum + value, 0) / values.length;
   return {
     count: values.length,
-    minMs,
-    maxMs,
+    minMs: sorted[0] ?? 0,
+    maxMs: sorted[sorted.length - 1] ?? 0,
     avgMs,
-    p50Ms: percentile(values, 50),
-    p95Ms: percentile(values, 95),
+    p50Ms: percentile(0.5),
+    p95Ms: percentile(0.95),
   };
 }
 

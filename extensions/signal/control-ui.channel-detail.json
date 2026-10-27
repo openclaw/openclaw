@@ -1,0 +1,6 @@
+{
+  "pluginId": "signal",
+  "titleKey": "channels.signal.title",
+  "subtitleKey": "channels.signal.subtitle",
+  "extraFacts": ["baseUrl"]
+}

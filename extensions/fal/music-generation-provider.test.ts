@@ -1,235 +1,104 @@
-// Fal tests cover music generation provider plugin behavior.
-import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MusicGenerationRequest } from "openclaw/plugin-sdk/music-generation";
+import {
+  getProviderHttpMocks,
+  installProviderHttpMockCleanup,
+  requireFirstPostJsonRecordRequest,
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
+import { expect, it, vi } from "vitest";
 import { buildFalMusicGenerationProvider } from "./music-generation-provider.js";
 
-const {
-  assertOkOrThrowHttpErrorMock,
-  postJsonRequestMock,
-  resolveApiKeyForProviderMock,
-  resolveProviderHttpRequestConfigMock,
-} = vi.hoisted(() => ({
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  postJsonRequestMock: vi.fn(),
-  resolveApiKeyForProviderMock: vi.fn(async () => ({
-    apiKey: "fal-key",
-    source: "env",
-    mode: "api-key",
-  })),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-  })),
-}));
+const { postJsonRequestMock, resolveApiKeyForProviderMock, fetchWithTimeoutMock } =
+  getProviderHttpMocks();
 
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
+installProviderHttpMockCleanup();
 
-vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
-  const original = await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>();
-  return {
-    ...original,
-    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-    postJsonRequest: postJsonRequestMock,
-    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-  };
-});
-
-function postRequest(): Record<string, unknown> {
-  const request = postJsonRequestMock.mock.calls[0]?.[0];
-  if (!request || typeof request !== "object" || Array.isArray(request)) {
-    throw new Error("expected fal music request");
-  }
-  return request as Record<string, unknown>;
-}
-
-function streamedAudioResponse(bytes: string): Response {
-  return new Response(
-    new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(bytes));
-        controller.close();
-      },
-    }),
-    { headers: { "content-type": "audio/mpeg" } },
+function mockAudio(payload: unknown, body: BodyInit = "wav-bytes", contentType = "audio/wav") {
+  postJsonRequestMock.mockResolvedValue({
+    response: Response.json(payload),
+    release: vi.fn(async () => {}),
+  });
+  fetchWithTimeoutMock.mockResolvedValue(
+    new Response(body, { headers: { "content-type": contentType } }),
   );
 }
 
-function falMusicJsonResponse(value: unknown) {
-  return {
-    response: Response.json(value),
-    release: vi.fn(async () => {}),
-  };
+const prompt = "city pop chorus";
+const audioUrl = "https://v3b.fal.media/files/b/out.mp3";
+
+function generateMusic(overrides: Partial<MusicGenerationRequest>) {
+  resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "fal-key" });
+  return buildFalMusicGenerationProvider().generateMusic({
+    provider: "fal",
+    model: "fal-ai/minimax-music/v2.6",
+    prompt,
+    cfg: {},
+    ...overrides,
+  });
 }
 
-describe("fal music generation provider", () => {
-  afterEach(() => {
-    assertOkOrThrowHttpErrorMock.mockClear();
-    postJsonRequestMock.mockReset();
-    resolveApiKeyForProviderMock.mockClear();
-    resolveProviderHttpRequestConfigMock.mockClear();
-    vi.unstubAllGlobals();
+function expectRequest(model: string, body: Record<string, unknown>) {
+  const request = requireFirstPostJsonRecordRequest(postJsonRequestMock, "fal music request");
+  expect(request.url).toBe(`https://fal.run/fal-ai/${model}`);
+  expect(request.body).toEqual({ prompt, ...body });
+}
+
+it("submits MiniMax music through fal and downloads the generated track", async () => {
+  mockAudio(
+    { audio: { url: audioUrl, content_type: "audio/mpeg", file_name: "out.mp3" } },
+    "mp3-bytes",
+    "application/octet-stream",
+  );
+
+  const result = await generateMusic({
+    model: "",
+    lyrics: "[Verse]\nNeon rain",
+    durationSeconds: 42,
+    format: "mp3",
   });
 
-  it("declares explicit mode capabilities", () => {
-    expectExplicitMusicGenerationCapabilities(buildFalMusicGenerationProvider());
+  expectRequest("minimax-music/v2.6", {
+    lyrics: "[Verse]\nNeon rain",
+    duration: 42,
+    audio_setting: { sample_rate: 44100, bitrate: 256000, format: "mp3" },
   });
-
-  it("submits MiniMax music through fal and downloads the generated track", async () => {
-    postJsonRequestMock.mockResolvedValue(
-      falMusicJsonResponse({
-        audio: {
-          url: "https://v3b.fal.media/files/b/kangaroo/out.mp3",
-          content_type: "audio/mpeg",
-          file_name: "out.mp3",
-        },
-      }),
-    );
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(Buffer.from("mp3-bytes"), {
-          headers: { "content-type": "application/octet-stream" },
-        }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await buildFalMusicGenerationProvider().generateMusic({
-      provider: "fal",
-      model: "",
-      prompt: "city pop chorus",
-      cfg: {},
-      lyrics: "[Verse]\nNeon rain",
-      durationSeconds: 42,
-      format: "mp3",
-    });
-
-    expect(postRequest().url).toBe("https://fal.run/fal-ai/minimax-music/v2.6");
-    expect(postRequest().body).toEqual({
-      prompt: "city pop chorus",
-      lyrics: "[Verse]\nNeon rain",
-      duration: 42,
-      audio_setting: {
-        sample_rate: 44100,
-        bitrate: 256000,
-        format: "mp3",
-      },
-    });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://v3b.fal.media/files/b/kangaroo/out.mp3",
-      expect.objectContaining({ method: "GET" }),
-    );
-    expect(result.model).toBe("fal-ai/minimax-music/v2.6");
-    expect(result.tracks[0]?.mimeType).toBe("audio/mpeg");
-    expect(result.tracks[0]?.buffer).toEqual(Buffer.from("mp3-bytes"));
-    expect(result.tracks[0]?.fileName).toBe("out.mp3");
-    expect(result.metadata?.audioUrl).toBe("https://v3b.fal.media/files/b/kangaroo/out.mp3");
+  expect(result).toMatchObject({
+    model: "fal-ai/minimax-music/v2.6",
+    metadata: { audioUrl },
+    tracks: [expect.objectContaining({ mimeType: "audio/mpeg", fileName: "out.mp3" })],
   });
+  expect(result.tracks[0]?.buffer).toEqual(Buffer.from("mp3-bytes"));
+});
 
-  it("rejects generated music downloads that exceed the configured media cap", async () => {
-    postJsonRequestMock.mockResolvedValue(
-      falMusicJsonResponse({
-        audio: {
-          url: "https://v3b.fal.media/files/b/out.mp3",
-          content_type: "audio/mpeg",
-        },
-      }),
-    );
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => streamedAudioResponse("too-large")),
-    );
+it("rejects generated music downloads that exceed the configured media cap", async () => {
+  mockAudio({ audio: { url: audioUrl, content_type: "audio/mpeg" } }, "too-large");
 
-    await expect(
-      buildFalMusicGenerationProvider().generateMusic({
-        provider: "fal",
-        model: "fal-ai/minimax-music/v2.6",
-        prompt: "short track",
-        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
-      }),
-    ).rejects.toThrow("fal generated music download exceeds 1 bytes");
+  await expect(
+    generateMusic({
+      cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+    }),
+  ).rejects.toThrow("fal generated music download exceeds 1 bytes");
+});
+
+it("rejects MiniMax lyrics requests that also ask for instrumental output", async () => {
+  await expect(generateMusic({ lyrics: "[Verse]\nNeon rain", instrumental: true })).rejects.toThrow(
+    "fal MiniMax music generation cannot use lyrics when instrumental=true.",
+  );
+
+  expect(postJsonRequestMock).not.toHaveBeenCalled();
+});
+
+it("maps ACE-Step duration and instrumental controls", async () => {
+  mockAudio({ audio: { url: audioUrl, content_type: "audio/wav" }, seed: 42, tags: "lofi, chill" });
+  await generateMusic({
+    model: "fal-ai/ace-step/prompt-to-audio",
+    instrumental: true,
+    durationSeconds: 30,
   });
+  expectRequest("ace-step/prompt-to-audio", { instrumental: true, duration: 30 });
+});
 
-  it("rejects MiniMax lyrics requests that also ask for instrumental output", async () => {
-    await expect(
-      buildFalMusicGenerationProvider().generateMusic({
-        provider: "fal",
-        model: "fal-ai/minimax-music/v2.6",
-        prompt: "city pop chorus",
-        cfg: {},
-        lyrics: "[Verse]\nNeon rain",
-        instrumental: true,
-      }),
-    ).rejects.toThrow("fal MiniMax music generation cannot use lyrics when instrumental=true.");
-
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
-  });
-
-  it("maps ACE-Step duration and instrumental controls", async () => {
-    postJsonRequestMock.mockResolvedValue(
-      falMusicJsonResponse({
-        audio: { url: "https://example.com/out.wav", content_type: "audio/wav" },
-        seed: 42,
-        tags: "lofi, chill",
-      }),
-    );
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(Buffer.from("wav-bytes"), {
-            headers: { "content-type": "audio/wav" },
-          }),
-      ),
-    );
-
-    await buildFalMusicGenerationProvider().generateMusic({
-      provider: "fal",
-      model: "fal-ai/ace-step/prompt-to-audio",
-      prompt: "lofi beach loop",
-      cfg: {},
-      instrumental: true,
-      durationSeconds: 30,
-    });
-
-    expect(postRequest().url).toBe("https://fal.run/fal-ai/ace-step/prompt-to-audio");
-    expect(postRequest().body).toEqual({
-      prompt: "lofi beach loop",
-      instrumental: true,
-      duration: 30,
-    });
-  });
-
-  it("maps Stable Audio duration controls", async () => {
-    postJsonRequestMock.mockResolvedValue(
-      falMusicJsonResponse({
-        audio: "https://example.com/stable.wav",
-      }),
-    );
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(Buffer.from("wav-bytes"), {
-            headers: { "content-type": "audio/wav" },
-          }),
-      ),
-    );
-
-    await buildFalMusicGenerationProvider().generateMusic({
-      provider: "fal",
-      model: "fal-ai/stable-audio-25/text-to-audio",
-      prompt: "orchestral hit",
-      cfg: {},
-      durationSeconds: 12,
-    });
-
-    expect(postRequest().url).toBe("https://fal.run/fal-ai/stable-audio-25/text-to-audio");
-    expect(postRequest().body).toEqual({
-      prompt: "orchestral hit",
-      seconds_total: 12,
-    });
-  });
+it("maps Stable Audio duration", async () => {
+  mockAudio({ audio: audioUrl });
+  await generateMusic({ model: "fal-ai/stable-audio-25/text-to-audio", durationSeconds: 12 });
+  expectRequest("stable-audio-25/text-to-audio", { seconds_total: 12 });
 });

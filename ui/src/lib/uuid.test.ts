@@ -29,11 +29,12 @@ describe("generateUUID", () => {
     expect(id).toBe("00010203-0405-4607-8809-0a0b0c0d0e0f");
   });
 
-  it("rejects UUID generation when crypto is missing", () => {
+  it("rejects UUID generation when crypto is missing and warns only once", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       expect(() => generateUUID(null)).toThrow("Web Crypto is required for UUID generation");
-      expect(warnSpy).toHaveBeenCalled();
+      expect(() => generateUUID(null)).toThrow("Web Crypto is required for UUID generation");
+      expect(warnSpy).toHaveBeenCalledTimes(1);
     } finally {
       warnSpy.mockRestore();
     }

@@ -3,7 +3,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolveWorkerCellExport } from "./worker-cell-package.mjs";
+import { readJson } from "../fixtures/common.mjs";
+import { childOf, retainedSnapshots, sqliteFamily } from "./fixture-files.mjs";
+import {
+  resolveWorkerCellExport,
+  resolveWorkerCellFunctionBinding,
+} from "./worker-cell-package.mjs";
 
 // These chunks belong to the integrity-pinned published 2026.9.4 package.
 const BASELINE_CHUNKS = {
@@ -31,22 +36,8 @@ function digest(file) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
 function writeJson(file, value) {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx" });
-}
-
-function within(root, file) {
-  const relative = path.relative(root, file);
-  return (
-    relative !== "" &&
-    relative !== ".." &&
-    !relative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relative)
-  );
 }
 
 function context() {
@@ -60,13 +51,13 @@ function context() {
   const stateDir = required("OPENCLAW_STATE_DIR");
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   assert(
-    configPath && within(stateDir, path.resolve(configPath)),
+    configPath && childOf(stateDir, path.resolve(configPath)),
     "Config must belong to the scenario state",
   );
-  assert(within(root, stateDir), "State must belong to the scenario runtime");
+  assert(childOf(root, stateDir), "State must belong to the scenario runtime");
   const tempRoots = [required("TMPDIR"), required("XDG_CACHE_HOME")];
   assert(
-    tempRoots.every((dir) => within(root, dir)),
+    tempRoots.every((dir) => childOf(root, dir)),
     "Snapshot roots must belong to the scenario runtime",
   );
   return {
@@ -95,34 +86,6 @@ function fixture(ctx) {
   );
   assert.equal(expected.configPath, ctx.configPath, "Projects fixture belongs to another config");
   return expected;
-}
-
-function retainedSnapshots(roots) {
-  const retained = [];
-  const visit = (dir) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const file = path.join(dir, entry.name);
-      if (/^openclaw-(?:sqlite-readonly-|doctor-lint-state-)/.test(entry.name)) {
-        retained.push(file);
-      }
-      if (entry.isDirectory()) {
-        visit(file);
-      }
-    }
-  };
-  for (const root of new Set(roots)) {
-    visit(root);
-  }
-  return retained.toSorted((a, b) => a.localeCompare(b));
-}
-
-function sqliteFamily(databasePath) {
-  return Object.fromEntries(
-    ["", "-wal", "-shm", "-journal"].flatMap((suffix) => {
-      const file = `${databasePath}${suffix}`;
-      return fs.existsSync(file) ? [[suffix || "main", digest(file)]] : [];
-    }),
-  );
 }
 
 export function assertProjectsInventory(inventory, baseline) {
@@ -167,39 +130,43 @@ async function artifactPreservingReader(ctx, stage, packageRoot) {
     "Snapshot package differs from the verified installed CLI",
   );
   const symbol = "withExistingOpenClawStateDatabaseArtifactPreservingReadOnly";
-  const matches = [];
-  for (const [relative, expected] of Object.entries(identity.files)) {
-    if (!/^dist\/openclaw-state-db-readonly-[\w-]+\.mjs$/.test(relative)) {
-      continue;
-    }
-    const file = path.join(packageRoot, relative);
-    assert(fs.lstatSync(file).isFile(), `Expected a regular snapshot owner: ${file}`);
-    const bytes = fs.readFileSync(file);
-    const sha256 = createHash("sha256").update(bytes).digest("hex");
-    assert.equal(sha256, expected.sha256, `Installed snapshot owner changed: ${relative}`);
-    const alias = resolveWorkerCellExport(bytes.toString("utf8"), symbol);
-    if (alias) {
-      matches.push({ file, relative, sha256, alias });
-    }
+  const { createNativeTypeScriptParser } = await import("../../../lib/native-typescript.mts");
+  const parser = createNativeTypeScriptParser({ cwd: packageRoot });
+  let binding;
+  try {
+    binding = await resolveWorkerCellFunctionBinding(
+      identity,
+      packageRoot,
+      "openclaw-state-db-readonly",
+      symbol,
+      parser,
+    );
+  } finally {
+    parser.close();
   }
+  const [name, exportName, sha256] = binding;
+  const relative = `dist/${name}`;
+  const file = path.join(packageRoot, relative);
+  const bytes = fs.readFileSync(file);
   assert.equal(
-    matches.length,
-    1,
-    "Expected exactly one installed artifact-preserving state reader",
+    createHash("sha256").update(bytes).digest("hex"),
+    sha256,
+    `Installed snapshot owner changed: ${relative}`,
   );
-  const binding = matches[0];
-  const module = await import(pathToFileURL(binding.file).href);
-  const read = module[binding.alias];
+  const alias = resolveWorkerCellExport(bytes.toString("utf8"), exportName);
+  assert(alias, "Installed artifact-preserving state reader export is missing");
+  const module = await import(pathToFileURL(file).href);
+  const read = module[alias];
   assert.equal(typeof read, "function", "Installed artifact-preserving state reader is missing");
   return {
     read,
-    evidence: { file: binding.relative, sha256: binding.sha256, export: binding.alias },
+    evidence: { file: relative, sha256, export: alias },
   };
 }
 
 async function snapshot(ctx, stage, packageRoot) {
   const expected = fixture(ctx);
-  const familyBefore = sqliteFamily(ctx.databasePath);
+  const familyBefore = sqliteFamily(ctx.databasePath, digest);
   const reader = await artifactPreservingReader(ctx, stage, packageRoot);
   const observed = reader.read(
     ({ db }) => ({
@@ -219,7 +186,7 @@ async function snapshot(ctx, stage, packageRoot) {
     { path: ctx.databasePath, env: process.env },
   );
   assert(observed, "Projects state database is missing");
-  const familyAfter = sqliteFamily(ctx.databasePath);
+  const familyAfter = sqliteFamily(ctx.databasePath, digest);
   assert.deepEqual(
     familyAfter,
     familyBefore,

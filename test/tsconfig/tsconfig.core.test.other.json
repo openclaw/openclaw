@@ -13,6 +13,7 @@
     "../../**/dist/**",
     "../../src/audit/**",
     "../../src/agents/**",
+    "../../src/claws/**",
     "../../src/gateway/**",
     "../../src/infra/**",
     "../../src/process/**",
@@ -37,7 +38,8 @@
     "../../src/hooks/**",
     "../../src/daemon/**",
     "../../src/plugin-state/**",
-    "../../src/tasks/**",
-    "../../src/state/**"
+    "../../src/state/**",
+    "../../src/node-host/**",
+    "../../src/worker/**"
   ]
 }

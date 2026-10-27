@@ -1,10 +1,5 @@
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../../state/openclaw-agent-db-registry-listing.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import type {
@@ -12,10 +7,10 @@ import type {
   SessionProviderReviewComparison,
 } from "./provider-review.types.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { runSessionEntryWorkerMutation } from "./session-accessor.sqlite-replacement-worker.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
-import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
+import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type { SessionEntry } from "./types.js";
 
@@ -41,57 +36,29 @@ async function withProviderReviewDatabase<T>(
   const storePath =
     logical.path ?? target.storePath ?? resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical));
   const candidates = captureSessionStoreReadCandidates(storePath);
-  const registryRead = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env });
-  return withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
-    const request = { agentId: logical.agentId, storePath, env };
-    let selected = await discovery.readStoreTarget({
-      ...request,
-      registeredDatabases: { status: "deferred" },
-    });
-    let assertRegistryCurrent: (() => void) | undefined;
-    if (selected.kind === "session-target-registry-required") {
-      const registry = await registryRead.read();
-      assertRegistryCurrent = registry.assertCurrent;
-      registry.assertCurrent();
-      discovery.assertCurrent();
-      assertCallerCurrent();
-      selected = await discovery.readStoreTarget({
-        ...request,
-        registeredDatabases:
-          registry.result.status === "available"
-            ? registry.result.entries
-            : { status: "unavailable" },
-      });
-    }
-    if (selected.kind !== "session-store-target") {
-      throw new Error("Provider review store could not resolve its database owner");
-    }
-    // Registry facts choose the physical owner. Its canonical execution then owns
-    // admission; promoting that writer deliberately invalidates the registry memo.
-    assertRegistryCurrent?.();
-    const sourcePath = selected.sourcePath;
-    const assertCurrent = () => {
-      discovery.assertCurrent();
-      assertSessionStoreReadCandidate(sourcePath, candidates);
-      assertCallerCurrent();
-    };
-    assertCurrent();
-    return operation({ ...selected.database, env }, logical.sessionKey, assertCurrent);
-  });
+  return withSessionStoreTarget(
+    { agentId: logical.agentId, storePath, env, candidates },
+    (selected, owner) =>
+      operation({ ...selected.database, env }, logical.sessionKey, owner.assertCurrent),
+    assertCallerCurrent,
+  );
 }
 
 export async function readSessionProviderReview(
   target: SessionProviderReviewTarget,
   assertCurrent: () => void,
 ): Promise<SessionEntry | undefined> {
-  assertCurrent();
   const { sessionId, lifecycleRevision } = target;
   return withProviderReviewDatabase(
     target,
     assertCurrent,
     async (options, sessionKey, assertHeld) => {
       const result = await withSessionHistoryWorkerDatabase(options, (owner) =>
-        owner.readExactEntries({ sessionKeys: [sessionKey], env: options.env ?? {} }),
+        owner.readExactEntries({
+          sessionKeys: [sessionKey],
+          snapshotFields: [],
+          env: options.env ?? {},
+        }),
       );
       assertHeld();
       const entry = result.entries.find((row) => row.sessionKey === sessionKey)?.entry;
@@ -111,7 +78,6 @@ export async function compareSessionProviderReview(
     assertCurrent: () => void;
   },
 ): Promise<SessionEntry> {
-  params.assertCurrent();
   const capturedTarget = { ...target };
   const input: SessionProviderReviewComparison = structuredClone({
     sessionKey: target.sessionKey,
@@ -125,45 +91,24 @@ export async function compareSessionProviderReview(
     params.assertCurrent,
     async (options, sessionKey, assertHeld) => {
       input.sessionKey = sessionKey;
-      const execution = captureOpenClawAgentDatabaseExecution(options);
-      const assertCurrent = () => {
-        execution.assertCurrent();
-        assertHeld();
-      };
-      try {
-        const entry = await runOpenClawAgentWorkerWrite(options, () =>
-          execution.runExisting(
-            {
-              assertCurrent,
-              createAdmission(binding) {
-                return () => ({
-                  nativeLocations: binding.nativeLocations,
-                  admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                    binding.authorize(request);
-                    assertCurrent();
-                    if (!grant()) {
-                      throw new Error("Provider review authority expired");
-                    }
-                  }),
-                });
-              },
-            },
-            (worker) => worker.execute({ type: "session.providerReview.compare", input }),
-          ),
-        );
-        if (!entry) {
-          throw new Error("Session disappeared before provider review update");
-        }
-        // The worker owns the commit; the host publishes only its acknowledged result.
-        sessionChanges.emit({
-          agentId: capturedTarget.agentId,
-          storePath: execution.path,
-          sessionKey,
-        });
-        return entry;
-      } finally {
-        await execution.release();
-      }
+      return runSessionEntryWorkerMutation(
+        { ...options, path: resolveOpenClawAgentSqlitePath(options) },
+        undefined,
+        assertHeld,
+        async (worker) => {
+          const result = await worker.execute({ type: "session.providerReview.compare", input });
+          return { kind: "committed", value: result.entry, publication: result.publication };
+        },
+        { identityAgentId: options.agentId },
+        {
+          errors: {
+            identity: "Provider review has no prepared native database identity",
+            unknown: "Provider review has no confirmed native completion and commit receipt",
+            missing: "Session disappeared before provider review update",
+            publication: "Provider review commit omitted its publication receipt",
+          },
+        },
+      );
     },
   );
 }

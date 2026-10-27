@@ -44,7 +44,3 @@ export function formatEnvelopeTimestamp(date: Date, zone: EnvelopeTimestampZone 
     formatUtcTimestamp(date, { displaySeconds: true });
   return weekday ? `${weekday} ${ts}` : ts;
 }
-
-export function formatLocalEnvelopeTimestamp(date: Date): string {
-  return formatEnvelopeTimestamp(date, "local");
-}

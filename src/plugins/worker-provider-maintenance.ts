@@ -1,9 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
+import { validateProviderSettings } from "../config/provider-settings.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { validateCloudWorkerProfileSettings } from "../config/zod-schema.cloud-workers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
+import { isManifestPluginOwnerAllowedByControlPlanePolicy } from "./manifest-contract-eligibility.js";
 import { normalizeCapabilityProviderId } from "./provider-registry-shared.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -40,11 +40,22 @@ export async function maintainConfiguredWorkerProviders(params: {
     if (!registration || !provider || !maintain || !owner || !isOwnerCurrent?.()) {
       return [];
     }
-    if (!passesManifestOwnerBasePolicy({ plugin: owner, normalizedConfig })) {
+    // Use the same bundled compatibility policy that admitted the configured provider at startup.
+    if (
+      !normalizedConfig.enabled ||
+      !isManifestPluginOwnerAllowedByControlPlanePolicy({
+        plugin: owner,
+        config,
+        normalizedConfig,
+        allowBundledProviderCompat: true,
+      })
+    ) {
       return [];
     }
     const settings = configuredSettings(config, providerId);
-    if (settings.some(([, value]) => validateCloudWorkerProfileSettings(value) !== undefined)) {
+    if (
+      settings.some(([, value]) => validateProviderSettings(value, "Worker profile") !== undefined)
+    ) {
       params.warn(
         `Worker provider maintenance skipped invalid settings (${providerId.slice(0, 128)})`,
       );
@@ -72,7 +83,7 @@ export async function maintainConfiguredWorkerProviders(params: {
         try {
           assertCurrent();
           await maintain.call(provider, {
-            // SAFETY: validateCloudWorkerProfileSettings checked every setting as bounded finite JSON before cloning.
+            // SAFETY: validateProviderSettings checked every setting as bounded finite JSON before cloning.
             profiles: structuredClone(snapshot.map(([, value]) => value)) as WorkerProfile[],
             signal: params.signal,
             assertCurrent,

@@ -2,26 +2,29 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { ignoreMissingPath, isMissingPathError } from "../../infra/errno.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { WORKER_BUNDLE_RSYNC_RECEIVER_PATH } from "../../shared/worker-bundle-hash.js";
+import { sleep } from "../../utils/sleep.js";
 import {
   type PreparedWorkerSsh,
   workerSshCommandOptions,
-  workerSshOptions,
+  workerSshCommandPrefix,
   workerSshRemoteCommand,
 } from "./ssh.js";
 import type { WorkerWorkspaceCommand, WorkerLocalWorkspaceSyncRequest } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import {
   parseRemoteWorkspaceManifestEnvelope,
-  recordRemoteWorkspaceHashMetrics,
   replaceWorkerWorkspaceHashMemoEntries,
   serializeRemoteWorkspaceHashMemo,
   type WorkspaceHashMemo,
-  type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
+import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
 import {
   createRemoteWorkspaceManifestScript,
   REMOTE_WORKSPACE_MANIFEST_JS,
@@ -51,17 +54,15 @@ export function waitForQuiescenceRenewal(
   if (signal.aborted) {
     return Promise.resolve(false);
   }
-  return new Promise<boolean>((resolve) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      resolve(false);
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve(true);
-    }, intervalMs);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
+  return sleep(intervalMs, signal).then(
+    () => true,
+    (error: unknown) => {
+      if (signal.aborted) {
+        return false;
+      }
+      throw error;
+    },
+  );
 }
 
 export function workerWorkspaceCommandSucceeded(result: SpawnResult): boolean {
@@ -83,15 +84,7 @@ export function workerWorkspaceRsyncRemoteCommand(
   prepared: PreparedWorkerSsh,
   port = prepared.port,
 ): string {
-  return workerSshRemoteCommand([
-    "ssh",
-    ...workerSshOptions(prepared, { forwarding: "disabled" }),
-    "-a",
-    "-x",
-    "-T",
-    "-p",
-    String(port),
-  ]);
+  return workerSshRemoteCommand(workerSshCommandPrefix(prepared, port));
 }
 
 type WorkerWorkspaceRsyncReceiverMode = "accepted-next" | "git-pack" | "workspace-root";
@@ -157,25 +150,6 @@ export function workerWorkspaceRsyncReceiverEntryPath(bundleHash: string): strin
   return `.openclaw-worker/${bundleHash}/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`;
 }
 
-export function workerWorkspaceSshArgv(
-  prepared: PreparedWorkerSsh,
-  remoteArgv: readonly string[],
-  port = prepared.port,
-): string[] {
-  return [
-    "ssh",
-    ...workerSshOptions(prepared, { forwarding: "disabled" }),
-    "-a",
-    "-x",
-    "-T",
-    "-p",
-    String(port),
-    "--",
-    prepared.sshTarget,
-    workerSshRemoteCommand(remoteArgv),
-  ];
-}
-
 export async function resolveRemoteWorkspaceManifest(
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>,
   remoteWorkspaceDir: string,
@@ -212,31 +186,24 @@ export async function captureRemoteWorkspaceManifest(params: {
   baseCommit: string | null;
   priorManifestDigests: readonly string[];
   hashMemo: WorkspaceHashMemo;
-  metrics: WorkspaceReconcileMetrics;
   maxHashMemoBytes?: number;
 }): Promise<string> {
-  params.metrics.remoteManifestCalls += 1;
-  const startedAt = performance.now();
-  const captured = await params
-    .runWorkspaceCommand({
-      transportRetry: "idempotent",
-      argv: [
-        "node",
-        "-e",
-        params.maxHashMemoBytes === undefined
-          ? REMOTE_WORKSPACE_MANIFEST_JS
-          : createRemoteWorkspaceManifestScript(params.maxHashMemoBytes),
-        params.remoteWorkspaceDir,
-        params.baseCommit ?? "",
-        params.baseCommit ? "eligible" : "all",
-        ...params.priorManifestDigests,
-        "memo-v1",
-      ],
-      input: serializeRemoteWorkspaceHashMemo(params.hashMemo, params.maxHashMemoBytes),
-    })
-    .finally(() => {
-      params.metrics.remoteManifestWallDurationMs += performance.now() - startedAt;
-    });
+  const captured = await params.runWorkspaceCommand({
+    transportRetry: "idempotent",
+    argv: [
+      "node",
+      "-e",
+      params.maxHashMemoBytes === undefined
+        ? REMOTE_WORKSPACE_MANIFEST_JS
+        : createRemoteWorkspaceManifestScript(params.maxHashMemoBytes),
+      params.remoteWorkspaceDir,
+      params.baseCommit ?? "",
+      params.baseCommit ? "eligible" : "all",
+      ...params.priorManifestDigests,
+      "memo-v1",
+    ],
+    input: serializeRemoteWorkspaceHashMemo(params.hashMemo, params.maxHashMemoBytes),
+  });
   if (!workerWorkspaceCommandSucceeded(captured)) {
     throw new Error(
       `Worker workspace manifest capture failed: ${boundedWorkerError(
@@ -254,7 +221,6 @@ export async function captureRemoteWorkspaceManifest(params: {
     });
   }
   replaceWorkerWorkspaceHashMemoEntries(params.hashMemo, response.memo);
-  recordRemoteWorkspaceHashMetrics(params.metrics, response.metrics);
   return response.manifestRef;
 }
 
@@ -263,23 +229,19 @@ export async function probeWorkspaceGitMode(params: {
   commandOptions: CommandOptions;
   runTask: (argv: string[], options: CommandOptions) => Promise<SpawnResult>;
 }): Promise<{ mode: "git" | "plain"; gitRoot: string; baseCommit: string }> {
-  const gitAdmin = await fs.lstat(path.join(params.localPath, ".git")).catch((error: unknown) => {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  });
+  const gitAdmin = await fs.lstat(path.join(params.localPath, ".git")).catch(ignoreMissingPath);
   if (!gitAdmin) {
     return { mode: "plain", gitRoot: params.localPath, baseCommit: "" };
   }
+  const commandOptions = {
+    ...params.commandOptions,
+    env: { ...params.commandOptions.env, GIT_NO_LAZY_FETCH: "1" },
+  };
   const [gitRootResult, gitBaseResult] = await Promise.all([
-    params.runTask(
-      ["git", "-C", params.localPath, "rev-parse", "--show-toplevel"],
-      params.commandOptions,
-    ),
+    params.runTask(["git", "-C", params.localPath, "rev-parse", "--show-toplevel"], commandOptions),
     params.runTask(
       ["git", "-C", params.localPath, "rev-parse", "--verify", "--quiet", "HEAD"],
-      params.commandOptions,
+      commandOptions,
     ),
   ]);
   if (!workerWorkspaceCommandSucceeded(gitRootResult)) {
@@ -300,11 +262,11 @@ export async function probeWorkspaceGitMode(params: {
 
 export async function resolveWorkerWorkspaceGitAuthor(
   request: Pick<WorkerLocalWorkspaceSyncRequest, "localPath" | "gitAuthor">,
-  runTask: (argv: string[]) => Promise<SpawnResult>,
+  runTask: (argv: string[], options: Pick<CommandOptions, "env">) => Promise<SpawnResult>,
 ): Promise<{ name: string; email: string }> {
   const git = ["git", "-C", request.localPath, "config", "--get"];
   const read = async (key: "name" | "email") => {
-    const result = await runTask([...git, `user.${key}`]);
+    const result = await runTask([...git, `user.${key}`], { env: { GIT_NO_LAZY_FETCH: "1" } });
     return workerWorkspaceCommandSucceeded(result) ? result.stdout.trim() : "";
   };
   const [name, email] = await Promise.all([
@@ -377,60 +339,30 @@ export function parseManifestRef(stdout: string): string {
 }
 
 export async function readTransferredManifest(filePath: string): Promise<string> {
-  const stats = await fs.lstat(filePath).catch((error: unknown) => {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  });
-  if (!stats?.isFile() || stats.isSymbolicLink() || stats.size > 64 * 1024 * 1024) {
-    throw new Error("Worker workspace manifest transfer is not a bounded regular file");
-  }
-  return await fs.readFile(filePath, "utf8");
+  const { buffer } = await readRegularFile({ filePath, maxBytes: MAX_WORKSPACE_MANIFEST_BYTES });
+  return buffer.toString("utf8");
 }
 
-async function inboundDirectoryUsage(
-  root: string,
+async function assertInboundDirectoryQuota(
+  directory: string,
   limits: { bytes: number; entries: number },
-): Promise<{ bytes: number; entries: number }> {
+): Promise<void> {
+  const root = await fsSafeRoot(directory);
   let bytes = 0;
-  let entries = 0;
-  const walk = async (directory: string): Promise<void> => {
-    for await (const directoryEntry of await fs.opendir(directory)) {
-      const candidate = path.join(directory, directoryEntry.name);
-      const stats = await fs.lstat(candidate).catch((error: unknown) => {
-        if (
-          typeof error === "object" &&
-          error !== null &&
-          "code" in error &&
-          error.code === "ENOENT"
-        ) {
-          return undefined;
-        }
-        throw error;
-      });
-      if (!stats) {
-        continue;
-      }
-      entries += 1;
-      if (entries > limits.entries) {
-        return;
-      }
-      if (stats.isDirectory() && !stats.isSymbolicLink()) {
-        await walk(candidate);
-      } else if (stats.isFile()) {
-        bytes += stats.size;
-        if (bytes > limits.bytes) {
-          return;
-        }
-      }
-      if (bytes > limits.bytes || entries > limits.entries) {
-        return;
-      }
+  for await (const entry of root.walk("", {
+    order: "filesystem",
+    maxEntries: limits.entries,
+    symlinkPolicy: "skip",
+  })) {
+    if (entry.kind === "file") {
+      bytes += entry.size;
     }
-  };
-  await walk(root);
-  return { bytes, entries };
+    if (entry.kind === "truncated" || bytes > limits.bytes) {
+      throw new Error(
+        `Cloud workspace inbound transfer exceeds its ${limits.bytes} byte or ${limits.entries} entry limit`,
+      );
+    }
+  }
 }
 
 export async function runBoundedInboundRsync(params: {
@@ -452,45 +384,39 @@ export async function runBoundedInboundRsync(params: {
     () => true,
     () => true,
   );
-  let quotaError: Error | undefined;
+  let quotaFailure: { error: unknown } | undefined;
   let pollIntervalMs = INBOUND_QUOTA_INITIAL_POLL_MS;
   // Rsync reports logical updates, not partial files or retry residue. Back off
   // the canonical tree scan, then always recheck once more before acceptance.
-  while (!(await Promise.race([transferSettled, delay(pollIntervalMs).then(() => false)]))) {
-    const usage = await inboundDirectoryUsage(params.destinationRoot, {
-      bytes: params.totalByteLimit,
-      entries: params.entryLimit,
-    });
-    if (usage.bytes > params.totalByteLimit || usage.entries > params.entryLimit) {
-      quotaError = new Error(
-        `Cloud workspace inbound transfer exceeds its ${params.totalByteLimit} byte or ${params.entryLimit} entry limit`,
-      );
-      quotaAbort.abort(quotaError);
-      break;
+  try {
+    while (!(await Promise.race([transferSettled, delay(pollIntervalMs).then(() => false)]))) {
+      await assertInboundDirectoryQuota(params.destinationRoot, {
+        bytes: params.totalByteLimit,
+        entries: params.entryLimit,
+      }).catch((error: unknown) => {
+        // Rsync renames temporary files during active scans; the final scan stays strict.
+        if (!isMissingPathError(error)) {
+          throw error;
+        }
+      });
+      pollIntervalMs = Math.min(pollIntervalMs * 2, INBOUND_QUOTA_MAX_POLL_MS);
     }
-    pollIntervalMs = Math.min(pollIntervalMs * 2, INBOUND_QUOTA_MAX_POLL_MS);
+  } catch (error) {
+    quotaFailure = { error };
+    quotaAbort.abort(error);
   }
   let result: SpawnResult;
   try {
     result = await transfer;
   } catch (error) {
-    throw quotaError ?? error;
+    throw quotaFailure ? quotaFailure.error : error;
   }
-  const finalUsage = await inboundDirectoryUsage(params.destinationRoot, {
+  if (quotaFailure) {
+    throw quotaFailure.error;
+  }
+  await assertInboundDirectoryQuota(params.destinationRoot, {
     bytes: params.totalByteLimit,
     entries: params.entryLimit,
   });
-  if (
-    quotaError ||
-    finalUsage.bytes > params.totalByteLimit ||
-    finalUsage.entries > params.entryLimit
-  ) {
-    throw (
-      quotaError ??
-      new Error(
-        `Cloud workspace inbound transfer exceeds its ${params.totalByteLimit} byte or ${params.entryLimit} entry limit`,
-      )
-    );
-  }
   return result;
 }

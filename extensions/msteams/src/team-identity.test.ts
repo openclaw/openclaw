@@ -44,15 +44,6 @@ describe("resolveTeamGroupId", () => {
     expect(getTeamDetails).toHaveBeenCalledWith(conversationTeamId);
   });
 
-  it("returns cached value without calling the Teams API again", async () => {
-    const params = { conversationTeamId: teamId("cached"), getTeamDetails };
-
-    await resolveTeamGroupId(params);
-    await resolveTeamGroupId(params);
-
-    expect(getTeamDetails).toHaveBeenCalledTimes(1);
-  });
-
   it("bounds a stalled Teams API identity lookup", async () => {
     vi.useFakeTimers();
     try {

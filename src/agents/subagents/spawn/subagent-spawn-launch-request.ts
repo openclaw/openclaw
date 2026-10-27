@@ -1,5 +1,12 @@
+import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { FreshChildSession } from "../../../gateway/in-process-session-run.js";
+import { MAX_RECOVERY_SOURCE_BYTES } from "../../../gateway/operator-run-recovery-source.codec.js";
+import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
+import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
+import type { AdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import type { BootstrapContextMode } from "../../bootstrap-files.js";
+import type { RequesterOrigin } from "../../requester-origin.js";
 import { normalizeSpawnedRunMetadata } from "../../spawned-context.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { resolveSubagentAgentGatewayTimeoutMs } from "./subagent-spawn-gateway.js";
@@ -15,28 +22,23 @@ export function buildSubagentLaunchRequest(params: {
   toolSpawnMetadata: Parameters<typeof normalizeSpawnedRunMetadata>[0];
   spawnedWorkspaceDir?: string;
   childSessionKey: string;
-  childSessionOrigin?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
+  childSession: {
+    entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+    freshChild?: FreshChildSession;
   };
+  childSessionOrigin?: DeliveryContext;
   childIdem: string;
   outputSchema?: Record<string, unknown>;
   childSystemPrompt: string;
-  thinkingOverride?: string;
   runTimeoutSeconds: number;
   lightContext: boolean;
-  requesterOrigin?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
+  requesterOrigin?: DeliveryContext;
   currentMessagingTarget?: string;
   currentChannelId?: string;
   currentMessageId?: string | number;
   launchAuthorization?: SubagentLaunchAuthorization;
+  requesterFacts?: RequesterOrigin;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   swarmSchedulerGroupKey?: string;
   swarmMaxConcurrent: number;
 }) {
@@ -61,8 +63,8 @@ export function buildSubagentLaunchRequest(params: {
       ? {}
       : {
           channel: params.childSessionOrigin?.channel,
-          to: params.childSessionOrigin?.to ?? undefined,
-          accountId: params.childSessionOrigin?.accountId ?? undefined,
+          to: params.childSessionOrigin?.to,
+          accountId: params.childSessionOrigin?.accountId,
           threadId:
             params.childSessionOrigin?.threadId != null
               ? stringifyRouteThreadId(params.childSessionOrigin.threadId)
@@ -76,9 +78,8 @@ export function buildSubagentLaunchRequest(params: {
     swarmOutputSchema: params.outputSchema,
     cleanupBundleMcpOnRunEnd: params.spawnMode !== "session",
     extraSystemPrompt: params.childSystemPrompt,
-    thinking: params.thinkingOverride,
     timeout: params.runTimeoutSeconds,
-    // Creation owns the label; delayed launches must preserve operator renames.
+    // Creation owns label and thinking; delayed launches preserve later session edits.
     ...(bootstrapContextMode
       ? {
           bootstrapContextMode,
@@ -92,17 +93,43 @@ export function buildSubagentLaunchRequest(params: {
     ...(params.launchAuthorization ? { authorization: params.launchAuthorization } : {}),
     timeoutMs: resolveSubagentAgentGatewayTimeoutMs(params.runTimeoutSeconds),
   };
+  const operatorRecovery = collect
+    ? captureQueuedOperatorRecoverySource(params.operatorAuthority)
+    : undefined;
   const queuedLaunch =
     collect && params.swarmSchedulerGroupKey
       ? {
           ...childLaunch,
+          // Preserve the current in-memory launch even when restart cannot retain
+          // its exact requester; recovery will report that explicit missing basis.
+          requesterRecovery: {
+            facts:
+              params.requesterFacts &&
+              Buffer.byteLength(JSON.stringify(params.requesterFacts), "utf8") >
+                MAX_RECOVERY_SOURCE_BYTES
+                ? null
+                : params.requesterFacts,
+            operator: operatorRecovery,
+          },
           schedulerGroupKey: params.swarmSchedulerGroupKey,
           maxConcurrent: params.swarmMaxConcurrent,
         }
       : undefined;
+  const childEntry = params.childSession.entry;
   return {
     childLaunch,
     queuedLaunch,
+    // Private admission facts stay out of the persisted restart descriptor.
+    preparedLaunch:
+      childEntry?.sessionId && childEntry.lifecycleRevision
+        ? {
+            sessionKey: params.childSessionKey,
+            sessionId: childEntry.sessionId,
+            lifecycleRevision: childEntry.lifecycleRevision,
+            runId: params.childIdem,
+            freshChild: params.childSession.freshChild,
+          }
+        : undefined,
     progressOrigin: {
       channel: params.requesterOrigin?.channel,
       accountId: params.requesterOrigin?.accountId,

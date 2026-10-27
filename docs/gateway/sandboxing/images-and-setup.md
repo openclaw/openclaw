@@ -8,7 +8,12 @@ Building the sandbox images from a source checkout or an npm install, and the ne
 
 ## Images and setup
 
-Default Docker image: `openclaw-sandbox:bookworm-slim`
+Default Docker image: `openclaw-sandbox:trixie-slim`
+
+The bundled images use Debian 13 (trixie). After upgrading from the previous
+Bookworm defaults, build the trixie images before starting new sandboxes. Explicit
+custom image settings stay unchanged; update them only when you want to switch
+images, then [recreate the affected sandboxes](/cli/sandbox#openclaw-sandbox-recreate).
 
 <Note>
 **Source checkout vs npm install**
@@ -30,8 +35,8 @@ commands shown below instead.
     From an npm install (no source checkout needed):
 
     ```bash
-    docker build -t openclaw-sandbox:bookworm-slim - <<'DOCKERFILE'
-    FROM debian:bookworm-slim
+    docker build -t openclaw-sandbox:trixie-slim - <<'DOCKERFILE'
+    FROM debian:trixie-slim
     ENV DEBIAN_FRONTEND=noninteractive
     RUN apt-get update && apt-get install -y --no-install-recommends \
       bash ca-certificates curl git jq python3 ripgrep \
@@ -45,7 +50,7 @@ commands shown below instead.
 
     The default image does **not** include Node. If a skill needs Node (or other runtimes), either bake a custom image or install via `sandbox.docker.setupCommand` (requires network egress + writable root + root user).
 
-    OpenClaw does not silently substitute plain `debian:bookworm-slim` when `openclaw-sandbox:bookworm-slim` is missing. Sandbox runs that target the default image fail fast with a build instruction until you build it, because the bundled image carries `python3` for the sandbox write/edit helpers.
+    OpenClaw does not silently substitute plain `debian:trixie-slim` when `openclaw-sandbox:trixie-slim` is missing. Sandbox runs that target the default image fail fast with a build instruction until you build it, because the bundled image carries `python3` for the sandbox write/edit helpers.
 
   </Step>
   <Step title="Optional: build the common image">
@@ -60,12 +65,12 @@ commands shown below instead.
     From an npm install, build the default image first (see above). Download [`scripts/docker/sandbox/Dockerfile.common`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.common) and the root [`package.json`](https://github.com/openclaw/openclaw/blob/main/package.json) from the same OpenClaw commit or tag into an empty directory. Keep their filenames, then run from that directory:
 
     ```bash
-    docker build -t openclaw-sandbox-common:bookworm-slim -f Dockerfile.common .
+    docker build -t openclaw-sandbox-common:trixie-slim -f Dockerfile.common .
     ```
 
     `package.json` supplies the pinned pnpm version and must be in the build context, even with `--build-arg INSTALL_PNPM=0`. It is a read-only build input; you do not need a source checkout or a host pnpm installation.
 
-    Then set `agents.defaults.sandbox.docker.image` to `openclaw-sandbox-common:bookworm-slim`.
+    Then set `agents.defaults.sandbox.docker.image` to `openclaw-sandbox-common:trixie-slim`.
 
   </Step>
   <Step title="Optional: build the sandbox browser image">

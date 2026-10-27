@@ -1,6 +1,7 @@
 import type { ConfigSchemaLookupResult as ProtocolConfigSchemaLookupResult } from "../../packages/gateway-protocol/src/schema/config.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
-import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
+import type { ConfigUiHints } from "./schema.hints.js";
 import {
   asSchemaObject,
   findWildcardHintMatch,
@@ -11,7 +12,6 @@ import {
 
 type JsonSchemaNode = Record<string, unknown>;
 
-const FORBIDDEN_LOOKUP_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 const LOOKUP_SCHEMA_STRING_KEYS = new Set([
   "$id",
   "$schema",
@@ -74,18 +74,6 @@ function splitLookupPath(path: string): string[] {
   return normalized ? normalized.split(".").filter(Boolean) : [];
 }
 
-function resolveUiHintMatch(
-  uiHints: ConfigUiHints,
-  path: string,
-  splitPath: (path: string) => string[],
-): { path: string; hint: ConfigUiHint } | null {
-  return findWildcardHintMatch({
-    uiHints,
-    path,
-    splitPath,
-  });
-}
-
 function resolveItemsSchema(schema: JsonSchemaObject, index?: number): JsonSchemaObject | null {
   if (Array.isArray(schema.items)) {
     const entry =
@@ -101,13 +89,22 @@ function resolveLookupChildSchema(
   schema: JsonSchemaObject,
   segment: string,
 ): JsonSchemaObject | null {
-  if (FORBIDDEN_LOOKUP_SEGMENTS.has(segment)) {
+  if (isBlockedObjectKey(segment)) {
     return null;
   }
 
   const properties = schema.properties;
   if (properties && Object.hasOwn(properties, segment)) {
     return asSchemaObject(properties[segment]);
+  }
+  for (const [pattern, child] of Object.entries(schema.patternProperties ?? {})) {
+    try {
+      if (new RegExp(pattern).test(segment)) {
+        return asSchemaObject(child);
+      }
+    } catch {
+      // Config validation reports malformed plugin schemas; lookup remains available.
+    }
   }
 
   const itemIndex = parseConfigPathArrayIndex(segment);
@@ -135,6 +132,20 @@ function resolveLookupChildSchema(
   }
 
   return null;
+}
+
+function resolveLookupSchema(
+  response: ConfigSchemaResponse,
+  parts: readonly string[],
+): JsonSchemaObject | null {
+  let current = asSchemaObject(response.schema);
+  for (const segment of parts) {
+    if (!current) {
+      break;
+    }
+    current = resolveLookupChildSchema(current, segment);
+  }
+  return current;
 }
 
 type ConfigSchemaPathSegmentKind = "property" | "record-key" | "array-index" | "invalid-record-key";
@@ -246,18 +257,8 @@ export function classifyConfigSchemaPathSegment(
   parentParts: readonly string[],
   segment: string,
 ): ConfigSchemaPathSegmentKind | null {
-  let current = asSchemaObject(response.schema);
-  if (!current) {
-    return null;
-  }
-  for (const parentPart of parentParts) {
-    const next = resolveLookupChildSchema(current, parentPart);
-    if (!next) {
-      return null;
-    }
-    current = next;
-  }
-  return classifyLookupChildSchema(current, segment);
+  const current = resolveLookupSchema(response, parentParts);
+  return current ? classifyLookupChildSchema(current, segment) : null;
 }
 
 function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): JsonSchemaNode {
@@ -326,6 +327,14 @@ function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): Js
       nestedFormDepth + 1,
     );
   }
+  if (schema.patternProperties) {
+    next.patternProperties = Object.fromEntries(
+      Object.entries(schema.patternProperties).map(([pattern, child]) => [
+        pattern,
+        stripSchemaForLookup(child, nestedFormDepth + 1),
+      ]),
+    );
+  }
   if (Array.isArray(schema.items)) {
     next.items = schema.items.map((item) => stripSchemaForLookup(item, nestedFormDepth + 1));
   } else if (schema.items && typeof schema.items === "object") {
@@ -358,7 +367,7 @@ function buildLookupChildren(
 
   const pushChild = (key: string, childSchema: JsonSchemaObject, isRequired: boolean) => {
     const childPath = path ? `${path}.${key}` : key;
-    const resolvedHint = resolveUiHintMatch(uiHints, childPath, splitPath);
+    const resolvedHint = findWildcardHintMatch({ uiHints, path: childPath, splitPath });
     const reloadMetadata = resolveReloadMetadata?.(childPath);
     children.push({
       key,
@@ -404,16 +413,9 @@ export function lookupConfigSchema(
     return null;
   }
 
-  let current = asSchemaObject(response.schema);
+  const current = resolveLookupSchema(response, parts);
   if (!current) {
     return null;
-  }
-  for (const segment of parts) {
-    const next = resolveLookupChildSchema(current, segment);
-    if (!next) {
-      return null;
-    }
-    current = next;
   }
 
   // Parent and child lookups share path parsing only for this response.
@@ -428,7 +430,11 @@ export function lookupConfigSchema(
         return cachedParts;
       }
     : splitLookupPath;
-  const resolvedHint = resolveUiHintMatch(response.uiHints, normalizedPath, splitHintPath);
+  const resolvedHint = findWildcardHintMatch({
+    uiHints: response.uiHints,
+    path: normalizedPath,
+    splitPath: splitHintPath,
+  });
   const reloadMetadata = resolveReloadMetadata?.(normalizedPath);
   return {
     path: wantsRoot ? "." : normalizedPath,

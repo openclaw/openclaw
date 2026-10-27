@@ -1,7 +1,7 @@
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import type { LivePreviewDeliveryResult } from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { expect, it, type Mock } from "vitest";
-import type { MatrixReplyDeliveryResult } from "./replies.js";
 
 type PreviewDeliveryHarness = {
   createStreamingHarness: (options: {
@@ -27,10 +27,14 @@ type PreviewDeliveryHarness = {
   createMockMatrixDeliveryResult: (
     messageId?: string,
     content?: string,
-  ) => MatrixReplyDeliveryResult;
+  ) => LivePreviewDeliveryResult;
+  acceptMatrixReply: (
+    messageId?: string,
+    content?: string,
+  ) => typeof import("../send.js").sendMessageMatrix;
   sendSingleTextMessageMatrixMock: Mock;
   editMessageMatrixMock: Mock;
-  deliverMatrixRepliesMock: Mock;
+  sendMessageMatrixMock: Mock<typeof import("../send.js").sendMessageMatrix>;
   waitForMatrixState: (assertion: () => void) => Promise<void>;
   mockCalls: (mock: unknown, label: string) => unknown[][];
 };
@@ -41,7 +45,8 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
     createMockMatrixDeliveryResult,
     sendSingleTextMessageMatrixMock,
     editMessageMatrixMock,
-    deliverMatrixRepliesMock,
+    sendMessageMatrixMock,
+    acceptMatrixReply,
     waitForMatrixState,
     mockCalls,
   } = harness;
@@ -71,130 +76,17 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
     expect(redactEventMock).toHaveBeenCalledExactlyOnceWith("!room:example.org", "$draft1");
     expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(editMessageMatrixMock).not.toHaveBeenCalled();
-    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
-  });
-
-  it("preserves a surviving draft receipt when redaction and media delivery fail", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
-    const { deliver, opts, finish } = await dispatch();
-
-    await opts.onPartialReply?.({ text: "Visible preview" });
-    await waitForMatrixState(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
-
-    redactEventMock.mockRejectedValueOnce(new Error("redaction failed"));
-    deliverMatrixRepliesMock.mockRejectedValueOnce(new Error("media send failed"));
-    const error = await deliver(
-      { mediaUrl: "https://example.com/image.png" },
-      { kind: "final" },
-    ).catch((caught: unknown) => caught);
-
-    expect(error).toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: {
-        messageIds: ["$draft1"],
-        visibleReplySent: true,
-        content: "Visible preview",
-        receipt: { primaryPlatformMessageId: "$draft1" },
-      },
-    });
-    await finish();
-  });
-
-  it("preserves a surviving draft receipt when final-edit fallback also fails", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
-    const { deliver, opts, finish } = await dispatch();
-
-    await opts.onPartialReply?.({ text: "Visible preview" });
-    await waitForMatrixState(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
-
-    editMessageMatrixMock.mockRejectedValueOnce(new Error("final edit failed"));
-    redactEventMock.mockRejectedValueOnce(new Error("redaction failed"));
-    deliverMatrixRepliesMock.mockRejectedValueOnce(new Error("fallback send failed"));
-    const error = await deliver({ text: "Final text" }, { kind: "final" }).catch(
-      (caught: unknown) => caught,
-    );
-
-    expect(error).toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: {
-        messageIds: ["$draft1"],
-        visibleReplySent: true,
-        content: "Visible preview",
-        receipt: { primaryPlatformMessageId: "$draft1" },
-      },
-    });
-    await finish();
-  });
-
-  it("preserves a surviving draft receipt when generic fallback delivery fails", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
-    const { deliver, opts, finish } = await dispatch();
-
-    await opts.onPartialReply?.({ text: "Visible preview" });
-    await waitForMatrixState(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
-
-    redactEventMock.mockRejectedValueOnce(new Error("redaction failed"));
-    deliverMatrixRepliesMock.mockRejectedValueOnce(new Error("fallback send failed"));
-    const error = await deliver({ text: "Something failed", isError: true } as never, {
-      kind: "final",
-    }).catch((caught: unknown) => caught);
-
-    expect(error).toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: {
-        messageIds: ["$draft1"],
-        visibleReplySent: true,
-        content: "Visible preview",
-        receipt: { primaryPlatformMessageId: "$draft1" },
-      },
-    });
-    await finish();
+    expect(sendMessageMatrixMock).not.toHaveBeenCalled();
   });
 
   it.each([
-    { branch: "final-edit", payload: { text: "Final text" }, failEdit: true },
-    { branch: "media", payload: { mediaUrl: "https://example.com/image.png" }, failEdit: false },
-    { branch: "generic", payload: { text: "Something failed", isError: true }, failEdit: false },
-  ])("retains a visible draft when $branch replacement throws", async ({ payload, failEdit }) => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
-    const { deliver, opts, finish } = await dispatch();
-
-    await opts.onPartialReply?.({ text: "Visible preview" });
-    await waitForMatrixState(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
-    if (failEdit) {
-      editMessageMatrixMock.mockRejectedValueOnce(new Error("final edit failed"));
-    }
-    deliverMatrixRepliesMock.mockRejectedValueOnce(new Error("replacement failed"));
-
-    const error = await deliver(payload, { kind: "final" }).catch((caught: unknown) => caught);
-
-    expect(error).toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: {
-        messageIds: ["$draft1"],
-        visibleReplySent: true,
-        content: "Visible preview",
-      },
-    });
-    expect(redactEventMock).not.toHaveBeenCalled();
-    await finish();
-    expect(redactEventMock).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { branch: "final-edit", payload: { text: "Final text" }, failEdit: true },
-    { branch: "media", payload: { mediaUrl: "https://example.com/image.png" }, failEdit: false },
-    { branch: "generic", payload: { text: "Something failed", isError: true }, failEdit: false },
+    {
+      branch: "reasoning",
+      payload: { mediaUrl: "https://example.com/image.png", isReasoning: true },
+      failEdit: false,
+    },
   ])(
-    "retains a visible draft when $branch replacement reports no visible event",
+    "retains a visible draft when $branch replacement is suppressed",
     async ({ payload, failEdit }) => {
       const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
       const { deliver, opts, finish } = await dispatch();
@@ -206,11 +98,6 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
       if (failEdit) {
         editMessageMatrixMock.mockRejectedValueOnce(new Error("final edit failed"));
       }
-      deliverMatrixRepliesMock.mockResolvedValueOnce({
-        visibleReplySent: false,
-        suppression: { reason: "no_visible_result" },
-      });
-
       const result = await deliver(payload, { kind: "final" });
       await finish();
 
@@ -223,41 +110,7 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
     },
   );
 
-  it.each([
-    { branch: "final-edit", payload: { text: "Final text" }, failEdit: true },
-    { branch: "media", payload: { mediaUrl: "https://example.com/image.png" }, failEdit: false },
-    { branch: "generic", payload: { text: "Something failed", isError: true }, failEdit: false },
-  ])(
-    "redacts a visible draft only after complete $branch replacement",
-    async ({ payload, failEdit }) => {
-      const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
-      const { deliver, opts, finish } = await dispatch();
-
-      await opts.onPartialReply?.({ text: "Visible preview" });
-      await waitForMatrixState(() => {
-        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-      });
-      if (failEdit) {
-        editMessageMatrixMock.mockRejectedValueOnce(new Error("final edit failed"));
-      }
-
-      const result = await deliver(payload, { kind: "final" });
-
-      expect(result).toMatchObject({ messageIds: ["$reply1"], visibleReplySent: true });
-      expect(deliverMatrixRepliesMock.mock.invocationCallOrder[0]).toBeLessThan(
-        redactEventMock.mock.invocationCallOrder[0]!,
-      );
-      expect(redactEventMock).toHaveBeenCalledExactlyOnceWith("!room:example.org", "$draft1");
-      await finish();
-      expect(redactEventMock).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each([
-    { branch: "final-edit", payload: { text: "Final text" }, failEdit: true },
-    { branch: "media", payload: { mediaUrl: "https://example.com/image.png" }, failEdit: false },
-    { branch: "generic", payload: { text: "Something failed", isError: true }, failEdit: false },
-  ])(
+  it.each([{ branch: "final-edit", payload: { text: "Final text" }, failEdit: true }])(
     "combines a visible draft with accepted $branch replacement prefixes",
     async ({ payload, failEdit }) => {
       const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
@@ -270,7 +123,7 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
       if (failEdit) {
         editMessageMatrixMock.mockRejectedValueOnce(new Error("final edit failed"));
       }
-      deliverMatrixRepliesMock.mockRejectedValueOnce(
+      sendMessageMatrixMock.mockRejectedValueOnce(
         createChannelPartialDeliveryError(new Error("second replacement event failed"), {
           ...createMockMatrixDeliveryResult("$accepted-prefix", "Accepted prefix"),
           visibleReplySent: true as const,
@@ -310,8 +163,8 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
       visibleReplySent: true,
       content: "Visible preview\ndelivered",
     });
-    deliverMatrixRepliesMock.mockResolvedValueOnce(
-      createMockMatrixDeliveryResult("$reply2", "Later durable reply"),
+    sendMessageMatrixMock.mockImplementationOnce(
+      acceptMatrixReply("$reply2", "Later durable reply"),
     );
     const laterResult = await deliver({ text: "Later durable reply" }, { kind: "final" });
     expect(laterResult).toMatchObject({
@@ -327,17 +180,10 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
     ]);
   });
 
-  it.each(
-    (["retained", "consumed"] as const).flatMap((priorDisposition) =>
-      (["block", "followup"] as const).flatMap((boundary) =>
-        (["complete", "unfinished"] as const).map((outcome) => ({
-          priorDisposition,
-          boundary,
-          outcome,
-        })),
-      ),
-    ),
-  )(
+  it.each([
+    { priorDisposition: "retained", boundary: "block", outcome: "unfinished" },
+    { priorDisposition: "consumed", boundary: "followup", outcome: "complete" },
+  ] as const)(
     "settles $priorDisposition then $boundary draft generations through $outcome",
     async ({ priorDisposition, boundary, outcome }) => {
       const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
@@ -348,7 +194,7 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
         expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
       });
       if (priorDisposition === "retained") {
-        deliverMatrixRepliesMock.mockRejectedValueOnce(new Error("replacement failed"));
+        sendMessageMatrixMock.mockRejectedValueOnce(new Error("replacement failed"));
       }
       if (boundary === "block") {
         await opts.onBlockReplyQueued?.({ text: "First generation" });
@@ -391,9 +237,9 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
         priorDisposition === "consumed" ? 1 : 0,
       );
       expect(redactedEventIds.filter((eventId) => eventId === "$draft2")).toHaveLength(1);
-      expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(outcome === "complete" ? 2 : 1);
+      expect(sendMessageMatrixMock).toHaveBeenCalledTimes(outcome === "complete" ? 2 : 1);
       if (outcome === "complete") {
-        expect(deliverMatrixRepliesMock.mock.invocationCallOrder[1]).toBeLessThan(
+        expect(sendMessageMatrixMock.mock.invocationCallOrder[1]).toBeLessThan(
           redactEventMock.mock.invocationCallOrder.at(-1)!,
         );
       }

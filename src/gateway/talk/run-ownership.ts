@@ -1,21 +1,66 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { getControllerEmbeddedAttachment } from "../../agents/embedded-agent-runner/run-state.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
-  ACTIVE_EMBEDDED_RUNS,
-  ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
-} from "../../agents/embedded-agent-runner/run-state.js";
+  getRpcSourceIdentity,
+  getRpcSourceLifecycleGeneration,
+  getRpcSourceForGateway,
+  isRpcSourceRegistered,
+  listRpcSourceEntriesForTarget,
+  type RpcSourceRef,
+} from "../../sessions/session-controller.rpc-sources.js";
 import {
   getAttachedBackend,
-  operationsByUpstreamAbortSignal,
-  resolveActiveReplyRunOwnerForSignal,
-} from "../../auto-reply/reply/reply-run-registry.state.js";
-import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+  isCurrentSessionControllerOperation,
+} from "../../sessions/session-controller.state.js";
 import type { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { resolveClientVoiceRunBinding } from "../../talk/client-voice-session.js";
-import type { GatewayRequestContext } from "../server-methods/types.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
+/** Validate consult control or completion against its captured source identity. */
+export function isTalkConsultSourceCurrent(params: {
+  entry?: RpcSourceRef;
+  connectionId: string;
+  sessionId: string;
+  sessionKey: string;
+  lifecycleGeneration?: string;
+  phase: "active" | "completion";
+}): boolean {
+  const { entry, lifecycleGeneration } = params;
+  if (!entry || entry.input.abortSignal.aborted || !lifecycleGeneration) {
+    return false;
+  }
+  if (
+    params.phase === "active" &&
+    (entry.input.retirementRequested || entry.input.phase === "consumed")
+  ) {
+    return false;
+  }
+  // Clean settlement retains completion custody, never active steering authority.
+  if (
+    !isRpcSourceRegistered(entry) &&
+    !(
+      params.phase === "completion" &&
+      entry.input.phase === "consumed" &&
+      entry.input.custody.failure === undefined &&
+      entry.input.protocolRunId !== undefined &&
+      !getRpcSourceForGateway(entry.input.protocolRunId, getGatewayContextResolver(entry.input))
+    )
+  ) {
+    return false;
+  }
+  const identity = getRpcSourceIdentity(entry);
+  return (
+    entry.adapter.requester?.connectionId === params.connectionId &&
+    identity.sessionId === params.sessionId &&
+    identity.sessionKey === params.sessionKey &&
+    getRpcSourceLifecycleGeneration(entry) === lifecycleGeneration &&
+    isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)
+  );
+}
+
 export function resolveOwnedActiveTalkRunTarget(params: {
-  context: Pick<GatewayRequestContext, "chatAbortControllers">;
   clientConnId?: string;
   sessionTarget: PreparedTalkSessionTarget;
   /** The shipped talk.client.steer RPC is session-wide; attached transports select their call. */
@@ -26,34 +71,45 @@ export function resolveOwnedActiveTalkRunTarget(params: {
       toolAuthoritySource?: "reply" | "attempt";
     })
   | null {
-  const connId = normalizeOptionalString(params.clientConnId);
+  const connId = params.clientConnId;
   if (!connId) {
     return null;
   }
   const { agentId, sessionKey, canonicalKey } = params.sessionTarget;
-  for (const [runId, entry] of params.context.chatAbortControllers) {
-    const generation = entry.lifecycleGeneration;
+  const target = captureSessionTarget({
+    storeScope: params.sessionTarget.storePath,
+    sessionKey: canonicalKey,
+    agentId,
+  });
+  for (const [runId, entry] of listRpcSourceEntriesForTarget(target)) {
+    const generation = getRpcSourceLifecycleGeneration(entry);
     if (!generation) {
       continue;
     }
-    const signal = entry.controller.signal;
-    const handle = ACTIVE_EMBEDDED_RUNS.get(entry.sessionId);
-    const registration = handle ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) : undefined;
+    const signal = entry.input.abortSignal;
+    const claim = entry.input.claim;
+    const operation = claim?.operation;
+    if (!claim || claim.released || !operation || !isCurrentSessionControllerOperation(operation)) {
+      continue;
+    }
+    const registration = getControllerEmbeddedAttachment(operation);
+    const handle = registration?.handle;
     const voiceBinding =
       params.scope.kind === "voice-session" ? resolveClientVoiceRunBinding(runId) : undefined;
     // Session RPCs can own a queued reply before its backend exists. Attached
     // voice controls instead preserve captured backend absence across their FIFO.
-    const reply =
-      params.scope.kind === "session" && !handle
-        ? operationsByUpstreamAbortSignal.get(signal)
-        : undefined;
+    const reply = params.scope.kind === "session" && !handle ? operation : undefined;
     const isCurrent = (resolvedSessionId?: string) => {
       params.assertCurrent?.();
+      const currentIdentity = getRpcSourceIdentity(entry);
       const replyOwner =
-        reply && operationsByUpstreamAbortSignal.get(signal) === reply
-          ? resolveActiveReplyRunOwnerForSignal(signal)
+        reply &&
+        entry.input.claim === claim &&
+        claim.operation === reply &&
+        isCurrentSessionControllerOperation(reply)
+          ? reply
           : undefined;
-      const replyHandle = replyOwner ? ACTIVE_EMBEDDED_RUNS.get(replyOwner.sessionId) : undefined;
+      const replyAttachment = replyOwner ? getControllerEmbeddedAttachment(replyOwner) : undefined;
       if (params.scope.kind === "voice-session") {
         // Retain the claim instance: A-to-B-to-A is reassignment, not revival.
         // Identical registrations preserve this snapshot at the producer.
@@ -68,25 +124,30 @@ export function resolveOwnedActiveTalkRunTarget(params: {
         }
       }
       return (
-        params.context.chatAbortControllers.get(runId) === entry &&
-        entry.agentId === agentId &&
-        (entry.sessionKey === sessionKey || entry.sessionKey === canonicalKey) &&
-        entry.ownerConnId === connId &&
-        entry.kind !== "agent" &&
-        entry.registrationCleanupRequested !== true &&
+        isRpcSourceRegistered(entry) &&
+        entry.input.claim === claim &&
+        claim.operation === operation &&
+        !claim.released &&
+        isCurrentSessionControllerOperation(operation) &&
+        !operation.abortSignal.aborted &&
+        !operation.result &&
+        currentIdentity.agentId === agentId &&
+        (currentIdentity.sessionKey === sessionKey ||
+          currentIdentity.sessionKey === canonicalKey) &&
+        entry.adapter.requester?.connectionId === connId &&
+        entry.adapter.kind !== "agent" &&
         (!reply ||
-          (replyOwner?.sessionKey === canonicalKey &&
-            (!replyHandle || getAttachedBackend(reply) === replyHandle))) &&
+          (replyOwner?.key === canonicalKey &&
+            (!replyAttachment || getAttachedBackend(reply) === replyAttachment.backend?.handle))) &&
         (resolvedSessionId === undefined ||
-          (entry.sessionId === resolvedSessionId &&
+          (currentIdentity.sessionId === resolvedSessionId &&
             (replyOwner
               ? replyOwner.sessionId === resolvedSessionId
               : handle !== undefined &&
-                ACTIVE_EMBEDDED_RUNS.get(resolvedSessionId) === handle &&
-                ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) === registration))) &&
-        entry.controller.signal === signal &&
+                getControllerEmbeddedAttachment(operation) === registration))) &&
+        entry.input.abortSignal === signal &&
         !signal.aborted &&
-        entry.lifecycleGeneration === generation &&
+        getRpcSourceLifecycleGeneration(entry) === generation &&
         isAgentEventLifecycleGenerationCurrent(generation)
       );
     };

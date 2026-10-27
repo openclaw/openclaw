@@ -77,6 +77,11 @@ Each `configSignals` entry supports:
 | `requiredAny`    | No       | `string[]` | Dot paths inside the effective config where at least one must have a configured value.                                                                                                    |
 | `mode`           | No       | `object`   | Optional string mode guard inside the effective config. Use this when config-only availability applies only to one mode.                                                                  |
 
+Config signals inspect normalized SecretRefs for provider and environment availability.
+Other nonempty objects are configured metadata; an object containing only `source`
+and `id` is not interpreted as a SecretRef. Doctor repairs legacy refs on declared
+credential paths without rewriting opaque plugin data.
+
 Each `mode` guard supports:
 
 | Field        | Required | Type       | What it means                                                                      |
@@ -146,6 +151,8 @@ Each provider entry can include:
 
 Use `providerEndpoints` for endpoint classification that generic request policy must know before provider runtime loads. Core still owns the meaning of each `endpointClass`; plugin manifests own the host and base URL metadata.
 
+When a custom provider uses a matching endpoint, its resolved endpoint class also selects the declaring plugin for lazy runtime loading. Provider hooks must opt into that class with `hookAliases`; endpoint metadata does not replace hook registration. Explicit plugin disablement, denylists, and allowlists still apply.
+
 The same endpoint metadata controls implicit model catalog eligibility when an operator sets `models.providers.<id>.baseUrl`. Catalog, alias, and native model base URLs also count as declared endpoints. A nonmatching provider-level URL excludes manifest, discovered, static, and generated catalog rows; explicitly authored models remain in the inventory. Plugins without native endpoint declarations keep their existing discovery behavior. Host and suffix matching retain their request-classification rules, so catalog eligibility does not establish exact-origin trust or prove a request can succeed.
 
 Officially externalized provider plugins are excluded from the core dist, so
@@ -191,3 +198,17 @@ Provider fields:
 | `family`              | `string`     | Provider family label used by generic request compatibility decisions and diagnostics.  |
 | `compatibilityFamily` | `"moonshot"` | Optional provider-family compatibility bucket for shared request helpers.               |
 | `openAICompletions`   | `object`     | OpenAI-compatible completions request flags. `supportsStreamingUsage` is the only flag. |
+| `modelParamsSchema`   | `object`     | JSON Schema for this provider's per-model runtime params.                               |
+
+`modelParamsSchema` validates `params` in `agents.defaults.models["provider/model"]`
+and `agents.entries.<agentId>.models["provider/model"]`. It applies only to the
+declared provider, and only provider IDs owned by the plugin are accepted.
+Keep `additionalProperties: true` so shared runtime parameters remain available.
+Use property `title` and `description` for labels and help in schema lookup.
+Schema defaults are descriptive: validation does not insert defaults into model
+override layers or change their inheritance. Global and per-agent `params` are
+not covered by this per-model schema.
+
+For example, the vLLM plugin declares the optional boolean `priorityScheduling`
+here. Operators enable it under an exact `vllm/<model>` entry's `params`, after
+starting the server with `--scheduling-policy priority`.

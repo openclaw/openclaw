@@ -1,17 +1,19 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  COMPUTER_USE_V2_ACTION_NAMES,
   parseComputerActParamsJSON,
   parseScreenSnapshotParamsJSON,
   type ComputerActParams,
   type ComputerUseProvider,
 } from "openclaw/plugin-sdk/computer-use";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createRastermill } from "rastermill";
 import { z } from "zod";
-import { normalizeModifiers, parseKeyChord, scalePoint } from "./actions.js";
+import type { CuaComputerActParams } from "./action-targets.js";
+import { CLICK_ACTIONS, normalizeModifiers, parseKeyChord, scalePoint } from "./actions.js";
 import {
   ClickButton,
   ScrollDirection,
@@ -19,8 +21,14 @@ import {
   type CuaDriverSession,
   type CuaToolResult,
 } from "./driver-client.js";
-import { actionEnvelope, platformActions, projectedToolDetails } from "./driver-result.js";
+import {
+  actionEnvelope,
+  CUA_WIRE_ACTION_NAMES,
+  platformActions,
+  projectedToolDetails,
+} from "./driver-result.js";
 import { createLazyCuaExecutionResources } from "./execution-resources.js";
+import type { CuaExecutionState } from "./execution-state.js";
 import {
   adoptGeneration,
   issueFrame,
@@ -32,10 +40,9 @@ import {
 } from "./frame.js";
 import { createCuaMcpDriver } from "./mcp-driver-client.js";
 import { closeRecordingExecution } from "./recording-actions.js";
-import { handleWindowAct, type CuaComputerActParams } from "./window-actions.js";
+import { handleWindowAct } from "./window-actions.js";
 
 const AVAILABILITY_POLL_MS = 5_000;
-const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
 // Rastermill enforces inputPixels before resizing, so this must clear the native
 // capture, not the delivered frame. 8K (7680x4320 = ~33.2M) is a valid primary
 // display; budget above it so full-resolution snapshots reach the downscaler.
@@ -64,27 +71,6 @@ const ScreenSizeSchema = z.object({
   scale_factor: z.number().positive(),
 });
 
-type ImageProcessor = {
-  encode(
-    input: Buffer,
-    options: {
-      format: "jpeg" | "png";
-      quality?: number;
-      resize?: { maxSide: number; enlarge: false };
-    },
-  ): Promise<{ data: Buffer; width: number; height: number }>;
-};
-
-type CuaComputerProviderOptions = {
-  platform?: NodeJS.Platform;
-  env?: NodeJS.ProcessEnv;
-  driver?: CuaDriverSession;
-  createDriver?: () => CuaDriverSession;
-  imageProcessor?: ImageProcessor;
-  setInterval?: typeof setInterval;
-  clearInterval?: typeof clearInterval;
-};
-
 function resolveMacOsMcpEndpoint(
   env: NodeJS.ProcessEnv,
 ): { socketPath: string; binaryPath: string } | undefined {
@@ -111,24 +97,6 @@ function resolveMacOsMcpEndpoint(
     return { socketPath, binaryPath };
   } catch {
     return undefined;
-  }
-}
-
-class PromiseQueue {
-  private tail: Promise<void> = Promise.resolve();
-
-  async run<T>(operation: () => Promise<T>): Promise<T> {
-    const previous = this.tail;
-    let release = () => {};
-    this.tail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-    }
   }
 }
 
@@ -213,7 +181,7 @@ function resolveImageCommand(command: string, env: NodeJS.ProcessEnv): string | 
   return null;
 }
 
-function createImageProcessor(env: NodeJS.ProcessEnv): ImageProcessor {
+function createImageProcessor(env: NodeJS.ProcessEnv) {
   return createRastermill({
     execution: "auto",
     limits: { inputPixels: MAX_IMAGE_PIXELS, outputPixels: MAX_IMAGE_PIXELS },
@@ -226,7 +194,7 @@ function clickArgs(
   platform: NodeJS.Platform,
   frame: CuaLastFrame,
   params: CuaComputerActParams,
-  button: ClickButton,
+  button: "left" | "right" | "middle",
   count: 1 | 2 | 3,
 ) {
   const point = scalePoint(frame, params.x, params.y, params.action);
@@ -238,7 +206,9 @@ function clickArgs(
   }
   return {
     ...point,
-    button,
+    button: { left: ClickButton.Left, right: ClickButton.Right, middle: ClickButton.Middle }[
+      button
+    ],
     count,
   };
 }
@@ -346,18 +316,7 @@ async function handleDesktopAct(
         case "middle_click":
         case "double_click":
         case "triple_click": {
-          const button =
-            desktopParams.action === "right_click"
-              ? ClickButton.Right
-              : desktopParams.action === "middle_click"
-                ? ClickButton.Middle
-                : ClickButton.Left;
-          const count =
-            desktopParams.action === "double_click"
-              ? 2
-              : desktopParams.action === "triple_click"
-                ? 3
-                : 1;
+          const { button, count } = CLICK_ACTIONS[desktopParams.action];
           result = assertToolSuccess(
             await driver.click(clickArgs(platform, frame, desktopParams, button, count), signal),
             "click",
@@ -404,32 +363,33 @@ async function handleDesktopAct(
   );
 }
 
-export function createCuaComputerProvider(
-  options: CuaComputerProviderOptions = {},
-): ComputerUseProvider {
-  const platform = options.platform ?? process.platform;
-  const env = options.env ?? process.env;
+export function createCuaComputerProvider(): ComputerUseProvider {
+  const platform = process.platform;
+  const env = process.env;
   const macOsEndpoint = platform === "darwin" ? resolveMacOsMcpEndpoint(env) : undefined;
+  const generation = `cua-computer-v2:${randomUUID()}`;
   let ownedAvailabilityDriver: CuaDriverSession | undefined;
+  let availabilityDisposal: Promise<void> | undefined;
   let stopped = false;
-  const createDriver =
-    options.createDriver ??
-    (macOsEndpoint ? () => createCuaMcpDriver({ ...macOsEndpoint, env }) : createCuaDriver);
+  const createDriver = macOsEndpoint
+    ? () => createCuaMcpDriver({ ...macOsEndpoint, env })
+    : createCuaDriver;
   const availabilityDriver = () => {
     if (stopped) {
       throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
     }
-    return options.driver ?? (ownedAvailabilityDriver ??= createDriver());
+    return (ownedAvailabilityDriver ??= createDriver());
   };
-  const disposeAvailabilityDriver = async () => {
+  const disposeAvailabilityDriver = () => {
     stopped = true;
-    const current = ownedAvailabilityDriver;
-    ownedAvailabilityDriver = undefined;
-    await current?.dispose();
+    // Driver disposal is terminal; every stop must observe its actual result.
+    return (availabilityDisposal ??= Promise.resolve().then(async () => {
+      const current = ownedAvailabilityDriver;
+      ownedAvailabilityDriver = undefined;
+      await current?.dispose();
+    }));
   };
-  const imageProcessor = options.imageProcessor ?? createImageProcessor(env);
-  const interval = options.setInterval ?? setInterval;
-  const clear = options.clearInterval ?? clearInterval;
+  const imageProcessor = createImageProcessor(env);
   const isSupportedPlatform =
     platform === "linux" || platform === "win32" || macOsEndpoint !== undefined;
   // The app injects the endpoint only after the host-owned daemon socket is
@@ -447,9 +407,7 @@ export function createCuaComputerProvider(
       provider: {
         id: "cua-computer",
         label: "CUA Computer",
-        generation: isSupportedPlatform
-          ? `cua-computer-v2:${availabilityDriver().generation}`
-          : "cua-computer-v2:unsupported",
+        generation,
       },
       actions: platformActions(platform),
       targets: ["screen", "window", "element", "browser"],
@@ -465,7 +423,7 @@ export function createCuaComputerProvider(
     },
     watchAvailability: (_context, onChange) => {
       let knownAvailable = isAvailable();
-      const timer = interval(() => {
+      const timer = setInterval(() => {
         availabilityDriver().resetAvailabilityCache();
         const available = isAvailable();
         if (available !== knownAvailable) {
@@ -475,19 +433,38 @@ export function createCuaComputerProvider(
       }, AVAILABILITY_POLL_MS);
       timer.unref?.();
       return () => {
-        clear(timer);
-        void disposeAvailabilityDriver();
+        clearInterval(timer);
+        return disposeAvailabilityDriver();
       };
     },
     openExecution: async () => {
       if (stopped) {
         throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
       }
-      const executionDriver = options.driver ?? createDriver();
+      const executionDriver = createDriver();
       const resources = createLazyCuaExecutionResources();
-      const executionState = { resources, recording: {} };
-      const queue = new PromiseQueue();
+      const executionState: CuaExecutionState = { resources, recording: {} };
+      const queue = new KeyedAsyncQueue();
       const frameState: CuaFrameState = { generation: executionDriver.generation };
+      const prepareExecution = async (signal?: AbortSignal) => {
+        const assertAuthority = () => {
+          signal?.throwIfAborted();
+          assertOpen();
+        };
+        assertAuthority();
+        try {
+          await executionDriver.prepareExecution?.(signal, assertAuthority);
+        } finally {
+          // Released recording ownership must not survive an interrupted renewal.
+          if (frameState.generation !== executionDriver.generation) {
+            executionState.recording.active = undefined;
+          }
+        }
+        // Close/cancellation can arrive while the native health call is pending.
+        assertAuthority();
+        // Renewal revokes refs before action validation, not after dispatch.
+        adoptGeneration(frameState, executionDriver.generation);
+      };
       let closing = false;
       let closePromise: Promise<void> | undefined;
       const assertOpen = () => {
@@ -504,10 +481,11 @@ export function createCuaComputerProvider(
       };
       return {
         snapshot: async (paramsJSON, signal) =>
-          await queue.run(async () => {
+          await queue.enqueue("execution", async () => {
             assertOpen();
             const params = parseScreenSnapshotParamsJSON(paramsJSON);
             assertPrimaryDisplay(params.screenIndex);
+            await prepareExecution(signal);
             const format = params.format ?? "jpeg";
             const maxWidth = params.maxWidth ?? (format === "png" ? 900 : 1_600);
             const quality = Math.min(1, Math.max(0.05, params.quality ?? 0.72));
@@ -556,14 +534,16 @@ export function createCuaComputerProvider(
             });
           }),
         act: async (paramsJSON, signal) =>
-          await queue.run(async () => {
+          await queue.enqueue("execution", async () => {
             assertOpen();
+            const params = parseComputerActParamsJSON(paramsJSON);
+            await prepareExecution(signal);
             return await handleWindowAct(
               platform,
               executionDriver,
               frameState,
               executionState,
-              parseComputerActParamsJSON(paramsJSON),
+              params,
               handleDesktopAct,
               signal,
             );
@@ -573,7 +553,7 @@ export function createCuaComputerProvider(
             return await closePromise;
           }
           closing = true;
-          closePromise = queue.run(async () => {
+          closePromise = queue.enqueue("execution", async () => {
             let failure: unknown;
             try {
               await closeRecordingExecution({

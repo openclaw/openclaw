@@ -4,5 +4,7 @@ import type {
 } from "../plugins/gateway-access-policy.types.js";
 
 export type GatewayOperatorAccessAuthority = PluginGatewayAccessAuthority & {
-  readonly gatewayAccessGrant?: GatewayAccessGrantRef;
+  /** Role requirement enforced when this authority was admitted. */
+  readonly requiredPolicyPlugin?: string;
+  readonly gatewayAccessGrant?: GatewayAccessGrantRef | null;
 };

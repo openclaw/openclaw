@@ -5,7 +5,6 @@ function chunk(text: string, overrides: Partial<BufferedOutput> = {}): BufferedO
   return {
     channel: "stdout",
     chunk: text,
-    generation: 1,
     truncatedTail: false,
     truncatedTailContinuesLine: false,
     precededByDrop: false,

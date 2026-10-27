@@ -1,42 +1,94 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { AsyncContext } from "../../shared/async-context.js";
+
+type RequestAuthority = { assertCurrent: () => void; beforeRequest?: () => void };
 
 // Host runtime and plugin SDK chunks must retain the same request-owned fence.
-const requestAuthority = resolveGlobalSingleton(
+const requestAuthority = new AsyncContext<RequestAuthority>(
   Symbol.for("openclaw.guardedFetchRequestAuthority"),
-  () => new AsyncLocalStorage<() => void>(),
 );
+
+/** Egress-only checks require managed fetch; lifetime assertions may also guard native transports. */
+export function hasGuardedFetchBeforeRequest(): boolean {
+  return requestAuthority.getStore()?.beforeRequest !== undefined;
+}
 
 /** Capture before transport preparation so redirects retain the original caller. */
 export function captureGuardedFetchRequestAuthority(): (() => void) | undefined {
-  return requestAuthority.getStore();
+  const authority = requestAuthority.getStore();
+  return authority
+    ? () => {
+        authority.assertCurrent();
+        authority.beforeRequest?.();
+      }
+    : undefined;
+}
+
+function invokeSynchronousGuard(guard: (() => void) | undefined): void {
+  const result: unknown = guard?.();
+  if (isPromiseLike(result)) {
+    void Promise.resolve(result).catch(() => undefined);
+    throw new TypeError("Guarded request authority must be synchronous.");
+  }
+}
+
+/**
+ * Add a synchronous egress check to guarded requests started by run, including
+ * requests a returned stream sends later. It narrows inherited authority only.
+ */
+export function withGuardedFetchBeforeRequest<T>(
+  beforeRequest: (() => void) | undefined,
+  run: () => T,
+): T {
+  if (!beforeRequest) {
+    return run();
+  }
+  const inherited = requestAuthority.getStore();
+  return requestAuthority.run(
+    {
+      assertCurrent: () => inherited?.assertCurrent(),
+      beforeRequest: () => {
+        inherited?.beforeRequest?.();
+        invokeSynchronousGuard(beforeRequest);
+      },
+    },
+    run,
+  );
 }
 
 /** Carry a host-owned assertion through provider preparation without granting new authority. */
 export async function withGuardedFetchRequestAuthority<T>(
   assertCurrent: (() => void) | undefined,
   run: (assertCurrent: (() => void) | undefined) => Promise<T>,
+  beforeRequest?: () => void,
 ): Promise<T> {
   const inherited = requestAuthority.getStore();
-  if (!assertCurrent && !inherited) {
+  if (!assertCurrent && !beforeRequest && !inherited) {
     return await run(undefined);
   }
   let active = true;
   const assertAuthority = () => {
-    inherited?.();
+    inherited?.assertCurrent();
     if (!active) {
       throw new Error("Guarded request authority is no longer active.");
     }
-    const result: unknown = assertCurrent?.();
-    if (isPromiseLike(result)) {
-      void Promise.resolve(result).catch(() => undefined);
-      throw new TypeError("Guarded request authority must be synchronous.");
-    }
+    invokeSynchronousGuard(assertCurrent);
   };
   try {
     assertAuthority();
-    return await requestAuthority.run(assertAuthority, () => run(assertAuthority));
+    return await requestAuthority.run(
+      {
+        assertCurrent: assertAuthority,
+        beforeRequest:
+          beforeRequest || inherited?.beforeRequest
+            ? () => {
+                inherited?.beforeRequest?.();
+                invokeSynchronousGuard(beforeRequest);
+              }
+            : undefined,
+      },
+      () => run(assertAuthority),
+    );
   } finally {
     active = false;
   }

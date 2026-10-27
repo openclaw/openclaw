@@ -1,4 +1,4 @@
-import type { ReactiveControllerHost } from "lit";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 
 type McpAppUnmountTarget = Element & {
   restartAfterTeardown(): void;
@@ -6,96 +6,90 @@ type McpAppUnmountTarget = Element & {
 };
 type McpAppUnmountKey = string | readonly string[];
 
-function isMcpAppUnmountTarget(value: Element): value is McpAppUnmountTarget {
-  return (
-    typeof Reflect.get(value, "restartAfterTeardown") === "function" &&
-    typeof Reflect.get(value, "teardown") === "function"
+const registeredTargets = new Set<McpAppUnmountTarget>();
+
+/** Each mounted App owns its registration until its rendering owner disposes. */
+export function registerMcpAppUnmountTarget(target: McpAppUnmountTarget): () => void {
+  registeredTargets.add(target);
+  return () => {
+    registeredTargets.delete(target);
+  };
+}
+
+export function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnmountTarget[] {
+  const leavingRoots = [...roots];
+  return [...registeredTargets].filter((target) =>
+    leavingRoots.some((root) => root.contains(target)),
   );
 }
 
-function findMcpAppUnmountTargets(
-  roots: Iterable<ParentNode>,
-  selector = "mcp-app-view",
-): McpAppUnmountTarget[] {
-  const targets = new Set<McpAppUnmountTarget>();
-  for (const root of roots) {
-    if (root instanceof Element && root.matches(selector) && isMcpAppUnmountTarget(root)) {
-      targets.add(root);
-    }
-    for (const candidate of root.querySelectorAll(selector)) {
-      if (isMcpAppUnmountTarget(candidate)) {
-        targets.add(candidate);
-      }
-    }
-  }
-  return [...targets];
-}
-
 /** Keeps rendered DOM and owner state together until one coalesced MCP teardown completes. */
-export class McpAppUnmountGate {
-  private renderedKey: McpAppUnmountKey | null = null;
-  private renderedValue: unknown;
-  private pending = false;
-  private restartTargets: McpAppUnmountTarget[] | null = null;
+export function createMcpAppUnmountGate<Value = unknown>(invalidate?: () => void) {
+  let renderedKey: McpAppUnmountKey | null = null;
+  let renderedValue: Value;
+  let pending = false;
+  let restartTargets: McpAppUnmountTarget[] | null = null;
+  const listeners = createChangeListeners();
 
-  constructor(
-    private readonly host: ReactiveControllerHost,
-    private readonly selector = "mcp-app-view",
-  ) {}
-
-  get retiring(): boolean {
-    return this.pending || this.restartTargets !== null;
+  function apply(key: McpAppUnmountKey, renderValue: () => Value): Value {
+    renderedValue = renderValue();
+    renderedKey = key;
+    return renderedValue;
   }
 
-  private apply(key: McpAppUnmountKey, renderValue: () => unknown): unknown {
-    this.renderedValue = renderValue();
-    this.renderedKey = key;
-    return this.renderedValue;
-  }
-
-  render(
+  function render(
     key: McpAppUnmountKey,
-    renderValue: () => unknown,
+    renderValue: () => Value,
     leavingRoots: () => Iterable<ParentNode>,
-    options: { retainRenderedValue?: boolean } = {},
-  ): unknown {
-    if (this.pending) {
-      return this.renderedValue;
+    options: { retainRenderedValue?: boolean; afterCommit?: (effect: () => void) => void } = {},
+  ): Value {
+    if (pending) {
+      return renderedValue;
     }
-    if (this.restartTargets) {
-      const targets = this.restartTargets;
-      this.restartTargets = null;
-      // Lit commits the parent update synchronously after render. Restart only
-      // torn-down views that survived that commit; retained siblings stay intact.
-      queueMicrotask(() => {
-        for (const target of targets) {
+    const restarting = restartTargets;
+    if (restarting) {
+      restartTargets = null;
+      // Restart only torn-down views that survived the owning renderer's commit.
+      const restart = () => {
+        for (const target of restarting) {
           if (target.isConnected) {
             target.restartAfterTeardown();
           }
         }
-      });
-      return this.renderedKey === key && options.retainRenderedValue
-        ? this.renderedValue
-        : this.apply(key, renderValue);
+      };
+      if (options.afterCommit) {
+        options.afterCommit(restart);
+      } else {
+        queueMicrotask(restart);
+      }
     }
-    if (this.renderedKey === key && options.retainRenderedValue) {
-      return this.renderedValue;
+    if (renderedKey === key && options.retainRenderedValue) {
+      return renderedValue;
     }
-    if (this.renderedKey === null || this.renderedKey === key) {
-      return this.apply(key, renderValue);
+    if (restarting || renderedKey === null || renderedKey === key) {
+      return apply(key, renderValue);
     }
 
-    const targets = findMcpAppUnmountTargets(leavingRoots(), this.selector);
+    const targets = findMcpAppUnmountTargets(leavingRoots());
     if (targets.length === 0) {
-      return this.apply(key, renderValue);
+      return apply(key, renderValue);
     }
 
-    this.pending = true;
+    pending = true;
     void Promise.allSettled(targets.map((target) => target.teardown())).then(() => {
-      this.pending = false;
-      this.restartTargets = targets;
-      this.host.requestUpdate();
+      pending = false;
+      restartTargets = targets;
+      invalidate?.();
+      listeners.publish();
     });
-    return this.renderedValue;
+    return renderedValue;
   }
+
+  return {
+    render,
+    subscribe: listeners.subscribe,
+    get retiring() {
+      return pending || restartTargets !== null;
+    },
+  };
 }

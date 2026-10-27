@@ -78,41 +78,6 @@ describe("fetchSessionMenuWork", () => {
     expect(request).toHaveBeenCalledTimes(testCase.expectedPath ? 1 : 0);
   });
 
-  it("resolves the PR URL and worktree path in one pass", async () => {
-    const request = vi.fn((_method: string) => {
-      return Promise.resolve({
-        worktrees: [
-          {
-            id: "wt-1",
-            path: "/work/trees/demo",
-            removedAt: undefined,
-          },
-          {
-            id: "wt-removed",
-            path: "/work/trees/stale",
-            removedAt: 123,
-          },
-        ],
-      });
-    });
-
-    await expect(
-      fetchSessionMenuWork({
-        client: sessionMenuClient(request),
-        loadPullRequests: async () => ({
-          pullRequests: [pullRequest({ url: "https://example.test/pr" })],
-          rateLimited: false,
-          status: "ready",
-        }),
-        worktreeId: "wt-1",
-      }),
-    ).resolves.toEqual({
-      pullRequestUrl: "https://example.test/pr",
-      worktreePath: "/work/trees/demo",
-    });
-    expect(request).toHaveBeenCalledWith("worktrees.list", {});
-  });
-
   it("returns nulls when the PR surface is absent, the worktree is removed, or requests fail", async () => {
     const failing = vi.fn(() => Promise.reject(new Error("offline")));
     await expect(

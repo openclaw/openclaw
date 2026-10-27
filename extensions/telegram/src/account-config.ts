@@ -1,4 +1,3 @@
-// Telegram helper module supports account config behavior.
 import {
   mergeAccountConfig,
   normalizeAccountId,
@@ -34,4 +33,13 @@ export function mergeTelegramAccountConfig(
     inheritEmptyKeys: { capabilities: "array", ...(isMultiAccount ? {} : { groups: "object" }) },
     preserveRootAllowFrom: true,
   });
+}
+
+export function resolveTelegramLegacyWebhookListener(
+  configured: TelegramAccountConfig["legacyWebhook"],
+): { port: number; host: string } | undefined {
+  if (!configured) {
+    return undefined;
+  }
+  return { port: configured.port, host: configured.host ?? "127.0.0.1" };
 }

@@ -207,7 +207,7 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
                     defaultRealtimeModelIdFallback: "gpt-realtime-2",
                     defaultSilenceTimeoutMs: 900))
                 manager.gatewayTalkPermissionState = .ready
-                await manager.prefetchRealtimeSessionIfReady(reason: "synthetic handoff")
+                await manager.prefetchRealtimeSessionIfReady()
                 let deadline = Date().addingTimeInterval(5)
                 while !manager._test_hasPrefetchedRealtimeSession(), Date() < deadline {
                     try await Task.sleep(for: .milliseconds(10))
@@ -327,7 +327,7 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
                     manager.gatewayTalkPermissionState = .ready
                     if path != "prefetch" { manager._test_prepareEnabledRealtimeSessionForClose() }
                     if path == "prefetch" {
-                        await manager.prefetchRealtimeSessionIfReady(reason: "synthetic compatibility")
+                        await manager.prefetchRealtimeSessionIfReady()
                     } else {
                         await manager.start()
                     }

@@ -87,9 +87,7 @@ extension OnboardingView {
         self.prepareSystemAgentHandoff()
         let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
         aiSetup.resumeConfiguredInference(modelRef: modelRef, modelTarget: modelTarget)
-        if let page = pageOrder.firstIndex(of: aiPageIndex) {
-            currentPage = page
-        }
+        self.selectAISetupPage()
         return Task {
             let outcome = await self.aiSetup.verifyPendingConfiguredInference()
             if case let .freshSetupAllowed(context) = outcome {
@@ -111,9 +109,7 @@ extension OnboardingView {
 
     func waitForPendingInferenceSetup() {
         self.prepareSystemAgentHandoff()
-        if let page = pageOrder.firstIndex(of: aiPageIndex) {
-            currentPage = page
-        }
+        self.selectAISetupPage()
         aiSetup.waitForPendingActivationDeadline()
     }
 
@@ -164,9 +160,13 @@ extension OnboardingView {
 
     func resumePendingInferenceSetup() {
         self.prepareSystemAgentHandoff()
+        self.selectAISetupPage()
+        aiSetup.resumeSetup()
+    }
+
+    private func selectAISetupPage() {
         if let page = pageOrder.firstIndex(of: aiPageIndex) {
             currentPage = page
         }
-        aiSetup.resumeSetup()
     }
 }

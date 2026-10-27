@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { deserialize } from "node:v8";
+import { zstdDecompressSync } from "node:zlib";
 import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
@@ -9,7 +11,9 @@ import {
   type WorkspaceHashMetrics,
 } from "./workspace-hash-memo.js";
 import {
+  manifestNodes,
   parseChangedWorkspaceResult,
+  sameEntry,
   type WorkspaceNode,
 } from "./workspace-manifest-comparison.js";
 import type {
@@ -26,26 +30,17 @@ import {
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
 
+function decodeUtf8(bytes: Uint8Array): string {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8");
+}
+
 function decodeManifestValue<Type extends keyof WorkspaceManifestValueInputs>(command: {
   type: Type;
   input: { payload: Uint8Array<ArrayBuffer> };
 }): WorkspaceManifestValueInputs[Type] {
-  const payload = command.input.payload;
-  const parsed: unknown = JSON.parse(
-    Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength).toString("utf8"),
-  );
+  const parsed: unknown = JSON.parse(decodeUtf8(command.input.payload));
   // SAFETY: Only the private host adapter creates these typed serialized payloads.
   return parsed as WorkspaceManifestValueInputs[Type];
-}
-
-function captureArguments(input: WorkspaceManifestValueInputs["workspace.manifest.capture"]) {
-  return {
-    root: input.root,
-    baseCommit: input.baseCommit,
-    includePaths: input.includePaths === undefined ? undefined : new Set(input.includePaths),
-    preserveDirectories:
-      input.preserveDirectories === undefined ? undefined : new Set(input.preserveDirectories),
-  };
 }
 
 async function withHashes<T>(
@@ -54,7 +49,6 @@ async function withHashes<T>(
 ): Promise<WorkspaceComputationHashResult<T>> {
   const metrics: WorkspaceHashMetrics = {
     contentHashCount: 0,
-    contentHashDurationMs: 0,
     memoHitCount: 0,
   };
   if (!input) {
@@ -84,6 +78,80 @@ export async function executeWorkspaceManifestComputation(
   assertBeforeMutation?: () => void,
 ): Promise<WorkspaceManifestComputationResult> {
   switch (command.type) {
+    case "workspace.manifest.local": {
+      const { executeLocalWorkspaceManifestRead } =
+        await import("./local-workspace-manifest-scan.js");
+      const bytes = command.input.snapshot;
+      // SAFETY: The state reader captures both arguments from the admitted request.
+      const args = deserialize(zstdDecompressSync(bytes)) as Parameters<
+        typeof executeLocalWorkspaceManifestRead
+      >;
+      return await executeLocalWorkspaceManifestRead(...args);
+    }
+    case "workspace.manifest.base-refresh": {
+      const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
+      const input = command.input;
+      return await withHashes(input.hashes, async () => {
+        const { manifest: before } = await readActualWorkspaceManifestImpl({
+          root: input.beforeRoot,
+          baseCommit: input.baseCommit,
+        });
+        const { manifest: after } = await readActualWorkspaceManifestImpl({
+          root: input.afterRoot,
+          baseCommit: input.baseCommit,
+        });
+        const accepted = parseWorkerWorkspaceManifest(
+          decodeUtf8(input.baseRaw),
+          input.baseRef,
+          input.buildCacheInputs,
+        );
+        const current = applyWorkspaceSourceOverlay(before, accepted, after);
+        current.buildCacheInputs = [
+          ...new Set([...input.buildCacheInputs, ...after.entries.map((entry) => entry.path)]),
+        ];
+        const priorNodes = manifestNodes(before);
+        const currentNodes = manifestNodes(current);
+        for (const [file, entry] of manifestNodes(accepted)) {
+          if (!priorNodes.has(file) && !sameEntry(entry, currentNodes.get(file))) {
+            throw new Error(
+              `The selected base conflicts with saved workspace data at ${file}; move that saved file before retrying ${input.action}.`,
+            );
+          }
+        }
+        const rawManifest = serializeWorkerWorkspaceManifest(current);
+        return {
+          rawManifest,
+          manifestRef: `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`,
+          buildCacheInputs: current.buildCacheInputs,
+        };
+      });
+    }
+    case "workspace.manifest.equal": {
+      const input = command.input;
+      const left = manifestNodes(
+        parseWorkerWorkspaceManifest(
+          decodeUtf8(input.baseRaw),
+          input.baseRef,
+          input.buildCacheInputs,
+        ),
+      );
+      const right = manifestNodes(
+        parseWorkerWorkspaceManifest(
+          decodeUtf8(input.currentRaw),
+          input.currentRef,
+          input.buildCacheInputs,
+        ),
+      );
+      return (
+        left.size === right.size &&
+        [...left].every(([file, entry]) => sameEntry(entry, right.get(file)))
+      );
+    }
+    case "workspace.manifest.remote-capture": {
+      const { captureNodeWorkspaceManifestImpl } =
+        await import("./workspace-manifest-script.runtime.js");
+      return await captureNodeWorkspaceManifestImpl(command.input, assertBeforeMutation);
+    }
     case "workspace.manifest.nodes": {
       const { localWorkspaceNode } = await import("./workspace-reconcile-fs.js");
       const input = decodeManifestValue(command);
@@ -104,7 +172,11 @@ export async function executeWorkspaceManifestComputation(
     }
     case "workspace.manifest.staged": {
       const { loadStagedWorkerWorkspace } = await import("./workspace-result-inventory.runtime.js");
-      return await loadStagedWorkerWorkspace(command.input.root, command.input.ref);
+      return await loadStagedWorkerWorkspace(
+        command.input.root,
+        command.input.ref,
+        command.input.buildCacheInputs,
+      );
     }
     case "workspace.manifest.stage-input": {
       const { buildWorkspaceStageInput } =
@@ -120,22 +192,32 @@ export async function executeWorkspaceManifestComputation(
         await import("./workspace-result-inventory.runtime.js");
       return ownedWorkerBytes(await readStagedWorkerWorkspaceEntries(command.input));
     }
-    case "workspace.manifest.capture": {
+    case "workspace.manifest.capture":
+    case "workspace.manifest.snapshot":
+    case "workspace.manifest.document":
+    case "workspace.manifest.reference": {
       const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
       const input = decodeManifestValue(command);
-      return await withHashes(input.hashes, async () => {
-        const { manifest, manifestRef } = await readActualWorkspaceManifestImpl(
-          captureArguments(input),
-        );
-        return { manifest, manifestRef };
-      });
-    }
-    case "workspace.manifest.snapshot": {
-      const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
-      const input = decodeManifestValue(command);
-      return await withHashes(input.hashes, () =>
-        readActualWorkspaceManifestImpl(captureArguments(input)),
+      const result = await withHashes(input.hashes, () =>
+        readActualWorkspaceManifestImpl({
+          ...input,
+          includePaths: input.includePaths && new Set(input.includePaths),
+          buildCacheInputs: input.buildCacheInputs && new Set(input.buildCacheInputs),
+          preserveDirectories: input.preserveDirectories && new Set(input.preserveDirectories),
+        }),
       );
+      if (command.type === "workspace.manifest.document") {
+        const { manifestRef, rawManifest } = result.value;
+        return { ...result, value: { manifestRef, rawManifest } };
+      }
+      return command.type === "workspace.manifest.reference"
+        ? { ...result, value: result.value.manifestRef }
+        : command.type === "workspace.manifest.snapshot"
+          ? result
+          : {
+              ...result,
+              value: { manifest: result.value.manifest, manifestRef: result.value.manifestRef },
+            };
     }
     case "workspace.manifest.file": {
       const { readWorkspaceFileSnapshotWithLimit } = await import("./workspace-actual-manifest.js");
@@ -149,12 +231,21 @@ export async function executeWorkspaceManifestComputation(
       const input = decodeManifestValue(command);
       return await withHashes(input.hashes, () => preflightWorkspaceApplyImpl(input));
     }
+    case "workspace.manifest.paths": {
+      const input = command.input;
+      const manifest = parseWorkerWorkspaceManifest(
+        decodeUtf8(input.raw),
+        input.expectedRef,
+        input.buildCacheInputs,
+      );
+      // Parsing already projects eligible entries; keep the directory-first path order.
+      return new Set([
+        ...(manifest.directories ?? []),
+        ...manifest.entries.map((entry) => entry.path),
+      ]);
+    }
     case "workspace.manifest.parse": {
-      const raw = Buffer.from(
-        command.input.raw.buffer,
-        command.input.raw.byteOffset,
-        command.input.raw.byteLength,
-      ).toString("utf8");
+      const raw = decodeUtf8(command.input.raw);
       const manifestRef =
         command.input.expectedRef ?? `sha256:${createHash("sha256").update(raw).digest("hex")}`;
       return {
@@ -176,16 +267,8 @@ export async function executeWorkspaceManifestComputation(
       return { raw, manifestRef: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
     }
     case "workspace.manifest.pair": {
-      const baseRaw = Buffer.from(
-        command.input.baseRaw.buffer,
-        command.input.baseRaw.byteOffset,
-        command.input.baseRaw.byteLength,
-      ).toString("utf8");
-      const currentRaw = Buffer.from(
-        command.input.currentRaw.buffer,
-        command.input.currentRaw.byteOffset,
-        command.input.currentRaw.byteLength,
-      ).toString("utf8");
+      const baseRaw = decodeUtf8(command.input.baseRaw);
+      const currentRaw = decodeUtf8(command.input.currentRaw);
       const base = parseWorkerWorkspaceManifest(baseRaw, command.input.baseRef);
       const current = parseWorkerWorkspaceManifest(currentRaw, command.input.currentRef);
       const compared = parseChangedWorkspaceResult(base, current);

@@ -1,22 +1,28 @@
 import type { ControlUiHost } from "../../../src/plugin-sdk/control-ui.js";
+import { listen } from "../lib/reactive/listener.ts";
 
 /** A mounted view cannot retain host calls or listeners after its own lifetime ends. */
-export function scopeControlUiHost(host: ControlUiHost, signal: AbortSignal): ControlUiHost {
+export function scopeControlUiHost(
+  host: ControlUiHost,
+  signal: AbortSignal,
+  isCurrent?: () => boolean,
+): ControlUiHost {
+  const active = () => !signal.aborted && !host.signal.aborted && (isCurrent?.() ?? true);
   const check = () => {
-    if (signal.aborted || host.signal.aborted) {
+    if (!active()) {
       throw new Error("This plugin UI view has ended.");
     }
   };
   const bindCallback =
     <Args extends unknown[]>(listener: (...args: Args) => void) =>
     (...args: Args) => {
-      if (!signal.aborted && !host.signal.aborted) {
+      if (active()) {
         listener(...args);
       }
     };
   const disposers = new Set<() => void>();
   const keep = (dispose: () => void) => {
-    if (signal.aborted || host.signal.aborted) {
+    if (!active()) {
       dispose();
       check();
     }
@@ -35,7 +41,9 @@ export function scopeControlUiHost(host: ControlUiHost, signal: AbortSignal): Co
           return next;
         })
       : result;
-  signal.addEventListener(
+  // The view's lifetime owns this one-shot teardown of its retained service handles.
+  listen(
+    signal,
     "abort",
     () => {
       for (const dispose of disposers) {
@@ -115,6 +123,7 @@ export function scopeControlUiHost(host: ControlUiHost, signal: AbortSignal): Co
       check();
       return keep(host.onEvent(name, bindCallback(listener)));
     },
+    // The SDK callback retains synchronous delivery and this view's live authority check.
     subscribe: (listener) => {
       check();
       return keep(host.subscribe(bindCallback(listener)));
@@ -122,6 +131,7 @@ export function scopeControlUiHost(host: ControlUiHost, signal: AbortSignal): Co
     sessions: services(host.sessions, { observe: 1 }),
     agents: services(host.agents),
     navigation: services(host.navigation),
+    dock: host.dock ? services(host.dock) : undefined,
     ui: services(host.ui),
     components: services(host.components),
   };

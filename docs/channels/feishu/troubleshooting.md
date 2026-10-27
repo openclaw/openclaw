@@ -14,19 +14,19 @@ Diagnostics for a Feishu bot that does not respond, does not receive events, or 
 
 ### Bot does not respond in group chats
 
-1. Ensure the bot is added to the group
-2. Ensure you @mention the bot (required by default)
+1. Check that the bot is added to the group
+2. @mention the bot (required by default)
 3. Verify `groupPolicy` is not `"disabled"`
 4. Check logs: `openclaw logs --follow`
 
 ### Bot does not receive messages
 
-1. Ensure the bot is published and approved in Feishu Open Platform / Lark Developer
-2. Ensure event subscription includes `im.message.receive_v1`
+1. Check that the bot is published and approved in Feishu Open Platform / Lark Developer
+2. Check that event subscription includes `im.message.receive_v1`
 3. For meeting invite auto-join, also subscribe to `vc.bot.meeting_invited_v1`
-4. Ensure **persistent connection** (WebSocket) is selected
-5. Ensure all required permission scopes are granted
-6. Ensure the gateway is running: `openclaw gateway status`
+4. Select **persistent connection** (WebSocket)
+5. Grant all required permission scopes
+6. Check that the gateway is running: `openclaw gateway status`
 7. Check logs: `openclaw logs --follow`
 
 Subscribing to `vc.bot.meeting_invited_v1` only delivers the event. Automatic joins are

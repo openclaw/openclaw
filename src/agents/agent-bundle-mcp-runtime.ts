@@ -1,103 +1,59 @@
-/** Session-scoped MCP runtime catalog loader and transport lifecycle. */
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import {
-  ErrorCode,
-  ListToolsResultSchema,
-  McpError,
-  type CallToolResult,
-  type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
+import type { Tool } from "@modelcontextprotocol/client";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { logWarn } from "../logger.js";
 import {
-  createCombinedSessionMcpRuntime,
-  mergeMcpToolCatalogs,
-} from "./agent-bundle-mcp-combined.js";
-import {
-  disposeAllSessionMcpRuntimes,
-  getSessionMcpRuntimeManagerForTesting,
-} from "./agent-bundle-mcp-manager-api.js";
-import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
-import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
-import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
-import type { CreateSessionMcpRuntime } from "./agent-bundle-mcp-runtime-shared.js";
+  getSessionMcpRequestSignal,
+  runWithSessionMcpRequestSignal,
+  withSessionMcpCallerAuthority,
+} from "./agent-bundle-mcp-request-context.js";
+import type { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
+import { loadBundleMcpRuntimeModules } from "./agent-bundle-mcp-runtime-modules.js";
+import { createSessionMcpRuntimeParts } from "./agent-bundle-mcp-runtime-parts.js";
 import type {
-  McpCatalogTool,
+  BundleMcpSession,
+  CreateSessionMcpRuntime,
+  ServerMcpRuntime,
+} from "./agent-bundle-mcp-runtime-shared.js";
+import type {
   McpRequestOptions,
-  McpServerCatalog,
   McpToolCatalog,
   McpToolCatalogDiagnostic,
   SessionMcpRuntime,
-  SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
 import {
-  connectMcpClient,
-  disposeMcpClient,
-  isMcpHttpSessionExpired,
-  McpClientConnectTimeoutError,
-} from "./mcp-client-lifecycle.js";
+  getCatalogListTimeoutMs,
+  listAllMcpTools,
+  listMcpServerItems,
+} from "./mcp-catalog-listing.js";
+import { MCP_ELICITATION_TIMEOUT_MS } from "./mcp-client-elicitation.js";
+import { applyMcpConnectionOverride } from "./mcp-connection-resolver.js";
+import { buildMcpClientCapabilities, summarizeServerCapabilities } from "./mcp-metadata.js";
+import { createMcpRequestLifecycle } from "./mcp-request-lifecycle.js";
 import {
-  normalizeMcpCodexToolAnnotations,
-  resolveProjectedMcpCodexToolApprovalMode,
-} from "./mcp-codex-tool-approval.js";
+  mcpCallToolResultSchema,
+  mcpGetPromptResultSchema,
+  mcpListResourceTemplatesResultSchema,
+  mcpListToolsResultSchema,
+  toLegacyMcpCallToolResult,
+  toLegacyMcpGetPromptResult,
+  toLegacyMcpListResourceTemplatesResult,
+  toLegacyMcpListToolsResult,
+} from "./mcp-sdk-compatibility.js";
+import { createMcpStartupBackoff, McpStartupBackoffError } from "./mcp-startup-backoff.js";
+import { recordModelFallbackStop } from "./model-fallback-stop.js";
 import {
-  applyMcpConnectionOverride,
-  hashMcpResolvedConnections,
-  partitionMcpServersByConnectionScope,
-} from "./mcp-connection-resolver.js";
-import { redactMcpDiagnosticError } from "./mcp-error.js";
-import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
-import {
-  buildMcpClientCapabilities,
-  normalizeToolUiVisibility,
-  sanitizeMcpMetadataText,
-  summarizeServerCapabilities,
-} from "./mcp-metadata.js";
-import { collectMcpPaginatedItems } from "./mcp-pagination.js";
-import { isMcpToolAllowed, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
-import { normalizeMcpToolCatalog, type McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
-import { resolveMcpTransport } from "./mcp-transport.js";
+  acquireNativeMcpServer,
+  nativeMcpRuntimeBindings,
+  type NativeMcpClientContext,
+} from "./native-mcp-runtime.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
-
-type BundleMcpSession = {
-  serverName: string;
-  client: Client;
-  transport: Transport;
-  transportType: "stdio" | "sse" | "streamable-http";
-  requestTimeoutMs: number;
-  connected: boolean;
-  disconnectReason?: string;
-  retiring: boolean;
-  connectPromise?: Promise<void>;
-  disposePromise?: Promise<void>;
-  detachStderr?: () => void;
-  toolMetadata?: McpToolCatalogMetadata;
-};
 
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
 const BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS = 5_000;
-const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
-const BUNDLE_MCP_DISPOSE_TIMEOUT_MS = 5_000;
-const BUNDLE_MCP_MAX_LIST_PAGES = 128;
-const BUNDLE_MCP_MAX_LIST_ITEMS = 16_384;
-const BUNDLE_MCP_MAX_LIST_BYTES = 10 * 1024 * 1024;
-let bundleMcpCatalogListTimeoutMs: number | undefined;
-const BUNDLE_MCP_TEST_STATE_KEY = Symbol.for("openclaw.bundleMcpTestState");
-type BundleMcpTestState = { disposeTimeoutMs?: number };
-
-function getBundleMcpTestState(): BundleMcpTestState {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[BUNDLE_MCP_TEST_STATE_KEY] as BundleMcpTestState | undefined;
-  if (existing) {
-    return existing;
-  }
-  const state: BundleMcpTestState = {};
-  globalStore[BUNDLE_MCP_TEST_STATE_KEY] = state;
-  return state;
-}
 
 type McpServerBackoffState = {
   session: BundleMcpSession;
@@ -105,324 +61,22 @@ type McpServerBackoffState = {
   retryAfterMs?: number;
 };
 
-export { createMcpJsonSchemaValidator as createBundleMcpJsonSchemaValidator };
-
-async function listAllTools(
-  client: Client,
-  timeoutMs: number,
-  signal: AbortSignal,
-): Promise<Tool[]> {
-  return await collectMcpPaginatedItems({
-    label: "MCP tool listing",
-    itemLabel: "tools",
-    timeoutMs,
-    maxPages: BUNDLE_MCP_MAX_LIST_PAGES,
-    maxItems: BUNDLE_MCP_MAX_LIST_ITEMS,
-    maxBytes: BUNDLE_MCP_MAX_LIST_BYTES,
-    signal,
-    loadPage: async ({ cursor, requestTimeoutMs, signal: requestSignal }) => {
-      const requestController = new AbortController();
-      const onAbort = () => requestController.abort(requestSignal.reason);
-      requestSignal.addEventListener("abort", onAbort, { once: true });
-      if (requestSignal.aborted) {
-        onAbort();
-      }
-      try {
-        const page = await client.request(
-          { method: "tools/list", params: cursor === undefined ? undefined : { cursor } },
-          ListToolsResultSchema,
-          {
-            timeout: requestTimeoutMs,
-            maxTotalTimeout: requestTimeoutMs,
-            signal: requestController.signal,
-          },
-        );
-        return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
-      } finally {
-        requestSignal.removeEventListener("abort", onAbort);
-      }
-    },
-  });
+function projectBundleMcpCatalogFailure(
+  catalog: McpToolCatalog | undefined,
+  diagnostic: McpToolCatalogDiagnostic,
+): McpToolCatalog {
+  return {
+    ...(catalog ?? { version: 1, servers: {}, tools: [] }),
+    generatedAt: Date.now(),
+    diagnostics: [diagnostic],
+  };
 }
-
-function isMcpMethodNotFoundError(error: unknown): boolean {
-  if (isRecord(error) && error.code === ErrorCode.MethodNotFound) {
-    return true;
-  }
-  const message = String(error);
-  return message.includes("-32601") || /\b(?:method not found|unknown method)\b/i.test(message);
-}
-
-function hasConfiguredMcpRequestTimeout(rawServer: unknown): boolean {
-  if (!rawServer || typeof rawServer !== "object") {
-    return false;
-  }
-  const record = rawServer as Record<string, unknown>;
-  for (const key of ["requestTimeoutMs", "timeout"]) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function getCatalogListTimeoutMs(rawServer: unknown, requestTimeoutMs: number): number {
-  if (bundleMcpCatalogListTimeoutMs !== undefined) {
-    return bundleMcpCatalogListTimeoutMs;
-  }
-  return hasConfiguredMcpRequestTimeout(rawServer)
-    ? requestTimeoutMs
-    : BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS;
-}
-
-function setBundleMcpCatalogListTimeoutMsForTest(timeoutMs?: number): void {
-  bundleMcpCatalogListTimeoutMs =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? Math.floor(timeoutMs)
-      : undefined;
-}
-
-function setBundleMcpDisposeTimeoutMsForTest(timeoutMs?: number): void {
-  // Non-isolated test workers can reload this module while a facade still
-  // references an older copy. Share the override across those copies.
-  getBundleMcpTestState().disposeTimeoutMs =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? Math.floor(timeoutMs)
-      : undefined;
-}
-
-function disposeBundleMcpSession(session: BundleMcpSession): Promise<"closed" | "uncertain"> {
-  return disposeMcpClient(
-    session,
-    getBundleMcpTestState().disposeTimeoutMs ?? BUNDLE_MCP_DISPOSE_TIMEOUT_MS,
-  );
-}
-
-function createDisposedError(sessionId: string): Error {
-  return new Error(`bundle-mcp runtime disposed for session ${sessionId}`);
-}
-
-type ServerMcpRuntime = SessionMcpRuntime & { readonly pluginOwned: boolean };
 
 export function createSessionMcpRuntime(
   params: Parameters<CreateSessionMcpRuntime>[0],
   previous = new Map<string, ServerMcpRuntime>(),
 ): SessionMcpRuntime {
-  const declared = loadSessionMcpConfig({
-    ...params,
-    includeServerNames: undefined,
-    excludeServerNames: undefined,
-    logDiagnostics: true,
-  });
-  const config = loadSessionMcpConfig({
-    ...params,
-    loaded: declared.loaded,
-    safeServerNamesByServer: declared.safeServerNamesByServer,
-    logDiagnostics: false,
-  });
-  const safeNames = declared.safeServerNamesByServer;
-  const configForServer = (serverName: string, nextParams = params, loaded = config.loaded) => {
-    const connection = nextParams.connectionOverrides?.get(serverName);
-    const serverConfig = loadSessionMcpConfig({
-      ...nextParams,
-      loaded,
-      logDiagnostics: false,
-      includeServerNames: new Set([serverName]),
-      excludeServerNames: undefined,
-      safeServerNamesByServer: new Map([[serverName, safeNames.get(serverName)!]]),
-      toolOverrides: {
-        ...nextParams.toolOverrides,
-        mcpToolsDeny: Object.fromEntries(
-          Object.entries(nextParams.toolOverrides?.mcpToolsDeny ?? {}).filter(
-            ([name]) => name === serverName,
-          ),
-        ),
-      },
-    });
-    if (connection) {
-      serverConfig.fingerprint += `:${hashMcpResolvedConnections(new Map([[serverName, connection]]))}`;
-    }
-    return serverConfig;
-  };
-  const owned = new Map<string, ServerMcpRuntime>();
-  for (const serverName of Object.keys(config.loaded.mcpServers)) {
-    const serverConfig = configForServer(serverName);
-    const fingerprint = serverConfig.fingerprint;
-    const existing = previous.get(serverName);
-    if (
-      existing?.configFingerprint === fingerprint &&
-      existing.workspaceDir === params.workspaceDir &&
-      existing.agentDir === params.agentDir
-    ) {
-      owned.set(serverName, existing);
-      previous.delete(serverName);
-    } else {
-      owned.set(
-        serverName,
-        createServerMcpRuntime({
-          ...params,
-          serverName,
-          serverConfig,
-          safeServerNamesByServer: safeNames,
-          configFingerprint: fingerprint,
-        }),
-      );
-    }
-  }
-  const requesterConnect = params.requesterConnect;
-  const connectFingerprints = new Map(
-    Object.keys(requesterConnect?.catalog.servers ?? {}).map((name) => [
-      name,
-      configForServer(name, params, declared.loaded).fingerprint,
-    ]),
-  );
-  let invalidated = false;
-  let pendingDisposal = Promise.resolve();
-  let cleanupFailure: PromiseRejectedResult | undefined;
-  const disposeParts = (parts: SessionMcpRuntime[]) => {
-    // Replacement must join cleanup already started by config publication.
-    pendingDisposal = Promise.allSettled([
-      pendingDisposal,
-      ...parts.map(async (part) => {
-        await part.dispose();
-        if (!part.joinCleanup) {
-          throw new Error("MCP runtime does not expose cleanup ownership");
-        }
-        await part.joinCleanup();
-      }),
-    ]).then((results) => {
-      cleanupFailure ??= results.find((result) => result.status === "rejected");
-    });
-    return pendingDisposal;
-  };
-  const runtime = createCombinedSessionMcpRuntime({
-    ...params,
-    parts: [...owned.values()],
-    // Admitted views keep routing to transferred servers; ownership alone moves.
-    serverOwners: new Map(owned),
-  });
-  runtime.configFingerprint = params.configFingerprint ?? config.fingerprint;
-  runtime.requesterScope = params.requesterScope;
-  runtime.requesterConnect = requesterConnect && {
-    ...requesterConnect,
-    get catalog() {
-      const catalog = requesterConnect.catalog;
-      return {
-        ...catalog,
-        servers: Object.fromEntries(
-          Object.entries(catalog.servers).filter(([name]) => connectFingerprints.has(name)),
-        ),
-        tools: catalog.tools.filter((tool) => connectFingerprints.has(tool.serverName)),
-      };
-    },
-    createExecute(serverName) {
-      const execute = requesterConnect.createExecute(serverName);
-      return (
-        execute &&
-        (async (...args) => {
-          if (!connectFingerprints.has(serverName)) {
-            throw createDisposedError(params.sessionId);
-          }
-          return await execute(...args);
-        })
-      );
-    },
-  };
-  runtime.mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
-  const joinParts = runtime.joinCleanup;
-  runtime.joinCleanup = async () => {
-    await pendingDisposal;
-    try {
-      await joinParts?.();
-    } catch (error) {
-      cleanupFailure ??= { status: "rejected", reason: error };
-    }
-    if (cleanupFailure) {
-      recordAgentCleanupFailure();
-      throw cleanupFailure.reason;
-    }
-  };
-  runtime.dispose = async () => {
-    connectFingerprints.clear();
-    invalidated = true;
-    const retired = [...owned.values()];
-    owned.clear();
-    sessionMcpRuntimeOwners.delete(runtime);
-    await disposeParts(retired);
-    if (cleanupFailure) {
-      recordAgentCleanupFailure();
-    }
-  };
-  sessionMcpRuntimeOwners.set(runtime, {
-    hasServers: () => owned.size > 0,
-    isCurrent: () => !invalidated,
-    replace: (nextParams) => createSessionMcpRuntime(nextParams, owned),
-    async retireUnusedServers(retainedServerNames) {
-      if (invalidated) {
-        return;
-      }
-      const retired: SessionMcpRuntime[] = [];
-      for (const [serverName, part] of owned) {
-        if (!retainedServerNames.has(serverName) && (part.activeLeases ?? 0) === 0) {
-          owned.delete(serverName);
-          retired.push(part);
-        }
-      }
-      if (retired.length === 0) {
-        return;
-      }
-      // Reacquisition can discover new members while transferring healthy survivors.
-      invalidated = true;
-      await disposeParts(retired);
-      if (cleanupFailure) {
-        recordAgentCleanupFailure();
-      }
-    },
-    async reload({ cfg, manifestRegistry, reloadPlugins }) {
-      const nextParams = { ...params, cfg, manifestRegistry };
-      const nextConfig = loadSessionMcpConfig({
-        ...nextParams,
-        includeServerNames: undefined,
-        excludeServerNames: undefined,
-        safeServerNamesByServer: undefined,
-        logDiagnostics: false,
-      });
-      const nextSafeNames = nextConfig.safeServerNamesByServer;
-      const { requesterScopedServerNames } = partitionMcpServersByConnectionScope(
-        nextConfig.loaded.mcpServers,
-      );
-      for (const [name, fingerprint] of connectFingerprints) {
-        if (
-          (reloadPlugins && !Object.hasOwn(params.cfg?.mcp?.servers ?? {}, name)) ||
-          cfg.gateway?.publicOrigin !== params.cfg?.gateway?.publicOrigin ||
-          configForServer(name, nextParams, nextConfig.loaded).fingerprint !== fingerprint ||
-          nextSafeNames.get(name) !== safeNames.get(name)
-        ) {
-          invalidated = true;
-          connectFingerprints.delete(name);
-        }
-      }
-      const retired: SessionMcpRuntime[] = [];
-      for (const [serverName, part] of owned) {
-        if (
-          (reloadPlugins && part.pluginOwned) ||
-          !Object.hasOwn(nextConfig.loaded.mcpServers, serverName) ||
-          requesterScopedServerNames.includes(serverName) !== Boolean(params.requesterScope) ||
-          nextSafeNames.get(serverName) !== safeNames.get(serverName) ||
-          configForServer(serverName, nextParams, nextConfig.loaded).fingerprint !==
-            part.configFingerprint
-        ) {
-          invalidated = true;
-          owned.delete(serverName);
-          retired.push(part);
-        }
-      }
-      // Disposal revokes the changed owner synchronously, before transport cleanup yields.
-      await disposeParts(retired);
-    },
-  });
-  return runtime;
+  return createSessionMcpRuntimeParts(params, createServerMcpRuntime, previous);
 }
 
 function createServerMcpRuntime(
@@ -430,57 +84,62 @@ function createServerMcpRuntime(
     serverName: string;
     serverConfig: ReturnType<typeof loadSessionMcpConfig>;
   },
+  nativeContext?: NativeMcpClientContext,
 ): ServerMcpRuntime {
   const { loaded, fingerprint: computedFingerprint } = params.serverConfig;
   const serverName = params.serverName;
   const configFingerprint = params.configFingerprint ?? computedFingerprint;
+  let startupRetryAfterMs: number | undefined;
   const mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
   const createdAt = Date.now();
   let lastUsedAt = createdAt;
   let activeLeases = 0;
   let retiredCatalog: McpToolCatalog | undefined;
   const lifecycleAbortController = new AbortController();
+  const startup = createMcpStartupBackoff({
+    identity: [
+      params.workspaceDir,
+      params.agentDir,
+      params.requesterScope,
+      serverName,
+      configFingerprint,
+    ],
+    signal: lifecycleAbortController.signal,
+    recoveryRetryMs: BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS,
+    runScoped: nativeContext !== undefined,
+  });
   let catalog: McpToolCatalog | null = null;
+  // Transport health cannot revoke advertised schemas; only a successful list
+  // or retirement of this configuration owner replaces them.
+  let lastListedCatalog: McpToolCatalog | undefined;
   let catalogRetryAfterMs: number | undefined;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
-  let catalogInvalidationGeneration = 0;
   const invalidateCatalog = () => {
-    catalogInvalidationGeneration += 1;
     catalog = null;
     catalogRetryAfterMs = undefined;
   };
   const scheduleCatalogServerRetry = (message: string) => {
-    const currentCatalog = catalog;
-    const server = currentCatalog?.servers[serverName];
-    const existing = currentCatalog?.diagnostics?.[0];
-    if (!currentCatalog) {
-      invalidateCatalog();
-      return;
-    }
-    let diagnostic: McpToolCatalogDiagnostic;
-    if (existing) {
-      diagnostic = { ...existing, message };
-    } else if (server) {
-      diagnostic = {
+    const server = lastListedCatalog?.servers[serverName];
+    invalidateCatalog();
+    if (server) {
+      catalog = projectBundleMcpCatalogFailure(lastListedCatalog, {
         serverName,
         safeServerName: server.safeServerName ?? serverName,
         launchSummary: server.launchSummary,
         message,
-      };
-    } else {
-      invalidateCatalog();
-      return;
+      });
+      catalogRetryAfterMs = Date.now();
     }
-    catalogInvalidationGeneration += 1;
-    catalog = {
-      ...currentCatalog,
-      diagnostics: [diagnostic],
-    };
-    catalogRetryAfterMs = Date.now();
   };
   const catalogRetryIsDue = (): boolean =>
     catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs;
   let currentSession: BundleMcpSession | undefined;
+  const nativeContextKey = nativeContext
+    ? stableStringify({ capabilities: nativeContext.capabilities, roots: nativeContext.roots })
+    : undefined;
+  let nativeViewCount = 0;
+  const nativeChildren = new Set<ServerMcpRuntime>();
+  let awaitSessionRecovery = false;
   let disposal: Promise<void> | undefined;
   let cleanupFailed = false;
   const pendingDisposals = new Set<Promise<void>>();
@@ -488,7 +147,8 @@ function createServerMcpRuntime(
     if (session.disposePromise) {
       return session.disposePromise;
     }
-    const closing = disposeBundleMcpSession(session)
+    const closing = loadBundleMcpRuntimeModules()
+      .then(({ lifecycle }) => lifecycle.disposeMcpClient(session))
       .then((outcome) => {
         if (outcome === "uncertain") {
           cleanupFailed = true;
@@ -522,12 +182,13 @@ function createServerMcpRuntime(
   };
   const failIfDisposed = () => {
     if (retiredCatalog) {
-      throw createDisposedError(params.sessionId);
+      throw new Error(`bundle-mcp runtime disposed for session ${params.sessionId}`);
     }
   };
   const requireConnectedSession = (): BundleMcpSession => {
     const session = currentSession;
-    if (!session || !session.connected) {
+    // Retained descriptors cannot admit calls before the replacement finishes listing.
+    if (!session || !session.connected || !session.toolMetadata) {
       throw new Error(
         session?.disconnectReason
           ? `bundle-mcp server "${serverName}" is disconnected: ${session.disconnectReason}`
@@ -536,83 +197,18 @@ function createServerMcpRuntime(
     }
     return session;
   };
-  const ensureSessionConnected = async (
-    session: BundleMcpSession,
-    connectionTimeoutMs: number,
-  ): Promise<void> => {
-    if (session.retiring) {
-      throw new Error(`bundle-mcp server "${session.serverName}" is retiring`);
-    }
-    if (session.connected) {
-      return;
-    }
-    session.connectPromise ??= connectMcpClient({
-      client: session.client,
-      transport: session.transport,
-      timeoutMs: connectionTimeoutMs,
-    })
-      .catch((error: unknown) => {
-        if (error instanceof McpClientConnectTimeoutError) {
-          throw new Error(
-            `MCP server "${session.serverName}" timed out: did not complete initialize within ${connectionTimeoutMs / 1_000}s`,
-            { cause: error },
-          );
-        }
-        throw error;
-      })
-      .then(() => {
-        session.connected = true;
-      })
-      .finally(() => {
-        session.connectPromise = undefined;
-      });
-    await session.connectPromise;
-  };
+
   const retireSessionIfCurrent = async (session: BundleMcpSession): Promise<boolean> => {
     if (currentSession !== session) {
       return false;
     }
     session.retiring = true;
     currentSession = undefined;
+    session.nativeBridge?.emit({ kind: "closed" });
     await disposeSession(session);
     return true;
   };
-  const localRequestTimeouts = new WeakSet<object>();
-  const runMcpRequest = async <T>(
-    session: BundleMcpSession,
-    request: (signal: AbortSignal) => Promise<T>,
-    parentSignal?: AbortSignal,
-  ): Promise<T> => {
-    const requestSignal = parentSignal ?? getSessionMcpRequestSignal();
-    const abortController = new AbortController();
-    const onParentAbort = () => abortController.abort(requestSignal?.reason);
-    if (requestSignal?.aborted) {
-      onParentAbort();
-    } else {
-      requestSignal?.addEventListener("abort", onParentAbort, { once: true });
-    }
-    const timeoutError = new McpError(ErrorCode.RequestTimeout, "Request timed out", {
-      timeout: session.requestTimeoutMs,
-    });
-    const timeout = setTimeout(() => {
-      localRequestTimeouts.add(timeoutError);
-      abortController.abort(timeoutError);
-    }, session.requestTimeoutMs);
-    timeout.unref?.();
-    try {
-      const signal = abortController.signal;
-      signal.throwIfAborted();
-      const result = await request(signal);
-      requestSignal?.throwIfAborted();
-      return result;
-    } catch (error) {
-      requestSignal?.throwIfAborted();
-      throw error;
-    } finally {
-      requestSignal?.removeEventListener("abort", onParentAbort);
-      clearTimeout(timeout);
-    }
-  };
+  const requests = createMcpRequestLifecycle(MCP_ELICITATION_TIMEOUT_MS);
   const runGuardedServerRequest = async <T>(
     session: BundleMcpSession,
     request: () => Promise<T>,
@@ -642,6 +238,13 @@ function createServerMcpRuntime(
       }
       return result;
     } catch (error) {
+      const {
+        lifecycle: { isMcpHttpSessionExpired },
+        errors: { redactMcpDiagnosticError },
+      } = await loadBundleMcpRuntimeModules();
+      if (currentSession !== session || session.retiring) {
+        throw error;
+      }
       // A stateful server uses HTTP 404 to invalidate an expired MCP session.
       // Reinitialize a fresh client, but never replay a possibly mutating call.
       const sessionExpired = isMcpHttpSessionExpired(session, error);
@@ -650,22 +253,18 @@ function createServerMcpRuntime(
         recycleReason = "expired HTTP session";
       } else if (tracksFailureBackoff && !requestSignal?.aborted) {
         const failures = recordServerToolFailure(session, nowMs);
-        const requestTimedOut =
-          error !== null && typeof error === "object" && localRequestTimeouts.has(error);
-        if (requestTimedOut && failures && failures >= BUNDLE_MCP_FAILURE_THRESHOLD) {
+        if (requests.didTimeout(error) && failures && failures >= BUNDLE_MCP_FAILURE_THRESHOLD) {
           recycleReason = "repeated request timeouts";
         }
       }
       if (recycleReason) {
+        awaitSessionRecovery ||= sessionExpired;
         serverBackoff = undefined;
         scheduleCatalogServerRetry(recycleReason);
-        const timedOut = recycleReason === "repeated request timeouts";
-        logWarn(
-          `bundle-mcp: recycling server "${serverName}" after ${timedOut ? "repeated timeouts" : "an expired HTTP session"}`,
-        );
+        logWarn(`bundle-mcp: recycling server "${serverName}" after ${recycleReason}`);
         void retireSessionIfCurrent(session).catch((retireError: unknown) => {
           logWarn(
-            `bundle-mcp: failed to retire ${timedOut ? "timed-out" : "expired-session"} server "${serverName}": ${redactMcpDiagnosticError(retireError)}`,
+            `bundle-mcp: failed to retire server "${serverName}" after ${recycleReason}: ${redactMcpDiagnosticError(retireError)}`,
           );
         });
       }
@@ -674,57 +273,57 @@ function createServerMcpRuntime(
   };
   const runGuardedMcpRequest = <T>(
     session: BundleMcpSession,
-    request: (signal: AbortSignal) => Promise<T>,
+    request: (signal: AbortSignal, holdForHumanInput: () => () => void) => Promise<T>,
     options?: McpRequestOptions,
-  ) => runGuardedServerRequest(session, () => runMcpRequest(session, request), options);
-  const collectServerItems = (session: BundleMcpSession, kind: "prompts" | "resources") => {
-    const callerSignal = getSessionMcpRequestSignal();
-    return collectMcpPaginatedItems({
-      label: `MCP ${kind === "resources" ? "resource" : "prompt"} listing`,
-      itemLabel: kind,
+  ) =>
+    runGuardedServerRequest(
+      session,
+      () => requests.run(session, withSessionMcpCallerAuthority(request)),
+      options,
+    );
+  const collectServerItems = (session: BundleMcpSession, kind: "prompts" | "resources") =>
+    listMcpServerItems(kind, {
+      client: session.client,
       timeoutMs: session.requestTimeoutMs,
-      maxPages: BUNDLE_MCP_MAX_LIST_PAGES,
-      maxItems: BUNDLE_MCP_MAX_LIST_ITEMS,
-      maxBytes: BUNDLE_MCP_MAX_LIST_BYTES,
-      signal: callerSignal
-        ? AbortSignal.any([lifecycleAbortController.signal, callerSignal])
-        : lifecycleAbortController.signal,
-      loadPage: ({ cursor, requestTimeoutMs: timeout, signal }) =>
-        runMcpRequest(
-          session,
-          async (requestSignal) => {
-            const requestParams = cursor === undefined ? undefined : { cursor };
-            const requestOptions = { timeout, maxTotalTimeout: timeout, signal: requestSignal };
-            const page =
-              kind === "resources"
-                ? await session.client.listResources(requestParams, requestOptions)
-                : await session.client.listPrompts(requestParams, requestOptions);
-            const items = page[kind] as unknown[];
-            return { items, nextCursor: page.nextCursor, serializedValue: page };
-          },
-          signal,
-        ),
+      signal: lifecycleAbortController.signal,
+      callerSignal: getSessionMcpRequestSignal(),
+      runRequest: (request, signal) =>
+        requests.run(session, withSessionMcpCallerAuthority(request), signal),
     });
-  };
 
-  const loadCatalog = async (): Promise<McpToolCatalog> => {
+  const loadCatalog = async (
+    discoveryContext?: NativeMcpClientContext,
+  ): Promise<McpToolCatalog> => {
     failIfDisposed();
     if (catalogInFlight) {
       return catalogInFlight;
     }
-    const catalogGeneration = catalogInvalidationGeneration;
     const inFlight = (async (): Promise<McpToolCatalog> => {
+      const {
+        client: { Client },
+        catalog: { projectBundleMcpServerCatalog },
+        elicitation: { bindMcpClientElicitation },
+        lifecycle: { ensureMcpSessionConnected, isMcpHttpSessionExpired },
+        errors: { isMcpMethodNotFoundError, redactMcpDiagnosticError },
+        validator: { createMcpJsonSchemaValidator },
+        transport: { resolveMcpTransport },
+        nativeConnect: { observeNativeMcpProbe },
+        nativeClient: { createNativeMcpClientBridge },
+      } = await loadBundleMcpRuntimeModules();
+      failIfDisposed();
       const rawServer = loaded.mcpServers[serverName]!;
       const override = params.connectionOverrides?.get(serverName);
       const transportSource = override
         ? applyMcpConnectionOverride(rawServer, override)
         : rawServer;
-      const resolved = resolveMcpTransport(serverName, transportSource, {
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-        prepareDataDir: loaded.prepareDataDirsByServer?.[serverName]?.dataDir,
-        requesterScope: params.requesterScope,
-      });
+      const resolveTransport = () =>
+        resolveMcpTransport(serverName, transportSource, {
+          cfg: params.cfg,
+          agentDir: params.agentDir,
+          prepareDataDir: loaded.prepareDataDirsByServer?.[serverName]?.dataDir,
+          requesterScope: params.requesterScope,
+        });
+      const resolved = resolveTransport();
       if (!resolved) {
         return { version: 1, generatedAt: Date.now(), servers: {}, tools: [] };
       }
@@ -736,53 +335,99 @@ function createServerMcpRuntime(
       failIfDisposed();
 
       let session = currentSession;
-      while (session && !session.retiring && !session.connected && !session.connectPromise) {
+      if (session && !session.connected && !session.connectPromise) {
         // A closed SDK client cannot reconnect cleanly on the same transport.
         await retireSessionIfCurrent(session);
-        // Retirement yields while closing. Preserve any replacement that a
-        // newer catalog generation installed during that await.
-        session = currentSession;
-      }
-      if (session?.retiring) {
         session = undefined;
       }
       const reusedSession = Boolean(session);
       const schemaValidator = createMcpJsonSchemaValidator();
-      if (!session) {
+      const createSession = (
+        transport: NonNullable<ReturnType<typeof resolveTransport>>,
+        legacy = false,
+      ) => {
         const client = new Client(
           {
             name: "openclaw-bundle-mcp",
             version: "0.0.0",
           },
           {
-            capabilities: buildMcpClientCapabilities(mcpAppsEnabled),
+            capabilities: nativeContext?.capabilities ?? buildMcpClientCapabilities(mcpAppsEnabled),
+            versionNegotiation: { mode: nativeContext && !legacy ? "auto" : "legacy" },
+            ...(nativeContext ? { inputRequired: { autoFulfill: false } } : {}),
             jsonSchemaValidator: schemaValidator,
-            listChanged: {
-              tools: {
-                autoRefresh: false,
-                debounceMs: 0,
-                onChanged: (error) => {
-                  if (error) {
-                    logWarn(
-                      `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactMcpDiagnosticError(error)}`,
-                    );
-                  }
-                  invalidateCatalog();
-                },
-              },
-            },
+            ...(nativeContext
+              ? {}
+              : {
+                  listChanged: {
+                    tools: {
+                      autoRefresh: false,
+                      debounceMs: 0,
+                      onChanged: (error) => {
+                        if (error) {
+                          logWarn(
+                            `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactMcpDiagnosticError(error)}`,
+                          );
+                        }
+                        invalidateCatalog();
+                      },
+                    },
+                  },
+                }),
           },
         );
         const createdSession: BundleMcpSession = {
           serverName,
           client,
-          transport: resolved.transport,
-          transportType: resolved.transportType,
-          requestTimeoutMs: resolved.requestTimeoutMs,
+          ...(mcpAppsEnabled && !nativeContext
+            ? { withElicitation: bindMcpClientElicitation(client) }
+            : {}),
+          transport: transport.transport,
+          transportType: transport.transportType,
+          requestTimeoutMs: transport.requestTimeoutMs,
           connected: false,
           retiring: false,
-          detachStderr: resolved.detachStderr,
+          detachStderr: transport.detachStderr,
         };
+        if (nativeContext) {
+          createdSession.nativeBridge = createNativeMcpClientBridge({
+            client,
+            transport: transport.transport,
+            transportType: transport.transportType,
+            context: nativeContext,
+            signal: lifecycleAbortController.signal,
+            invalidateCatalog,
+            validatorForCall: (name) => createdSession.toolMetadata?.validatorForCall(name),
+            retire: async () => {
+              if (currentSession === createdSession) {
+                invalidateCatalog();
+                await retireSessionIfCurrent(createdSession);
+              }
+            },
+            acquireLease: () => {
+              runtime.markUsed();
+              return runtime.acquireLease!();
+            },
+            runRequest: (signal, request) =>
+              runWithSessionMcpRequestSignal(signal, () =>
+                runGuardedServerRequest(createdSession, () =>
+                  requests.run(
+                    createdSession,
+                    (requestSignal, holdForHumanInput) =>
+                      request(
+                        {
+                          signal: requestSignal,
+                          // The lifecycle owns active time; the SDK bounds the shared human allowance too.
+                          timeout: createdSession.requestTimeoutMs + MCP_ELICITATION_TIMEOUT_MS,
+                        },
+                        holdForHumanInput,
+                      ),
+                    signal,
+                  ),
+                ),
+              ),
+          });
+        }
         // The SDK exposes lifecycle hooks as callback properties. A close is
         // terminal for this client/transport pair.
         // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client is not an EventTarget.
@@ -790,6 +435,9 @@ function createServerMcpRuntime(
           const wasConnected = createdSession.connected;
           createdSession.connected = false;
           createdSession.disconnectReason = "mcp transport closed";
+          if (wasConnected) {
+            createdSession.nativeBridge?.emit({ kind: "closed" });
+          }
           // Only established current sessions invalidate the catalog. Startup closes
           // already belong to catalog loading, and retirement must not start a rebuild.
           if (
@@ -798,26 +446,105 @@ function createServerMcpRuntime(
             !createdSession.retiring &&
             currentSession === createdSession
           ) {
+            awaitSessionRecovery ||= createdSession.transportType === "sse";
             scheduleCatalogServerRetry("mcp transport closed");
             logWarn(`bundle-mcp: server "${serverName}" closed; next request reconnects`);
           }
         };
-        session = createdSession;
+        return createdSession;
+      };
+      if (!session) {
+        session = createSession(resolved);
         currentSession = session;
       }
 
       try {
         failIfDisposed();
-        await ensureSessionConnected(session, resolved.connectionTimeoutMs);
+        if (!session.connected) {
+          const connect = async (connectingSession: BundleMcpSession) => {
+            if (!connectingSession.nativeBridge || !discoveryContext) {
+              return ensureMcpSessionConnected(connectingSession, resolved.connectionTimeoutMs);
+            }
+            const initializing = connectingSession.nativeBridge.bind(discoveryContext);
+            try {
+              await initializing.initialize(() =>
+                ensureMcpSessionConnected(connectingSession, resolved.connectionTimeoutMs),
+              );
+            } finally {
+              await initializing.detach();
+            }
+          };
+          const probe = nativeContext ? observeNativeMcpProbe(session.transport) : undefined;
+          try {
+            await startup.connect(async () => {
+              try {
+                await connect(session!);
+              } catch (error) {
+                if (!probe?.canRestartLegacy(error)) {
+                  throw error;
+                }
+                probe.detach();
+                await retireSessionIfCurrent(session!);
+                if (cleanupFailed) {
+                  throw new Error("MCP probe cleanup could not confirm closure", {
+                    cause: error,
+                  });
+                }
+                failIfDisposed();
+                discoveryContext?.assertCurrent();
+                lifecycleAbortController.signal.throwIfAborted();
+                const replacement = resolveTransport();
+                if (!replacement) {
+                  throw new Error("MCP projection transport is unavailable", { cause: error });
+                }
+                session = createSession(replacement, true);
+                currentSession = session;
+                await connect(session);
+              }
+            });
+          } finally {
+            probe?.detach();
+          }
+        }
+        if (
+          session.nativeBridge &&
+          session.client.getProtocolEra() === "modern" &&
+          !session.nativeSubscription
+        ) {
+          const subscribedSession = session;
+          const subscription = await session.nativeBridge.listenForCatalogChanges(
+            session.requestTimeoutMs,
+          );
+          session.nativeSubscription = subscription;
+          void subscription?.closed.then(() => {
+            subscribedSession.nativeSubscription = undefined;
+            if (!subscribedSession.retiring && !retiredCatalog) {
+              invalidateCatalog();
+              subscribedSession.nativeBridge?.emit({ kind: "invalidated" });
+            }
+          });
+        }
+        startupRetryAfterMs = undefined;
         failIfDisposed();
         const capabilities = summarizeServerCapabilities(session.client.getServerCapabilities());
         let listedTools: Tool[];
         try {
-          listedTools = await listAllTools(
-            session.client,
-            getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
-            lifecycleAbortController.signal,
-          );
+          const list = () =>
+            listAllMcpTools(
+              session!.client,
+              getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
+              lifecycleAbortController.signal,
+            );
+          if (session.nativeBridge && discoveryContext) {
+            const listing = session.nativeBridge.bind(discoveryContext);
+            try {
+              listedTools = await listing.initialize(list);
+            } finally {
+              await listing.detach();
+            }
+          } else {
+            listedTools = await list();
+          }
         } catch (error) {
           if (
             !capabilities.tools &&
@@ -830,162 +557,114 @@ function createServerMcpRuntime(
           }
         }
         failIfDisposed();
-        const toolFilter = normalizeMcpToolFilter(
-          isRecord(rawServer) ? rawServer.toolFilter : undefined,
-        );
-        const denialMap = params.toolOverrides?.mcpToolsDeny;
-        const deniedToolNames = new Set(
-          denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
-        );
-        const normalizedTools = normalizeMcpToolCatalog(
-          listedTools,
-          schemaValidator,
-          (toolName) => {
-            if (!isMcpToolAllowed(toolFilter, toolName)) {
-              return "exclude";
-            }
-            return deniedToolNames.has(toolName) ? "denied" : "include";
-          },
-        );
-        session.toolMetadata = normalizedTools.metadata;
-        const exposedTools = normalizedTools.tools;
-        const serverEntry: McpServerCatalog = {
+        const projected = projectBundleMcpServerCatalog({
           serverName,
           safeServerName,
-          launchSummary: launchDescription,
-          toolCount: exposedTools.length,
-          requestTimeoutMs: resolved.requestTimeoutMs,
-          supportsParallelToolCalls: resolved.supportsParallelToolCalls,
-          ...(capabilities.resources ? { resources: capabilities.resources } : {}),
-          ...(capabilities.prompts ? { prompts: capabilities.prompts } : {}),
-          ...(capabilities.tools
-            ? {
-                tools: {
-                  ...capabilities.tools,
-                  ...(exposedTools.length !== listedTools.length
-                    ? { filteredCount: listedTools.length - exposedTools.length }
-                    : {}),
-                },
-              }
-            : {}),
-          ...(toolFilter ? { toolFilter } : {}),
-          ...(deniedToolNames.size > 0 ? { deniedToolNames: [...deniedToolNames].toSorted() } : {}),
-          codexApprovalMode: resolveProjectedMcpCodexToolApprovalMode(serverName, rawServer),
-        };
-        const toolEntries: McpCatalogTool[] = [];
-        const policyToolEntries: McpCatalogTool[] = [];
-        for (const [tool, excludedFromOpenClawCatalog, deniedBySession] of [
-          ...normalizedTools.tools.map((entry) => [entry, false, false] as const),
-          ...normalizedTools.deniedTools.map((entry) => [entry, false, true] as const),
-          ...normalizedTools.excludedTools.map(
-            (entry) => [entry, true, deniedToolNames.has(entry.name)] as const,
-          ),
-        ]) {
-          const toolName = tool.name;
-          const { _meta: metadata } = tool;
-          const uiMeta =
-            metadata?.ui && typeof metadata.ui === "object" && !Array.isArray(metadata.ui)
-              ? (metadata.ui as { resourceUri?: unknown; visibility?: unknown })
-              : undefined;
-          const rawResourceUri = uiMeta?.resourceUri ?? metadata?.["ui/resourceUri"];
-          const uiResourceUri =
-            typeof rawResourceUri === "string" && rawResourceUri.startsWith("ui://")
-              ? rawResourceUri
-              : undefined;
-          const uiVisibility = normalizeToolUiVisibility(uiMeta?.visibility);
-          const entry: McpCatalogTool = {
-            serverName,
-            safeServerName,
-            toolName,
-            title: tool.title,
-            description: sanitizeMcpMetadataText(tool.description),
-            inputSchema: tool.inputSchema,
-            fallbackDescription: `Provided by bundle MCP server "${serverName}" (${launchDescription}).`,
-            ...(uiResourceUri ? { uiResourceUri } : {}),
-            ...(uiVisibility ? { uiVisibility } : {}),
-            ...(excludedFromOpenClawCatalog ? { excludedFromOpenClawCatalog: true as const } : {}),
-            ...(deniedBySession ? { deniedBySession: true } : {}),
-            codexAnnotations: normalizeMcpCodexToolAnnotations(tool.annotations),
-          };
-          policyToolEntries.push(entry);
-          if (!entry.excludedFromOpenClawCatalog) {
-            toolEntries.push(entry);
-          }
-        }
-        return {
-          version: 1,
-          generatedAt: Date.now(),
-          servers: { [serverName]: serverEntry },
-          tools: toolEntries.filter((tool) => !tool.deniedBySession),
-          policyTools: policyToolEntries,
-          sessionDeniedTools: toolEntries.filter((tool) => tool.deniedBySession),
-        };
+          launchDescription,
+          rawServer,
+          listedTools,
+          schemaValidator,
+          denialMap: params.toolOverrides?.mcpToolsDeny,
+          capabilities,
+          serverVersion: session.client.getServerVersion(),
+          serverCapabilities: session.client.getServerCapabilities(),
+          // Served whole, as Claude's native connection received them.
+          instructions: session.client.getInstructions()?.trim() || undefined,
+          pluginId: loaded.pluginIdsByServer?.[serverName],
+          connection: resolved,
+        });
+        session.toolMetadata = projected.metadata;
+        return projected.catalog;
       } catch (error) {
         const message = redactMcpDiagnosticError(error);
-        if (!retiredCatalog) {
+        if (error instanceof McpStartupBackoffError && error.authorizationRequired) {
+          lastListedCatalog = undefined;
+        }
+        startupRetryAfterMs =
+          error instanceof McpStartupBackoffError ? error.retryAfterMs : undefined;
+        if (
+          !retiredCatalog &&
+          (!(error instanceof McpStartupBackoffError) || error.reportFailure)
+        ) {
           const action = reusedSession ? "refresh" : "start";
           logWarn(
             `bundle-mcp: failed to ${action} server "${serverName}" (${launchDescription}): ${message}`,
           );
         }
-        const diags: McpToolCatalogDiagnostic[] = [
-          {
-            serverName,
-            safeServerName,
-            launchSummary: launchDescription,
-            message,
-          },
-        ];
-        if (!session.connected || isMcpHttpSessionExpired(session, error)) {
-          // A close is terminal for every catalog generation sharing this
-          // session. The identity guard preserves any newer replacement.
-          await retireSessionIfCurrent(session);
-        } else if (!reusedSession && catalogInvalidationGeneration === catalogGeneration) {
-          // An isolated startup failure gets a fresh process on retry. When a
-          // notification superseded this list, the queued generation reuses it.
+        if (!session.connected || isMcpHttpSessionExpired(session, error) || !reusedSession) {
+          // Closed, expired, or failed startups need a fresh process.
           await retireSessionIfCurrent(session);
         }
         failIfDisposed();
-        return { version: 1, generatedAt: Date.now(), servers: {}, tools: [], diagnostics: diags };
+        return projectBundleMcpCatalogFailure(lastListedCatalog, {
+          serverName,
+          safeServerName,
+          launchSummary: launchDescription,
+          message,
+        });
       }
     })();
     catalogInFlight = inFlight;
     try {
       const nextCatalog = await inFlight;
       failIfDisposed();
-      if (catalogInvalidationGeneration === catalogGeneration) {
-        catalog = nextCatalog;
-        catalogRetryAfterMs = nextCatalog.diagnostics?.length
-          ? Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS
-          : undefined;
+      // A list-change notification during this load is best effort; the next
+      // notification or explicit refresh replaces the completed inventory.
+      catalog = nextCatalog;
+      if (!nextCatalog.diagnostics?.length) {
+        lastListedCatalog = nextCatalog;
+        awaitSessionRecovery = false;
       }
+      catalogRetryAfterMs = nextCatalog.diagnostics?.length
+        ? (startupRetryAfterMs ?? Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS)
+        : undefined;
       return nextCatalog;
     } finally {
-      if (catalogInFlight === inFlight) {
-        catalogInFlight = undefined;
-      }
+      catalogInFlight = undefined;
     }
   };
 
-  const getCatalog = async (): Promise<McpToolCatalog> => {
+  const getCatalog = async (discoveryContext?: NativeMcpClientContext): Promise<McpToolCatalog> => {
     failIfDisposed();
+    if (startupRetryAfterMs === Infinity && !startup.get()) {
+      startupRetryAfterMs = undefined;
+      invalidateCatalog();
+    }
+    // Shared startup failures cannot suppress listing on this session's live connection.
+    if (!catalog && !currentSession?.connected) {
+      const backoff = startup.get();
+      if (backoff) {
+        if (backoff.authorizationRequired) {
+          lastListedCatalog = undefined;
+        }
+        catalog = projectBundleMcpCatalogFailure(lastListedCatalog, {
+          serverName,
+          safeServerName: params.safeServerNamesByServer?.get(serverName) ?? serverName,
+          launchSummary: serverName,
+          message: backoff.message,
+        });
+        startupRetryAfterMs = backoff.retryAfterMs;
+        catalogRetryAfterMs = backoff.retryAfterMs;
+      }
+    }
     if (catalog && !catalogRetryIsDue()) {
       return catalog;
     }
     if (!catalog) {
-      await loadCatalog();
-      if (catalog) {
-        return catalog;
-      }
-      // Replay one in-flight invalidation before accepting the latest completed
-      // snapshot. A server that invalidates every list must not block its siblings.
-      const replayedCatalog = await loadCatalog();
-      return catalog ?? replayedCatalog;
+      const retryExitedProcess = currentSession?.transportType === "stdio";
+      const loadedCatalog = await loadCatalog(discoveryContext);
+      // Recover a previously healthy process once; HTTP list failures retain their diagnostic.
+      return retryExitedProcess &&
+        loadedCatalog.diagnostics?.length &&
+        lastListedCatalog &&
+        !currentSession
+        ? loadCatalog(discoveryContext)
+        : loadedCatalog;
     }
 
     const staleCatalog = catalog;
     catalogRetryAfterMs = undefined;
-    void loadCatalog().catch(() => {
+    void loadCatalog(discoveryContext).catch(() => {
       if (!retiredCatalog && catalog === staleCatalog && catalogRetryAfterMs === undefined) {
         catalogRetryAfterMs = Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS;
       }
@@ -999,10 +678,29 @@ function createServerMcpRuntime(
     const signal = getSessionMcpRequestSignal();
     signal?.throwIfAborted();
     await racePromiseWithAbortSignal(getCatalog(), signal);
+    if (awaitSessionRecovery && catalogInFlight) {
+      await racePromiseWithAbortSignal(catalogInFlight, signal);
+    }
     return requireConnectedSession();
   };
 
   const runtime: ServerMcpRuntime = {
+    get nativeContextKey() {
+      return nativeContextKey;
+    },
+    get nativeCapabilityContext() {
+      return nativeContext?.capabilityContext;
+    },
+    get nativeViewCount() {
+      return nativeViewCount;
+    },
+    resetStartupBackoff() {
+      startup.reset();
+      if (startupRetryAfterMs !== undefined || (catalogInFlight && !currentSession?.connected)) {
+        startupRetryAfterMs = undefined;
+        invalidateCatalog();
+      }
+    },
     // Provenance travels with the transport; a later explicit definition cannot relabel it.
     pluginOwned:
       !Object.hasOwn(params.cfg?.mcp?.servers ?? {}, serverName) ||
@@ -1016,13 +714,20 @@ function createServerMcpRuntime(
     ...(params.requesterConnect ? { requesterConnect: params.requesterConnect } : {}),
     // A runtime partition hosts either only static or only requester-scoped servers.
     isRequesterScopedServer: () => params.requesterScope !== undefined,
+    canReadLocalFiles: (name) =>
+      name === serverName &&
+      currentSession?.connected === true &&
+      currentSession.transportType === "stdio",
     mcpAppsEnabled,
     createdAt,
     get lastUsedAt() {
-      return lastUsedAt;
+      return Math.max(lastUsedAt, ...[...nativeChildren].map((child) => child.lastUsedAt));
     },
     get activeLeases() {
-      return activeLeases;
+      return (
+        activeLeases +
+        [...nativeChildren].reduce((sum, child) => sum + (child.activeLeases ?? 0), 0)
+      );
     },
     acquireLease() {
       activeLeases += 1;
@@ -1032,7 +737,7 @@ function createServerMcpRuntime(
           return;
         }
         released = true;
-        activeLeases = Math.max(0, activeLeases - 1);
+        activeLeases -= 1;
         // Release is not use: refreshing lastUsedAt here defeats the idle-sweep TTL.
       };
     },
@@ -1051,26 +756,49 @@ function createServerMcpRuntime(
     markUsed() {
       lastUsedAt = Date.now();
     },
-    async callTool(requestedServer, toolName, input) {
+    async callTool(requestedServer, toolName, input, options) {
       const session = await getActiveSession(requestedServer);
       const validateResult = session.toolMetadata?.validatorForCall(toolName);
-      const result = (await runGuardedMcpRequest(session, (signal) =>
-        session.client.callTool(
-          { name: toolName, arguments: isRecord(input) ? input : {} },
-          undefined,
-          { timeout: session.requestTimeoutMs, signal },
-        ),
-      )) as CallToolResult;
+      const result = await runGuardedMcpRequest(session, (signal, holdForHumanInput) => {
+        options?.assertCurrent?.();
+        const call = () =>
+          withGuardedFetchRequestAuthority(options?.assertCurrent, () =>
+            session.client.request(
+              {
+                method: "tools/call",
+                params: {
+                  name: toolName,
+                  arguments: isRecord(input) ? input : {},
+                  ...(options?._meta ? { _meta: options._meta } : {}),
+                },
+              },
+              mcpCallToolResultSchema,
+              {
+                // The local deadline owns active work; the SDK bounds the total
+                // call, including one shared allowance for pending human input.
+                timeout:
+                  session.requestTimeoutMs +
+                  (session.withElicitation ? MCP_ELICITATION_TIMEOUT_MS : 0),
+                signal,
+              },
+            ),
+          );
+        return session.withElicitation
+          ? session.withElicitation(signal, call, holdForHumanInput)
+          : call();
+      });
       validateResult?.(result);
-      return result;
+      return toLegacyMcpCallToolResult(result);
     },
     async listTools(requestedServer, requestParams) {
       const session = await getActiveSession(requestedServer);
-      return await runGuardedMcpRequest(session, (signal) =>
-        session.client.request(
-          { method: "tools/list", params: requestParams },
-          ListToolsResultSchema,
-          { timeout: session.requestTimeoutMs, signal },
+      return toLegacyMcpListToolsResult(
+        await runGuardedMcpRequest(session, (signal) =>
+          session.client.request(
+            { method: "tools/list", params: requestParams },
+            mcpListToolsResultSchema,
+            { timeout: session.requestTimeoutMs, signal },
+          ),
         ),
       );
     },
@@ -1087,31 +815,44 @@ function createServerMcpRuntime(
       return await runGuardedMcpRequest(
         session,
         (signal) =>
-          session.client.readResource({ uri }, { timeout: session.requestTimeoutMs, signal }),
+          session.client.request(
+            {
+              method: "resources/read",
+              params: { uri, ...(options?._meta ? { _meta: options._meta } : {}) },
+            },
+            { timeout: session.requestTimeoutMs, signal },
+          ),
         options,
       );
     },
     async listResourceTemplates(requestedServer, requestParams) {
       const session = await getActiveSession(requestedServer);
-      return await runGuardedMcpRequest(session, (signal) =>
-        session.client.listResourceTemplates(requestParams, {
-          timeout: session.requestTimeoutMs,
-          signal,
-        }),
+      return toLegacyMcpListResourceTemplatesResult(
+        await runGuardedMcpRequest(session, (signal) =>
+          session.client.request(
+            { method: "resources/templates/list", params: requestParams },
+            mcpListResourceTemplatesResultSchema,
+            {
+              timeout: session.requestTimeoutMs,
+              signal,
+            },
+          ),
+        ),
       );
     },
     async listPrompts(requestedServer) {
       const session = await getActiveSession(requestedServer);
-      return await runGuardedServerRequest(session, async () =>
-        collectServerItems(session, "prompts"),
-      );
+      return runGuardedServerRequest(session, () => collectServerItems(session, "prompts"));
     },
     async getPrompt(requestedServer, name, args) {
       const session = await getActiveSession(requestedServer);
-      return await runGuardedMcpRequest(session, (signal) =>
-        session.client.getPrompt(
-          { name, ...(args ? { arguments: args } : {}) },
-          { timeout: session.requestTimeoutMs, signal },
+      return toLegacyMcpGetPromptResult(
+        await runGuardedMcpRequest(session, (signal) =>
+          session.client.request(
+            { method: "prompts/get", params: { name, ...(args ? { arguments: args } : {}) } },
+            mcpGetPromptResultSchema,
+            { timeout: session.requestTimeoutMs, signal },
+          ),
         ),
       );
     },
@@ -1120,7 +861,9 @@ function createServerMcpRuntime(
       await Promise.allSettled(pendingDisposals);
       if (cleanupFailed) {
         recordAgentCleanupFailure();
-        throw new Error("MCP runtime cleanup could not confirm closure");
+        const error = new Error("MCP runtime cleanup could not confirm closure");
+        recordModelFallbackStop(error);
+        throw error;
       }
     },
     dispose() {
@@ -1139,19 +882,35 @@ function createServerMcpRuntime(
             },
           ],
         };
-        lifecycleAbortController.abort(createDisposedError(params.sessionId));
+        currentSession?.nativeBridge?.emit({ kind: "closed" });
+        startup.dispose();
+        lifecycleAbortController.abort(
+          new Error(`bundle-mcp runtime disposed for session ${params.sessionId}`),
+        );
         catalog = null;
+        lastListedCatalog = undefined;
         catalogRetryAfterMs = undefined;
         const pendingCatalog = catalogInFlight;
         catalogInFlight = undefined;
         const session = currentSession;
         currentSession = undefined;
+        const children = [...nativeChildren];
+        nativeChildren.clear();
         disposal = (async () => {
+          const childOutcomes = Promise.allSettled(
+            children.map(async (child) => {
+              await child.dispose();
+              await child.joinCleanup?.();
+            }),
+          );
           if (session) {
             await disposeSession(session).catch(() => undefined);
           }
           await pendingCatalog?.catch(() => undefined);
           await Promise.allSettled(pendingDisposals);
+          if ((await childOutcomes).some((outcome) => outcome.status === "rejected")) {
+            cleanupFailed = true;
+          }
         })();
       }
       // Physical cleanup is single-flight; uncertainty belongs to every caller.
@@ -1163,32 +922,121 @@ function createServerMcpRuntime(
       return disposal;
     },
   };
+  nativeMcpRuntimeBindings.set(runtime, {
+    hasServer: (name) => name === serverName,
+    async acquire(name, context) {
+      failIfDisposed();
+      context.assertCurrent();
+      if (name !== serverName) {
+        throw new Error(`MCP server "${name}" has no projection owner`);
+      }
+      if (context.capabilities.elicitation && !context.elicit) {
+        throw new Error("MCP elicitation capability requires a handler");
+      }
+      if (context.capabilities.sampling && !context.createMessage) {
+        throw new Error("MCP sampling capability requires a handler");
+      }
+      if (context.capabilities.extensions?.["openai/elicitation"] && !context.elicitCustom) {
+        throw new Error("MCP custom elicitation capability requires a handler");
+      }
+      const key = stableStringify({ capabilities: context.capabilities, roots: context.roots });
+      // Ordinary callers retain their legacy context in either acquisition order.
+      if (
+        !nativeContext ||
+        nativeContextKey !== key ||
+        nativeContext.capabilityContext !== context.capabilityContext
+      ) {
+        let child = [...nativeChildren].find(
+          (candidate) =>
+            candidate.nativeContextKey === key &&
+            candidate.nativeCapabilityContext === context.capabilityContext,
+        );
+        if (!child) {
+          child = createServerMcpRuntime(params, context);
+          nativeChildren.add(child);
+        }
+        const selected = child;
+        const cleanupUnused = async () => {
+          if (selected.nativeViewCount === 0) {
+            lastUsedAt = Math.max(lastUsedAt, selected.lastUsedAt);
+            try {
+              await selected.dispose();
+              await selected.joinCleanup?.();
+              nativeChildren.delete(selected);
+            } catch (error) {
+              cleanupFailed = true;
+              recordAgentCleanupFailure();
+              throw error;
+            }
+          }
+        };
+        try {
+          const view = await acquireNativeMcpServer(selected, name, context);
+          let releasePromise: Promise<void> | undefined;
+          return {
+            ...view,
+            release() {
+              return (releasePromise ??= (async () => {
+                try {
+                  await view.release();
+                } finally {
+                  await cleanupUnused();
+                }
+              })());
+            },
+          };
+        } catch (error) {
+          await cleanupUnused();
+          throw error;
+        }
+      }
+      nativeViewCount += 1;
+      const releaseLease = runtime.acquireLease!();
+      let releasePromise: Promise<void> | undefined;
+      try {
+        // Shared owners can outlive their first borrower; discovery uses this acquisition.
+        await getCatalog(context);
+        if (catalogInFlight) {
+          await catalogInFlight;
+        }
+        failIfDisposed();
+        context.assertCurrent();
+        const session = requireConnectedSession();
+        if (!session.nativeBridge) {
+          throw new Error("MCP session has no projection binding");
+        }
+        const bound = session.nativeBridge.bind({
+          ...context,
+          assertCurrent() {
+            failIfDisposed();
+            context.assertCurrent();
+            if (session !== currentSession || !session.connected) {
+              throw new Error("MCP projection connection retired");
+            }
+          },
+        });
+        return {
+          runtime,
+          ...bound.protocol,
+          release() {
+            return (releasePromise ??= (async () => {
+              try {
+                await bound.detach();
+              } finally {
+                nativeViewCount -= 1;
+              }
+            })());
+          },
+        };
+      } catch (error) {
+        nativeViewCount -= 1;
+        throw error;
+      } finally {
+        releaseLease();
+      }
+    },
+  });
   return runtime;
 }
 
-export const testing = {
-  buildMcpClientCapabilities,
-  async resetSessionMcpRuntimeManager() {
-    await disposeAllSessionMcpRuntimes();
-    setBundleMcpCatalogListTimeoutMsForTest();
-    setBundleMcpDisposeTimeoutMsForTest();
-  },
-  getCachedSessionIds() {
-    return getSessionMcpRuntimeManagerForTesting().listSessionIds();
-  },
-  getCachedRuntimeKeys() {
-    return getSessionMcpRuntimeManagerForTesting().listRuntimeKeys();
-  },
-  getBookkeepingSizes(manager: SessionMcpRuntimeManager): Record<string, number> {
-    const sizes = (
-      manager as SessionMcpRuntimeManager & {
-        bookkeepingSizesForTest?: () => Record<string, number>;
-      }
-    ).bookkeepingSizesForTest?.();
-    return sizes ?? {};
-  },
-  setBundleMcpCatalogListTimeoutMsForTest,
-  setBundleMcpDisposeTimeoutMsForTest,
-  mergeMcpToolCatalogs,
-};
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

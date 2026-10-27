@@ -19,7 +19,7 @@ access hundreds of models through a single endpoint.
 | Model catalog | Auto-discovered via `/v1/models`       |
 
 <Tip>
-OpenClaw auto-discovers the Gateway `/v1/models` catalog, so both the
+OpenClaw auto-discovers the Gateway `/v1/models` catalog with your API key, so both the
 `/models vercel-ai-gateway` chat command and
 `openclaw models list --provider vercel-ai-gateway` include current model
 refs such as `vercel-ai-gateway/openai/gpt-5.5` and
@@ -43,16 +43,21 @@ refs such as `vercel-ai-gateway/openai/gpt-5.5` and
     openclaw onboard --auth-choice ai-gateway-api-key
     ```
   </Step>
-  <Step title="Set a default model">
+  <Step title="Check the default model">
+    Onboarding sets the default to the first
+    [recommended model](/concepts/recommended-models) that your key can use.
+    To choose another, set any model from the list below:
+
     ```json5
     {
       agents: {
         defaults: {
-          model: { primary: "vercel-ai-gateway/anthropic/claude-opus-4.6" },
+          model: { primary: "vercel-ai-gateway/<model-id>" },
         },
       },
     }
     ```
+
   </Step>
   <Step title="Verify the model is available">
     ```bash
@@ -70,6 +75,14 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --ai-gateway-api-key "$AI_GATEWAY_API_KEY"
 ```
 
+## Token Pass
+
+[Vercel Token Pass](https://vercel.com/docs/ai-gateway/token-pass) uses a
+Token Pass API key in place of a regular AI Gateway API key. Set it up with
+the same auth choice. Vercel lists only Token Pass models for that key, so
+`openclaw models list --provider vercel-ai-gateway` shows exactly the models
+the key can use. Onboarding picks the default from those models.
+
 ## Model ID shorthand
 
 OpenClaw normalizes Claude shorthand model refs at runtime:
@@ -80,7 +93,7 @@ OpenClaw normalizes Claude shorthand model refs at runtime:
 | `vercel-ai-gateway/opus-4.6`        | `vercel-ai-gateway/anthropic/claude-opus-4-6` |
 
 <Tip>
-Use either form in your configuration; OpenClaw resolves the canonical
+Use either form in your configuration; OpenClaw resolves the full
 `anthropic/...` ref automatically.
 </Tip>
 
@@ -94,7 +107,7 @@ Use either form in your configuration; OpenClaw resolves the canonical
     <Warning>
     A key exported only in an interactive shell will not be visible to a
     launchd/systemd daemon unless that environment is explicitly imported. Set
-    the key in `~/.openclaw/.env` or via `env.shellEnv` to ensure the gateway
+    the key in `~/.openclaw/.env` or via `env.shellEnv` so the gateway
     process can read it.
     </Warning>
 
@@ -115,6 +128,12 @@ Use either form in your configuration; OpenClaw resolves the canonical
     variants down to `gpt-5.1-codex`) expose `/think xhigh`. Other namespaced
     refs keep the standard reasoning levels unless their catalog metadata
     declares more.
+  </Accordion>
+  <Accordion title="App attribution">
+    Requests to `ai-gateway.vercel.sh` carry Vercel's documented app-attribution
+    headers, `HTTP-Referer: https://openclaw.ai` and `X-Title: OpenClaw`. This
+    also applies to custom provider ids whose `baseUrl` points at AI Gateway.
+    A custom proxy `baseUrl` gets no attribution headers.
   </Accordion>
 </AccordionGroup>
 

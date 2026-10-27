@@ -3,33 +3,6 @@ import type { Command } from "commander";
 import type { callGatewayFromCli } from "../cli/gateway-rpc.js";
 import type { MeetingPluginConfig } from "./plugin-config.js";
 
-type MeetingCliMode = "agent" | "bidi" | "transcribe";
-type MeetingCliTransport = "chrome" | "chrome-node";
-
-type MeetingCliDescriptions = {
-  root: string;
-  join: string;
-  leave: string;
-  status: string;
-  setup: string;
-  testSpeech: string;
-  testListen: string;
-};
-
-type MeetingCliOptions = {
-  callGateway: typeof callGatewayFromCli;
-  commandName: string;
-  config: MeetingPluginConfig;
-  descriptions: MeetingCliDescriptions;
-  methodPrefix: string;
-  program: Command;
-  resolveGatewayTimeoutMs(params: {
-    config: MeetingPluginConfig;
-    method: string;
-    requestedTimeoutMs?: number;
-  }): number;
-};
-
 type JoinOptions = {
   transport?: string;
   mode?: string;
@@ -48,14 +21,18 @@ function parseTimeout(value: string | undefined): number | undefined {
   return parsed;
 }
 
-function parseMeetingCliMode(value: string | undefined): MeetingCliMode | undefined {
+function parseMeetingCliMode(
+  value: string | undefined,
+): ("agent" | "bidi" | "transcribe") | undefined {
   if (value === undefined || value === "agent" || value === "bidi" || value === "transcribe") {
     return value;
   }
   throw new Error(`mode must be agent, bidi, or transcribe; received ${value}`);
 }
 
-function parseMeetingCliTransport(value: string | undefined): MeetingCliTransport | undefined {
+function parseMeetingCliTransport(
+  value: string | undefined,
+): ("chrome" | "chrome-node") | undefined {
   if (value === undefined || value === "chrome" || value === "chrome-node") {
     return value;
   }
@@ -71,10 +48,12 @@ function markMeetingSetupFailure(result: unknown): void {
 function joinPayload(url: string, options: JoinOptions): Record<string, unknown> {
   return {
     url,
-    ...(options.transport ? { transport: parseMeetingCliTransport(options.transport) } : {}),
-    ...(options.mode ? { mode: parseMeetingCliMode(options.mode) } : {}),
+    ...(options.transport === undefined
+      ? {}
+      : { transport: parseMeetingCliTransport(options.transport) }),
+    ...(options.mode === undefined ? {} : { mode: parseMeetingCliMode(options.mode) }),
     ...(options.message ? { message: options.message } : {}),
-    ...(options.timeoutMs ? { timeoutMs: parseTimeout(options.timeoutMs) } : {}),
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: parseTimeout(options.timeoutMs) }),
   };
 }
 
@@ -85,7 +64,27 @@ function addJoinOptions(command: Command): Command {
     .option("--message <text>", "instructions to speak after joining");
 }
 
-export function registerMeetingPluginCli(options: MeetingCliOptions): void {
+export function registerMeetingPluginCli(options: {
+  callGateway: typeof callGatewayFromCli;
+  commandName: string;
+  config: MeetingPluginConfig;
+  descriptions: {
+    root: string;
+    join: string;
+    leave: string;
+    status: string;
+    setup: string;
+    testSpeech: string;
+    testListen: string;
+  };
+  methodPrefix: string;
+  program: Command;
+  resolveGatewayTimeoutMs(params: {
+    config: MeetingPluginConfig;
+    method: string;
+    requestedTimeoutMs?: number;
+  }): number;
+}): void {
   const call = async (method: string, payload?: Record<string, unknown>) => {
     const requestedTimeoutMs =
       typeof payload?.timeoutMs === "number" ? payload.timeoutMs : undefined;
@@ -155,7 +154,7 @@ export function registerMeetingPluginCli(options: MeetingCliOptions): void {
     ["test-listen", "testListen", options.descriptions.testListen],
   ] as const) {
     addJoinOptions(command(`${name} <url>`, description))
-      .option("--timeout-ms <ms>", "probe timeout in milliseconds")
+      .option("--timeout-ms <ms>", "check timeout in milliseconds")
       .action(async (url: string, joinOptions: JoinOptions) => {
         await call(method(action), joinPayload(url, joinOptions));
       });

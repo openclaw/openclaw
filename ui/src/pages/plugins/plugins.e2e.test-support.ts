@@ -26,6 +26,7 @@ import {
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
 import {
+  createPluginDeclaredSurface,
   discoveryCategories,
   discoveryResult,
   finalDiscoveryPageItems,
@@ -224,18 +225,7 @@ const workboardInspection = {
     enabled: false,
   },
   source: { kind: "npm", packageName: workboardDisabled.packageName },
-  declared: {
-    channels: [],
-    providers: [],
-    tools: [],
-    contracts: [],
-    hooks: [],
-    mcpServers: [],
-    cliCommands: [],
-    cliBackends: [],
-    skills: [],
-    dangerousConfigFlags: [],
-  },
+  declared: createPluginDeclaredSurface(),
   components: {
     mapped: [],
     skills: [],
@@ -565,6 +555,22 @@ function pluginMethodResponses() {
         { match: { pluginId: "workboard" }, response: workboardInspection },
         { match: { pluginId: "lobster" }, response: lobsterInspection },
         { match: { pluginId: "calendar-plus" }, response: calendarInspection },
+        {
+          match: { pluginId: "local-calendar" },
+          response: {
+            ...workboardInspection,
+            plugin: localCalendarDisabled,
+            source: { kind: "npm", packageName: localCalendarDisabled.packageName },
+          } satisfies PluginsInspectResult,
+        },
+        {
+          match: { pluginId: "matrix" },
+          response: {
+            ...workboardInspection,
+            plugin: matrixEnabled,
+            source: { kind: "npm", packageName: matrixEnabled.packageName },
+          } satisfies PluginsInspectResult,
+        },
       ],
     },
     "plugins.search": {

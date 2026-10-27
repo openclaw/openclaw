@@ -15,9 +15,12 @@ import {
   parseRemoteWorkspaceManifestEnvelope,
   type RemoteWorkspaceManifestEnvelope,
 } from "./workspace-hash-memo.js";
+import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
 import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+useAgedWorkspaceHashClock();
+afterEach(() => vi.restoreAllMocks());
 
 it.each([
   { operation: "clone", reason: "clone-failed", stage: "git clone" },
@@ -250,11 +253,13 @@ it.each([
       let revision = 0;
       const capture = async (active = actions, directory = first.remoteWorkspaceDir) => {
         const firstCapture = manifestCaptures.length;
+        const phases: string[] = [];
         const result = await active.reconcileWorkspace({
           remoteWorkspaceDir: directory,
           baseManifestRef: first.baseManifestRef,
           source: {
             kind: "repository",
+            markPhase: (phase) => phases.push(phase),
             referenceManifestRef: checkpoint?.currentManifestRef ?? first.manifestRef,
             prepareCheckpoint: async (payload) => {
               const stagingRoot = path.join(root, `checkpoint-${++revision}`);
@@ -296,12 +301,19 @@ it.each([
             },
           },
         });
+        expect(phases).toEqual([
+          "repositoryCheckpointUpload",
+          "repositoryVerification",
+          "repositoryPublicationUpload",
+          "repositoryVerification",
+          "repositoryCheckpointStage",
+        ]);
         await verifyReconciledWorkspaceFinal(result, {
           assertActive: async () => {},
           resume: async () => {},
         });
         const captures = manifestCaptures.slice(firstCapture);
-        expect(captures).toHaveLength(5);
+        expect(captures).toHaveLength(4);
         expect(captures.slice(1).every(({ metrics }) => metrics.contentHashCount === 0)).toBe(true);
         expect(captures.slice(1).every(({ metrics }) => metrics.memoHitCount > 0)).toBe(true);
         return captures;

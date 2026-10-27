@@ -15,9 +15,9 @@ const secrets = vi.hoisted(() => ({ consumeHandoff: vi.fn() }));
 const oauth = {
   startAuthorization: vi.fn(),
   pollAuthorization: vi.fn(),
-  cancelAuthorization: vi.fn(),
+  cancelAuthorizationAsync: vi.fn(),
   refreshEffectiveIdentity: vi.fn(),
-  retireProfile: vi.fn(),
+  retireProfileAsync: vi.fn(),
 };
 
 vi.mock("../../agents/github-tool-identity.js", () => ({
@@ -104,9 +104,9 @@ describe("tools.github handlers", () => {
     github.updateConfig.mockResolvedValue({ next: true });
     oauth.startAuthorization.mockReset();
     oauth.pollAuthorization.mockReset();
-    oauth.cancelAuthorization.mockReset();
+    oauth.cancelAuthorizationAsync.mockReset();
     oauth.refreshEffectiveIdentity.mockReset().mockResolvedValue(undefined);
-    oauth.retireProfile.mockReset();
+    oauth.retireProfileAsync.mockReset();
   });
 
   it("returns selected-scope plus effective status without refreshing credentials", async () => {
@@ -266,7 +266,7 @@ describe("tools.github handlers", () => {
       agentId: "main",
       expectedIdentity: { profileId, kind: "oauth" },
     });
-    expect(oauth.retireProfile).toHaveBeenCalledWith(profileId);
+    expect(oauth.retireProfileAsync).toHaveBeenCalledWith(profileId);
   });
 
   it("delegates device start, poll, and cancel without exposing private authorization fields", async () => {
@@ -279,7 +279,7 @@ describe("tools.github handlers", () => {
       pollAfterMs: 5_000,
     });
     oauth.pollAuthorization.mockResolvedValue({ status: "pending", retryAfterMs: 10_000 });
-    oauth.cancelAuthorization.mockReturnValue(true);
+    oauth.cancelAuthorizationAsync.mockReturnValue(true);
 
     const start = await invoke("tools.github.authorize.start", {
       scope: "agent",
@@ -290,7 +290,7 @@ describe("tools.github handlers", () => {
 
     expect(oauth.startAuthorization).toHaveBeenCalledWith({ scope: "agent", agentId: "main" });
     expect(oauth.pollAuthorization).toHaveBeenCalledWith(requestId);
-    expect(oauth.cancelAuthorization).toHaveBeenCalledWith(requestId);
+    expect(oauth.cancelAuthorizationAsync).toHaveBeenCalledWith(requestId);
     expect(start.mock.calls[0]?.[1]).toEqual({
       requestId,
       userCode: "ABCD-EFGH",

@@ -18,7 +18,7 @@ describe("createPollCommentFolder", () => {
   });
 
   it("does NOT fold a deliberate later inline reply to the poll", () => {
-    const folder = createPollCommentFolder({ windowMs: 15_000 });
+    const folder = createPollCommentFolder();
     folder.rememberPoll(POLL_GUID, T0, "+15551110000");
     // A real "I can't make it" reply a minute later must be delivered.
     expect(folder.isPollComment(POLL_GUID, T0 + 60_000, "+15551110000")).toBe(false);

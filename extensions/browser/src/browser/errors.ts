@@ -1,21 +1,11 @@
-/**
- * Browser domain errors.
- *
- * Provides HTTP-mappable error classes and stable blocked-policy messages used
- * by route handlers, clients, and Gateway proxy code.
- */
-/** Stable message for blocked CDP endpoint configuration. */
 const BROWSER_ENDPOINT_BLOCKED_MESSAGE = "browser endpoint blocked by policy";
-/** Stable message for blocked page navigation targets. */
 const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
 
-/** Stable machine-readable browser error reasons. */
 export const BROWSER_ERROR_REASONS = {
   noDisplayForHeadedProfile: "no_display_for_headed_profile",
   navigationBlocked: "navigation_blocked",
 } as const;
 
-/** Stable machine-readable codes returned by browser action routes. */
 export const BROWSER_ACT_ERROR_CODES = {
   kindRequired: "ACT_KIND_REQUIRED",
   invalidRequest: "ACT_INVALID_REQUEST",
@@ -67,7 +57,6 @@ export type BrowserErrorPayload = WithBrowserErrorMetadata<{
   unrecognizedCode?: true;
 }>;
 
-/** Base browser error carrying an HTTP status code. */
 export class BrowserError extends Error {
   status: number;
 
@@ -95,56 +84,48 @@ export class BrowserCdpEndpointBlockedError extends BrowserError {
   }
 }
 
-/** Validation failure for browser route or config input. */
 export class BrowserValidationError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 400, options);
+  constructor(message: string) {
+    super(message, 400);
   }
 }
 
-/** Raised when one tab reference matches multiple tabs. */
 export class BrowserTargetAmbiguousError extends BrowserError {
-  constructor(message = "ambiguous browser tab reference", options?: ErrorOptions) {
-    super(message, 409, options);
+  constructor() {
+    super("ambiguous browser tab reference", 409);
   }
 }
 
-/** Raised when a requested browser tab cannot be resolved. */
 export class BrowserTabNotFoundError extends BrowserError {
-  constructor(inputOrMessage?: string | { input?: string }, options?: ErrorOptions) {
-    const input =
-      typeof inputOrMessage === "object" ? inputOrMessage.input?.trim() : inputOrMessage?.trim();
+  constructor(options?: { input?: string }) {
+    const input = options?.input?.trim();
     const message = input
       ? /^\d+$/.test(input)
         ? `tab not found: browser tab "${input}" not found. Numeric values are not tab targets; use a stable tab id like "t1", a label, or a raw targetId. For positional selection, use "openclaw browser tab select ${input}".`
         : `tab not found: browser tab "${input}" not found. Use action=tabs and pass suggestedTargetId, tabId, label, or raw targetId.`
       : "tab not found";
-    super(message, 404, options);
+    super(message, 404);
   }
 }
 
-/** Raised when a requested browser profile does not exist. */
 export class BrowserProfileNotFoundError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 404, options);
+  constructor(message: string) {
+    super(message, 404);
   }
 }
 
-/** Raised when a browser config mutation conflicts with existing state. */
 export class BrowserConflictError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 409, options);
+  constructor(message: string) {
+    super(message, 409);
   }
 }
 
-/** Raised when a browser profile cannot be reset by the current driver. */
 export class BrowserResetUnsupportedError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 400, options);
+  constructor(message: string) {
+    super(message, 400);
   }
 }
 
-/** Raised when a profile is configured but not currently reachable. */
 export class BrowserProfileUnavailableError extends BrowserError {
   readonly metadata?: BrowserNoDisplayErrorMetadata;
 
@@ -157,14 +138,12 @@ export class BrowserProfileUnavailableError extends BrowserError {
   }
 }
 
-/** Raised when browser resource allocation, such as CDP ports, is exhausted. */
 export class BrowserResourceExhaustedError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 507, options);
+  constructor(message: string) {
+    super(message, 507);
   }
 }
 
-/** Map browser-domain errors to HTTP response details. */
 export function toBrowserErrorResponse(err: unknown): BrowserErrorResponse | null {
   if (err instanceof BrowserActionError) {
     return { status: err.status, message: err.message, code: err.code };

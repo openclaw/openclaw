@@ -1,27 +1,20 @@
 import { vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { scheduleGatewayPostReadyMaintenance } from "./server-runtime-services.js";
 
 type StartSessionDeliveryRuntime =
   typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
-type StartHeartbeatRunner =
-  typeof import("../infra/heartbeat-runner-scheduler.js").startHeartbeatRunner;
 type DrainPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue-recovery.js").drainPendingDeliveriesCore;
 type RecoverPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue-recovery.js").recoverPendingDeliveries;
 
 const runtimeServiceMocks = vi.hoisted(() => {
-  const heartbeatRunner = {
-    stop: vi.fn(),
-    updateConfig: vi.fn(),
-  };
   const stopSessionUpstreamMonitor = vi.fn();
   const stopSessionDeliveryRuntime = vi.fn(async () => {});
   return {
-    heartbeatRunner,
-    startHeartbeatRunner: vi.fn<StartHeartbeatRunner>(() => heartbeatRunner),
-    runHeartbeatOnce: vi.fn(async () => ({ status: "ran" as const, durationMs: 1 })),
+    warmGatewayDatabasePageCache: vi.fn(async () => {}),
     startChannelHealthMonitor: vi.fn(() => ({
       stop: vi.fn(),
       shutdown: vi.fn(),
@@ -40,23 +33,19 @@ const runtimeServiceMocks = vi.hoisted(() => {
       skippedMaxRetries: 0,
       deferredBackoff: 0,
     })),
-    countPendingDeliveryQueueEntries: vi.fn(() => 0),
-    listLegacyDeliveryQueueArtifacts: vi.fn(() => [] as string[]),
+    countPendingDeliveryQueueEntries: vi.fn(async () => 0),
     drainPendingDeliveries: vi.fn<DrainPendingDeliveries>(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
     deliverQueuedSessionDelivery: vi.fn(async () => undefined),
     settleQueuedSessionDelivery: vi.fn(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
-    assertQueuedConversationDeliveryAttemptAuthorized: vi.fn(),
+    withAuthorizedQueuedConversationDelivery: vi.fn(),
   };
 });
 
-vi.mock("../infra/heartbeat-runner-scheduler.js", () => ({
-  startHeartbeatRunner: runtimeServiceMocks.startHeartbeatRunner,
-}));
-
-vi.mock("../infra/heartbeat-runner-run.js", () => ({
-  runHeartbeatOnce: runtimeServiceMocks.runHeartbeatOnce,
+// mock-isolation: Scheduler tests do not inspect or warm host database files.
+vi.mock("./server-database-page-cache.js", () => ({
+  warmGatewayDatabasePageCache: runtimeServiceMocks.warmGatewayDatabasePageCache,
 }));
 
 vi.mock("../sessions/session-upstream-monitor.js", () => ({
@@ -78,13 +67,10 @@ vi.mock("../infra/delivery-queue-sqlite.js", async (importOriginal) => ({
   countPendingDeliveryQueueEntries: runtimeServiceMocks.countPendingDeliveryQueueEntries,
 }));
 
-vi.mock("../infra/delivery-queue-legacy-files.js", () => ({
-  listLegacyDeliveryQueueArtifacts: runtimeServiceMocks.listLegacyDeliveryQueueArtifacts,
-}));
-
-vi.mock("./conversation-route-ownership.js", () => ({
-  assertQueuedConversationDeliveryAttemptAuthorized:
-    runtimeServiceMocks.assertQueuedConversationDeliveryAttemptAuthorized,
+vi.mock("./conversation-route-ownership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./conversation-route-ownership.js")>()),
+  withAuthorizedQueuedConversationDelivery:
+    runtimeServiceMocks.withAuthorizedQueuedConversationDelivery,
 }));
 
 vi.mock("../infra/session-delivery-queue-runtime.js", () => ({
@@ -106,16 +92,12 @@ vi.mock("./channel-health-monitor.js", () => ({
 // Vitest moves the declaration before imports; it rejects an exported hoisted declaration.
 export { runtimeServiceMocks };
 
-export function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
+export { waitForFast } from "../../test/helpers/vitest-wait.js";
 
 export function createLog() {
   return {
     child: vi.fn(() => createInfoWarnErrorLogger()),
+    info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
   };
@@ -142,11 +124,18 @@ export function createTestCronReconciliation(complete: () => Promise<void> = asy
 }
 
 export function createPostReadyMaintenanceScheduleParams(
-  overrides: Partial<Parameters<typeof scheduleGatewayPostReadyMaintenance>[0]> = {},
+  overrides: Partial<Parameters<typeof scheduleGatewayPostReadyMaintenance>[0]> &
+    Pick<Parameters<typeof scheduleGatewayPostReadyMaintenance>[0], "scheduler">,
 ): Parameters<typeof scheduleGatewayPostReadyMaintenance>[0] {
   return {
+    signal: new AbortController().signal,
     delayMs: 1,
     isClosing: () => false,
+    waitForPostReadyWork: async () => {},
+    startupMaintenance: {
+      startupSessionDatabases: [],
+      pluginRuntime: { registry: createEmptyPluginRegistry() },
+    },
     startMaintenance: vi.fn(async () => null),
     applyMaintenance: vi.fn(),
     shouldStartCron: () => true,
@@ -171,10 +160,7 @@ export function createMaintenanceHandles() {
 }
 
 export function resetRuntimeServiceMocks() {
-  runtimeServiceMocks.heartbeatRunner.stop.mockClear();
-  runtimeServiceMocks.heartbeatRunner.updateConfig.mockClear();
-  runtimeServiceMocks.startHeartbeatRunner.mockClear();
-  runtimeServiceMocks.runHeartbeatOnce.mockClear();
+  runtimeServiceMocks.warmGatewayDatabasePageCache.mockReset().mockResolvedValue(undefined);
   runtimeServiceMocks.startChannelHealthMonitor.mockClear();
   runtimeServiceMocks.startSessionUpstreamMonitor.mockClear();
   runtimeServiceMocks.stopSessionUpstreamMonitor.mockClear();
@@ -188,13 +174,12 @@ export function resetRuntimeServiceMocks() {
     skippedMaxRetries: 0,
     deferredBackoff: 0,
   });
-  runtimeServiceMocks.countPendingDeliveryQueueEntries.mockReset().mockReturnValue(0);
-  runtimeServiceMocks.listLegacyDeliveryQueueArtifacts.mockReset().mockReturnValue([]);
+  runtimeServiceMocks.countPendingDeliveryQueueEntries.mockReset().mockResolvedValue(0);
   runtimeServiceMocks.drainPendingDeliveries.mockReset();
   runtimeServiceMocks.drainPendingDeliveries.mockResolvedValue(undefined);
   runtimeServiceMocks.recoverPendingRestartContinuationDeliveries.mockClear();
   runtimeServiceMocks.deliverQueuedSessionDelivery.mockClear();
   runtimeServiceMocks.settleQueuedSessionDelivery.mockClear();
   runtimeServiceMocks.deliverOutboundPayloads.mockClear();
-  runtimeServiceMocks.assertQueuedConversationDeliveryAttemptAuthorized.mockReset();
+  runtimeServiceMocks.withAuthorizedQueuedConversationDelivery.mockReset();
 }

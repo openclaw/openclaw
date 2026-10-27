@@ -1,20 +1,18 @@
+import { createDeferredCore } from "../shared/deferred.js";
+import { copyOwnedBuffer } from "../shared/owned-buffer.js";
+
 const REALTIME_VOICE_MAX_PENDING_AUDIO_CHUNKS = 320;
 const REALTIME_VOICE_MAX_PENDING_AUDIO_BYTES = 1024 * 1024;
 
 type RealtimeVoiceAudioOverflowPolicy = "drop-oldest" | "reject-newest";
 
-export type RealtimeVoiceAudioQueue = {
-  clear: () => void;
-  dequeue: () => Buffer | undefined;
-  drain: () => Buffer[];
-  enqueue: (audio: Buffer) => boolean;
-};
+export type RealtimeVoiceAudioQueue = ReturnType<typeof createRealtimeVoiceAudioQueue>;
 
 export function createRealtimeVoiceAudioQueue(
   overflowPolicy: RealtimeVoiceAudioOverflowPolicy,
   onOverflow?: () => void,
-): RealtimeVoiceAudioQueue {
-  let chunks: Buffer[] = [];
+) {
+  let chunks: Buffer<ArrayBuffer>[] = [];
   let bytes = 0;
 
   const clear = () => {
@@ -36,7 +34,7 @@ export function createRealtimeVoiceAudioQueue(
       clear();
       return drained;
     },
-    enqueue: (audio) => {
+    enqueue: (audio: Buffer) => {
       if (audio.byteLength > REALTIME_VOICE_MAX_PENDING_AUDIO_BYTES) {
         onOverflow?.();
         return false;
@@ -62,7 +60,7 @@ export function createRealtimeVoiceAudioQueue(
       }
       // Capture transports can recycle caller-owned views before provider readiness,
       // so the queue owns an immutable copy of every accepted chunk.
-      const chunk = Buffer.from(audio);
+      const chunk = copyOwnedBuffer(audio);
       chunks.push(chunk);
       bytes += chunk.byteLength;
       return true;
@@ -80,7 +78,6 @@ export type RealtimeVoiceSessionConnection = Readonly<{
 
 type RealtimeVoiceIdleState = {
   phase: "idle" | "terminal";
-  terminalOutcome?: "completed";
 };
 
 type RealtimeVoiceConnectionState = {
@@ -109,6 +106,7 @@ type RealtimeVoiceConnectAttemptOptions = {
   onTimeout: () => void;
   timeoutError: () => Error;
   timeoutMs: number;
+  ref?: boolean;
 };
 
 export class RealtimeVoiceSessionLifecycle {
@@ -158,7 +156,7 @@ export class RealtimeVoiceSessionLifecycle {
     connection: RealtimeVoiceSessionConnection,
   ): RealtimeVoiceSessionConnection | undefined {
     const state = this.currentState(connection);
-    if (!state || state.phase !== "retry-wait" || state.terminalOutcome) {
+    if (state?.phase !== "retry-wait") {
       return undefined;
     }
     const nextConnection = this.createConnection(state.controller);
@@ -169,7 +167,7 @@ export class RealtimeVoiceSessionLifecycle {
 
   ready(connection: RealtimeVoiceSessionConnection): boolean {
     const state = this.currentState(connection);
-    if (!state || state.phase !== "connecting" || state.terminalOutcome) {
+    if (state?.phase !== "connecting") {
       return false;
     }
     state.phase = "ready";
@@ -197,19 +195,11 @@ export class RealtimeVoiceSessionLifecycle {
     let settled = false;
     let ready = false;
     let startupFailed = false;
-    let resolvePromise!: () => void;
-    let rejectPromise!: (error: Error) => void;
-    const promise = new Promise<void>((resolve, reject) => {
-      resolvePromise = resolve;
-      rejectPromise = reject;
-    });
-    let removeAbortListener = () => {};
+    const { promise, resolve: resolvePromise, reject: rejectPromise } = createDeferredCore();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const cleanup = () => {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      removeAbortListener();
+      clearTimeout(timeout);
+      options.connection.signal.removeEventListener("abort", onAbort);
     };
     const resolve = (providerReady = false) => {
       if (settled) {
@@ -229,7 +219,7 @@ export class RealtimeVoiceSessionLifecycle {
       rejectPromise(error);
     };
     const rejectStartup = (error: Error) => {
-      if (settled || !this.acceptsEvents(options.connection) || ready) {
+      if (settled || !this.acceptsEvents(options.connection)) {
         return false;
       }
       startupFailed = true;
@@ -251,6 +241,9 @@ export class RealtimeVoiceSessionLifecycle {
           reject(options.timeoutError());
         }
       }, options.timeoutMs);
+      if (options.ref === false) {
+        timeout.unref?.();
+      }
     };
     const onAbort = () => {
       const outcome = this.terminalOutcome(options.connection);
@@ -263,7 +256,6 @@ export class RealtimeVoiceSessionLifecycle {
       reject(reason instanceof Error ? reason : new Error(String(reason)));
     };
     options.connection.signal.addEventListener("abort", onAbort, { once: true });
-    removeAbortListener = () => options.connection.signal.removeEventListener("abort", onAbort);
     if (options.connection.signal.aborted) {
       onAbort();
     }
@@ -293,7 +285,7 @@ export class RealtimeVoiceSessionLifecycle {
     this.connectPromise = undefined;
     this.clearPendingAudio();
     if (!("controller" in state)) {
-      this.state = { phase: "terminal", terminalOutcome: "completed" };
+      this.state = { phase: "terminal" };
       return true;
     }
     state.phase = "terminal";

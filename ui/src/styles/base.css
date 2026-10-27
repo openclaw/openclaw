@@ -1,31 +1,54 @@
+/* Details and the desktop menus share the same block-divider color. Keep the
+   token available before lazy menu/Details styles load, without changing other borders. */
+.chat-details-desktop-body,
+.context-usage__popover,
+.chat-dashboard-menu__panel,
+.side-panel-position-menu,
+.chat-pr-menu,
+.chat-header-session-menu__panel,
+.session-menu__panel {
+  --details-separator: color-mix(in srgb, var(--border-strong) 70%, var(--border));
+}
+
 :root {
-  /* Background - Deep, rich dark with layered depth */
   --bg: #0e1015;
   --bg-accent: #13151b;
   --bg-elevated: #191c24;
   --bg-hover: #1f2330;
   --bg-muted: #1f2330;
 
-  /* Card / Surface - Clear hierarchy between levels */
+  /* Interaction layers follow the host surface and the theme's own ink. */
+  --surface-hover-amount: 6%;
+  --surface-selected-amount: 8%;
+  --surface-selected-hover-amount: 11%;
+  --surface-hover: color-mix(in srgb, var(--text) var(--surface-hover-amount), transparent);
+  --surface-selected: color-mix(in srgb, var(--text) var(--surface-selected-amount), transparent);
+  --surface-selected-hover: color-mix(
+    in srgb,
+    var(--text) var(--surface-selected-hover-amount),
+    transparent
+  );
+  --navigation-selected-border: transparent;
+
   --card: #161920;
   --card-foreground: #f0f0f2;
   --card-highlight: rgba(255, 255, 255, 0.04);
   --popover: #191c24;
   --popover-foreground: #f0f0f2;
+  --chat-send-foreground: var(--primary-foreground);
+  --chat-composer-surface: var(--popover);
+  --chat-user-surface: var(--accent-subtle);
   --session-hovercard-surface: color-mix(in srgb, var(--card) 94%, black 6%);
-  --session-hovercard-progress-surface: color-mix(in srgb, var(--card) 58%, var(--bg) 42%);
+  --session-hovercard-attribution-surface: color-mix(in srgb, var(--text) 6%, transparent);
 
-  /* Panel */
   --panel: #0e1015;
   --panel-strong: #191c24;
   --panel-hover: #1f2330;
   --chrome: rgba(14, 16, 21, 0.96);
   --chrome-strong: rgba(14, 16, 21, 0.98);
 
-  /* Text - Clean contrast
-   * Keep --muted AA on dark surfaces; do not dim muted body text with opacity.
-   * --text targets ~10:1 on --bg #0e1015 (10.1; 9.3 on --card) — the dark
-   * comfort band is ~10-12 and brighter body text halates on dark. */
+  /* Keep secondary copy AA on its host surface; emphasis gets brighter ink
+     without pushing ordinary body text into a high-glare contrast range. */
 
   --text: #bcbcc0;
   --text-strong: #f4f4f5;
@@ -33,9 +56,27 @@
   --muted: #8b8b94;
   --muted-strong: #898990;
   --muted-foreground: #8b8b94;
-  --file-icon-glyph: #a3a3a3;
+  /* Low-emphasis chrome follows the actual surface; secondary copy keeps --muted. */
+  --text-tertiary: color-mix(in srgb, var(--text) 48.4%, transparent);
+  --icon-interactive: var(--text-tertiary);
+  --icon-decorative: var(--text-tertiary);
+  --icon-active: var(--text-strong);
+  --control-secondary-text: var(--muted);
+  --context-ring-track: color-mix(in srgb, var(--muted) 75%, transparent);
+  --navigation-selected-icon: var(--icon-active);
+  --file-icon-glyph: var(--muted);
 
-  /* Border - Whisper-thin, barely there */
+  /* Navigation controls use their own resting ink and the selected accent pair. */
+  --sidebar-rail-control-color: var(--icon-interactive);
+  --sidebar-toolbar-action-opacity: 1;
+  --sidebar-rail-action-bg: var(--accent);
+  --sidebar-rail-action-hover-bg: var(--accent-hover);
+  --sidebar-rail-action-active-bg: color-mix(in srgb, var(--accent) 90%, var(--text));
+
+  /* GitHub references share an opaque neutral surface; only their ink carries status. */
+  --github-item-bg: color-mix(in srgb, var(--text) 6%, var(--bg));
+  --github-item-hover-bg: color-mix(in srgb, var(--text) 10%, var(--bg));
+
   --border: #1e2028;
   --border-strong: #2e3040;
   --border-hover: #3e4050;
@@ -49,48 +90,43 @@
   --rail-header-padding-end: 8px;
   --rail-header-action-size: 28px;
   --rail-header-action-glyph-size: 16px;
-  --rail-header-action-color: var(--muted);
+  --rail-header-action-color: color-mix(in srgb, var(--text) 65%, transparent);
   --rail-header-action-hover-color: var(--text);
-  --rail-header-action-active-color: var(--accent);
+  --rail-header-action-active-color: var(--icon-active);
   --rail-header-action-disabled-opacity: 0.4;
   --rail-header-action-gap: 2px;
-  --rail-header-copy-gap: 2px;
   --rail-header-background: var(--bg);
-  --rail-header-eyebrow-size: var(--control-ui-text-xs);
-  --rail-header-eyebrow-letter-spacing: 0.04em;
+  --session-header-sharing-surface: color-mix(in srgb, var(--text) 4%, transparent);
+  --session-header-control-surface: color-mix(in srgb, var(--text) 5%, transparent);
+  --session-header-control-hover-bg: var(--surface-hover);
+  --session-header-control-active-hover-bg: color-mix(in srgb, var(--text) 10%, transparent);
+  --session-header-sharing-hover-bg: var(--surface-hover);
+  --session-header-sharing-active-bg: var(--session-header-control-active-hover-bg);
+  --session-header-control-active-color: var(--icon-active);
   --rail-header-title-size: var(--control-ui-text-sm);
   --rail-header-title-weight: 600;
   --rail-divider-color: var(--border);
   --rail-divider-size: 1px;
   --resize-handle-size: 6px;
   --resize-handle-line-size: 1px;
+  --shell-divider-size: var(--resize-handle-line-size);
   --resize-handle-active-line-size: 2px;
   --resize-handle-rest-color: color-mix(in srgb, var(--border) 74%, transparent);
   --resize-handle-active-color: color-mix(in srgb, var(--text) 42%, transparent);
 
   /*
    * Accent - Punchy signature red
-   *
-   * WCAG 2.1 AA audit (bg = #0e1015, relative luminance ≈ 0.005):
-   *   --accent #ff5c5c on bg: 6.3:1 AA text ✓
-   *   --primary-foreground #ffffff on #d13c3c button: 4.75:1 AA ✓
-   *   --primary-foreground #ffffff on #c22e2e hover: 5.64:1 AA ✓
-   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
-   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
-   *   --card/--popover/--secondary foreground pairs: 15.4:1 / 14.9:1 / 15.4:1 ✓
-   *   --selection-fg #ffffff on --selection-bg #005fcc: 6.0:1 AA ✓
    */
   --accent: #ff5c5c;
   --accent-hover: #ff7070;
   --accent-muted: #ff5c5c;
   --accent-subtle: rgba(255, 92, 92, 0.1);
-  --accent-foreground: #fafafa;
+  --accent-foreground: #0e1015;
   --accent-glow: rgba(255, 92, 92, 0.2);
   --inbox-attention: #e5243b;
-  --inbox-attention-hover: color-mix(in srgb, var(--inbox-attention) 88%, black);
   --inbox-attention-foreground: #ffffff;
 
-  /* Lobster mascot icon (icons-tools.ts). Dark surfaces swallowed the shipped
+  /* Lobster mascot icon (icon-data-tools.ts). Dark surfaces swallowed the shipped
      #ff4d4d→#991b1b gradient, so dark mode lifts both stops; light mode
      restores the original artwork below. */
   --lobster-icon-body: #ff6d5a;
@@ -107,13 +143,14 @@
      feedback that never costs readability. */
   --link: color-mix(in srgb, var(--accent-hover) 85%, var(--text));
   --link-hover: color-mix(in srgb, var(--link) 82%, var(--text));
-  --selection-bg: #005fcc;
+  --selection-bg: #5a7593;
   --selection-fg: #ffffff;
   --primary: #d13c3c;
-  --primary-hover: #c22e2e;
+  /* Imported palettes supply a fill/ink pair, not a hover pair. Keep their
+     contrast intact; built-in palettes override with audited hover colors. */
+  --primary-hover: var(--primary);
   --primary-foreground: #ffffff;
 
-  /* Secondary */
   --secondary: #161920;
   --secondary-foreground: #f0f0f2;
   --accent-2: #14b8a6;
@@ -128,6 +165,8 @@
   --qr-text: #444444;
   --media-bg: #000000;
   --media-foreground: #ffffff;
+  --media-control-bg: rgba(255, 255, 255, 0.16);
+  --media-control-bg-hover: rgba(255, 255, 255, 0.22);
   --exec-highlight: #f97316;
   --moon-highlight: #fef3c7;
   --moon-base: #fbbf24;
@@ -137,6 +176,8 @@
   --brand-claude: #d97757;
   --brand-google: #4285f4;
 
+  --session-color-tint: 12%;
+  --session-color-hover-tint: 18%;
   --session-color-red: #f07878;
   --session-color-blue: #72a7ed;
   --session-color-green: #69bf8a;
@@ -170,45 +211,49 @@
    *
    * Each `--x` doubles as label text on its own `--x-subtle` tint, so the pair
    * is one contrast decision: the 8% tint composites onto the surface and the
-   * label must still clear WCAG AA 4.5:1 on the lightest dark surface
-   * (dash `--card` #221a16, worse than claw `--card` #161920). Keep every
+   * label must still clear WCAG AA 4.5:1 on the actual host surface. Keep every
    * `-subtle`/`-muted` rgba in sync with its base hex — they are the same
    * color at 8%/75%, and re-tinting one without the other silently drops the
    * pair below AA. Bases stay literal hex: `widget-theme.ts` publishes them to
    * MCP app guest documents, where a `color-mix(... var(--x) ...)` string
    * would not resolve.
    *
-   * WCAG 2.1 AA audit (label on own subtle tint, worst of --card / --bg):
-   *   --ok     #22c55e  6.66:1 ✓    --warn  #f59e0b  6.93:1 ✓
-   *   --danger #f87171  5.52:1 ✓    --info  #60a5fa  5.97:1 ✓
-   *
    * Bounded to --card and --bg. A status label can also land on --bg-hover,
-   * --bg-muted, --panel-hover or --input, which this audit does not cover.
+   * --bg-muted, --panel-hover or --input: include the actual host in validation.
    */
   --ok: #22c55e;
   --ok-muted: rgba(34, 197, 94, 0.75);
   --ok-subtle: rgba(34, 197, 94, 0.08);
   --destructive: #ef4444;
+  --destructive-hover: var(--destructive);
   --destructive-foreground: #fafafa;
   --warn: #f59e0b;
-  --warn-muted: rgba(245, 158, 11, 0.75);
   --warn-subtle: rgba(245, 158, 11, 0.08);
+  /* Presence dots are indicators, not text: idle keeps this amber in every theme. */
+  --presence-idle: #f59e0b;
   --danger: #f87171;
   --danger-muted: rgba(248, 113, 113, 0.75);
   --danger-subtle: rgba(248, 113, 113, 0.08);
   --info: #60a5fa;
   --info-subtle: rgba(96, 165, 250, 0.08);
-  --warn-bright: #f59e0b;
-  --warn-strong: #d97706;
-  --danger-solid-hover: #dc2626;
   --pr-merged: #a78bfa;
+  /* Categorical chart series: distinct hues validated for color-vision separation on this surface. */
+  --chart-series-1: #3987e5;
+  --chart-series-2: #d95926;
+  --chart-series-3: #199e70;
+  --chart-series-4: #c98500;
+  --chart-series-5: #d55181;
 
-  /* Focus */
   --focus: rgba(255, 92, 92, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
+  /* Native primitives keep the typography, timing, and outline previously supplied by the theme. */
+  --control-ui-font-weight-normal: 400;
+  --control-ui-font-weight-semibold: 500;
+  --control-ui-transition-fast: 75ms;
+  --control-ui-focus-ring: solid 0.1875rem var(--ring);
+  --control-ui-focus-ring-offset: 0.0625rem;
 
-  /* Grid */
   --grid-line: rgba(255, 255, 255, 0.03);
 
   /* GitHub syntax palette shared by highlighted code and file previews. */
@@ -222,11 +267,6 @@
   --hljs-deletion: #ffa198;
   --hljs-addition: #7ee787;
 
-  /* Theme transition */
-  --theme-switch-x: 50%;
-  --theme-switch-y: 50%;
-
-  /* Typography */
   --mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --font-shortcut: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Symbol", sans-serif;
@@ -246,17 +286,20 @@
   --chat-text-size: var(--control-ui-text-md);
   --chat-block-gap: var(--chat-text-size);
 
-  /* Shadows - Subtle, layered depth */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.4);
   --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.5);
-  --shadow-glow: 0 0 24px var(--accent-glow);
 
   /* Transient surfaces use one edge and elevation treatment. Persistent
      panels and dialogs keep their independent elevation hierarchy. */
   --overlay-border: color-mix(in srgb, var(--border-strong) 64%, transparent);
   --overlay-shadow: 0 1px 2px rgb(0 0 0 / 0.18), 0 8px 24px rgb(0 0 0 / 0.24);
+  --overlay-modal-backdrop: color-mix(in oklab, black 60%, transparent);
+  --overlay-palette-backdrop: color-mix(in oklab, black 12%, transparent);
+  --overlay-modal-radius: 0.75rem;
+  --overlay-modal-shadow: 0 0.5rem 0.5rem -0.25rem
+    color-mix(in oklab, var(--bg-muted) 72%, transparent);
 
   /* Spacing scale. Settings surfaces use these (see
      ui/docs/design-system/settings-design.md); elsewhere raw px padding/gap is
@@ -271,14 +314,16 @@
   --space-8: 40px;
 
   /* Shared by mobile headers, transcripts, and independently loaded composers. */
-  --chat-mobile-edge-inset: var(--space-3);
+  --chat-mobile-edge-inset: var(--space-4);
+  --shell-popup-inline-gutter: 12px;
 
   /* One inset shared by every widget frame (chat preview panel, board card)
      so agent-authored widget documents meet identical breathing room on all
      surfaces. Board layout math mirrors this value numerically. */
   --widget-frame-inset: var(--space-3);
 
-  /* Radii - Slightly larger for modern feel */
+  --sidebar-nav-row-height: 32px;
+
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
@@ -290,8 +335,7 @@
      (transparent border + content-box clip). Derived from --muted so every
      theme family and both modes follow with no override. scrollbar-color is a
      real property, not a token, but it lives here (not a second :root block)
-     to satisfy no-duplicate-selectors; it also inherits into shadow roots,
-     which is what gives Web Awesome ::part() surfaces their thumb tint. */
+     to satisfy no-duplicate-selectors; it also inherits into shadow roots. */
   --scrollbar-size: 12px;
   --scrollbar-thumb-inset: 3px;
   --scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
@@ -315,12 +359,10 @@
   --menu-item-radius: var(--radius-sm);
   --menu-item-height: 28px;
   --menu-padding: 4px;
-  --menu-selected: color-mix(in srgb, var(--text) 8%, transparent);
+  --menu-selected: var(--surface-selected);
 
-  /* Transitions - Crisp and responsive */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --duration-fast: 100ms;
   --duration-normal: 180ms;
   --duration-slow: 300ms;
@@ -329,14 +371,23 @@
   --safe-area-right: env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left: env(safe-area-inset-left, 0px);
+  --shell-viewport-base: 100vh;
+  --shell-safe-area-bottom: var(--safe-area-bottom);
+  --shell-canvas-height: min(
+    var(--shell-viewport-base),
+    var(--shell-viewport-height, var(--shell-viewport-base))
+  );
+  --shell-content-height: calc(
+    var(--shell-canvas-height) - var(--safe-area-top) - var(--shell-safe-area-bottom)
+  );
 
-  /* Layering */
   --z-dropdown: 100;
   --z-toast: 2000;
 
-  /* Custom select chevron. Data URIs cannot read var(--muted), so the stroke
-     color is baked per theme mode; light mode overrides the whole image. */
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  /* Two gradient strokes keep native select chevrons on the live muted ink. */
+  --select-chevron:
+    linear-gradient(45deg, transparent 40%, var(--muted) 40% 60%, transparent 60%),
+    linear-gradient(-45deg, transparent 40%, var(--muted) 40% 60%, transparent 60%);
 
   color-scheme: dark;
 }
@@ -402,6 +453,7 @@
   .chat-pr.chat-pr,
   .nav-item.nav-item,
   .sidebar-recent-session.sidebar-recent-session,
+  .plugin-catalog-detail__security-score.plugin-catalog-detail__security-score,
   .settings-sidebar__item.settings-sidebar__item,
   .btn.btn,
   .agent-select__trigger.agent-select__trigger,
@@ -421,7 +473,7 @@
     :is(.chat-thread, .chat-session-rail__thread)
     .chat-group.user
     :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
-    > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
+    > :is(.chat-text, .chat-message-disclosure) {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
@@ -432,7 +484,7 @@
   }
 
   /* These two add a fixed cosmetic offset on top of the --radius-xl step in
-     their home rule (components.css); only the --radius-xl portion scales,
+     their home rule (agents.css); only the --radius-xl portion scales,
      matching that intent. */
   .md-preview-dialog__panel.md-preview-dialog__panel {
     border-radius: calc(20px * var(--openclaw-corner-radius-scale) + 6px);
@@ -464,64 +516,56 @@
     border-radius: calc(10px * var(--openclaw-corner-radius-scale) - 4px);
     corner-shape: superellipse(1.5);
   }
-
-  /* wa-dropdown/wa-popover/wa-select: the panel gets the same direct
-     border-radius as the part below, so nothing it contains inherits a
-     token from it. Their items are light-DOM children slotted into that
-     part with feature-specific classes (not a single enumerable selector,
-     and occasionally a plain <button> rather than <wa-dropdown-item>), so
-     --menu-radius/--menu-item-radius stay redeclared on the host purely to
-     reach those items by inheritance — the one remaining inheritable-token
-     exception in this block. It is bounded to these three purpose-built
-     menu/select components, whose entire subtree is menu chrome by
-     construction, unlike the arbitrary-content containers above. */
-  wa-dropdown,
-  wa-popover,
-  wa-select {
-    --menu-radius: calc(10px * var(--openclaw-corner-radius-scale));
-    --menu-item-radius: calc(var(--menu-radius) - var(--menu-padding));
-  }
-
-  /* Unlike the doubled classes above, this generic tag selector must outrank
-     dozens of concrete per-feature panels (.cron-job-menu::part(menu),
-     .usage-export-menu::part(menu), and so on app-wide) that each declare
-     their own border-radius from --menu-radius. A bare type selector can
-     never out-specificity a class selector no matter how it's repeated, so
-     !important is the only way for one generic rule to cover every
-     wa-dropdown/wa-popover/wa-select panel by design, matching this PR's
-     "any wa-dropdown, wa-popover or wa-select gets the treatment" intent. */
-  wa-dropdown::part(menu),
-  wa-popover::part(body),
-  wa-select::part(listbox),
-  wa-select::part(combobox) {
-    border-radius: calc(10px * var(--openclaw-corner-radius-scale)) !important;
-    corner-shape: superellipse(1.5);
-  }
 }
 
-/* The claw family deepens only the text-bearing destructive fill. */
+/* The claw family deepens text-bearing primary and destructive fills. */
 :root[data-theme="dark"] {
+  --bg-content: #0e1015;
+  --muted: #8e8e97;
+  --muted-strong: #8e8e95;
+  --muted-foreground: #8e8e97;
+  --primary-hover: #c22e2e;
   --destructive: #d32f2f;
   --destructive-hover: #bc2a2a;
+}
+
+:root[data-theme="light"] {
+  --bg-content: #f8f8f8;
+  --text: #353535;
+  --text-strong: #202020;
+  --chat-text: #353535;
+  --muted: #5e5e5e;
+  --muted-strong: #525252;
+  --muted-foreground: #5e5e5e;
+  --card-foreground: #202020;
+  --popover-foreground: #202020;
+  --secondary-foreground: #353535;
+  --primary-hover: var(--accent-hover);
 }
 
 /* Light theme tokens apply to every light-mode family. */
 /* Defaults must lose to named palettes even when their link precedes the app CSS. */
 :root:where([data-theme-mode="light"]) {
-  /*
-   * Warm paper light mode - terracotta accent on ivory
-   *
-   * WCAG 2.1 AA audit (bg = #faf9f7, relative luminance ≈ 0.941):
-   *   --accent #bd4531  contrast ≈ 4.9:1  AA text ✓
-   *   --primary-foreground #ffffff on #bd4531 button: 5.2:1 AA ✓
-   *   --text #403c35 ≈ 10.4:1 AAA ✓, --muted #6e6960 ≈ 5.2:1 AA ✓
-   */
+  --media-control-bg: rgba(12, 16, 24, 0.64);
+  --media-control-bg-hover: rgba(12, 16, 24, 0.78);
+  /* Imported light palettes retain the warm defaults; built-ins own their canvas below. */
   --bg: #faf9f7;
   --bg-accent: #f4f1ec;
   --bg-elevated: #ffffff;
   --bg-hover: #efebe4;
   --bg-muted: #efebe4;
   --bg-content: #f4f1ec;
+  --chat-user-surface: color-mix(in srgb, var(--accent) 15%, var(--bg));
+
+  --surface-hover-amount: 4%;
+  --surface-selected-amount: 6%;
+  --surface-selected-hover-amount: 9%;
+  --session-header-sharing-surface: color-mix(in srgb, var(--text) 3%, transparent);
+  --session-header-control-surface: var(--surface-selected);
+  --session-header-control-active-hover-bg: var(--surface-selected-hover);
+  --subagent-avatar-ink: 45% 36%;
+  --subagent-avatar-tint: 45% 94%;
+  --subagent-avatar-tint-strength: 100%;
 
   --card: #ffffff;
   --card-foreground: #211e1a;
@@ -529,11 +573,7 @@
   --popover: #ffffff;
   --popover-foreground: #211e1a;
   --session-hovercard-surface: var(--card);
-  --session-hovercard-progress-surface: color-mix(
-    in srgb,
-    var(--card) 54%,
-    var(--panel-strong) 46%
-  );
+  --session-hovercard-attribution-surface: color-mix(in srgb, var(--text) 4%, transparent);
 
   --panel: #faf9f7;
   --panel-strong: #f4f1ec;
@@ -547,7 +587,11 @@
   --muted: #6e6960;
   --muted-strong: #56524a;
   --muted-foreground: #6e6960;
-  --file-icon-glyph: #737373;
+  /* Enabled glyphs stay distinct from the lighter decorative tier. */
+  --icon-interactive: color-mix(in srgb, var(--text) 60%, transparent);
+  --rail-header-action-color: color-mix(in srgb, var(--text) 70%, transparent);
+  --github-item-bg: color-mix(in srgb, var(--text) 5%, var(--bg));
+  --github-item-hover-bg: color-mix(in srgb, var(--text) 9%, var(--bg));
 
   --border: #e8e4dc;
   --border-strong: #d6d0c5;
@@ -575,6 +619,8 @@
   --accent-2-muted: rgba(13, 148, 136, 0.75);
   --accent-2-subtle: rgba(13, 148, 136, 0.08);
 
+  --session-color-tint: 9%;
+  --session-color-hover-tint: 14%;
   --session-color-red: #c74646;
   --session-color-blue: #376fbd;
   --session-color-green: #328452;
@@ -594,28 +640,14 @@
   --control-ui-environment-red-ink: #991b1b;
   --control-ui-environment-gray-ink: #334155;
 
-  /*
-   * Semantic status — see the `:root` block for the pairing rule. Light mode
-   * is bounded by `--bg` (#faf9f7, and the darker dash-light #f7f2ec) rather
-   * than the white `--card`, so a token that passes on a card can still fail
-   * on the page behind it.
-   *
-   * WCAG 2.1 AA audit (label on own subtle tint, worst of --card / --bg):
-   *   --ok     #166534  5.70:1 ✓    --warn  #92400e  5.66:1 ✓
-   *   --danger #b91c1c  5.10:1 ✓    --info  #1d4ed8  5.34:1 ✓
-   *
-   * Bounded to --card and --bg. Hover and input surfaces are not covered, and
-   * one gap is reachable: .plugins-row-message--error sits on --danger-subtle
-   * over a hovered row, which is 4.28:1 under dash-light. That is an
-   * improvement on the 3.23:1 it replaced, not a regression, but it is not AA.
-   */
+  /* Semantic status follows the base pairing rule. Validate label contrast on
+     the actual host surface, including neutral interaction layers. */
   --ok: #166534;
   --ok-muted: rgba(22, 101, 52, 0.75);
   --ok-subtle: rgba(22, 101, 52, 0.08);
   --destructive: #dc2626;
   --destructive-foreground: #fafafa;
   --warn: #92400e;
-  --warn-muted: rgba(146, 64, 14, 0.75);
   --warn-subtle: rgba(146, 64, 14, 0.08);
   --danger: #b91c1c;
   --danger-muted: rgba(185, 28, 28, 0.75);
@@ -623,6 +655,11 @@
   --info: #1d4ed8;
   --info-subtle: rgba(29, 78, 216, 0.08);
   --pr-merged: #7c3aed;
+  --chart-series-1: #2a78d6;
+  --chart-series-2: #eb6834;
+  --chart-series-3: #1baf7a;
+  --chart-series-4: #eda100;
+  --chart-series-5: #e87ba4;
 
   --focus: rgba(189, 69, 49, 0.15);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
@@ -640,18 +677,145 @@
   --hljs-deletion: #a40e26;
   --hljs-addition: #116329;
 
-  /* Light shadows - Subtle, warm-tinted */
   --shadow-sm: 0 1px 2px rgba(60, 42, 24, 0.05);
   --shadow-md: 0 4px 12px rgba(60, 42, 24, 0.07);
   --shadow-lg: 0 12px 28px rgba(60, 42, 24, 0.09);
   --shadow-xl: 0 24px 48px rgba(60, 42, 24, 0.11);
-  --shadow-glow: 0 0 20px var(--accent-glow);
   --overlay-border: color-mix(in srgb, var(--border-strong) 64%, transparent);
   --overlay-shadow: 0 1px 2px rgb(60 42 24 / 0.035), 0 8px 24px rgb(60 42 24 / 0.065);
-
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  --overlay-modal-backdrop: color-mix(in oklab, #101219 50%, transparent);
+  --overlay-modal-shadow: 0 0.5rem 0.5rem -0.25rem color-mix(in oklab, #101219 12%, transparent);
 
   color-scheme: light;
+}
+
+/* Built-in surface hierarchy. Absolutely owns its surface palette;
+   imported and plugin palettes retain the default contract above. Each family
+   owns a literal canvas anchor, independent of a user-selected accent. */
+:root[data-theme="dark"],
+:root[data-theme="light"],
+:root[data-theme="openknot"],
+:root[data-theme="openknot-light"],
+:root[data-theme="dash"],
+:root[data-theme="dash-light"],
+:root[data-theme="tide"],
+:root[data-theme="tide-light"],
+:root[data-theme="beacon"],
+:root[data-theme="beacon-light"],
+:root[data-theme="phosphor"],
+:root[data-theme="phosphor-light"],
+:root[data-theme="crt"],
+:root[data-theme="crt-light"],
+:root[data-theme="manuscript"],
+:root[data-theme="manuscript-light"],
+:root[data-theme="rose"],
+:root[data-theme="rose-light"],
+:root[data-theme="miami"],
+:root[data-theme="miami-light"] {
+  --bg: color-mix(in srgb, var(--text) 2%, var(--bg-content));
+  --sidebar-rail-surface: color-mix(in srgb, var(--text) 4%, var(--bg-content));
+  --sidebar-rail-divider-color: var(--border-strong);
+  --bg-muted: color-mix(in srgb, var(--text) 4%, var(--bg-content));
+  --card: var(--bg-elevated);
+  --popover: var(--bg-elevated);
+  --panel-strong: var(--bg-content);
+  --input: var(--border);
+  --secondary: var(--bg-accent);
+  --chrome: color-mix(in srgb, var(--bg) 96%, transparent);
+  --chrome-strong: color-mix(in srgb, var(--bg) 98%, transparent);
+  /* Components draw their own contour; elevation adds only two soft shadows. */
+  --shadow-md: 0 3px 7.5px rgba(0, 0, 0, 0.04), 0 0 20px rgba(0, 0, 0, 0.05);
+  --overlay-shadow: var(--shadow-md);
+}
+
+:root[data-theme="dark"],
+:root[data-theme="openknot"],
+:root[data-theme="dash"],
+:root[data-theme="tide"],
+:root[data-theme="beacon"],
+:root[data-theme="phosphor"],
+:root[data-theme="crt"],
+:root[data-theme="manuscript"],
+:root[data-theme="rose"],
+:root[data-theme="miami"] {
+  --bg-accent: color-mix(in srgb, var(--text) 4%, var(--bg-content));
+  --bg-hover: color-mix(in srgb, var(--text) 10%, var(--bg-content));
+  --chat-composer-surface: color-mix(in srgb, var(--text) 14%, var(--bg-content));
+  --chat-user-surface: color-mix(in srgb, var(--accent) 14%, var(--bg-content));
+  --panel: var(--bg-content);
+  --panel-hover: color-mix(in srgb, var(--text) 14%, var(--bg-content));
+  /* A translucent chip stays distinct on both the canvas and elevated cards. */
+  --inline-code-bg: rgba(255, 255, 255, 0.06);
+}
+
+:root[data-theme="light"],
+:root[data-theme="openknot-light"],
+:root[data-theme="dash-light"],
+:root[data-theme="tide-light"],
+:root[data-theme="beacon-light"],
+:root[data-theme="phosphor-light"],
+:root[data-theme="crt-light"],
+:root[data-theme="manuscript-light"],
+:root[data-theme="rose-light"],
+:root[data-theme="miami-light"] {
+  --bg-accent: var(--bg);
+  --bg-elevated: color-mix(in srgb, var(--bg-content) 70%, white);
+  --bg-hover: color-mix(in srgb, var(--text) 5%, var(--bg-content));
+  --chat-composer-surface: var(--popover);
+  --chat-user-surface: color-mix(in srgb, var(--accent) 12%, var(--bg-content));
+  --panel: var(--bg);
+  --panel-hover: color-mix(in srgb, var(--text) 8%, var(--bg-content));
+  --inline-code-bg: color-mix(in srgb, var(--text) 5%, var(--bg-content));
+}
+
+:root[data-theme="dark"],
+:root[data-theme="openknot"],
+:root[data-theme="dash"],
+:root[data-theme="tide"],
+:root[data-theme="beacon"],
+:root[data-theme="phosphor"],
+:root[data-theme="crt"],
+:root[data-theme="rose"],
+:root[data-theme="miami"] {
+  --bg-elevated: color-mix(in srgb, var(--text) 8%, var(--bg-content));
+}
+
+/* The reading-room ink needs a smaller lift to keep native selection distinct. */
+:root[data-theme="manuscript"] {
+  --bg-elevated: color-mix(in srgb, var(--text) 6.5%, var(--bg-content));
+}
+
+/* Beacon keeps stronger structural borders for its accessibility contract. */
+:root[data-theme="dark"],
+:root[data-theme="openknot"],
+:root[data-theme="dash"],
+:root[data-theme="tide"],
+:root[data-theme="phosphor"],
+:root[data-theme="crt"],
+:root[data-theme="manuscript"],
+:root[data-theme="rose"],
+:root[data-theme="miami"] {
+  --overlay-border: var(--border);
+  --inline-code-border: rgba(255, 255, 255, 0.14);
+  --border: color-mix(in srgb, var(--text) 12%, var(--bg-content));
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --border-hover: color-mix(in srgb, var(--text) 26%, var(--bg-content));
+}
+
+:root[data-theme="light"],
+:root[data-theme="openknot-light"],
+:root[data-theme="dash-light"],
+:root[data-theme="tide-light"],
+:root[data-theme="phosphor-light"],
+:root[data-theme="crt-light"],
+:root[data-theme="manuscript-light"],
+:root[data-theme="rose-light"],
+:root[data-theme="miami-light"] {
+  --overlay-border: var(--border);
+  --inline-code-border: rgba(0, 0, 0, 0.13);
+  --border: color-mix(in srgb, var(--text) 7%, var(--bg-content));
+  --border-strong: rgba(0, 0, 0, 0.13);
+  --border-hover: color-mix(in srgb, var(--text) 18%, var(--bg-content));
 }
 
 * {
@@ -661,7 +825,9 @@
   scrollbar-width: thin;
 }
 
-.sr-only {
+.sr-only,
+.settings-control__sr-label,
+.cron-required-sr {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -669,9 +835,13 @@
   padding: 0;
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
-  clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* Preserve the additional clipping only for the existing generic utility. */
+.sr-only {
+  clip-path: inset(50%);
 }
 
 html,
@@ -730,8 +900,12 @@ summary,
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  html:has(.shell--chat),
-  body:has(.shell--chat) {
+  :root {
+    --shell-popup-inline-gutter: var(--chat-mobile-edge-inset);
+  }
+
+  html.control-ui-chat-shell,
+  .control-ui-chat-shell body {
     /* iOS Safari exposes the document canvas around its browser chrome; keep
        that canvas on the same semantic surface as the narrow transcript. */
     background: var(--control-ui-system-chrome-background, var(--bg-content, var(--bg)));
@@ -756,44 +930,15 @@ summary,
   }
 }
 
-/* Theme transition */
-@keyframes theme-circle-transition {
-  0% {
-    clip-path: circle(0% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%));
-  }
-  100% {
-    clip-path: circle(150% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%));
-  }
-}
-
-html.theme-transition {
-  view-transition-name: theme;
-}
-
-html.theme-transition::view-transition-old(theme) {
-  mix-blend-mode: normal;
-  animation: none;
-  z-index: 1;
-}
-
-html.theme-transition::view-transition-new(theme) {
-  mix-blend-mode: normal;
-  z-index: 2;
-  animation: theme-circle-transition 0.4s var(--ease-out) forwards;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html.theme-transition::view-transition-old(theme),
-  html.theme-transition::view-transition-new(theme) {
-    animation: none !important;
-  }
-}
-
 openclaw-app {
   display: block;
   position: relative;
   z-index: 1;
-  height: 100%;
+  /* One safe-area owner for every in-flow route, including native embeds.
+     Fixed/portaled surfaces consume the same geometry at the viewport edge. */
+  height: var(--shell-canvas-height);
+  padding: var(--safe-area-top) var(--safe-area-right) var(--shell-safe-area-bottom)
+    var(--safe-area-left);
 }
 
 /* Empty contribution hosts must not add layout boxes before the plugin runtime loads. */
@@ -801,21 +946,23 @@ openclaw-plugin-contributions {
   display: contents;
 }
 
+@supports (height: 100dvh) {
+  :root {
+    --shell-viewport-base: 100dvh;
+  }
+}
+
 @media (display-mode: standalone) {
-  @supports (height: 100dvh) {
-    html,
-    body {
-      height: 100dvh;
-    }
+  html,
+  body {
+    /* Keep the root clipping box on the CSS canvas. The app can shrink within
+       it to the visible bound without changing the keyboard layout reference. */
+    height: var(--shell-viewport-base);
   }
 
   body {
     position: fixed;
     inset: 0;
-    padding-top: var(--safe-area-top);
-    padding-right: var(--safe-area-right);
-    padding-bottom: var(--safe-area-bottom);
-    padding-left: var(--safe-area-left);
   }
 }
 
@@ -868,9 +1015,8 @@ a:where(
     .sidebar-markdown a,
     .markdown a,
     .markdown-body a,
-    .chat-session-rail__answer a,
     .dreams-diary__para a
-  ):not(:where(.btn, [role="button"])) {
+  ):not(:where(.btn, [role="button"], .chat-assistant-attachment-card__action)) {
   text-decoration: underline;
 }
 
@@ -887,60 +1033,6 @@ a[href] {
 
 a:hover {
   text-decoration-thickness: 2px;
-}
-
-/* Web Awesome defaults checked switches to brand blue. Keep every switch on
-   the Control UI accent, matching native check controls and custom switches. */
-wa-switch {
-  --wa-form-control-activated-color: var(--accent);
-  --wa-color-focus: var(--ring);
-}
-
-/* Keep neutral menu hover, keyboard focus, and open submenus on the active theme.
-   Web Awesome dropdown items ship `cursor: pointer` on their shadow host.
-   Document rules beat `:host`, so route them through the policy here — and
-   re-add the disabled cue this override would otherwise clobber. */
-wa-dropdown-item {
-  --wa-color-neutral-fill-normal: var(--bg-hover);
-
-  cursor: var(--cursor-action);
-}
-
-wa-dropdown-item[disabled] {
-  cursor: not-allowed;
-}
-
-/* The submenu safe triangle follows the pointer and can cover sibling rows,
-   trapping hover on tall or flipped menus. Let real rows receive the pointer;
-   Web Awesome still owns submenu closing and its pointer-exit grace period. */
-wa-dropdown-item::part(submenu)::before {
-  pointer-events: none;
-}
-
-/* Keep Web Awesome's checkbox rail trailing so it cannot shift menu icons and labels. */
-wa-dropdown-item[checkbox-adjacent] {
-  padding-inline-start: 1em;
-}
-
-wa-dropdown-item[type="checkbox"]::part(checkmark) {
-  order: 1;
-  margin-inline: 0.75em 0;
-}
-
-wa-dropdown-item[type="checkbox"] {
-  display: flex;
-  align-items: center;
-}
-
-/* Web Awesome owns these popup panels in shadow DOM, so shared tokens enter
-   through exported parts; feature styles continue to own content geometry. */
-wa-dropdown::part(menu),
-wa-dropdown-item::part(submenu),
-wa-popover::part(body),
-wa-select::part(listbox) {
-  background: var(--popover);
-  border-color: var(--overlay-border);
-  box-shadow: var(--overlay-shadow);
 }
 
 button,
@@ -973,38 +1065,25 @@ textarea,
   user-select: text;
 }
 
-::selection {
+/* Highlight styles inherit from the document root; matching every element
+   separately repeats this work whenever a large subtree changes. */
+:root::selection {
   background: var(--selection-bg);
   color: var(--selection-fg);
 }
 
-/* Canonical scrollbar for every scroll surface. scrollbar-color (:root above)
-   inherits, including into shadow roots; scrollbar-width (* above) does not.
-   Web Awesome shadow-DOM menus/listboxes are reachable via ::part(); no document
-   rule crosses that boundary on its own, so every rule below repeats the same
-   generic host group used for the shared corner treatment above. Enumerating
-   feature classes instead would leave every unlisted dropdown, listbox, and
-   popover on the raw platform scrollbar the moment one is added. */
-::-webkit-scrollbar,
-wa-dropdown::part(menu)::-webkit-scrollbar,
-wa-select::part(listbox)::-webkit-scrollbar,
-wa-popover::part(body)::-webkit-scrollbar {
+/* Canonical scrollbar for every light-DOM scroll surface, including owned overlays. */
+::-webkit-scrollbar {
   width: var(--scrollbar-size);
   height: var(--scrollbar-size);
 }
 
 ::-webkit-scrollbar-track,
-::-webkit-scrollbar-corner,
-wa-dropdown::part(menu)::-webkit-scrollbar-track,
-wa-select::part(listbox)::-webkit-scrollbar-track,
-wa-popover::part(body)::-webkit-scrollbar-track {
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-::-webkit-scrollbar-thumb,
-wa-dropdown::part(menu)::-webkit-scrollbar-thumb,
-wa-select::part(listbox)::-webkit-scrollbar-thumb,
-wa-popover::part(body)::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   background-clip: content-box;
   border: var(--scrollbar-thumb-inset) solid transparent;
@@ -1013,22 +1092,17 @@ wa-popover::part(body)::-webkit-scrollbar-thumb {
 
 /* :hover::-webkit-scrollbar-thumb (container hover) is safe here because html,
    body set overflow: clip above, so the document itself never scrolls and the
-   always-true html:hover/body:hover can't hover a document scrollbar. ::part()
-   surfaces get thumb-only hover; container hover can't chain through shadow. */
+   always-true html:hover/body:hover can't hover a document scrollbar. */
 ::-webkit-scrollbar-thumb:hover,
-:hover::-webkit-scrollbar-thumb,
-wa-dropdown::part(menu)::-webkit-scrollbar-thumb:hover,
-wa-select::part(listbox)::-webkit-scrollbar-thumb:hover,
-wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
+:hover::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb-hover);
   background-clip: content-box;
 }
 
-/* Animations - Polished with spring feel */
 @keyframes rise {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(var(--rise-start-y, 8px));
   }
   to {
     opacity: 1;
@@ -1088,7 +1162,6 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   }
 }
 
-/* Skeleton loading primitives */
 .skeleton {
   position: relative;
   overflow: hidden;
@@ -1136,15 +1209,7 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  wa-dropdown,
-  wa-popover,
-  wa-select {
-    --show-duration: 0ms;
-    --hide-duration: 0ms;
-  }
-
-  .skeleton::after,
-  .chat-controls__inline-select[open] > wa-popup::part(popup) {
+  .skeleton::after {
     animation: none !important;
   }
 
@@ -1160,7 +1225,6 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   }
 }
 
-/* Focus visible styles */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

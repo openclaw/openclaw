@@ -15,12 +15,12 @@ Adds Z.AI model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/zai-provider`
-- Install route: npm or ClawHub: `clawhub:@openclaw/zai-provider`
+- Install route: npm or ClawHub: `@openclaw/zai-provider`
 
 ## Surface
 
 - Providers: `zai`
-- Contracts: `mediaUnderstandingProviders`, `usageProviders`
+- Contracts: `mediaUnderstandingProviders`, `usageProviders`, `videoGenerationProviders`
 
 ## Related docs
 

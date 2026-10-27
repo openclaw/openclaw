@@ -10,6 +10,7 @@ import { expect, vi } from "vitest";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import type { CodexSkillsListResponse } from "./protocol-control-plane.js";
 import {
   isJsonObject,
   type CodexConfigReadResponse,
@@ -21,6 +22,17 @@ import {
   type CodexAppServerClientFactory,
   type CodexAppServerClientOptions,
 } from "./shared-client.js";
+
+/** Synthetic transports declare their own trust and proxy profile, never the host's. */
+export function stubCodexInferenceTransportEnv(): void {
+  for (const key of ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUEST_METHOD"]) {
+    vi.stubEnv(key, undefined);
+  }
+  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
+    vi.stubEnv(key, undefined);
+    vi.stubEnv(key.toLowerCase(), undefined);
+  }
+}
 
 /** Minimal deterministic host terminal observer for Codex harness tests. */
 export function createCodexTestToolTerminalObserver(): NonNullable<
@@ -126,6 +138,50 @@ export function createCodexTestModel(provider = "openai", input = ["text"]): Mod
   } as Model;
 }
 
+export function createCodexRuntimePlanFixture(): NonNullable<
+  EmbeddedRunAttemptParams["runtimePlan"]
+> {
+  return {
+    auth: {},
+    observability: {
+      resolvedRef: "codex/gpt-5.4-codex",
+      provider: "codex",
+      modelId: "gpt-5.4-codex",
+      harnessId: "codex",
+    },
+    transport: {
+      resolveExtraParams: () => ({}),
+    },
+    prompt: {
+      resolveSystemPromptContribution: () => undefined,
+    },
+    tools: {
+      normalize: (tools: unknown[]) => tools,
+      logDiagnostics: () => undefined,
+    },
+  } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
+}
+
+export function assistantMessage(text: string, timestamp: number) {
+  return {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text }],
+    api: "openai-chatgpt-responses",
+    provider: "openai",
+    model: "gpt-5.4-codex",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop" as const,
+    timestamp,
+  };
+}
+
 export async function waitForHarnessRequest(
   harness: ReturnType<typeof createClientHarness>,
   method: string,
@@ -158,11 +214,16 @@ export async function waitForHarnessRequest(
   return { id: request.id, params: request.params };
 }
 
+export function withoutCodexSkillDiscovery(methods: string[]): string[] {
+  return methods.filter((method) => method !== "skills/list");
+}
+
 /** Creates an in-memory Codex app-server client harness with writable stdout frames. */
 export function createClientHarness(
   options: {
     autoEmitExit?: boolean;
     maxFrameBytes?: number;
+    onWriteCallback?: (callback: (error?: Error | null) => void) => void;
     onWrite?: (line: string, send: (message: unknown) => void) => void;
   } = {},
 ) {
@@ -190,7 +251,11 @@ export function createClientHarness(
   const stdin = new Writable({
     write(chunk, _encoding, callback) {
       writes.push(chunk.toString());
-      callback();
+      if (options.onWriteCallback) {
+        options.onWriteCallback(callback);
+      } else {
+        callback();
+      }
       writeEvents.emit("write");
       options.onWrite?.(chunk.toString(), (message) =>
         stdout.write(`${JSON.stringify(message)}\n`),
@@ -261,7 +326,7 @@ export function createClientHarness(
         const timer = setTimeout(() => {
           cleanup();
           reject(new Error(`Timed out waiting for app-server harness write ${index}`));
-        }, 1_000);
+        }, 5_000);
         writeEvents.on("write", onWrite);
       });
     },
@@ -269,10 +334,33 @@ export function createClientHarness(
       return stdinDestroyed;
     },
     emitExit,
-    send(message: unknown) {
+    send(this: void, message: unknown) {
       stdout.write(`${JSON.stringify(message)}\n`);
     },
   };
+}
+
+export function createRequestClientHarness(
+  onRequest: (
+    method: string,
+    id: unknown,
+    requestParams: unknown,
+    send: (message: unknown) => void,
+  ) => void,
+) {
+  return createClientHarness({
+    onWrite(line, send) {
+      const message: unknown = JSON.parse(line);
+      if (
+        !isJsonObject(message) ||
+        typeof message.method !== "string" ||
+        message.id === undefined
+      ) {
+        return;
+      }
+      onRequest(message.method, message.id, message.params, send);
+    },
+  });
 }
 
 /** Stock read-only replies from an authenticated managed native app-server. */
@@ -280,9 +368,11 @@ export function createCodexInferenceReadResponses() {
   return {
     "config/read": { config: {}, origins: {}, layers: [] },
     "account/read": { account: { type: "apiKey" }, requiresOpenaiAuth: true },
+    "skills/list": { data: [] },
   } satisfies {
     "config/read": CodexConfigReadResponse;
     "account/read": CodexGetAccountResponse;
+    "skills/list": CodexSkillsListResponse;
   };
 }
 
@@ -298,7 +388,9 @@ export function createInferenceReadyClientHarness(
       if (
         isJsonObject(request) &&
         request.id !== undefined &&
-        (request.method === "config/read" || request.method === "account/read")
+        (request.method === "config/read" ||
+          request.method === "account/read" ||
+          request.method === "skills/list")
       ) {
         send({ id: request.id, result: reads[request.method] });
       } else {
@@ -314,35 +406,25 @@ export async function withLeasedCodexTestClient<T>(params: {
   request: (method: string, params?: unknown) => Promise<unknown>;
   run: (client: CodexAppServerClient) => Promise<T>;
 }): Promise<T> {
-  const harness = createClientHarness({
-    onWrite: (line, send) => {
-      const message: unknown = JSON.parse(line);
-      if (
-        !isJsonObject(message) ||
-        typeof message.method !== "string" ||
-        message.id === undefined
-      ) {
-        return;
-      }
-      const result =
-        message.method === "initialize"
-          ? Promise.resolve({
-              userAgent: "codex-cli/0.151.0",
-              codexHome: resolveCodexAppServerHomeDir(params.agentDir),
-            })
-          : params.request(message.method, message.params);
-      void result.then(
-        (value) => send({ id: message.id, result: value }),
-        (error: unknown) =>
-          send({
-            id: message.id,
-            error: {
-              code: -32000,
-              message: error instanceof Error ? error.message : String(error),
-            },
-          }),
-      );
-    },
+  const harness = createRequestClientHarness((method, id, requestParams, send) => {
+    const result =
+      method === "initialize"
+        ? Promise.resolve({
+            userAgent: "codex-cli/0.151.0",
+            codexHome: resolveCodexAppServerHomeDir(params.agentDir),
+          })
+        : params.request(method, requestParams);
+    void result.then(
+      (value) => send({ id, result: value }),
+      (error: unknown) =>
+        send({
+          id,
+          error: {
+            code: -32000,
+            message: error instanceof Error ? error.message : String(error),
+          },
+        }),
+    );
   });
   const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
   try {

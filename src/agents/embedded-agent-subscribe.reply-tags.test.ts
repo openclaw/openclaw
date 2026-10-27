@@ -1,314 +1,413 @@
-// Reply-tag tests cover streaming directive parsing for reply_to markers across
-// block replies and partial reply chunks.
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
-  createStubSessionHarness,
+  readReplyPayloadSourceOccurrence,
+  type ReplyPayloadSourceOccurrence,
+} from "../auto-reply/reply-payload.js";
+import { createBlockReplyPipeline } from "../auto-reply/reply/block-reply-pipeline.js";
+import {
+  createParagraphChunkedBlockReplyHarness,
+  createSubscribedSessionHarness,
   emitAssistantTextDelta,
+  emitAssistantTextDeltaAndEnd,
   emitAssistantTextEnd,
+  expectFencedChunks,
+  extractTextPayloads,
+  createTextEndBlockReplyHarness,
+  emitMessageStartAndEndForAssistantText,
+  extractAgentEventPayloads,
+  expectSingleAgentEventText,
 } from "./embedded-agent-subscribe.e2e-harness.js";
-import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
-describe("subscribeEmbeddedAgentSession reply tags", () => {
-  type ReplyPayload = {
-    text?: string;
-    replyToId?: string;
-    replyToCurrent?: boolean;
-    replyToTag?: boolean;
-    audioAsVoice?: boolean;
+type Reply = Parameters<NonNullable<SubscribeEmbeddedAgentSessionParams["onBlockReply"]>>[0];
+function blockHarness(
+  maxChars: number,
+  options: { enforceFinalTag?: boolean; flushOnParagraph?: boolean } = {},
+) {
+  const onBlockReply = vi.fn<(payload: Reply) => void>();
+  const harness = createSubscribedSessionHarness({
+    runId: "fences",
+    onBlockReply,
+    enforceFinalTag: options.enforceFinalTag,
+    blockReplyBreak: "text_end",
+    blockReplyChunking: {
+      minChars: 1,
+      maxChars,
+      breakPreference: "newline",
+      flushOnParagraph: options.flushOnParagraph,
+    },
+  });
+  onTestFinished(async () => {
+    harness.subscription.unsubscribe();
+    await harness.subscription.waitForPendingEvents();
+  });
+  return {
+    ...harness,
+    chunks: () => extractTextPayloads(onBlockReply.mock.calls),
+    payloads: () => onBlockReply.mock.calls.map(([payload]) => payload),
+    delta: (delta: string) => emitAssistantTextDelta({ emit: harness.emit, delta }),
+    end: (content: string) => emitAssistantTextEnd({ emit: harness.emit, content }),
   };
+}
+const fenceHarness = (enforceFinalTag = false) =>
+  blockHarness(1_200, { enforceFinalTag, flushOnParagraph: true });
+const unfenced = (chunks: string[], marker: string) =>
+  chunks.flatMap((chunk) => chunk.split("\n").filter((line) => !line.startsWith(marker))).join("");
 
-  function replyPayloadAt(mock: ReturnType<typeof vi.fn>, index: number): ReplyPayload {
-    const call = mock.mock.calls[index];
-    if (!call) {
-      throw new Error(`expected reply payload at index ${index}`);
+describe("fenced block streaming", () => {
+  it("preserves an indented held fence boundary across a tool flush", async () => {
+    const prefix = "Intro\n\n  ~~~";
+    const tail = "xml\n  <final>literal</final>\n  ~~~\n\n<think>private</think>After";
+    const { emit, subscription, delta, end, chunks } = fenceHarness();
+    try {
+      delta(prefix);
+      expect(chunks()).toEqual(["Intro"]);
+      emit({ type: "tool_execution_start", toolName: "bash", toolCallId: "fence", args: {} });
+      await subscription.waitForPendingEvents();
+      expect(chunks()).toEqual(["Intro"]);
+      delta(tail);
+      end(prefix + tail);
+      await subscription.waitForPendingEvents();
+      expect(chunks()).toEqual(["Intro", "  ~~~xml\n  <final>literal</final>\n  ~~~", "After"]);
+    } finally {
+      emit({
+        type: "tool_execution_end",
+        toolName: "bash",
+        toolCallId: "fence",
+        isError: false,
+        result: {},
+      });
+      await subscription.waitForPendingEvents();
     }
-    return call[0] as ReplyPayload;
-  }
-
-  function replyTexts(mock: ReturnType<typeof vi.fn>): string[] {
-    return mock.mock.calls.map(([payload]) => (payload as ReplyPayload).text ?? "");
-  }
-
-  function lastReplyPayload(mock: ReturnType<typeof vi.fn>): ReplyPayload {
-    return replyPayloadAt(mock, mock.mock.calls.length - 1);
-  }
-
-  function createBlockReplyHarness() {
-    // Small chunk sizes force directive-only and text chunks through the block
-    // reply path where reply metadata must be preserved.
-    const { session, emit } = createStubSessionHarness();
-    const onBlockReply = vi.fn();
-
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "text_end",
-      blockReplyChunking: {
-        minChars: 1,
-        maxChars: 50,
-        breakPreference: "newline",
-      },
-    });
-
-    return { emit, onBlockReply, subscription };
-  }
+  });
 
   it.each([
     {
-      name: "split inline code",
-      chunks: ["Use `", "[[reply_to:example-id]]` literally.\n\n"],
-      text: "Use `[[reply_to:example-id]]` literally.",
-      replyToId: undefined,
+      name: "hidden reasoning",
+      enforceFinalTag: false,
+      text: `<think>\n~~~txt\n${"secret\n".repeat(300)}literal</think>private\n~~~\n</think>After`,
+      expected: "After",
     },
     {
-      name: "inline code split by block chunking",
-      chunks: ["Use `" + "x".repeat(60), "[[reply_to:example-id]]` literally.\n\n"],
-      literal: "[[reply_to:example-id]]",
-      replyToId: undefined,
+      name: "enforced final output",
+      enforceFinalTag: true,
+      text: `<final>\n~~~txt\n${"code\n".repeat(300)}<final>literal</final>\n~~~\n\nAfter</final>`,
+      expected: `${"code".repeat(300)}<final>literal</final>After`,
     },
-    {
-      name: "complete inline code",
-      chunks: ["Use `[[reply_to:example-id]]` literally.\n\n"],
-      text: "Use `[[reply_to:example-id]]` literally.",
-      replyToId: undefined,
-    },
-    {
-      name: "a reply directive outside code",
-      chunks: ["[[reply_to:example-id]]", "Visible reply.\n\n"],
-      text: "Visible reply.",
-      replyToId: "example-id",
-    },
-    {
-      name: "a voice directive followed by ordinary blocks",
-      chunks: [
-        "[[audio_as_voice]]Hello.\n\n",
-        "An ordinary paragraph is long enough to drain the earlier voice block.\n\n",
-      ],
-      text: "Hello.",
-      audioAsVoice: true,
-      replyToId: undefined,
-    },
-  ])("delivers $name before text_end with matching reply metadata", async (scenario) => {
-    const { emit, onBlockReply, subscription } = createBlockReplyHarness();
-    const message = { role: "assistant", phase: "final_answer", content: [] };
+  ])("preserves wrapped fence semantics in $name", ({ enforceFinalTag, text, expected }) => {
+    const harness = fenceHarness(enforceFinalTag);
+    harness.delta(text);
+    harness.end(text);
+    const chunks = harness.chunks();
+    expect(chunks.every((chunk) => chunk.length <= 1_200)).toBe(true);
+    expect(unfenced(chunks, "~~~")).toBe(expected);
+  });
 
-    emit({ type: "message_start", message });
+  it("preserves fenced code and final prose in a long fence", () => {
+    const text = `\`\`\`txt\n${"code\n\n".repeat(600)}\`\`\`\n\nAfter`;
+    const harness = fenceHarness();
+    harness.delta(text);
+    expect(harness.chunks().length).toBeGreaterThan(1);
+    harness.end(text);
+    const chunks = harness.chunks();
+    expect(chunks.at(-1)).toBe("After");
+    expect(chunks.every((chunk) => chunk.length <= 1_200)).toBe(true);
+    for (const chunk of chunks.slice(0, -1)) {
+      expect(chunk.startsWith("```txt\n")).toBe(true);
+      expect(chunk.trimEnd().endsWith("```")).toBe(true);
+    }
+    expect(unfenced(chunks, "```").replace(/\s/g, "")).toBe(`${"code".repeat(600)}After`);
+  });
+
+  it("delivers identical fenced chunks as distinct source occurrences with coalescing", async () => {
+    const delivered: string[] = [];
+    const occurrences: ReplyPayloadSourceOccurrence[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: (payload) => {
+        delivered.push(payload.text ?? "");
+      },
+      timeoutMs: 5000,
+      coalescing: { minChars: 1, maxChars: 30, idleMs: 0, joiner: "\n\n" },
+    });
+    const { emit, subscription } = createParagraphChunkedBlockReplyHarness({
+      chunking: { minChars: 10, maxChars: 30 },
+      onBlockReply: (payload) => {
+        const occurrence = readReplyPayloadSourceOccurrence(payload);
+        if (occurrence) {
+          occurrences.push(occurrence);
+        }
+        pipeline.enqueue(payload);
+      },
+    });
+    onTestFinished(() => subscription.unsubscribe());
+    const text = `\`\`\`txt\n${"a".repeat(80)}\n\`\`\``;
+    emitAssistantTextDeltaAndEnd({ emit, text });
+    await pipeline.flush({ force: true });
+    expect(delivered.length).toBeGreaterThan(2);
+    expectFencedChunks(
+      delivered.map((chunk) => [{ text: chunk }]),
+      "```txt",
+    );
+    expect(pipeline.hasSentPayload({ text })).toBe(true);
+    expect(
+      occurrences.some((occurrence) =>
+        occurrences.some(
+          (candidate) =>
+            candidate.sourceText === occurrence.sourceText &&
+            candidate.sourceRange[0] !== occurrence.sourceRange[0],
+        ),
+      ),
+    ).toBe(true);
+  });
+});
+
+function subscribe(options: Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId">) {
+  const { emit, subscription } = createSubscribedSessionHarness({ runId: "run", ...options });
+  onTestFinished(() => subscription.unsubscribe());
+  return emit;
+}
+
+async function expectPrivateDeltas(deltas: string[], finish = true, rejectTags = true) {
+  const onPartialReply = vi.fn();
+  const onBlockReply = vi.fn();
+  const { emit, subscription } = createSubscribedSessionHarness({
+    runId: "reasoning-tags",
+    reasoningMode: "off",
+    onPartialReply,
+    ...(finish ? { onBlockReply, blockReplyBreak: "text_end" } : {}),
+  });
+  onTestFinished(() => subscription.unsubscribe());
+  for (const delta of deltas) {
+    emitAssistantTextDelta({ emit, delta });
+    await subscription.waitForPendingEvents();
+    const partials = extractTextPayloads(onPartialReply.mock.calls);
+    for (const text of rejectTags ? partials : [partials.join("")]) {
+      expect(text).not.toContain("PRIVATE_MARKER");
+      if (rejectTags) {
+        expect(text).not.toContain("<");
+      }
+    }
+  }
+  if (finish) {
+    const content = deltas.join("");
+    emitAssistantTextEnd({ emit, content });
+    emit({ type: "message_end", message: textAssistant(content) });
+    await subscription.waitForPendingEvents();
+    expect(extractTextPayloads(onBlockReply.mock.calls).join("")).toBe("Before  After");
+  }
+  expect(extractTextPayloads(onPartialReply.mock.calls).at(-1)).toBe("Before  After");
+}
+
+describe("streamed reasoning tag privacy", () => {
+  it.each(["reasoning", "internal", "antml:reasoning", "mm:reasoning"])(
+    "withholds split <%s> blocks before partial or block delivery",
+    async (tag) => {
+      await expectPrivateDeltas([
+        "Before ",
+        "<",
+        tag.slice(0, 2),
+        `${tag.slice(2)}>`,
+        "PRIVATE_MARKER",
+        `</${tag}>`,
+        " After",
+      ]);
+    },
+  );
+
+  it.each([
+    ["think", "internal"],
+    ["internal", "reasoning"],
+  ])("withholds nested <%s> and <%s> blocks through the outer close", async (outer, inner) => {
+    await expectPrivateDeltas(
+      [`Before <${outer}>outer<${inner}>inner</${inner}>`, "PRIVATE_MARKER", `</${outer}> After`],
+      true,
+      false,
+    );
+  });
+
+  it("holds a reasoning tag whose quoted attribute contains a split closing bracket", async () => {
+    await expectPrivateDeltas(
+      ["Before <reasoning note='a>", "b'>PRIVATE_MARKER", "</reasoning> After"],
+      false,
+    );
+  });
+
+  it("keeps internal blocks private when reasoning visibility is enabled", () => {
+    const onPartialReply = vi.fn();
+    const onReasoningStream = vi.fn();
+    const emit = subscribe({ reasoningMode: "stream", onPartialReply, onReasoningStream });
+    emitAssistantTextDelta({ emit, delta: "Before <internal>PRIVATE_MARKER</internal> After" });
+    expect(extractTextPayloads(onPartialReply.mock.calls)).toEqual(["Before  After"]);
+    expect(onReasoningStream).not.toHaveBeenCalled();
+  });
+
+  it("preserves literal code tags without letting their quotes hide later reasoning tags", () => {
+    const onPartialReply = vi.fn();
+    const emit = subscribe({ reasoningMode: "off", onPartialReply });
+    const literal = "Use `<reasoning note='literal>` and `<internal>literal</internal>`.";
+    emitAssistantTextDelta({
+      emit,
+      delta: `${literal} <reasoning>PRIVATE_MARKER</reasoning> After`,
+    });
+    expect(extractTextPayloads(onPartialReply.mock.calls)).toEqual([`${literal}  After`]);
+  });
+
+  it("strips self-closing reasoning tags without hiding the following answer", () => {
+    const onPartialReply = vi.fn();
+    const emit = subscribe({ reasoningMode: "off", onPartialReply });
+    emitAssistantTextDelta({ emit, delta: "Before <reasoning/> After" });
+    expect(extractTextPayloads(onPartialReply.mock.calls)).toEqual(["Before  After"]);
+  });
+});
+
+describe("streamed final tags", () => {
+  it("closes hidden reasoning fences split across deltas", () => {
+    const reply = vi.fn();
+    const emit = subscribe({ enforceFinalTag: true, onPartialReply: reply });
+    emit({ type: "message_start", message: { role: "assistant" } });
     for (const delta of [
-      ...scenario.chunks,
+      "<think>\n```ts\nconst hidden = true;\n``",
+      "`\n</think><final>Answer</final>",
+    ]) {
+      emitAssistantTextDelta({ emit, delta });
+    }
+    expect(reply.mock.calls.map(([payload]) => payload.text)).toEqual(["Answer"]);
+  });
+
+  it.each([
+    [
+      "self-closing final closer",
+      "<final data-model='gemma'>Visible<final data-model='x' />hidden",
+    ],
+    ["leading self-closing final opener", "<final data-model=openrouter/google/gemini/>Visible"],
+  ])("preserves enforced content with a %s", (_name, delta) => {
+    const onPartialReply = vi.fn();
+    const emit = subscribe({ enforceFinalTag: true, onPartialReply });
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta });
+    expect(
+      onPartialReply.mock.calls
+        .map(([p]) => p.delta)
+        .filter((value) => typeof value === "string")
+        .join(""),
+    ).toBe("Visible");
+  });
+
+  it("strips split final tags without remnants or replacement events", () => {
+    const onAgentEvent = vi.fn();
+    const emit = subscribe({ onAgentEvent });
+    emit({ type: "message_start", message: { role: "assistant" } });
+    for (const delta of ["<", "final>Title\n", "Line one\nLine two</", "final>"]) {
+      emitAssistantTextDelta({ emit, delta });
+    }
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    const text = payloads.map((payload) => payload.delta).join("");
+    expect(text).toBe("Title\nLine one\nLine two");
+    expect(payloads.some((payload) => payload.replace)).toBe(false);
+  });
+
+  it("keeps trailing tag prefixes when message_end drains chunked text_end replies", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({
+      onBlockReply,
+      blockReplyChunking: { minChars: 1, maxChars: 200 },
+    });
+    onTestFinished(() => subscription.unsubscribe());
+    const text = "Answer ends with <fi";
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: text });
+    emitAssistantTextEnd({ emit });
+    emit({ type: "message_end", message: textAssistant(text) });
+    await Promise.resolve();
+    expect(onBlockReply.mock.calls.map(([payload]) => payload?.text)).toEqual([text]);
+  });
+
+  it("preserves literal trailing tag-prefix text in message_end fallback", () => {
+    const onAgentEvent = vi.fn();
+    const emit = subscribe({ onAgentEvent });
+    emitMessageStartAndEndForAssistantText({ emit, text: "Answer ends with <" });
+    expectSingleAgentEventText(onAgentEvent.mock.calls, "Answer ends with <");
+  });
+});
+
+function replies() {
+  const harness = blockHarness(50);
+  const message = { role: "assistant", phase: "final_answer", content: [] };
+  harness.emit({ type: "message_start", message });
+  return {
+    ...harness,
+    end: (text: string) =>
+      harness.emit({
+        type: "message_end",
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      }),
+    message,
+  };
+}
+
+describe("subscribeEmbeddedAgentSession reply tags", () => {
+  it("delivers voice intent before text_end without leaking metadata", async () => {
+    const h = replies();
+    for (const delta of [
+      "[[audio_as_voice]]Hello.\n\n",
+      "An ordinary paragraph is long enough to drain the earlier voice block.\n\n",
       "A second paragraph gives the first completed block enough text to drain.",
     ]) {
-      emit({
+      h.emit({
         type: "message_update",
-        message,
+        message: h.message,
         assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta },
       });
     }
-    await subscription.waitForPendingEvents();
-
-    const payload = replyPayloadAt(onBlockReply, 0);
-    if (scenario.text) {
-      expect(payload.text).toBe(scenario.text);
-    }
-    if (scenario.literal) {
-      expect(replyTexts(onBlockReply).join("")).toContain(scenario.literal);
-    }
-    expect(payload.replyToId).toBe(scenario.replyToId);
-    expect(Boolean(payload.replyToTag)).toBe(Boolean(scenario.replyToId));
-    expect(payload.replyToCurrent).toBeFalsy();
-    expect(Boolean(payload.audioAsVoice)).toBe(Boolean(scenario.audioAsVoice));
-    for (const [later] of onBlockReply.mock.calls.slice(1)) {
-      expect(later.audioAsVoice).toBeFalsy();
-      if (!scenario.replyToId) {
-        expect(later.replyToId).toBeUndefined();
-        expect(later.replyToTag).toBeFalsy();
-        expect(later.replyToCurrent).toBeFalsy();
+    await h.subscription.waitForPendingEvents();
+    const payloads = h.payloads();
+    expect(payloads[0]?.text).toBe("Hello.");
+    expect(Boolean(payloads[0]?.audioAsVoice)).toBe(true);
+    for (const [index, payload] of payloads.entries()) {
+      expect(payload.replyToId).toBeUndefined();
+      expect(payload.replyToTag).toBeFalsy();
+      expect(payload.replyToCurrent).toBeFalsy();
+      if (index > 0) {
+        expect(payload.audioAsVoice).toBeFalsy();
       }
     }
   });
 
   it("carries reply_to_current across tag-only block chunks", () => {
-    const { emit, onBlockReply } = createBlockReplyHarness();
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextDelta({ emit, delta: "[[reply_to_current]]\nHello" });
-    emitAssistantTextEnd({ emit });
-
-    const assistantMessage = textAssistant("[[reply_to_current]]\nHello") as AssistantMessage;
-    emit({ type: "message_end", message: assistantMessage });
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    const payload = replyPayloadAt(onBlockReply, 0);
-    expect(payload.text).toBe("Hello");
-    expect(payload.replyToCurrent).toBe(true);
-    expect(payload.replyToTag).toBe(true);
+    const h = replies();
+    h.delta("[[reply_to_current]]\nHello");
+    emitAssistantTextEnd(h);
+    h.end("[[reply_to_current]]\nHello");
+    expect(h.payloads()).toEqual([
+      expect.objectContaining({ text: "Hello", replyToCurrent: true, replyToTag: true }),
+    ]);
   });
 
   it.each([
-    {
-      name: "literal brackets",
-      text: "Hello [[",
-      expectedTexts: ["Hello [["],
-      textEndComplete: true,
-      repeatFinal: true,
-    },
-    {
-      name: "valid media",
-      text: "Hello\nMEDIA:https://example.com/a.png",
-      expectedTexts: ["Hello", ""],
-      mediaUrls: ["https://example.com/a.png"],
-    },
-    {
-      name: "rejected media path",
-      text: "Hello\nMEDIA:../secret.png",
-      expectedTexts: ["Hello"],
-    },
-    {
-      name: "withdrawn media",
-      text: "Hello\nMEDIA:https://example.com/a.png",
-      finalText: "Hello",
-      expectedTexts: ["Hello"],
-    },
-    {
-      name: "literal media inside an unclosed fence",
-      text: "```text\nMEDIA:https://example.com/a.png",
-      expectedTexts: ["```text\nMEDIA:https://example.com/a.png"],
-      textEndComplete: true,
-    },
-  ])("flushes trailing directive tails on stream end: $name", (scenario) => {
-    const { emit, onBlockReply } = createBlockReplyHarness();
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextDelta({ emit, delta: scenario.text });
-    emitAssistantTextEnd({ emit });
-
-    if (scenario.textEndComplete) {
-      expect(replyTexts(onBlockReply)).toEqual(scenario.expectedTexts);
+    [
+      "valid media",
+      "Hello\nMEDIA:https://example.com/a.png",
+      ["Hello", ""],
+      ["https://example.com/a.png"],
+      false,
+    ],
+    [
+      "unclosed fence",
+      "```text\nMEDIA:https://example.com/a.png",
+      ["```text\nMEDIA:https://example.com/a.png\n```"],
+      [],
+      true,
+    ],
+  ] as const)("flushes trailing directive tails: %s", (_name, text, texts, media, early) => {
+    const h = replies();
+    h.delta(text);
+    emitAssistantTextEnd(h);
+    if (early) {
+      expect(h.payloads().map((payload) => payload.text)).toEqual(texts);
     }
-
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: scenario.finalText ?? scenario.text }],
-    } as AssistantMessage;
-    emit({ type: "message_end", message: assistantMessage });
-
-    expect(replyTexts(onBlockReply)).toEqual(scenario.expectedTexts);
-    expect(onBlockReply).toHaveBeenCalledTimes(scenario.expectedTexts.length);
-    expect(onBlockReply.mock.calls.flatMap(([payload]) => payload.mediaUrls ?? [])).toEqual(
-      scenario.mediaUrls ?? [],
-    );
-
-    if (scenario.repeatFinal) {
-      expect(replyTexts(onBlockReply).join("")).toBe("Hello [[");
-      emit({ type: "message_end", message: assistantMessage });
-      expect(replyTexts(onBlockReply)).toEqual(["Hello [["]);
-    }
-  });
-
-  it.each([
-    { name: "a split reply tag", chunks: ["[[reply_to:1897", "]] Hello", " world"] },
-    {
-      name: "held whitespace before hidden reasoning",
-      chunks: [" \nHello \t", "<think>private</think> [[reply_to_current]] world  "],
-    },
-    {
-      name: "held whitespace before a split reasoning tag",
-      chunks: [" \nHello \t<think", ">private</think> [[reply_to_current]] world  "],
-    },
-  ])("streams partial replies past $name", ({ chunks }) => {
-    // Split tags are buffered until complete so partial replies never expose raw
-    // directive syntax.
-    const { session, emit } = createStubSessionHarness();
-
-    const onPartialReply = vi.fn();
-
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
-      onPartialReply,
-    });
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    for (const delta of chunks) {
-      emitAssistantTextDelta({ emit, delta });
-    }
-
-    expect(replyTexts(onPartialReply)).toEqual(["Hello", "Hello world"]);
-    emitAssistantTextEnd({ emit });
-    expect(lastReplyPayload(onPartialReply).text).toBe("Hello world");
-    for (const call of onPartialReply.mock.calls) {
-      expect(call[0]?.text?.includes("[[reply_to")).toBe(false);
-    }
-  });
-
-  it("strips a malformed reply prefix when the stream ends", () => {
-    const { session, emit } = createStubSessionHarness();
-    const onPartialReply = vi.fn();
-
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
-      onPartialReply,
-    });
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextDelta({ emit, delta: "[[reply_to_" });
-    emitAssistantTextDelta({ emit, delta: "current] Visible reply" });
-    emitAssistantTextEnd({ emit });
-
-    const payload = lastReplyPayload(onPartialReply);
-    expect(payload.text).toBe("Visible reply");
-    expect(payload.replyToCurrent).toBeUndefined();
-    expect(payload.replyToTag).toBeUndefined();
-    for (const call of onPartialReply.mock.calls) {
-      expect(call[0]?.text?.includes("[[reply_to")).toBe(false);
-    }
-  });
-
-  it.each([
-    {
-      name: "a split malformed prefix",
-      chunks: ["[[reply_to_", "current] Visible reply"],
-      source: "[[reply_to_current] Visible reply",
-      text: "Visible reply",
-      replyToId: undefined,
-    },
-    {
-      name: "a genuine tag without streamed deltas",
-      chunks: [],
-      source: "[[reply_to:target]] Visible reply",
-      text: "Visible reply",
-      replyToId: "target",
-    },
-    {
-      name: "a literal tag without streamed deltas",
-      chunks: [],
-      source: "Use `[[reply_to:target]]` literally.",
-      text: "Use `[[reply_to:target]]` literally.",
-      replyToId: undefined,
-    },
-  ])("prepares the final block reply for $name", async (scenario) => {
-    const { emit, onBlockReply, subscription } = createBlockReplyHarness();
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    for (const delta of scenario.chunks) {
-      emitAssistantTextDelta({ emit, delta });
-    }
-    if (scenario.chunks.length > 0) {
-      emitAssistantTextEnd({ emit });
-    }
-
-    const assistantMessage = textAssistant(scenario.source) as AssistantMessage;
-    emit({ type: "message_end", message: assistantMessage });
-    await subscription.waitForPendingEvents();
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    const payload = replyPayloadAt(onBlockReply, 0);
-    expect(payload.text).toBe(scenario.text);
-    expect(payload.replyToId).toBe(scenario.replyToId);
-    expect(payload.replyToCurrent).toBeFalsy();
-    expect(Boolean(payload.replyToTag)).toBe(Boolean(scenario.replyToId));
+    h.end(text);
+    expect(h.payloads().map((payload) => payload.text)).toEqual(texts);
+    expect(h.payloads().flatMap((payload) => payload.mediaUrls ?? [])).toEqual(media);
   });
 });

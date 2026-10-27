@@ -7,7 +7,22 @@ html.openclaw-native-embed .shell--embed {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   grid-template-areas: "content";
-  padding: var(--safe-area-top) var(--safe-area-right) var(--safe-area-bottom) var(--safe-area-left);
+}
+
+.shell--embed.shell--chat openclaw-chat-page[data-native-conversation] {
+  --shell-titlebar-inset: 12px;
+
+  /* The native sidebar owns window controls; the shared pane header owns this
+     titlebar band, including when the desktop window becomes narrow. */
+  openclaw-app[data-native-titlebar] & {
+    --rail-header-height: var(--openclaw-native-titlebar-height, 52px);
+    --chat-mobile-pane-header-height: var(--rail-header-height);
+  }
+}
+
+/* A narrow desktop window still places its titlebar flush with the window edge. */
+openclaw-app[data-native-titlebar] .shell--embed > .content {
+  padding: 0;
 }
 
 .shell--embed-settings > .content {

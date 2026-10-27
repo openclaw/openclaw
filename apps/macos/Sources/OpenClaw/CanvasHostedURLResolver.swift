@@ -1,23 +1,12 @@
 import Foundation
+import OpenClawKit
 
 enum CanvasHostedURLResolver {
     private static let canvasPath = "/__openclaw__/canvas"
 
     static func resolve(surfaceURL rawSurfaceURL: String?, target rawTarget: String) -> URL? {
-        guard let target = relativeHostedTarget(rawTarget),
-              var surface = capabilitySurface(rawSurfaceURL)
-        else {
-            return nil
-        }
-
-        var surfacePath = surface.percentEncodedPath
-        while surfacePath.hasSuffix("/") {
-            surfacePath.removeLast()
-        }
-        surface.percentEncodedPath = surfacePath + target.percentEncodedPath
-        surface.percentEncodedQuery = target.percentEncodedQuery
-        surface.fragment = target.fragment
-        return surface.url
+        guard let target = relativeHostedTarget(rawTarget) else { return nil }
+        return GatewayPluginSurfaceURL.appendingTarget(target, toCapabilitySurface: rawSurfaceURL)
     }
 
     static func isHostedTarget(_ rawTarget: String) -> Bool {
@@ -54,36 +43,6 @@ enum CanvasHostedURLResolver {
             return nil
         }
         return components
-    }
-
-    private static func capabilitySurface(_ rawSurfaceURL: String?) -> URLComponents? {
-        let raw = rawSurfaceURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !raw.isEmpty,
-              let components = URLComponents(string: raw),
-              isWebURL(components),
-              components.user == nil,
-              components.password == nil,
-              components.percentEncodedQuery == nil,
-              components.fragment == nil
-        else {
-            return nil
-        }
-
-        let segments = components.percentEncodedPath.split(separator: "/", omittingEmptySubsequences: true)
-        guard segments.count >= 3,
-              segments[segments.count - 3] == "__openclaw__",
-              segments[segments.count - 2] == "cap",
-              let capability = String(segments[segments.count - 1]).removingPercentEncoding,
-              !capability.isEmpty
-        else {
-            return nil
-        }
-        return components
-    }
-
-    private static func isWebURL(_ components: URLComponents) -> Bool {
-        let scheme = components.scheme?.lowercased()
-        return (scheme == "http" || scheme == "https") && components.host?.isEmpty == false
     }
 
     private static func isCanonicalHostedPath(_ path: String) -> Bool {

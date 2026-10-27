@@ -74,7 +74,7 @@ export function registerReasoningFallbackTests({
         }
         expect(payloads).toContainEqual(
           expect.objectContaining({
-            text: expect.stringContaining("did not produce a visible reply"),
+            text: "No answer was returned. Ask again if you still need one.",
             isError: true,
           }),
         );

@@ -8,6 +8,7 @@ import {
   listMemoryFiles,
   type MemoryWorkspaceFiles,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { decodeUtf8Input } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 type MemoryWorkspaceMaintenance = NonNullable<MemoryWorkspaceFiles["maintenance"]>;
 
@@ -31,7 +32,10 @@ export async function readWorkspaceFile(workspaceDir: string, filePath: string):
 }
 
 export async function readWorkspaceText(workspaceDir: string, filePath: string): Promise<string> {
-  return (await readWorkspaceFile(workspaceDir, filePath)).toString("utf8");
+  return decodeUtf8Input(
+    await readWorkspaceFile(workspaceDir, filePath),
+    `Memory file ${filePath} (preserve the original and convert a copy to UTF-8 before retrying)`,
+  );
 }
 
 export async function accessWorkspacePath(workspaceDir: string, filePath: string): Promise<void> {

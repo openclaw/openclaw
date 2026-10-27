@@ -138,10 +138,8 @@ class SessionCatalogTest {
         hosts =
           listOf(
             SessionCatalogHost(
-              catalogId = "codex",
               hostId = "desktop",
               label = "Desktop",
-              kind = "node",
               connected = true,
               sessions = listOf(entry("thread-1")),
               nextCursor = "cursor-2",
@@ -175,10 +173,8 @@ class SessionCatalogTest {
   fun pageMergeIgnoresHostsThatWereNotRequested() {
     val requested =
       SessionCatalogHost(
-        catalogId = "codex",
         hostId = "requested",
         label = "Requested",
-        kind = "node",
         connected = true,
         sessions = listOf(entry("requested-1")),
         nextCursor = "requested-cursor",
@@ -222,10 +218,8 @@ class SessionCatalogTest {
   fun pageMergePreservesSessionsAndCursorWhenAHostFails() {
     val currentHost =
       SessionCatalogHost(
-        catalogId = "claude-code",
         hostId = "desktop",
         label = "Desktop",
-        kind = "node",
         connected = true,
         sessions = listOf(entry("thread-1")),
         nextCursor = "retry-cursor",
@@ -415,10 +409,8 @@ class SessionCatalogTest {
     nextCursor: String? = null,
   ): SessionCatalogHost =
     SessionCatalogHost(
-      catalogId = "codex",
       hostId = hostId,
       label = hostId,
-      kind = "node",
       connected = true,
       sessions = sessions,
       nextCursor = nextCursor,

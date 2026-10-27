@@ -1,9 +1,8 @@
-// Real Gateway proof: execute only on a machine with isolated SQLite coordination.
 import { expect, it } from "vitest";
 import type { WebSocket } from "ws";
-import type { SessionCatalogHost } from "../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import * as catalogs from "./server-methods/session-catalog.fixtures.test-support.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   connectOk,
@@ -14,38 +13,25 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-type CatalogResponse = {
-  type: "res";
-  id: string;
-  ok: boolean;
-  payload?: { catalogs: Array<{ id: string; hosts: unknown[] }> };
-};
-
 it("shares a held catalog RPC after 128 distinct catalog results settle", async ({ signal }) => {
   const token = "catalog-sharing-proof-token";
   const heldCatalogId = "catalog-sharing-proof";
   const completedCatalogId = "catalog-completed-proof";
-  const started = createDeferredCore();
-  const release = createDeferredCore();
-  const host: SessionCatalogHost = {
-    hostId: "gateway:local",
-    label: "Catalog sharing proof",
-    kind: "gateway",
-    connected: true,
-    sessions: [],
-  };
+  const [started, release] = [createDeferred(), createDeferred()];
+  const host = catalogs.catalogHost();
+  const progressId = "follower-progress";
   const publishHeldHosts: Array<() => void> = [];
-  const providerRuns: Promise<SessionCatalogHost[]>[] = [];
-  const requests: Promise<CatalogResponse>[] = [];
+  const providerRuns: Promise<(typeof host)[]>[] = [];
+  const requests: Array<ReturnType<typeof onceMessage>> = [];
+  const expectCatalog = (response: unknown, id: string, hosts: (typeof host)[] = []) =>
+    expect(response).toMatchObject({ ok: true, payload: { catalogs: [{ id, hosts }] } });
   let heldCalls = 0;
   const registry = createEmptyPluginRegistry();
   for (const catalogId of [heldCatalogId, completedCatalogId]) {
     registry.sessionCatalogs.push({
       pluginId: "catalog-sharing-proof",
       source: "test",
-      provider: {
-        id: catalogId,
-        label: "Catalog sharing proof",
+      provider: catalogs.catalogProvider(catalogId, {
         audience: "gateway-operators",
         supportsProcessHomeIsolation: true,
         list: ({ search, onHost }) => {
@@ -58,17 +44,14 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
               return [host];
             }
             if (search === "after-follower") {
-              for (const publish of publishHeldHosts) {
-                publish();
-              }
+              publishHeldHosts.forEach((publish) => publish());
             }
             return [];
           })();
           providerRuns.push(operation);
           return operation;
         },
-        read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-      },
+      }),
     });
   }
   setTestPluginRegistry(registry);
@@ -85,64 +68,38 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
     ws = await gateway.openWs();
     await connectOk(ws, { token, scopes: ["operator.admin"] });
     const socket = ws;
-    const request = (catalogId: string, search: string, progressId?: string) => {
+    const request = (catalogId: string, search: string, progress?: string) => {
       const id = `catalog-${requests.length}`;
-      const response = onceMessage<CatalogResponse>(
-        socket,
-        (frame) => frame.type === "res" && frame.id === id,
-      );
+      const response = onceMessage(socket, (frame) => frame.type === "res" && frame.id === id);
       requests.push(response);
-      socket.send(
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "sessions.catalog.list",
-          params: { catalogId, search, progressId },
-        }),
-      );
+      const params = { catalogId, search, progressId: progress };
+      socket.send(JSON.stringify({ type: "req", id, method: "sessions.catalog.list", params }));
       return response;
     };
     const leader = request(heldCatalogId, "held", "leader-progress");
-    await Promise.race([
-      started.promise,
-      leader.then(() => {
-        throw new Error("held catalog returned before provider admission");
-      }),
-    ]);
+    await awaitGateBeforeSettlement(started.promise, leader, "provider admission");
     for (let index = 0; index < 128; index += 1) {
-      expect(await request(completedCatalogId, `completed-${index}`)).toMatchObject({
-        ok: true,
-        payload: { catalogs: [{ id: completedCatalogId, hosts: [] }] },
-      });
+      expectCatalog(await request(completedCatalogId, `completed-${index}`), completedCatalogId);
     }
     followerHost = onceMessage(
       socket,
       (frame) =>
         frame.type === "event" &&
         frame.event === "sessions.catalog.host" &&
-        frame.payload?.progressId === "follower-progress",
+        frame.payload?.progressId === progressId,
     );
-    const follower = request(heldCatalogId, "held", "follower-progress");
+    const follower = request(heldCatalogId, "held", progressId);
     const [barrier, progress] = await Promise.all([
       request(completedCatalogId, "after-follower"),
       followerHost,
     ]);
-    expect(barrier).toMatchObject({
-      ok: true,
-      payload: { catalogs: [{ id: completedCatalogId, hosts: [] }] },
-    });
+    expectCatalog(barrier, completedCatalogId);
     expect(progress).toMatchObject({
-      payload: {
-        progressId: "follower-progress",
-        catalog: { id: heldCatalogId, hosts: [host] },
-      },
+      payload: { progressId, catalog: { id: heldCatalogId, hosts: [host] } },
     });
     unblock();
     for (const response of await Promise.all([leader, follower])) {
-      expect(response).toMatchObject({
-        ok: true,
-        payload: { catalogs: [{ id: heldCatalogId, hosts: [host] }] },
-      });
+      expectCatalog(response, heldCatalogId, [host]);
     }
     expect(heldCalls).toBe(1);
   } finally {

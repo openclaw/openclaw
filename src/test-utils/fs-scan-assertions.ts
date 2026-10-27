@@ -46,6 +46,7 @@ export function expectNoFsSyncDuring<T>(run: () => T, counters: FsScanCounter[])
 export function expectNoNodeFsScans<T>(
   body: string,
   options?: {
+    allowedExistsSyncPaths?: string[];
     counters?: FsScanCounter[];
     parseResult?: (result: unknown) => T;
   },
@@ -56,11 +57,15 @@ export function expectNoNodeFsScans<T>(
         import fs from "node:fs";
         import { syncBuiltinESMExports } from "node:module";
         const counts = ${JSON.stringify(Object.fromEntries(counters.map((name) => [name, 0])))};
+        const allowedExistsSyncPaths = ${JSON.stringify(options?.allowedExistsSyncPaths ?? [])};
         ${counters
           .map(
             (name) => `
         const ${name}Original = fs.${name};
         fs.${name} = (...args) => {
+          if (${name === "existsSync"} && allowedExistsSyncPaths.includes(args[0])) {
+            return ${name}Original(...args);
+          }
           counts.${name} += 1;
           return ${name}Original(...args);
         };`,

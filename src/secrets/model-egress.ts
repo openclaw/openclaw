@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveProviderConfigSecretInput } from "../agents/model-auth-provider-config.js";
 import { findConfiguredProviderModel } from "../config/model-provider-config.js";
@@ -11,10 +8,9 @@ import {
   createProviderModelCatalogIdNormalizer,
   resolveProviderModelRoutes,
 } from "../plugins/provider-model-routes.js";
-import { startSecretEgressProxyServer } from "./egress-proxy/proxy-server.js";
 import { normalizeExactAllowedHost } from "./exact-hostname.js";
+import { withJobSecretEgress } from "./job-egress.js";
 import { resolveSecretRefString } from "./resolve.js";
-import { sealSecretSentinel } from "./sentinel.js";
 
 export type ConfiguredModelEgress = {
   /** Opaque API-key substitute for the remote application. */
@@ -128,64 +124,54 @@ export async function withConfiguredModelEgress<T>(
   const selection = resolveModelEgressSelection(params);
   const apiKey = await resolveSecretRefString(selection.ref, { config: params.config });
   params.signal?.throwIfAborted();
-  if (Buffer.byteLength(apiKey) > 64 * 1024) {
-    throw new Error("Model egress API key exceeds the protected credential size limit");
-  }
-  const sentinel = sealSecretSentinel(apiKey, { label: `model-egress:${selection.provider}` });
-  await using resources = new AsyncDisposableStack();
-  const caDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-egress-"));
-  resources.defer(() => fs.rm(caDir, { recursive: true, force: true }));
-  params.signal?.throwIfAborted();
-  const proxy = await startSecretEgressProxyServer({
-    caDir,
-    allowedHosts: selection.allowedHosts,
-    onAudit: () => {},
-  });
-  resources.defer(() => proxy.stop());
-  params.signal?.throwIfAborted();
-  const grant = proxy.registerProcess([
+  return withJobSecretEgress(
     {
-      name: `${selection.provider} model API key`,
-      sentinel,
+      secrets: [
+        {
+          envName: "OPENAI_API_KEY",
+          name: `${selection.provider} model API key`,
+          value: apiKey,
+          allowedHosts: selection.allowedHosts,
+        },
+      ],
+      signal: params.signal,
       allowedHosts: selection.allowedHosts,
     },
-  ]);
-  resources.defer(() => {
-    grant.revoke();
-    params.signal?.removeEventListener("abort", grant.revoke);
-  });
-  params.signal?.addEventListener("abort", grant.revoke, { once: true });
-  params.signal?.throwIfAborted();
-  const caBundle = await fs.readFile(grant.env.NODE_EXTRA_CA_CERTS!, "utf8");
-  params.signal?.throwIfAborted();
-  const values = [...captureSecretRedactionRegistrySnapshot().values, grant.env.HTTPS_PROXY!];
-  const output = (stream: "stdout" | "stderr") =>
-    createRedactingStreamWriter(
-      {
-        write(text) {
-          params.onOutput?.(text, stream);
-          return true;
-        },
-      },
-      values,
-    );
-  const stdout = output("stdout");
-  const stderr = output("stderr");
-  resources.defer(stdout.flush);
-  resources.defer(stderr.flush);
-  const result = await run({
-    sentinel,
-    baseUrl: selection.baseUrl,
-    model: selection.model,
-    allowedHosts: selection.allowedHosts,
-    hostEnv: grant.env,
-    caBundle,
-    onOutputChunk: params.onOutput
-      ? (chunk, stream) => {
-          (stream === "stdout" ? stdout : stderr).write(chunk);
-        }
-      : undefined,
-  });
-  params.signal?.throwIfAborted();
-  return result;
+    async (egress) => {
+      await using resources = new AsyncDisposableStack();
+      const values = [
+        ...captureSecretRedactionRegistrySnapshot().values,
+        egress.hostEnv.HTTPS_PROXY!,
+      ];
+      const output = (stream: "stdout" | "stderr") =>
+        createRedactingStreamWriter(
+          {
+            write(text) {
+              params.onOutput?.(text, stream);
+              return true;
+            },
+          },
+          values,
+        );
+      const stdout = output("stdout");
+      const stderr = output("stderr");
+      resources.defer(stdout.flush);
+      resources.defer(stderr.flush);
+      const result = await run({
+        sentinel: egress.remoteEnv.OPENAI_API_KEY!,
+        baseUrl: selection.baseUrl,
+        model: selection.model,
+        allowedHosts: selection.allowedHosts,
+        hostEnv: egress.hostEnv,
+        caBundle: egress.caBundle,
+        onOutputChunk: params.onOutput
+          ? (chunk, stream) => {
+              (stream === "stdout" ? stdout : stderr).write(chunk);
+            }
+          : undefined,
+      });
+      params.signal?.throwIfAborted();
+      return result;
+    },
+  );
 }

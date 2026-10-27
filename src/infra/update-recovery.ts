@@ -11,6 +11,7 @@ export const updateRecoverySchema = z.discriminatedUnion("serviceRestartSafe", [
   }),
   z.strictObject({
     serviceRestartSafe: z.literal(false),
+    dataAtRisk: z.string().trim().min(1).optional(),
     packageRollbackVerified: z.boolean().optional(),
     reason: z.enum([
       "source-rollback-failed",
@@ -25,3 +26,18 @@ export const updateRecoverySchema = z.discriminatedUnion("serviceRestartSafe", [
 ]);
 
 export type UpdateRecovery = z.infer<typeof updateRecoverySchema>;
+
+/** Secondary recovery failures retain the owner's stronger restart refusal. */
+export function unsafeUpdateRecovery(
+  recovery: UpdateRecovery | undefined,
+  dataAtRisk?: string,
+): Extract<UpdateRecovery, { serviceRestartSafe: false }> {
+  const unsafe = recovery?.serviceRestartSafe === false ? recovery : undefined;
+  return {
+    ...unsafe,
+    serviceRestartSafe: false,
+    reason:
+      unsafe?.reason ?? (dataAtRisk ? "state-migration-started" : "runtime-verification-failed"),
+    dataAtRisk: unsafe?.dataAtRisk ?? dataAtRisk,
+  };
+}

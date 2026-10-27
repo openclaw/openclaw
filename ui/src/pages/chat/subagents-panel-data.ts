@@ -1,0 +1,736 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { NativeSubagentsSnapshot } from "../../../../packages/gateway-protocol/src/index.js";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { createSidebarNarration } from "../../components/app-sidebar-session-narration.ts";
+import { readSidebarToolActivity } from "../../components/sidebar-tool-activity.ts";
+import { resolveToolDisplayIdentity } from "../../lib/chat/tool-display-identity.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
+import {
+  childSessionListQuery,
+  fetchChildSessionRows,
+} from "../../lib/sessions/child-session-data.ts";
+import type {
+  SessionCapability,
+  SessionListSnapshot,
+  SessionMessageSubscription,
+} from "../../lib/sessions/index.ts";
+import {
+  areUiSessionKeysEquivalent,
+  normalizeAgentId,
+  resolveUiConversationIdentity,
+  resolveUiSessionRowAgentId,
+} from "../../lib/sessions/session-key.ts";
+import { parseSessionChangedEvent } from "../../lib/sessions/session-row-reconcile.ts";
+import { requestChatAbort } from "./chat-abort-request.ts";
+import { requestSharedHistory } from "./chat-history-request.ts";
+import { historySessionId, isHistoryCursor } from "./chat-history-snapshot.ts";
+import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
+import { isSubagentsPanelSession } from "./chat-spawned-subagent.ts";
+import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
+import {
+  readSubagentActivitySnapshot,
+  readSubagentToolEvent,
+  subagentToolCallCount,
+  type SubagentActivitySnapshot,
+} from "./subagents-panel-activity.ts";
+import { buildToolStreamIdentity, toolStreamIdentityRunId } from "./tool-stream-identity.ts";
+
+const HISTORY_CONCURRENCY = 2;
+const MAX_RETAINED_CALLS = 1024;
+
+export type SubagentsPanelRow = {
+  session: GatewaySessionRow;
+  callCount?: { count: number; exact: boolean };
+  activity?: string;
+  toolDisplayName?: string;
+  canStop: boolean;
+  stopping: boolean;
+  stopAccess: SessionMethodAccess;
+};
+
+export type SubagentsPanelInput = {
+  sessionKey: string;
+  agentId: string;
+  presented: boolean;
+};
+
+type Metrics = SubagentActivitySnapshot & {
+  identity: string;
+  pending: boolean;
+  read: boolean;
+  liveToolObserved: boolean;
+  preparedCalls: Set<string>;
+  unidentifiedCall: boolean;
+};
+
+function runIdentity(row: GatewaySessionRow): string {
+  return JSON.stringify([row.sessionId, row.lastRunId, row.activeRunIds, row.status]);
+}
+
+function createMetrics(identity: string): Metrics {
+  return {
+    identity,
+    calls: new Map(),
+    complete: false,
+    pending: false,
+    read: false,
+    liveToolObserved: false,
+    preparedCalls: new Set(),
+    unidentifiedCall: false,
+  };
+}
+
+export class SubagentsPanelData {
+  rows: readonly SubagentsPanelRow[] = [];
+  nativeSnapshot: NativeSubagentsSnapshot | undefined;
+  nativeError: string | null = null;
+  loading = false;
+  private failure: { kind: "read" | "stop"; message: string } | null = null;
+  get error(): string | null {
+    return this.failure?.message ?? null;
+  }
+  get readError(): string | null {
+    return this.failure?.kind === "read" ? this.failure.message : null;
+  }
+  get stopError(): string | null {
+    return this.failure?.kind === "stop" ? this.failure.message : null;
+  }
+  readResult: Promise<void> = Promise.resolve();
+  private readCompletion: ReturnType<typeof Promise.withResolvers<void>> | null = null;
+  private lifetime = Promise.withResolvers<void>();
+  get retired(): Promise<void> {
+    return this.lifetime.promise;
+  }
+  hasResult = false;
+
+  private input: SubagentsPanelInput | null = null;
+  private scope: ReturnType<SessionCapability["captureConnectionScope"]> = null;
+  private observation: ReturnType<SessionCapability["observeList"]> | null = null;
+  private pendingListRead: Promise<void> | null = null;
+  private generation = 0;
+  private nativeRead: Promise<void> | null = null;
+  private nativeRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private disposed = false;
+  private sessions: GatewaySessionRow[] = [];
+  private metrics = new Map<string, Metrics>();
+  private historyReads = 0;
+  private stopping = new Set<string>();
+  private readonly messageSubscriptions = new Map<string, Set<SessionMessageSubscription>>();
+  private readonly narrationSource: Pick<
+    SessionCapability,
+    "subscribeMessages" | "unsubscribeMessages"
+  >;
+  private readonly narration = createSidebarNarration();
+  private readonly unsubscribe: Array<() => void>;
+  private readonly visibilityDocument = globalThis.document;
+  private readonly stopVisibility: (() => void) | undefined;
+
+  constructor(
+    private readonly context: ApplicationContext,
+    private readonly changed: () => void,
+  ) {
+    this.narrationSource = {
+      subscribeMessages: async (key, options) => {
+        const generation = this.generation;
+        const subscription = await context.sessions.subscribeMessages(key, options);
+        if (this.current(generation)) {
+          const subscriptions = this.messageSubscriptions.get(key) ?? new Set();
+          subscriptions.add(subscription);
+          this.messageSubscriptions.set(key, subscriptions);
+          this.readMetrics();
+        }
+        return subscription;
+      },
+      unsubscribeMessages: async (subscription) => {
+        await context.sessions.unsubscribeMessages(subscription);
+        for (const [key, subscriptions] of this.messageSubscriptions) {
+          subscriptions.delete(subscription);
+          if (subscriptions.size === 0) {
+            this.messageSubscriptions.delete(key);
+          }
+        }
+      },
+    };
+    // Until disposal, keep rows synchronous and retire connection scopes before observer events.
+    this.unsubscribe = [
+      this.narration.subscribe(() => this.publish()),
+      context.gateway.subscribe(() => {
+        this.reconcile();
+        this.publish();
+      }),
+      context.gateway.subscribeEvents((event) => this.handleEvent(event)),
+    ];
+    this.stopVisibility = this.visibilityDocument
+      ? listen(this.visibilityDocument, "visibilitychange", () => this.reconcile())
+      : undefined;
+  }
+
+  sync(input: SubagentsPanelInput): void {
+    const changed =
+      input.sessionKey !== this.input?.sessionKey ||
+      normalizeAgentId(input.agentId) !== normalizeAgentId(this.input?.agentId);
+    if (!changed && input.presented === this.input?.presented) {
+      return;
+    }
+    this.input = input;
+    if (changed) {
+      this.retire();
+    }
+    this.reconcile();
+  }
+
+  private reconcile(): void {
+    if (this.disposed) {
+      return;
+    }
+    const visible = this.input?.presented && this.visibilityDocument?.visibilityState !== "hidden";
+    const scope = visible ? this.context.sessions.captureConnectionScope() : null;
+    if (!scope || !this.input?.sessionKey) {
+      this.retire();
+      this.publish();
+      return;
+    }
+    if (this.scope && !this.context.sessions.isConnectionScopeCurrent(this.scope)) {
+      this.retire();
+    }
+    if (this.observation) {
+      return;
+    }
+    this.scope = scope;
+    const generation = this.generation;
+    this.loading = true;
+    this.failure = null;
+    this.syncReadCompletion();
+    this.observation = this.context.sessions.observeList(
+      this.childQuery(this.input),
+      (snapshot) => {
+        if (this.current(generation)) {
+          this.applyList(snapshot);
+        }
+      },
+    );
+    void this.refresh();
+  }
+
+  private childQuery(input: SubagentsPanelInput) {
+    const parent = resolveUiConversationIdentity(
+      {
+        assistantAgentId: input.agentId,
+        agentsList: this.context.agents.state.agentsList,
+        hello: this.context.gateway.snapshot.hello,
+      },
+      input.sessionKey,
+      input.agentId,
+    );
+    return {
+      ...childSessionListQuery(parent.sessionKey),
+      // Global aliases require their physical agent scope. Canonical parents
+      // must retain children spawned on other configured agents.
+      ...(parent.sessionKey === "global" ? { agentId: parent.agentId } : {}),
+    };
+  }
+
+  async refresh(): Promise<void> {
+    const generation = this.generation;
+    await this.pendingListRead;
+    if (!this.current(generation)) {
+      return;
+    }
+    this.metrics.clear();
+    this.failure = null;
+    await Promise.all([this.readList(), this.readNative()]);
+  }
+
+  private readNative(): Promise<void> {
+    const { input, scope, generation } = this;
+    if (this.nativeRead || !input || !scope || !this.current(generation)) {
+      return this.nativeRead ?? Promise.resolve();
+    }
+    clearTimeout(this.nativeRefreshTimer);
+    const query = this.childQuery(input);
+    const pending = Promise.resolve().then(async () => {
+      try {
+        if (!this.current(generation)) {
+          return;
+        }
+        const result = await scope.client.request<{
+          session: GatewaySessionRow | null;
+          nativeSubagents?: NativeSubagentsSnapshot;
+        }>("sessions.describe", {
+          key: query.spawnedBy,
+          ...(query.agentId ? { agentId: query.agentId } : {}),
+          includeNativeSubagents: true,
+        });
+        if (!this.current(generation)) {
+          return;
+        }
+        // Parent authorization and native generation are owned by this read.
+        // Absence is not a saved-history assertion and never creates sessions.
+        this.nativeSnapshot = result.session ? result.nativeSubagents : undefined;
+        this.nativeError = null;
+        this.changed();
+      } catch (error: unknown) {
+        if (this.current(generation)) {
+          this.nativeSnapshot = undefined;
+          this.nativeError = formatUiError(error);
+          this.changed();
+        }
+      } finally {
+        if (this.nativeRead === pending) {
+          this.nativeRead = null;
+          if (this.current(generation)) {
+            // Completion-paced and non-overlapping; hidden/disconnected owners retire.
+            this.nativeRefreshTimer = setTimeout(() => void this.readNative(), 5_000);
+          }
+        }
+      }
+    });
+    this.nativeRead = pending;
+    return pending;
+  }
+
+  private async readList(initialResult?: SessionsListResult): Promise<void> {
+    if (this.pendingListRead) {
+      return this.pendingListRead;
+    }
+    const generation = this.generation;
+    if (!this.input || !this.current(generation)) {
+      return;
+    }
+    const query = this.childQuery(this.input);
+    this.loading = true;
+    this.syncReadCompletion();
+    this.publish();
+    const pending = Promise.resolve()
+      .then(async () => {
+        if (this.current(generation)) {
+          await fetchChildSessionRows({
+            sessions: this.context.sessions,
+            parentKey: query.spawnedBy,
+            agentId: query.agentId,
+            isCurrent: () => this.current(generation),
+            initialResult,
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        if (this.current(generation)) {
+          this.failure = { kind: "read", message: formatUiError(error) };
+          this.loading = false;
+          this.syncReadCompletion();
+          this.publish();
+        }
+      })
+      .finally(() => {
+        if (this.pendingListRead === pending) {
+          this.pendingListRead = null;
+        }
+      });
+    this.pendingListRead = pending;
+    await pending;
+  }
+
+  private applyList(snapshot: SessionListSnapshot): void {
+    const result = snapshot.result;
+    const pagination = snapshot.pagination;
+    const incomplete =
+      (pagination?.hasMore ?? result?.hasMore) ||
+      (pagination?.totalCount !== undefined && pagination.count < pagination.totalCount);
+    this.loading = !snapshot.error && (snapshot.loading || incomplete);
+    this.failure = snapshot.error ? { kind: "read", message: snapshot.error } : null;
+    this.syncReadCompletion();
+    if (snapshot.error) {
+      // Access loss must not leave previously readable child contents onscreen.
+      this.sessions = [];
+      this.metrics.clear();
+    } else if (result && !incomplete) {
+      this.hasResult = true;
+      const sampledAt = Date.now();
+      const previous = new Map(this.sessions.map((row) => [row.key, row]));
+      this.sessions = result.sessions.filter(isSubagentsPanelSession).map((row) => {
+        const held = previous.get(row.key);
+        const sameSample =
+          held && runIdentity(held) === runIdentity(row) && held.runtimeMs === row.runtimeMs;
+        return Object.assign({}, row, {
+          agentId: resolveUiSessionRowAgentId(row, this.input?.agentId ?? "main"),
+          runtimeSampledAt:
+            row.runtimeSampledAt ?? (sameSample ? held.runtimeSampledAt : undefined) ?? sampledAt,
+        });
+      });
+      const keys = new Set(this.sessions.map((row) => row.key));
+      for (const key of this.metrics.keys()) {
+        if (!keys.has(key)) {
+          this.metrics.delete(key);
+        }
+      }
+      for (const row of this.sessions) {
+        const identity = runIdentity(row);
+        if (this.metrics.get(row.key)?.identity !== identity) {
+          this.metrics.set(row.key, createMetrics(identity));
+        }
+      }
+    }
+    this.syncNarration();
+    this.publish();
+    this.readMetrics();
+    if (result && incomplete && !snapshot.loading && !snapshot.error) {
+      void this.readList(result);
+    }
+  }
+
+  private syncNarration(): void {
+    this.narration.sync({
+      enabled: Boolean(this.input?.presented && this.scope),
+      connected: Boolean(this.context.sessions.captureConnectionScope()),
+      connectionIdentity: this.context.gateway.snapshot.hello,
+      source: this.narrationSource,
+      rows: this.sessions.map((row) => ({
+        key: row.key,
+        hasActiveRun: isSessionRunStateActive(row),
+        startedAt: row.startedAt,
+        updatedAt: row.updatedAt,
+      })),
+      openSessionKey: this.input?.sessionKey ?? "",
+      agentId: this.input?.agentId ?? "main",
+    });
+  }
+
+  private readMetrics(): void {
+    if (!this.scope || !this.current(this.generation)) {
+      return;
+    }
+    for (const row of this.sessions) {
+      const metrics = this.metrics.get(row.key);
+      if (
+        !metrics ||
+        metrics.read ||
+        metrics.pending ||
+        this.historyReads >= HISTORY_CONCURRENCY ||
+        (isSessionRunStateActive(row) && !this.messageSubscriptions.has(row.key))
+      ) {
+        continue;
+      }
+      metrics.pending = true;
+      this.historyReads += 1;
+      const generation = this.generation;
+      const scope = this.scope;
+      const current = () => this.current(generation) && this.metrics.get(row.key) === metrics;
+      const requestKey = `subagent-panel\u0000${row.key}\u0000${row.sessionId ?? ""}`;
+      void requestSharedHistory(
+        null,
+        scope.client,
+        requestKey,
+        "chat.history",
+        row.key,
+        row.agentId,
+        this,
+        { isCurrent: current },
+      )
+        .then((history) => {
+          if (
+            !current() ||
+            isHistoryCursor(history) ||
+            !row.sessionId ||
+            historySessionId(history) !== row.sessionId
+          ) {
+            return;
+          }
+          const snapshot = readSubagentActivitySnapshot(history);
+          for (const [id, item] of metrics.calls) {
+            if (snapshot.calls.get(id)?.phase !== "end" || item.phase === "end") {
+              const prepared = metrics.preparedCalls.has(id);
+              const update = readSubagentToolEvent(
+                prepared ? "item" : "tool",
+                prepared ? item : { ...item, phase: item.phase === "end" ? "result" : item.phase },
+                snapshot.calls.get(id),
+              );
+              if (update) {
+                snapshot.calls.set(id, update);
+              }
+            }
+          }
+          if (snapshot.calls.size > MAX_RETAINED_CALLS) {
+            snapshot.calls.clear();
+            metrics.preparedCalls.clear();
+            snapshot.complete = false;
+          }
+          metrics.calls = snapshot.calls;
+          metrics.complete = snapshot.complete && !metrics.unidentifiedCall;
+          metrics.tool = snapshot.tool;
+        })
+        .catch(() => {
+          // Counts are optional. Explicit refresh retries unavailable history.
+        })
+        .finally(() => {
+          this.historyReads -= 1;
+          if (current()) {
+            metrics.pending = false;
+            metrics.read = true;
+            this.publish();
+          }
+          this.readMetrics();
+        });
+    }
+  }
+
+  private handleEvent(event: GatewayEventFrame): void {
+    if (!this.current(this.generation)) {
+      return;
+    }
+    if (event.event === "sessions.changed") {
+      const info = parseSessionChangedEvent(event.payload)?.[0];
+      if (info && ["reset", "rewind", "branch-switch", "compact"].includes(info.reason ?? "")) {
+        const row = this.sessions.find((candidate) =>
+          areUiSessionKeysEquivalent(candidate.key, info.key),
+        );
+        if (row) {
+          this.metrics.set(row.key, createMetrics(runIdentity(row)));
+          this.publish();
+          this.readMetrics();
+        }
+      }
+      return;
+    }
+    if (event.event !== "agent" && event.event !== "session.tool") {
+      return;
+    }
+    const payload = asOptionalRecord(event.payload);
+    const stream = payload?.stream;
+    if (stream !== "tool" && stream !== "item" && stream !== "lifecycle") {
+      return;
+    }
+    if (stream === "item" && asOptionalRecord(payload?.data)?.kind !== "tool") {
+      return;
+    }
+    if (typeof payload?.sessionKey !== "string" || typeof payload.runId !== "string") {
+      return;
+    }
+    const sessionKey = payload.sessionKey;
+    const runId = payload.runId;
+    const row = this.sessions.find(
+      (candidate) =>
+        areUiSessionKeysEquivalent(candidate.key, sessionKey) &&
+        candidate.activeRunIds?.includes(runId) &&
+        (typeof payload.agentId !== "string" ||
+          normalizeAgentId(payload.agentId) === candidate.agentId),
+    );
+    if (!row) {
+      return;
+    }
+    if (stream === "lifecycle") {
+      this.narration.handleEvent(event);
+      return;
+    }
+    const metrics = this.metrics.get(row.key);
+    if (!metrics) {
+      return;
+    }
+    const fallback =
+      !metrics.liveToolObserved && metrics.tool && !this.narration.read().tools.has(row.key);
+    const activity = readSidebarToolActivity(stream, payload.data, metrics.tool);
+    if (activity !== undefined) {
+      metrics.liveToolObserved = true;
+    }
+    this.narration.handleEvent(event);
+    const data = asOptionalRecord(payload.data);
+    const callId = data?.toolCallId;
+    const callIdentity =
+      typeof callId === "string" ? buildToolStreamIdentity(runId, callId) : undefined;
+    const item = readSubagentToolEvent(
+      payload.stream,
+      payload.data,
+      callIdentity ? metrics.calls.get(callIdentity) : undefined,
+    );
+    if (!item) {
+      if (fallback && activity !== undefined && !this.narration.read().tools.has(row.key)) {
+        this.publish();
+      }
+      return;
+    }
+    metrics.liveToolObserved = true;
+    if (!item.toolCallId?.trim()) {
+      // An item identity is not an invocation identity. A later promoted frame
+      // cannot prove whether it aliases a previously observed call.
+      metrics.unidentifiedCall = true;
+      metrics.complete = false;
+      this.publish();
+      return;
+    }
+    const id = buildToolStreamIdentity(runId, item.toolCallId);
+    if (metrics.calls.size >= MAX_RETAINED_CALLS && !metrics.calls.has(id)) {
+      metrics.complete = false;
+    } else {
+      if (payload.stream === "item") {
+        metrics.preparedCalls.add(id);
+      }
+      metrics.calls.set(id, item);
+    }
+    this.publish();
+  }
+
+  private publish(): void {
+    if (this.disposed) {
+      return;
+    }
+    const tools = this.narration.read().tools;
+    this.rows = this.sessions.map((session) => {
+      const metrics = this.metrics.get(session.key);
+      const active = isSessionRunStateActive(session);
+      const tool = active
+        ? (tools.get(session.key) ?? (metrics?.liveToolObserved ? undefined : metrics?.tool))
+        : undefined;
+      const headline =
+        active && metrics
+          ? selectActivityHeadline(
+              [...metrics.calls]
+                .filter(([identity, item]) => {
+                  const runId = toolStreamIdentityRunId(identity);
+                  return (
+                    runId !== undefined &&
+                    session.activeRunIds?.includes(runId) &&
+                    !item.hideFromChannelProgress &&
+                    !item.suppressChannelProgress
+                  );
+                })
+                .map(([, item]) => item),
+              [],
+              new Map(),
+            )
+          : undefined;
+      const stopAccess = readChatSessionActionAccess(this.context.gateway.snapshot, true, {
+        session,
+        sessionAbortable: true,
+      }).abort;
+      return {
+        session,
+        callCount: metrics ? subagentToolCallCount(metrics) : undefined,
+        activity:
+          tool?.text ||
+          headline?.title ||
+          (active &&
+          session.observerDigest?.runId &&
+          session.activeRunIds?.includes(session.observerDigest.runId)
+            ? session.observerDigest.headline.trim() || undefined
+            : undefined),
+        toolDisplayName: tool ? resolveToolDisplayIdentity(tool.name).label : undefined,
+        canStop: active && session.activeRunIds?.length === 1 && stopAccess.allowed,
+        stopping: this.stopping.has(session.key),
+        stopAccess,
+      };
+    });
+    this.changed();
+  }
+
+  async stop(row: SubagentsPanelRow): Promise<void> {
+    const session = this.sessions.find(
+      (candidate) =>
+        candidate.key === row.session.key && candidate.sessionId === row.session.sessionId,
+    );
+    const runId = row.session.activeRunIds?.length === 1 ? row.session.activeRunIds[0] : undefined;
+    const scope = this.scope;
+    if (
+      !session ||
+      !runId ||
+      !session.activeRunIds?.includes(runId) ||
+      !scope ||
+      !this.current(this.generation) ||
+      this.stopping.has(session.key)
+    ) {
+      return;
+    }
+    const access = readChatSessionActionAccess(this.context.gateway.snapshot, true, {
+      session,
+      sessionAbortable: true,
+    }).abort;
+    if (!access.allowed) {
+      this.failure = { kind: "stop", message: access.reason };
+      this.publish();
+      return;
+    }
+    const generation = this.generation;
+    this.stopping.add(session.key);
+    this.publish();
+    const result = await requestChatAbort(scope.client, {
+      sessionKey: session.key,
+      agentId: session.agentId,
+      runId,
+      sessionAbortable: true,
+    });
+    if (!this.current(generation)) {
+      return;
+    }
+    this.stopping.delete(session.key);
+    const message = result.ok ? (result.warning ?? null) : formatUiError(result.error);
+    this.failure = message ? { kind: "stop", message } : null;
+    this.publish();
+    if (result.ok) {
+      void this.refresh();
+    }
+  }
+
+  reportStopError(error: unknown): void {
+    this.failure = { kind: "stop", message: formatUiError(error) };
+    this.publish();
+  }
+
+  private syncReadCompletion(): void {
+    if (this.loading) {
+      if (!this.readCompletion) {
+        this.readCompletion = Promise.withResolvers<void>();
+        this.readResult = this.readCompletion.promise;
+      }
+    } else {
+      this.readCompletion?.resolve();
+      this.readCompletion = null;
+    }
+  }
+
+  private current(generation: number): boolean {
+    return Boolean(
+      !this.disposed &&
+      generation === this.generation &&
+      this.scope &&
+      this.context.sessions.isConnectionScopeCurrent(this.scope),
+    );
+  }
+
+  private retire(): void {
+    this.lifetime.resolve();
+    this.lifetime = Promise.withResolvers<void>();
+    this.readCompletion?.resolve();
+    this.readCompletion = null;
+    this.readResult = Promise.resolve();
+    this.generation += 1;
+    clearTimeout(this.nativeRefreshTimer);
+    this.nativeRead = null;
+    this.nativeSnapshot = undefined;
+    this.nativeError = null;
+    this.observation?.dispose();
+    this.observation = null;
+    this.pendingListRead = null;
+    this.scope = null;
+    this.sessions = [];
+    this.metrics.clear();
+    this.stopping.clear();
+    this.messageSubscriptions.clear();
+    this.loading = false;
+    this.hasResult = false;
+    this.failure = null;
+    this.syncNarration();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.retire();
+    this.narration.disconnect();
+    for (const unsubscribe of this.unsubscribe) {
+      unsubscribe();
+    }
+    this.stopVisibility?.();
+  }
+}

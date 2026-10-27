@@ -2,7 +2,7 @@ import Commander
 import Foundation
 
 @MainActor
-struct StartCommand: ParsableCommand {
+struct StartCommand: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "start", abstract: "Start swabble (foreground placeholder)")
     }
@@ -13,7 +13,7 @@ struct StartCommand: ParsableCommand {
 }
 
 @MainActor
-struct StopCommand: ParsableCommand {
+struct StopCommand: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "stop", abstract: "Stop swabble (placeholder)")
     }
@@ -24,7 +24,7 @@ struct StopCommand: ParsableCommand {
 }
 
 @MainActor
-struct RestartCommand: ParsableCommand {
+struct RestartCommand: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "restart", abstract: "Restart swabble (placeholder)")
     }

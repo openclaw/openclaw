@@ -4,7 +4,7 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawChatUI
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct WebChatSwiftUISmokeTests {
     private struct TestTransport: OpenClawChatTransport {
@@ -174,13 +174,13 @@ struct WebChatSwiftUISmokeTests {
             let connection = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
 
             #expect(manager.openWindowCount(for: .profile(profile.id)) == 2)
-            #expect(manager._testSessionObserverVisible(connection: connection))
+            #expect(manager.sessionObserverOwners.isVisible(connection: ObjectIdentifier(connection)))
             manager.resetPrimaryConnections()
             #expect(manager.openWindowCount(for: .profile(profile.id)) == 2)
-            #expect(manager._testSessionObserverVisible(connection: connection))
+            #expect(manager.sessionObserverOwners.isVisible(connection: ObjectIdentifier(connection)))
             manager.closeGatewayWindows(profileID: profile.id)
             #expect(manager.openWindowCount(for: .profile(profile.id)) == 0)
-            #expect(!manager._testSessionObserverVisible(connection: connection))
+            #expect(!manager.sessionObserverOwners.isVisible(connection: ObjectIdentifier(connection)))
         }
     }
 

@@ -16,7 +16,7 @@ const enSidebarAttention = {
       requesting: "Requesting administrator access…",
       requestingAction: "Requesting…",
       pending:
-        "Approve this browser by running openclaw devices on the Gateway or from Devices on an admin browser. Retry reattaches to the request; Cancel stops waiting.",
+        "Approve this browser by running {command} on the Gateway or from Devices on an admin browser. Retry reattaches to the request; Cancel stops waiting.",
       retry: "Retry",
       cancel: "Cancel",
       rejected: "The administrator access request was rejected.",
@@ -64,15 +64,11 @@ const enSidebarAttention = {
     outbox: {
       conversation: "Conversation",
       failed: "Your message wasn’t sent",
-      unconfirmed: "Your message may not have arrived",
+      held: "Your message needs review",
       commandFailed: "Your command failed",
-      commandUnconfirmed: "Your command may not have run",
       review: "Review in chat",
       reviewShort: "Review",
       reviewHint: "Open the conversation to review it before trying again.",
-      checkBeforeRetry: "Open the conversation to check whether it arrived before trying again.",
-      checkCommandBeforeRetry:
-        "The command may already have run. Review the conversation before retrying.",
       offline: "Offline",
       offlineHint: "Offline: reconnect before retrying.",
     },

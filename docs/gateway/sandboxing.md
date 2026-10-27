@@ -6,7 +6,7 @@ read_when: "You want a dedicated explanation of sandboxing or need to tune agent
 status: active
 ---
 
-OpenClaw can run tool execution inside a sandbox backend to reduce blast radius. Sandboxing is off by default and controlled by `agents.defaults.sandbox` (global), `agents.entries.*.sandbox` (per-agent), or a required creator-role sandbox policy. The Gateway process always stays on the host; only tool execution moves into the sandbox when enabled.
+OpenClaw can run tool execution inside a sandbox backend to limit the damage tools can cause. Sandboxing is off by default and controlled by `agents.defaults.sandbox` (global), `agents.entries.*.sandbox` (per-agent), or a required creator-role sandbox policy. The Gateway process always stays on the host; only tool execution moves into the sandbox when enabled.
 
 <Note>
 This is not a perfect security boundary, but it materially limits filesystem and process access when the model does something dumb.
@@ -75,6 +75,27 @@ Debugging:
 ## Multi-agent overrides
 
 Each agent can override sandbox + tools: `agents.entries.*.sandbox` and `agents.entries.*.tools` (plus `agents.entries.*.tools.sandbox.tools` for sandbox tool policy). See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence.
+
+Core Goal controls (`get_goal`, `create_goal`, and `update_goal`) are included in the default sandbox tool allowlist. They operate on the current session’s OpenClaw Goal; explicit denies and custom allowlists still apply.
+
+### Managed GitHub identity
+
+Publication-eligible managed sessions can use `github_publish` under the default sandbox tool policy to publish their own session branch through the Gateway. Publication credentials stay on the Gateway; the credential opt-in below is unnecessary for this route. Explicit tool denies and restrictive custom allowlists still apply. See [GitHub publication](/gateway/config-tools/github-identity).
+
+Sandboxed execution excludes the agent's managed GitHub identity by default.
+Set `agents.entries.<id>.tools.github.allowInSandbox: true` on that agent's
+managed identity to allow it inside the agent's own Docker or Podman sandbox.
+OpenClaw mounts the selected profile read-only at `/openclaw/github`, sets
+`GH_CONFIG_DIR` to that path, and provides the same managed token and Git author
+as host execution. The container needs `gh` installed for GitHub CLI commands.
+
+This opt-in exposes credentials to code running in the sandbox; read-only
+mounting prevents profile edits, not credential reads. `openclaw security audit`
+emits a warning for every opted-in agent. Effective `scope: "shared"` refuses
+identity injection and logs a warning naming the agent, because that container
+can serve other agents. Role-required sandboxes retain their per-creator
+isolation and support the opt-in. Other sandbox backends reject provisioning
+with the opt-in enabled. See [GitHub identity](/gateway/config-tools/github-identity#sandbox-opt-in).
 
 ## Minimal enable example
 

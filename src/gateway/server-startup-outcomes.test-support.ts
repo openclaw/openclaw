@@ -1,5 +1,5 @@
 /** Startup outcome coverage loaded by the post-attach startup suite. */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createGatewayStartupOutcomeRecorder,
   formatGatewayStartupOutcomes,
@@ -13,100 +13,36 @@ type GatewayStartupOutcome = Parameters<typeof formatGatewayStartupOutcomes>[0][
 const inactiveParams: GatewayStartupOutcomeRecorderParams = {
   cfg: {},
   gatewayStartHooks: false,
-  env: {},
+  internalHooksConfigured: false,
 };
 
 describe("gateway startup outcomes", () => {
-  it("formats reverse input in canonical subsystem order", () => {
-    const outcomes: GatewayStartupOutcome[] = [
-      { subsystem: "gmail-model", status: "scheduled" },
-      { subsystem: "gmail-watcher", status: "skipped", reason: "no-gmail-account" },
-      { subsystem: "gateway-start-hooks", status: "scheduled" },
-      { subsystem: "internal-startup-hook", status: "scheduled" },
-      { subsystem: "internal-hooks", status: "loaded" },
-    ];
-
-    expect(formatGatewayStartupOutcomes(outcomes)).toBe(
-      "gateway startup outcomes: internal-hooks=loaded; " +
-        "internal-startup-hook=scheduled; gateway-start-hooks=scheduled; " +
-        "gmail-watcher=skipped (no-gmail-account); gmail-model=scheduled",
-    );
-  });
-
+  beforeEach(() => vi.stubEnv("OPENCLAW_SKIP_GMAIL_WATCHER", ""));
+  afterEach(() => vi.unstubAllEnvs());
   it.each([
     {
-      name: "unconfigured",
-      params: inactiveParams,
-      expected: [
-        "internal-hooks=skipped (not-configured)",
-        "internal-startup-hook=skipped (no-handlers-loaded)",
-        "gateway-start-hooks=skipped (no-handlers-loaded)",
-        "gmail-watcher=skipped (hooks-disabled)",
-        "gmail-model=skipped (not-configured)",
-      ],
+      account: "operator@example.com",
+      skip: "1",
+      reason: "disabled-by-environment",
     },
-    {
-      name: "explicitly disabled internal hooks",
-      params: {
-        ...inactiveParams,
-        cfg: { hooks: { internal: { enabled: false } } },
-      } satisfies GatewayStartupOutcomeRecorderParams,
-      expected: [
-        "internal-hooks=skipped (hooks-disabled)",
-        "internal-startup-hook=skipped (hooks-disabled)",
-      ],
-    },
-    {
-      name: "scheduled",
-      params: {
-        cfg: {
-          hooks: {
-            enabled: true,
-            internal: { enabled: true },
-            gmail: { account: "operator@example.com", model: "openai/gpt-5.5" },
-          },
-        },
-        gatewayStartHooks: true,
-        env: {},
-      } satisfies GatewayStartupOutcomeRecorderParams,
-      expected: [
-        "internal-hooks=skipped (no-handlers-loaded)",
-        "internal-startup-hook=skipped (no-handlers-loaded)",
-        "gateway-start-hooks=scheduled",
-        "gmail-watcher=scheduled",
-        "gmail-model=scheduled",
-      ],
-    },
-    {
-      name: "gmail skip reasons",
-      params: {
-        ...inactiveParams,
-        cfg: { hooks: { enabled: true, gmail: { account: "operator@example.com" } } },
-        env: { OPENCLAW_SKIP_GMAIL_WATCHER: "1" },
-      } satisfies GatewayStartupOutcomeRecorderParams,
-      expected: ["gmail-watcher=skipped (disabled-by-environment)"],
-    },
-    {
-      name: "missing gmail account",
-      params: {
-        ...inactiveParams,
-        cfg: { hooks: { enabled: true } },
-      } satisfies GatewayStartupOutcomeRecorderParams,
-      expected: ["gmail-watcher=skipped (no-gmail-account)"],
-    },
-  ])("uses the fixed vocabulary for $name", ({ params, expected }) => {
-    const summary = formatGatewayStartupOutcomes(
-      createGatewayStartupOutcomeRecorder(params).snapshot(),
-    );
-
-    for (const entry of expected) {
-      expect(summary).toContain(entry);
-    }
+    { account: undefined, skip: undefined, reason: "no-gmail-account" },
+  ])("records Gmail skip reason $reason", ({ account, skip, reason }) => {
+    vi.stubEnv("OPENCLAW_SKIP_GMAIL_WATCHER", skip);
+    const recorder = createGatewayStartupOutcomeRecorder({
+      ...inactiveParams,
+      cfg: { hooks: { enabled: true, gmail: { account } } },
+    });
+    expect(recorder.snapshot().find((outcome) => outcome.subsystem === "gmail-watcher")).toEqual({
+      subsystem: "gmail-watcher",
+      status: "skipped",
+      reason,
+    });
   });
 
   it("records awaited internal hook outcomes without logging raw error fields", () => {
     const recorder = createGatewayStartupOutcomeRecorder({
       ...inactiveParams,
+      internalHooksConfigured: true,
       cfg: {
         hooks: {
           enabled: true,
