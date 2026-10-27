@@ -101,7 +101,7 @@ const canonicalToolParameterSchemas = new WeakMap<object, unknown>();
  * `const: true` that became `enum: ["true"]`). Local validation must therefore keep
  * the canonical contract that produced the projection.
  */
-export function getCanonicalToolParameterSchema(schema: unknown): unknown | undefined {
+export function getCanonicalToolParameterSchema(schema: unknown): unknown {
   return schema !== null && typeof schema === "object"
     ? canonicalToolParameterSchemas.get(schema)
     : undefined;
