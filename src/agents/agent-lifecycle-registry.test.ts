@@ -213,25 +213,6 @@ afterEach(async () => {
 });
 
 describe("agent lifecycle registry", () => {
-  it.each(["close", "terminal failure"])(
-    "rejects prepared effects after %s",
-    async (transition) => {
-      const database = openOpenClawStateDatabase(options);
-      await readAgentDeletionJournalStatusInWorker("main", options);
-      const preparedBlocked = prepareAgentDeletionBlocked("main", options);
-      expect(preparedBlocked()).toBe(false);
-      if (transition === "close") {
-        await closeStateDatabaseForTest();
-      } else {
-        recordOpenClawStateDatabaseOpenFailure(
-          database.path,
-          new Error("synthetic terminal failure"),
-        );
-      }
-      expect(preparedBlocked).toThrow();
-    },
-  );
-
   it.each(["openclaw", "crestodian"])(
     "rejects deletion authority for system agent %s",
     async (agentId) => {
@@ -248,7 +229,7 @@ describe("agent lifecycle registry", () => {
     },
   );
 
-  it("keeps committed lifecycle authority through a rolled-back writer transaction", async () => {
+  it("keeps lifecycle authority through rollback but rejects terminal database failure", async () => {
     const config = { agents: { entries: { main: {} } } };
     await setProvenance(1);
     const binding = (await captureAgentLifecycleBinding(() => config, "main", options))!;
@@ -283,6 +264,11 @@ describe("agent lifecycle registry", () => {
     expect(blocked()).toBe(false);
     expect(preparedBlocked()).toBe(false);
     expect(matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
+    recordOpenClawStateDatabaseOpenFailure(
+      openOpenClawStateDatabase(options).path,
+      new Error("synthetic terminal failure"),
+    );
+    expect(preparedBlocked).toThrow();
   });
 
   it.each(["commit", "rollback"] as const)(
@@ -394,7 +380,7 @@ describe("agent lifecycle registry", () => {
     expect(tableExists(database.db, "agent_deletion_journal")).toBe(false);
   });
 
-  it("reads current deletion authority outside an inherited discovery snapshot", async () => {
+  it("reads current deletion authority across snapshots but rejects closed scopes and databases", async () => {
     const config = { agents: { entries: { main: {} } } };
     await setProvenance();
     const binding = await captureAgentLifecycleBinding(() => config, "main", options);
@@ -424,6 +410,8 @@ describe("agent lifecycle registry", () => {
     }, options);
     expect(retainedGuard).toThrow("read scope is closing or closed");
     expect(retainedPreparedGuard).toThrow("read scope is closing or closed");
+    await closeStateDatabaseForTest();
+    expect(preparedBlocked).toThrow();
   });
 
   it("uses committed journal authority for filesystem effects without host SQL", async () => {
@@ -589,7 +577,6 @@ describe("agent lifecycle registry", () => {
       expect(tableExists(openOpenClawStateDatabase(options).db, "agent_provenance")).toBe(
         provenanceTable === "present",
       );
-      expect(matchesAgentLifecycleBinding(config, legacy, options)).toBe(true);
       assertMatches(legacy, true);
 
       await setProvenance(42);

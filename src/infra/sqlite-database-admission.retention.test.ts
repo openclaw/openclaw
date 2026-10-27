@@ -737,20 +737,6 @@ it.each([false, true])(
   },
 );
 
-it("path revocation invalidates scoped receipts and admission facts with a live handle", () => {
-  using fixture = databaseFixture("sqlite-admission-path-revocation-");
-  const { database, location } = fixture;
-  const beforeRevocation = scopedToken(database, "proof");
-  publishFact(database, key, "healthy");
-  publishFact(database, schemaKey, "admitted");
-
-  revokePath(location);
-
-  expect(scopedToken(database, "proof")).not.toBe(beforeRevocation);
-  expect(getFact(database, key)).toBeUndefined();
-  expect(getFact(database, schemaKey)).toBeUndefined();
-});
-
 const key = { name: "test.engine-admission", read: (value: unknown) => value };
 const schemaKey = { ...key, name: "test.engine-schema-admission", schemaDependent: true };
 
@@ -788,7 +774,10 @@ it.each([
   expect(read()).toBe("first");
   publishFact(database, factKey, "replacement");
   expect(read()).toBe("replacement");
+  const beforeRevocation = scopedToken(database, "proof");
   revokePath(location);
+  expect(scopedToken(database, "proof")).not.toBe(beforeRevocation);
+  expect(getFact(database, factKey)).toBeUndefined();
   expect(read()).toBeUndefined();
   publishFact(database, factKey, "recovered");
   expect(read()).toBe("recovered");
