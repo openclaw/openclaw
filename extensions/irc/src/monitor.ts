@@ -81,7 +81,6 @@ type IrcMonitorOptions = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
-  ingressQueue?: NonNullable<Parameters<typeof createIrcIngressMonitor>[0]["queue"]>;
 };
 
 export async function monitorIrcProvider(
@@ -124,7 +123,6 @@ export async function monitorIrcProvider(
   const ingress: IrcIngressMonitor = createIrcIngressMonitor({
     accountId: account.accountId,
     runtime,
-    ...(opts.ingressQueue ? { queue: opts.ingressQueue } : {}),
     dispatch: async (
       message,
       turnAdoptionLifecycle: IrcIngressLifecycle,

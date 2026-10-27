@@ -982,7 +982,7 @@ describe("buildCachedChatItems", () => {
     expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([textBlock("Ship it.")]);
   });
 
-  it.each(["incomplete imports", "canonical replay"])(
+  it.each(["incomplete imports", "canonical replay", "distinct IDs", "missing IDs"])(
     "deduplicates user prompts only with proven identity: %s",
     (source) => {
       const canonical = {
@@ -994,24 +994,27 @@ describe("buildCachedChatItems", () => {
         messages: [1, 2].map((timestamp) =>
           user([textBlock("Same prompt")], timestamp, {
             __openclaw:
-              source === "canonical replay"
-                ? { ...canonical }
-                : {
-                    id: "provider-local-user",
-                    externalId: "provider-local-user",
-                    importedFrom: "claude-cli",
-                  },
+              source === "missing IDs"
+                ? undefined
+                : source === "incomplete imports"
+                  ? {
+                      id: "provider-local-user",
+                      externalId: "provider-local-user",
+                      importedFrom: "claude-cli",
+                    }
+                  : {
+                      ...canonical,
+                      id: source === "distinct IDs" ? `user-${timestamp}` : canonical.id,
+                    },
           }),
         ),
       });
       expect(groups).toHaveLength(1);
       const group = groupAt(groups, 0);
-      expect(group.messages).toHaveLength(source === "canonical replay" ? 1 : 2);
-      if (source === "incomplete imports") {
-        expect(group.messages.map((entry) => entry.duplicateCount)).toEqual([undefined, undefined]);
-      } else {
-        expect(group.role).toBe("user");
-        expect(group.messages).toMatchObject([{ duplicateCount: 2 }]);
+      expect(group.messages.map((entry) => normalizeMessage(entry.message).timestamp)).toEqual(
+        source === "canonical replay" ? [1] : [1, 2],
+      );
+      if (source === "canonical replay") {
         expect(persistedMessageEntryId(messageRecord(group))).toBe(canonical.id);
       }
     },
