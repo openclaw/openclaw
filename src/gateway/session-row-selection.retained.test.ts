@@ -79,7 +79,9 @@ function fixture() {
           ? previous.generation
           : Symbol("generation"),
     };
-    if (previous && identity(previous) !== identity(row)) remove(key);
+    if (previous && identity(previous) !== identity(row)) {
+      remove(key);
+    }
     rows.set(key, row);
     selection.change({ kind: "row", id: identity(row), key, agentId, row, scope: "session-entry" });
   };
@@ -116,7 +118,9 @@ function fixture() {
     select,
     fresh() {
       const result = create();
-      for (const row of rows.values()) result.add(row);
+      for (const row of rows.values()) {
+        result.add(row);
+      }
       return result;
     },
   };
@@ -201,7 +205,9 @@ it.for([0x12e7, 0x4b91])("matches fresh selection after seeded write sequences (
     createdActor: { type: "human", source: "profile", id: index % 2 ? "ada" : "bob" },
     participants: [{ identity: { type: "profile", id: index % 2 ? "ada" : "bob" } }],
   });
-  for (const [index, key] of keys.entries()) state.put(key, initial(key, index));
+  for (const [index, key] of keys.entries()) {
+    state.put(key, initial(key, index));
+  }
   const queries: SessionsListParams[] = [
     ...(["updatedAt", "lastInteractionAt", "activity"] as const).map((sortBy) => ({
       sortBy,
@@ -232,13 +238,17 @@ it.for([0x12e7, 0x4b91])("matches fresh selection after seeded write sequences (
       { profileRelation: { profileId: "bob", relationship: "owned" } },
       { activeMinutes: 15, sortBy: "activity" },
     ] satisfies SessionsListParams[]),
-  ].map((query): SessionsListParams => ({
-    archived: "all",
-    limit: 7,
-    includeGlobal: true,
-    includeUnknown: true,
-    ...query,
-  }));
+  ].map((query): SessionsListParams =>
+    Object.assign(
+      {
+        archived: "all",
+        limit: 7,
+        includeGlobal: true,
+        includeUnknown: true,
+      } satisfies SessionsListParams,
+      query,
+    ),
+  );
   const retained = queries.map(() => new WeakMap<object, SessionListFilteredEntries>());
   const check = () => {
     const fresh = state.fresh();
@@ -355,7 +365,9 @@ it.for([0x12e7, 0x4b91])("matches fresh selection after seeded write sequences (
         state.put(key, entry, { path: value ? storePath : outsidePath });
         break;
     }
-    if (Object.keys(patch).length) state.put(key, { ...entry, ...patch });
+    if (Object.keys(patch).length) {
+      state.put(key, { ...entry, ...patch });
+    }
     check();
   }
 });
