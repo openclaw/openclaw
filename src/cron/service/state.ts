@@ -15,6 +15,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronAgentAvailability } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
+import type { resolveCronListSnapshotRows } from "../list-snapshot-revision.js";
 import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
@@ -368,6 +369,7 @@ export type CronJobPolicyContext = {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
+  listSnapshotRows?: ReturnType<typeof resolveCronListSnapshotRows>;
   /** Worker publications replace the source rows or advance the store revision. */
   readSnapshot?: {
     storeRevision: number;
@@ -380,8 +382,8 @@ export type CronServiceState = {
       jobs: CronJob[];
       snapshotRevision: string;
     }[];
-    /** Requested rows are detached and frozen once for this list generation. */
-    readJobs: WeakMap<CronJob, CronJob>;
+    /** Detached rows and their content digests survive unchanged store publications. */
+    readJobs?: ReturnType<typeof resolveCronListSnapshotRows>;
     searchText: WeakMap<CronJob, string>;
   };
   /** Last known durable wake for each persisted job. Map presence distinguishes
@@ -493,6 +495,7 @@ export function prepareCronServiceStore(state: CronServiceState): Promise<void> 
   if (previous) {
     state.store = null;
     state.readSnapshot = undefined;
+    state.listSnapshotRows = undefined;
   }
   const promise = (async () => {
     const env = state.deps.env;

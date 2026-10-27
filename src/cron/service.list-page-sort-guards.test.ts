@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
+import * as nodeCrypto from "@openclaw/normalization-core/node-crypto";
 import * as stringCoerce from "@openclaw/normalization-core/string-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import * as snapshotRevisions from "./list-snapshot-revision.js";
@@ -59,7 +60,9 @@ it("preserves list revisions for large Unicode and escaped payloads", async () =
 
   const page = await listPage(state);
 
-  expect(page.snapshotRevision).toBe("sha256:fS8eVTHy9mbmpjFKHm3pEcvOobmxd1rMQpDjfh3qmKM");
+  expect((await listPage(state)).snapshotRevision).toBe(page.snapshotRevision);
+  state.store!.jobs[0]!.payload = { kind: "systemEvent", text: "changed 🦞" };
+  expect((await listPage(state)).snapshotRevision).not.toBe(page.snapshotRevision);
 });
 
 it("filters normalized agent owners across explicit, session-scoped, and default jobs", async () => {
@@ -103,7 +106,7 @@ it("shares immutable requested rows until a list revision changes", async () => 
   expect(() => {
     page.jobs[0]!.state.lastStatus = "error";
   }).toThrow(TypeError);
-  expect(clone).toHaveBeenCalledExactlyOnceWith(jobs[1]);
+  expect(clone).toHaveBeenCalledWith(jobs[1]);
   const visibilityPass = await listPage(state, options, () => false);
   expect(visibilityPass).toMatchObject({ jobs: [], total: 0 });
   const repeated = await listPage(state, options);
@@ -112,7 +115,7 @@ it("shares immutable requested rows until a list revision changes", async () => 
   expect(repeated.jobs[0]).toBe(page.jobs[0]);
   expect(await status(state)).toBe(firstStatus);
   expect(repeated.snapshotRevision).toBe(page.snapshotRevision);
-  expect(clone).toHaveBeenCalledTimes(1);
+  expect(clone).toHaveBeenCalledTimes(3);
   expect(revision).toHaveBeenCalledTimes(2);
   page.jobs.length = 0;
   expect(repeated.jobs).toHaveLength(1);
@@ -132,7 +135,7 @@ it("shares immutable requested rows until a list revision changes", async () => 
   expect(changedStatus.nextWakeAtMs).toBe(100);
   expect(changedStatus).not.toBe(firstStatus);
   expect(await status(state)).toBe(changedStatus);
-  expect(clone).toHaveBeenCalledTimes(2);
+  expect(clone).toHaveBeenCalledTimes(5);
 });
 
 it("reuses interleaved list variants while refreshing visibility and mutated rows", async () => {
@@ -282,4 +285,34 @@ it("preserves callback failure and subsequent reads when the logger throws", asy
   } finally {
     await state.op;
   }
+});
+
+it("hashes only changed rows across publications and interleaved list variants", async () => {
+  const state = listState({ name: "alpha" }, { name: "beta" }, { name: "gamma" });
+  state.schedulerStarted = true;
+  const hash = vi.spyOn(nodeCrypto, "sha256StableValue");
+  await status(state);
+  expect(hash).not.toHaveBeenCalled();
+  const first = await listPage(state, { limit: 1, query: "alpha" });
+  hash.mockClear();
+  for (const query of ["beta", "gamma", "", "alpha", "job"]) {
+    await listPage(state, { query });
+  }
+  expect(hash).not.toHaveBeenCalled();
+
+  // A reload can replace every source object without changing the published content.
+  await locked(state, async () => {
+    applyCronRuntimeRowsToState(state, structuredClone(state.store!.jobs));
+  });
+  expect((await listPage(state, { query: "alpha" })).snapshotRevision).toBe(first.snapshotRevision);
+  expect(hash).not.toHaveBeenCalled();
+
+  await locked(state, async () => {
+    const job = state.store!.jobs[1]!;
+    job.state.lastStatus = "ok";
+    applyCronRuntimeRowsToState(state, [job]);
+  });
+  expect((await listPage(state, { query: "alpha" })).snapshotRevision).toBe(first.snapshotRevision);
+  expect(hash).toHaveBeenCalledTimes(1);
+  expect((await listPage(state, { query: "beta" })).jobs[0]?.state.lastStatus).toBe("ok");
 });
