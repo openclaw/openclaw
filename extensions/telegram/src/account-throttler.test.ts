@@ -103,16 +103,23 @@ function createApi(
   api.config.use(getOrCreateAccountThrottler(token).transformer);
   return api;
 }
-function laneProbe(
+function actionApi(
   token: string,
+  respond: (count: number) => Response | Promise<Response> = () => response(success),
+) {
+  const sent: number[] = [];
+  const fetch = async () => {
+    sent.push(Date.now());
+    return respond(sent.length);
+  };
+  return { api: createApi(token, false, fetch), sent, fetch: asTelegramClientFetch(fetch) };
+}
+
+function gatedCall(
   format: (payload: { message_id?: number; message_thread_id?: string; text?: string }) => string,
 ) {
   const firstGate = deferred<void>();
   const entered: string[] = [];
-  const throttler = getOrCreateAccountThrottler(
-    token,
-    () => async (prev, method, payload, signal) => prev(method, payload, signal),
-  ).transformer;
   const prev = vi.fn(async (_method: string, payload: unknown) => {
     const request = payload as Parameters<typeof format>[0];
     entered.push(format(request));
@@ -121,7 +128,18 @@ function laneProbe(
     }
     return { ok: true, result: request.text ?? "" };
   }) as unknown as TelegramPreviousCall;
-  return { firstGate, entered, throttler, prev };
+  return { firstGate, entered, prev };
+}
+
+function laneProbe(
+  token: string,
+  format: (payload: { message_id?: number; message_thread_id?: string; text?: string }) => string,
+) {
+  const throttler = getOrCreateAccountThrottler(
+    token,
+    () => async (prev, method, payload, signal) => prev(method, payload, signal),
+  ).transformer;
+  return { ...gatedCall(format), throttler };
 }
 
 beforeEach(() => {
@@ -152,15 +170,13 @@ it("preserves the group message budget while sending topic actions", async () =>
 
 it("shares suspension and recovery across clients for the same token", async () => {
   vi.useFakeTimers();
-  let sent = 0;
-  const fetch = asTelegramClientFetch(async () => {
-    sent++;
-    return response(sent <= 10 ? unauthorized : success);
-  });
-  const first = new Api("123:shared-failures", { fetch });
+  const {
+    api: first,
+    sent,
+    fetch,
+  } = actionApi("shared-failures", (count) => response(count <= 10 ? unauthorized : success));
   const second = new Api("123:shared-failures", { fetch });
   const account = getOrCreateAccountThrottler("shared-failures");
-  first.config.use(account.transformer);
   second.config.use(getOrCreateAccountThrottler("shared-failures").transformer);
   const attempts = Array.from({ length: 11 }, (_, index) =>
     (index % 2 === 0 ? first : second).sendChatAction(-100123, "typing", {
@@ -171,13 +187,13 @@ it("shares suspension and recovery across clients for the same token", async () 
   finishClock(600_000, () => results);
   await tick(600_000);
   expect((await results).every((result) => result.status === "rejected")).toBe(true);
-  expect(sent).toBe(10);
+  expect(sent).toHaveLength(10);
   expect(account.chatActions.isSuspended()).toBe(true);
   account.chatActions.reset();
   const recovered = typing(second, 12);
   await tick(1_000);
   await recovered;
-  expect(sent).toBe(11);
+  expect(sent).toHaveLength(11);
 });
 
 it.each([
@@ -185,25 +201,11 @@ it.each([
   { name: "authorization backoff", errorCode: 401, secondStatus: "fulfilled" },
 ])("rechecks $name before sending a queued topic action", async ({ errorCode, secondStatus }) => {
   vi.useFakeTimers();
-  const sent: number[] = [];
   const startedAt = Date.now();
-  const api = new Api("123:queued-failure", {
-    fetch: asTelegramClientFetch(async () => {
-      sent.push(Date.now() - startedAt);
-      return response(
-        sent.length === 1
-          ? {
-              ok: false,
-              error_code: errorCode,
-              description: errorCode === 429 ? "Too Many Requests" : "Unauthorized",
-              ...(errorCode === 429 ? { parameters: { retry_after: 20 } } : {}),
-            }
-          : success,
-      );
-    }),
-  });
+  const { api, sent } = actionApi("queued-failure", (count) =>
+    count === 1 ? (errorCode === 429 ? flood(20) : response(unauthorized)) : response(success),
+  );
   const account = getOrCreateAccountThrottler("queued-failure");
-  api.config.use(account.transformer);
   const first = typing(api, 10);
   const second = typing(api, 20);
   const results = Promise.allSettled([first, second]);
@@ -213,7 +215,7 @@ it.each([
   await tick(1_000);
   expect((await results).map((result) => result.status)).toEqual(["rejected", secondStatus]);
   if (secondStatus === "fulfilled") {
-    expect(sent[1]).toBeGreaterThanOrEqual(1_900);
+    expect(sent[1]! - startedAt).toBeGreaterThanOrEqual(1_900);
     const nextTopic = typing(api, 40);
     await tick(0);
     expect(sent).toHaveLength(2);
@@ -233,11 +235,9 @@ it.each([
 
 it("releases a topic action canceled during authorization backoff", async () => {
   vi.useFakeTimers();
-  let sent = 0;
-  const api = createApi("canceled-backoff", false, async () => {
-    sent++;
-    return response(sent === 1 ? unauthorized : success);
-  });
+  const { api, sent } = actionApi("canceled-backoff", (count) =>
+    response(count === 1 ? unauthorized : success),
+  );
   const first = typing(api, 1);
   const failed = expect(first).rejects.toThrow("Unauthorized");
   await tick(0);
@@ -251,11 +251,11 @@ it("releases a topic action canceled during authorization backoff", async () => 
   controller.abort();
   await tick(0);
   expect(settled).toHaveBeenCalledOnce();
-  expect(sent).toBe(1);
+  expect(sent).toHaveLength(1);
   const recovered = typing(api, 3);
   await tick(3_000);
   await recovered;
-  expect(sent).toBe(2);
+  expect(sent).toHaveLength(2);
 });
 
 it.each(["group queue", "authorization queue"])(
@@ -264,13 +264,11 @@ it.each(["group queue", "authorization queue"])(
     vi.useFakeTimers();
     const authorization = queue === "authorization queue";
     const held = deferred<Response>();
-    let sent = 0;
-    const api = createApi("queued-wait", false, async () => {
-      sent++;
-      if (authorization && sent === 1) {
+    const { api, sent } = actionApi("queued-wait", (count) => {
+      if (authorization && count === 1) {
         return response(unauthorized);
       }
-      if (sent === (authorization ? 2 : 1)) {
+      if (count === (authorization ? 2 : 1)) {
         return held.promise;
       }
       return response(success);
@@ -298,11 +296,11 @@ it.each(["group queue", "authorization queue"])(
     controller.abort();
     await tick(0);
     expect(settled).toHaveBeenCalledOnce();
-    expect(sent).toBe(authorization ? 2 : 1);
+    expect(sent).toHaveLength(authorization ? 2 : 1);
     held.resolve(response(success));
     await tick(2_000);
     await Promise.all([predecessor, successor]);
-    expect(sent).toBe(authorization ? 3 : 2);
+    expect(sent).toHaveLength(authorization ? 3 : 2);
   },
 );
 
@@ -526,18 +524,9 @@ describe("releaseAccountThrottler", () => {
         }
         return fakeClearInterval(handle);
       }) as typeof clearInterval;
-      const firstGate = deferred<void>();
+      const { firstGate, entered, prev } = gatedCall((request) => request.text ?? "");
       try {
         const account = getOrCreateAccountThrottler("settle-release");
-        const entered: string[] = [];
-        const prev = vi.fn(async (_method: string, payload: unknown) => {
-          const request = payload as { text?: string };
-          entered.push(request.text ?? "");
-          if (entered.length === 1) {
-            await firstGate.promise;
-          }
-          return { ok: true, result: request.text ?? "" };
-        }) as unknown as TelegramPreviousCall;
         const send = (text: string) =>
           callLooseSendMessage(account.transformer, prev, { chat_id: chatId, text });
         const first = send("first");
@@ -580,11 +569,9 @@ describe("releaseAccountThrottler", () => {
     async (wait) => {
       vi.useFakeTimers();
       const held = deferred<Response>();
-      let sent = 0;
-      const api = createApi("action-retire", false, async () => {
-        sent++;
-        return sent === 1 && wait === "running predecessor" ? held.promise : response(success);
-      });
+      const { api, sent } = actionApi("action-retire", (count) =>
+        count === 1 && wait === "running predecessor" ? held.promise : response(success),
+      );
       const first = typing(api, 1);
       finishClock(
         2_000,
@@ -595,7 +582,7 @@ describe("releaseAccountThrottler", () => {
       if (wait === "pacing") {
         await first;
       }
-      expect(sent).toBe(1);
+      expect(sent).toHaveLength(1);
       const second = typing(api, 2);
       const rejected = expect(second).rejects.toThrow(/released/i);
       if (wait === "pacing") {
@@ -608,18 +595,16 @@ describe("releaseAccountThrottler", () => {
       await tick(2_000);
       await first;
       await releasing;
-      expect(sent).toBe(1);
+      expect(sent).toHaveLength(1);
     },
   );
 
   it.each([-100123, 42])("settles a backing-off action immediately for chat %s", async (chatId) => {
     vi.useFakeTimers();
-    let sent = 0;
     const group = chatId < 0;
-    const api = createApi("backoff-retire", false, async () => {
-      sent++;
-      return response(group && sent > 1 ? success : unauthorized);
-    });
+    const { api, sent } = actionApi("backoff-retire", (count) =>
+      response(group && count > 1 ? success : unauthorized),
+    );
     const send = (thread: number) =>
       group ? typing(api, thread) : api.sendChatAction(chatId, "typing");
     const failed = Array.from({ length: group ? 1 : 4 }, () =>
@@ -635,14 +620,14 @@ describe("releaseAccountThrottler", () => {
     finishClock(600_000, () => Promise.allSettled([...failed, outcome]));
     await tick(group ? 1_500 : 9_500);
     await Promise.all(failed);
-    expect(sent).toBe(group ? 1 : 4);
+    expect(sent).toHaveLength(group ? 1 : 4);
     const releasing = releaseAccountThrottler("backoff-retire");
     await tick(group ? 0 : 10);
     expect(settled).toHaveBeenCalledOnce();
     await expect(second).rejects.toThrow(/released/i);
     await releasing;
     await tick(600_000);
-    expect(sent).toBe(group ? 1 : 4);
+    expect(sent).toHaveLength(group ? 1 : 4);
     await outcome;
   });
 });
