@@ -54,6 +54,7 @@ function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
       encoding: "utf8",
       env: {
         ...process.env,
+        ZDOTDIR: undefined,
         HOME: home,
         ...env,
         BASH_ENV: "",
@@ -2494,7 +2495,7 @@ EOF
         ]) {
           const fresh = spawnSync("zsh", args, {
             encoding: "utf8",
-            env: { HOME: home, PATH: "/usr/bin:/bin", ZDOTDIR: home },
+            env: { HOME: home, PATH: "/usr/bin:/bin" },
           });
           expect(fresh.status).toBe(0);
           expect(fresh.stdout.trim()).toBe(join(bin, "openclaw"));
@@ -2523,6 +2524,54 @@ EOF
       }
     }
   });
+
+  it
+    .skipIf(spawnSync("zsh", ["--version"]).status !== 0)
+    .each(["/bin/zsh", "/bin/bash", "/usr/bin/fish"])(
+    "persists custom ZDOTDIR profiles when installing from %s",
+    (shell) => {
+      const home = join(tempDirs.make("openclaw-install-zdotdir-"), "home");
+      const zshDir = join(home, ".config", "zsh profiles 'quoted'");
+      const bin = join(home, ".local", "bin");
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(zshDir, { recursive: true });
+      writeFileSync(join(bin, "openclaw"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      for (const name of [".zshrc", ".zprofile"]) {
+        writeFileSync(join(zshDir, name), "# existing profile\n");
+      }
+      const env = { HOME: home, ZDOTDIR: zshDir, PATH: "/usr/bin:/bin", SHELL: shell };
+      const persist = runInstallShell(
+        `source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path; ensure_user_local_bin_on_path`,
+        env,
+      );
+      expect(persist.status, persist.stdout + persist.stderr).toBe(0);
+      for (const name of [".zshrc", ".zprofile"]) {
+        expect(readFileSync(join(zshDir, name), "utf8")).toBe(
+          'export PATH="$HOME/.local/bin:$PATH"\n# existing profile\n',
+        );
+        expect(existsSync(join(home, name))).toBe(false);
+      }
+      // Isolate the zsh scan from the Bash/Fish profiles also written above.
+      writeFileSync(join(zshDir, ".zshrc"), 'export PATH="$HOME/zsh-only/bin:$PATH"\n', {
+        flag: "a",
+      });
+      const hint = runInstallShell(
+        `source "${SCRIPT_PATH}"; warn_shell_path_missing_dir "$HOME/zsh-only/bin" "zsh-only bin"`,
+        env,
+      );
+      expect(hint.status).toBe(0);
+      expect(hint.stdout).toContain(`If your shell reads ${join(zshDir, ".zshrc")} and`);
+      expect(hint.stdout).not.toContain("source ");
+      for (const mode of ["-ic", "-lic"]) {
+        const fresh = spawnSync("zsh", [mode, "command -v openclaw"], {
+          encoding: "utf8",
+          env,
+        });
+        expect(fresh.status, fresh.stdout + fresh.stderr).toBe(0);
+        expect(fresh.stdout.trim()).toBe(join(bin, "openclaw"));
+      }
+    },
+  );
 
   it("updates existing startup files for dual-shell users", () => {
     const tmp = tempDirs.make("openclaw-install-dual-shell-path-");

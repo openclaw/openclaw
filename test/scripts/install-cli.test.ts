@@ -38,6 +38,7 @@ function runShell(script: string, env: NodeJS.ProcessEnv = {}) {
     encoding: "utf8",
     env: {
       ...process.env,
+      ZDOTDIR: undefined,
       OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1",
       ...env,
       BASH_ENV: "",
@@ -120,6 +121,40 @@ function runNpmPolicy(spec: string) {
 
 describe("install-cli.sh", () => {
   const script = readStandaloneInstaller(process.cwd(), SCRIPT_PATH.slice("scripts/".length));
+
+  it.each([undefined, ".config/zsh"])(
+    "persists npm prefix PATH to the selected zsh directory (%s)",
+    (suffix) => {
+      const home = join(tempDirs.make("openclaw-cli-zdotdir-"), "home");
+      const zshDir = suffix ? join(home, suffix) : home;
+      mkdirSync(zshDir, { recursive: true });
+      writeFileSync(join(home, ".bashrc"), "# bash\n");
+      writeFileSync(join(zshDir, ".zshrc"), "# zsh\n");
+      const result = runInstallCliShell(
+        `
+      os_detect() { echo linux; }
+      npm_fixture() {
+        case "$*" in
+          "config get prefix") echo "$HOME/missing/prefix" ;;
+          "config set prefix $HOME/.npm-global") return 0 ;;
+          *) return 97 ;;
+        esac
+      }
+      npm_bin() { echo npm_fixture; }
+      fix_npm_prefix_if_needed
+      fix_npm_prefix_if_needed
+    `,
+        { HOME: home, ZDOTDIR: suffix ? zshDir : undefined },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const line = `export PATH="${home}/.npm-global/bin:$PATH"\n`;
+      expect(readFileSync(join(home, ".bashrc"), "utf8")).toBe(`# bash\n${line}`);
+      expect(readFileSync(join(zshDir, ".zshrc"), "utf8")).toBe(`# zsh\n${line}`);
+      if (suffix) {
+        expect(existsSync(join(home, ".zshrc"))).toBe(false);
+      }
+    },
+  );
   const installerContract = {
     scriptPath: SCRIPT_PATH,
     runShell,
