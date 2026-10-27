@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root } from "@openclaw/fs-safe/root";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { ensureWritableSkillDirectories } from "../../skills/loading/skill-directory-modes.js";
@@ -42,7 +43,7 @@ async function linkOrCopySkillDir(params: { sourceDir: string; targetDir: string
       verbatimSymlinks: true,
     });
     await ensureWritableSkillDirectories(
-      path.dirname(params.targetDir),
+      await root(path.dirname(params.targetDir)),
       path.basename(params.targetDir),
     );
   }
