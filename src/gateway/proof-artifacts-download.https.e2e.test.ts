@@ -1,8 +1,5 @@
-import assert from "node:assert/strict";
 import { X509Certificate } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readFile } from "node:fs/promises";
 import { Agent, fetch } from "undici";
 import { expect, test, vi } from "vitest";
 import type {
@@ -21,7 +18,6 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayClient } from "./client.js";
 import { startGatewayServer } from "./server.js";
-import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { startClaimedGateway } from "./test-helpers.listener.js";
 
