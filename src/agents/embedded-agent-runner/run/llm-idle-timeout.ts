@@ -118,16 +118,6 @@ function hasLocalProviderAuthMarker(apiKey: unknown): boolean {
   return typeof apiKey === "string" && LOCAL_PROVIDER_AUTH_MARKERS.has(apiKey.trim().toLowerCase());
 }
 
-function hasConfiguredLocalProviderSignal(params: {
-  cfg: OpenClawConfig | undefined;
-  provider: string | undefined;
-}): boolean {
-  const providerConfig = findConfiguredProviderConfig(params.cfg, params.provider);
-  return Boolean(
-    providerConfig?.localService || hasLocalProviderAuthMarker(providerConfig?.apiKey),
-  );
-}
-
 type LlmTimeoutParams = {
   cfg?: OpenClawConfig;
   runTimeoutMs?: number;
@@ -137,9 +127,14 @@ type LlmTimeoutParams = {
 
 /**
  * Classifies the model endpoint locality shared by the idle and first-event
- * watchdogs. Ollama `*:cloud` models stay "cloud" even behind a local proxy.
+ * watchdogs. Explicit remote providers and Ollama `*:cloud` models retain
+ * hosted timing behind local relays, including those managed by localService.
  */
 function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
+  const providerConfig = findConfiguredProviderConfig(params?.cfg, params?.model?.provider);
+  if (providerConfig?.remote === true) {
+    return { isLocalRuntimeModel: false, isSelfHostedRuntimeModel: false };
+  }
   const baseUrl = params?.model?.baseUrl;
   const hostname =
     typeof baseUrl === "string" ? URL.parse(baseUrl)?.hostname.toLowerCase() : undefined;
@@ -153,10 +148,8 @@ function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
           hostname &&
           (EXPLICIT_LOCAL_HOSTNAMES.has(hostname) ||
             (isBareProviderHostname(hostname) &&
-              hasConfiguredLocalProviderSignal({
-                cfg: params?.cfg,
-                provider: params?.model?.provider,
-              }))),
+              (providerConfig?.localService ||
+                hasLocalProviderAuthMarker(providerConfig?.apiKey)))),
         )),
   };
 }
