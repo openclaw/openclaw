@@ -60,20 +60,21 @@ const providerRenames = [{ from: "old", to: "new", baseUrl: "https://models.exam
 const providerConfig = (baseUrl: string) => ({ baseUrl, models: [] });
 
 function mockExternalShadow(enabledByDefault = false) {
-  const plugin = {
+  const bundled = registry({
     id: "matrix",
+    rootDir: makeTempDir(),
+    origin: "bundled",
     doctorContract: { stateMigrations: [{ id: "matrix-inbound-dedupe-to-claimable-dedupe" }] },
-  };
-  mocks.loadPluginManifestRegistry
-    .mockReturnValueOnce(registry({ ...plugin, rootDir: makeTempDir() }))
-    .mockReturnValueOnce(
-      registry({
-        ...plugin,
-        rootDir: makeTempDir(),
-        origin: "global",
-        ...(enabledByDefault ? { enabledByDefault } : {}),
-      }),
-    );
+  });
+  mocks.loadPluginManifestRegistry.mockReturnValueOnce(bundled).mockReturnValueOnce(
+    registry({
+      id: "matrix",
+      rootDir: makeTempDir(),
+      origin: "global",
+      doctorContract: bundled.plugins[0]?.doctorContract,
+      ...(enabledByDefault ? { enabledByDefault } : {}),
+    }),
+  );
 }
 
 describe("doctor-contract-registry module loader", () => {
@@ -101,20 +102,26 @@ describe("doctor-contract-registry module loader", () => {
   });
 
   it("rejects provider renames outside the plugin's declared providers", () => {
-    mockContract(
+    const root = mockContract(
       { providerRenames },
       { id: "owner", providers: ["old"], doctorContract: { configRepair: true } },
     );
     expect(doctor.resolvePluginDoctorProviderRenames({ pluginIds: ["old"], env: {} })).toEqual([]);
     expect(doctorContractWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining("Provider renames must belong to the plugin's declared providers."),
+      expect.stringContaining(
+        `failed to load doctor contract for owner from ${path.join(root, "doctor-contract-api.ts")}: Provider renames must belong to the plugin's declared providers.`,
+      ),
     );
   });
 
   it("defers declared provider renames during compatibility preflight", () => {
     mockContract(
       { providerRenames },
-      { id: "rename-owner", providers: ["old", "new"], doctorContract: { configRepair: true } },
+      {
+        id: "rename-owner",
+        providers: ["old", "new"],
+        doctorContract: { configRepair: true },
+      },
     );
     const config: OpenClawConfig = {
       models: {
@@ -132,6 +139,40 @@ describe("doctor-contract-registry module loader", () => {
     });
     expect([result.config, result.changes]).toEqual([original, []]);
     expect(config).toEqual(original);
+  });
+
+  it.each(["repair", "throw", "warning"])("isolates a normalizer-only config %s", (mode) => {
+    mockContract(
+      {
+        normalizeCompatibilityConfig: ({ cfg }: { cfg: Record<string, unknown> }) => {
+          cfg.repaired = true;
+          if (mode === "throw") {
+            throw new Error("fixture repair failed");
+          }
+          return mode === "warning"
+            ? { config: cfg, changes: [], warnings: ["Repair requires operator input."] }
+            : { config: cfg, changes: ["repaired config"] };
+        },
+      },
+      { id: "normalizer-only", doctorContract: { configRepair: true } },
+    );
+
+    const config = {};
+    const result = doctor.applyPluginDoctorCompatibilityMigrations(config, { env: {} });
+    expect(config).toEqual({});
+    expect(result.config).toEqual(mode === "repair" ? { repaired: true } : {});
+    expect(result.changes).toEqual(mode === "repair" ? ["repaired config"] : []);
+    expect(result.warnings).toEqual(
+      mode === "throw"
+        ? [
+            expect.stringContaining(
+              'Plugin "normalizer-only" config repair failed: fixture repair failed',
+            ),
+          ]
+        : mode === "warning"
+          ? ["Repair requires operator input."]
+          : undefined,
+    );
   });
 
   it.each(["js", "ts"])(
@@ -216,6 +257,8 @@ describe("doctor-contract-registry module loader", () => {
       mocks.loadPluginManifestRegistry.mockReturnValueOnce(
         registry({ id: `${id}-plugin`, rootDir }),
       );
+    }
+    for (const id of ["first", "second"]) {
       expect(
         doctor.listPluginDoctorLegacyConfigRules({ workspaceDir: "/workspace", env: {} }),
       ).toEqual([{ path: ["plugins", "entries", id], message: `${id} contract` }]);
@@ -264,21 +307,43 @@ function mockRawDoctorPlugins(...plugins: Record<string, unknown>[]): void {
 }
 
 describe("doctor-contract-registry selection", () => {
-  const configuredProviders = ["default", "entry", "policy", "worker"];
-  const officialOwner = { ownerId: "feishu", trusted: true, pins: true };
+  const configuredProviders = [
+    "channel",
+    "default",
+    "entry",
+    "fallback",
+    "gmail",
+    "hook",
+    "opencode",
+    "policy",
+    "tts",
+    "voice",
+    "worker",
+  ];
   it.each([
     { name: "missing official plugin", pins: true },
     { name: "unresolved host facts", warning: "Resolve account ambiguity", pins: false },
     { name: "deferred installed owner", ownerId: "feishu", pins: false },
-    { name: "deferred trusted official owner", ...officialOwner },
-    { name: "deferred trusted owner with authored endpoints", ...officialOwner, explicit: true },
+    { name: "deferred trusted official owner", ownerId: "feishu", trusted: true, pins: true },
+    {
+      name: "deferred trusted owner with authored endpoints",
+      ownerId: "feishu",
+      trusted: true,
+      explicit: true,
+      pins: true,
+    },
     {
       name: "deferred trusted owner excluded by the allowlist",
-      ...officialOwner,
+      ownerId: "feishu",
+      trusted: true,
       restricted: true,
       pins: false,
     },
-    { name: "deferred replacement owner", ownerId: "custom-feishu", pins: false },
+    {
+      name: "deferred replacement owner",
+      ownerId: "custom-feishu",
+      pins: false,
+    },
   ])("preserves historical webhook ownership for $name", (scenario) => {
     const { ownerId, trusted, restricted, warning, explicit = false, pins } = scenario;
     const config: OpenClawConfig = {
@@ -341,20 +406,26 @@ describe("doctor-contract-registry selection", () => {
     expect(config).toEqual(original);
     const expected = structuredClone(original);
     if (pins || restricted) {
-      expected.meta!.migrations!.webhookListeners = {
-        telegram: [],
-        feishu:
-          pins && !explicit ? [["channels", "feishu", "accounts", "default", "legacyWebhook"]] : [],
+      expected.meta = {
+        migrations: {
+          webhookListeners: {
+            telegram: [],
+            feishu:
+              pins && !explicit
+                ? [["channels", "feishu", "accounts", "default", "legacyWebhook"]]
+                : [],
+          },
+        },
       };
     }
     if (pins) {
       const channel = expected.channels!.feishu;
-      (explicit ? channel : channel.accounts.default).legacyWebhook = explicit
-        ? { port: 9001, host: "0.0.0.0" }
-        : { port: 3000, host: "127.0.0.1" };
       if (explicit) {
         delete channel.webhookPort;
         delete channel.webhookHost;
+        channel.legacyWebhook = { port: 9001, host: "0.0.0.0" };
+      } else {
+        channel.accounts.default.legacyWebhook = { port: 3000, host: "127.0.0.1" };
       }
     }
     expect(result.config).toEqual(expected);
@@ -414,9 +485,10 @@ describe("doctor-contract-registry selection", () => {
     {
       name: "configured-model and policy providers without shadow-list owners",
       raw: {
+        models: { providers: { "ollama-cloud": {} } },
         agents: {
           defaults: {
-            model: "default/model",
+            model: { primary: "default/model", fallbacks: ["fallback/model", 42] },
             modelPolicy: { allow: ["default/*", "policy/*", 42, "bare"] },
           },
           entries: {
@@ -430,8 +502,18 @@ describe("doctor-contract-registry selection", () => {
             },
           ],
         },
+        hooks: {
+          mappings: [{ model: "hook/model" }, { model: 42 }],
+          gmail: { model: "gmail/model" },
+        },
+        tts: { summaryModel: "tts/model" },
+        tools: { media: { image: { preferredModel: "opencode/minimax-m3" } } },
+        channels: {
+          modelByChannel: { slack: { room: "channel/model" } },
+          discord: { voice: { model: "voice/model" } },
+        },
       },
-      ids: configuredProviders,
+      ids: [...configuredProviders, "discord", "ollama-cloud"].toSorted(),
       touchedIds: configuredProviders,
     },
     {
@@ -503,11 +585,19 @@ describe("doctor-contract-registry selection", () => {
   it("collects provider ids from media model entries", () => {
     const raw = {
       tools: {
-        media: { models: [" xAI ", " ", "XAI", "openai"].map((provider) => ({ provider })) },
+        media: {
+          models: [
+            { provider: " xAI " },
+            { provider: " " },
+            { provider: "XAI", model: "grok-stt", capabilities: ["audio"] },
+            { provider: "openai", model: "gpt-5.5", capabilities: ["image"] },
+            { provider: "gemini", model: "veo", capabilities: ["video"] },
+          ],
+        },
       },
     };
 
-    const expected = ["openai", "xai"];
+    const expected = ["gemini", "openai", "xai"];
     expect(doctor.collectRelevantDoctorPluginIds(raw)).toEqual(expected);
     expect(
       doctor.collectDoctorConfigRepairPluginIds(raw, [["tools", "media", "models", "2", "model"]]),
@@ -607,6 +697,11 @@ it("repairs retained channel config before installation without selecting state 
     changes: ["moved DM policy"],
   });
   expect(config.channels.discord.dm.policy).toBe("allowlist");
+  expect(retainedConfigDoctorMock).toHaveBeenCalledWith({
+    dirName: "discord",
+    artifactCandidates: ["config-doctor-api.js"],
+    env: {},
+  });
   retainedConfigDoctorMock.mockClear();
   expect([
     doctor.listPluginDoctorSessionStoreAgentIds({ config, env: {} }),
@@ -616,12 +711,17 @@ it("repairs retained channel config before installation without selecting state 
 });
 
 it.each([false, true])("keeps installed owner (configRepair=%s)", (configRepair) => {
-  mockRawDoctorPlugins({
-    id: "installed-owner",
-    channels: ["discord"],
-    providers: [],
-    rootDir: makeTempDir(),
-    doctorContract: { configRepair },
+  mocks.loadPluginManifestRegistry.mockReturnValue({
+    plugins: [
+      {
+        id: "installed-owner",
+        channels: ["discord"],
+        providers: [],
+        rootDir: makeTempDir(),
+        doctorContract: { configRepair },
+      },
+    ],
+    diagnostics: [],
   });
   const config = channelConfig();
   expect(doctor.listPluginDoctorLegacyConfigRules({ config, env: {} })).toEqual([]);

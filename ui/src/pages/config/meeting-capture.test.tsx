@@ -58,14 +58,15 @@ async function mount(
       if (options.failStatus) {
         throw new Error("Archive unavailable");
       }
-      return {
+      const status: TranscriptsStatusResult = {
         ...meetingStatus,
         providers: options.providers ?? meetingStatus.providers,
         configuredSources: meetingStatus.configuredSources.map((source) => ({
           ...source,
           startDiagnostic: options.startDiagnostic,
         })),
-      } satisfies TranscriptsStatusResult;
+      };
+      return status;
     }
     if (method === "config.get") {
       return {
@@ -87,7 +88,11 @@ async function mount(
     <MeetingCaptureSettings mutationDisabled={options.disabled ?? false} />
   ));
   const { page } = mounted;
-  await waitText(page, options.failStatus ? "Capture health is unknown" : "Not active");
+  await waitForSolid(() =>
+    expect(page.textContent).toContain(
+      options.failStatus ? "Capture health is unknown" : "Not active",
+    ),
+  );
   return { ...mounted, request, respond, original };
 }
 
@@ -107,6 +112,17 @@ function chooseProvider(page: Element, value: string) {
 function submit(page: Element, bubbles = false) {
   page.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles, cancelable: true }));
 }
+async function expectSaved(
+  runtimeConfig: RuntimeConfigCapability,
+  request: Awaited<ReturnType<typeof mount>>["request"],
+  sources: Record<string, unknown>[],
+) {
+  await runtimeConfig.save();
+  const write = request.mock.calls.find(([method]) => method === "config.set")?.[1];
+  expect(write?.baseHash).toBe("one");
+  expect(JSON.parse(write!.raw!).transcripts.autoStart).toEqual(sources);
+}
+
 function expectSources(runtimeConfig: RuntimeConfigCapability, sources: unknown[]) {
   expect(runtimeConfig.state.configForm?.transcripts).toEqual({
     enabled: true,
@@ -125,10 +141,6 @@ function input(page: Element, name: string, value: string) {
   control.value = value;
   control.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
-}
-function editTitle(page: Element, title: string) {
-  click(page, "Edit source 1");
-  input(page, "title", title);
 }
 
 describe("curated meeting capture", () => {
@@ -175,16 +187,20 @@ describe("curated meeting capture", () => {
   ] as const)(
     "retains %s validation for %s through health refresh",
     async (health, field, value, openDuringRefresh, reselect) => {
-      const { page, runtimeConfig, request } = await mount({ providers: requiredProviders });
+      const { page, runtimeConfig, request } = await mount({
+        providers: requiredProviders,
+      });
       const pending = createDeferred<TranscriptsStatusResult>();
       request.mockImplementationOnce(() => pending.promise);
       if (!openDuringRefresh) {
-        editTitle(page, "Not yet submitted");
+        click(page, "Edit source 1");
+        input(page, "title", "Not yet submitted");
       }
       const refresh = click(page, "Refresh");
       await waitForSolid(() => expect(refresh.disabled).toBe(true));
       if (openDuringRefresh) {
-        editTitle(page, "Not yet submitted");
+        click(page, "Edit source 1");
+        input(page, "title", "Not yet submitted");
       }
       const control = inputControl(page, field);
       try {
@@ -240,7 +256,9 @@ describe("curated meeting capture", () => {
         publish(true);
       }
       await waitForSolid(() =>
-        expect(currentRequest.mock.calls.map(([method]) => method)).toContain("transcripts.status"),
+        expect(currentRequest.mock.calls.some(([method]) => method === "transcripts.status")).toBe(
+          true,
+        ),
       );
       await waitForSolid(() => expect(settingsButton(page, "Edit source 1").disabled).toBe(false));
       try {
@@ -255,7 +273,9 @@ describe("curated meeting capture", () => {
         expect([...page.querySelectorAll("input")].some((item) => item.required)).toBe(false);
         expect(inputControl(page, "title").value).toBe("Keep this draft");
         click(page, "Save source");
-        expectSources(runtimeConfig, [{ ...original, title: "Keep this draft" }]);
+        await expectSaved(runtimeConfig, currentRequest, [
+          { ...original, title: "Keep this draft" },
+        ]);
       } finally {
         current.resolve({ ...meetingStatus, providers: [] });
         previous.resolve(meetingStatus);
@@ -294,7 +314,9 @@ describe("curated meeting capture", () => {
     expect(inputControl(page, "title").value).toBe("Unsaved title");
     input(page, "channelId", locators.channelId);
     click(page, "Save source");
-    expectSources(runtimeConfig, [{ ...original, ...locators, title: "Unsaved title" }]);
+    await expectSaved(runtimeConfig, request, [
+      { ...original, ...locators, title: "Unsaved title" },
+    ]);
     flush();
     click(page, "Edit source 1");
     expect([...page.querySelectorAll("input")].some((item) => item.required)).toBe(false);
@@ -345,14 +367,15 @@ describe("curated meeting capture", () => {
       whenOccupied: true,
       sessionId: "saved-custom-id",
     };
-    const { page, runtimeConfig } = await mount({ source });
+    const { page, runtimeConfig, request } = await mount({ source });
     click(page, "Edit source 1");
     const id = inputControl(page, "sessionId");
-    expect(id).toMatchObject({ disabled: true, value: source.sessionId });
+    expect(id.disabled).toBe(true);
+    expect(id.value).toBe(source.sessionId);
     expect(page.textContent).toContain("Occupancy mode chooses session IDs automatically");
     input(page, "title", "Future occupied room");
     click(page, "Save source");
-    expectSources(runtimeConfig, [{ ...source, title: "Future occupied room" }]);
+    await expectSaved(runtimeConfig, request, [{ ...source, title: "Future occupied room" }]);
   });
 
   it("does not save another entry's dirty locator when switching directly between equal sources", async () => {
@@ -413,7 +436,7 @@ describe("curated meeting capture", () => {
       expect(inputControl(page, "title").value).toBe(" Future title ");
       click(page, "Save source");
       expect(source.title).toBe("Original title");
-      expectSources(runtimeConfig, [{ ...source, title: "Future title" }]);
+      await expectSaved(runtimeConfig, request, [{ ...source, title: "Future title" }]);
     },
   );
 
@@ -447,8 +470,9 @@ describe("curated meeting capture", () => {
   });
 
   it("requires Cancel and reopen to edit a replaced source, including after re-entry", async () => {
-    const { page, runtimeConfig, original } = await mount();
-    editTitle(page, "Stale edit");
+    const { page, runtimeConfig, original, request } = await mount();
+    click(page, "Edit source 1");
+    input(page, "title", "Stale edit");
     const replacement = { ...original, sessionId: "replacement" };
     runtimeConfig.patchForm(["transcripts", "autoStart"], [replacement]);
     flush();
@@ -469,7 +493,7 @@ describe("curated meeting capture", () => {
     expect(page.querySelector('[role="alert"]')).toBeNull();
     input(page, "title", "Current edit");
     click(page, "Save source");
-    expectSources(runtimeConfig, [{ ...replacement, title: "Current edit" }]);
+    await expectSaved(runtimeConfig, request, [{ ...replacement, title: "Current edit" }]);
   });
 
   it.each([false, true])(
@@ -504,7 +528,8 @@ describe("curated meeting capture", () => {
 
   it("rejects an open editor submission after admin access is revoked", async () => {
     const { page, context, runtimeConfig, original, publish } = await mount();
-    editTitle(page, "Unauthorized edit");
+    click(page, "Edit source 1");
+    input(page, "title", "Unauthorized edit");
     const snapshot = context.gateway.snapshot;
     publish(true, snapshot.client!, {
       ...snapshot.hello!,
@@ -553,7 +578,7 @@ describe("curated meeting capture", () => {
     expect(
       request.mock.calls.some(([method]) => method.includes("delete") || method.includes("stop")),
     ).toBe(false);
-    expectSources(runtimeConfig, [
+    await expectSaved(runtimeConfig, request, [
       { providerId: "test-voice", guildId: "second-guild", channelId: "second-room" },
     ]);
     flush();
@@ -570,7 +595,9 @@ describe("curated meeting capture", () => {
     const { page } = await mount({
       providers: [
         ...meetingStatus.providers,
-        sourceProvider("attach-only", { canStart: true }),
+        sourceProvider("attach-only", {
+          canStart: true,
+        }),
         sourceProvider("metadata-only", { autoStart: {} }),
         sourceProvider("disabled", {
           availability: "disabled",
@@ -618,7 +645,8 @@ describe("curated meeting capture", () => {
 
   it("keeps the draft and Refresh control through a rejected health read and retry", async () => {
     const { page, request, respond } = await mount();
-    editTitle(page, "Unsaved meeting title");
+    click(page, "Edit source 1");
+    input(page, "title", "Unsaved meeting title");
     const title = inputControl(page, "title");
     const failure = createDeferred<TranscriptsStatusResult>();
     request.mockImplementationOnce(() => failure.promise);
@@ -641,7 +669,8 @@ describe("curated meeting capture", () => {
 
   it("does not overwrite an authoritative raw config draft with an old source array", async () => {
     const { page, runtimeConfig } = await mount();
-    editTitle(page, "Stale title");
+    click(page, "Edit source 1");
+    input(page, "title", "Stale title");
     runtimeConfig.setRaw('{ "transcripts": { "autoStart": [{ "providerId": "other" }] } }');
     flush();
     expect(page.textContent).toContain("Save or discard the pending raw config draft");

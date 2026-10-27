@@ -643,6 +643,10 @@ describe("provider public artifacts", () => {
       levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
       defaultLevel: "high",
     });
+    expect(loadArtifact).toHaveBeenCalledWith({
+      dirName: "xai",
+      artifactCandidates: ["provider-policy-api.js"],
+    });
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
@@ -682,6 +686,10 @@ describe("provider public artifacts", () => {
       surface?.resolveThinkingProfile?.({ provider: "claude-cli", modelId: "claude-opus-4-8" }),
     ).toEqual({
       levels: [{ id: "claude-cli" }],
+    });
+    expect(loadArtifact).toHaveBeenCalledWith({
+      dirName: "anthropic",
+      artifactCandidates: ["provider-policy-api.js"],
     });
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
@@ -797,6 +805,10 @@ describe("provider public artifacts", () => {
     };
     const surface = resolvePolicySurface("openai", { manifestRegistry });
     expect(surface?.normalizeConfig).toBeTypeOf("function");
+    expect(loadArtifact).toHaveBeenCalledWith({
+      dirName: "openai",
+      artifactCandidates: ["provider-policy-api.js"],
+    });
   });
 
   it("recognizes resolveModelRoutes as a standalone provider policy surface", async () => {

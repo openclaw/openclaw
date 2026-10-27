@@ -313,21 +313,38 @@ describe("plugin metadata snapshot", () => {
 
   it("cold-loads the requested workspace instead of reusing a different lifecycle graph", () => {
     const config = {};
-    const prepare = (id: string) => {
-      const params = {
-        ...prepareRegistry(config, "provided", [id]),
-        workspaceDir: `/workspace/${id}`,
-      };
-      params.index.workspaceDir = params.workspaceDir;
-      return params;
-    };
-    const staleParams = prepare("stale");
-    setCurrentPluginMetadataSnapshot(loadPluginMetadataSnapshot(staleParams), staleParams);
-    const { index: _index, ...freshParams } = prepare("fresh");
-    const resolved = resolvePluginMetadataSnapshot(freshParams);
+    const sourceWorkspace = "/workspace/source";
+    const targetWorkspace = "/workspace/target";
+    const staleIndex = makeIndex("stale");
+    staleIndex.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    staleIndex.workspaceDir = sourceWorkspace;
+    mockRegistrySnapshot(staleIndex);
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry("stale"));
+    const stale = loadPluginMetadataSnapshot({
+      config,
+      env: {},
+      index: staleIndex,
+      workspaceDir: sourceWorkspace,
+    });
+    setCurrentPluginMetadataSnapshot(stale, { config, env: {}, workspaceDir: sourceWorkspace });
+
+    // Convergence replaced the persisted inventory; a fresh load now sees a different graph.
+    const freshIndex = makeIndex("fresh");
+    freshIndex.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    freshIndex.workspaceDir = targetWorkspace;
+    mockRegistrySnapshot(freshIndex);
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry("fresh"));
+
+    const resolved = resolvePluginMetadataSnapshot({
+      config,
+      env: {},
+      workspaceDir: targetWorkspace,
+    });
+
     expect(resolved.index.plugins.map((plugin) => plugin.pluginId)).toEqual(["fresh"]);
     expect(resolved.configFingerprint).toBe(
-      loadPluginMetadataSnapshot(freshParams).configFingerprint,
+      loadPluginMetadataSnapshot({ config, env: {}, workspaceDir: targetWorkspace })
+        .configFingerprint,
     );
   });
 
@@ -338,26 +355,20 @@ describe("plugin metadata snapshot", () => {
     expect(reloaded.finalizePluginMetadataSnapshot(snapshot)).toBe(snapshot);
   });
 
-  it.each([
-    { source: "derived", empty: true },
-    { source: "persisted", empty: true },
-    { source: "derived", empty: false },
-  ])("retains the $source index and manifest graph (empty: $empty)", ({ source, empty }) => {
+  it.each(["derived", "persisted"])("keeps an empty %s index authoritative", (source) => {
     const index = makeIndex();
-    const manifestRegistry = makeManifestRegistry();
-    if (empty) {
-      index.plugins = [];
-      manifestRegistry.plugins = [];
-    }
+    index.plugins = [];
     const discovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
     loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
       source,
       snapshot: index,
       diagnostics: [],
       ...(source === "derived" ? { discovery } : {}),
-      ...(!empty ? { manifestRegistry } : {}),
     });
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
 
     const snapshot = loadPluginMetadataSnapshot({
       config: {},
@@ -372,15 +383,33 @@ describe("plugin metadata snapshot", () => {
       }),
     );
     expect(snapshot.discovery).toBe(source === "derived" ? discovery : undefined);
-    expect(snapshot.registrySource).toBe(source);
-    expect(snapshot.plugins.map((plugin) => plugin.id)).toEqual(empty ? [] : ["demo"]);
-    if (empty) {
-      expect(snapshot.index.plugins).toEqual([]);
-    } else {
-      expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ manifestRegistry, includeDisabled: true }),
-      );
-    }
+    expect(snapshot.plugins).toEqual([]);
+    expect(snapshot.index.plugins).toEqual([]);
+  });
+
+  it("carries a derived manifest graph into snapshot construction without rebuilding it", () => {
+    const index = makeIndex();
+    const manifestRegistry = makeManifestRegistry();
+    const discovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: index,
+      diagnostics: [],
+      discovery,
+      manifestRegistry,
+    });
+
+    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {} });
+
+    expect(snapshot.plugins.map((plugin) => plugin.id)).toEqual(["demo"]);
+    expect(snapshot.registrySource).toBe("derived");
+    expect(snapshot.discovery).toBe(discovery);
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        manifestRegistry,
+        includeDisabled: true,
+      }),
+    );
   });
 
   it("reuses an adopted snapshot across config objects until a lifecycle owner replaces it", () => {
@@ -388,9 +417,10 @@ describe("plugin metadata snapshot", () => {
     const load = { paths: ["/custom/plugins"] };
     const config = { plugins: { load, entries: { demo: { enabled: true } } } };
     const compatibleConfig = { plugins: { load, entries: { demo: { enabled: false } } } };
-    const params = prepareRegistry(config);
-    const { index } = params;
-    const snapshot = loadPluginMetadataSnapshot(params);
+    const index = makeIndex();
+    index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    mockRegistrySnapshot(index);
+    const snapshot = loadPluginMetadataSnapshot({ config, env: {}, index });
     adoptCurrentPluginMetadataSnapshotIfAbsent(snapshot, {
       config,
       compatibleConfigs: [compatibleConfig],
@@ -544,25 +574,26 @@ describe("plugin metadata snapshot", () => {
 
   it("reuses prepared model normalization policies without enumerating declarations", () => {
     const enumeratePolicies = vi.fn(Reflect.ownKeys);
-    const normalizer = (
-      id: string,
-      providers: Record<string, { aliases: Record<string, string> }>,
-    ) => ({
-      id,
-      providers: ["demo"],
-      modelIdNormalization: { providers },
-    });
     const snapshot = restorePluginMetadataSnapshot(
       createPluginMetadataSnapshotFixture({
         plugins: [
-          normalizer("first", { " Demo ": { aliases: { latest: "first-model" } } }),
-          normalizer(
-            "last",
-            new Proxy(
-              { demo: { aliases: { latest: "middle-model", "middle-model": "final-model" } } },
-              { ownKeys: (target) => enumeratePolicies(target) },
-            ),
-          ),
+          {
+            id: "first",
+            providers: ["demo"],
+            modelIdNormalization: {
+              providers: { " Demo ": { aliases: { latest: "first-model" } } },
+            },
+          },
+          {
+            id: "last",
+            providers: ["demo"],
+            modelIdNormalization: {
+              providers: new Proxy(
+                { demo: { aliases: { latest: "middle-model", "middle-model": "final-model" } } },
+                { ownKeys: (target) => enumeratePolicies(target) },
+              ),
+            },
+          },
         ],
       }),
     );
@@ -598,14 +629,15 @@ describe("plugin metadata snapshot", () => {
         expect(normalizeStaticProviderModelId("demo", "latest", { manifestPlugins: [] })).toBe(
           "latest",
         );
-        const plugins = [
-          normalizer("explicit", { demo: { aliases: { latest: "explicit-model" } } }),
-        ];
+        const providers = { demo: { aliases: { latest: "explicit-model" } } };
+        const plugins = [{ modelIdNormalization: { providers } }];
         expect(normalizeStaticProviderModelId("demo", "latest", { manifestPlugins: plugins })).toBe(
           "explicit-model",
         );
-        plugins[0] = normalizer("explicit", {
-          demo: { aliases: { latest: "changed-explicit-model" } },
+        plugins.splice(0, 1, {
+          modelIdNormalization: {
+            providers: { demo: { aliases: { latest: "changed-explicit-model" } } },
+          },
         });
         expect(normalizeStaticProviderModelId("demo", "latest", { manifestPlugins: plugins })).toBe(
           "changed-explicit-model",
