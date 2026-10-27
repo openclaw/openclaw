@@ -62,18 +62,14 @@ function sessionEntry(lifecycleRevision?: string) {
   };
 }
 
-function holdMessageRead(messageId = "executing") {
+function holdMessageRead() {
   const entered = createDeferred();
   const release = createDeferred<ReturnType<typeof storedMessage>>();
   readSessionMessageByIdAsyncMock.mockImplementationOnce(() => {
     entered.resolve();
     return release.promise;
   });
-  return { entered: entered.promise, release: () => release.resolve(storedMessage(messageId)) };
-}
-
-function expectMessageIds(broadcast: ReturnType<typeof vi.fn>, ids: string[]) {
-  expect(broadcast.mock.calls.map((call) => call[1]?.messageId)).toEqual(ids);
+  return { entered: entered.promise, release: () => release.resolve(storedMessage("executing")) };
 }
 
 describe("createTranscriptUpdateBroadcastHandler", () => {
@@ -213,45 +209,37 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     });
   });
 
-  it.each(["current", "deleted"] as const)(
-    "publishes identity-only invalidation only for a %s owner",
-    async (owner) => {
-      const { broadcastToConnIds, handler } = routedHandler(
-        { "agent:main:main": ["conn-targeted", "conn-shared"] },
-        ["conn-broad", "conn-shared"],
-      );
-      loadAccessorSessionEntryReadOnlyMock.mockReturnValue(
-        owner === "current" ? sessionEntry("committed-revision") : undefined,
-      );
+  it("invalidates broad and targeted subscribers once for an identity-only commit", async () => {
+    const { broadcastToConnIds, handler } = routedHandler(
+      { "agent:main:main": ["conn-targeted", "conn-shared"] },
+      ["conn-broad", "conn-shared"],
+    );
+    loadAccessorSessionEntryReadOnlyMock.mockReturnValue(sessionEntry("committed-revision"));
 
-      await handler({
-        target: transcriptTarget("/tmp/identity-only-custom-sessions.json"),
-        lifecycleRevision: "committed-revision",
-      });
+    await handler({
+      target: transcriptTarget("/tmp/identity-only-custom-sessions.json"),
+      lifecycleRevision: "committed-revision",
+    });
 
-      if (owner === "current") {
-        expect(broadcastToConnIds).toHaveBeenCalledOnce();
-        expectBroadcast(
-          broadcastToConnIds,
-          {
-            sessionKey: "agent:main:main",
-            agentId: "main",
-            sessionId: "sess-main",
-            phase: "message",
-          },
-          "sessions.changed",
-          new Set(["conn-broad", "conn-shared", "conn-targeted"]),
-        );
-        expectAbsentFields(
-          broadcastToConnIds.mock.calls[0]?.[1],
-          "message messageId messageSeq lifecycleRevision storePath target.storePath",
-        );
-      } else {
-        expect(broadcastToConnIds).not.toHaveBeenCalled();
-      }
-      expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
-    },
-  );
+    expect(broadcastToConnIds).toHaveBeenCalledOnce();
+    expectBroadcast(
+      broadcastToConnIds,
+      {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        sessionId: "sess-main",
+        phase: "message",
+      },
+      "sessions.changed",
+      new Set(["conn-broad", "conn-shared", "conn-targeted"]),
+    );
+    const payload = broadcastToConnIds.mock.calls[0]?.[1];
+    expectAbsentFields(
+      payload,
+      "message messageId messageSeq lifecycleRevision storePath target.storePath",
+    );
+    expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
+  });
 
   it("scopes a queued marker update to its final transcript key", async () => {
     listAccessorSessionEntriesReadOnlyMock
@@ -274,6 +262,18 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     );
   });
 
+  it("rejects an identity-only invalidation when its custom-store owner was deleted", async () => {
+    const { broadcastToConnIds, handler } = createHandler(false);
+
+    await handler({
+      target: transcriptTarget("/tmp/deleted-identity-only-sessions.json"),
+      lifecycleRevision: "deleted-revision",
+    });
+
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+    expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
+  });
+
   registerTranscriptMarkerQueueTests();
 
   it.each([
@@ -291,7 +291,8 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         entry: sessionEntry("revision-before-reset"),
         storePath: "/tmp/default-lifecycle-sessions.json",
       });
-      const read = holdMessageRead("message-before-reset");
+      const read = createDeferred<ReturnType<typeof storedMessage>>();
+      readSessionMessageByIdAsyncMock.mockImplementation(() => read.promise);
       const { broadcastToConnIds, handler } = createHandler(false);
 
       const pendingBroadcast = handler({
@@ -300,8 +301,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         ...messageUpdate("message-before-reset", "deleted by reset", "user"),
       });
 
-      await read.entered;
-      expect(readSessionMessageByIdAsyncMock).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(readSessionMessageByIdAsyncMock).toHaveBeenCalledOnce());
       if (ownerChange === "deleted") {
         currentEntry = undefined;
       } else if (ownerChange === "rebound") {
@@ -309,7 +309,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       } else {
         currentEntry.lifecycleRevision = "revision-after-reset";
       }
-      read.release();
+      read.resolve(storedMessage("message-before-reset"));
 
       await pendingBroadcast;
       expect(loadGatewaySessionEntryReadOnlyMock).not.toHaveBeenCalled();
@@ -349,6 +349,11 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       expect(broadcastToConnIds).toHaveBeenCalledOnce();
       expectBroadcast(broadcastToConnIds, { sessionKey: "agent:main:main", messageId, messageSeq });
       if (current) {
+        expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledWith({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          storePath,
+        });
         expect(loadGatewaySessionEntryReadOnlyMock).not.toHaveBeenCalled();
         expectAbsentFields(
           broadcastToConnIds.mock.calls[0]?.[1],
@@ -358,22 +363,40 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     },
   );
 
-  it.each([true, false])(
-    "projects terminal run ownership only after execution starts: %s",
-    async (started) => {
-      const { broadcastToConnIds, handler } = createHandler(true, started);
-      await handler({ ...directUpdate("message-1", "Final answer"), runId: "run-before-finalize" });
-      const state = { status: started ? "running" : "done", hasActiveRun: started };
-      expectBroadcast(broadcastToConnIds, {
-        sessionKey: "agent:main:main",
-        runId: "run-before-finalize",
-        messageId: "message-1",
-        messageSeq: 1,
-        ...state,
-        session: expect.objectContaining({ key: "agent:main:main", ...state }),
-      });
-    },
-  );
+  it("carries terminal assistant run ownership while plugin finalization keeps the run active", async () => {
+    // before_agent_finalize hooks run after the assistant transcript write but
+    // before terminal delivery. The active-run registry remains authoritative
+    // during that interval even when the persisted session row says done.
+    const { broadcastToConnIds, handler } = createHandler(true);
+
+    await handler({
+      ...directUpdate("message-1", "Final answer"),
+      runId: "run-before-finalize",
+    });
+
+    expectBroadcast(broadcastToConnIds, {
+      sessionKey: "agent:main:main",
+      runId: "run-before-finalize",
+      messageId: "message-1",
+      messageSeq: 1,
+      status: "running",
+      hasActiveRun: true,
+      session: expect.objectContaining({
+        key: "agent:main:main",
+        status: "running",
+        hasActiveRun: true,
+      }),
+    });
+  });
+
+  it("does not project a prepared source as a running startup transcript", async () => {
+    await expect(emitAssistantTranscriptUpdate(true, undefined, false)).resolves.toMatchObject({
+      sessionKey: "agent:main:main",
+      status: "done",
+      hasActiveRun: false,
+      session: { key: "agent:main:main", status: "done", hasActiveRun: false },
+    });
+  });
 
   it.each(["ultra", undefined])(
     "projects thinking state %s without picker metadata",
@@ -463,13 +486,24 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     expectPrivateSessionInvalidation(broadcastToConnIds.mock.calls[0]?.[1]);
   });
 
-  it("broadcasts user message ownership", async () => {
+  it.each([
+    [
+      { idempotencyKey: "client-turn-3" },
+      {
+        sessionKey: "agent:main:main",
+        messageId: "message-1",
+        messageSeq: 1,
+        message: { __openclaw: { id: "message-1", idempotencyKey: "client-turn-3", seq: 1 } },
+      },
+    ],
+    [{ __openclaw: { senderIsOwner: true } }, { senderIsOwner: true }],
+  ])("broadcasts user message metadata %j", async (metadata, expected) => {
     await expect(
       emitAssistantTranscriptUpdate(false, {
         ...messageUpdate("message-1", "User turn", "user").message,
-        __openclaw: { senderIsOwner: true },
+        ...metadata,
       }),
-    ).resolves.toMatchObject({ senderIsOwner: true });
+    ).resolves.toMatchObject(expected);
   });
   it("publishes message-phase changes to plugins without websocket subscribers", async () => {
     const received = vi.fn();
@@ -547,7 +581,8 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         await Promise.allSettled([slowTask, fastTask]);
       }
 
-      expectMessageIds(broadcastToConnIds, ["fast-1", "slow-1"]);
+      expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
+      expect(broadcastToConnIds.mock.calls[1]?.[1]).toMatchObject({ messageId: "slow-1" });
     },
   );
 
@@ -603,7 +638,10 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         releaseFirstCount(1);
         await Promise.allSettled([firstTask, secondTask]);
       }
-      expectMessageIds(broadcastToConnIds, ["ordered-1", "ordered-2"]);
+      expect(broadcastToConnIds.mock.calls.map((call) => call[1]?.messageId)).toEqual([
+        "ordered-1",
+        "ordered-2",
+      ]);
     },
   );
 });
