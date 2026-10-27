@@ -2,6 +2,7 @@
 import { button, choice, el } from "./page-dom.js";
 import {
   CONVERSATIONS_SCHEDULE,
+  defaultOptions,
   REVIEW_NIGHTLY_SCHEDULE,
   REVIEW_WEEKLY_SCHEDULE,
   scribeLabel,
@@ -307,7 +308,7 @@ export function openStartDialog(input: StartDialogInput) {
   const frame = dialogFrame(scribe.dialogTitle, scribeTile(scribe));
   const effectSlot = el("div");
   let mode: () => ScribeMode = () => scribe.modes[0]!;
-  let options: () => ScribeSetup["options"] = () => ({});
+  let options: () => ScribeSetup["options"] = () => defaultOptions(scribe.id);
   let valid = () => true;
   let starting = false;
   const submit = button(scribe.submitLabel, () => void run(), "knowledge-button knowledge-primary");
