@@ -12,6 +12,7 @@ import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/m
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import type {
   GatewaySessionModelSource,
@@ -147,6 +148,7 @@ export function mayMatchSessionRowModelSearch(
     ref(source?.rowModelIdentity.provider, source?.rowModelIdentity.model);
     if (source) {
       runtime(source.thinkingProjection.agentRuntime.id);
+      add(formatAgentRuntimeLabel(source.thinkingProjection.agentRuntime));
     }
   }
   for (const agentId of agents) {

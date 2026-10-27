@@ -426,10 +426,11 @@ export function filterSessionEntries(
           }
         }
         const runtime = source.thinkingProjection.agentRuntime;
-        let runtimeMatch = runtimeMatches?.get(runtime.id);
+        const runtimeLabel = formatAgentRuntimeLabel(runtime);
+        let runtimeMatch = runtimeMatches?.get(runtimeLabel);
         if (runtimeMatch === undefined) {
-          runtimeMatch = matchesSessionListSearch([formatAgentRuntimeLabel(runtime)], search);
-          (runtimeMatches ??= new Map()).set(runtime.id, runtimeMatch);
+          runtimeMatch = matchesSessionListSearch([runtimeLabel], search);
+          (runtimeMatches ??= new Map()).set(runtimeLabel, runtimeMatch);
         }
         return runtimeMatch;
       }

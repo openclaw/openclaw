@@ -430,7 +430,7 @@ test("search preserves the eager predicate's rows and order across vocabulary su
     }),
   });
   const facts = new Map<string, ReturnType<SessionListModelFactsLookup>>(
-    rows.map(([key]): [string, ReturnType<SessionListModelFactsLookup>] => [
+    rows.map(([key], index): [string, ReturnType<SessionListModelFactsLookup>] => [
       key,
       {
         selectedModel: {
@@ -441,8 +441,9 @@ test("search preserves the eager predicate's rows and order across vocabulary su
         rowModelIdentity: { provider: choose(providers), model: choose(models) },
         thinkingProjection: {
           agentRuntime: {
-            id: choose(["openclaw", "codex", "acp"]),
+            id: index < 2 ? "shared-runtime" : choose(["openclaw", "codex", "acp"]),
             source: "implicit",
+            ...(index === 0 ? { fallback: "openclaw" } : index === 1 ? { fallback: "none" } : {}),
           },
           acpMeta: undefined,
         },
@@ -498,9 +499,8 @@ test("search preserves the eager predicate's rows and order across vocabulary su
     "openai/gpt-4.1",
     "anthropic/claude-sonnet-4",
     "vendor/custom",
-    "openclaw",
-    "codex",
-    "acp",
+    "shared-runtime (fallback openclaw)",
+    "shared-runtime (fallback none)",
     "Pursuing goal",
     "Goal paused (1.2k used)",
     "Waiting for review",

@@ -536,7 +536,7 @@ test("searches rich displayed fields before selecting a page across visible agen
     vi.spyOn(runtimeMetadata, "resolveCurrentSessionAgentRuntimeMetadata").mockImplementation(
       (params) =>
         params.sessionKey === "agent:work:target"
-          ? { id: "custom-harness", source: "session", fallback: "portable-mode" }
+          ? { id: "custom-harness", source: "session", fallback: "openclaw" }
           : runtime(params),
     );
     for (let index = 0; index < 55; index++) {
@@ -553,7 +553,7 @@ test("searches rich displayed fields before selecting a page across visible agen
       "Pursuing goal (12k/50k)",
       "Telescope calibrated",
       "Orchid Navigator",
-      "custom-harness (fallback portable-mode)",
+      "custom-harness (fallback openclaw)",
     ]) {
       const result = await list({ search, limit: 50 });
       expect
