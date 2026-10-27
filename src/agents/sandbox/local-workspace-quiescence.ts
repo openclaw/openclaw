@@ -344,7 +344,9 @@ export async function quiesceLocalWorkspace(params: {
         await release();
       }
       params.assertCurrent();
-      await params.persist([]);
+      if (paused.length) {
+        await params.persist([]);
+      }
     },
   };
 }
