@@ -225,6 +225,8 @@ async function setup(missingAuth = false) {
         assertCurrent() {},
       };
       const models = createPluginRequesterModels(readerParams)!;
+      const unpreparedModels = () =>
+        createPluginRequesterModels({ ...readerParams, preparedModelRuntime: undefined })!;
       const client: GatewayClient = {
         connId: person.id,
         connect: {
@@ -236,6 +238,7 @@ async function setup(missingAuth = false) {
       return {
         readerParams,
         models,
+        unpreparedModels,
         save,
         revoke: () => {
           current = false;
@@ -255,16 +258,12 @@ async function setup(missingAuth = false) {
   return { config, context, requesters, owner, accountCatalog, refreshAccount };
 }
 
-it("projects safe requester catalogs and valid declared families", async () => {
-  await fixture(async ({ owner, requesters }) => {
-    owner.modelCatalog.entries[0]!.family = "openai";
-    owner.modelCatalog.entries[1]!.family = "Open AI";
+it("matches the safe models.list session projection for two differently restricted requesters", async () => {
+  await fixture(async ({ requesters }) => {
     const catalogs = [];
     for (const [i, requester] of requesters.entries()) {
-      const gateway = await requester.gateway();
-      expect(Check(ModelsListResultSchema, gateway)).toBe(true);
       const result = await requester.models.list();
-      expect(result).toEqual(projectRequesterModelCatalog(gateway));
+      expect(result).toEqual(projectRequesterModelCatalog(await requester.gateway()));
       expect(result.models.map((model) => model.id)).toEqual([ids[i]]);
       expect(result.selectionPolicy).toEqual({
         restricted: true,
@@ -273,10 +272,30 @@ it("projects safe requester catalogs and valid declared families", async () => {
       expect(JSON.stringify(result)).not.toMatch(
         /synthetic-private-key|apiKeySupported|authProfile|credentials|refresh/,
       );
-      expect(result.models[0]?.family).toBe(i === 0 ? "openai" : undefined);
+      // These fixture rows declare no family, so none may be invented.
+      expect(result.models[0]).not.toHaveProperty("family");
       catalogs.push(result);
     }
     expect(catalogs[0]!.revision).not.toBe(catalogs[1]!.revision);
+  });
+});
+
+it("gives the requester reader the family a catalog declares, never a malformed one", async () => {
+  await fixture(async ({ owner, requesters }) => {
+    const [declared, malformed] = owner.modelCatalog.entries;
+    declared!.family = "openai";
+    // Catalog sources normalize families; the public projection still never trusts a raw one.
+    malformed!.family = "Open AI";
+    const families = [];
+    for (const requester of requesters) {
+      const gateway = await requester.gateway();
+      expect(Check(ModelsListResultSchema, gateway)).toBe(true);
+      const result = await requester.models.list();
+      expect(result).toEqual(projectRequesterModelCatalog(gateway));
+      expect(JSON.stringify(result)).not.toMatch(/synthetic-private-key|apiKeySupported/);
+      families.push(result.models.map(({ id, family }) => [id, family]));
+    }
+    expect(families).toEqual([[[ids[0], "openai"]], [[ids[1], undefined]]]);
   });
 });
 
@@ -360,11 +379,9 @@ it("recovers a retained reader after auth-owner replacement instead of pinning i
     const published = vi
       .spyOn(preparedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
       .mockReturnValue(undefined);
-    await expect(requesters[0]!.models.list()).resolves.toEqual({
-      revision: expect.any(String),
+    await expect(requesters[0]!.models.list()).resolves.toMatchObject({
       state: "pending",
       models: [],
-      selectionPolicy: { restricted: true, defaultModel: null },
     });
     published.mockReturnValue(replacement);
     await expect(requesters[0]!.models.list()).resolves.toMatchObject({
@@ -482,6 +499,7 @@ it("uses requester catalogs through the real command and agent tool assembly cal
       pluginOwner,
     );
     try {
+      expect(registry.diagnostics).toEqual([]);
       const expected = projectRequesterModelCatalog(await requester.gateway());
       const params = buildCommandTestParams("/catalog", config);
       params.sessionKey = requester.readerParams.sessionKey;
@@ -515,6 +533,20 @@ it("uses requester catalogs through the real command and agent tool assembly cal
     } finally {
       await disposePluginRegistryInstances(registry);
     }
+  });
+});
+
+it("returns pending with no admitted models when no prepared owner is published", async () => {
+  await fixture(async ({ requesters }) => {
+    vi.spyOn(preparedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot").mockReturnValue(
+      undefined,
+    );
+    await expect(requesters[0]!.unpreparedModels().list()).resolves.toEqual({
+      revision: expect.any(String),
+      state: "pending",
+      models: [],
+      selectionPolicy: { restricted: true, defaultModel: null },
+    });
   });
 });
 
@@ -559,28 +591,33 @@ it.each(["reset", "revocation", "retirement", "account publication"])(
 );
 
 it("never represents unknown, unavailable or non-selectable rows as available, and drops credential-bearing fields", () => {
-  const model = (
-    id: string,
-    name: string,
-    fields: Partial<ModelsListResult["models"][number]> = {},
-  ) => ({
-    id,
-    provider: "test",
-    name,
-    ...fields,
-  });
   const catalog = projectRequesterModelCatalog({
     models: [
-      model("ready", "Ready", {
+      {
+        id: "ready",
+        provider: "test",
+        name: "Ready",
         available: true,
         apiKeySupported: true,
         thinkingLevels: [{ id: "high", label: "High" }],
         supportsFastMode: true,
-      }),
-      model("no-fast", "No fast", { available: true, supportsFastMode: false }),
-      model("unknown", "Unknown"),
-      model("offline", "Offline", { available: false }),
-      model("hidden", "Hidden", { available: true, manualSelectionAllowed: false }),
+      },
+      {
+        id: "no-fast",
+        provider: "test",
+        name: "No fast",
+        available: true,
+        supportsFastMode: false,
+      },
+      { id: "unknown", provider: "test", name: "Unknown" },
+      { id: "offline", provider: "test", name: "Offline", available: false },
+      {
+        id: "hidden",
+        provider: "test",
+        name: "Hidden",
+        available: true,
+        manualSelectionAllowed: false,
+      },
     ],
     pendingProviders: ["test"],
     accountSelection: {

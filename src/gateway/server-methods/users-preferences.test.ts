@@ -8,6 +8,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { holdNextReply } from "../../state/github-publication.worker.test-support.js";
 import {
@@ -457,6 +458,7 @@ test("users.prefs dispatch saves guest choices only to the authenticated durable
     const choice = { folder: "/projects/openclaw" };
     const updated = { folder: "/focused-fix" };
     const success = [true, { status: "ok" }, undefined];
+    using prepare = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "prepare");
     expect(await request("users.prefs.set", { entries: { [key]: choice } })).toEqual(success);
     expect(await request("users.prefs.get")).toEqual(preferenceReply({ [key]: choice }));
     expect(await request("users.prefs.get", {}, graceClient)).toEqual(preferenceReply({}));
@@ -474,6 +476,13 @@ test("users.prefs dispatch saves guest choices only to the authenticated durable
         expectedEntries: { [key]: choice },
       }),
     ).toEqual(success);
+    expect(notifications).toHaveBeenCalledWith(
+      "users.prefs.changed",
+      { profileId: ada.id, keys: [key] },
+      expect.any(Set),
+    );
+    expect(prepare).not.toHaveBeenCalled();
+    prepare.mockRestore();
 
     expect(
       await request("users.prefs.set", {
