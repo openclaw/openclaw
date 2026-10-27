@@ -300,7 +300,7 @@ type CurrentUserTimestampOverride = NonNullable<LlmBoundaryOptions["currentUserT
 
 export async function prepareEmbeddedAttemptSessionBoundary(input: {
   abortSignal?: AbortSignal;
-  activeSession: Pick<AgentSession, "agent">;
+  activeSession: Pick<AgentSession, "agent" | "subscribe">;
   appendOnlyRuntimeContext?: boolean;
   inHistorySystemUpdates?: boolean;
   attempt: SessionBoundaryAttempt;

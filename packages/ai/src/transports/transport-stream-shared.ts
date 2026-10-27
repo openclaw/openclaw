@@ -25,7 +25,7 @@ import {
 } from "../utils/provider-error.js";
 import { isTransientNetworkError } from "../utils/retryable-network-errors.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { createZeroUsage } from "../utils/usage.js";
+import { createZeroUsage, isUnbilledFailedTurn } from "../utils/usage.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
 /** Decodes frame boundaries; callers retain reader lifetime and protocol admission. */
@@ -630,6 +630,14 @@ export function assignTransportErrorDetails(
   if (output.usage.usageReport?.state !== "available") {
     output.usage.usageReport = { state: "unavailable" };
     output.usage.contextUsage = { state: "unavailable" };
+  }
+  if (isUnbilledFailedTurn(output)) {
+    // The provider did no billable work; record its usage as a complete zero.
+    output.usage = {
+      ...createZeroUsage(),
+      usageReport: { state: "available" },
+      contextUsage: output.usage.contextUsage,
+    };
   }
   if (
     projection.stopReason === "error" &&

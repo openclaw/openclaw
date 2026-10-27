@@ -26,14 +26,11 @@ import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
 } from "./local-state-owner.js";
+import { startGatewayWizard } from "./setup-admission.js";
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
-import {
-  rejectExistingSetupWizardSession,
-  startSetupActivationWizard,
-} from "./system-agent-setup-wizard.js";
+import { startSetupActivationWizard } from "./system-agent-setup-wizard.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
-import { startWizardLogin } from "./wizard-login.js";
 
 export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
   "models.authLogin": defineValidatedGatewayHandler(
@@ -65,9 +62,6 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
           return;
         }
       }
-      if (rejectExistingSetupWizardSession({ sessionId: params.sessionId, context, respond })) {
-        return;
-      }
       const resolveChoice = () => {
         const matches = resolveManifestDeclaredProviderAuthChoices({
           config: context.getRuntimeConfig(),
@@ -91,9 +85,8 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const assertCurrent = () => {
+      const assertLoginCurrent = () => {
         assertOwner?.();
-        client.connectionSignal?.throwIfAborted();
         if (client.invalidated || !client.connect.scopes?.includes("operator.admin")) {
           throw new Error("Provider login authority is no longer active.");
         }
@@ -110,10 +103,12 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
       };
       if (choice.appGuidedAuth && choice.credentialOnly !== true) {
         await startSetupActivationWizard({
+          request: options,
           sessionId: params.sessionId,
-          client,
           ownerKey: resolveSystemAgentSessionOwnerKey({ client }),
-          assertCurrent,
+          connectionBound: true,
+          isLocalClient: client.internal?.isLocalClient === true,
+          assertCurrent: assertLoginCurrent,
           activation: {
             kind: "provider-auth",
             authChoice: choice.choiceId,
@@ -121,19 +116,15 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
             selectModel: params.selectModel === true,
           },
           timeoutMs: 25 * 60_000,
-          context,
-          respond,
-          isLocalClient: client.internal?.isLocalClient === true,
         });
         return;
       }
-      await startWizardLogin({
-        client,
-        context,
+      await startGatewayWizard({
+        request: options,
         sessionId: params.sessionId,
-        respond,
-        assertCurrent,
-        createSession: () =>
+        connectionBound: true,
+        assertCurrent: assertLoginCurrent,
+        createSession: (assertCurrent) =>
           new WizardSession(
             async (prompter, signal, runner) => {
               const runtime = createNonExitingRuntime();

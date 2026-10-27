@@ -174,9 +174,12 @@ suite.define(() => {
 
       const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");
       await message.fill(longPrompt);
+      // Native input commits its overflow presentation on the next animation frame.
+      await expect
+        .poll(() => message.evaluate((element) => getComputedStyle(element).overflowY))
+        .toBe("auto");
       const capped = await message.evaluate((element) => ({
         clientHeight: element.clientHeight,
-        overflowY: getComputedStyle(element).overflowY,
         scrollHeight: element.scrollHeight,
       }));
       const [expandedIdentityBox, expandedTriggersBox, expandedComposerBox] = await Promise.all([
@@ -185,7 +188,6 @@ suite.define(() => {
         composer.boundingBox(),
       ]);
       expect(capped.clientHeight).toBeLessThan(capped.scrollHeight);
-      expect(capped.overflowY).toBe("auto");
       // Browser subpixel rounding may shift stable blocks by a pixel; larger movement is visible.
       for (const [before, after] of [
         [identityBox, expandedIdentityBox],

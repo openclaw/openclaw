@@ -24,7 +24,6 @@ const mocks = vi.hoisted(() => ({
   createCacheTrace: vi.fn(),
   createSessionSettleTracker: vi.fn(),
   retainSessionPromptState: vi.fn(),
-  beginSessionSystemPrompt: vi.fn(() => false),
   installContextGuards: vi.fn(),
   prepareAgentSession: vi.fn(),
   prepareSessionBoundary: vi.fn(),
@@ -45,7 +44,6 @@ vi.mock("../../cache-trace.js", () => ({ createCacheTrace: mocks.createCacheTrac
 vi.mock("../session-prompt-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-prompt-state.js")>()),
   retainEmbeddedSessionPromptState: mocks.retainSessionPromptState,
-  beginSessionSystemPrompt: mocks.beginSessionSystemPrompt,
 }));
 vi.mock("../tool-result-truncation.js", () => ({
   restoreCacheTtlToolResultProjections: mocks.restoreProjections,
@@ -295,6 +293,25 @@ afterEach(async () => {
 });
 
 describe("prepareEmbeddedAttemptSessionRuntime", () => {
+  it("clears an unsent prompt without reading history when prompt updates remain enabled", async () => {
+    const fixture = createHistoryFixture();
+    const first = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+    const prompt = await first.prepareSystemPromptUpdate!("## Policy\nUnsent update");
+    prompt.commit();
+    expect(first.sessionPromptState.pendingSystemPrompt?.renderedPrefix).toBe(
+      "## Policy\nUnsent update",
+    );
+
+    const getBranch = vi.spyOn(fixture.sessionManager, "getBranch");
+    try {
+      const next = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      expect(getBranch).not.toHaveBeenCalled();
+      expect(next.sessionPromptState.pendingSystemPrompt).toBeUndefined();
+    } finally {
+      getBranch.mockRestore();
+    }
+  });
+
   it("re-pins personal bootstrap when the selected profile changes between attempts", async () => {
     const fixture = createHistoryFixture();
     mocks.retainSessionPromptState.mockImplementation(() => ({

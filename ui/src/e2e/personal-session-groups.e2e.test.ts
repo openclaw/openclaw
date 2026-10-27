@@ -54,12 +54,51 @@ suite.define(() => {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
           const sidebar = page.locator("openclaw-app-sidebar");
           await sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`).waitFor();
-          if (artifacts && process.env.OPENCLAW_PERSONAL_GROUP_PROOF_STAGE === "before") {
-            await captureFrame(artifacts, "before.png", page.locator(".shell"), [
-              sidebar.locator(".sidebar-sessions"),
-            ]);
-            console.log("Personal groups before proof: " + artifacts);
+          const heading = sidebar.locator(".personal-session-groups__heading");
+          const addGroup = heading.getByRole("button", { name: "New personal group", exact: true });
+          await addGroup.hover();
+          if (artifacts) {
+            await captureFrame(
+              artifacts,
+              process.env.OPENCLAW_PERSONAL_GROUP_PROOF_STAGE === "before"
+                ? "before.png"
+                : "add-button-hover.png",
+              page.locator(".shell"),
+              [sidebar.locator(".sidebar-sessions")],
+            );
+            console.log("Personal groups add button proof: " + artifacts);
           }
+          // The add button stays at the trailing edge without a row or button hover fill.
+          await expect
+            .poll(() =>
+              heading.evaluate((element) => {
+                const button = element.querySelector("button")!;
+                return Math.round(
+                  element.getBoundingClientRect().right - button.getBoundingClientRect().right,
+                );
+              }),
+            )
+            .toBe(10);
+          await expect
+            .poll(() => heading.evaluate((element) => getComputedStyle(element).backgroundColor))
+            .toBe("rgba(0, 0, 0, 0)");
+          await expect
+            .poll(() => addGroup.evaluate((element) => getComputedStyle(element).backgroundColor))
+            .toBe("rgba(0, 0, 0, 0)");
+          const hoverColor = await addGroup.evaluate((element) => getComputedStyle(element).color);
+          await page.mouse.move(900, 600);
+          await expect
+            .poll(() => addGroup.evaluate((element) => getComputedStyle(element).color))
+            .not.toBe(hoverColor);
+          await addGroup.focus();
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Shift+Tab");
+          expect(await addGroup.evaluate((element) => element.matches(":focus-visible"))).toBe(
+            true,
+          );
+          expect(
+            await addGroup.evaluate((element) => getComputedStyle(element).outlineStyle),
+          ).not.toBe("none");
           const create = async (label: string, selected?: string) => {
             await sidebar.getByRole("button", { name: "New personal group", exact: true }).click();
             const dialog = page.getByRole("dialog", { name: "New personal group", exact: true });
@@ -135,6 +174,7 @@ suite.define(() => {
             .getByRole("link", { name: /Release checklist/ })
             .waitFor();
           if (artifacts && process.env.OPENCLAW_PERSONAL_GROUP_PROOF_STAGE !== "before") {
+            await addGroup.hover();
             await captureFrame(artifacts, "after.png", page.locator(".shell"), [
               sidebar.locator(".sidebar-sessions"),
             ]);

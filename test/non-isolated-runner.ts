@@ -458,12 +458,18 @@ async function drainMockerResolveMocks(mocker: ModuleMocker | undefined): Promis
 export default class OpenClawNonIsolatedRunner extends TestRunner {
   declare onTaskUpdate: VitestTestRunner["onTaskUpdate"];
 
-  override onCollectStart(file: RunnerTestFile) {
-    super.onCollectStart(file);
+  override importFile(...args: Parameters<TestRunner["importFile"]>) {
+    // Vitest does not await onCollectStart's queue notification. Track resources
+    // before setup or collection can evaluate their source modules.
     if (!this.config.isolate) {
       installCustomElementTracking();
       installDomResourceTracking();
     }
+    return super.importFile(...args);
+  }
+
+  override onCollectStart(file: RunnerTestFile) {
+    super.onCollectStart(file);
     restoreRealTimers();
     restoreNativeTimerGlobals();
     restoreSharedTestHomeAfterEnvUnstub(getSharedTestHome());

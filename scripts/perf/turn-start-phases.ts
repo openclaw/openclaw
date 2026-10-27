@@ -7,17 +7,31 @@
 // 200 ms mock first-token delay. --unchanged-origin keeps the remote fixed; --cpu-profile
 // records a separate diagnostic CPU/Git-trace pass; --git-trace records Git Trace2 alone.
 // --state-dir reuses an existing
-// synthetic fixture after a setup failure; --output must always be new. Phase timings exclude
-// provider delay. Fresh bursts are separated by 31s to expire the base-refresh TTL. p95 at 40 samples is descriptive, not a regression gate. All state is synthetic.
+// synthetic fixture after a setup failure; --output must always be new.
+// Subscriber waterfalls include provider delay; server scope totals are overlapping stage aggregates.
+// Fresh bursts are separated by 31s to expire the base-refresh TTL. Tails at 40 samples are descriptive, not regression gates. All state is synthetic.
+// See docs/reference/session-start-measurement.md for receipts, outputs, and comparison rules.
 // --sandbox-image openclaw-sandbox:bookworm-slim exercises Docker workspace projection,
 // 40 synthetic skills with companion files, and real /workspace read/exec tool calls.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { generateTeamShapeStressFixture } from "./team-shape-stress-fixture.ts";
+import {
+  summarizeTurnStarts,
+  type TurnStartSample,
+  type TurnStartPhase,
+} from "./turn-start-report.ts";
 
 const { values } = parseArgs({
   options: {
@@ -56,6 +70,7 @@ const stateDir = values["state-dir"]
   ? path.resolve(values["state-dir"])
   : path.join(output, "state");
 const before = { at: new Date().toISOString(), load: loadavg() };
+const buildInfoPath = path.join(path.dirname(entry), "build-info.json");
 const identity = {
   workload: {
     sessions: 10800,
@@ -68,6 +83,8 @@ const identity = {
     warmRoundGapMs: 0,
     files: 3000,
     fileBytes: 256,
+    longTranscriptEntries: 2000,
+    longTranscriptSessions: 4,
     providerDelayMs: 200,
     advanceOrigin: !values["unchanged-origin"],
     cpuProfile: values["cpu-profile"],
@@ -77,6 +94,7 @@ const identity = {
   stateDir,
   entry,
   entrySha256: createHash("sha256").update(readFileSync(entry)).digest("hex"),
+  buildInfo: existsSync(buildInfoPath) ? JSON.parse(readFileSync(buildInfoPath, "utf8")) : null,
   sandboxRuntime: Object.fromEntries(
     readdirSync(path.dirname(entry))
       .filter((name) => name.startsWith("docker-") && name.endsWith(".mjs"))
@@ -124,7 +142,20 @@ if (!values["state-dir"]) {
     worktreeFiles: 3000,
     worktreeFileBytes: 256,
     worktreeLocalOrigin: true,
+    longTranscriptEntries: 2000,
   });
+}
+const fixtureShape = JSON.parse(
+  readFileSync(path.join(stateDir, "team-shape-summary.json"), "utf8"),
+);
+if (
+  fixtureShape.sessionCount !== identity.workload.sessions ||
+  fixtureShape.longTranscriptEntries !== identity.workload.longTranscriptEntries ||
+  fixtureShape.longTranscriptSessions !== identity.workload.longTranscriptSessions
+) {
+  throw new Error(
+    "Regenerate the turn-start fixture: expected 10,800 sessions and four 2,000-entry histories",
+  );
 }
 if (values["sandbox-image"]) {
   const skillsDir = path.join(stateDir, "synthetic-skills");
@@ -263,15 +294,13 @@ if (!probeDir) {
 }
 const phaseFile = path.join(stateDir, probeDir, "turn-start-phases.json");
 const captured = JSON.parse(readFileSync(phaseFile, "utf8")) as {
-  phases: Array<{
-    round: number;
-    name: string;
-    durationMs: number;
-    startedAt: number;
-    endedAt: number;
-    details?: Record<string, unknown> & { stage?: string };
-  }>;
+  turns: TurnStartSample[];
+  phases: TurnStartPhase[];
 };
+const sessionStart = summarizeTurnStarts({ ...captured, coldRounds });
+if (captured.turns.length !== (coldRounds + warmRounds) * identity.workload.runs) {
+  throw new Error("Missing session-start receipts for one or more declared turns");
+}
 const groups = new Map<string, number[]>();
 function add(key: string, value: number) {
   const samples = groups.get(key) ?? [];
@@ -280,7 +309,8 @@ function add(key: string, value: number) {
 }
 for (const phase of captured.phases) {
   const cohort = phase.round < coldRounds ? "fresh" : "warm";
-  add(`${cohort}/${phase.details?.stage ?? "worktree"}/${phase.name}`, phase.durationMs);
+  const stage = typeof phase.details?.stage === "string" ? phase.details.stage : "worktree";
+  add(`${cohort}/${stage}/${phase.name}`, phase.durationMs);
   if (phase.name === "worktree.preparation") {
     for (const [name, duration] of Object.entries(phase.details ?? {})) {
       if (typeof duration === "number" && !name.startsWith("template.")) {
@@ -296,6 +326,7 @@ const summary = [...groups]
       phase,
       count: samples.length,
       p50: samples[Math.ceil(samples.length * 0.5) - 1],
+      p90: samples[Math.ceil(samples.length * 0.9) - 1],
       p95: samples[Math.ceil(samples.length * 0.95) - 1],
       max: samples.at(-1),
     };
@@ -307,12 +338,19 @@ if (!summary.length) {
 writeFileSync(
   path.join(output, "summary.json"),
   JSON.stringify(
-    { identity, before, after: { at: new Date().toISOString(), load: loadavg() }, summary },
+    {
+      identity,
+      before,
+      after: { at: new Date().toISOString(), load: loadavg() },
+      summary,
+      sessionStart,
+    },
     null,
     2,
   ),
 );
 console.table(summary.slice(0, 50));
+console.table(sessionStart.milestones);
 
 if (values["git-trace"] || values["cpu-profile"]) {
   type GitTraceEvent = {
