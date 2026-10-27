@@ -1,11 +1,11 @@
-import { createMemo, Repeat, Show } from "solid-js";
+import { createMemo, onSettled, Repeat, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createMediaQuerySource } from "../../../lib/reactive/platform.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
-import { MicrophoneMeterCanvas } from "../talk/microphone-meter-canvas.tsx";
-import type { MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
+import { createMicrophoneMeter, type MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
 
 registerEnglishCatalog(registerChatComposerEnglish);
@@ -63,14 +63,62 @@ export function MicrophoneActivity(props: {
         )}
       </Repeat>
       <Show when={canvasLifetime()} keyed>
-        {(initial) => (
-          <MicrophoneMeterCanvas
-            initialStatus={initial.status}
-            initialSource={initial.source}
-            readHost={() => host}
-            readBars={() => bars}
-          />
-        )}
+        {(initial) => {
+          const initialStatus = initial.status;
+          if (initialStatus === "connecting") {
+            return null;
+          }
+          const initialSource = initial.source;
+          const reducedMotion = createMediaQuerySource("(prefers-reduced-motion: reduce)");
+          let canvas: HTMLCanvasElement | undefined;
+          onSettled(() => {
+            const currentHost = host;
+            const surface = canvas;
+            if (!currentHost || !surface) {
+              return undefined;
+            }
+            let renderer: ReturnType<typeof createMicrophoneMeter> | undefined;
+            const initialLevel = initialSource?.value ?? 0;
+            const setLevel = (level: number) => {
+              const value = String(level);
+              if (currentHost.dataset.level !== value) {
+                currentHost.dataset.level = value;
+              }
+              // CSS already draws silence. Allocate only when there is activity to paint.
+              if (
+                !renderer &&
+                (initialStatus === "thinking" || (initialStatus === "listening" && level > 0))
+              ) {
+                renderer = createMicrophoneMeter(
+                  currentHost,
+                  surface,
+                  bars,
+                  initialStatus,
+                  reducedMotion,
+                );
+                // Preserve the first transition from silence rather than jumping to its target.
+                renderer.setLevel(initialLevel);
+              }
+              renderer?.setLevel(level);
+            };
+            // The owner's subscription immediately supplies its current level.
+            const stop = initialSource?.subscribe(setLevel);
+            if (!initialSource) {
+              setLevel(0);
+            }
+            return () => {
+              stop?.();
+              renderer?.dispose();
+            };
+          });
+          return (
+            <canvas
+              ref={(element) => (canvas = element)}
+              class="agent-chat__voice-activity-canvas"
+              aria-hidden="true"
+            />
+          );
+        }}
       </Show>
     </openclaw-microphone-activity>
   );
