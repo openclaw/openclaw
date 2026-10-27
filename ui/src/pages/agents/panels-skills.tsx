@@ -162,8 +162,9 @@ function AgentSkillsContent(
       : rawSkills(),
   );
   const shownNames = createMemo(() => new Set(filtered().map((skill) => skill.name)));
-  // Filtering keeps this report's controls mounted; agent/connection changes still retire them.
-  const groups = createMemo(() => groupSkills(rawSkills()));
+  // Keep the entry policy for this scope: a sticky filter must not mount every control.
+  const retainControls = createMemo<boolean>((initial) => initial ?? !filter());
+  const groups = createMemo(() => groupSkills(retainControls() ? rawSkills() : filtered()));
   const enabledCount = createMemo(() =>
     usingAllowlist()
       ? rawSkills().filter((skill) => isWorkshopSkill(skill) || allowSet().has(skill.name)).length

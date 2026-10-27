@@ -337,6 +337,7 @@ describe("agents skills panel (browser)", () => {
       expect(container.querySelector<HTMLDetailsElement>(".agent-skills-group")?.open).toBe(false),
     );
     const rows = view.rows();
+    const controls = rows.map((row) => row.querySelector("input"));
 
     view.update({ ...params, filter: "Unique Built In Match" });
     await waitForSolid(() => expect(container.textContent).toContain("1 shown"));
@@ -362,7 +363,51 @@ describe("agents skills panel (browser)", () => {
     );
     expect(container.querySelector<HTMLElement>(".agent-skills-groups")?.hidden).toBe(false);
     view.expectRows(rows);
+    view.rows().forEach((row, index) => expect(row.querySelector("input")).toBe(controls[index]));
   });
+
+  it.each(["initial", "agent", "connection"])(
+    "only mounts matching controls when the %s scope starts filtered",
+    async (scope) => {
+      const view = mountSkills(
+        [
+          createSkill({ name: "Matching skill", source: "openclaw-managed" }),
+          createSkill({ name: "Unrelated skill", source: "openclaw-managed" }),
+        ],
+        { filter: scope === "initial" ? "Matching" : "" },
+      );
+      const { container, params } = view;
+      await waitForSolid(() => expect(view.rows()).toHaveLength(scope === "initial" ? 1 : 2));
+      const oldRows = view.rows();
+      const agentId = scope === "agent" ? "research" : "main";
+      const filtered = {
+        ...params,
+        agentId,
+        agentSkillsAgentId: agentId,
+        filter: "Matching",
+        ...(scope === "connection"
+          ? { readData: () => ({ ...params.readData(), requestGeneration: 1 }) }
+          : {}),
+      };
+      view.update(filtered);
+      await waitForSolid(() => {
+        expect(view.rows()).toHaveLength(1);
+        expect(container.querySelectorAll(".agent-skill-row input")).toHaveLength(1);
+        expect(container.textContent).not.toContain("Unrelated skill");
+      });
+      if (scope !== "initial") {
+        expect(oldRows.every((row) => !container.contains(row))).toBe(true);
+      }
+
+      view.update({ ...filtered, filter: "" });
+      await waitForSolid(() => expect(view.rows()).toHaveLength(2));
+      view.update(filtered);
+      await waitForSolid(() => {
+        expect(view.rows()).toHaveLength(1);
+        expect(container.textContent).not.toContain("Unrelated skill");
+      });
+    },
+  );
 
   it("retires optimistic reset presentation when the selected agent changes", async () => {
     const completion = deferred();
