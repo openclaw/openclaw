@@ -8,6 +8,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { hasAnyMatrixAuthAsync } from "../../auth-presence.js";
+import { matrixSetupPlugin } from "../channel.setup.js";
 import { getMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import { resolveConfiguredMatrixBotUserIds } from "./accounts.js";
@@ -45,6 +46,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
@@ -194,11 +196,17 @@ it("does not read or remove legacy credential files at runtime", async () => {
   expect(fs.existsSync(legacyPath)).toBe(true);
 });
 
-it("clears only the requested canonical account", async () => {
+it("clears only the account removed through channels remove", async () => {
+  // The CLI resolves the setup plugin, whose removal hook reads process.env.
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   await save();
   await saveMatrixCredentials(auth, {}, "ops");
 
-  await clearMatrixCredentials({}, "ops");
+  await matrixSetupPlugin.lifecycle?.onAccountRemoved?.({
+    prevCfg: {},
+    accountId: "ops",
+    runtime: {} as never,
+  });
 
   expect(loadMatrixCredentials({}, "ops")).toBeNull();
   expect(raw("ops")).toMatchObject({ kind: "revoked", accountId: "ops" });
