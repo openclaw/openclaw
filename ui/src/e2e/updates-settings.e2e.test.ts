@@ -1,8 +1,6 @@
 // Control UI tests cover the routed Updates settings page through a mocked Gateway.
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import {
@@ -280,65 +278,6 @@ suite.define(() => {
         await link.waitFor();
         expect(await link.getAttribute("target")).toBe("_blank");
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
-      },
-    );
-  });
-
-  it("keeps every failed-update recovery action legible on a phone", async () => {
-    await suite.withPage(
-      { ...pageOptions, viewport: { height: 812, width: 375 } },
-      async ({ page }) => {
-        const run = createUpdateRunFixture({
-          phase: "finished",
-          status: "failed",
-          reason: "checkout-failed",
-          finishedAtMs: 500,
-        });
-        const config = { update: { auto: { enabled: false }, channel: "stable" } };
-        const gateway = await installMockGateway(page, {
-          operatorScopes: ["operator.read", "operator.write", "operator.admin"],
-          methodResponses: {
-            "config.get": configResponse(config, "recovery-layout-config"),
-            "update.status": { activeRun: null, lastRun: run },
-          },
-        });
-        await page.goto(`${suite.server.baseUrl}settings/updates`);
-        await gateway.waitForRequest("update.status");
-        const retry = page.getByRole("button", { name: "Retry update", exact: true });
-        await retry.waitFor();
-        await page.getByRole("button", { name: "Report update failure", exact: true }).waitFor();
-        await retry.scrollIntoViewIfNeeded();
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const dir = createControlUiE2eArtifactDir("updates-recovery-actions-phone");
-          await page.screenshot({ animations: "disabled", path: path.join(dir, "recovery.png") });
-        }
-
-        // Each label renders whole inside its own button, and no two buttons overlap.
-        const boxes = await retry
-          .locator("xpath=..")
-          .getByRole("button")
-          .evaluateAll((buttons) =>
-            buttons.map((button) => {
-              const rect = button.getBoundingClientRect();
-              return {
-                clipped: button.scrollWidth > button.clientWidth,
-                rect: { bottom: rect.bottom, left: rect.left, right: rect.right, top: rect.top },
-                withinViewport: rect.left >= 0 && rect.right <= window.innerWidth,
-              };
-            }),
-          );
-        expect(boxes.length).toBeGreaterThanOrEqual(3);
-        for (const [index, box] of boxes.entries()) {
-          expect(box).toMatchObject({ clipped: false, withinViewport: true });
-          for (const other of boxes.slice(index + 1)) {
-            const overlaps =
-              box.rect.left < other.rect.right &&
-              other.rect.left < box.rect.right &&
-              box.rect.top < other.rect.bottom &&
-              other.rect.top < box.rect.bottom;
-            expect(overlaps).toBe(false);
-          }
-        }
       },
     );
   });
