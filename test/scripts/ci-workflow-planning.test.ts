@@ -52,6 +52,7 @@ import {
   CACHE_V5,
   SETUP_GO_V6,
   UPLOAD_ARTIFACT_V7,
+  evaluateWorkflow,
   evaluateWorkflowCondition,
   evaluateWorkflowExpression,
   quoteShell,
@@ -61,6 +62,7 @@ import {
   readTrackedText,
   readWorkflow,
   readWorkflowOutputs,
+  requiredWorkflowStep,
   runControlUiE2eWorkflow,
   runGit,
   runWorkflowCommand,
@@ -11060,11 +11062,9 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs["checks-ui-browser-extension"]).toBeUndefined();
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e-real-gateway");
     const artifactSteps = workflow.jobs["build-artifacts"].steps as WorkflowStep[];
-    const browserScenario = expectDefined(
-      artifactSteps.find(
-        (step: WorkflowStep) => step.name === "Test browser extension bootstrap end-to-end",
-      ),
-      "public-build browser extension proof",
+    const browserScenario = requiredWorkflowStep(
+      artifactSteps,
+      "Test browser extension bootstrap end-to-end",
     );
     expect(browserScenario.run).toContain(
       "extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
@@ -11079,11 +11079,9 @@ describe("ci workflow guards", () => {
       OPENCLAW_E2E_WORKERS: "1",
       OPENCLAW_VITEST_WORKER_CACHE: "1",
     });
-    const productionScenario = expectDefined(
-      artifactSteps.find(
-        (step: WorkflowStep) => step.name === "Test production Control UI deployment fixtures",
-      ),
-      "public-build production deployment proof",
+    const productionScenario = requiredWorkflowStep(
+      artifactSteps,
+      "Test production Control UI deployment fixtures",
     );
     expect(productionScenario.env).toMatchObject({
       OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1",
@@ -11142,10 +11140,7 @@ describe("ci workflow guards", () => {
       matrix: "${{ fromJson(needs.preflight.outputs.ui_real_gateway_matrix) }}",
     });
 
-    const uiE2eSetup = expectDefined(
-      uiE2e.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
-      "Control UI E2E Node setup",
-    );
+    const uiE2eSetup = requiredWorkflowStep(uiE2e.steps, "Setup Node environment");
     expect(uiE2eSetup.uses).toBe("./.ci-harness/.github/actions/setup-node-env");
     const expectedSharedUiE2eSetup = {
       "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
@@ -11159,10 +11154,7 @@ describe("ci workflow guards", () => {
         "${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 'true' || 'false' }}",
     } as const;
     expect(uiE2eSetup.with).toEqual(expectedUiE2eSetup);
-    const realGatewaySetup = expectDefined(
-      uiE2eRealGateway.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
-      "real-Gateway Control UI E2E Node setup",
-    );
+    const realGatewaySetup = requiredWorkflowStep(uiE2eRealGateway.steps, "Setup Node environment");
     expect(realGatewaySetup).toMatchObject({
       uses: uiE2eSetup.uses,
       with: expectedSharedUiE2eSetup,
@@ -11204,172 +11196,91 @@ describe("ci workflow guards", () => {
       ...routedRealGatewayJobs,
     ] as const;
     expect(new Set(routedUiE2eJobs.map((job) => job.name)).size).toBe(routedUiE2eJobs.length);
+    const sameRepo = { headRepository: "openclaw/openclaw" };
     const routingScenarios = [
-      {
-        name: "same-repo pull request first attempt",
-        context: {
-          eventName: "pull_request",
-          headRepository: "openclaw/openclaw",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-        },
-        expected: { blacksmith: true, dependencyCache: "true" },
-      },
-      {
-        name: "same-repo pull request with GitHub backend",
-        context: {
-          eventName: "pull_request",
-          headRepository: "openclaw/openclaw",
-          repository: "openclaw/openclaw",
-          runnerBackend: "github",
-          runAttempt: 1,
-        },
-        expected: { blacksmith: false, dependencyCache: "false" },
-      },
-      {
-        name: "same-repo pull request with hybrid backend",
-        context: {
-          eventName: "pull_request",
-          headRepository: "openclaw/openclaw",
-          repository: "openclaw/openclaw",
-          runnerBackend: "hybrid",
-          runAttempt: 1,
-        },
-        expected: { blacksmith: true, dependencyCache: "true" },
-      },
-      {
-        name: "same-repo pull request retry",
-        context: {
-          eventName: "pull_request",
-          headRepository: "openclaw/openclaw",
-          repository: "openclaw/openclaw",
-          runAttempt: 2,
-        },
-        expected: { blacksmith: false, dependencyCache: "false" },
-      },
-      {
-        name: "same-repo pull request with hybrid backend retry",
-        context: {
-          eventName: "pull_request",
-          headRepository: "openclaw/openclaw",
-          repository: "openclaw/openclaw",
-          runnerBackend: "hybrid",
-          runAttempt: 2,
-        },
-        expected: { blacksmith: false, dependencyCache: "false" },
-      },
-      {
-        name: "canonical hybrid push retry",
-        context: {
-          eventName: "push",
-          repository: "openclaw/openclaw",
-          runnerBackend: "hybrid",
-          runAttempt: 2,
-        },
-        expected: { blacksmith: false, dependencyCache: "false" },
-      },
-      {
-        // Runner capacity is author-independent; exact dependency restores
-        // still require a same-repository PR.
-        name: "fork pull request from returning contributor",
-        context: {
-          authorAssociation: "CONTRIBUTOR",
-          eventName: "pull_request",
-          headRepository: "contributor/openclaw",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-        },
-        expected: { blacksmith: true, dependencyCache: "false" },
-      },
-      {
-        name: "fork pull request from unknown author",
-        context: {
-          authorAssociation: "NONE",
-          eventName: "pull_request",
-          headRepository: "contributor/openclaw",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-        },
-        expected: { blacksmith: true, dependencyCache: "false" },
-      },
-      {
-        name: "workflow dispatch",
-        context: {
-          eventName: "workflow_dispatch",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-        },
-        expected: { blacksmith: false, dependencyCache: "false" },
-      },
-      {
-        name: "canonical push retry",
-        context: {
-          eventName: "push",
-          repository: "openclaw/openclaw",
-          runAttempt: 2,
-        },
-        expected: { blacksmith: true, dependencyCache: "true" },
-      },
+      ["same-repo pull request first attempt", sameRepo, true, "true"],
+      [
+        "same-repo pull request with GitHub backend",
+        { ...sameRepo, runnerBackend: "github" },
+        false,
+        "false",
+      ],
+      [
+        "same-repo pull request with hybrid backend",
+        { ...sameRepo, runnerBackend: "hybrid" },
+        true,
+        "true",
+      ],
+      ["same-repo pull request retry", { ...sameRepo, runAttempt: 2 }, false, "false"],
+      [
+        "same-repo pull request with hybrid backend retry",
+        { ...sameRepo, runnerBackend: "hybrid", runAttempt: 2 },
+        false,
+        "false",
+      ],
+      [
+        "canonical hybrid push retry",
+        { eventName: "push", runnerBackend: "hybrid", runAttempt: 2 },
+        false,
+        "false",
+      ],
+      // Runner capacity is author-independent; exact dependency restores still require a same-repository PR.
+      [
+        "fork pull request from returning contributor",
+        { authorAssociation: "CONTRIBUTOR", headRepository: "contributor/openclaw" },
+        true,
+        "false",
+      ],
+      [
+        "fork pull request from unknown author",
+        { authorAssociation: "NONE", headRepository: "contributor/openclaw" },
+        true,
+        "false",
+      ],
+      ["workflow dispatch", { eventName: "workflow_dispatch" }, false, "false"],
+      ["canonical push retry", { eventName: "push", runAttempt: 2 }, true, "true"],
     ] as const;
     for (const { blacksmithRunner, job, matrix, name: jobName, setup } of routedUiE2eJobs) {
-      for (const { context, expected, name: scenarioName } of routingScenarios) {
+      for (const [scenarioName, context, blacksmith, dependencyCache] of routingScenarios) {
         const assertionName = `${jobName}: ${scenarioName}`;
-        const expectedRunner = expected.blacksmith ? blacksmithRunner : "ubuntu-24.04";
         expect(
           String(job.name).replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) =>
-            String(evaluateWorkflowExpression(expression, { ...context, matrix })),
+            String(evaluateWorkflow(expression, { ...context, matrix })),
           ),
           assertionName,
         ).toBe(jobName);
+        expect(evaluateWorkflow(job["runs-on"], { ...context, matrix }), assertionName).toBe(
+          blacksmith ? blacksmithRunner : "ubuntu-24.04",
+        );
         expect(
-          evaluateWorkflowExpression(job["runs-on"], { ...context, matrix }),
-          assertionName,
-        ).toBe(expectedRunner);
-        expect(
-          evaluateWorkflowExpression(setup.with?.["dependency-cache"], {
+          evaluateWorkflow(setup.with?.["dependency-cache"], {
             ...context,
             matrix,
-            runnerEnvironment: expected.blacksmith ? "self-hosted" : "github-hosted",
+            runnerEnvironment: blacksmith ? "self-hosted" : "github-hosted",
           }),
           assertionName,
-        ).toBe(expected.dependencyCache);
+        ).toBe(dependencyCache);
         expect(setup.with?.["cache-mode"], assertionName).toBe(
           "${{ needs.preflight.outputs.cache_mode }}",
         );
       }
     }
 
-    const chromiumInstall = expectDefined(
-      uiE2e.steps.find((step: WorkflowStep) => step.name === "Install Playwright Chromium"),
-      "Control UI E2E Chromium installation",
-    );
+    const chromiumInstall = requiredWorkflowStep(uiE2e.steps, "Install Playwright Chromium");
     expect(chromiumInstall.uses).toBe("./.ci-harness/.github/actions/setup-playwright-chromium");
-    const realGatewayChromiumInstall = expectDefined(
-      uiE2eRealGateway.steps.find(
-        (step: WorkflowStep) => step.name === "Install Playwright Chromium",
-      ),
-      "real-Gateway Control UI E2E Chromium installation",
+    const realGatewayChromiumInstall = requiredWorkflowStep(
+      uiE2eRealGateway.steps,
+      "Install Playwright Chromium",
     );
     expect(realGatewayChromiumInstall).toEqual(chromiumInstall);
-    const scenario = expectDefined(
-      uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
-      "Control UI E2E suite",
-    );
-    const selection = expectDefined(
-      uiE2e.steps.find((step: WorkflowStep) => step.name === "Decode Control UI E2E selection"),
-      "Control UI E2E selection",
-    );
+    const scenario = requiredWorkflowStep(uiE2e.steps, "Test Control UI end-to-end");
+    const selection = requiredWorkflowStep(uiE2e.steps, "Decode Control UI E2E selection");
     expect(selection.if).toBe("matrix.task == 'control-ui'");
     expect(selection.env).toEqual({
       OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:
         "${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}",
     });
-    const discovery = expectDefined(
-      uiE2e.steps.find(
-        (step: WorkflowStep) => step.name === "Discover Control UI E2E requirements",
-      ),
-      "Control UI E2E discovery",
-    );
+    const discovery = requiredWorkflowStep(uiE2e.steps, "Discover Control UI E2E requirements");
     expect(discovery["timeout-minutes"]).toBe(20);
     expect(scenario.if).toBe("matrix.task == 'control-ui'");
     expect(scenario["timeout-minutes"]).toBe(20);
@@ -11382,11 +11293,9 @@ describe("ci workflow guards", () => {
       OPENCLAW_VITEST_MAX_WORKERS: "${{ matrix.vitest_max_workers || 2 }}",
     });
     expect(scenario.run).not.toContain("--project");
-    const timeoutDiagnostics = expectDefined(
-      uiE2e.steps.find(
-        (step: WorkflowStep) => step.name === "Upload Control UI E2E timeout diagnostics",
-      ),
-      "Control UI E2E timeout diagnostic upload",
+    const timeoutDiagnostics = requiredWorkflowStep(
+      uiE2e.steps,
+      "Upload Control UI E2E timeout diagnostics",
     );
     expect(timeoutDiagnostics).toEqual({
       name: "Upload Control UI E2E timeout diagnostics",
@@ -11399,11 +11308,9 @@ describe("ci workflow guards", () => {
         "retention-days": 7,
       },
     });
-    const browserExtension = expectDefined(
-      uiE2e.steps.find(
-        (step: WorkflowStep) => step.name === "Test browser extension bootstrap end-to-end",
-      ),
-      "browser extension bootstrap E2E suite",
+    const browserExtension = requiredWorkflowStep(
+      uiE2e.steps,
+      "Test browser extension bootstrap end-to-end",
     );
     expect(browserExtension.if).toBe("matrix.task == 'browser-extension'");
     expect(browserExtension.run).toBe("pnpm test:e2e:browser-extension");
@@ -11430,11 +11337,9 @@ describe("ci workflow guards", () => {
     );
     const proofUpload = uiE2eRealGateway.steps[proofUploadIndex];
     const realGatewayIndex = uiE2eRealGateway.steps.indexOf(realGatewayStep);
-    const realGatewayFailureDiagnostics = expectDefined(
-      uiE2eRealGateway.steps.find(
-        (step: WorkflowStep) => step.name === "Upload Control UI real-Gateway failure diagnostics",
-      ),
-      "real-Gateway Control UI failure diagnostic upload",
+    const realGatewayFailureDiagnostics = requiredWorkflowStep(
+      uiE2eRealGateway.steps,
+      "Upload Control UI real-Gateway failure diagnostics",
     );
     expect(realGatewayFailureDiagnostics).toEqual({
       name: "Upload Control UI real-Gateway failure diagnostics",
@@ -11453,11 +11358,9 @@ describe("ci workflow guards", () => {
     expect(uiE2eRealGateway.steps.indexOf(realGatewayFailureDiagnostics)).toBeGreaterThan(
       realGatewayIndex,
     );
-    const quotaDiagnostics = expectDefined(
-      uiE2eRealGateway.steps.find(
-        (step: WorkflowStep) => step.name === "Upload quota auth and transport diagnostics",
-      ),
-      "quota diagnostics retained on success and failure",
+    const quotaDiagnostics = requiredWorkflowStep(
+      uiE2eRealGateway.steps,
+      "Upload quota auth and transport diagnostics",
     );
     expect(quotaDiagnostics).toEqual({
       name: "Upload quota auth and transport diagnostics",
@@ -11473,12 +11376,9 @@ describe("ci workflow guards", () => {
     expect(uiE2eRealGateway.steps.indexOf(quotaDiagnostics)).toBeGreaterThan(realGatewayIndex);
     // Same-origin admission compares exact build IDs, including the build timestamp.
     // Include private QA so media bootstrap cannot rebuild runtime behind the UI.
-    const realGatewayBuild = expectDefined(
-      uiE2eRealGateway.steps.find(
-        (step: WorkflowStep) =>
-          step.name === "Build runtime and Control UI artifacts for real-Gateway tests",
-      ),
-      "paired runtime and Control UI build",
+    const realGatewayBuild = requiredWorkflowStep(
+      uiE2eRealGateway.steps,
+      "Build runtime and Control UI artifacts for real-Gateway tests",
     );
     expect(realGatewayBuild.run).toBe("pnpm build");
     expect(realGatewayBuild.if).toBe(
@@ -11492,11 +11392,9 @@ describe("ci workflow guards", () => {
     const realGatewayBuildIndex = uiE2eRealGateway.steps.indexOf(realGatewayBuild);
     expect(realGatewayBuildIndex).toBeGreaterThan(uiE2eRealGateway.steps.indexOf(realGatewaySetup));
     expect(realGatewayBuildIndex).toBeLessThan(realGatewayIndex);
-    const desktopProof = expectDefined(
-      uiE2eRealGateway.steps.find(
-        (step: WorkflowStep) => step.name === "Prove desktop resize over node and SSH",
-      ),
-      "real desktop fixture proof",
+    const desktopProof = requiredWorkflowStep(
+      uiE2eRealGateway.steps,
+      "Prove desktop resize over node and SSH",
     );
     expect(desktopProof).toEqual({
       name: "Prove desktop resize over node and SSH",
@@ -11531,11 +11429,9 @@ describe("ci workflow guards", () => {
         }
       }
     }
-    const desktopUpload = expectDefined(
-      uiE2eRealGateway.steps.find(
-        (step: WorkflowStep) => step.name === "Upload sanitized desktop resize proof",
-      ),
-      "sanitized desktop upload",
+    const desktopUpload = requiredWorkflowStep(
+      uiE2eRealGateway.steps,
+      "Upload sanitized desktop resize proof",
     );
     expect(desktopUpload).toEqual({
       name: "Upload sanitized desktop resize proof",
