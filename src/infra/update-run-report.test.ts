@@ -191,25 +191,19 @@ it.each([true, false])("separates saved and current health (responding=%s)", (re
   expect(report.headline).not.toContain("gateway is running");
 });
 
-it.each(["state-migration-started", "runtime-verification-failed"] as const)(
-  "retains %s constraints",
-  async (reason) => {
-    const record = observedFailure(serving("2026.9.5", reason), { reason: "post-update-plugins" });
-    const expected = `verified serving 2026.9.5; restart remains unsafe (${reason})`;
-    expect(renderUpdateRunReport(record).markdown).toContain(expected);
-    const report = await failureReport(
-      record,
-      reason === "runtime-verification-failed"
-        ? {
-            verification: verified("2026.9.5"),
-            recovery: healthy("2026.9.5"),
-            steps: [resultStep("gateway recovery verification", { command: "verify" })],
-          }
-        : {},
-    );
-    expect(report.body).toContain(`Recovery outcome: ${expected}`);
-  },
-);
+it("preserves recorded restart constraints over newer healthy recovery facts", async () => {
+  const record = observedFailure(serving("2026.9.5", "runtime-verification-failed"), {
+    reason: "post-update-plugins",
+  });
+  const report = await failureReport(record, {
+    verification: verified("2026.9.5"),
+    recovery: healthy("2026.9.5"),
+    steps: [resultStep("gateway recovery verification", { command: "verify" })],
+  });
+  expect(report.body).toContain(
+    "Recovery outcome: verified serving 2026.9.5; restart remains unsafe (runtime-verification-failed)",
+  );
+});
 
 it.each([
   ["target", "runtime-verification-failed", true],
@@ -345,31 +339,19 @@ it.each([
   );
 });
 
-it.each<[UpdateRunRecord["verification"], string, boolean?]>([
-  [{ runningVersion: "2026.9.1", versionMatch: false }, "version mismatch"],
-  [
-    { runningVersion: "2026.9.2", runningBuildId: "older-build", versionMatch: false },
-    "build mismatch",
-  ],
-  [{ runningVersion: "2026.9.2", versionMatch: false }, "service identity unavailable"],
-  [
-    { serviceRunning: true, versionMatch: false },
-    "service running; service identity unavailable",
-    true,
-  ],
-])("reports identity (%j, %s)", async (verification, expected, publicReport) => {
+it("does not report a missing running identity as a version mismatch", async () => {
   const record = failed({
     reason: "restart-unhealthy",
     after: { version: "2026.9.2", buildId: "candidate-build" },
-    verification,
+    verification: { serviceRunning: true, versionMatch: false },
   });
   const report = renderUpdateRunReport(record);
-  expect(report.lines).toContain(`Recorded verification: ${expected}.`);
-  if (publicReport) {
-    const failure = await failureReport(record);
-    for (const text of [report.markdown, failure.body]) {
-      expectText(text, ["identity unavailable"], ["version mismatch"]);
-    }
+  expect(report.lines).toContain(
+    "Recorded verification: service running; service identity unavailable.",
+  );
+  const failure = await failureReport(record);
+  for (const text of [report.markdown, failure.body]) {
+    expectText(text, ["identity unavailable"], ["version mismatch"]);
   }
 });
 

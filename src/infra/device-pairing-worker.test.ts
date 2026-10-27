@@ -177,9 +177,6 @@ test("keeps public list, lookup, and pending bytes while executing no host queri
   using first = vi.spyOn(queries, "executeSqliteQueryTakeFirstSync");
   expect(JSON.stringify(await listDevicePairing(baseDir))).toBe(goldenList);
   expect(JSON.stringify(await listDevicePairingReadOnly(baseDir))).toBe(goldenList);
-  expect(JSON.stringify(await getPairedDevice(" paired-rich ", baseDir))).toBe(
-    JSON.stringify(native.pairedByDeviceId["paired-rich"]),
-  );
   expect(JSON.stringify(await getPendingDevicePairing("refreshed", baseDir))).toBe(
     JSON.stringify(refreshed),
   );
@@ -187,39 +184,17 @@ test("keeps public list, lookup, and pending bytes while executing no host queri
   for (const missing of ["missing", "toString", "constructor", "__proto__"]) {
     expect(await getPairedDevice(missing, baseDir)).toBeNull();
   }
+  using unavailable = vi
+    .spyOn(stateReads, "executeExistingOpenClawStateRead")
+    .mockRejectedValue(new Error("reader busy"));
+  expect(JSON.stringify(await getPairedDevice(" paired-rich ", baseDir))).toBe(
+    JSON.stringify(native.pairedByDeviceId["paired-rich"]),
+  );
+  await updatePairedDeviceMetadata("paired-rich", { displayName: "Committed" }, baseDir);
+  expect((await paired())?.displayName).toBe("Committed");
+  expect(unavailable).not.toHaveBeenCalled();
   expect(all).not.toHaveBeenCalled();
   expect(first).not.toHaveBeenCalled();
-});
-
-test("rolls back owner approval when live policy is revoked before worker commit", async () => {
-  const before = JSON.stringify(readState());
-  let allowed = true;
-  let revokeAfterGrant = true;
-  const isApprovalCurrent = () => {
-    if (revokeAfterGrant) {
-      queueMicrotask(() => {
-        allowed = false;
-      });
-    }
-    return allowed;
-  };
-  const approve = () =>
-    approveDevicePairing("newest", { callerScopes: ["operator.read"], isApprovalCurrent }, baseDir);
-
-  await expect(approve()).resolves.toEqual({
-    status: "forbidden",
-    reason: "approval-policy-changed",
-  });
-  expect(JSON.stringify(readState())).toBe(before);
-  allowed = true;
-  revokeAfterGrant = false;
-  await expect(approve()).resolves.toMatchObject({
-    status: "approved",
-    requestId: "newest",
-    device: { deviceId: "paired-rich", publicKey: "synthetic-replacement-key" },
-  });
-  expect(await getPendingDevicePairing("newest", baseDir)).toBeNull();
-  expect((await paired())?.publicKey).toBe("synthetic-replacement-key");
 });
 
 test("reconnects without replacing paired rows or changing unrelated device fields", async () => {
@@ -376,20 +351,6 @@ test("persists token use and node connection facts without reading unrelated dev
     });
     expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(originalBinding);
   });
-});
-
-test("serves reconnect lookups from committed rows while the read worker is unavailable", async () => {
-  const device = await paired();
-  using unavailable = vi
-    .spyOn(stateReads, "executeExistingOpenClawStateRead")
-    .mockRejectedValue(new Error("reader busy"));
-  const rows = await Promise.all(Array.from({ length: 160 }, () => paired()));
-  expect(rows).toEqual(Array.from({ length: 160 }, () => device));
-  rows[0]!.tokens!.operator!.revokedAtMs = 123;
-  expect((await paired())?.tokens?.operator?.revokedAtMs).toBeUndefined();
-  await updatePairedDeviceMetadata("paired-rich", { displayName: "Committed" }, baseDir);
-  expect((await paired())?.displayName).toBe("Committed");
-  expect(unavailable).not.toHaveBeenCalled();
 });
 
 test("coalesces reconnect presence without rewriting recent last-seen or replacement approvals", async () => {

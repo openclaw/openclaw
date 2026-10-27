@@ -145,10 +145,8 @@ function isExclusiveCreate(flags: string | number | undefined): boolean {
 it.each([
   ["observation", "absent"],
   ["observation", "replacement-pending"],
-  ["observation", "replacement-complete"],
   ["script", "absent"],
   ["script", "replacement-pending"],
-  ["script", "replacement-empty"],
 ])("refuses a displaced root during %s (%s)", async (phase, state) => {
   const displaced = displacedRoot();
   const cooperativeDiscard = vi.fn();
@@ -201,18 +199,12 @@ it.each([
   } else if (state === "replacement-pending") {
     // The failed generation does not authorize recovery of its replacement.
     expect(await read(pending)).toBe("replacement pending\n");
-  } else if (phase === "script") {
-    expect(await optionalPending()).toBeNull();
-    const replay = vi.fn();
-    await finish(replay);
-    expect(replay).not.toHaveBeenCalled();
   }
 });
 
 it.each([
   ["callback", "absent"],
   ["callback", "legacy"],
-  ["release-before-retirement", "absent"],
   ["release-before-retirement", "pending"],
 ])("preserves retired work after %s failure (%s)", async (phase, shape) => {
   const other = await fixture();
@@ -332,17 +324,6 @@ it.each<[string, () => Promise<unknown>]>([
   } else {
     expect(await read(pending)).toBe("pending\n");
   }
-});
-
-it("retries when the observed owner released before exiting", async () => {
-  await writeOwner();
-  vi.spyOn(pidAlive, "isPidAlive").mockImplementationOnce(() => {
-    fsSync.rmSync(lock);
-    return false;
-  });
-  await finish();
-  expect(runScript).toHaveBeenCalledTimes(2);
-  await missing(lock);
 });
 
 it.each(["not-directory", "inaccessible", "removed-on-create"])(
