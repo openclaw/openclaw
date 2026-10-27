@@ -295,6 +295,10 @@ these rules:
   cross-call state in `api.runtime.state` or the plugin's own database.
 - **Disposal releases everything the plugin started.** Register cleanup with
   `api.lifecycle.onDispose` and wait for your own workers and timers there.
+- **A context engine keeps turn state durable.** At handover OpenClaw disposes
+  the old version's engine and creates one from the new version for the rest
+  of the turn. The new engine finishes the turn: it receives `commitTurn` for
+  the whole turn and runs its maintenance once.
 
 In return, OpenClaw never runs calls on two versions of the plugin at once,
 stops and disposes the old version only after its admitted calls finish, and
@@ -304,9 +308,9 @@ failing.
 Handover happens only between model steps. A long-running tool call keeps the
 reload waiting until it returns. A turn hands over only when every plugin the
 reload replaces declares the field; one undeclared plugin keeps the whole turn
-waiting. Plugins that register a context engine keep the default wait for now,
-because the engine's turn state is held outside the step boundary. Reload status
-and logs name the plugins that kept a turn waiting.
+waiting. If the new version no longer registers the turn's context engine, the
+turn ends with an error instead of switching engines mid-turn. Reload status and
+logs name the plugins that kept a turn waiting.
 
 ### Plugin value boundary
 

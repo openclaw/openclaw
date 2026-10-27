@@ -23,7 +23,7 @@ describe("plugin reload drain reason", () => {
     ]);
     expect(reason).toContain("queued behind 3 retained work item(s) for plugin swap, pinned.");
     expect(reason).toContain(
-      "Running turns keep pinned until they finish because it does not hand turns over (reload.turnHandover is not declared, or a context engine is registered).",
+      "Running turns keep pinned until they finish because it does not declare reload.turnHandover.",
     );
   });
 });

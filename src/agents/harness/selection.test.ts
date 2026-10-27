@@ -84,6 +84,7 @@ import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { assembleHarnessContextEngine } from "./context-engine-lifecycle.js";
 import { createContextEngineRequiringAssembly } from "./context-engine-lifecycle.test-support.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
+import { createTurnLease } from "./context-engine-turn.test-support.js";
 import { prepareAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import {
@@ -1377,6 +1378,7 @@ describe("runAgentHarnessAttempt", () => {
       ...(degradedReason ? { reason: degradedReason } : {}),
     });
     const lease = {
+      ...createTurnLease(configuredEngine),
       get engine() {
         return effectiveEngine;
       },
@@ -1403,10 +1405,6 @@ describe("runAgentHarnessAttempt", () => {
         order.push("begin");
         return asEffective();
       }),
-      deferDisposalUntil: vi.fn(),
-      disposed: false,
-      onDispose: vi.fn(),
-      dispose: vi.fn(async () => {}),
     } satisfies ContextEngineLogicalTurnLease;
     contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun.mockImplementationOnce(
       async (params) => {

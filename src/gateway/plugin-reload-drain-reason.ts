@@ -31,7 +31,7 @@ export function formatPluginReloadDrainReason(params: {
   }
   if (pinning.length) {
     parts.push(
-      `Running turns keep ${pinning.map((hold) => hold.pluginId).join(", ")} until they finish because ${pinning.length === 1 ? "it does" : "they do"} not hand turns over (reload.turnHandover is not declared, or a context engine is registered).`,
+      `Running turns keep ${pinning.map((hold) => hold.pluginId).join(", ")} until they finish because ${pinning.length === 1 ? "it does" : "they do"} not declare reload.turnHandover.`,
     );
   }
   parts.push(`New agent runs wait up to the ${drainBudgetSeconds}s drain budget.`);

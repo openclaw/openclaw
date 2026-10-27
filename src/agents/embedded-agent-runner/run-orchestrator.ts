@@ -677,6 +677,9 @@ async function runEmbeddedAgentForSession(
             }
             // A refresh must join the old generation's tracked cleanup before reacquisition.
             await generationCleanup;
+            // The logical turn's engine came from the old generation; release it so a reload
+            // can drain it. The next attempt's begin rebinds it from the published generation.
+            await continuation.contextEngineLogicalTurnLease?.handOver();
             // The old attempt has persisted results and released its tools. Reuse admission,
             // but acquire fresh plugin owners before continuing the same task from its transcript.
             params = continuation;

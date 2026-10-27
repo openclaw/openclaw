@@ -71,20 +71,6 @@ describe("plugin turn handover", () => {
     expect(instance.retainedWorkCount).toBe(1);
   });
 
-  it("keeps holds on a context-engine owner even when it declares turn handover", async () => {
-    const { registry, instance } = createRegistryWithInstance("swap", true);
-    registry.contextEngines.set("swap-engine", {
-      factory: () => ({}) as never,
-      owner: "plugin:swap",
-      lifecycle: "runtime",
-    });
-    retainRuntimePluginWork([registry], "unknown", captureTurnHandoverRequest([registry]));
-
-    instance.reserveReplacement();
-    await settle();
-    expect(instance.retainedWorkCount).toBe(1);
-  });
-
   it("yields a whole-run hold outside a turn", async () => {
     const { registry, instance } = createRegistryWithInstance("swap", true);
     retainRuntimePluginWork([registry], "unknown", captureTurnHandoverRequest([registry]));
