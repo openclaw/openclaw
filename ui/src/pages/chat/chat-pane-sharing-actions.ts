@@ -17,6 +17,8 @@ import {
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
+import type { ChatHeaderSharingSnapshot } from "./chat-header-viewers-snapshot.ts";
+import { chatHistoryRequests } from "./chat-history-state.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import type { ChatPaneConnectionScope } from "./chat-pane-shared.ts";
 import { ChatPaneSidePanels } from "./chat-pane-side-panels.ts";
@@ -28,6 +30,7 @@ import {
   type ChatSessionSharingProps,
   type ChatSessionSharingState,
 } from "./components/chat-session-sharing-shared.tsx";
+import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 registerChatSessionEnglish();
 
@@ -35,6 +38,42 @@ const SESSION_MEMBERS_LIST_METHOD = "session.members.listEvidence";
 
 export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
   private readonly sessionSharingPropsMemo = new ChatPaneHeaderMemo<PreparedChatSessionSharing>();
+
+  protected headerSharingPlaceholder(
+    row: GatewaySessionRow | undefined,
+    control: ChatSessionSharingProps | undefined,
+  ): ChatHeaderSharingSnapshot | undefined {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const target = { sessionKey: state.sessionKey };
+    const saved = readChatSessionSnapshot(state.chatMessagesBySession, state, target);
+    if (!saved || saved.sessionId !== state.currentSessionId) {
+      return;
+    }
+    if (
+      row &&
+      state.connected &&
+      state.client?.recoveryScopeReady &&
+      !chatHistoryRequests(state).initialSnapshotHydration
+    ) {
+      const display =
+        control && canManageChatSessionSharing(row)
+          ? (control.state?.result ? control.state.result.publicShare : control.cachedPublished)
+            ? "public"
+            : (row.visibility ?? "shared")
+          : null;
+      if (saved.headerSharing !== display) {
+        cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
+          ...saved,
+          headerSharing: display,
+        });
+      }
+      return;
+    }
+    return saved.headerSharing ?? undefined;
+  }
 
   /** Shared presentation facts; loading and mutations remain with this pane's native owner. */
   protected prepareSessionSharing(
@@ -76,6 +115,14 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     const openDisabledReason =
       readAccess.allowed || visibilityDisabledReason === undefined ? undefined : readAccess.reason;
     const state = this.collaboration.sharingStates.get(this.sessionSharingCacheKey(row.key));
+    const cached =
+      this.state && !state?.result
+        ? readChatSessionSnapshot(this.state.chatMessagesBySession, this.state, {
+            sessionKey: row.key,
+          })
+        : undefined;
+    const cachedPublished =
+      cached?.headerSharing === "public" && cached.sessionId === row.sessionId;
     const allowedVisibilities = snapshot.hello?.policy?.allowedSessionVisibilities;
     const operationSignal = this.headerSessionMutationAbortController.signal;
     return this.sessionSharingPropsMemo.read(
@@ -83,6 +130,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
         row,
         ...Object.entries(row).flat(),
         state,
+        cachedPublished,
         allowedVisibilities,
         operationSignal,
         readAccess.allowed,
@@ -98,6 +146,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       () => ({
         session: row,
         state,
+        cachedPublished,
         allowedVisibilities,
         operationSignal,
         membersAvailable: readAccess.allowed,

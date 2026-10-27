@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
@@ -55,10 +56,18 @@ suite.define(() => {
               watcher("Operator", true),
               ...["Ada", "Zoe", "Lin", "Sam", "Kai"].map((name) => watcher(name)),
             ],
+            emitPresenceOnConnect: false,
             sessionKey,
             deferredMethods: ["connect"],
             historyMessages: [{ role: "assistant", content: "Synthetic cached conversation." }],
-            featureMethods: ["board.get"],
+            featureMethods: [
+              "board.get",
+              "session.members.listEvidence",
+              "session.members.add",
+              "session.members.remove",
+              "session.visibility.set",
+              "session.publicShare.set",
+            ],
             methodResponses: {
               "board.get": board(sessionKey),
               "sessions.list": {
@@ -72,6 +81,8 @@ suite.define(() => {
                       owner: { actor: ada },
                       participants: [{ identity: identity("Zoe"), label: "Zoe" }],
                       participantCount: 1,
+                      sharingRole: "owner",
+                      visibility: "shared",
                     },
                   ),
                 ]),
@@ -87,6 +98,13 @@ suite.define(() => {
           expect(response?.status()).toBe(200);
           await gateway.waitForRequest("connect");
           await gateway.resolveDeferred("connect");
+          await waitForControlUiGatewayReady(page);
+          const hello = await evaluateControlUiContext(
+            page,
+            (context) => context.gateway.snapshot.hello,
+          );
+          expect(hello).not.toBeNull();
+          await gateway.emitGatewayEvent("presence", { presence: hello?.snapshot?.presence });
           const header = page.locator(".chat-pane__header").first();
           const count = (selector: string, expected: number) =>
             expect.poll(() => header.locator(selector).count()).toBe(expected);
@@ -97,6 +115,7 @@ suite.define(() => {
             await count(`[data-viewer-id="${id}"]`, 1);
           }
           await attribute(".chat-pane__presence .viewer-facepile", "data-viewer-count").toBe("5");
+          await header.locator("button.chat-pane__sharing-trigger").waitFor({ state: "visible" });
 
           await page.getByText("Synthetic cached conversation.", { exact: true }).waitFor();
           await page.evaluate(async () => {
@@ -133,6 +152,16 @@ suite.define(() => {
               .getAttribute("data-viewer-count"),
           ).toBe("5");
           expect(await header.locator(".viewer-avatar--overflow").textContent()).toBe("+2");
+          const placeholder = header.locator("[inert] .chat-pane__sharing-trigger");
+          await placeholder.waitFor({ state: "visible" });
+          const cachedSharingBox = await placeholder.boundingBox();
+          const cachedPeopleBox = await header.locator(".chat-pane__presence").boundingBox();
+          const membershipReads = await gateway.getRequests("session.members.listEvidence");
+          await placeholder.click({ force: true });
+          expect(await header.locator(".chat-pane__sharing-panel:visible").count()).toBe(0);
+          expect(await gateway.getRequests("session.members.listEvidence")).toHaveLength(
+            membershipReads.length,
+          );
           const cachedAvatar = await header
             .locator('[data-viewer-id="profile-ada"]')
             .elementHandle();
@@ -140,8 +169,26 @@ suite.define(() => {
             animations: "disabled",
             path: path.join(outputDir, `${face}-warm-header.png`),
           });
-          await gateway.resolveDeferred("connect");
+          await gateway.resolveDeferred("connect", {
+            ...hello,
+            snapshot: {
+              ...hello?.snapshot,
+              presence: hello?.snapshot?.presence?.filter(
+                (row) => row.user?.id === "profile-operator",
+              ),
+            },
+          });
           await waitForControlUiGatewayReady(page);
+          await attribute(".chat-pane__presence .viewer-facepile", "data-viewer-count").toBe("5");
+          expect(await cachedAvatar?.evaluate((element) => element.isConnected)).toBe(true);
+          const liveSharingBox = await header
+            .locator("button.chat-pane__sharing-trigger")
+            .boundingBox();
+          expect(liveSharingBox).toEqual(cachedSharingBox);
+          expect(await header.locator(".chat-pane__presence").boundingBox()).toEqual(
+            cachedPeopleBox,
+          );
+          await gateway.emitGatewayEvent("presence", { presence: hello?.snapshot?.presence });
           await attribute(".chat-pane__presence .viewer-facepile", "data-viewer-count").toBe("5");
           expect(await cachedAvatar?.evaluate((element) => element.isConnected)).toBe(true);
 

@@ -378,6 +378,13 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       ownerViewing,
       showOwner: showOwnerChip && !this.mergedChrome && !detailsControl,
     });
+    const sharingControl =
+      sharing &&
+      (canManageChatSessionSharing(sharing.session)
+        ? !this.narrow && !sharing.openDisabledReason
+        : sharing.session.visibility === "draft")
+        ? sharing
+        : undefined;
     this.headerBoardMenu = this.pageBoardWidgetMenu(currentLayout);
     const boardWidgetMenu = this.headerBoardMenuMemo.read(
       [this.headerBoardMenu?.widget, this.headerBoardMenu?.tabs, this.headerBoardMenu?.canMutate],
@@ -546,13 +553,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             }
           : undefined,
       presence: viewers?.length ? { staticUsers: viewers, totalCount, personActivity } : undefined,
-      sharingControl:
-        sharing &&
-        (canManageChatSessionSharing(sharing.session)
-          ? !this.narrow && !sharing.openDisabledReason
-          : sharing.session.visibility === "draft")
-          ? sharing
-          : undefined,
+      sharingControl,
+      sharingPlaceholder: this.headerSharingPlaceholder(row, sharingControl),
       publicAccessIndicator: this.narrow ? (sharing ?? undefined) : undefined,
       readMachineName,
       onMobilePlacementStop: row

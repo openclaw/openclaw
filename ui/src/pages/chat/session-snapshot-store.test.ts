@@ -645,6 +645,7 @@ describe("persistent chat session snapshots", () => {
     async (scope) => {
       const value: ChatSessionSnapshot = {
         ...snapshot("important transcript"),
+        headerSharing: "public",
         headerViewers: {
           users: [{ id: "peer", name: "Peer", avatarUrl: "/peer.png" }],
           totalCount: 5,

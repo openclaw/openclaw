@@ -140,7 +140,10 @@ progress card for display while connecting; live Gateway results replace those
 cached facts in place. Cached progress does not authorize offline actions. The
 header also retains its last three viewer avatars and overflow count for that
 conversation while connecting. The reconnect indicator describes connection
-state; live presence replaces these last-known viewers when it arrives.
+state; the full live presence roster replaces these last-known viewers when it
+arrives. The identity-only hello does not clear them. The header retains the
+sharing control's displayed mode and geometry while connecting, without enabling
+its menu or membership actions until live authority is available.
 The first chat request uses the saved cursor if the cached transcript is ready when
 the live message subscription finishes connecting. Otherwise, the live read and
 cache restoration run in parallel. Agent switches and stale asynchronous reads

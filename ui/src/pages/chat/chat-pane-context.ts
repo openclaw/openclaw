@@ -17,7 +17,6 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import { loadSettings } from "../../app/settings.ts";
-import { readPresenceEntries } from "../../app/user-profile.ts";
 import type { SessionPlacementPresentation } from "../../components/session-placement-move-dialog.tsx";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
@@ -311,11 +310,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (clientChanged) {
       this.replaceStagedAttachmentGatewayOwner(snapshot.client);
     }
-    if (snapshot.phase !== "connected") {
+    // Hello carries only self identity; the presence stream owns the full roster.
+    if (snapshot.phase !== "connected" || clientChanged) {
       this.presence.update(undefined);
-    } else if (clientChanged || !wasConnected) {
-      const presence = readPresenceEntries(snapshot.hello?.snapshot);
-      this.presence.update({ presence: presence ?? [] });
     }
     const rename = this.headerPresentation.renameSession;
     const draftOwnerChanged = state.client !== snapshot.client || pairingOwnerChanged;
