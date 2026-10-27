@@ -1,6 +1,9 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -205,7 +208,14 @@ suite.define(() => {
     expect(collaborative?.titleLeft).toBeCloseTo(single?.titleLeft ?? 0, 5);
   });
 
-  it.each([1200, 390])("keeps inline-owner activity last at %ipx", async (width) => {
+  it.each([
+    { width: 1200, grouping: "None" },
+    { width: 1200, grouping: "Custom groups" },
+    { width: 1200, grouping: "Person" },
+    { width: 390, grouping: "None" },
+    { width: 390, grouping: "Custom groups" },
+    { width: 390, grouping: "Person" },
+  ])("keeps $grouping activity last at $width px", async ({ width, grouping }) => {
     const patrick = sessionPerson("profile-patrick", "Patrick");
     const mira = sessionPerson("profile-mira", "Mira");
     const states: Array<[string, Record<string, unknown>]> = [
@@ -219,7 +229,8 @@ suite.define(() => {
         {
           key: `agent:main:${id}`,
           kind: "direct",
-          label: `Inline ${id} session`,
+          label: `Review ${id} session`,
+          category: "Release readiness",
           createdActor: patrick,
           owner: { actor: patrick },
           updatedAt: 10 - index,
@@ -230,7 +241,9 @@ suite.define(() => {
     rows.push({
       key: "agent:main:child",
       kind: "direct",
-      label: "Inline child session",
+      label: "Verify release checks",
+      hasActiveRun: true,
+      status: "running",
       createdActor: patrick,
       owner: { actor: patrick },
       spawnedBy: "agent:main:parent",
@@ -255,8 +268,8 @@ suite.define(() => {
     if (width === 390) {
       await navigationDrawerToggle(page).click();
     }
-    await page.getByText("Inline idle session", { exact: true }).waitFor();
-    await chooseSidebarMenuOption(page, "Group by", "Person");
+    await page.getByText("Review idle session", { exact: true }).waitFor();
+    await chooseSidebarMenuOption(page, "Group by", grouping);
     await closeSidebarMenu(page);
     await chooseOwner(page, "owner:profile-patrick");
     // Escape may close only the picker, leaving the mobile drawer open.
@@ -267,7 +280,10 @@ suite.define(() => {
       }
       await waitForMobileSidebarDrawerOpen(page);
     }
-    const group = page.locator(".sidebar-recent-sessions__group--inline-owner");
+    const group = page.locator(".sidebar-recent-sessions");
+    if (grouping === "Person") {
+      await group.locator(".sidebar-recent-sessions__group--inline-owner").waitFor();
+    }
     const row = (id: string) => group.locator(`[data-session-key="agent:main:${id}"]`);
     await row("running").locator(".session-glyph__ring").waitFor();
     await row("unread").locator(".session-unread-dot").waitFor();
@@ -287,16 +303,34 @@ suite.define(() => {
         };
       });
     const header = await page
-      .locator("#sidebar-session-owner-title")
+      .locator(".personal-session-groups__heading")
       .evaluate((element) => element.getBoundingClientRect().bottom);
     const [idle, unread, running] = await Promise.all([
       rowGeometry("idle"),
       rowGeometry("unread"),
       rowGeometry("running"),
     ]);
-    expect(idle.top - header).toBeLessThanOrEqual(12);
+    if (grouping === "Person") {
+      expect(idle.top - header).toBeLessThanOrEqual(12);
+    }
+    if (width === 1200 && grouping !== "Person") {
+      const frame = await takeControlUiScreenshotFrame(
+        page,
+        page.locator("body"),
+        [row("running")],
+        {
+          animations: "disabled",
+          elements: [page.locator(".sidebar-shell")],
+        },
+      );
+      await writeFile(path.join(suite.artifactDir, `my-sessions-${grouping}.png`), frame.png);
+      await writeFile(
+        path.join(suite.artifactDir, `my-sessions-${grouping}-sidebar.png`),
+        frame.elements[0]!.png,
+      );
+    }
     expect(idle.indicator).toBeUndefined();
-    for (const status of [unread, running]) {
+    for (const status of [running, unread]) {
       expect(status.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
       expect(status.indicator?.left).toBeGreaterThanOrEqual(status.text?.right ?? Infinity);
     }
@@ -335,9 +369,34 @@ suite.define(() => {
     const toggle = row("parent").locator("[data-child-session-toggle]");
     await toggle.click();
     await expectBrowser(group.locator('[data-session-key="agent:main:child"]')).toContainText(
-      "Inline child session",
+      "Verify release checks",
     );
     await expectBrowser(toggle).toHaveAttribute("aria-expanded", "true");
+    await row("child").locator(".session-glyph__ring").waitFor();
+    await row("child").hover();
+    const child = await rowGeometry("child");
+    expect(child.indicator?.left).toBeGreaterThanOrEqual(child.actions?.right ?? Infinity);
+    expect(child.right - (child.indicator?.right ?? 0)).toBeCloseTo(
+      running.right - (running.indicator?.right ?? 0),
+      5,
+    );
+    await row("running").hover();
+    if (width === 390) {
+      await row("running").locator("[data-sidebar-session-menu]").click();
+      await page.getByRole("menuitem", { name: "Pin session", exact: true }).click();
+    } else {
+      await row("running").getByRole("button", { name: "Pin session", exact: true }).click();
+    }
+    await expectBrowser(page.locator('[data-session-section="pinned"]')).toContainText(
+      "Review running session",
+    );
+    await row("running").hover();
+    const pinned = await rowGeometry("running");
+    expect(pinned.indicator?.left).toBeGreaterThanOrEqual(pinned.actions?.right ?? Infinity);
+    expect(pinned.right - (pinned.indicator?.right ?? 0)).toBeCloseTo(
+      running.right - (running.indicator?.right ?? 0),
+      5,
+    );
   });
 
   it("derives People controls and owner filtering from current session owners", async () => {
