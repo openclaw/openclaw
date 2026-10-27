@@ -90,6 +90,8 @@ reopening the scribe shows its current state.
 
 ## Limits
 
+- The Scribes tab rereads scribe state about every 30 seconds while it is visible,
+  so a setup result or a finished run can take that long to appear.
 - Conversation counts and the `MEMORY.md` size come from Gateway reads. A count
   the Gateway cannot provide is left out rather than estimated.
 - Repair and Retry reuse the options of the latest setup message the page can still read

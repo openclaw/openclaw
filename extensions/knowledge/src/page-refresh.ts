@@ -114,6 +114,12 @@ export async function refreshScope(ui: Page, replaceLocation = true) {
     status.hidden = true;
     banner.hidden = true;
     banner.textContent = "";
+    // Scribe state lives in sessions and automations, not the vault, so the vault snapshot
+    // cannot tell whether the Scribes tab is current: reload it in the background every resync.
+    if (s.tab === "scribes" && s.viewReady && !s.loadingGeneration && s.displayView === viewKey()) {
+      await load(true);
+      return;
+    }
     if (
       s.loadingGeneration ||
       (s.viewReady &&
