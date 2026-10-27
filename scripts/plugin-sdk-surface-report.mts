@@ -296,7 +296,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: openRecord and ToolArgumentValidationError on the existing tool-plugin facade.
       // +1: resolveManagedResourceStateDir keeps plugin-managed model caches and binaries on the operator root during redirected agent exec.
       // +2: shared SystemOne question encoder and response decoder on the Decisions facade.
-      3818,
+      // +4: capability-aware auth context and transport model types in core/plugin-entry.
+      3822,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

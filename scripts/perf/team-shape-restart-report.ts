@@ -21,6 +21,17 @@ export type RestartRecord = {
   shutdownMs?: number;
   error?: string;
 };
+export type StressSettlement = {
+  startedAt: number;
+  deadline: number;
+  finishedAt?: number;
+  timedOut: boolean;
+};
+export type SharedRateLimitProbe = {
+  first429At: number;
+  resetAt: number;
+  newcomerCreatedAt?: number;
+};
 type Status = "pass" | "fail" | "unknown";
 type Invariant = { id: number; name: string; status: Status; details: string; evidence: unknown[] };
 const record = (value: unknown): Record<string, unknown> =>
@@ -42,10 +53,6 @@ function text(value: unknown): string {
       ? text(item.content)
       : "";
 }
-const hasMarker = (value: string, marker: string) => {
-  const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`${escaped}(?=$|[^a-zA-Z0-9_-])`).test(value);
-};
 export function stressAnswerMessages(history: unknown, inputId: string) {
   return array(record(history).messages)
     .map(record)
@@ -53,7 +60,7 @@ export function stressAnswerMessages(history: unknown, inputId: string) {
       (message) =>
         message.role === "assistant" &&
         (message.phase === undefined || message.phase === "final_answer") &&
-        hasMarker(text(message.content), `DONE_${inputId}`),
+        text(message.content).trimEnd().split(/\r?\n/).at(-1) === `DONE_${inputId}`,
     );
 }
 function percentile(values: number[], fraction: number) {
@@ -69,6 +76,8 @@ export function summarizeRestartStress(params: {
   effects: Record<string, string[]>;
   provider: unknown;
   errors: string[];
+  settlement?: StressSettlement;
+  sharedRateLimit?: SharedRateLimitProbe;
 }) {
   const histories = Object.fromEntries(
     Object.entries(params.histories).map(([key, value]) => [key, record(value)]),
@@ -153,7 +162,9 @@ export function summarizeRestartStress(params: {
             ? "failed"
             : terminal?.payload.state === "aborted" || receipt?.cancelled === true
               ? "cancelled"
-              : "unresolved",
+              : params.settlement?.timedOut
+                ? "timed-out"
+                : "unresolved",
       finalMarkers: finals.length,
       finalReceipts: finals,
       receipt,
@@ -166,7 +177,9 @@ export function summarizeRestartStress(params: {
   });
   const accepted = rows.filter((input) => input.accepted);
   const acceptanceUnknown = rows.filter((input) => input.outcome === "acceptance-unknown");
-  const unresolved = accepted.filter((input) => input.outcome === "unresolved");
+  const unresolved = accepted.filter((input) =>
+    ["unresolved", "timed-out"].includes(input.outcome),
+  );
   const stuckQueued = accepted.filter(
     (input) =>
       record(input.sessionInfo).hasActiveRun === false &&
@@ -312,6 +325,30 @@ export function summarizeRestartStress(params: {
     provider: params.provider,
   };
   const providerRequests = record(params.provider).requests;
+  const newcomer = rows.find((input) => input.id === "rate-newcomer");
+  const newcomerRequests = array(providerRequests)
+    .map(record)
+    .filter((request) => request.id === newcomer?.id && request.streaming === true)
+    .toSorted((a, b) => Number(a.at) - Number(b.at));
+  const firstNewcomerRequest = newcomerRequests[0];
+  const newcomerWaits = events.filter(
+    (event) =>
+      event.event === "agent" &&
+      event.payload.runId === newcomer?.runId &&
+      event.payload.stream === "run_status" &&
+      record(event.payload.data).reason === "rate_limit" &&
+      event.at < (params.sharedRateLimit?.resetAt ?? -Infinity) &&
+      Number(record(event.payload.data).retryAt) >= (params.sharedRateLimit?.resetAt ?? Infinity) &&
+      event.at < Number(firstNewcomerRequest?.at),
+  );
+  const probe = params.sharedRateLimit;
+  const sharedKnowledge = {
+    ...probe,
+    input: newcomer,
+    firstRequest: firstNewcomerRequest,
+    requests: newcomerRequests,
+    waits: newcomerWaits,
+  };
   const observedRequests =
     typeof providerRequests === "number" ? providerRequests : array(providerRequests).length;
   const latencies = accepted
@@ -331,12 +368,12 @@ export function summarizeRestartStress(params: {
       id: 1,
       name: "Every accepted input settles",
       status:
-        unresolved.length || stuckQueued.length
+        params.settlement?.timedOut || unresolved.length || stuckQueued.length
           ? "fail"
           : !accepted.length || acceptanceUnknown.length
             ? "unknown"
             : "pass",
-      details: `${accepted.length} accepted; ${unresolved.length} unresolved; ${stuckQueued.length} queued on idle sessions; ${acceptanceUnknown.length} acceptance unknown after transport failure. Consumed receipts alone never count as answered.`,
+      details: `${accepted.length} accepted; ${unresolved.length} unresolved (${unresolved.filter((input) => input.outcome === "timed-out").length} explicitly timed out); ${stuckQueued.length} queued on idle sessions; ${acceptanceUnknown.length} acceptance unknown after transport failure. Consumed receipts alone never count as answered.`,
       evidence: [{ unresolved, stuckQueued, acceptanceUnknown }],
     },
     {
@@ -415,8 +452,39 @@ export function summarizeRestartStress(params: {
         "Missing activity stays explicit and is excluded from percentiles, never treated as zero latency.",
       evidence: [latencyMs],
     },
+    {
+      id: 9,
+      name: "New session uses shared primary rate-limit knowledge",
+      status:
+        !probe ||
+        !newcomer ||
+        newcomer.sentAt <= probe.first429At ||
+        (probe.newcomerCreatedAt !== undefined && probe.newcomerCreatedAt >= probe.resetAt) ||
+        !firstNewcomerRequest
+          ? "unknown"
+          : firstNewcomerRequest.primary === false ||
+              (firstNewcomerRequest.primary === true &&
+                Number(firstNewcomerRequest.at) >= probe.resetAt &&
+                newcomerWaits.length > 0)
+            ? "pass"
+            : Number(firstNewcomerRequest.at) < probe.resetAt
+              ? "fail"
+              : "unknown",
+      details:
+        "A fresh session is created after the first injected primary 429. Its first streamed request must use fallback or have a recorded shared rate-limit wait until reset; preparation delays alone prove nothing. Title/utility requests are excluded.",
+      evidence: [sharedKnowledge],
+    },
   ];
-  const report = { invariants, inputs: rows, latencyMs, counts, effects, errors: params.errors };
+  const report = {
+    invariants,
+    inputs: rows,
+    latencyMs,
+    counts,
+    effects,
+    settlement: params.settlement,
+    sharedKnowledge,
+    errors: params.errors,
+  };
   const markdown = [
     "# Isolated Gateway restart stress",
     "",

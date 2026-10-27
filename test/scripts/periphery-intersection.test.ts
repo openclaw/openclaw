@@ -92,7 +92,7 @@ it("downloads each consumer report from its selected producer attempt", () => {
   const consumerNames = artifactNames("intersect").filter((name) =>
     name.includes("producers.outputs."),
   );
-  const producerNames = ["scan-ios", "macos-index"]
+  const producerNames = ["ios-index", "macos-index"]
     .flatMap(artifactNames)
     .map((name) =>
       name.replace(
@@ -110,9 +110,14 @@ if (!script) {
 const parameters = ["github", "context", "core"];
 const execute = compileFunction(`return (async () => {\n${script}\n})();`, parameters);
 const jobMetadata = { run_id: 123, head_sha: "current-head", status: "completed" };
-const producer = (name: string, run_attempt = 2) => ({ ...jobMetadata, name, run_attempt });
+const producer = (name: string, run_attempt = 2) => ({
+  ...jobMetadata,
+  name,
+  run_attempt,
+  conclusion: "success",
+});
 const producers = () => [
-  producer(workflow.jobs!["scan-ios"]!.name!, 1),
+  producer(workflow.jobs!["ios-index"]!.name!, 1),
   producer(workflow.jobs!["macos-index"]!.name!),
 ];
 const resolve = async (jobs = producers(), head = "current-head") => {
@@ -150,10 +155,22 @@ it.each(["", "scan / "])(
   },
 );
 
-it("selects a rerun producer even when its new artifact may be absent", async () => {
-  const jobs = producers();
-  jobs.push({ ...jobs[1]!, run_attempt: 3 });
-  await expect(resolve(jobs)).resolves.toMatchObject({ "macos-attempt": "3" });
+it.each(["ios", "macos"] as const)(
+  "selects the latest failed %s producer without falling back to an older artifact",
+  async (platform) => {
+    const jobs = producers();
+    jobs.push({ ...jobs[platform === "ios" ? 0 : 1]!, run_attempt: 3, conclusion: "failure" });
+    await expect(resolve(jobs)).resolves.toMatchObject({ [`${platform}-attempt`]: "3" });
+  },
+);
+
+it("retains valid branch reports from completed producers whose siblings failed", async () => {
+  await expect(
+    resolve(producers().map((job) => Object.assign(job, { conclusion: "failure" }))),
+  ).resolves.toEqual({
+    "ios-attempt": "1",
+    "macos-attempt": "2",
+  });
 });
 
 it.each([

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 271181,
-  "reason": "Same-host main285 and Creation bfcd2db6 measure startup 271088 to 271181 B gzip (+93 B), with five JS requests and one CSS request unchanged. New Session falls from 768182 to 767606 B and 17 to 16 JS requests. Retain the previously measured model-open CPU and Claws warm-task wins, with their disclosed cold-tail caveats; fresh source-pinned runtime qualification is recorded in PR #184994. Ratchet to the actual measured head.",
+  "startupJsGzipBytes": 90195,
+  "reason": "Early transport overlaps cold boot without delaying cached reloads; final current-main build measures 90,195 B gzip in 3 startup requests.",
   "updatedAt": "2026-10-27"
 }

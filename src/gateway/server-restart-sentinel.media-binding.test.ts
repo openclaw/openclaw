@@ -356,9 +356,17 @@ describe("original requester media handoff", () => {
       const exhausted = mode === "exhaust";
       vi.useFakeTimers({ toFake: exhausted ? ["Date"] : ["setTimeout", "clearTimeout", "Date"] });
       const startedAt = Date.now();
+      const realPerformanceNow = performance.now.bind(performance);
+      let performanceClockSkewMs = 0;
+      if (exhausted) {
+        vi.spyOn(performance, "now").mockImplementation(
+          () => realPerformanceNow() + performanceClockSkewMs,
+        );
+      }
       enqueue[exhausted ? "mockImplementation" : "mockImplementationOnce"](async () => {
         if (exhausted) {
           vi.setSystemTime(startedAt + 120_001);
+          performanceClockSkewMs += 120_001;
         }
         firstRefused.resolve();
         throw new Error(exhausted ? "queue remains unavailable" : "temporary queue write refusal");
@@ -432,6 +440,11 @@ describe("queued media completion past the handoff deadline", () => {
         const originalOwner = await f.acquire();
         const startedAt = Date.now();
         vi.useFakeTimers({ toFake: ["Date"] });
+        const realPerformanceNow = performance.now.bind(performance);
+        let performanceClockSkewMs = 0;
+        vi.spyOn(performance, "now").mockImplementation(
+          () => realPerformanceNow() + performanceClockSkewMs,
+        );
         const observedQueuedRetry = createDeferredCore();
         let scheduledCount = 0;
         let queueId: string | undefined;
@@ -441,6 +454,7 @@ describe("queued media completion past the handoff deadline", () => {
           queueId = id;
           await f.drain(id);
           vi.setSystemTime(startedAt + 120_001);
+          performanceClockSkewMs = 120_001;
           if (++scheduledCount > 1) {
             observedQueuedRetry.resolve();
           }

@@ -77,7 +77,10 @@ export type SessionEntryCohortReader = {
   readonly storePaths: readonly string[];
   assertCurrent(): void;
   /** Return committed data without retaining writer admission for a consumer effect. */
-  readEntry(assertCallerCurrent: () => void): Promise<{
+  readEntry(
+    assertCallerCurrent: () => void,
+    projection?: SessionEntryReadScope["projection"],
+  ): Promise<{
     entry: InternalSessionEntry;
     source: SessionEntryCohortResult["source"];
   }>;

@@ -3,6 +3,7 @@ import type {
   SessionsRecoverParams,
   SessionsRecoverResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { takeEarlyGatewaySubscription } from "../../api/gateway-boot.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SessionsBranchesListResult,
@@ -246,16 +247,19 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       if (!isCurrent()) {
         throw new Error("Session message subscription completed on a replaced Gateway connection");
       }
-      const subscription = await runtime
-        .getGatewaySessionMessageSubscriptionCoordinator(client, {
-          keysEquivalent: areUiSessionKeysEquivalent,
-        })
-        .acquire(normalizedKey, {
-          agentId,
-          ...(includeApprovals ? { includeApprovals: true } : {}),
-          ...(mode ? { mode } : {}),
-          ...(initialHistory ? { initialHistory } : {}),
-        });
+      const early = takeEarlyGatewaySubscription(client, normalizedKey, options);
+      const subscription =
+        (early ? await early : null) ??
+        (await runtime
+          .getGatewaySessionMessageSubscriptionCoordinator(client, {
+            keysEquivalent: areUiSessionKeysEquivalent,
+          })
+          .acquire(normalizedKey, {
+            agentId,
+            ...(includeApprovals ? { includeApprovals: true } : {}),
+            ...(mode ? { mode } : {}),
+            ...(initialHistory ? { initialHistory } : {}),
+          }));
       ownedSubscriptions.add(subscription);
       if (!isCurrent() || (beforeHello && host.gateway.snapshot.phase !== "connected")) {
         // Retire admission before hello can reuse it; the coordinator retains pending cleanup.

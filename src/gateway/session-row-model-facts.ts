@@ -12,7 +12,9 @@ import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/m
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
+import { addSessionListSearchModelFields } from "./session-list-search-fields.js";
 import type {
   GatewaySessionModelSource,
   SessionListRowContext,
@@ -88,13 +90,11 @@ export function mayMatchSessionRowModelSearch(
   const ref = (provider?: string, model?: string) => {
     if (provider) {
       providers.add(lower(provider));
-      add(provider);
     }
     if (!model) {
       return;
     }
     models.add(lower(model));
-    add(model);
     if (provider) {
       let providerModels = refs.get(provider);
       if (!providerModels) {
@@ -147,6 +147,7 @@ export function mayMatchSessionRowModelSearch(
     ref(source?.rowModelIdentity.provider, source?.rowModelIdentity.model);
     if (source) {
       runtime(source.thinkingProjection.agentRuntime.id);
+      add(formatAgentRuntimeLabel(source.thinkingProjection.agentRuntime));
     }
   }
   for (const agentId of agents) {
@@ -237,14 +238,35 @@ export function mayMatchSessionRowModelSearch(
       ref(display.provider, display.model);
     }
   }
+  const modelFields: Array<string | undefined> = [];
+  for (const identity of identities()) {
+    addSessionListSearchModelFields(modelFields, identity);
+  }
+  for (const provider of providers) {
+    addSessionListSearchModelFields(modelFields, { provider });
+  }
+  for (const model of models) {
+    addSessionListSearchModelFields(modelFields, { model });
+  }
+  for (const field of modelFields) {
+    add(field);
+  }
+  if ([...fields].some((field) => field.includes(search))) {
+    return true;
+  }
   // Bare historical models can infer a provider; rejection must cover every possible pairing.
-  return (
-    [...fields].some((field) => field.includes(search)) ||
-    (search.includes("/") &&
-      [...providers].some((provider) =>
-        [...models].some((model) => `${provider}/${model}`.includes(search)),
-      ))
-  );
+  if (search.includes("/")) {
+    for (const provider of providers) {
+      for (const model of models) {
+        modelFields.length = 0;
+        addSessionListSearchModelFields(modelFields, { provider, model });
+        if (modelFields.some((field) => field?.includes(search))) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 /** Search and row presentation share model policy without preparing unrelated row fields. */

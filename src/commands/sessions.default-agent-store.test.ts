@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
@@ -40,6 +45,25 @@ function mockStores(...stores: ReturnType<typeof sessionRows>[]) {
   }
 }
 
+function createDatabase(pathname: string, table: string): void {
+  const database = new DatabaseSync(pathname);
+  if (table === "schema_meta") {
+    database.exec(`
+      CREATE TABLE schema_meta (
+        meta_key TEXT PRIMARY KEY,
+        role TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        agent_id TEXT
+      );
+      INSERT INTO schema_meta (meta_key, role, schema_version, agent_id)
+      VALUES ('primary', 'agent', 0, 'main');
+    `);
+  } else {
+    database.exec(`CREATE TABLE ${table} (meta_key TEXT PRIMARY KEY)`);
+  }
+  database.close();
+}
+
 function createSessionsConfig(store = "/tmp/sessions-{agentId}.json") {
   return {
     agents: {
@@ -56,6 +80,7 @@ function createSessionsConfig(store = "/tmp/sessions-{agentId}.json") {
 }
 
 describe("sessionsCommand default store agent selection", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let runtime: ReturnType<typeof createTestRuntime>;
   function readJsonOutput() {
     const output = runtime.log.mock.calls[0]?.[0];
@@ -127,15 +152,69 @@ describe("sessionsCommand default store agent selection", () => {
     });
   });
 
-  it("requires session-list selection without a designation", async () => {
+  it.each([undefined, "ghost"])("rejects an absent or unknown selection (%s)", async (agent) => {
     loadConfigMock.mockReturnValue({
       agents: { ownership: "explicit", entries: { main: {}, helper: {} } },
     });
 
-    const result = sessionsCommand({}, runtime);
-    await expect(result).rejects.toBeInstanceOf(AgentSelectionRequiredError);
+    const result = sessionsCommand({ agent }, runtime);
+    await expect(result).rejects.toBeInstanceOf(
+      agent ? ExpectedCliError : AgentSelectionRequiredError,
+    );
+    if (!agent) {
+      await expect(result).rejects.toMatchObject({
+        agentIds: ["main", "helper"],
+        message: expect.stringContaining(
+          "session-store selection has no explicit owner. Pass --agent <id> to select one agent, or --all-agents",
+        ),
+      });
+    }
+    expect(runtime.log).not.toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(listSessionEntriesMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing", "does not exist"],
+    ["suffixless", "does not exist"],
+    ["directory", "not a regular file"],
+    ["non-database", "not a session store"],
+    ["foreign-database", "not a session store"],
+  ])("rejects a %s explicit store before reading sessions", async (storeKind, reason) => {
+    const store = path.join(
+      tempDirs.make("session-target-"),
+      storeKind === "suffixless" ? "requested-store" : `${storeKind}.sqlite`,
+    );
+    const resolvedPath = storeKind === "suffixless" ? `${store}.sqlite` : store;
+    if (storeKind === "suffixless" || storeKind === "directory") {
+      fs.mkdirSync(store);
+    } else if (storeKind === "non-database") {
+      fs.writeFileSync(store, "not a db");
+    } else if (storeKind === "foreign-database") {
+      createDatabase(store, "unrelated");
+    }
+    await expect(sessionsCommand({ store, agent: "main" }, runtime)).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: expect.stringContaining(reason),
+      humanOutput: expect.stringContaining(resolvedPath),
+      machineOutput: expect.stringContaining(resolvedPath),
+    });
+    expect(listSessionEntriesMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["legacy JSON locator", "sessions.json", "openclaw-agent.main.sqlite"],
+    ["suffixless locator", "offline-store", "offline-store.main.sqlite"],
+  ])("lists the existing SQLite target of a %s", async (_name, locator, target) => {
+    const dir = tempDirs.make("session-target-");
+    const databasePath = path.join(dir, target);
+    createDatabase(databasePath, "schema_meta");
+
+    await sessionsCommand({ store: path.join(dir, locator), agent: "main", json: true }, runtime);
+
+    expect(readJsonOutput()).toMatchObject({ path: databasePath, count: 0, sessions: [] });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });
