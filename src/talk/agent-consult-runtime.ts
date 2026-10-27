@@ -35,6 +35,7 @@ import {
   collectRealtimeVoiceAgentConsultVisibleText,
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "./agent-consult-tool.js";
+import { resolveDueVoiceSessionReset } from "./voice-session-reset.js";
 
 export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
 
@@ -191,46 +192,24 @@ async function rollOverStaleConsultSession(params: {
   logger: Pick<RuntimeLogger, "warn">;
   abortSignal?: AbortSignal;
 }): Promise<void> {
-  const { cfg, agentId, sessionKey, storePath, entry } = params;
-  if (!entry?.sessionId?.trim() || isModelSelectionLocked(entry)) {
+  const { agentId, sessionKey, storePath, entry } = params;
+  const reason = await resolveDueVoiceSessionReset(params);
+  if (!reason || !entry) {
     return;
   }
   const [
-    { resolveSessionEntryResetFreshnessAsync },
-    { resolveChannelResetConfig, resolveSessionResetType },
     { resetSessionEntryLifecycle },
     { createSessionWorkStartChangedError, resolveSessionWorkStartError },
     { normalizeStoreSessionKey },
     { clearRotatedSessionMetadata },
     { clearCommittedSessionResetRuntimeState },
   ] = await Promise.all([
-    import("../config/sessions/entry-freshness.js"),
-    import("../config/sessions/reset.js"),
     import("../config/sessions/session-accessor.lifecycle.js"),
     import("../config/sessions/lifecycle.js"),
     import("../config/sessions/store-entry.js"),
     import("../agents/session-reset-metadata.js"),
     import("../auto-reply/reply/session-reset-cleanup.js"),
   ]);
-  // Blocked sessions (archived, recovery tombstone, provider review) keep their state; the
-  // consult's admission rejects them with the specific reason.
-  if (resolveSessionWorkStartError(sessionKey, entry)) {
-    return;
-  }
-  const resolved = await resolveSessionEntryResetFreshnessAsync({
-    agentId,
-    sessionKey,
-    storePath,
-    sessionCfg: cfg.session,
-    resetType: resolveSessionResetType({ sessionKey }),
-    resetOverride: resolveChannelResetConfig({
-      sessionCfg: cfg.session,
-      channel: deliveryContextFromSession(entry)?.channel,
-    }),
-  });
-  if (resolved.state !== "stale") {
-    return;
-  }
   const now = Date.now();
   await resetSessionEntryLifecycle({
     agentId,
@@ -240,7 +219,7 @@ async function rollOverStaleConsultSession(params: {
     commitGuard: () => params.abortSignal?.throwIfAborted(),
     resetBoundary: {
       context: "preserve-tail",
-      reason: resolved.freshness.staleReason ?? "reset",
+      reason,
       cwd: params.cwd,
     },
     buildNextEntry: ({ currentEntry }) => {

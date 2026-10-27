@@ -311,7 +311,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           replacement?.assertCurrent(target);
         };
         const initialItems = replacement
-          ? await readTalkRealtimeInitialItems(target, assertEnsuredTargetCurrent)
+          ? await readTalkRealtimeInitialItems(target, assertEnsuredTargetCurrent, runtimeConfig)
           : [];
         assertEnsuredTargetCurrent();
         const model =

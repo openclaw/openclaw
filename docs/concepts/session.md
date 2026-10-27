@@ -254,7 +254,8 @@ Sessions are reused until you reset them manually or opt into an automatic reset
 
 When both daily and idle resets are configured, whichever expires first wins.
 The message that triggers an automatic reset continues in the new conversation;
-voice consults (browser Talk, meetings, voice calls) reset the same way.
+voice consults (browser Talk, meetings, voice calls) reset the same way, and a Talk
+call that starts after the boundary quotes none of the old conversation.
 Heartbeat, cron, exec, and other system-event turns may write session metadata,
 but those writes do not extend daily or idle reset freshness. When a reset
 rolls the session, queued system-event notices for the old session are
