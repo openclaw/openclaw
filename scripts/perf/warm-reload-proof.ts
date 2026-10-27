@@ -80,7 +80,9 @@ async function freePort() {
         server.once("error", reject);
         server.listen(port, "127.0.0.1", resolve);
       });
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
       return port;
     } catch (error) {
       if (!(error instanceof Error) || !("code" in error) || error.code !== "EADDRINUSE") {
@@ -162,15 +164,23 @@ async function readWarmCache(page: Page, sessionKey: string) {
     }
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open(name);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+      request.addEventListener("success", () => resolve(request.result), { once: true });
+      request.addEventListener(
+        "error",
+        () => reject(new Error("Unable to open snapshot cache", { cause: request.error })),
+        { once: true },
+      );
     });
     try {
       const readKeys = (store: string) =>
         new Promise<IDBValidKey[]>((resolve, reject) => {
           const request = database.transaction(store, "readonly").objectStore(store).getAllKeys();
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
+          request.addEventListener("success", () => resolve(request.result), { once: true });
+          request.addEventListener(
+            "error",
+            () => reject(new Error("Unable to read snapshot cache", { cause: request.error })),
+            { once: true },
+          );
         });
       const snapshots = await readKeys("snapshots");
       const sidebar = await readKeys("sidebarSnapshots");
@@ -206,14 +216,8 @@ async function captureReload(
   const tree: { frameTree: { frame: { id: string } } } = await cdp.send("Page.getFrameTree");
   const documents: Array<{ path: string; epochMs: number; monotonicMs: number; loaderId: string }> =
     [];
-  const onDocument = (event: {
-    type: string;
-    frameId: string;
-    wallTime: number;
-    timestamp: number;
-    loaderId: string;
-    request: { url: string };
-  }) => {
+  type DocumentRequest = Parameters<Parameters<typeof cdp.on<"Network.requestWillBeSent">>[1]>[0];
+  const onDocument = (event: DocumentRequest) => {
     if (event.type === "Document" && event.frameId === tree.frameTree.frame.id) {
       documents.push({
         path: new URL(event.request.url).pathname,

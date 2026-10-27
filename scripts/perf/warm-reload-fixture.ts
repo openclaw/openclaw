@@ -314,10 +314,10 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
         (owner) => {
           const storeKey = cronKey.cronStoreKey(path.join(stateDir, "cron", "jobs.json"));
           const { store } = cronLoad.loadCronStoreFromDatabase(owner.db, storeKey);
-          cronSave.saveCronStoreInDatabase(owner, storeKey, {
-            version: 1,
-            jobs: store.jobs.map((job, index) => ({ ...job, sessionKey: targets[index % 2]!.key })),
-          });
+          for (const [index, job] of store.jobs.entries()) {
+            job.sessionKey = targets[index % 2]!.key;
+          }
+          cronSave.saveCronStoreInDatabase(owner, storeKey, store);
         },
         { env },
       );
@@ -353,6 +353,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
           items: [
             {
               url: `data:image/png;base64,${png.createSolidPngBuffer(960, 400, { r: 44, g: 122, b: 110 }).toString("base64")}`,
+              trustedLocal: false,
             },
           ],
         });

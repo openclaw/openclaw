@@ -12,7 +12,7 @@ export const proofRegions = {
 /** Serialized into the top document before its application modules execute. */
 export function installWarmReloadBrowserProbe(route: string) {
   if (window !== window.top) {
-    return;
+    return undefined;
   }
   const data = {
     firstAppDomMs: null as number | null,
@@ -286,10 +286,13 @@ export function installWarmReloadBrowserProbe(route: string) {
         const style = getComputedStyle(active);
         const box = active.getBoundingClientRect();
         addMask("caret", "Empty editable text origin", {
-          x: box.x + parseFloat(style.paddingLeft),
-          y: box.y + parseFloat(style.paddingTop),
+          x: box.x + Number.parseFloat(style.paddingLeft),
+          y: box.y + Number.parseFloat(style.paddingTop),
           width: 2,
-          height: Math.min(40, parseFloat(style.lineHeight) || parseFloat(style.fontSize)),
+          height: Math.min(
+            40,
+            Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize),
+          ),
         });
       }
     }
