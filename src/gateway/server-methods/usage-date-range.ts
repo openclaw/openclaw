@@ -134,7 +134,7 @@ const parseUtcOffsetToMinutes = (raw: unknown): number | undefined => {
   return totalMinutes;
 };
 
-export const resolveDateInterpretation = (params: {
+const resolveDateInterpretation = (params: {
   mode?: unknown;
   utcOffset?: unknown;
   timeZone?: unknown;
