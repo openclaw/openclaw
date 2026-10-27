@@ -127,6 +127,12 @@ writing.
 OAuth upserts recheck the current local or inherited credential after admission,
 before applying the existing generation-replacement rules.
 
+Cooldown, blocked, and disabled windows update the current availability view
+without replacing prepared plugin generations. Selection reads the committed
+windows immediately; bursts of availability changes coalesce metadata notifications
+without announcing a model catalog change. Credential, profile membership, order,
+and ownership changes still invalidate the prepared runtime before its next use.
+
 Runtime auth-store updates keep their read, merge, encode, and commit in the
 existing SQLite worker. Update callbacks execute at most once against the
 transaction's current rows; live owner admission is checked again before commit.
