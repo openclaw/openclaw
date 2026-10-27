@@ -8,6 +8,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   cacheChatSessionSnapshot,
   captureChatDetailsSnapshot,
+  createChatWidgetLayout,
   readChatSessionSnapshot,
 } from "./session-message-cache.ts";
 
@@ -25,11 +26,15 @@ function cachedPane() {
   return { state, read: () => readChatSessionSnapshot(state.chatMessagesBySession, state, target) };
 }
 
-it("adopts display facts from the current snapshot and merges independent section receipts", () => {
+it("merges Details and row-footprint receipts in the current snapshot", () => {
   const { state, read } = cachedPane();
   const receipt = captureChatDetailsSnapshot(state)!;
   expect(receipt.details).toBeUndefined();
   receipt.write({ subagents: { total: 0, rows: [], counts: [] }, outputs: 2 });
+  const widgetHeights = { 'row:v1:768:appearance:revision:"reply"': 200 };
+  createChatWidgetLayout()(state.chatMessagesBySession, state, {
+    sessionKey: state.sessionKey,
+  }).writeRows(widgetHeights);
   receipt.write({ automations: { rows: [], total: 0, more: false } });
   expect(captureChatDetailsSnapshot(state)?.details).toEqual({
     locale: i18n.getLocale(),
@@ -38,6 +43,7 @@ it("adopts display facts from the current snapshot and merges independent sectio
     outputs: 2,
   });
   expect(read()?.details?.outputs).toBe(2);
+  expect(read()?.widgetHeights).toEqual(widgetHeights);
 });
 
 it.each<{ name: string; change: (state: ChatPageHost) => void }>([
