@@ -474,6 +474,7 @@ async function runProof(options: ProducerOptions) {
     published = await createPublishedWireWorkspace(root);
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       command: {
         executablePath: process.execPath,
         argsPrefix: [path.join(options.repoRoot, "dist", "index.js")],

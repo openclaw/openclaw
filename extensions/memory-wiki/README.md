@@ -172,6 +172,7 @@ openclaw wiki compile
 openclaw wiki lint
 openclaw wiki search "alpha"
 openclaw wiki get entity.alpha --from 1 --lines 80
+openclaw wiki chatgpt import --export ./chatgpt-export
 
 openclaw wiki apply synthesis "Alpha Summary" \
   --body "Short synthesis body" \
@@ -195,6 +196,9 @@ openclaw wiki obsidian daily
 openclaw wiki status --agent support
 openclaw wiki search "refund policy" --agent support
 ```
+
+ChatGPT imports preserve active-branch message text, including pasted JSON.
+Serialized image parts are omitted; serialized text parts are decoded as text.
 
 ## Agent tools
 

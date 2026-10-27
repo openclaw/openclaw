@@ -20,7 +20,6 @@ import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import {
   initialTranscriptRect,
   isTranscriptRangeCommitted,
-  measureTranscriptRow,
   createPositionRailGutter,
 } from "./chat-transcript-geometry.ts";
 import { reconcileTranscriptHeaderMargin } from "./chat-transcript-header.ts";
@@ -77,7 +76,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private cleanupVirtualizer?: () => void;
   private threadInnerElement: HTMLDivElement | null = null;
   connected = false;
-  private contentReady = false;
   // The in-flow history header's fixed height, folded into scrollMargin.
   // appliedHeaderHeight is what the current virtualizer margin already carries.
   private headerHeight = 0;
@@ -148,6 +146,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     if (!anchor) {
       return;
     }
+    this.layout.rowLayout?.invalidateRow(anchor.row.dataset.virtualRowKey);
     this.endAnchor.clear();
     this.prependAnchor.clear();
     this.offsetState.pendingInteractionAnchor = anchor;
@@ -198,6 +197,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       measureConnectedRows: () => this.presentation.measureRows(),
       queueRowMeasure: () => this.presentation.queueRowMeasure(),
       onViewportResize: () => this.callbacks.onViewportResize?.(),
+      layout: this.layout,
       invalidate,
     });
     this.virtualizer = new Virtualizer({
@@ -238,7 +238,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           instance,
           callback,
         ),
-      measureElement: measureTranscriptRow,
+      measureElement: this.layout.measureRow,
       rangeExtractor: (range) => this.initialRange.extract(range),
       // Virtual distance omits real padding, pinning readers ~80px up past scroll.ts's follow-lock.
       // scheduleCommittedChatScroll owns end-follow on content changes and source: "resize".
@@ -248,7 +248,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     });
     // Initial placement owns compensation; an estimated end is not a native scroll target.
     this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
-    const beforeMeasure = () => !this.initialRange.pending && this.offsetState.syncNativeOffset?.();
+    // A boot re-anchor can precede its native extent; only reader geometry may override it.
+    const beforeMeasure = () => this.initialRange.reading && this.offsetState.syncNativeOffset?.();
     this.presentation = createTranscriptPresentation(
       () => this.scrollElement,
       this.virtualizer,
@@ -265,7 +266,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       offsetState: this.offsetState,
       virtualizer: this.virtualizer,
       getScrollElement: () => this.scrollElement,
-      isContentReady: () => this.contentReady,
+      isContentReady: () => this.layout.ready,
       getRowCount: () => this.rowKeys.length,
       isConnected: () => this.connected,
       pendingScrollFrame: null,
@@ -361,7 +362,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.offsetState.syncNativeOffset?.();
       this.invalidate();
     }
-    if (!this.initialRange.pending || (this.contentReady && this.rowKeys.length === 0)) {
+    if (!this.initialRange.pending || (this.layout.ready && this.rowKeys.length === 0)) {
       applyPendingScrollOffset(this.scrollRestoreHost);
       if (this.initialRange.pending) {
         this.initialRange.finish();
@@ -369,6 +370,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       }
     }
     this.queueLayout();
+    if (!this.initialRange.pending && this.layout.ready) {
+      this.layout.persistRows(this.virtualizer);
+    }
     // Disclosure measurement owns this commit; its sizer lands on the next update.
     if (interactionResizePending) {
       this.endAnchor.cancelReconcile();
@@ -487,6 +491,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           announce && !this.offsetState.pendingScrollOffset,
         );
         this.messageRowKeysById = messageRows;
+        this.layout.rows = rows;
         this.prependAnchor.committedMessageRows = renderKeyRows;
         this.renderPreviousRows = () => this.renderCommittedRows(snapshot, false);
         // Capture only after the unmount gate permits the projection to commit.
@@ -569,7 +574,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   }
 
   get isPositionSettled(): boolean {
-    return this.contentReady && !this.initialRange.pending && !this.offsetState.pendingScrollOffset;
+    return this.layout.ready && !this.initialRange.pending && !this.offsetState.pendingScrollOffset;
   }
 
   private canAutoFollow(): boolean {
@@ -667,10 +672,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.invalidate();
     this.queueLayout();
     return true;
-  }
-
-  setContentReady(ready: boolean): void {
-    this.contentReady = ready;
   }
 
   restoreScrollOffset(
