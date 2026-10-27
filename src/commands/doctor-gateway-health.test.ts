@@ -296,18 +296,14 @@ describe("checkGatewayHealth", () => {
       vi.useRealTimers();
     });
 
-    function mockResponseTiming(statusMs: number | null, diagnosticsMs: number | null) {
-      const statusStarted = createDeferred();
-      const channelsStarted = createDeferred();
-      const exporterStarted = createDeferred();
+    async function checkAfterTiming(statusMs: number, diagnosticsMs: number | null) {
+      const started = {
+        status: createDeferred(),
+        "channels.status": createDeferred(),
+        "diagnostics.stability": createDeferred(),
+      };
       callGateway.mockImplementation(
-        ({ method, timeoutMs }: { method: string; timeoutMs: number }) => {
-          const started =
-            method === "status"
-              ? statusStarted
-              : method === "channels.status"
-                ? channelsStarted
-                : exporterStarted;
+        ({ method, timeoutMs }: { method: keyof typeof started; timeoutMs: number }) => {
           const responseMs = method === "status" ? statusMs : diagnosticsMs;
           return new Promise((resolve, reject) => {
             setTimeout(
@@ -327,39 +323,30 @@ describe("checkGatewayHealth", () => {
               },
               Math.min(responseMs ?? timeoutMs, timeoutMs),
             );
-            started.resolve();
+            started[method].resolve();
           });
         },
       );
-      return {
-        statusStarted: statusStarted.promise,
-        diagnosticsStarted: Promise.all([channelsStarted.promise, exporterStarted.promise]),
-      };
+      const result = check();
+      await started.status.promise;
+      await vi.advanceTimersByTimeAsync(statusMs);
+      await Promise.all([
+        started["channels.status"].promise,
+        started["diagnostics.stability"].promise,
+      ]);
+      await vi.advanceTimersByTimeAsync(diagnosticsMs ?? 21_000);
+      await expect(result).resolves.toMatchObject({ healthOk: true, authenticated: true });
+      expect(sharedRuntime.error).not.toHaveBeenCalled();
     }
 
     it("allows slow diagnostics after a 100 ms status response", async () => {
-      const started = mockResponseTiming(100, 4_000);
-      const result = check();
-      await started.statusStarted;
-      await vi.advanceTimersByTimeAsync(100);
-      await started.diagnosticsStarted;
-      await vi.advanceTimersByTimeAsync(4_000);
-
-      await expect(result).resolves.toMatchObject({ healthOk: true, authenticated: true });
+      await checkAfterTiming(100, 4_000);
       expect(note).not.toHaveBeenCalled();
-      expect(sharedRuntime.error).not.toHaveBeenCalled();
     });
 
     it("reports measured latency and the exhausted diagnostic budget without failing health", async () => {
       vi.spyOn(restartHealth, "DEFAULT_RESTART_HEALTH_TIMEOUT_MS", "get").mockReturnValue(10_000);
-      const started = mockResponseTiming(7_000, null);
-      const result = check();
-      await started.statusStarted;
-      await vi.advanceTimersByTimeAsync(7_000);
-      await started.diagnosticsStarted;
-      await vi.advanceTimersByTimeAsync(21_000);
-
-      await expect(result).resolves.toMatchObject({ healthOk: true, authenticated: true });
+      await checkAfterTiming(7_000, null);
       for (const [kind, title] of [
         ["channel", "Channel warnings"],
         ["exporter", "Telemetry exporters"],
@@ -372,7 +359,6 @@ describe("checkGatewayHealth", () => {
       expect(
         note.mock.calls.every(([message]) => String(message).includes("host may be slow")),
       ).toBe(true);
-      expect(sharedRuntime.error).not.toHaveBeenCalled();
     });
   });
 

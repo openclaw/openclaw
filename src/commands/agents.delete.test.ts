@@ -129,6 +129,11 @@ const credentialsError = () =>
   });
 const session = (sessionId: string, updatedAt = 1) => ({ sessionId, updatedAt });
 const agentConfig = (agents: NonNullable<OpenClawConfig["agents"]>): OpenClawConfig => ({ agents });
+async function seedCron(...jobs: Parameters<typeof makeCronJob>[0][]) {
+  const store = resolveCronJobsStorePath();
+  await saveCronStore(store, { version: 1, jobs: jobs.map(makeCronJob) });
+  return async () => (await loadCronStore(store)).jobs.map((job) => job.id);
+}
 function expectJsonFailure(message: unknown) {
   expect(readJson()).toMatchObject({ ok: false, error: { message } });
   expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
@@ -383,11 +388,7 @@ describe("agents delete command", () => {
       talk: { agentId: "ops", provider: "test-provider" },
     };
     await state.setup({ cfg });
-    const storePath = resolveCronJobsStorePath();
-    await saveCronStore(storePath, {
-      version: 1,
-      jobs: [makeCronJob({ id: "keep", agentId: "ops" })],
-    });
+    const cronIds = await seedCron({ id: "keep", agentId: "ops" });
     gatewayMocks.callGateway.mockRejectedValue(credentialsError());
     await removeAgent({ json: true });
     expect(readJson()).toMatchObject({
@@ -399,7 +400,7 @@ describe("agents delete command", () => {
     });
     expect(readJson()).not.toHaveProperty("purgeFailed");
     expect(readJson()).not.toHaveProperty("transport");
-    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(["keep"]);
+    expect(await cronIds()).toEqual(["keep"]);
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining('cron cleanup was skipped for deleted agent "ops"'),
     );
@@ -437,24 +438,17 @@ describe("agents delete command", () => {
         ops: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/keep" }] },
       },
     });
-    const cronPath = resolveCronJobsStorePath();
-    await saveCronStore(cronPath, {
-      version: 1,
-      jobs: [
-        makeCronJob({ id: "remove", agentId: "main" }),
-        makeCronJob({ id: "keep", agentId: "ops", declarationKey: "heartbeat:ops" }),
-        makeCronJob({ id: "dreaming", declarationKey: "memory-core:memory-dreaming-promotion" }),
-      ],
-    });
+    const cronIds = await seedCron(
+      { id: "remove", agentId: "main" },
+      { id: "keep", agentId: "ops", declarationKey: "heartbeat:ops" },
+      { id: "dreaming", declarationKey: "memory-core:memory-dreaming-promotion" },
+    );
     const mainAgentDir = path.join(state.stateDir, "agents/main/agent");
     const external = path.join(state.tempRoot, "external.sqlite");
     const externalFiles = [external, `${external}-wal`, `${external}-shm`, `${external}-journal`];
     await Promise.all([...externalFiles, sharedDatabasePath].map((file) => fs.writeFile(file, "")));
-    for (const file of [
-      path.join(mainAgentDir, "openclaw-agent.sqlite"),
-      external,
-      sharedDatabasePath,
-    ]) {
+    const mainDatabase = path.join(mainAgentDir, "openclaw-agent.sqlite");
+    for (const file of [mainDatabase, external, sharedDatabasePath]) {
       registerOpenClawAgentDatabase({ agentId: "main", path: file });
     }
     registerOpenClawAgentDatabase({ agentId: "ops", path: sharedDatabasePath });
@@ -477,7 +471,7 @@ describe("agents delete command", () => {
         allowlist: [expect.objectContaining({ pattern: "/usr/bin/keep" })],
       },
     });
-    expect((await loadCronStore(cronPath)).jobs.map((job) => job.id)).toEqual(["keep", "dreaming"]);
+    expect(await cronIds()).toEqual(["keep", "dreaming"]);
     for (const file of [mainAgentDir, ...externalFiles]) {
       await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
     }
