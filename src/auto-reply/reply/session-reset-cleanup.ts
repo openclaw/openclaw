@@ -128,6 +128,8 @@ export function clearCommittedSessionResetRuntimeState(params: {
   agentId: string;
   sessionKey: string;
   signal?: AbortSignal;
+  /** Keep queued controller inputs, including the reserved one whose request triggered the reset. */
+  preserveControllerInputs?: boolean;
   onError: (error: unknown) => void;
 }): void {
   if (!params.previousSessionEntry) {
@@ -144,6 +146,7 @@ export function clearCommittedSessionResetRuntimeState(params: {
       }),
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      preserveControllerInputs: params.preserveControllerInputs,
       assertCurrent: () => params.signal?.throwIfAborted(),
     });
   } catch (error) {
@@ -159,6 +162,7 @@ export function clearSessionResetRuntimeState(
     controllerTarget?: SessionTarget;
     sessionKey: string;
     activeReplySessionId?: string;
+    preserveControllerInputs?: boolean;
     assertCurrent: () => void;
   },
 ): void {
@@ -168,7 +172,13 @@ export function clearSessionResetRuntimeState(
   if (opts.activeReplySessionId) {
     clearPromptCacheObservations(opts.activeReplySessionId);
   }
-  const cleared = clearSessionQueues(keys, opts.controllerTarget, undefined, opts.assertCurrent);
+  // An empty capture clears no controller inputs; queue keys still select the events below.
+  const cleared = clearSessionQueues(
+    keys,
+    opts.controllerTarget,
+    opts.preserveControllerInputs ? [] : undefined,
+    opts.assertCurrent,
+  );
   for (const key of cleared) {
     opts.assertCurrent();
     const owner = parseAgentSessionKey(key)?.agentId;

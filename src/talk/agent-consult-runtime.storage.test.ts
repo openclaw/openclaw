@@ -11,6 +11,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveMemoryAudienceFromEntry } from "../plugins/memory-audience.js";
 import { createRuntimeAgent } from "../plugins/runtime/runtime-agent.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { reserveSessionControllerSource } from "../sessions/session-controller.mailbox.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -157,6 +159,32 @@ describe("voice consult concrete store ownership", () => {
       await expect(run()).rejects.toThrow("is archived");
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
       expect(revision()).toBe("day-one");
+    });
+
+    it("keeps the browser's reserved consult input across the reset", async () => {
+      const { revision, runEmbeddedAgent, target, consult } = await seedVoiceSession(
+        { reset: { mode: "daily", atHour: 4 } },
+        noon - 2 * 24 * 60 * MINUTE_MS,
+      );
+      // Browser Talk reserves its controller input before entering the consult runtime and passes
+      // that input's signal as the consult's abort signal (client-gateway-control.ts).
+      const adapter = new AbortController();
+      const input = reserveSessionControllerSource(target.sessionKey, {
+        policy: { mode: "followup" },
+        target: captureSessionTarget({
+          storeScope: target.storePath,
+          sessionKey: target.sessionKey,
+          agentId: target.agentId,
+        }),
+        adapter: { signal: adapter.signal },
+      });
+
+      await expect(consult({ ...target, abortSignal: input.abortSignal })).resolves.toEqual({
+        text: "Checked",
+      });
+      expect(input.abortSignal.aborted).toBe(false);
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+      expect(revision()).not.toBe("day-one");
     });
 
     it("leaves the session untouched when the caller cancels during preparation", async () => {

@@ -267,6 +267,8 @@ async function rollOverStaleConsultSession(params: {
     agentId,
     sessionKey,
     storePath,
+    // Voice callers reserve their controller input before this runs; it must survive its own reset.
+    preserveControllerInputs: true,
     onError: (error) =>
       params.logger.warn(`[talk] failed to clear session reset runtime state: ${String(error)}`),
   });
