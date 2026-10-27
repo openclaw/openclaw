@@ -143,7 +143,9 @@ Status identifies the capture selector, source lease, checkpoint references, and
 A paused capture does not prevent source-lease cleanup, but enrollment on its uncertain source remains blocked until recovery clears the reservation.
 
 Gateway warm-image maintenance runs at startup and during the periodic worker
-environment sweep (every minute by default). It retries uncertain captures until
+environment sweep (every minute by default), including when the prepared pool is
+disabled and no worker sessions are active. Maintenance follows the configured
+provider's plugin activation policy. It retries uncertain captures until
 their source lease is absent, stopped, released, or expired. Released and expired
 leases cannot start another checkpoint; lease teardown still owns physical resource
 cleanup. Maintenance matches the exact recorded lease ID in Crabbox's checkpoint
