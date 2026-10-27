@@ -16,7 +16,11 @@ vi.mock("./container-engine.js", () => ({
 }));
 vi.mock("./docker-mount-source.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./docker-mount-source.js")>();
-  return { ...actual, resolveDockerSourceNamespace: vi.fn() };
+  return {
+    parseInspectedSandboxMounts: actual.parseInspectedSandboxMounts,
+    translateSandboxMountSources: actual.translateSandboxMountSources,
+    resolveDockerSourceNamespace: vi.fn(),
+  };
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -182,7 +186,9 @@ describe("managed mount plan", () => {
     "preserves Gateway ancestor access with writable child=%s",
     async (child) => {
       const output = path.join(root, "agent/.agents/output");
-      if (child) fs.mkdirSync(output);
+      if (child) {
+        fs.mkdirSync(output);
+      }
       const namespace = await resolveDockerSourceNamespace(engine);
       vi.mocked(resolveDockerSourceNamespace).mockResolvedValue([
         ...namespace!,
@@ -192,7 +198,9 @@ describe("managed mount plan", () => {
       const plan = await prepare("rw");
       expect(plan.binds).toContain("/host/agents-ro:/workspace/.agents:ro,z");
       expect(plan.binds).toContain("/host/agents-ro/skills:/workspace/.agents/skills:ro,z");
-      if (child) expect(plan.binds).toContain("/host/agents-output:/workspace/.agents/output:z");
+      if (child) {
+        expect(plan.binds).toContain("/host/agents-output:/workspace/.agents/output:z");
+      }
     },
   );
 
