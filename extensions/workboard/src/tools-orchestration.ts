@@ -55,6 +55,12 @@ export function createWorkboardOrchestrationTools(params: {
         description: Type.Optional(Type.String({ description: "Board description." })),
         icon: Type.Optional(Type.String({ description: "Short icon or label." })),
         color: Type.Optional(Type.String({ description: "Display color token." })),
+        clearAppearance: Type.Optional(
+          Type.Array(Type.Union([Type.Literal("icon"), Type.Literal("color")]), {
+            description:
+              "Reset the listed appearance fields to their defaults. Overrides supplied icon or color values; omitted or empty icon/color values preserve existing appearance.",
+          }),
+        ),
         automationJobId: Type.Optional(
           Type.String({
             description: "Owning automation job id.",
