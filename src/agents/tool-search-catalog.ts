@@ -6,6 +6,7 @@ import { generateSecureHex } from "../infra/secure-random.js";
 import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 import {
   finalizeAgentToolAvailability,
+  getAgentToolAvailabilityBinding,
   resolveAgentToolExecutionSchema,
 } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
@@ -73,9 +74,14 @@ function compactMcpInstructions(instructions: string | undefined): string | unde
 
 /**
  * Discovery (describe, compact hints, Code Mode declarations) advertises the contract that
- * dispatch enforces, not the lossy provider projection used for the wire request.
+ * dispatch enforces, not the lossy provider projection used for the wire request. Tools that
+ * declare their own execution schema keep the availability-narrowed parameters: their owner
+ * schema is a validation detail, not the advertised per-turn contract.
  */
 function catalogEntryInputSchema(entry: ToolSearchCatalogEntry): unknown {
+  if (getAgentToolAvailabilityBinding(entry.tool)?.executionSchema) {
+    return entry.parameters;
+  }
   return resolveAgentToolExecutionSchema(entry.tool, entry.parameters) ?? entry.parameters;
 }
 
