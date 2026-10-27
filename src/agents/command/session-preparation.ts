@@ -430,25 +430,37 @@ export async function prepareEmbeddedSessionState(params: {
         .join("\n\n");
     }
   }
-  const preparedOpts =
-    conversationPrompt || deliveryFormat
-      ? {
-          ...opts,
-          extraSystemPrompt: [
-            conversationPrompt,
-            opts.extraSystemPrompt,
-            !conversationPrompt && deliveryFormat,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-          ...(conversationPrompt ? { silentReplyPromptMode: "none" as const } : {}),
-          extraSystemPromptTurnContext: {
-            start:
-              conversationPrompt || !opts.extraSystemPrompt ? 0 : opts.extraSystemPrompt.length + 2,
-            text: conversationPrompt || deliveryFormat || "",
-          },
-        }
-      : opts;
+  // Returned-result intake instructions belong to this turn. Ordinary peer
+  // requests and existing producer-marked policy spans retain their placement.
+  const returnedResultPrompt =
+    !opts.extraSystemPromptTurnContext &&
+    opts.extraSystemPrompt &&
+    (opts.replyExpectation === "optional" || opts.privateCompletion === true) &&
+    opts.inputProvenance?.kind === "inter_session" &&
+    (opts.inputProvenance.sourceTool === "sessions_send" ||
+      opts.inputProvenance.sourceTool === "subagent_announce");
+  let preparedOpts = opts;
+  if (conversationPrompt || deliveryFormat || returnedResultPrompt) {
+    const extraSystemPrompt = [
+      conversationPrompt,
+      opts.extraSystemPrompt,
+      !conversationPrompt && deliveryFormat,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    preparedOpts = {
+      ...opts,
+      extraSystemPrompt,
+      ...(conversationPrompt ? { silentReplyPromptMode: "none" as const } : {}),
+      extraSystemPromptTurnContext: {
+        start:
+          returnedResultPrompt || conversationPrompt || !opts.extraSystemPrompt
+            ? 0
+            : opts.extraSystemPrompt.length + 2,
+        text: returnedResultPrompt ? extraSystemPrompt : conversationPrompt || deliveryFormat || "",
+      },
+    };
+  }
   prepareGoalContinuationContext({ runId: params.runId, sessionKey, sessionEntry });
   return {
     sessionEntry,

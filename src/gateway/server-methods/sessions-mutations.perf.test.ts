@@ -4,6 +4,7 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import * as thinking from "../../auto-reply/thinking.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -21,7 +22,6 @@ import { promptReport } from "../../config/sessions/system-prompt-report.test-su
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -32,10 +32,7 @@ import { createSessionMutationContext } from "./sessions-mutations.native-consen
 import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import type { GatewayClient } from "./types.js";
 
-afterEach(async () => {
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-});
+afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 function humanClient(): GatewayClient {
   const client = createSessionMutationTestClient("perf-reviewer");
@@ -125,6 +122,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
       const statements = trackReads(database);
       const respond = vi.fn();
       const hostSql = observeHostDataSql();
+      const thinkingReads = vi.spyOn(thinking, "resolveThinkingProfile");
       try {
         await sessionMutationHandlers["sessions.patch"]!({
           params: { key: targetKey, ...patch },
@@ -133,7 +131,9 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
           client: humanClient(),
         } as never);
         expect(historyLane.pool.getSnapshot().workersCreated).toBe(historyWorkers.workersCreated);
+        expect(thinkingReads.mock.calls.length).toBe(0);
       } finally {
+        thinkingReads.mockRestore();
         hostSql.restore();
         statements.restore();
       }
