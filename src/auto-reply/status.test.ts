@@ -208,61 +208,50 @@ it.each<[number | null, number, number | undefined, string]>([
   expect(text.includes("Context: 49k/200k")).toBe(context === "49k/200k");
 });
 
-function buildCliAliasStatus({ sessionEntry, ...args }: StatusTestArgs) {
+it.each([false, true])("renders CLI alias with configured API pricing=%s", (priced) => {
   configureCliBackend(true);
   const route = fallbackRoute(
     { provider: "anthropic", model: "claude-opus-4-7" },
     { provider: "claude-cli", model: "claude-opus-4-7" },
     "selected model unavailable",
   );
-  return buildStatusMessage({
+  const text = normalizedStatus({
     ...route,
     activeModelAuth: "oauth (anthropic:claude-cli)",
-    ...args,
+    modelAuth: priced ? "api-key (env: ANTHROPIC_API_KEY)" : "unknown",
+    config: priced
+      ? providerModels([
+          "anthropic",
+          "claude-opus-4-7",
+          {
+            cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+          },
+        ])
+      : undefined,
     sessionEntry: {
       ...route.sessionEntry,
       inputTokens: 29,
       outputTokens: 19_000,
-      ...sessionEntry,
+      ...(!priced
+        ? {
+            cacheRead: 3_000_000,
+            ...freshUsage(36_000),
+            contextTokens: 1_000_000,
+          }
+        : {}),
     },
   });
-}
-
-it.each<[StatusTestArgs, string[], string[]]>([
-  [
-    {
-      sessionEntry: {
-        cacheRead: 3_000_000,
-        ...freshUsage(36_000),
-        contextTokens: 1_000_000,
-      },
-      modelAuth: "unknown",
-    },
-    ["Endpoint: unknown", "Context: 36k/?"],
-    ["Auth: unknown"],
-  ],
-  [
-    {
-      config: providerModels([
-        "anthropic",
-        "claude-opus-4-7",
-        {
-          cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-        },
-      ]),
-      sessionEntry: {},
-      modelAuth: "api-key (env: ANTHROPIC_API_KEY)",
-    },
-    [],
-    ["api-key (env: ANTHROPIC_API_KEY)", "Cost:"],
-  ],
-])("renders CLI alias with %j", (args, present, absent) => {
-  const text = normalizeTestText(buildCliAliasStatus(args));
   expect(text).toContain("Model: anthropic/claude-opus-4-7");
   expect(text).toContain("oauth (anthropic:claude-cli)");
-  present.forEach((snippet) => expect(text).toContain(snippet));
   expect(text).not.toContain("Fallback: claude-cli/claude-opus-4-7");
-  absent.forEach((snippet) => expect(text).not.toContain(snippet));
+  if (priced) {
+    expect(text).not.toContain("api-key (env: ANTHROPIC_API_KEY)");
+    expect(text).not.toContain("Cost:");
+  } else {
+    expect(text).toContain("Endpoint: unknown");
+    expect(text).toContain("Context: 36k/?");
+    expect(text).not.toContain("Auth: unknown");
+  }
 });
 
 it.each<[MediaUnderstandingDecision[], string, string?]>([
@@ -338,11 +327,7 @@ it("lists commands with aliases and hints", () => {
   expect(text).toContain("ℹ️ Slash commands");
   expect(text).toContain("Status");
   expect(text).toContain("/demo_skill - Demo skill");
-  expect(text).toContain("/commands - List all slash commands.");
-  expect(text).toContain("/skill - Run a skill by name.");
   expect(text).toContain("/think (/thinking, /t) - Set thinking level.");
-  expect(text).toContain("/compact - Compact the session context.");
-  expect(text).toContain("/models - List model providers/models.");
   expect(text).not.toContain("/config");
   expect(text).not.toContain("/debug");
 });

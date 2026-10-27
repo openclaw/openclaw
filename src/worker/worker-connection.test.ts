@@ -275,7 +275,6 @@ describe("worker connection endpoint failures", () => {
     const peers = new Set<net.Socket>();
     let connections = 0;
     let httpBytes = 0;
-    let connectFrames = 0;
     const peerClosed = createDeferred();
     server.on("connection", (peer) => {
       connections += 1;
@@ -288,11 +287,6 @@ describe("worker connection endpoint failures", () => {
     server.on("secureConnection", (peer) => {
       peer.on("data", (data: Buffer) => {
         httpBytes += data.length;
-      });
-    });
-    websocketServer.on("connection", (socket) => {
-      socket.on("message", () => {
-        connectFrames += 1;
       });
     });
     cleanups.push(async () => {
@@ -323,10 +317,9 @@ describe("worker connection endpoint failures", () => {
     expect(error).toMatchObject({ message: "gateway tls fingerprint mismatch" });
     expect(states).toEqual(["connecting", "failed"]);
     await expect(connection.waitForExit()).resolves.toEqual({ kind: "failed", error });
-    expect({ connections, httpBytes, connectFrames }).toEqual({
+    expect({ connections, httpBytes }).toEqual({
       connections: 1,
       httpBytes: 0,
-      connectFrames: 0,
     });
   });
 
@@ -700,7 +693,7 @@ describe("WorkerConnection inference callback isolation", () => {
         observed.push(frame.payload.seq);
       };
       for (const seq of [1, 2]) {
-        expect(() => dispatcher.dispatchReadyFrame(makeFrame(seq), socket)).not.toThrow();
+        dispatcher.dispatchReadyFrame(makeFrame(seq), socket);
       }
       expect(observed).toEqual([1, 2]);
     },

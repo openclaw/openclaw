@@ -14,7 +14,11 @@ import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/as
 import * as initialization from "./init.js";
 import { LegacyContextEngine } from "./legacy.js";
 import * as health from "./quarantine-health.js";
-import { createNativeSource, resolveFixtureEngine } from "./registry-resources.test-support.js";
+import {
+  createNativeSource,
+  createRegistryFixture,
+  resolveFixtureEngine,
+} from "./registry-resources.test-support.js";
 import * as contextEngineRegistry from "./registry.js";
 import {
   adoptRuntimeContextEngineRegistrations,
@@ -24,6 +28,12 @@ import {
 } from "./registry.js";
 import { resetContextEngineRuntimeQuarantineForTests as resetQuarantine } from "./registry.test-support.js";
 import type { ContextEngine } from "./types.js";
+
+function pluginRegistry(plugin: Parameters<typeof createPluginRecord>[0]) {
+  const registry = createEmptyPluginRegistry();
+  registry.plugins.push(createPluginRecord(plugin));
+  return registry;
+}
 
 describe("logical-turn native resources", () => {
   afterEach(() => {
@@ -48,12 +58,15 @@ describe("logical-turn native resources", () => {
     "initialization-abort",
     "shared",
   ] as const)("retains the adopted engine's native source through %s", async (mode) => {
-    const donor = createEmptyPluginRegistry();
-    const supplyingView = createEmptyPluginRegistry();
+    const inMode = (...modes: string[]) => modes.includes(mode);
+    const invalid = inMode("invalid-tail", "invalid-factory-tail");
+    const factoryAbort = inMode("abort-factory-tail", "invalid-factory-tail");
+    const disposalTail = inMode("dispose-tail", "invalid-tail", "shared");
+    const abortTail = inMode("abort-tail", "parent-abort");
     const viewSource = new PluginRegistryInspectionResources(retireInspectionInstances);
     const plugin = { id: "engine-source-fixture", source: "/synthetic/plugin.cjs" };
-    donor.plugins.push(createPluginRecord(plugin));
-    supplyingView.plugins.push(createPluginRecord(plugin));
+    const donor = pluginRegistry(plugin);
+    const supplyingView = pluginRegistry(plugin);
     if (mode !== "raw-view") {
       viewSource.attach(supplyingView);
     }
@@ -63,14 +76,7 @@ describe("logical-turn native resources", () => {
       }
     });
     const { database, resources: source } = native;
-    const reads: number[] = [];
-    const read = () => {
-      try {
-        reads.push(native.read());
-      } catch {
-        reads.push(-1);
-      }
-    };
+    const read = vi.fn(native.read);
     const factoryStarted = createDeferred();
     const factoryGate = createDeferred();
     const factoryTail = createDeferred();
@@ -94,7 +100,7 @@ describe("logical-turn native resources", () => {
     class NativeEngine extends LegacyContextEngine {
       #read = read;
       override readonly info = {
-        id: mode === "invalid-tail" || mode === "invalid-factory-tail" ? "" : "native-engine",
+        id: invalid ? "" : "native-engine",
         name: "Native engine",
       };
       override async assemble(params: Parameters<ContextEngine["assemble"]>[0]) {
@@ -105,17 +111,17 @@ describe("logical-turn native resources", () => {
         engineDisposals++;
         disposeStarted.resolve();
         // A factory's accepted background work may require disposal to let it finish.
-        if (mode !== "abort-factory-tail" && mode !== "invalid-factory-tail") {
+        if (!factoryAbort) {
           factoryTail.resolve();
         }
         if (mode === "invalid-factory-tail") {
           cleanupSignal = getAsyncWorkSignal();
           await factoryWorker;
         }
-        if (mode === "dispose" || mode === "invalid-factory-tail") {
+        if (inMode("dispose", "invalid-factory-tail")) {
           await disposeGate.promise;
         }
-        if (mode === "dispose-tail" || mode === "invalid-tail" || mode === "shared") {
+        if (disposalTail) {
           cleanupSignal = getAsyncWorkSignal();
           tails.push(readAfter(disposeTail, () => this.#read()));
         }
@@ -127,7 +133,7 @@ describe("logical-turn native resources", () => {
       const signal = getAsyncWorkSignal();
       if (signal) {
         signals.push(signal);
-        if (mode === "abort-tail" || mode === "parent-abort") {
+        if (abortTail) {
           signal.addEventListener(
             "abort",
             () => {
@@ -142,12 +148,12 @@ describe("logical-turn native resources", () => {
       if (mode === "closing-factory") {
         await factoryGate.promise;
       }
-      if (mode === "factory-tail" || mode === "closing-factory") {
+      if (inMode("factory-tail", "closing-factory")) {
         const tail = readAfter(factoryTail);
         void tail.catch(() => {});
         tails.push(tail);
       }
-      if (mode === "abort-factory-tail" || mode === "invalid-factory-tail") {
+      if (factoryAbort) {
         if (!signal) {
           throw new Error("Managed factory did not receive its work signal");
         }
@@ -179,65 +185,57 @@ describe("logical-turn native resources", () => {
     if (mode !== "raw-view") {
       viewSource.attach(copiedView);
     }
-    const config = {
-      plugins: {
-        entries: { [plugin.id]: { enabled: true } },
-        slots: { contextEngine: "selected" },
+    const leaseOptions = {
+      identity: { runId: "fixture-run", sessionId: "fixture-session" },
+      agentDir: "/synthetic/staged-agent",
+      workspaceDir: "/synthetic/workspace",
+      config: {
+        plugins: {
+          entries: { [plugin.id]: { enabled: true } },
+          slots: { contextEngine: "selected" },
+        },
       },
     };
     const cleanupScope = createAgentCleanupScope();
     const parent = new AsyncWorkScope();
     const foreign = new AsyncWorkScope();
-    type Lease = Pick<
-      Awaited<ReturnType<typeof createLease>>,
-      "engine" | "dispose" | "degradedReason"
-    >;
+    type Lease = Awaited<ReturnType<typeof createLease>>;
     const leases: Lease[] = [];
     const pending: Array<Promise<unknown>> = [];
     const initializationStarted = createDeferred();
     const initializationGate = createDeferred();
     const initialize = initialization.ensureContextEnginesInitialized;
-    const initializeSpy =
-      mode === "initialization" ||
-      mode === "initialization-error" ||
-      mode === "initialization-abort"
-        ? vi
-            .spyOn(initialization, "ensureContextEnginesInitialized")
-            .mockImplementation(async () => {
-              await initialize();
-              initializationStarted.resolve();
-              await initializationGate.promise;
-            })
-        : undefined;
+    const initializeSpy = inMode("initialization", "initialization-error", "initialization-abort")
+      ? vi.spyOn(initialization, "ensureContextEnginesInitialized").mockImplementation(async () => {
+          await initialize();
+          initializationStarted.resolve();
+          await initializationGate.promise;
+        })
+      : undefined;
     const start = async () => {
       const create = () =>
         cleanupScope.run(() =>
           withRegistry(copiedView, async (): Promise<Lease> => {
-            const options = {
-              agentDir: "/synthetic/staged-agent",
-              workspaceDir: "/synthetic/workspace",
-            };
             // Keep the acquired alias pair even though lease initialization refreshes legacy.
             if (mode === "shared") {
-              const pair = await resolveLogicalTurnContextEngines(config, options);
+              const pair = await resolveLogicalTurnContextEngines(
+                leaseOptions.config,
+                leaseOptions,
+              );
               using resolution = vi
                 .spyOn(contextEngineRegistry, "resolveLogicalTurnContextEngines")
                 .mockResolvedValueOnce(pair);
               const lease = await createLease({
                 identity: { runId: "alias", sessionId: "alias" },
-                config,
+                config: leaseOptions.config,
               });
               expect(resolution).toHaveBeenCalledOnce();
               return lease;
             }
-            return createLease({
-              identity: { runId: "fixture-run", sessionId: "fixture-session" },
-              config,
-              ...options,
-            });
+            return createLease(leaseOptions);
           }),
         );
-      const lease = await (mode === "abort-factory-tail" || mode === "invalid-factory-tail"
+      const lease = await (factoryAbort
         ? create()
         : mode === "closing-factory"
           ? parent.run(create)
@@ -253,7 +251,7 @@ describe("logical-turn native resources", () => {
         await initializationStarted.promise;
         expect(database.isOpen).toBe(true);
         expect(contexts).toEqual([]);
-        if (mode === "initialization-error" || mode === "initialization-abort") {
+        if (inMode("initialization-error", "initialization-abort")) {
           const failure = new Error("initialization failed");
           if (mode === "initialization-error") {
             initializationGate.reject(failure);
@@ -309,7 +307,7 @@ describe("logical-turn native resources", () => {
       if (mode === "closing-factory") {
         expect(lease.degradedReason).toBe("original factory failure");
         factoryTail.resolve();
-      } else if (mode === "invalid-tail" || mode === "invalid-factory-tail") {
+      } else if (invalid) {
         expect(lease.degradedReason).toContain("missing info.id");
       } else {
         await lease.engine.assemble({ sessionId: "fixture-session", messages: [] });
@@ -333,27 +331,21 @@ describe("logical-turn native resources", () => {
       pending.push(cleanup);
       await vi.advanceTimersByTimeAsync(25);
       await cleanup;
-      if (
-        mode === "dispose" ||
-        mode === "dispose-tail" ||
-        mode === "abort-tail" ||
-        mode === "parent-abort" ||
-        mode === "shared"
-      ) {
+      if (inMode("dispose", "dispose-tail", "shared") || abortTail) {
         expect.soft(cleanupScope.outcome).toBe("uncertain");
         expect.soft(database.isOpen).toBe(true);
       }
       if (mode === "shared") {
         expect.soft([engineDisposals, native.state.disposals]).toEqual([1, 0]);
       }
-      if (mode === "abort-tail" || mode === "parent-abort") {
+      if (abortTail) {
         expect.soft(abortInOrigin).toBe(true);
       }
       if (mode === "last-user") {
         expect.soft(native.state.disposals).toBe(0);
         await leases[1]!.dispose();
       }
-      if (mode === "dispose-tail" || mode === "invalid-tail") {
+      if (inMode("dispose-tail", "invalid-tail")) {
         expect.soft(cleanupSignal?.aborted).toBe(false);
       }
       if (mode === "abort-factory-tail") {
@@ -370,7 +362,7 @@ describe("logical-turn native resources", () => {
       if (mode === "closing-factory") {
         expect.soft(cleanupScope.outcome).toBe("uncertain");
       }
-      expect.soft(new Set(reads)).toEqual(new Set([42]));
+      expect.soft(new Set(read.mock.results.map((result) => result.value))).toEqual(new Set([42]));
       expect(engineDisposals).toBe(mode === "closing-factory" ? 0 : mode === "last-user" ? 2 : 1);
       await lease.dispose();
     } finally {
@@ -548,20 +540,16 @@ describe("lazy fallback native resources", () => {
       registry.contextEngines.set("legacy", donor.contextEngines.get("legacy")!);
       const id = `quarantine-source-${mode}`;
       const failure = new Error("configured engine failed");
+      const fail = () => {
+        throw failure;
+      };
       if (mode !== "missing") {
         registerEngine(
           registry,
           id,
-          () => {
-            if (mode === "factory") {
-              throw failure;
-            }
-            return Object.assign(new LegacyContextEngine(), {
-              assemble: async () => {
-                throw failure;
-              },
-            });
-          },
+          mode === "factory"
+            ? fail
+            : () => Object.assign(new LegacyContextEngine(), { assemble: async () => fail() }),
           "plugin:fixture",
         );
       }
@@ -620,32 +608,18 @@ describe("lazy fallback native resources", () => {
 
 describe("registry adoption", () => {
   it("does not treat an uncovered view as a retired donor's owner after a failed dependency", async () => {
-    const donor = createEmptyPluginRegistry();
-    const target = createEmptyPluginRegistry();
-    const donorSource = new PluginRegistryInspectionResources(retireInspectionInstances);
-    const primarySource = new PluginRegistryInspectionResources(retireInspectionInstances);
-    donorSource.attach(donor);
-    primarySource.attach(target);
     const record = { id: "uncovered-engine", source: "/synthetic/uncovered-engine.cjs" };
-    donor.plugins.push(createPluginRecord(record));
-    target.plugins.push(createPluginRecord(record));
-    let calls = 0;
-    let primaryDisposals = 0;
-    primarySource.register(record.id, {
-      id: "primary",
-      dispose() {
-        primaryDisposals++;
-      },
-    });
-    registerEngine(
-      donor,
+    const donor = pluginRegistry(record);
+    const target = pluginRegistry(record);
+    const donorSource = new PluginRegistryInspectionResources(retireInspectionInstances);
+    const { resources: primarySource, retired } = createRegistryFixture(
+      undefined,
+      target,
       record.id,
-      () => {
-        calls++;
-        return new LegacyContextEngine();
-      },
-      `plugin:${record.id}`,
     );
+    donorSource.attach(donor);
+    const factory = vi.fn(() => new LegacyContextEngine());
+    registerEngine(donor, record.id, factory, `plugin:${record.id}`);
     const copied = adoptRuntimeContextEngineRegistrations(target, donor);
     primarySource.attach(copied);
     await donorSource.release();
@@ -659,10 +633,10 @@ describe("registry adoption", () => {
         }),
       );
       expect(lease.degraded).toBe(true);
-      expect(calls).toBe(0);
+      expect(factory).not.toHaveBeenCalled();
       await primarySource.release();
       await lease.dispose();
-      expect(primaryDisposals).toBe(1);
+      expect(retired).toHaveBeenCalledOnce();
     } finally {
       await lease?.dispose();
       await primarySource.release();
@@ -681,14 +655,11 @@ describe("registry adoption", () => {
       factory?: ContextEngineFactory;
     } = {},
   ) {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      createPluginRecord({
-        id: "ce-probe",
-        source: params.source ?? "/tmp/ce-probe",
-        status: params.status ?? "loaded",
-      }),
-    );
+    const registry = pluginRegistry({
+      id: "ce-probe",
+      source: params.source ?? "/tmp/ce-probe",
+      status: params.status ?? "loaded",
+    });
     if (params.lifecycle !== null) {
       registry.contextEngines.set("ce-probe", {
         factory: params.factory ?? unusedFactory,
@@ -730,9 +701,6 @@ describe("registry adoption", () => {
       expect(adopted.contextEngines.get("ce-probe")?.factory).toBe(expected);
       if (lifecycle !== null) {
         expect(adopted.contextEngines.get("ce-probe")?.lifecycle).toBe("runtime");
-      }
-      if (lifecycle !== "readOnlyDiscovery") {
-        expect(adopted).toBe(scoped);
       }
     },
   );

@@ -253,14 +253,12 @@ describe("resolveCommandAuthorization", () => {
   ] as const)("$name", ({ owner, provider, expectedProvider, expectedOwner }) => {
     const webchat = provider === "webchat";
     const auth = authorize(
-      {
-        Provider: provider,
-        Surface: provider,
+      channelContext(provider, {
         ...(webchat
           ? { OriginatingChannel: "webchat", GatewayClientScopes: ["operator.write"] }
           : { From: "discord:123456789012345678" }),
         SenderId: "123456789012345678",
-      } as MsgContext,
+      }),
       { commands: { ownerAllowFrom: [owner] } } as OpenClawConfig,
     );
 
@@ -275,13 +273,12 @@ describe("resolveCommandAuthorization", () => {
     } as OpenClawConfig;
 
     const auth = authorize(
-      {
-        Provider: "webchat",
+      channelContext("webchat", {
         Surface: "whatsapp",
         OriginatingChannel: "whatsapp",
         From: "whatsapp:+19995551234",
         SenderE164: "+19995551234",
-      } as MsgContext,
+      }),
       cfg,
     );
 
@@ -604,13 +601,11 @@ describe("resolveCommandAuthorization", () => {
     },
   ] as const)("$name", ({ provider, scope, expectedOwner }) => {
     const auth = authorize(
-      {
-        Provider: provider,
-        Surface: provider,
+      channelContext(provider, {
         ...(provider === "telegram" ? { From: "telegram:12345" } : {}),
         GatewayClientScopes: [scope],
-      } as MsgContext,
-      {} as OpenClawConfig,
+      }),
+      {},
     );
     expect(auth.senderIsOwner).toBe(expectedOwner);
   });
@@ -699,23 +694,11 @@ describe("control command parsing", () => {
     ).toBe(true);
   });
 
-  function expectCommandAfterMetadata(label: string, json: string, command: string) {
+  it.each([
+    ["", '{"message_id":"msg-abc","chat_id":"chat-123"}', "/model spark"],
+    ["[Wed 2026-03-11 23:51 PDT] ", '{"chat_id":"chat-123"}', "/status"],
+  ])("detects commands after metadata with prefix %s", (prefix, json, command) => {
+    const label = `${prefix}${markInboundContextLabel("Conversation info:")}`;
     expect(hasControlCommand([label, "```json", json, "```", "", command].join("\n"))).toBe(true);
-  }
-
-  it("detects commands wrapped in inbound metadata blocks", () => {
-    expectCommandAfterMetadata(
-      markInboundContextLabel("Conversation info:"),
-      '{"message_id":"msg-abc","chat_id":"chat-123"}',
-      "/model spark",
-    );
-  });
-
-  it("detects /status command after timestamp + metadata prefix", () => {
-    expectCommandAfterMetadata(
-      `[Wed 2026-03-11 23:51 PDT] ${markInboundContextLabel("Conversation info:")}`,
-      '{"chat_id":"chat-123"}',
-      "/status",
-    );
   });
 });
