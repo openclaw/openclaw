@@ -1,6 +1,7 @@
 ---
 summary: "How Barnacle and ClawSweeper feedback helps move OpenClaw pull requests through review."
 read_when:
+  - Preparing local review before opening or updating a PR
   - Following up after Barnacle or ClawSweeper feedback
   - Asking ClawSweeper for review
   - Debugging Barnacle, ClawSweeper, stale labels, or auto-closures
@@ -14,6 +15,60 @@ feedback, and what to check when automation stays quiet.
 
 Barnacle and ClawSweeper help maintainers keep the review queue usable. They do
 not replace maintainer judgment.
+
+## Local review before a PR
+
+Choose one local review route before asking for review. Complete the change and
+its focused validation first, then address actionable review findings together.
+
+| Author      | Review route                                                                                                                                                     |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Maintainer  | Run local ClawSweeper on the final committed range. If it is unavailable, run local autoreview, then request one hosted ClawSweeper review when the PR is ready. |
+| Contributor | Local autoreview is strongly encouraged. Local ClawSweeper is an optional alternative with its own setup and model usage.                                        |
+
+For this route, maintainers are organization owners or people with effective
+repository `maintain` or `admin` access. Organization membership or repository
+`write` access alone does not qualify.
+
+A completed local ClawSweeper review does not require routine autoreview or a
+duplicate hosted review. This route does not replace required independent
+review, CI, security approval, release review, or the native maintainer workflow.
+Maintainers may request missing review or validation evidence before reviewing
+a contributor PR.
+
+### Set up a local reviewer
+
+- **Autoreview:** follow the public [shared setup](https://github.com/openclaw/agent-skills#shared-autoreview)
+  and [autoreview skill](https://github.com/openclaw/agent-skills/tree/main/skills/autoreview).
+  Read the full installed skill. After source updates, reinstall copy-mode skills
+  using that setup guide. The helper's `--version` identifies its content, not a
+  release or trusted proof of execution.
+- **ClawSweeper:** use the public [source-checkout setup and local skill](https://github.com/openclaw/clawsweeper/blob/main/.agents/skills/local-clawsweeper-review/SKILL.md).
+  Its committed-range mode requires a clean checkout. Follow the documented
+  target-directory and base selection instead of changing the branch under review.
+  This is a source workflow, not an npm or Homebrew package installation.
+
+Both tools use the configured model service. Send only material you are
+authorized to share with that service. Local review also works from fork
+checkouts without adding fork workflows, labels, or repository configuration.
+
+### Report the actual review
+
+In the PR's **Evidence** section, name the tool, reviewed base and head or local
+change snapshot, effective priority or coverage, outcome, and remaining findings.
+A smoke run, filtered result, failed run, or incomplete review is not a clean
+review of the complete change. Describe unavailable tools and remaining gaps
+instead of claiming success. Never switch tools to hide findings or bypass a refusal.
+
+Local summaries are self-reported evidence. A hash or version does not attest
+that a review ran or replace separately required hosted checks.
+Keep credentials, private paths, and unrelated report contents out of public PRs.
+
+Check for a queued or running review of the current range before requesting one.
+Batch fixes, tests, and PR-body updates before requesting another
+review. A small edit alone is not a reason to start another hosted run.
+When the reviewed code or base changes, check what the existing result still
+covers and refresh the applicable review before claiming it covers the new range.
 
 ## Barnacle
 
@@ -45,17 +100,17 @@ and help maintainers with guarded repair or automerge flows.
 A positive ClawSweeper result is supporting evidence, not maintainer approval.
 Maintainers still decide whether and when a PR is ready to merge.
 
-ClawSweeper is queue-based. When you open a non-draft PR or mark a draft ready
-for review, it posts a short receipt comment right away, but the review itself
-still waits for a queue slot. Do not expect an immediate review after opening a
+ClawSweeper is queue-based. When the repository enables automatic review, it posts a short
+receipt when you open a non-draft PR or mark a draft ready for review. The review
+itself still waits for a queue slot. Do not expect an immediate review after opening a
 PR or adding a review request. Label updates after a ClawSweeper run can also
 take time.
 
-ClawSweeper reviews each PR automatically once. Later pushes, description edits,
+The initial automatic review runs once. Later pushes, description edits,
 and reopens do not start another review on their own. Maintainers can also queue
-review, repair, or automerge flows with labels or commands. After you have
-updated the branch, PR description, proof, or code, request a fresh review with
-a new PR comment:
+review, repair, or automerge flows with labels or commands. When the selected
+route or a maintainer requires another hosted review, complete the branch,
+PR description, and proof first. Request it with one new PR comment:
 
 ```text
 @clawsweeper re-review
@@ -86,9 +141,8 @@ next-step checklist for the PR.
 3. Add the requested proof, using evidence that matches the change.
 4. Resolve addressed review conversations yourself. Reply and leave a
    conversation open only when you need maintainer or reviewer judgment.
-5. Ask for a re-review only after the branch, PR description, evidence, and
-   relevant CI results are current. Multiple update and review cycles between the
-   author, maintainer, and ClawSweeper are normal.
+5. Ask for a re-review only when needed and after the branch, PR description,
+   evidence, and relevant CI results are current. Check for a pending request first.
 6. Keep discussion on the PR when possible. Move to `#clawtributors` on Discord
    only when the PR needs maintainer coordination, automation appears blocked,
    or the next decision is hard to settle in GitHub comments. Include the PR

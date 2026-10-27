@@ -186,12 +186,14 @@ if (isMainThread) {
     if (message?.channel !== 'openclaw-gateway-bench-profile' || message.kind !== 'cpu') return;
     if (message.action === 'start') { rows = []; rowWork = []; }
     if (message.action === 'stop') {
+      process.channel?.ref();
       await waitForDiagnosticEventsDrained();
-      process.send({ channel: 'list-rpc-capture', rows, rowWork });
+      process.send({ channel: 'list-rpc-capture', rows, rowWork }, () => process.channel?.unref());
       rows = undefined;
       rowWork = undefined;
     }
   });
+  process.channel?.unref();
 }`,
     );
     const profile = `team-shape-${port}`;

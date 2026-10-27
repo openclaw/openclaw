@@ -11,6 +11,17 @@ export type ReloadRegion = {
   height: number;
 };
 export type ReloadMask = ReloadRegion & { reason: string };
+export type ReloadAnimationSample = {
+  atMs: number;
+  animations: Array<
+    ReloadRegion & {
+      key: string;
+      signature: string;
+      kind: "shimmer" | "fade";
+      active: boolean;
+    }
+  >;
+};
 type Pixels = { width: number; height: number; data: Uint8Array };
 type Threshold = { channelThreshold: number; minChangedPixels: number; minChangedRatio: number };
 type Difference = { changedPixels: number; comparedPixels: number; significant: boolean };
@@ -23,7 +34,41 @@ type Transition = {
   comparedPixels: number;
   regions: string[];
 };
-type Tracker = { states: State[]; timeline: Transition[]; last?: State };
+type Tracker = { states: State[]; timeline: Transition[]; last?: State; comparisonPixels?: Pixels };
+
+function matchingFadePixels(a: Pixels, b: Pixels, region: ReloadRegion) {
+  let count = 0,
+    sumA = 0,
+    sumB = 0,
+    squareA = 0,
+    squareB = 0,
+    product = 0;
+  for (let y = region.y; y < region.y + region.height; y++) {
+    for (let x = region.x; x < region.x + region.width; x++) {
+      const offset = (y * a.width + x) * 4;
+      const left =
+        a.data[offset]! * 0.2126 + a.data[offset + 1]! * 0.7152 + a.data[offset + 2]! * 0.0722;
+      const right =
+        b.data[offset]! * 0.2126 + b.data[offset + 1]! * 0.7152 + b.data[offset + 2]! * 0.0722;
+      count++;
+      sumA += left;
+      sumB += right;
+      squareA += left * left;
+      squareB += right * right;
+      product += left * right;
+    }
+  }
+  if (!count) {
+    return false;
+  }
+  const varianceA = squareA - (sumA * sumA) / count;
+  const varianceB = squareB - (sumB * sumB) / count;
+  // Blank/faint pixels cannot establish that content already painted, even when DOM matches.
+  return (
+    Math.min(varianceA, varianceB) / count >= 16 &&
+    (product - (sumA * sumB) / count) / Math.sqrt(varianceA * varianceB) >= 0.999
+  );
+}
 
 function clipped(region: ReloadRegion, width: number, height: number): ReloadRegion {
   const left = Math.max(0, Math.min(width, Math.floor(region.x)));
@@ -97,13 +142,41 @@ function classifier(
   regions: ReloadRegion[],
   mask: Uint8Array,
   threshold: Threshold,
+  adjacent = false,
 ) {
   const whole: Tracker = { states: [], timeline: [] };
   const byRegion = new Map(
     regions.map((region) => [region.name, { states: [], timeline: [] } as Tracker]),
   );
-  const same = (a: Pixels, b: Pixels, box: ReloadRegion) =>
-    !compare(a, b, box, mask, threshold, true).significant;
+  function baseline(
+    tracker: Tracker,
+    pixels: Pixels,
+    region: ReloadRegion,
+    comparisonMask: Uint8Array,
+  ) {
+    if (!adjacent) {
+      return tracker.last?.pixels;
+    }
+    const previous = tracker.comparisonPixels;
+    if (!previous || comparisonMask === mask) {
+      return previous;
+    }
+    let normalized: Uint8Array | undefined;
+    // Normalize this region's animation pixels without advancing its unexplained changes.
+    for (let y = region.y; y < region.y + region.height; y++) {
+      for (let x = region.x; x < region.x + region.width; x++) {
+        const index = y * pixels.width + x;
+        if (comparisonMask[index] && !mask[index]) {
+          normalized ??= previous.data.slice();
+          normalized.set(pixels.data.subarray(index * 4, index * 4 + 4), index * 4);
+        }
+      }
+    }
+    if (normalized) {
+      tracker.comparisonPixels = { ...previous, data: normalized };
+    }
+    return tracker.comparisonPixels;
+  }
   function accept(
     tracker: Tracker,
     frame: ReloadFrame,
@@ -118,6 +191,9 @@ function classifier(
       tracker.states.push(state);
     }
     tracker.last = state;
+    if (adjacent) {
+      tracker.comparisonPixels = pixels;
+    }
     tracker.timeline.push({
       atMs: frame.atMs,
       frame: path.basename(frame.file),
@@ -129,12 +205,15 @@ function classifier(
   }
   return {
     whole,
-    consume(frame: ReloadFrame, pixels: Pixels) {
+    consume(frame: ReloadFrame, pixels: Pixels, comparisonMask = mask) {
+      const same = (a: Pixels, b: Pixels, box: ReloadRegion) =>
+        !compare(a, b, box, mask, threshold, true).significant;
       const changedRegions: string[] = [];
       for (const region of regions) {
         const tracker = byRegion.get(region.name)!;
-        const difference = tracker.last
-          ? compare(tracker.last.pixels, pixels, region, mask, threshold)
+        const previous = baseline(tracker, pixels, region, comparisonMask);
+        const difference = previous
+          ? compare(previous, pixels, region, comparisonMask, threshold)
           : { changedPixels: 0, comparedPixels: 0, significant: true };
         if (difference.significant) {
           changedRegions.push(region.name);
@@ -143,10 +222,12 @@ function classifier(
           );
         }
       }
-      const difference = whole.last
-        ? compare(whole.last.pixels, pixels, viewport, mask, threshold)
+      const previous = baseline(whole, pixels, viewport, comparisonMask);
+      const difference = previous
+        ? compare(previous, pixels, viewport, comparisonMask, threshold)
         : { changedPixels: 0, comparedPixels: 0, significant: true };
-      if (difference.significant || changedRegions.length) {
+      const accepted = difference.significant || changedRegions.length > 0;
+      if (accepted) {
         accept(
           whole,
           frame,
@@ -169,7 +250,7 @@ function classifier(
   };
 }
 
-async function contactSheets(states: State[], directory: string) {
+async function contactSheets(states: State[], directory: string, prefix = "contact-sheet") {
   const files: string[] = [];
   const { width, height } = states[0]!.pixels;
   const labelHeight = 44;
@@ -204,7 +285,7 @@ async function contactSheets(states: State[], directory: string) {
           22,
         );
       }
-      const name = `contact-sheet-${String(files.length + 1).padStart(2, "0")}.png`;
+      const name = `${prefix}-${String(files.length + 1).padStart(2, "0")}.png`;
       await writeFile(path.join(directory, name), image.get_bytes());
       files.push(name);
     } finally {
@@ -218,6 +299,7 @@ export async function analyzeReloadFrames(options: {
   frames: ReloadFrame[];
   regions: ReloadRegion[];
   masks: ReloadMask[];
+  animationSamples?: ReloadAnimationSample[];
   outputDir: string;
   channelThreshold?: number;
   minChangedPixels?: number;
@@ -259,6 +341,21 @@ export async function analyzeReloadFrames(options: {
   let mask = new Uint8Array();
   let masked: ReturnType<typeof classifier> | undefined;
   let unmasked: ReturnType<typeof classifier> | undefined;
+  let visible: ReturnType<typeof classifier> | undefined;
+  let sampleIndex = -1;
+  let previousAnimations: ReloadAnimationSample["animations"] = [];
+  let previousCapturedPixels: Pixels | undefined;
+  const animationSamples = options.animationSamples ?? [];
+  if (
+    animationSamples.some(
+      (sample, index) =>
+        !Number.isFinite(sample.atMs) ||
+        (index > 0 && sample.atMs < animationSamples[index - 1]!.atMs),
+    )
+  ) {
+    throw new Error("Animation samples must have finite times in capture order");
+  }
+  const suppressedAnimationPairs: Array<{ atMs: number; rectangles: ReloadMask[] }> = [];
   let lastTime = -Infinity;
   for (const frame of options.frames) {
     if (!Number.isFinite(frame.atMs) || frame.atMs < lastTime) {
@@ -286,16 +383,65 @@ export async function analyzeReloadFrames(options: {
         }
         masked = classifier(viewport, regions, mask, threshold);
         unmasked = classifier(viewport, regions, new Uint8Array(width * height), threshold);
+        visible = classifier(viewport, regions, mask, threshold, true);
       } else if (pixels.width !== width || pixels.height !== height) {
         throw new Error(`Frame dimensions changed: ${frame.file}`);
       }
       masked.consume(frame, pixels);
       unmasked!.consume(frame, pixels);
+      while (
+        animationSamples[sampleIndex + 1]?.atMs !== undefined &&
+        animationSamples[sampleIndex + 1]!.atMs <= frame.atMs
+      ) {
+        sampleIndex++;
+      }
+      const currentAnimations = animationSamples[sampleIndex]?.animations ?? [];
+      const rectangles = currentAnimations.flatMap((animation) => {
+        const previous = previousAnimations.find((candidate) => candidate.key === animation.key);
+        if (
+          !previous ||
+          !(previous.active || animation.active) ||
+          previous.signature !== animation.signature ||
+          previous.kind !== animation.kind ||
+          ["x", "y", "width", "height"].some(
+            (key) => Reflect.get(previous, key) !== Reflect.get(animation, key),
+          )
+        ) {
+          return [];
+        }
+        const rectangle = clipped(animation, width, height);
+        if (
+          animation.kind === "fade" &&
+          (!previousCapturedPixels ||
+            !matchingFadePixels(previousCapturedPixels, pixels, rectangle))
+        ) {
+          return [];
+        }
+        return [
+          {
+            ...rectangle,
+            reason: `${animation.kind}: same element, content, appearance and geometry`,
+          },
+        ];
+      });
+      const comparisonMask = rectangles.length ? mask.slice() : mask;
+      for (const box of rectangles) {
+        for (let y = box.y; y < box.y + box.height; y++) {
+          comparisonMask.fill(1, y * width + box.x, y * width + box.x + box.width);
+        }
+      }
+      if (rectangles.length) {
+        suppressedAnimationPairs.push({ atMs: frame.atMs, rectangles });
+      }
+      visible!.consume(frame, pixels, comparisonMask);
+      previousAnimations = currentAnimations;
+      previousCapturedPixels = pixels;
     } finally {
       image.free();
     }
   }
   await mkdir(options.outputDir, { recursive: true });
+  const visibleResult = suppressedAnimationPairs.length ? visible! : masked!;
   return {
     width,
     height,
@@ -308,6 +454,20 @@ export async function analyzeReloadFrames(options: {
     maskedPixels: mask.reduce((sum, value) => sum + value, 0),
     ...masked!.report(),
     unmasked: unmasked!.report(),
+    visibleChangeCensus: {
+      ...visibleResult.report(),
+      method:
+        "Captured-frame pixel changes with attributed animation pixels normalized between adjacent captures; unexplained changes accumulate. This is a heuristic, not semantic or compositor-paint proof; inspect original pixels.",
+      animationPolicy:
+        "Only the same animation target with unchanged content, appearance and geometry on both samples qualifies. Fades additionally require actual pixel luminance standard deviation >=4 on both captures and Pearson correlation >=0.999. Blank/faint or changed spatial patterns remain changes. Shimmer phase may be grouped for explicit skeleton targets. DOM/frame correlation may be stale; original pixels and inspection remain authoritative.",
+      animationSamples: animationSamples.length,
+      suppressedAnimationPairs,
+      contactSheets: await contactSheets(
+        visibleResult.whole.states,
+        options.outputDir,
+        "visible-contact-sheet",
+      ),
+    },
     contactSheets: await contactSheets(masked!.whole.states, options.outputDir),
   };
 }

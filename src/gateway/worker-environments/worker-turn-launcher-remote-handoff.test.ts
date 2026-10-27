@@ -122,27 +122,30 @@ describe("worker turn launcher remote handoff", () => {
     environment.desktop!.apps![0]!.args = ["-File", "C:\\ProgramData\\OpenClaw\\browser.ps1"];
     const bootstrapReceipt = expectDefined(environment.bootstrapReceipt, "bootstrap receipt");
     const acknowledgeCredentialDelivery = vi.fn(async () => true);
-    const reconcileWorkspace = vi.fn(
-      async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
-        if (request.source.kind !== "local") {
-          throw new Error("expected a local workspace source");
-        }
-        expect(request.source.stagedResult).toBeDefined();
-        await request.source.stagedResult!.record(request.source.stagedResult!.ref);
-        expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
-          { stagedResultRef: request.source.stagedResult!.ref, workspaceAcceptedAtMs: null },
-        ]);
-        return {
-          ...(await reconcileUnchangedLocalWorkspace(request)),
-          getAppliedWorkspaceResult: () => ({
-            manifestRef: MANIFEST_REF,
-            manifest: { version: 1 as const, baseCommit: null, entries: [] },
-            conflictPaths: ["src/local.ts"],
-            verifyLocalStable: async () => {},
-          }),
-        };
-      },
-    );
+    const reconcileWorkspace = vi
+      .fn<WorkerTunnelHandle["reconcileWorkspace"]>()
+      .mockImplementationOnce(reconcileUnchangedLocalWorkspace)
+      .mockImplementationOnce(
+        async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
+          if (request.source.kind !== "local") {
+            throw new Error("expected a local workspace source");
+          }
+          expect(request.source.stagedResult).toBeDefined();
+          await request.source.stagedResult!.record(request.source.stagedResult!.ref);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
+            { stagedResultRef: request.source.stagedResult!.ref, workspaceAcceptedAtMs: null },
+          ]);
+          return {
+            ...(await reconcileUnchangedLocalWorkspace(request)),
+            getAppliedWorkspaceResult: () => ({
+              manifestRef: MANIFEST_REF,
+              manifest: { version: 1 as const, baseCommit: null, entries: [] },
+              conflictPaths: ["src/local.ts"],
+              verifyLocalStable: async () => {},
+            }),
+          };
+        },
+      );
     const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
       quiesceWorkspace: vi.fn(async () => ({
         assertActive: vi.fn(async () => {}),
@@ -294,6 +297,7 @@ describe("worker turn launcher remote handoff", () => {
       paths: ["src/local.ts"],
       stagedResultRef: expect.stringMatching(/^refs\/openclaw\/worker-results\//u),
     });
+    expect(reconcileWorkspace).toHaveBeenCalledTimes(2);
     expect(onAgentEvent).not.toHaveBeenCalled();
     const entries = (await openSessionManager()).getBranch();
     const conflictIndex = entries.findIndex(

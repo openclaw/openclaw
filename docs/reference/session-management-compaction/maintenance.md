@@ -163,7 +163,10 @@ until the history is restored.
 Low-level synchronous transcript APIs instead return a
 restore-required error while a transcript is cold; their callers must await
 asynchronous restoration first. Storage and usage inventory can count cold
-transcripts without restoring them. Text search excludes cold transcript contents and
+transcripts without restoring them. Usage refreshes and exact-range reports read
+verified archive chunks directly when existing rollups cannot answer the request;
+they keep transcript payloads cold and store results in the existing usage cache.
+Text search excludes cold transcript contents and
 reports how many archived transcripts it excluded; restored transcripts become
 searchable again. Import and cross-store repair refuse cold transcripts that
 have not been restored, rather than copying an incomplete history.

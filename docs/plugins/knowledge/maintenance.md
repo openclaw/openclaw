@@ -125,9 +125,10 @@ Maintenance picks the automation in this order:
 With neither, the pass reports no review.
 
 The review edits private knowledge, so its automation must run in a session
-with the owner's private access. To start the **Review unlinked claims**
-scribe, open a new conversation in the owner's direct chat and send its setup
-message, with your agent ID and IANA time zone:
+with the owner's private access. Turn on **Review unlinked claims** from the
+[Scribes](/plugins/knowledge/scribes) tab of the Knowledge page. To start it
+without the Control UI, open a new conversation in the owner's direct chat and
+send its setup message, with your agent ID and IANA time zone:
 
 ````text
 Knowledge scribe setup: unlinked-review

@@ -223,18 +223,20 @@ suite.define(() => {
       await expectCount(page.locator('[data-attention-kind="outbox"]'), 0);
       await page.keyboard.press("Escape");
       await gateway.resolveDeferred("chat.send", { runId, status: "queued" });
-      await page.locator(".chat-send-status").waitFor({ state: "detached" });
+      await expect
+        .poll(() =>
+          page.evaluate(
+            (id) =>
+              Object.entries(sessionStorage).some(
+                ([key, value]) =>
+                  key.startsWith("openclaw.control.chatComposer.") && value.includes(id),
+              ),
+            runId,
+          ),
+        )
+        .toBe(false);
+      expect(await page.locator(".chat-send-status").count()).toBe(0);
       await expectCount(page.locator(".sidebar-issues-button__count"), 0);
-      expect(
-        await page.evaluate(
-          (id) =>
-            Object.entries(sessionStorage).some(
-              ([key, value]) =>
-                key.startsWith("openclaw.control.chatComposer.") && value.includes(id),
-            ),
-          runId,
-        ),
-      ).toBe(false);
       expect(await gateway.getRequests("chat.send")).toHaveLength(2);
     });
   });

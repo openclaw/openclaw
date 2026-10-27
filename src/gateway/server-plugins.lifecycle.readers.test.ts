@@ -166,7 +166,7 @@ it("reports plugin reload status and serves metadata throughout an admitted call
       phase: "reloading",
       pluginIds: ["instance-binding-probe"],
       deadlineAtMs: expect.any(Number),
-      reason: expect.stringContaining("new agent runs wait"),
+      reason: expect.stringContaining("New agent runs wait"),
     });
     expect(instance.acceptingCalls).toBe(false);
     const during = await withinTest(reads(), signal);

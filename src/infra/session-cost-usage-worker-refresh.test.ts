@@ -69,10 +69,11 @@ async function scan(
     readGeneration: async () => generation,
     checkProgress,
     // A short page does not mean end-of-range; decoded byte limits can cut any page.
-    readRows: async (_marker, afterSeq, throughSeq) => {
+    readRows: async (_marker, afterSeq, throughSeq, consume) => {
       const page = rows.filter((row) => row.seq > afterSeq && row.seq <= throughSeq).slice(0, 2);
       readSequences?.push(...page.map((row) => row.seq));
-      return page;
+      page.forEach(({ seq, event }) => consume(seq, event));
+      return page.at(-1)?.seq ?? afterSeq;
     },
   });
 }

@@ -14,6 +14,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { isGatewayProtocolResponseError } from "../../packages/gateway-client/src/protocol-request.ts";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { connectRestartClient } from "../../test/gateway-restart.test-support.ts";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.ts";
@@ -290,6 +291,17 @@ export async function runRestartStress(argv: string[]) {
     histories[key] = result;
     return isRecord(result) ? result : {};
   };
+  const createSession = async (agentId: string, label: string) => {
+    const result = await client!.request<unknown>(
+      "sessions.create",
+      { agentId, label, idempotencyKey: `restart-stress-${label}` },
+      { timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS },
+    );
+    if (!isRecord(result) || typeof result.key !== "string" || !result.key) {
+      throw new Error("sessions.create returned no key");
+    }
+    return result.key;
+  };
   const send = async (
     key: string,
     id: string,
@@ -333,7 +345,7 @@ export async function runRestartStress(argv: string[]) {
     trackProcess();
     await connect();
     // A completed session is the negative control: no message after any restart.
-    const idle = "agent:stress0:idle-control";
+    const idle = await createSession("stress0", "idle-control");
     await send(
       idle,
       "idle-control",
@@ -357,7 +369,10 @@ export async function runRestartStress(argv: string[]) {
     for (const [leg, kind] of ["managed", "sigterm", "sigkill"].entries()) {
       abort.signal.throwIfAborted();
       console.log(`LEG ${kind}: ${concurrency} concurrent sessions`);
-      const keys = Array.from({ length: concurrency }, (_, i) => `agent:stress${i}:chaos-${leg}`);
+      // The Control UI publishes a created row before sends and read-marker patches.
+      const keys = await Promise.all(
+        Array.from({ length: concurrency }, (_, i) => createSession(`stress${i}`, `${kind}-${i}`)),
+      );
       const sending = Promise.all(
         keys.map(async (key, i) => {
           const id = `${kind}-${i}`;
@@ -501,24 +516,19 @@ export async function runRestartStress(argv: string[]) {
       );
     }
     console.log("LEG rate-limit: primary 429 window, real fallback configured");
+    const rateKeys = await Promise.all(
+      Array.from({ length: concurrency }, (_, i) => createSession(`stress${i}`, `rate-${i}`)),
+    );
     provider.rejectFor(values.dry ? 5000 : 30_000);
     await Promise.all(
       Array.from({ length: concurrency }, (_, i) =>
-        send(
-          `agent:stress${i}:rate-limit`,
-          `rate-${i}`,
-          "rate-limit",
-          `Reply exactly DONE_rate-${i}. No tools.`,
-        ),
+        send(rateKeys[i]!, `rate-${i}`, "rate-limit", `Reply exactly DONE_rate-${i}. No tools.`),
       ),
     );
     await waitUntil(async () => {
       let complete = true;
       for (let i = 0; i < concurrency; i++) {
-        if (
-          stressAnswerMessages(await history(`agent:stress${i}:rate-limit`), `rate-${i}`).length ===
-          0
-        ) {
+        if (stressAnswerMessages(await history(rateKeys[i]!), `rate-${i}`).length === 0) {
           complete = false;
         }
       }

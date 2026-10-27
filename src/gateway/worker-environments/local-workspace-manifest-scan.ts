@@ -435,11 +435,16 @@ export async function executeLocalWorkspaceManifestRead(
     assertCurrent: () => undefined,
   });
   const retained = [...buildCacheInputPaths(canonicalPaths)];
-  if (action.target === "projection") {
-    for (const entryPath of records.keys()) {
-      if (entryPath !== "") {
-        canonicalPaths.add(entryPath);
-      }
+  const preserveDirectories = new Set<string>();
+  for (const [entryPath, { node }] of records) {
+    if (entryPath === "") {
+      continue;
+    }
+    if (node.type === "directory") {
+      preserveDirectories.add(entryPath);
+    }
+    if (action.target === "projection") {
+      canonicalPaths.add(entryPath);
     }
   }
   const fingerprintTarget = action.target === "canonical" ? "projection" : "canonical";
@@ -461,6 +466,7 @@ export async function executeLocalWorkspaceManifestRead(
     root: action.target === "canonical" ? row.projection_path : action.canonicalRoot,
     baseCommit: row.base_commit,
     includePaths: action.target === "projection" ? canonicalPaths : undefined,
+    preserveDirectories,
     buildCacheInputs: new Set(retained),
     reuseFile: fingerprintScan.reuseFile,
     onEntry(node, identity) {

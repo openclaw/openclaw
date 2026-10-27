@@ -171,6 +171,47 @@ it.each(["session.message", "sessions.changed"])(
   },
 );
 
+it("preserves built source bytes and native dynamic imports in the main isolate and workers", async () => {
+  const root = temporary.make("team-stress-native-source-");
+  fs.writeFileSync(path.join(root, "dependency.cjs"), "module.exports = {value: 42};");
+  const source = 'export const load = () => import("./dependency.cjs");';
+  fs.writeFileSync(path.join(root, "built.mjs"), source);
+  const entry = path.join(root, "entry.mjs");
+  fs.writeFileSync(
+    entry,
+    `import {Session} from "node:inspector/promises";
+     import {Worker, isMainThread, parentPort} from "node:worker_threads";
+     import {load} from "./built.mjs";
+     const session = new Session();
+     session.connect();
+     let scriptId;
+     session.on("Debugger.scriptParsed", ({params}) => {
+       if (params.url === new URL("./built.mjs", import.meta.url).href) scriptId = params.scriptId;
+     });
+     await session.post("Debugger.enable");
+     const {scriptSource} = await session.post("Debugger.getScriptSource", {scriptId});
+     session.disconnect();
+     const result = {source: scriptSource, value: (await load()).default.value};
+     if (isMainThread) {
+       const worker = new Worker(new URL(import.meta.url));
+       worker.once("message", child => console.log(JSON.stringify({main: result, worker: child})));
+     } else parentPort.postMessage(result);`,
+  );
+  const loader = new URL("../../scripts/perf/team-shape-stress-loader.mjs", import.meta.url);
+  const { stdout } = await executeFile(
+    resolveTestNodeExecPath(),
+    ["--import", loader.href, entry],
+    {
+      cwd: root,
+      timeout: 15_000,
+    },
+  );
+  expect(JSON.parse(stdout)).toEqual({
+    main: { source, value: 42 },
+    worker: { source, value: 42 },
+  });
+});
+
 it("loads source worker telemetry through built package exports without redirecting built imports", async () => {
   const root = temporary.make("team-stress-worker-telemetry-");
   const dist = path.join(root, "dist");

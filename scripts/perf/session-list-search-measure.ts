@@ -15,6 +15,12 @@
  * this script adds long/group titles and model overrides before projection admission.
  * Unlike row-only test fixtures, cold archived rows reconstruct actual model/thinking
  * facts. Timing is untraced; allocation sampling separately includes collected objects.
+ * --selection-workload measures no-search roster, exclusion, archive and relationship
+ * queries for three viewers through prepareProjectedSessionList's real sharing filter.
+ * Use --iterations 2000 --pairs 5; compare filter calls and owner projections as well
+ * as CPU/allocation. --base-list and --candidate-list compare the preparation owner
+ * instead of the filter owner; serialized responses are compared after timing, excluding
+ * the per-array random rowsRevision token. Facets and selected entry bytes must match for every query/viewer.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -30,6 +36,7 @@ import { parseArgs } from "node:util";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../src/agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { generateTeamShapeStressFixture } from "./team-shape-stress-fixture.ts";
@@ -45,7 +52,10 @@ const { values } = parseArgs({
     "reuse-fixture": { type: "boolean", default: false },
     "base-filter": { type: "string" },
     "candidate-filter": { type: "string" },
+    "base-list": { type: "string" },
+    "candidate-list": { type: "string" },
     pairs: { type: "string", default: "5" },
+    "selection-workload": { type: "boolean", default: false },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -54,21 +64,32 @@ assert(
   !values["candidate-filter"] || values["base-filter"],
   "--candidate-filter requires --base-filter",
 );
+assert(!values["candidate-list"] || values["base-list"], "--candidate-list requires --base-list");
+assert(
+  !values["base-list"] || values["selection-workload"],
+  "--base-list requires --selection-workload",
+);
 assert(global.gc, "Run with --expose-gc");
 const integer = (name: "sessions" | "iterations" | "warmup" | "pairs", min = 1) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
 const sessions = integer("sessions", 100);
 const iterations = integer("iterations");
 const warmup = integer("warmup");
-const pairs = values["base-filter"] ? integer("pairs") : 1;
+const pairs = values["base-filter"] || values["base-list"] ? integer("pairs") : 1;
 assert(iterations >= pairs && iterations % pairs === 0, "iterations must divide into pairs");
 const root = path.resolve(values["state-dir"]);
 const anchor = Date.UTC(2026, 9, 25);
 const sourceSha256 = createHash("sha256")
   .update(
     readFileSync(
-      values["candidate-filter"] ??
-        new URL("../../src/gateway/session-list-filters.ts", import.meta.url),
+      values["candidate-list"] ??
+        values["candidate-filter"] ??
+        new URL(
+          values["base-list"]
+            ? "../../src/gateway/session-utils-list.ts"
+            : "../../src/gateway/session-list-filters.ts",
+          import.meta.url,
+        ),
     ),
   )
   .digest("hex");
@@ -177,6 +198,35 @@ const queries = [
   "idle",
   "zz-no-match",
 ];
+const profileId = "team-shape-profile-0";
+const selectionQueries: Array<{ name: string; opts: SessionsListParams }> = [
+  { name: "roster", opts: {} },
+  { name: "roots", opts: { excludeSubagents: true, excludeCron: true, excludeSystem: true } },
+  { name: "archived", opts: { archived: true, excludeSubagents: true } },
+  { name: "recent", opts: { activeMinutes: 7 * 24 * 60 } },
+  { name: "personal", opts: { involvingMe: true } },
+  { name: "created", opts: { profileRelation: { relationship: "created", profileId } } },
+  { name: "related", opts: { profileRelation: { relationship: "involving", profileId } } },
+];
+const viewers: GatewayClient[] = [0, 1, 2].map((index) => {
+  const id = `team-shape-profile-${index}`;
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: { id: "openclaw-control-ui", version: "bench", platform: "bench", mode: "webchat" },
+      role: "operator",
+      scopes: ["operator.read", "operator.write", ...(index === 2 ? ["operator.admin"] : [])],
+    },
+    authenticatedUserProfile: {
+      profileId: id,
+      displayName: null,
+      hasAvatar: false,
+      updatedAt: anchor,
+    },
+    preparedSessionProfile: { profileId: id, aliases: new Set([id]), role: null },
+  };
+});
 const digest = (value: unknown) =>
   createHash("sha256")
     .update(
@@ -270,6 +320,7 @@ try {
   assert(shape.worktrees > 100 && shape.retainedRuns > 100 && shape.groups > 0);
   const results = [];
   const golden: Record<string, string> = {};
+  const responseRequests = new Map<string, Parameters<typeof lists.listProjectedSessions>[0]>();
   const currentFilters: typeof import("../../src/gateway/session-list-filters.js") = await import(
     values["candidate-filter"]
       ? pathToFileURL(path.resolve(values["candidate-filter"])).href
@@ -278,20 +329,52 @@ try {
   const baseFilters: typeof currentFilters | undefined = values["base-filter"]
     ? await import(pathToFileURL(path.resolve(values["base-filter"])).href)
     : undefined;
+  const candidateLists: typeof lists = values["candidate-list"]
+    ? await import(pathToFileURL(path.resolve(values["candidate-list"])).href)
+    : lists;
+  const baseLists: typeof lists | undefined = values["base-list"]
+    ? await import(pathToFileURL(path.resolve(values["base-list"])).href)
+    : undefined;
   inspector.connect();
   connected = true;
-  for (const search of queries) {
-    const name = search ?? "<no-search>";
+  const workloads = values["selection-workload"]
+    ? selectionQueries.flatMap(({ name, opts }) =>
+        viewers.map((client, index) => ({
+          name: `${name}:viewer-${index}`,
+          opts,
+          client,
+        })),
+      )
+    : queries.map((search) => ({
+        name: search ?? "<no-search>",
+        opts: { search },
+        client: undefined,
+      }));
+  for (const workload of workloads) {
+    const { name, client } = workload;
+    const search = workload.opts.search;
     const opts: SessionsListParams = {
       source: search === undefined ? "agent-roster" : "sessions-page",
       rowMode: search === undefined ? "sidebar" : "compact",
       archived: "all",
       limit: 50,
       excludeDock: true,
-      search,
+      ...workload.opts,
     };
-    const prepare = () => {
+    if (baseLists) {
+      responseRequests.set(name, { projection, opts, client });
+    }
+    const prepare = (listOwner = lists) => {
       const current = projection!;
+      if (values["selection-workload"]) {
+        return listOwner.prepareProjectedSessionList({
+          projection: current,
+          opts,
+          client,
+          now: anchor,
+          metadataPrepared: true,
+        }).filters;
+      }
       const projectRun = activeRuns.createVisibleActiveSessionRunProjector(
         current.state.rowContext.projectedAgentRuns,
         undefined,
@@ -315,22 +398,25 @@ try {
       };
     };
     const window = { offset: 0, limit: 50, ownerLimit: 0 };
-    const arms = baseFilters
-      ? [
-          {
-            name: "base",
-            select: (params: ReturnType<typeof prepare>) =>
-              baseFilters.filterSessionEntries(params, window),
-          },
-          {
-            name: "candidate",
-            select: (params: ReturnType<typeof prepare>) =>
-              currentFilters.filterSessionEntries(params, window),
-          },
-        ]
-      : [{ name: "selection", select: lists.selectSessionEntries }];
+    const arms =
+      baseFilters || baseLists
+        ? [
+            {
+              name: "base",
+              prepare: () => prepare(baseLists ?? lists),
+              select: (params: ReturnType<typeof prepare>) =>
+                (baseFilters ?? currentFilters).filterSessionEntries(params, window),
+            },
+            {
+              name: "candidate",
+              prepare: () => prepare(candidateLists),
+              select: (params: ReturnType<typeof prepare>) =>
+                currentFilters.filterSessionEntries(params, window),
+            },
+          ]
+        : [{ name: "selection", prepare, select: lists.selectSessionEntries }];
     for (const arm of arms) {
-      const expected = roster.withAgentRosterFactsBatch(cfg, () => arm.select(prepare()));
+      const expected = roster.withAgentRosterFactsBatch(cfg, () => arm.select(arm.prepare()));
       if (search === "running" || search === "idle") {
         assert(expected.totalCount > 0, `${search} must exercise its real active-run branch`);
         assert(expected.totalCount < sessions, `${search} must distinguish the mixed run states`);
@@ -340,27 +426,48 @@ try {
       }
       golden[name] = digest(expected);
       for (let index = 0; index < warmup; index++) {
-        roster.withAgentRosterFactsBatch(cfg, () => arm.select(prepare()));
+        roster.withAgentRosterFactsBatch(cfg, () => arm.select(arm.prepare()));
       }
     }
     const count = iterations / pairs;
     for (let pair = 0; pair < pairs; pair++) {
       for (const arm of pair % 2 ? arms.toReversed() : arms) {
-        const read = () => roster.withAgentRosterFactsBatch(cfg, () => arm.select(prepare()));
+        const read = () => roster.withAgentRosterFactsBatch(cfg, () => arm.select(arm.prepare()));
         let targetReads = 0;
         let modelFactsReads = 0;
-        const counted = prepare();
+        let sharingChecks = 0;
+        let ownerProjections = 0;
+        const counted = arm.prepare();
         const originalTarget = counted.getTarget;
         const originalModelFacts = counted.getModelFacts;
+        const originalFilter = counted.entryFilter;
+        if (originalFilter) {
+          counted.entryFilter = (...args) => {
+            sharingChecks++;
+            return originalFilter(...args);
+          };
+        }
+        const identityProjection = counted.getRowContext().identityProjection;
+        const originalOwner = identityProjection?.owner;
+        if (identityProjection && originalOwner) {
+          identityProjection.owner = (...args) => {
+            ownerProjections++;
+            return originalOwner(...args);
+          };
+        }
         counted.getTarget = (key) => {
           targetReads++;
           return originalTarget(key);
         };
         counted.getModelFacts = (key) => {
           modelFactsReads++;
+          assert(originalModelFacts);
           return originalModelFacts(key);
         };
         const expected = roster.withAgentRosterFactsBatch(cfg, () => arm.select(counted));
+        if (identityProjection && originalOwner) {
+          identityProjection.owner = originalOwner;
+        }
         global.gc();
         await nextTurn();
         const collections: PerformanceEntry[] = [];
@@ -403,6 +510,8 @@ try {
           returned: expected.entries.length,
           filterTargetReads: targetReads,
           filterModelFactsReads: modelFactsReads,
+          sharingChecks,
+          ownerProjections,
           hostLoad,
           cpuMsPerCall: (used.user + used.system) / 1000 / count,
           wallMsPerCall: elapsedMs / count,
@@ -424,6 +533,21 @@ try {
       }
     }
   }
+  const responseGolden: Record<string, string> = {};
+  for (const [name, request] of responseRequests) {
+    assert(baseLists);
+    const baseline = await baseLists.listProjectedSessions(request);
+    const candidate = await candidateLists.listProjectedSessions(request);
+    // Each non-retained row array gets a fresh UUID, including identical-source calls.
+    assert.equal(typeof candidate.rowsRevision, typeof baseline.rowsRevision);
+    const responseDigest = digest({ ...candidate, rowsRevision: undefined });
+    assert.equal(
+      responseDigest,
+      digest({ ...baseline, rowsRevision: undefined }),
+      `response equality excluding random rowsRevision: ${name}`,
+    );
+    responseGolden[name] = responseDigest;
+  }
   if (values.golden) {
     assert.deepEqual(golden, JSON.parse(readFileSync(values.golden, "utf8")));
   }
@@ -431,9 +555,12 @@ try {
   const result = {
     node: process.version,
     sourceSha256,
-    baseSourceSha256: values["base-filter"]
-      ? createHash("sha256").update(readFileSync(values["base-filter"])).digest("hex")
-      : undefined,
+    baseSourceSha256:
+      values["base-list"] || values["base-filter"]
+        ? createHash("sha256")
+            .update(readFileSync((values["base-list"] ?? values["base-filter"])!))
+            .digest("hex")
+        : undefined,
     mode: values.mode,
     sessions,
     warmup,
@@ -462,6 +589,7 @@ try {
       ),
     ),
     golden,
+    responseGolden,
     scope:
       "Real resident selection/filter/model-facts owners; no WebSocket or model turn load. Allocation-pass timing is diagnostic only.",
   };

@@ -92,7 +92,7 @@ it("keeps suspension preparation rate-limited while admission is closed", async 
 });
 
 it("blocks a startup-gated method before dispatch with a retryable startup error", async () => {
-  const method = "sessions.list";
+  const method = "chat.send";
   const { context, handler, request } = setup();
   context.unavailableGatewayMethods = new Set(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
   const blocked = await request(method);

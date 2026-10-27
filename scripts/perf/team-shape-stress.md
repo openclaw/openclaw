@@ -7,8 +7,11 @@ connects to an existing Gateway, discovers credentials, or drives a real browser
 Both builds must support the database schemas written by the tooling checkout's
 fixture generator. A schema mismatch is a setup failure; the harness never
 downstamps databases or bypasses Gateway schema admission.
-The Gateway's instrumentation loader disables tsconfig aliases, so runtime
-package imports resolve through each build's own package exports. Keep each
+The Gateway's instrumentation loader uses native Node type stripping and resolves
+source-only `.js` imports to TypeScript without applying tsconfig aliases.
+Already-built JavaScript stays byte-for-byte native: a transforming loader can
+append inline source maps and inflate retained Script source bytes and import cost.
+Runtime package imports resolve through each build's own package exports. Keep each
 checkout's source, workspace package artifacts, and `dist` build consistent;
 rebasing source invalidates previously built artifacts.
 
@@ -223,7 +226,15 @@ uninstrumented. Attribute sampled bytes to the policy stacks in
 This opt-in scenario extends the same controller with real Gateway processes,
 throwaway Git workspaces, input receipts, metadata churn, and three restart legs
 (managed intent plus SIGTERM, raw SIGTERM, and deliberately injected SIGKILL).
-It is never run automatically by CI. Start with the mock setup check:
+It is never run automatically by CI.
+
+Every workload session is created through `sessions.create`; the controller waits
+for the returned key before sending turns or starting metadata churn, matching the
+Control UI. Read-marker and label patches still run concurrently with `chat.send`
+admission on those published sessions. Racing patches against an absent key tests
+implicit creation instead and can fail before any restart is injected.
+
+Start with the mock setup check:
 
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/team-shape-stress.ts \

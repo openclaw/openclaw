@@ -7,7 +7,10 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
-import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
+import {
+  invalidateChatMetadataForSessionEvent,
+  invalidateChatMetadataStore,
+} from "../../lib/chat/chat-metadata-cache.ts";
 import {
   beginChatMetadataPublication,
   subscribeChatMetadata,
@@ -26,7 +29,7 @@ import { installModelPickerLayout } from "../../test-helpers/model-picker-layout
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
+import { makeChatHost, makeRequestMock, requestCalls } from "./chat-host.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
@@ -102,6 +105,49 @@ function mountPicker(state: ChatPageHost, manualRefresh = false, cleanup?: () =>
 
 describe("chat pane composer controls", () => {
   const cachedModels = [{ id: "cached-model", name: "Cached Model", provider: "openai" }];
+  it("shares a pending picker catalog when session facts change before reopening", async () => {
+    const htmlStyle = document.documentElement.style.cssText;
+    const replacement = createDeferred<ModelCatalogResult>();
+    const request = makeRequestMock({ "models.list": () => replacement.promise });
+    const client = createTestGatewayClient(request);
+    const { state } = createRefreshChatPane(client);
+    state.sessionKey = "agent:main:main";
+    const scope = seedCatalog(client, state.sessionKey, {
+      models: cachedModels,
+      sessionModelRevision: "selection-a",
+    });
+    const pending: Promise<void>[] = [];
+    try {
+      await refreshChatModelCatalogOnDemand(state);
+      invalidateModelCatalogCache(client, scope);
+      pending.push(refreshChatModelCatalogOnDemand(state));
+      expect(requestCalls(request, "models.list")).toHaveLength(1);
+
+      invalidateChatMetadataForSessionEvent(
+        client,
+        {
+          sessionKey: state.sessionKey,
+          agentId: "main",
+          reason: "patch",
+          session: { key: state.sessionKey, sessionModelRevision: "selection-b" },
+        },
+        {},
+      );
+      pending.push(refreshChatModelCatalogOnDemand(state));
+      expect(requestCalls(request, "models.list")).toHaveLength(1);
+
+      replacement.resolve({ models: cachedModels, sessionModelRevision: "selection-b" });
+      await Promise.all(pending);
+      expect(state.chatModelCatalog).toEqual(cachedModels);
+    } finally {
+      replacement.resolve({ models: cachedModels, sessionModelRevision: "selection-b" });
+      await Promise.all(pending);
+      retireChatMetadataRequests(state);
+      state.sessions.dispose();
+      document.documentElement.style.cssText = htmlStyle;
+    }
+  });
+
   it.each(["metadata", "picker"] as const)(
     "retains model selection through a blip, fences late %s reads, and clears on client replacement",
     async (kind) => {

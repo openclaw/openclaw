@@ -841,6 +841,11 @@ agent's full integrity scan. Worker limits and existing command ordering are unc
 Genuine migration warnings remain recorded for the boot. This changes no stored state or update
 migration behavior.
 
+The initial startup pass reports fleet-wide legacy-session migration guidance.
+Deferred preparation of one agent does not repeat that advisory scan across other
+agents and retired stores. Its own schema, canonical-session, and ACP checks still
+finish before the agent becomes available; Doctor remains the repair owner.
+
 Every 60 seconds while recovery is pending, `agent database startup preparation
 still running` reports `agentId`, `phase`, `elapsedMs`, and `phaseElapsedMs`;
 `publication-wait` also names `publishingAgentId`. Success (`agent database
