@@ -1,4 +1,3 @@
-import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
@@ -13,7 +12,7 @@ import {
   stopSession,
   type SessionStopHookContext,
 } from "../../sessions/session-controller.stop.js";
-import { abortChatRunById, type ChatAbortOps } from "../chat-abort.js";
+import { abortChatRunById, createChatAbortSignalReason, type ChatAbortOps } from "../chat-abort.js";
 import { abortControlledSubagents } from "./chat-abort-descendants.js";
 
 type ExactClientRunStopResult = {
@@ -47,6 +46,7 @@ export async function stopExactClientRun(params: {
   cfg: OpenClawConfig;
   runId: string;
   active: RpcSourceRef;
+  userInitiated?: boolean;
   lifecycleRevision?: string;
   assertCurrent?: () => void;
   hookContext: Omit<SessionStopHookContext, "sessionKey" | "sessionId">;
@@ -81,7 +81,7 @@ export async function stopExactClientRun(params: {
       source: "client-run",
       capture,
       assertCurrent,
-      reason: createAgentRunDirectAbortError(),
+      reason: createChatAbortSignalReason("rpc", params.userInitiated),
       hookContext: { ...params.hookContext, sessionKey, sessionId },
       afterParent: params.afterParent,
       continueChildStop: () => result.aborted,

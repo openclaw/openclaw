@@ -58,7 +58,7 @@ async function requestStop({ gateway, stop, sessionKey, runId, composer }: Abort
   await gateway.deferNext("chat.abort");
   await stop.click();
   const abort = await gateway.waitForRequest("chat.abort", { after });
-  expect(abort.params).toEqual({ sessionKey, runId });
+  expect(abort.params).toEqual({ sessionKey, runId, userInitiated: true });
   await composer.fill(draft);
 }
 async function expectDraft(composer: Locator, stop: Locator, state: "visible" | "detached") {
@@ -450,7 +450,7 @@ suite.define(() => {
 
     await gateway.setOnline(true);
     const abort = await gateway.waitForRequest("chat.abort");
-    expect(abort.params).toEqual({ runId, sessionKey });
+    expect(abort.params).toEqual({ runId, sessionKey, userInitiated: true });
     await stop.waitFor({ state: "detached" });
     expect(await gateway.getRequests("chat.abort")).toHaveLength(1);
     expect(await composer.inputValue()).toBe("keep this draft");
@@ -605,7 +605,7 @@ suite.define(() => {
     await gateway.deferNext("sessions.abort");
     await stop.click();
     const abort = await gateway.waitForRequest("sessions.abort");
-    expect(abort.params).toEqual({ key: sessionKey, clearQueued: true });
+    expect(abort.params).toEqual({ key: sessionKey, clearQueued: true, userInitiated: true });
     expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
     // Post-Stop reads begin when the Gateway answers Stop. Publishing them earlier
     // lets a still-pending startup read settle the run before Stop is clicked.

@@ -23,7 +23,7 @@ export type SessionPendingInputOwner = Omit<
   promotedOwner?: SessionPendingInputOwner;
   /** Prompt authority is revoked; this owner still holds terminal disposition custody. */
   settling?: true;
-  finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
+  finish: (disposition: Exclude<SessionPendingInputState, "queued">, userInitiated?: true) => void;
   restartRecovered?: true;
   /** Aggregate authority is the exact source closures, never persisted source identifiers. */
   sources?: readonly SessionPendingInputOwner[];

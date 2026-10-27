@@ -103,7 +103,7 @@ suite.define(() => {
         await composer.fill("");
         await stop.click();
         const aborted = await gateway.waitForRequest("chat.abort");
-        expect(aborted.params).toEqual({ sessionKey, runId });
+        expect(aborted.params).toEqual({ sessionKey, runId, userInitiated: true });
       } else {
         expect(await successorTool.isVisible()).toBe(true);
         expect(await successorTool.locator(".chat-tool-row__cmd").textContent()).toContain(

@@ -370,7 +370,7 @@ export function prepareChatSessionAbort(
     const stopRequest = {
       capture: stopCapture,
       assertCurrent: params.assertCurrent,
-      reason: createChatAbortSignalReason(params.stopReason),
+      reason: createChatAbortSignalReason(params.stopReason, params.userInitiated),
       hookContext: params.hookContext,
       onCancelled,
       onEffectCancelled: (effect) => {

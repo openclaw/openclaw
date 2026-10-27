@@ -278,7 +278,7 @@ suite.define(() => {
     expect(await interrupted.textContent()).toContain("Interrupted");
     expect(await pane.getByLabel("Run status: Interrupted").count()).toBe(0);
     await expectText(pane.locator(".agent-chat__run-status-announcement"), "Interrupted");
-    expect(requireRecord(abort.params)).toEqual({ sessionKey, runId });
+    expect(requireRecord(abort.params)).toEqual({ sessionKey, runId, userInitiated: true });
     await stop.waitFor({ state: "detached" });
     await expectDraft(composingDraft, 1);
   });

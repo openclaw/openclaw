@@ -312,7 +312,7 @@ async function abortChatRun(state: ChatAbortRunState, intent?: ChatAbortIntent, 
   const captured = intent ?? currentChatAbortIntent(state, client);
   // Session cancellation still answers to the run that owned the Stop action.
   const target = scope ? currentChatAbortIntent(state, client, scope) : captured;
-  const result = await requestChatAbort(client, target);
+  const result = await requestChatAbort(client, { ...target, userInitiated: true });
   return settleChatAbortResponse(state, captured, result);
 }
 

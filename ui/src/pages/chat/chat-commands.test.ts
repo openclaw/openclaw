@@ -198,6 +198,7 @@ describe("conversation reset confirmation", () => {
       expect(host.request).toHaveBeenCalledTimes(sharingRole === "owner" ? 1 : 0);
       if (sharingRole === "owner") {
         expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+          userInitiated: true,
           key: sessionKey,
           clearQueued: true,
         });

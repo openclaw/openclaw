@@ -122,13 +122,18 @@ export function resolveChatAbortStopReason(signal: AbortSignal): string {
     : (resolveAgentRunAbortLifecycleFields(signal).stopReason ?? "rpc");
 }
 
-export function createChatAbortSignalReason(stopReason: string | undefined): Error {
+export function createChatAbortSignalReason(
+  stopReason: string | undefined,
+  userInitiated?: boolean,
+): Error {
   if (stopReason === "restart") {
     return createAgentRunRestartAbortError();
   }
   if (stopReason !== "timeout") {
     // Keep transport presentation separate from the typed lifecycle cause.
-    return Object.assign(createAgentRunDirectAbortError(), { gatewayStopReason: stopReason });
+    return Object.assign(createAgentRunDirectAbortError(userInitiated), {
+      gatewayStopReason: stopReason,
+    });
   }
   const reason = new Error("chat run timed out");
   reason.name = "TimeoutError";

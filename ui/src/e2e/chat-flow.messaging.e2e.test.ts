@@ -299,6 +299,7 @@ suite.define(() => {
 
     const abortRequest = await gateway.waitForRequest("sessions.abort");
     expect(requireRecord(abortRequest.params)).toEqual({
+      userInitiated: true,
       key: channelSessionKey,
       clearQueued: true,
     });

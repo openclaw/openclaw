@@ -511,6 +511,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       runId: requestedRunId,
       abortOrigin: "rpc",
       stopReason: "rpc",
+      userInitiated: p.userInitiated,
       requester,
       stopSource: requestedRunId ? "client-run" : "client-session",
       hookContext: stopHookContext,
@@ -543,6 +544,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
             sessionKey: abortSessionKey,
             runId: requestedRunId,
             agentId: targetAgentId,
+            ...(p.userInitiated ? { userInitiated: true } : {}),
           },
           respond: (ok, payload, error, meta) => {
             if (!ok) {

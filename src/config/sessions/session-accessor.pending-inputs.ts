@@ -54,6 +54,7 @@ import {
   type SessionPendingInputAuthority,
 } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import { finishPendingInputSources } from "./session-pending-input-live-owner.js";
 import type { PendingInputCustodyGrant } from "./session-pending-input-operations.types.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
@@ -136,23 +137,6 @@ export function withSessionPendingInputPersistence<T>(
 ): T {
   const owner = receiptOwners.get(receipt);
   return owner ? runWithSessionPendingInputPersistence(owner, persist) : receipt.run(persist);
-}
-
-function finishPendingInputSources(
-  sources: readonly SessionPendingInputOwner[],
-  disposition: "cancelled" | "interrupted",
-): void {
-  const failures: unknown[] = [];
-  for (const source of sources) {
-    try {
-      source.finish(disposition);
-    } catch (error) {
-      failures.push(error);
-    }
-  }
-  if (failures.length) {
-    throw new AggregateError(failures, "Failed to finish collected input custody");
-  }
 }
 
 /** Bind one collected message to its private admitted sources without creating another durable queue. */
@@ -457,7 +441,7 @@ async function stagePreparedPendingInput(
           return completion;
         }
       : undefined;
-    const finish = (disposition: "cancelled" | "interrupted") => {
+    const finish = (disposition: "cancelled" | "interrupted", userInitiated?: true) => {
       if (finished) {
         return;
       }
@@ -469,7 +453,15 @@ async function stagePreparedPendingInput(
       const settleDisposition = async () => {
         if (owner && !owner.consumed) {
           const receipt = await store.mutate(
-            { ...settlementIdentity(), kind: "finish", inputId: owner.inputId, disposition },
+            {
+              ...settlementIdentity(),
+              kind: "finish",
+              inputId: owner.inputId,
+              disposition,
+              ...(disposition === "cancelled" && userInitiated
+                ? { cancelledByUser: true as const }
+                : {}),
+            },
             () => assertRegisteredSessionPendingInputOwner(owner!),
           );
           if (receipt.withdrawnInputId === owner.inputId) {

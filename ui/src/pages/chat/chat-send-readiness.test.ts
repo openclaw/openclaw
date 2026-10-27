@@ -468,6 +468,7 @@ it.each(
       expect(host.chatLoading).toBe(true);
       if (action === "abort") {
         expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+          userInitiated: true,
           key: host.sessionKey,
           clearQueued: true,
         });

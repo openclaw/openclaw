@@ -830,6 +830,7 @@ describe("chat pane connection lifecycle", () => {
     });
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("chat.abort", {
+        userInitiated: true,
         sessionKey: "agent:main",
         runId: "run-main",
       }),

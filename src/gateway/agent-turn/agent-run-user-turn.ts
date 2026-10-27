@@ -20,6 +20,7 @@ import {
   type RequesterOrigin,
 } from "../../agents/requester-origin.js";
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../../agents/restart-recovery-prompt.js";
+import { isUserInitiatedAgentRunAbortReason } from "../../agents/run-termination.js";
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -605,7 +606,11 @@ export async function releaseStoppedAgentRunUserTurn(
     abort.controller.signal.aborted &&
     stopReason !== "restart" &&
     (!prepared.privateCompletion || outcome.reason === "cancelled");
-  await releasePreparedAgentRunUserTurn(prepared, cancelled ? "cancelled" : "interrupted");
+  await releasePreparedAgentRunUserTurn(
+    prepared,
+    cancelled ? "cancelled" : "interrupted",
+    isUserInitiatedAgentRunAbortReason(abort.controller.signal.reason) ? true : undefined,
+  );
 }
 
 export async function releasePreparedAgentRunUserTurn(
@@ -617,10 +622,11 @@ export async function releasePreparedAgentRunUserTurn(
     | "execApprovalFollowupHandoffClaimId"
   >,
   disposition: "cancelled" | "interrupted" = "interrupted",
+  userInitiated?: true,
 ): Promise<void> {
   try {
     prepared.releaseProcessingAbortObserver?.();
-    prepared.recorder?.finishPendingInput?.(disposition);
+    prepared.recorder?.finishPendingInput?.(disposition, userInitiated);
   } finally {
     try {
       await prepared.recorder?.waitForPendingInputSettlement?.();

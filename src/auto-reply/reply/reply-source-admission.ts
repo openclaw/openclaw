@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isUserInitiatedAgentRunAbortReason } from "../../agents/run-termination.js";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
@@ -45,6 +46,7 @@ export async function prepareReplySourceAdmission(params: {
             operation.result?.kind === "aborted" && operation.result.code === "aborted_by_user"
               ? "cancelled"
               : "interrupted",
+            isUserInitiatedAgentRunAbortReason(operation.abortSignal.reason) ? true : undefined,
           );
         } finally {
           await recorder.waitForPendingInputSettlement?.();

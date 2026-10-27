@@ -144,6 +144,7 @@ describe("chat pane Stop intent", () => {
           method,
           {
             [method === "chat.abort" ? "sessionKey" : "key"]: fixture.state.sessionKey,
+            userInitiated: true,
             runId: "original-run",
           },
         ],
@@ -336,7 +337,12 @@ describe("chat pane Stop intent", () => {
       expect(fixture.state.pendingAbort).toBeNull();
       expect(fixture.request.mock.calls).toEqual(
         ownsOriginal
-          ? [["chat.abort", { sessionKey: fixture.session.key, runId: "original-run" }]]
+          ? [
+              [
+                "chat.abort",
+                { sessionKey: fixture.session.key, runId: "original-run", userInitiated: true },
+              ],
+            ]
           : [],
       );
     },
@@ -372,7 +378,12 @@ describe("chat pane Stop intent", () => {
       expect(fixture.state.pendingAbort).toBeNull();
       expect(fixture.request.mock.calls.filter(([method]) => method === "chat.abort")).toEqual(
         sharingRole === "owner"
-          ? [["chat.abort", { sessionKey: fixture.session.key, runId: "original-run" }]]
+          ? [
+              [
+                "chat.abort",
+                { sessionKey: fixture.session.key, runId: "original-run", userInitiated: true },
+              ],
+            ]
           : [],
       );
     },

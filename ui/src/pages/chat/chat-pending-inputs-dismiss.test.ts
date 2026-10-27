@@ -213,6 +213,10 @@ describe("retired pending input dismissal", () => {
         ...page.items,
         tombstone(retained("dismissed-input", "cancelled", "Already dismissed", 102)),
         retained("queued-input", "queued", "Summarize the open pull requests", 103),
+        {
+          ...retained("user-stopped", "cancelled", "Keep my stopped request", 104),
+          cancelledByUser: true,
+        },
       ],
       [],
     );

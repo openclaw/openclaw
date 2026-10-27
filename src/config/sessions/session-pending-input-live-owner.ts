@@ -84,3 +84,21 @@ export function collectForeignLiveSessionPendingInputEntries(params: {
   }
   return entries;
 }
+
+export function finishPendingInputSources(
+  sources: readonly SessionPendingInputOwner[],
+  disposition: "cancelled" | "interrupted",
+  userInitiated?: true,
+): void {
+  const failures: unknown[] = [];
+  for (const source of sources) {
+    try {
+      source.finish(disposition, userInitiated);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) {
+    throw new AggregateError(failures, "Failed to finish collected input custody");
+  }
+}

@@ -874,7 +874,7 @@ var External = [
     /(^mcpServers$|^mcpToolsDeny$|^skills$|^webSearch$)/u,
     /^.*$/u,
     /^.*$/u,
-    /(^sessionKey$|^agentId$|^runId$|^preserveSideRuns$|^discardPendingInput$)/u,
+    /(^sessionKey$|^agentId$|^runId$|^preserveSideRuns$|^discardPendingInput$|^userInitiated$)/u,
     /(^sessionKey$|^agentId$|^message$|^label$)/u,
     /(^limit$|^cursor$|^query$|^providerId$|^accountId$|^agentId$|^startedAfter$|^startedBefore$)/u,
     IsDateTime,
@@ -1400,7 +1400,7 @@ var External = [
     /(^cursor$|^knownState$|^limit$|^maxBytes$|^toolResultMaxChars$|^inputRunIds$)/u,
     /(^key$|^agentId$|^subscriptionId$)/u,
     /(^agentId$|^sessionKeys$)/u,
-    /(^key$|^runId$|^agentId$|^clearQueued$)/u,
+    /(^key$|^runId$|^agentId$|^clearQueued$|^userInitiated$)/u,
     /(^key$|^agentId$|^expectedSessionId$|^expectedLifecycleRevision$|^expectedPermissionMode$|^expectedSandboxMode$|^expectedNativeRuntimeConsent$|^expectedToolOverrides$|^expectedMarkedUnreadAt$|^expectedSidebarRoot$|^expectedCategory$|^expectedArchived$|^expectedSidebarAncestors$|^label$|^autoLabel$|^icon$|^color$|^category$|^boardFace$|^boardPresentation$|^statusNote$|^attention$|^ttlMinutes$|^archived$|^pinned$|^sidebarRoot$|^snoozedUntil$|^unread$|^contextWindow$|^thinkingLevel$|^cyberAccessProgram$|^fastMode$|^toolOverrides$|^verboseLevel$|^traceLevel$|^reasoningLevel$|^responseUsage$|^elevatedLevel$|^execHost$|^execSecurity$|^execAsk$|^execNode$|^permissionMode$|^communication$|^sandboxMode$|^nativeRuntimeConsent$|^model$|^agentRuntime$|^completionOwnerSessionKey$|^inheritedToolPolicyVersion$|^inheritedToolAllow$|^inheritedToolDeny$|^sendPolicy$|^groupActivation$)/u,
     /(^key$|^agentId$|^expectedSessionId$|^expectedSidebarRoot$|^expectedCategory$)/u,
     /(^send$|^receive$)/u,
@@ -6321,7 +6321,10 @@ var External = [
       check_181(value.preserveSideRuns)) &&
     (value.discardPendingInput === void 0 ||
       !("discardPendingInput" in value) ||
-      check_181(value.discardPendingInput)),
+      check_181(value.discardPendingInput)) &&
+    (value.userInitiated === void 0 ||
+      !("userInitiated" in value) ||
+      check_181(value.userInitiated)),
   check_870 = (value) => check_871(value),
   check_871 = (value) =>
     typeof value == "object" &&
@@ -15670,7 +15673,10 @@ var External = [
     (value.key === void 0 || !("key" in value) || check_63(value.key)) &&
     (value.runId === void 0 || !("runId" in value) || check_63(value.runId)) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
-    (value.clearQueued === void 0 || !("clearQueued" in value) || check_181(value.clearQueued)),
+    (value.clearQueued === void 0 || !("clearQueued" in value) || check_181(value.clearQueued)) &&
+    (value.userInitiated === void 0 ||
+      !("userInitiated" in value) ||
+      check_181(value.userInitiated)),
   check_2354 = (value) => check_2355(value),
   check_2355 = (value) =>
     typeof value == "object" &&

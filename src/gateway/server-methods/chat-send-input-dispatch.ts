@@ -290,12 +290,17 @@ export async function handleChatSendWithStorage(
           !isAgentRunRestartAbortReason(activeRunAbort.controller.signal.reason)
             ? "cancelled"
             : "interrupted";
-        userTurnRecorder.finishPendingInput?.(disposition);
-        if (pending && activeRunAbort.controller.signal.aborted) {
-          const reason = resolveChatAbortDiagnosticReason(
-            activeRunAbort.controller.signal,
-            activeRunAbort.entry?.adapter,
-          );
+        const reason = activeRunAbort.controller.signal.aborted
+          ? resolveChatAbortDiagnosticReason(
+              activeRunAbort.controller.signal,
+              activeRunAbort.entry?.adapter,
+            )
+          : undefined;
+        userTurnRecorder.finishPendingInput?.(
+          disposition,
+          reason === "user-stop" ? true : undefined,
+        );
+        if (pending && reason) {
           context.logGateway.info(`chat pending input aborted: ${reason} (${disposition})`, {
             runId: clientRunId,
             sessionKey,

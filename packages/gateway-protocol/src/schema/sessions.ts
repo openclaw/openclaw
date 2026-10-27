@@ -518,6 +518,8 @@ export const SessionsAbortParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   /** Also discard followup and lane queues for a key-only non-global session abort. */
   clearQueued: Type.Optional(Type.Boolean()),
+  /** Explicit Stop action; presentation only, never cancellation authority. */
+  userInitiated: Type.Optional(Type.Boolean()),
 });
 
 /** Updates or clears one plugin namespace value on a session record. */

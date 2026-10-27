@@ -23,6 +23,7 @@ import type {
 } from "./session-pending-input-operations.types.js";
 import {
   isFinalInputCompletion,
+  markSessionPendingInputCancelledByUser,
   normalizePendingInputReceiptRunIds,
   projectPendingInputReceipts,
   resolvePendingInputHistoryLimit,
@@ -362,7 +363,13 @@ export function createSessionActorMemoryPending(
           receipt.outcome = structuredClone(outcome);
         }
       } else if (row?.state === "queued" && row.consumed_event_id === null) {
-        state.pendingInputs.set(input.idempotencyKey, { ...row, state: input.disposition });
+        state.pendingInputs.set(input.idempotencyKey, {
+          ...row,
+          state: input.disposition,
+          ...(input.cancelledByUser
+            ? { message_json: markSessionPendingInputCancelledByUser(row.message_json) }
+            : {}),
+        });
         if (input.disposition === "cancelled") {
           receipt.withdrawnInputId = input.inputId;
         }

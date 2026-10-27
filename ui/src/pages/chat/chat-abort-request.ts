@@ -53,7 +53,7 @@ export type ChatAbortRequestResult =
 
 export async function requestChatAbort(
   client: GatewayBrowserClient,
-  intent: { sessionKey: string; agentId?: string } & (
+  intent: { sessionKey: string; agentId?: string; userInitiated?: true } & (
     | { runId: string; sessionAbortable?: boolean; discardPendingInput?: true }
     | { runId: null; clearQueued?: true }
   ),
@@ -65,6 +65,7 @@ export async function requestChatAbort(
       await client.request(sessionAbort ? "sessions.abort" : "chat.abort", {
         ...(sessionAbort ? { key: intent.sessionKey } : { sessionKey: intent.sessionKey }),
         ...(intent.agentId ? { agentId: intent.agentId } : {}),
+        ...(intent.userInitiated ? { userInitiated: true } : {}),
         ...(intent.runId !== null
           ? {
               runId: intent.runId,

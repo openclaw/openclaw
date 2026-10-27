@@ -112,6 +112,7 @@ function describePendingInputPreview(message: unknown): string {
 function isDismissablePendingInput(input: ChatPendingInputsPage["items"][number]): boolean {
   return (
     !input.queued &&
+    !(input.state === "cancelled" && input.cancelledByUser) &&
     (input.state === "interrupted" || input.state === "cancelled") &&
     asNullableRecord(input.message)?.display !== false
   );
@@ -155,6 +156,7 @@ export function buildPendingInputItems(
           status: pendingStatus,
           key: `pending-input:${input.id}:state`,
           timestamp: input.acceptedAt,
+          ...(input.cancelledByUser ? { cancelledByUser: true } : {}),
           ...(retired ? { retired } : {}),
         }),
       ),

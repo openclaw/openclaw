@@ -604,12 +604,12 @@ export function createUserTurnTranscriptRecorder(
     ...processing,
     isPendingInputConsumed: () => pendingInput?.state === "consumed",
     withPendingInput: (run) => (pendingInput ? pendingInput.run(run) : run()),
-    finishPendingInput: (disposition) => {
+    finishPendingInput: (disposition, userInitiated) => {
       if (pendingInput) {
-        pendingInput.finish(disposition);
+        pendingInput.finish(disposition, userInitiated);
       } else {
         for (const source of params.pendingInputSources ?? []) {
-          source.finishPendingInput?.(disposition);
+          source.finishPendingInput?.(disposition, userInitiated);
         }
       }
     },

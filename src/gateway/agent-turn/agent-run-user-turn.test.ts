@@ -226,6 +226,7 @@ it.each([
       if (custody === "committed" || custody === "settlement-failed") {
         expect(finish).toHaveBeenCalledExactlyOnceWith(
           stopReason === "rpc" ? "cancelled" : "interrupted",
+          undefined,
         );
       }
       expect(cleanup).toHaveBeenCalledTimes(1);
