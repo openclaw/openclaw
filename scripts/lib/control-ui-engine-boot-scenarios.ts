@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import type { ColdLoadRpcRecord } from "../../ui/src/test-helpers/control-ui-cold-load-probe-init.ts";
 import { createColdLoadProbeInitScript } from "../../ui/src/test-helpers/control-ui-cold-load-probes.ts";
+import type { MockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import {
   createControlUiStreamingReply,
@@ -17,11 +18,18 @@ const runId = "engine-streaming-run";
 const activePane = ".chat-pane-cache__pane--active";
 const composerSelector = `${activePane} .agent-chat__composer-combobox textarea`;
 
-export type EngineScenario = InteractionScenario & {
+export type EngineScenario = Omit<InteractionScenario, "run"> & {
   /** A fresh context stays unnavigated until the measured action starts. */
   navigation?: "measured" | "reload";
   /** Append to the mock Gateway's init script, preserving WebSocket wrapper order. */
   initScript?: string;
+  /** Opt-in post-GC checkpoints; excluded from latency comparisons. */
+  memory?: boolean;
+  run: (
+    page: Page,
+    gateway: MockGatewayControls,
+    checkpoint?: (label: string) => Promise<void>,
+  ) => Promise<void | InteractionEvidence>;
 };
 
 function transcript(messages: number) {

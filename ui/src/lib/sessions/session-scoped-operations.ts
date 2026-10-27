@@ -195,7 +195,8 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       });
     ownedSubscriptions.add(subscription);
     if (!isCurrent() || (beforeHello && host.gateway.snapshot.phase !== "connected")) {
-      await unsubscribeMessages(subscription).catch(() => undefined);
+      // Retire admission before hello can reuse it; the coordinator retains pending cleanup.
+      void unsubscribeMessages(subscription).catch(() => undefined);
       throw new Error("Session message subscription completed on a replaced Gateway connection");
     }
     return subscription;

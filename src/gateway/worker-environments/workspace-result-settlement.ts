@@ -203,6 +203,7 @@ type StagedWorkspaceResultSettlement = {
   workspace: WorkerSessionWorkspace;
   stagedResultRef: string | null | undefined;
   conflictRetained: boolean;
+  closeToolState?: false;
   beforeComplete: () => Promise<void>;
   complete?: () => Promise<WorkerSessionPlacementRecord>;
   afterComplete?: (completed: WorkerSessionPlacementRecord) => Promise<void>;
@@ -211,7 +212,7 @@ export async function settleStagedWorkspaceResult(
   params: StagedWorkspaceResultSettlement,
 ): Promise<WorkerSessionPlacementRecord> {
   params.assertCurrent();
-  if (params.turnClaim.owner.kind === "worker") {
+  if (params.turnClaim.owner.kind === "worker" && params.closeToolState !== false) {
     await params.placements.closeWorkerTurnToolState(params.turnClaim);
     params.assertCurrent();
   }

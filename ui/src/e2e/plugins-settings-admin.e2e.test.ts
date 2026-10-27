@@ -137,6 +137,68 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
 }
 
 suite.define(() => {
+  it("uses installed plugin artwork in the browser sign-in dialog", async () => {
+    await suite.withPage(createSettingsPageOptions(), async ({ page }) => {
+      const linear = { ...workboard, id: "linear", name: "Linear", hasIcon: true };
+      await page.route("**/__openclaw__/plugin-icon/linear", (route) =>
+        route.fulfill({
+          contentType: "image/svg+xml",
+          body: '<svg fill="#FFFFFF" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><title>Linear</title><path d="M2.886 4.18A11.982 11.982 0 0 1 11.99 0C18.624 0 24 5.376 24 12.009c0 3.64-1.62 6.903-4.18 9.105L2.887 4.18ZM1.817 5.626l16.556 16.556c-.524.33-1.075.62-1.65.866L.951 7.277c.247-.575.537-1.126.866-1.65ZM.322 9.163l14.515 14.515c-.71.172-1.443.282-2.195.322L0 11.358a12 12 0 0 1 .322-2.195Zm-.17 4.862 9.823 9.824a12.02 12.02 0 0 1-9.824-9.824Z"/></svg>',
+        }),
+      );
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...pluginMethods, "mcp.authLogin", "wizard.next", "wizard.cancel"],
+        methodResponses: {
+          ...pluginResponses(),
+          "plugins.list": { ...inventory, plugins: [linear] },
+          "plugins.inspect": {
+            ...inspection,
+            plugin: linear,
+            catalog: undefined,
+            mcpAuth: [{ serverName: "linear-mcp", state: "requires-authorization" }],
+          },
+          "mcp.authLogin": { done: false, status: "running" },
+          "wizard.next": {
+            done: false,
+            status: "running",
+            step: {
+              id: "authorize",
+              type: "progress",
+              executor: "gateway",
+              externalUrl: "https://example.test/linear/authorize",
+            },
+          },
+          "wizard.cancel": { status: "cancelled" },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/plugins/linear`);
+      const heroIcon = page.locator(".plugin-catalog-detail__hero .plugins-icon");
+      await expect
+        .poll(() => heroIcon.evaluate((image: HTMLImageElement) => image.naturalWidth))
+        .toBeGreaterThan(0);
+      const iconUrl = await heroIcon.getAttribute("src");
+      await page
+        .getByRole("button", { name: "Sign in to linear-mcp", exact: true })
+        .first()
+        .click();
+      const dialog = page.locator(".model-setup-wizard--sign-in");
+      await dialog.getByRole("heading", { name: "Continue in your browser" }).waitFor();
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "plugin-oauth-icon.png"),
+        });
+      }
+      expect(
+        await dialog.locator(".wizard-sign-in__badge img").getAttribute("src", { timeout: 1000 }),
+      ).toBe(iconUrl);
+      expect((await gateway.getRequests("mcp.authLogin"))[0]?.params).toMatchObject({
+        serverName: "linear-mcp",
+      });
+      await dialog.getByRole("button", { name: "Cancel sign-in", exact: true }).click();
+    });
+  });
+
   it("explains MCP sign-in failures and starts a fresh attempt after Close", async () => {
     await suite.withPage(createSettingsPageOptions(), async ({ page, context }) => {
       await context.grantPermissions(["clipboard-read", "clipboard-write"]);

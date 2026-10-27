@@ -350,6 +350,7 @@ async function hashFiles(entries) {
         continue;
       }
       const absolute = path.join(root, entry.path);
+      const startedAtMs = Date.now();
       let handle;
       try {
         assertManifestCurrent();
@@ -367,7 +368,8 @@ async function hashFiles(entries) {
           fail("worker workspace manifest exceeds its eligible byte limit");
         }
         const identity = workspaceStatIdentity("worker", before);
-        let sha256 = hashMemo.get(identity);
+        const reusable = workspaceCtimeIsReusable(before.ctimeNs, startedAtMs);
+        let sha256 = reusable ? hashMemo.get(identity) : undefined;
         if (sha256) {
           metrics.memoHitCount += 1;
         } else {
@@ -389,7 +391,7 @@ async function hashFiles(entries) {
         entry.mode = Number(after.mode & 0o777n);
         entry.size = Number(after.size);
         entry.sha256 = sha256;
-        usedHashMemo.set(identity, sha256);
+        if (reusable) usedHashMemo.set(identity, sha256);
       } catch (error) {
         stop(error);
       } finally {

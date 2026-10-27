@@ -318,14 +318,14 @@ export function throwIfModelStreamAborted(signal?: AbortSignal): void {
 
 function waitForModelStreamTurn(signal?: AbortSignal, work = 1): Promise<void> | undefined {
   throwIfModelStreamAborted(signal);
-  // All streams share the main loop. Recheck after waking so a swarm cannot
+  // Callers recheck admission after this shared wakeup so a swarm cannot
   // spend a fresh per-stream budget in the same microtask burst.
   if (
     nextStreamTurn &&
     (streamWorkThisTurn + work > MODEL_STREAM_COOPERATIVE_YIELD_BUDGET ||
       Date.now() - streamTurnStartedAt >= MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS)
   ) {
-    return nextStreamTurn.then(() => waitForModelStreamTurn(signal, work));
+    return nextStreamTurn;
   }
   if (!nextStreamTurn) {
     streamTurnStartedAt = Date.now();
@@ -347,8 +347,7 @@ export async function* iterateModelStream<T>(
   signal?: AbortSignal,
 ): AsyncGenerator<T> {
   for await (const event of events) {
-    const wait = waitForModelStreamTurn(signal);
-    if (wait) {
+    for (let wait; (wait = waitForModelStreamTurn(signal));) {
       await wait;
     }
     yield event;
@@ -553,8 +552,7 @@ export function withProviderResponseHook<T = never>(params: {
       try {
         await awaitProviderLifecycleCallback(params.hook, params.signal);
         // Hooks may finish together after waiting through earlier work budgets.
-        const wait = waitForModelStreamTurn(params.signal, MODEL_STREAM_START_WORK);
-        if (wait) {
+        for (let wait; (wait = waitForModelStreamTurn(params.signal, MODEL_STREAM_START_WORK));) {
           await wait;
         }
       } catch (error) {

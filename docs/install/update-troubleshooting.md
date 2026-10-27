@@ -372,12 +372,10 @@ inference route” after a rehearsal timeout. This comes from a broad error hand
 while preparing automatic repair, not from an inference check performed by the
 rehearsal. Inspect the original failed step and elapsed time. Current updaters
 retain the `candidate-checks-timeout` reason and do not run inference repair for
-that failure. If the installed updater cannot finish, preserve a
-[verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
-and use the installation owner's
+that failure. If the installed updater cannot finish, use the installation
+owner's
 [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
-with an exact compatible target, then run the target's `openclaw doctor --fix`
-before starting its Gateway.
+with an exact compatible target.
 
 ## Published 2026.9.4 on large agent fleets
 
@@ -419,8 +417,7 @@ Keep the same service account, profile, package manager, and installation prefix
 Have that installation's owner stop the Gateway and other writers before manual
 replacement. When the installed updater cannot complete, use the
 [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
-with an exact target compatible with the retained state, then run the target's
-`openclaw doctor --fix` before starting its Gateway. If the retained binary
+with an exact target compatible with the retained state. If the retained binary
 cannot read the current state, follow
 [backup recovery](/install/updating/rollback-and-recovery#downgrade); changing
 schema markers or deleting lease rows does not reverse migrations.
@@ -555,9 +552,9 @@ An update can stop with `Update snapshot cleanup could not be confirmed` (reason
 `candidate-snapshot-failed`) when plugin work started for the candidate snapshot
 does not finish in time. The installed updater runs this step, so retrying the
 same update repeats it, and `openclaw update repair` cannot finish a snapshot
-that never completed. Install the target once by hand with the Gateway stopped
-([manual npm, pnpm, or bun](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)),
-then run `openclaw doctor --fix` and start the Gateway. Include `openclaw update
+that never completed. Install the target once with the
+[manual npm, pnpm, or bun procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun).
+Include `openclaw update
 status --json` (with the nested `cause`) when you report it.
 
 ### Large model-catalog temporary directories
@@ -636,10 +633,9 @@ Windows host-wide legacy capture cleanup remains report-only.
   changed` when the updater's umask differs from the installed launcher's
   permissions, and on busy hosts or slow disks a 30-second baseline package
   fingerprint timeout reported as a changed package tree. Retrying with the
-  same installed updater repeats them. Install the target once with the
-  [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
-  run `openclaw doctor --fix`, and restart the Gateway. This manual install
-  bypasses the installed updater once. Releases 2026.9.5 and later contain both
+  same installed updater can repeat them. Install the target once with the
+  [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun).
+  This manual install bypasses the installed updater once. Releases 2026.9.5 and later contain both
   fixes ([#145282](https://github.com/openclaw/openclaw/pull/145282) and
   [#144758](https://github.com/openclaw/openclaw/pull/144758)), so later
   `openclaw update` runs use the repaired updater.
@@ -663,8 +659,8 @@ Windows host-wide legacy capture cleanup remains report-only.
   when updating from 2026.9.4: the installed updater shares that deadline across
   the snapshot and candidate checks, even with a larger `--timeout`. The elapsed
   failure duration is not Gateway startup time alone. Use the same
-  [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
-  then run `openclaw doctor --fix` and restart the Gateway. See
+  [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun).
+  See
   [#144858](https://github.com/openclaw/openclaw/issues/144858) and
   [#154381](https://github.com/openclaw/openclaw/issues/154381).
 - `Plugin dependency <name> is unresolvable inside the temporary update copy`:

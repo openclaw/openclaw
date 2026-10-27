@@ -135,7 +135,8 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
 Use `--steps chat-typing,session-switch` for focused comparisons and `--trace`
 for separate Playwright/Inspector attribution runs. `--compare-bundle-dir` and
 `--control-bundle-dir` add candidate and A/A control builds. Repeat the control
-option for interleaved base/base/head/head observations. Reports retain the
+option for interleaved base/head/base/head observations. For Workboard, repeat
+`--control-source-root` in the same order as the control bundles. Reports retain the
 metric time domain: WebKit Inspector durations are wall time, while Chromium
 CDP uses thread CPU. Untraced WebKit runs leave those counters null. `--cpu-only`
 collects WebKit's sampled process utilization without Timeline or ScriptProfiler;
@@ -157,6 +158,41 @@ do not measure a real Gateway's network latency.
 Mobile transcript-top uses a native scrollport jump because Playwright's mobile
 WebKit driver has no wheel input; it is not a wheel-latency measurement. Tracing
 omits DOM snapshots so snapshot traversal does not dominate attribution.
+
+Style/layout census can select the existing `settings-open`, `settings-sections`,
+and `data-*` actions together with `theme-switch-cycles` and
+`sidebar-live-style-cycles`. The latter exercise real preference and session
+lifecycle publications. `workboard-style-cycles` loads the native plugin and its
+1,000-card fixture, preserving its virtual window; use `--source-root`, `--compare-source-root`, and
+`--control-source-root` to bind its plugin assets to the corresponding bundle's
+source checkout. The manifest records each plugin tree and asset hash.
+
+Use `--steps memory --viewport desktop --pairs 1` for the opt-in cross-engine
+retention census, or select individual `memory-route-usage`,
+`memory-long-session`, `memory-workboard-updates`, and
+`memory-mcp-relay-updates` steps. Route scenes make 20 same-document visits;
+the long-session scene switches among ten 2,000-message sessions and streams
+three replies; plugin scenes retire five mounts after 50 verified updates each.
+`memory-workboard-idle-control` and `memory-workboard-mounts-control` prime the
+same 50-update warmup, then capture four rounds without updates (idle or repeated
+mount/retirement). Compare these with the update workload to distinguish
+Inspector/allocator footprint from surviving application data.
+Each checkpoint drains intentional retirement timers, clears synthetic request
+history, requests two GCs and saves a heap snapshot. Each observation gets its
+own browser process. Reports include process-tree RSS, WebKit resource categories,
+heap class counts, detached DOM and active resource counters.
+
+Memory captures are excluded from the latency table. Compare warm and later
+checkpoints within each engine before attributing growth: Inspector/JIT warmup,
+retained Chat panes and bounded caches are not leaks. WebKit snapshot self sizes
+omit some backing stores, and its DOM counts cover JavaScript wrappers;
+Chromium supplies native DOM counters and snapshot detachedness. RSS can retain
+allocator capacity after GC and excludes platform services reparented outside
+the owned browser process tree. Native Workboard/MCP fixtures build from the
+current checkout; bundle comparisons alone do not compare plugin revisions.
+The collector clears WebKit Inspector's retained snapshot history after every
+capture, so WebKit heap object IDs are checkpoint-local. Raw snapshots remain
+available for class/edge inspection; use Chromium for stable cross-snapshot IDs.
 
 Build with `pnpm ui:build`, then collect the production renderer's desktop and
 mobile interactions against the synthetic Gateway:

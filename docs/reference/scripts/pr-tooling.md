@@ -41,10 +41,27 @@ versions. A successful installation is published atomically under
 `~/.cache/openclaw/pr-dependencies/`; concurrent creators keep the first complete
 entry and discard their staging copies.
 
-The cache key covers the full source tree (including the lockfile, manifests,
-workspace configuration, patches, and lifecycle scripts), platform, architecture,
-and Node ABI. This deliberately favors complete install inputs over sharing
-across unrelated source revisions. Repeated commands reuse a complete entry.
+The cache key covers the install inputs, platform, architecture, and Node ABI.
+For the audited source-install path, unrelated source revisions reuse the same
+installation. `scripts/pr-lib/dependency-inputs.json` records the lifecycle read
+set: all package manifests, lockfile, workspace/package-manager configuration,
+patches, lifecycle code (including `pnpm:devPreinstall`) and its imports, both
+SQL schemas, and the native protocol generator's declared inputs and TypeScript
+configuration. Git-hook setup reads the presence of its
+directory, not hook contents. Generated outputs start absent in the archive.
+The full archive still undergoes the same Git blob, mode, symlink, and inventory
+verification before installation; sharing changes only dependency identity.
+
+The audit signature covers executable inputs and dependency/build policy.
+Changes to those inputs, a different runtime, a tracked `dist/` tree, or an older
+wrapper without an audit retain full-tree keying. This prevents a changed hook
+from reading a new source path while reusing an installation based on the old
+read set. SQL schemas are executable inputs too: the generator passes them to
+SQLite. To renew an audit, trace the root/workspace hooks and allowed dependency
+builds, update the read set, then set `auditSha256` to SHA-256 of the selected
+`git ls-tree -r -z <revision>` rows (without the final NUL).
+The current audit qualifies Darwin arm64 and its recorded Node ABI; other
+platforms retain full-tree isolation until their dependency builds are audited.
 The current wrapper can prepare dependencies for older retained workflows without
 changing their binding or executing newer workflow code in their place.
 

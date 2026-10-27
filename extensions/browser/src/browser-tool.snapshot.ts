@@ -37,6 +37,7 @@ const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
   console: "\n[truncated — retry with a stricter level or targetId]",
   requests: "\n[truncated — retry with a narrower filter or smaller limit]",
   errors: "\n[truncated — retry with a smaller limit]",
+  judge: "\n[truncated judgment — inspect the page before acting]",
   tabs: "\n[truncated — retry with action=snapshot and a specific targetId]",
   act: "\n[truncated — inspect the affected targetId with action=snapshot]",
   download: "\n[truncated — retry with a specific targetId and download ref]",

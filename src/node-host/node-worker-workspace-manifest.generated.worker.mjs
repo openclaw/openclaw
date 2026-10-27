@@ -136,6 +136,13 @@ function projectWorkspaceEntries(entries, isRetainedInput, excludeBuildCaches = 
   return eligible.toReversed();
 }
 
+const WORKSPACE_CTIME_SAFETY_MARGIN_MS = 2000;
+function workspaceCtimeIsReusable(ctimeNs, startedAtMs) {
+  // Recent files cost another hash; a backwards clock keeps them outside the reuse window.
+  return (
+    ctimeNs >= 0n && ctimeNs < BigInt(startedAtMs - WORKSPACE_CTIME_SAFETY_MARGIN_MS) * 1000000n
+  );
+}
 function workspaceStatIdentity(owner, stats) {
   return [owner, stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].join(":");
 }
@@ -541,6 +548,7 @@ async function hashFiles(entries) {
         continue;
       }
       const absolute = path.join(root, entry.path);
+      const startedAtMs = Date.now();
       let handle;
       try {
         assertManifestCurrent();
@@ -558,7 +566,8 @@ async function hashFiles(entries) {
           fail("worker workspace manifest exceeds its eligible byte limit");
         }
         const identity = workspaceStatIdentity("worker", before);
-        let sha256 = hashMemo.get(identity);
+        const reusable = workspaceCtimeIsReusable(before.ctimeNs, startedAtMs);
+        let sha256 = reusable ? hashMemo.get(identity) : undefined;
         if (sha256) {
           metrics.memoHitCount += 1;
         } else {
@@ -580,7 +589,7 @@ async function hashFiles(entries) {
         entry.mode = Number(after.mode & 0o777n);
         entry.size = Number(after.size);
         entry.sha256 = sha256;
-        usedHashMemo.set(identity, sha256);
+        if (reusable) usedHashMemo.set(identity, sha256);
       } catch (error) {
         stop(error);
       } finally {

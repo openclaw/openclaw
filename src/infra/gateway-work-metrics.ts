@@ -69,6 +69,8 @@ function selectionTask(task: string | undefined): string {
       return "session-event";
     case "gateway:task-pr-lineage":
       return "task-pr-lineage";
+    case "gateway:work-metrics":
+      return "work-metrics";
     case "gateway:rpc:controlUi.sessionPullRequests.subscribe":
     case "gateway:rpc:controlUi.sessionPullRequests.checks":
     case "scheduler:control-ui-session-pr-poll":

@@ -43,6 +43,11 @@ vi.mock("../agents/worktrees/service.js", () => ({
   managedWorktrees: { gc: () => forbiddenDefaultAdapter("worktree GC") },
 }));
 
+// mock-isolation: Worker-free timers reject accidental default manifest database sweeps.
+vi.mock("./worker-environments/local-workspace-gc.js", () => ({
+  sweepLocalWorkspaceManifests: () => forbiddenDefaultAdapter("workspace manifest GC"),
+}));
+
 vi.mock("../infra/delivery-queue-sqlite.js", () => ({
   captureDeliveryQueueStateContext: () => forbiddenDefaultAdapter("delivery queue context"),
   pruneExpiredDeliveryQueueTombstones: () => forbiddenDefaultAdapter("delivery queue GC"),
