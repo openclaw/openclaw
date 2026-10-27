@@ -260,6 +260,9 @@ const { values } = parseArgs({
   options: {
     "new-session-first-token": { type: "boolean", default: false },
     "new-session-token-ms": { type: "string", default: "1500" },
+    "new-session-worker": { type: "boolean", default: false },
+    "new-session-filmstrip": { type: "boolean", default: false },
+    "new-session-list-mode": { type: "string", default: "normal" },
     "cpu-profile": { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
     "cpu-profile-compare": { type: "string" },
@@ -862,6 +865,14 @@ try {
   const settingsCoreSchema = values["settings-core-schema"]
     ? (await import("../src/config/schema.ts")).buildConfigSchemaCore()
     : undefined;
+  const agentsResponse = fixture.scenario.methodResponses?.["agents.list"];
+  const workerAgents =
+    values["new-session-worker"] && agentsResponse && typeof agentsResponse === "object"
+      ? {
+          ...agentsResponse,
+          sessionPlacement: { requiredProfile: { id: "l247-worker", providerId: "crabbox" } },
+        }
+      : undefined;
   const prepared = await prepareControlUiMockGatewayScenario({
     ...fixture.scenario,
     ...(streamingSplitLayout
@@ -878,14 +889,11 @@ try {
         }
       : {}),
     subscriptionInitialHistory: true,
-    ...(settingsCoreSchema
-      ? {
-          methodResponses: {
-            ...fixture.scenario.methodResponses,
-            "config.schema": settingsCoreSchema,
-          },
-        }
-      : {}),
+    methodResponses: {
+      ...fixture.scenario.methodResponses,
+      ...(workerAgents ? { "agents.list": workerAgents } : {}),
+      ...(settingsCoreSchema ? { "config.schema": settingsCoreSchema } : {}),
+    },
     terminalEnabled,
     serverBuildId: buildId,
     serverVersion: JSON.parse(await readFile("package.json", "utf8")).version,
@@ -2006,6 +2014,7 @@ try {
       layoutCell ||
       firstLoad ||
       values["critical-path"] ||
+      values["new-session-first-token"] ||
       bootRoute !== "chat" ||
       // Typing in the second pane changes the URL; restore the fixture's primary route.
       streamingPanes > 1 ||
@@ -3155,6 +3164,11 @@ try {
           initialHistory: fixture.scenario.methodResponses?.["chat.startup"],
           viewerId: fixture.sidebarListInput.viewerProfileId,
           tokenDelayMs: Number(values["new-session-token-ms"]),
+          worker: values["new-session-worker"],
+          filmstrip: values["new-session-filmstrip"],
+          held:
+            values["new-session-list-mode"] === "held" ||
+            (values["new-session-list-mode"] === "alternate" && run % 2 === 1),
         })
       : undefined;
     await cdp.detach();
