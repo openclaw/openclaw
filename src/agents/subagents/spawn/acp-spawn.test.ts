@@ -173,6 +173,9 @@ function configureSubagentDefaults(subagents: AgentDefaultsConfig["subagents"]):
   const defaults = ((hoisted.state.cfg.agents ??= {}).defaults ??= {});
   Object.assign((defaults.subagents ??= {}), subagents);
 }
+function configureAcp(options: NonNullable<OpenClawConfig["acp"]>) {
+  Object.assign((hoisted.state.cfg.acp ??= {}), options);
+}
 
 const acpAgent = (agent = "codex", backend?: string): AgentEntryConfig => ({
   runtime: { type: "acp", acp: { agent, ...(backend ? { backend } : {}) } },
@@ -272,6 +275,7 @@ const requesterContext: SpawnContext = {
   agentTo: "telegram:6098642967",
   agentThreadId: "1",
 };
+const subagentContext = { ...requesterContext, agentSessionKey: "agent:main:subagent:parent" };
 
 async function workspaceFixture(agent = "claude-code", exists = true) {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-spawn-"));
@@ -281,10 +285,7 @@ async function workspaceFixture(agent = "claude-code", exists = true) {
   if (exists) {
     await fs.mkdir(targetWorkspace, { recursive: true });
   }
-  hoisted.state.cfg.acp = {
-    ...hoisted.state.cfg.acp,
-    allowedAgents: agent === "codex" ? [agent] : ["codex", agent],
-  };
+  configureAcp({ allowedAgents: agent === "codex" ? [agent] : ["codex", agent] });
   hoisted.state.cfg.agents = {
     entries: {
       main: { workspace: mainWorkspace },
@@ -722,8 +723,7 @@ describe("spawnAcpDirect", () => {
     const entered = createDeferred();
     const release = createDeferred();
     const context = {
-      ...requesterContext,
-      agentSessionKey: "agent:main:subagent:parent",
+      ...subagentContext,
       ...(cap === 1 ? { completionOwnerKey: "agent:main:main" } : {}),
     };
     let dispatchedRuns = 0;
@@ -779,10 +779,7 @@ describe("spawnAcpDirect", () => {
     }
 
     try {
-      const rejected = await spawn(
-        { mode: "run" },
-        { ...requesterContext, agentSessionKey: controllerSessionKey },
-      );
+      const rejected = await spawn({ mode: "run" }, subagentContext);
 
       expect(expectFailedSpawn(rejected, "forbidden")).toMatchObject({
         errorCode: "subagent_policy",
@@ -797,10 +794,8 @@ describe("spawnAcpDirect", () => {
   it("returns ACP child capacity after run registration fails", async () => {
     configureSubagentDefaults({ maxChildrenPerAgent: 1 });
     hoisted.registerSubagentRunMock.mockRejectedValueOnce(new Error("registry unavailable"));
-    const context = { ...requesterContext, agentSessionKey: "agent:main:subagent:parent" };
-
-    const failed = await spawn({ mode: "run" }, context);
-    const replacement = await spawn({ mode: "run" }, context);
+    const failed = await spawn({ mode: "run" }, subagentContext);
+    const replacement = await spawn({ mode: "run" }, subagentContext);
 
     expect(expectFailedSpawn(failed, "error")).toMatchObject({
       errorCode: "spawn_failed",
@@ -815,18 +810,9 @@ describe("spawnAcpDirect", () => {
   it.each([true, false])(
     "enforces the registry with wildcard allowlist (configured=%s)",
     async (configured) => {
-      hoisted.state.cfg.acp = {
-        ...hoisted.state.cfg.acp,
-        allowedAgents: configured ? ["codex", "writer"] : [],
-      };
-      hoisted.state.cfg.agents = {
-        ...hoisted.state.cfg.agents,
-        entries: { main: { subagents: { allowAgents: ["*"] } } },
-      };
-      const result = await spawn(
-        { mode: "run", agentId: "writer" },
-        { ...requesterContext, agentSessionKey: "agent:main:subagent:parent" },
-      );
+      configureAcp({ allowedAgents: configured ? ["codex", "writer"] : [] });
+      configureAgents({ main: { subagents: { allowAgents: ["*"] } } });
+      const result = await spawn({ mode: "run", agentId: "writer" }, subagentContext);
       if (configured) {
         expectAcceptedSpawn(result);
       } else {
@@ -839,7 +825,7 @@ describe("spawnAcpDirect", () => {
   );
 
   it("rejects explicit ACP self-targets when the subagent allowlist excludes the requester", async () => {
-    hoisted.state.cfg.acp = { ...hoisted.state.cfg.acp, allowedAgents: ["codex", "writer"] };
+    configureAcp({ allowedAgents: ["codex", "writer"] });
     configureSubagentDefaults({ allowAgents: ["writer"] });
 
     const result = await spawn(
@@ -899,11 +885,7 @@ describe("spawnAcpDirect", () => {
           accounts: { "bot-alpha": {}, "bot-beta": {} },
         },
       };
-      hoisted.state.cfg.acp = {
-        ...hoisted.state.cfg.acp,
-        defaultAgent: "reviewer",
-        allowedAgents: ["codex", "bot-alpha"],
-      };
+      configureAcp({ defaultAgent: "reviewer", allowedAgents: ["codex", "bot-alpha"] });
       configureAgents({
         main: {},
         "bot-alpha": {},

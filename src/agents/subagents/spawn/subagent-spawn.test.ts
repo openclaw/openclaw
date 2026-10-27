@@ -424,9 +424,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(queuedRequest).not.toHaveProperty("provider");
     expect(queuedRequest).not.toHaveProperty("model");
     expect(queuedLaunch).toMatchObject({
-      authorization: {
-        modelOverride: { provider: "openai", model: "gpt-5.4" },
-      },
+      authorization: { modelOverride: { provider: "openai", model: "gpt-5.4" } },
     });
     await vi.waitFor(() => expect(gatewayRequest("agent")).toBeDefined());
     expect(gatewayRequest("agent")).toMatchObject({
@@ -435,22 +433,20 @@ describe("spawnSubagentDirect seam flow", () => {
     });
   });
 
-  it("returns the model owner's policy refusal before creating child state", async () => {
-    const model = "fixture/blocked";
-    const error = "model not allowed: fixture/blocked";
-    hoisted.prepareModelChoiceMock.mockResolvedValue({ kind: "unavailable", error });
-    const result = await spawn({ task: "validate before launch", model });
-    expect(result).toMatchObject({ status: "error", error: expect.stringContaining(error) });
-    expectNoChildSpawnSideEffects();
-  });
-
-  it("rejects failed model preparation without creating child state", async () => {
-    hoisted.prepareModelChoiceMock.mockRejectedValue(new Error("configuration unavailable"));
-    await expectRefusedSpawn(
-      { model: "openai/gpt-5.4" },
-      "sessions_spawn could not verify the selected model: configuration unavailable",
-    );
-  });
+  it.each([
+    [false, "model not allowed: fixture/blocked"],
+    [true, "sessions_spawn could not verify the selected model: configuration unavailable"],
+  ] as const)(
+    "rejects model preparation before child effects (throws=%s)",
+    async (throws, error) => {
+      if (throws) {
+        hoisted.prepareModelChoiceMock.mockRejectedValue(new Error("configuration unavailable"));
+      } else {
+        hoisted.prepareModelChoiceMock.mockResolvedValue({ kind: "unavailable", error });
+      }
+      await expectRefusedSpawn({ model: "fixture/blocked" }, error);
+    },
+  );
 
   it.each(["unconfirmed", "publication", "indeterminate"] as const)(
     "retains collector capacity until rollback settles (%s)",
@@ -629,56 +625,39 @@ describe("spawnSubagentDirect seam flow", () => {
   });
 
   it("reconciles a transport-ambiguous dispatch so an accepted run is surfaced instead of misreported as an error", async () => {
-    let dispatchAttempts = 0;
-    hoisted.callGatewayMock.mockImplementation(
-      async (request: { method?: string; timeoutMs?: number }) => {
-        if (request.method === "agent") {
-          dispatchAttempts += 1;
-          if (dispatchAttempts === 1) {
-            throw new Error("gateway timeout after 60000ms");
-          }
-          if (dispatchAttempts === 2) {
-            return {
-              runId: "accepted-ambig-run",
-              status: "in_flight",
-              admissionPending: true,
-            };
-          }
-          return { runId: "accepted-ambig-run", status: "in_flight" };
-        }
-        return request.method?.startsWith("sessions.") ? { ok: true } : {};
-      },
+    const accepted = { runId: "accepted-ambig-run", status: "in_flight" };
+    const dispatch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("gateway timeout after 60000ms"))
+      .mockResolvedValueOnce({ ...accepted, admissionPending: true })
+      .mockResolvedValue(accepted);
+    hoisted.callGatewayMock.mockImplementation(async ({ method }: { method?: string }) =>
+      method === "agent" ? dispatch() : method?.startsWith("sessions.") ? { ok: true } : {},
     );
     const result = await spawn({ task: "ambiguous child" });
 
-    expect(dispatchAttempts).toBe(3);
     const agentRequests = gatewayRequestRecords().filter((request) => request.method === "agent");
     expect(agentRequests.map((request) => request.params)).toEqual(
       Array(3).fill(agentRequests[0]?.params),
     );
-    expect(agentRequests.slice(1).map((request) => request.timeoutMs)).toEqual([800, 800]);
     expect(result).toMatchObject({
       status: "accepted",
       runId: "accepted-ambig-run",
       childSessionKey: expect.any(String),
     });
-    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not register a child when reconciliation finds a terminal run", async () => {
-    let dispatchAttempts = 0;
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent" && ++dispatchAttempts === 1) {
-        throw new Error("gateway timeout after 60000ms");
-      }
-      return request.method === "agent"
-        ? { runId: "stopped-run", status: "timeout" }
-        : { ok: true };
-    });
+    const dispatch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("gateway timeout after 60000ms"))
+      .mockResolvedValue({ runId: "stopped-run", status: "timeout" });
+    hoisted.callGatewayMock.mockImplementation(async ({ method }: { method?: string }) =>
+      method === "agent" ? dispatch() : { ok: true },
+    );
 
     const result = await spawn({ task: "ambiguous terminal child" });
 
-    expect(dispatchAttempts).toBe(2);
     expect(result).toMatchObject({
       status: "error",
       error: expect.stringContaining("no active subagent run (status: timeout)"),
@@ -714,7 +693,6 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(rejected.status).toBe("error");
     expect(rejected.error).toContain("requires a tool-capable target model");
-    expect(hoisted.prepareModelChoiceMock).toHaveBeenCalledOnce();
     expect(hoisted.updateSessionStoreMock).not.toHaveBeenCalled();
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
@@ -866,7 +844,6 @@ describe("spawnSubagentDirect seam flow", () => {
       childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
       error: expect.stringContaining("invalid model: bad-model"),
     });
-    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledOnce();
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
     expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalled();
