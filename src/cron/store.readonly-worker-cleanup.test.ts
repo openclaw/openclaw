@@ -107,7 +107,7 @@ it("refuses new reader admission while canonical close is draining an earlier re
         await finish.promise;
         return await terminate.call(this);
       });
-    const first = state.read().then(
+    const first = state.read(true).then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );

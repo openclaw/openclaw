@@ -15,7 +15,8 @@
 // fresh clone per arm for partial-clone comparisons. No operator repositories.
 // --previous-ref <commit> seeds the native cache before timing; its initial
 // hydration/size scan is excluded. Without it, native mode measures a cold HEAD.
-// Acceptance: identical byte totals, fewer full size scans, lower CPU/allocation.
+// --cold disables size-fact reuse to measure a cold Git worker on every operation.
+// Acceptance: identical byte totals, fewer full scans, lower CPU/allocation.
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { Session, type HeapProfiler } from "node:inspector/promises";
@@ -28,6 +29,7 @@ import { parseArgs } from "node:util";
 const { values } = parseArgs({
   options: {
     allocation: { type: "boolean" },
+    cold: { type: "boolean" },
     "base-file": { type: "string" },
     iterations: { type: "string" },
     repo: { type: "string" },
@@ -36,6 +38,7 @@ const { values } = parseArgs({
 });
 const repo = values.repo ? path.resolve(values.repo) : undefined;
 assert(!values["previous-ref"] || repo, "previous-ref requires repo");
+assert(!values.cold || !values["previous-ref"], "cold cannot seed a previous fact");
 const iterations = Number(values.iterations ?? (repo ? "1" : "2000"));
 assert(Number.isSafeInteger(iterations) && iterations > 0, "iterations must be a positive integer");
 const fileCount = 10_000;
@@ -147,7 +150,7 @@ try {
     actualCheckoutBytes = await estimateCheckoutObjectBytes(
       repo ?? syntheticRoot!,
       "HEAD",
-      "refs/replace/",
+      values.cold ? undefined : "refs/replace/",
     );
     if (!repo) {
       assert.equal(actualCheckoutBytes, expectedBytes + (state.operation % 2) * 8192);
@@ -191,8 +194,9 @@ try {
       mode: values.allocation ? "allocation" : "timing",
       scope: repo
         ? "direct owner with native Git; wall includes Git/I/O, process CPU excludes Git child CPU; optional seed excluded"
-        : "advancing-commit JS owner and synthetic Git adapter; excludes native Git, network, and worker queues",
+        : `${values.cold ? "cold" : "advancing-commit"} JS owner and synthetic Git adapter; excludes native Git, network, and worker queues`,
       operations: iterations,
+      cold: Boolean(values.cold),
       previousRef: values["previous-ref"],
       seedExcluded: Boolean(values["previous-ref"]),
       fileCount: repo ? undefined : fileCount,

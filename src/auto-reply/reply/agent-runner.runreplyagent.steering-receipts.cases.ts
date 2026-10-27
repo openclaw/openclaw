@@ -94,16 +94,14 @@ export function registerSteeringReceiptCases({
         },
         runOverrides: {
           messageProvider: "telegram",
-          config:
-            allowCollaborativeSteering === undefined
-              ? {}
-              : { messages: { queue: { allowCollaborativeSteering } } },
+          config: { messages: { queue: { allowCollaborativeSteering } } },
         },
         opts: {
           [REPLY_OPERATION_RUN_STATE]: runState,
           turnAdoptionLifecycle: { onAdopted, onAbandoned, onSettled },
         },
       });
+      candidate.followupRun.run.config.messages!.queue!.collaborativeSteeringFallback = "reject";
       await active.bindToolAuthoritySnapshotAsync(
         prepareReplyToolAuthority({
           ...candidate.followupRun,

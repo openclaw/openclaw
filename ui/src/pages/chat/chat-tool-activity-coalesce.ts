@@ -519,7 +519,7 @@ export function coalesceToolActivityMessages(
         return;
       }
       owner ??= message;
-      inputs.push(item.kind, item.key, message, item.duplicateCount, item.startsTurn);
+      inputs.push(item.kind, item.key, message, item.startsTurn);
       // Preserve the content-replacement contract of the tool-card owner too.
       inputs.push(message.content);
       if (Array.isArray(message.content)) {

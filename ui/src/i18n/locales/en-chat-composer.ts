@@ -54,7 +54,7 @@ const catalog = {
       removeNamedAttachment: "Remove {name}",
       removeBrowserAnnotation: "Remove browser annotation: {name}",
       addAttachment: "Add attachment",
-      attach: "Attach…",
+      attach: "Add attachment…",
       attachPhoto: "Photo",
       attachMedia: "Media",
       attachFileOption: "File",

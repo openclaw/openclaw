@@ -362,7 +362,7 @@ These are observations, not statistical speed guarantees.
 ## Options
 
 - `-m, --message <text>`: message body
-- `--message-file <path>`: read the message body from a UTF-8 file
+- `--message-file <path>`: read the message body from a UTF-8 file; `-` reads stdin
 - `-t, --to <dest>`: recipient used to derive the session key
 - `--session-key <key>`: explicit session key to use for routing
 - `--session-id <id>`: explicit session id
@@ -401,6 +401,7 @@ restart, and session ownership changes continue to fence active writers.
 openclaw agent --to +15555550123 --message "status update" --deliver
 openclaw agent --agent ops --message "Summarize logs"
 openclaw agent --agent ops --message-file ./task.md
+cat task.md | openclaw agent --agent ops --message-file -
 openclaw agent --agent ops --model openai/gpt-5.4 --message "Summarize logs"
 openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"
 openclaw agent --agent ops --session-key incident-42 --message "Summarize status"
@@ -412,7 +413,7 @@ openclaw agent --agent ops --message "Run locally" --local
 
 ## Notes
 
-- Pass exactly one of `--message` or `--message-file`. `--message-file` strips a leading UTF-8 BOM and preserves multiline content; it rejects files that are not valid UTF-8. Files larger than 4 MiB are rejected before dispatch. Nonblank file paths are used exactly as supplied, including leading or trailing spaces.
+- Pass exactly one of `--message` or `--message-file`. With `--message-file`, exact `-` reads stdin; use `./-` or an absolute path for a file named `-`. Both inputs strip a leading UTF-8 BOM, preserve multiline content, and reject invalid UTF-8, empty prompts, or input larger than 4 MiB before dispatch. Other nonblank file paths are used exactly as supplied, including leading or trailing spaces.
 - `--message` does not run the channel slash-command dispatcher. Recognized `$skill-name` references and leading `/skill-name [input]` are the scoped exception: OpenClaw expands them into model instructions to read the skill before acting. Other slash-prefixed messages keep normal agent-turn behavior; `/compact` is rejected with a pointer to `openclaw sessions compact <key>`.
 - `--local` runs are one-shot: cached provider connections, bundled MCP loopback resources, and warm Claude stdio sessions opened for the run are retired after the reply, so scripted invocations do not leave sockets or local child processes running. Gateway-backed runs keep Gateway-owned resources under the running Gateway process instead.
 - `--local` requires exclusive ownership of the configured state directory. It refuses to start while a Gateway or another `agent --local` run owns that directory, then holds the same state lock for the full embedded turn. Run without `--local` to use the active Gateway, or stop it first with `openclaw gateway stop`.
