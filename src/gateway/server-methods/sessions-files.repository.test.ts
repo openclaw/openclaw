@@ -313,11 +313,7 @@ it("downloads original live repository bytes in bounded windows and rejects stal
   expect(Buffer.from(first.value!).equals(bytes.subarray(0, first.value!.length))).toBe(true);
   nextWindow.resolve();
   const chunks = [first.value!];
-  for (;;) {
-    const next = await reader.read();
-    if (next.done) {
-      break;
-    }
+  for (let next = await reader.read(); !next.done; next = await reader.read()) {
     chunks.push(next.value);
   }
   expect(Buffer.concat(chunks).equals(bytes)).toBe(true);
@@ -366,8 +362,7 @@ it("browses, previews, edits and diffs only the live repository without a Gatewa
   expect(summary.additions).toBe(2);
   expect(summary.deletions).toBe(1);
   expect(summary.commits).toBeUndefined();
-  const reveal = await files.ok("reveal");
-  expect(reveal).toMatchObject({
+  expect(await files.ok("reveal")).toMatchObject({
     ok: false,
     error: expect.stringContaining("no Gateway checkout"),
   });
@@ -376,14 +371,13 @@ it("browses, previews, edits and diffs only the live repository without a Gatewa
 });
 
 it.each(["tunnel", "result"])("rejects a replaced placement after %s work", async (phase) => {
+  const replace = () => {
+    generation++;
+  };
   if (phase === "tunnel") {
-    onTunnel = () => {
-      generation++;
-    };
+    onTunnel = replace;
   } else {
-    onResult = () => {
-      generation++;
-    };
+    onResult = replace;
   }
   await expect(files.request("get", "README")).rejects.toThrow("placement changed");
   expect(mocks.workspace).not.toHaveBeenCalled();
@@ -424,8 +418,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   await publishCheckpoint(base, await capture());
   active = false;
   const originalGitRead = worktreeGit.runGitBuffered;
-  const hostReads = vi.spyOn(worktreeGit, "runGitBuffered");
-  onTestFinished(() => hostReads.mockRestore());
+  using hostReads = vi.spyOn(worktreeGit, "runGitBuffered");
   const list = await files.ok("list");
   expect(list.browser.entries.map((entry: { path: string }) => entry.path)).toEqual(changedPaths);
   const retained = await files.ok("get", "second.txt");
@@ -442,8 +435,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   await files.error("download", "../changed.txt", undefined, connection);
   const beforeOversized = blobsRead();
   expect(beforeOversized).toBeGreaterThan(0);
-  const oversized = await files.error("get", "oversized.txt");
-  expect(oversized).toEqual({
+  expect(await files.error("get", "oversized.txt")).toEqual({
     code: "INVALID_REQUEST",
     message: "session file is too large to preview",
     details: {
