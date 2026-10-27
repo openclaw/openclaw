@@ -58,7 +58,7 @@ console.log(JSON.stringify(["catalog-page", "session-history"].map((name) => {
     ]);
   });
 
-  it("loads original JavaScript workers through the public manifest projection", () => {
+  it.each([false, true])("loads split AI roots with declarations=%s", (declarations) => {
     const { root } = fixture();
     const write = (name: string, contents: string) => {
       const filename = path.join(root, name);
@@ -66,7 +66,14 @@ console.log(JSON.stringify(["catalog-page", "session-history"].map((name) => {
       fs.writeFileSync(filename, contents);
     };
     write("tsdown.config.ts", "export default [];\n");
-    write("tsdown.ai.config.ts", "export default { entry: {} };\n");
+    const ai = { entry: { index: "src/owner.ts" }, outDir: "packages/ai/dist" };
+    write(
+      "tsdown.ai.config.ts",
+      `export default ${JSON.stringify([
+        { ...ai, dts: false },
+        ...(declarations ? [{ ...ai, dts: { emitDtsOnly: true } }] : []),
+      ])};\n`,
+    );
     write(
       "scripts/lib/bundled-plugin-build-entries.mjs",
       "export const collectSourceCheckoutPluginBuildEntries = () => [];\n",
@@ -89,11 +96,17 @@ console.log(JSON.stringify(["catalog-page", "session-history"].map((name) => {
         "--eval",
         `const { loadStandaloneSourceEntries } = await import(${JSON.stringify(loader.href)});
 const entries = await loadStandaloneSourceEntries({ sourceRoot: process.cwd() });
-console.log(JSON.stringify(entries.unmappedWorkers(["openclaw.mjs", "node-compile-cache.mjs"])));`,
+console.log(JSON.stringify({
+  unmapped: entries.unmappedWorkers(["openclaw.mjs", "node-compile-cache.mjs"]),
+  ai: entries.entries.map(entry => ({ output: entry.output, source: entry.relativeSource }))
+}));`,
       ],
       { cwd: root, encoding: "utf8", timeout: 30_000 },
     );
-    expect(JSON.parse(result)).toEqual([]);
+    expect(JSON.parse(result)).toEqual({
+      unmapped: [],
+      ai: [{ output: "packages/ai/dist/index.mjs", source: "src/owner.ts" }],
+    });
   });
 
   it("selects named runtime roots while retaining discovered workers and auxiliary programs", () => {

@@ -1,9 +1,12 @@
 // Builds the reusable AI package separately to keep provider bundling out of
 // the already-parallel main package graph.
+import fs from "node:fs";
+import path from "node:path";
 import type { UserConfig } from "tsdown";
 import { resolveRepoRoot } from "./scripts/lib/repo-root.mjs";
 import { createStandaloneSourceModuleUrlPlugin } from "./scripts/lib/standalone-source-module-urls.mjs";
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
+import { splitTsdownPackageConfig } from "./scripts/lib/tsdown-package-config.mts";
 import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -57,8 +60,21 @@ const config = {
   env: { NODE_ENV: "production" },
   format: "esm",
   outDir: "packages/ai/dist",
-
-  copy: [{ from: "node_modules/@mistralai/mistralai/LICENSE", rename: "mistral.LICENSE" }],
+  plugins: [
+    {
+      name: "openclaw:mistral-license",
+      buildStart(options) {
+        const license = path.resolve(options.cwd, "node_modules/@mistralai/mistralai/LICENSE");
+        // Emitted assets participate in runtime-cache output and input ownership.
+        this.emitFile({
+          type: "asset",
+          fileName: "mistral.LICENSE",
+          originalFileName: license,
+          source: fs.readFileSync(license),
+        });
+      },
+    },
+  ],
   platform: "node",
   target: "node22",
   deps: {
@@ -72,9 +88,14 @@ const config = {
   },
 } satisfies UserConfig;
 
-export default cacheTsdownRuntimeConfigs([
-  {
-    ...config,
-    plugins: [createStandaloneSourceModuleUrlPlugin({ rootDir: repoRoot })],
-  },
-])[0]!;
+const configs = splitTsdownPackageConfig(config, config.dts);
+for (const config of configs) {
+  if (typeof config.dts === "object" && config.dts.emitDtsOnly) {
+    continue;
+  }
+  config.plugins = [config.plugins, createStandaloneSourceModuleUrlPlugin({ rootDir: repoRoot })]
+    .flat()
+    .filter(Boolean);
+}
+
+export default cacheTsdownRuntimeConfigs(configs);

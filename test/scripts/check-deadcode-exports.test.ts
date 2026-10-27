@@ -269,6 +269,24 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     );
   });
 
+  it.each(["package.json", "packages/ai/package.json"])(
+    "models external AI runtime dependencies in %s without retaining bundled or unused packages",
+    (file) => {
+      const source = JSON.stringify({
+        dependencies: {
+          openai: "1.0.0",
+          typebox: "1.0.0",
+          "@mistralai/mistralai": "1.0.0",
+          "unused-package": "1.0.0",
+        },
+      });
+      const compiled = knipConfig.compilers.json(source, file);
+      const imports = compiled.split("\n").filter((line) => line.startsWith('import "'));
+      expect(imports).toEqual(['import "openai";', 'import "typebox";']);
+      expect(knipConfig.compilers.json(source, "packages/unrelated/package.json")).toBe("");
+    },
+  );
+
   it("models only Vite runner members consumed by the build", () => {
     const source = `const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(
   path.join(here, "src/app-route-paths.ts"), options);

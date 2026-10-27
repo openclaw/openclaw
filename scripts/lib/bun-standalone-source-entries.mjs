@@ -374,15 +374,21 @@ export async function loadStandaloneSourceEntries(options) {
     throw new Error("Disable tsdown output-cache restoration before loading source entries");
   }
   const load = (relative) => import(pathToFileURL(path.join(sourceRoot, relative)).href);
-  const [{ default: configs }, { default: ai }, plugins, runtimePlans, processManifest, assets] =
-    await Promise.all([
-      load("tsdown.config.ts"),
-      load("tsdown.ai.config.ts"),
-      load("scripts/lib/bundled-plugin-build-entries.mjs"),
-      load("scripts/lib/plugin-npm-runtime-build.mts"),
-      load("src/infra/runtime-process-manifest.ts"),
-      load("scripts/lib/static-extension-assets.mts"),
-    ]);
+  const [
+    { default: configs },
+    { default: aiConfigs },
+    plugins,
+    runtimePlans,
+    processManifest,
+    assets,
+  ] = await Promise.all([
+    load("tsdown.config.ts"),
+    load("tsdown.ai.config.ts"),
+    load("scripts/lib/bundled-plugin-build-entries.mjs"),
+    load("scripts/lib/plugin-npm-runtime-build.mts"),
+    load("src/infra/runtime-process-manifest.ts"),
+    load("scripts/lib/static-extension-assets.mts"),
+  ]);
   const pluginEntries = plugins
     .collectSourceCheckoutPluginBuildEntries({ cwd: sourceRoot })
     .map((entry) => {
@@ -416,7 +422,7 @@ export async function loadStandaloneSourceEntries(options) {
   return createStandaloneSourceEntries({
     ...options,
     sourceRoot,
-    configs: [...configs, ai],
+    configs: [...configs, ...aiConfigs],
     pluginEntries,
     originalJavaScriptEntries,
   });

@@ -15,7 +15,7 @@ import {
   runtimeProcessToolingEntrypoints,
 } from "../src/infra/runtime-process-manifest.ts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
-import aiBuildConfig from "../tsdown.ai.config.ts";
+import aiBuildConfigs from "../tsdown.ai.config.ts";
 import {
   collectRuntimeProcessManifestEntries,
   compileDynamicConsumerEdges,
@@ -1510,7 +1510,7 @@ function compileBundledPackageConsumers(source: string, filePath: string): strin
     const manifest: {
       dependencies?: Record<string, string>;
     } = JSON.parse(source);
-    const neverBundle = aiBuildConfig.deps?.neverBundle;
+    const neverBundle = aiBuildConfigs.find((config) => config.dts === false)?.deps?.neverBundle;
     if (typeof neverBundle !== "function") {
       throw new Error("Expected the AI build's externalization callback.");
     }
