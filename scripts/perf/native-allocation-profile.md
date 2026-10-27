@@ -53,6 +53,35 @@ This samples roughly one allocation per 512 KiB; small categories have substanti
 sampling uncertainty. Profiling, polling, and forced GC perturb the process. Do not
 use these runs to gate CPU, latency, natural GC, or promotion.
 
+## Transcript committer checkpoints
+
+The source-mode committer benchmark can use the same preload and addon. Create a
+fresh output directory and use the allocator configuration above:
+
+```sh
+mkdir /absolute/new-committer-profile
+mkdir /absolute/new-committer-profile/home
+env -i PATH="$PATH" HOME=/absolute/new-committer-profile/home CI=1 \
+  LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 \
+  MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,prof:true,lg_prof_sample:19 \
+  OPENCLAW_NATIVE_PROFILE_DIR=/absolute/new-committer-profile \
+  OPENCLAW_NATIVE_PROFILE_ADDON=/absolute/native-allocation-profile.node \
+  node --import ./scripts/perf/native-allocation-profile.mjs \
+  --import ./scripts/tsx.mjs scripts/bench-worker-transcript-commit.ts \
+  --runs 1 --native-profile
+```
+
+Snapshots occur after warmup cleanup, before measured commits, after reconciliation
+drains, and after fixture cleanup. Compare isolate identities as well as totals to
+separate warmup retention from workers opened by the measured fixture. The workload
+still checks commit ordering, ledger replay, transcript contents, and publication
+counts. A failed snapshot fails the benchmark; inspect partial observations.
+
+This mode requires one sample and a separate pass from `--cpu-profile`. Its output
+sets `profiled: true`; checkpoint time stays outside commit timing. Source-mode
+loader allocations and internal loader isolates limit attribution: these are not
+packaged Gateway RSS measurements, and a residual is not proof of a native leak.
+
 ## Interpret
 
 Keep three views separate:
