@@ -1,6 +1,7 @@
 /** Opt-in browser diagnostics, sampled by the existing warm-reload frame loop. */
 export function installPaneChromeProbe() {
   const selectors = {
+    headerViewers: ".chat-pane__presence",
     headerTrailing: ".chat-pane__header-trailing",
     composerControls: ".chat-controls__session, .chat-controls__permission-picker",
     workspace: ".chat-pane__workspace-chip",
@@ -126,6 +127,14 @@ export function installPaneChromeProbe() {
     read(firstTranscriptPaint: number | null) {
       observer.disconnect();
       shiftObserver.disconnect();
+      const firstHeader =
+        frames.find((frame) => frame.regions.headerTrailing.nodes > 0)?.at ?? null;
+      const viewerChangesAfterHeader = frames.filter(
+        (frame, index) =>
+          firstHeader !== null &&
+          frame.at > firstHeader &&
+          frame.regions.headerViewers.hash !== frames[index - 1]?.regions.headerViewers.hash,
+      ).length;
       const changes = frames.flatMap((frame, index) => {
         const previous = frames[index - 1];
         if (!previous || firstTranscriptPaint === null || frame.at <= firstTranscriptPaint) {
@@ -144,6 +153,8 @@ export function installPaneChromeProbe() {
         (shift) => firstTranscriptPaint !== null && shift.at > firstTranscriptPaint,
       );
       return {
+        firstHeader,
+        viewerChangesAfterHeader,
         firstTranscriptPaint,
         changesAfterContent: firstTranscriptPaint === null ? null : changes.length,
         changes,
