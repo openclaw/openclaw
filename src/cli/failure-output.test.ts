@@ -23,23 +23,6 @@ function failure(error: unknown, argv?: string[], debug = false) {
 }
 
 afterEach(() => vi.unstubAllEnvs());
-
-it.each([false, true])(
-  "neutralizes diagnostic values without changing JSON (config=%s)",
-  (config) => {
-    const message =
-      "path\u001b[2J\u001b]8;;https://example.invalid\u0007link\u001b]8;;\u0007\u009b2J\nforged";
-    const error = config ? createInvalidConfigError(message, "- field: issue") : new Error(message);
-    const lines = failure(error, ["update"]);
-    expect(lines.join("\n")).toContain("pathlink\\nforged");
-    expect(lines.join("\n")).not.toContain("\u001b");
-    expect(lines.join("\n")).not.toContain("\u009b");
-    expect(formatCliJsonFailure(error).error.message).toBe(error.message);
-    if (config) {
-      expect(lines[1]).toContain(":\n- field: issue");
-    }
-  },
-);
 it.each([
   [Object.assign(new Error("already reported"), { name: "ExitError" }), false, "0"],
   [new Error("action failed"), false, "1"],

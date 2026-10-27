@@ -77,14 +77,19 @@ export async function channelsDeadLettersResubmitCommand(
     }
     return;
   }
-  if (result.kind === "completed") {
-    throw new Error(`Ingress event ${eventId} is completed and cannot be resubmitted.`);
+  let message: string;
+  switch (result.kind) {
+    case "completed":
+      message = `Ingress event ${eventId} is completed and cannot be resubmitted.`;
+      break;
+    case "active":
+      message = `Ingress event ${eventId} is already ${result.status}.`;
+      break;
+    case "unrecoverable":
+      message = `Ingress event ${eventId} has no retained payload and cannot be resubmitted.`;
+      break;
+    default:
+      message = `Ingress event ${eventId} was not found for ${channelId}/${accountId}.`;
   }
-  if (result.kind === "active") {
-    throw new Error(`Ingress event ${eventId} is already ${result.status}.`);
-  }
-  if (result.kind === "unrecoverable") {
-    throw new Error(`Ingress event ${eventId} has no retained payload and cannot be resubmitted.`);
-  }
-  throw new Error(`Ingress event ${eventId} was not found for ${channelId}/${accountId}.`);
+  throw new Error(options.json ? message : terminalText`${message}`);
 }

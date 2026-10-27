@@ -32,7 +32,6 @@ export function formatInvalidConfigDetails(issues: ConfigValidationIssue[]): str
 
 type InvalidConfigError = Error & {
   code: "INVALID_CONFIG";
-  configPath?: string;
   details?: string;
   recovery?: "doctor" | "manual";
   diagnosticEmitted?: boolean;
@@ -48,7 +47,6 @@ export function createInvalidConfigError(
   return Object.assign(new Error(`Invalid config at ${configPath}:\n${details}`), {
     name: "InvalidConfigError",
     code: "INVALID_CONFIG" as const,
-    configPath,
     details,
     recovery: options.recovery ?? "doctor",
     diagnosticEmitted: false,
