@@ -175,7 +175,7 @@ export function bindSqliteWorkerBackend(
             input.removals.length === 0 &&
             input.upserts.length === 1 &&
             upsert &&
-            !upsert.relatedSessionKeys?.length
+            !upsert.relatedSessionKeys?.some((key) => key !== upsert.sessionKey.trim())
               ? prepareSessionActorEntryPatch(database, upsert.sessionKey.trim())?.snapshot()
               : undefined;
           // Related-parent builders still require their complete multi-entry projection.

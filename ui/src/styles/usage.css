@@ -1,5 +1,6 @@
 .usage-page {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-5);
   container-type: inline-size;
 }
@@ -43,6 +44,7 @@
 .session-detail-row,
 .session-detail-bottom {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -610,6 +612,22 @@
 .session-logs-list {
   display: grid;
   gap: 10px;
+}
+
+/* Long conversation text must not recursively size implicit grid columns in WebKit. */
+.session-logs-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.session-logs-list--windowed {
+  display: block;
+  height: min(70vh, 640px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.session-logs-window {
+  position: relative;
 }
 
 .usage-summary-grid {
@@ -1814,6 +1832,7 @@
 
 .session-log-entry {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   padding: 12px;
   border: 1px solid var(--border);

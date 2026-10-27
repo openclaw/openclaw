@@ -249,13 +249,17 @@ it("keeps append receipts independent of retained transcript length", async () =
   expect(Math.max(...receiptBytes) - Math.min(...receiptBytes)).toBeLessThan(128);
 });
 
-it("refuses to restore a receipt without its exact command preimage", () => {
+it.each([false, true])("restores only an exact preimage (delta=%s)", (changed) => {
   const before = hot(1);
+  before.entry = { sessionId: "session", updatedAt: 1, label: "removed", inputTokens: 3 };
+  const entry = changed
+    ? { sessionId: "session", updatedAt: 2, inputTokens: 3, outputTokens: 4 }
+    : before.entry;
   const outcome = createSessionActorCommittedOutcome({
-    phase: "appendTranscriptEvent",
+    phase: changed ? "patch" : "appendTranscriptEvent",
     command: { commandId: "append", phaseId: "turn" },
     before,
-    after: { ...hot(2), entry: before.entry },
+    after: { ...hot(2), entry },
     applied: { value: { projectionNeedsReconcile: false }, reducers: [] },
   });
   const wire = projectSessionActorCommittedOutcome(outcome, before);
@@ -266,61 +270,82 @@ it("refuses to restore a receipt without its exact command preimage", () => {
     );
     expect(wire.receipt.postimage.entry).toBeUndefined();
   }
-  expect(restoreSessionActorCommittedOutcome(wire, before).receipt.postimage.entry).toBe(
-    before.entry,
-  );
+  expect(restoreSessionActorCommittedOutcome(wire, before).receipt.postimage.entry).toEqual(entry);
+  expect(before.entry?.label).toBe("removed");
+  expect(before.entry?.updatedAt).toBe(1);
 });
 
-it.each(["append", "patch"] as const)(
-  "omits only the unchanged entry held by a %s command",
+it.each(["append", "tool", "patch"] as const)(
+  "bounds receipts against the exact preimage held by a %s command",
   (phase) =>
     withActor(async (f) => {
       const prompt = "synthetic instructions ".repeat(1600);
       f.writeEntry({ ...f.nativeEntry()!, skillsSnapshot: { prompt, skills: [] } });
       for (const mode of ["matching", "stale", "changed"] as const) {
         const before = f.read();
-        const command: Mutation = {
-          type: "session.actor.appendTranscriptEvent",
-          input: {
-            target: f.target,
-            sessionId: f.scope.sessionId,
-            lifecycleRevision: null,
-            commandId: `resident-${phase}-${mode}`,
-            phaseId: "turn",
-            entryReference: mode === "stale" ? "stale-token" : before.writeToken,
-            reducers: mode === "changed" ? [{ kind: "activity", updatedAt: 20 }] : undefined,
-            eventJson: JSON.stringify({
-              type: "custom",
-              customType: "synthetic-receipt",
-              id: `new-event-${mode}`,
-              parentId: null,
-              data: { content: "x".repeat(6 * 1024) },
-            }),
-          },
+        const input = {
+          target: f.target,
+          commandId: `resident-${phase}-${mode}`,
+          phaseId: "turn",
+          entryReference: mode === "stale" ? "stale-token" : before.writeToken,
+          reducers: [
+            {
+              kind: "activity" as const,
+              updatedAt: mode === "changed" ? 20 : before.entry!.updatedAt,
+            },
+          ],
         };
         const selected: Mutation =
           phase === "patch"
-            ? {
-                type: "session.actor.patch",
-                input: {
-                  target: f.target,
-                  commandId: command.input.commandId,
-                  phaseId: "turn",
-                  entryReference: command.input.entryReference,
-                  reducers: [
-                    {
-                      kind: "activity",
-                      updatedAt: mode === "changed" ? 20 : before.entry!.updatedAt,
+            ? { type: "session.actor.patch", input }
+            : phase === "tool"
+              ? {
+                  type: "session.actor.appendToolResult",
+                  input: {
+                    ...input,
+                    append: {
+                      kind: "message",
+                      input: {
+                        scope: f.scope,
+                        cwd: "/synthetic",
+                        messageJson: JSON.stringify({
+                          role: "toolResult",
+                          toolCallId: `tool-${mode}`,
+                          toolName: "synthetic",
+                          content: [{ type: "text", text: "x".repeat(1024) }],
+                          isError: false,
+                          timestamp: 1,
+                        }),
+                      },
                     },
-                  ],
-                },
-              }
-            : command;
+                  },
+                }
+              : {
+                  type: "session.actor.appendTranscriptEvent",
+                  input: {
+                    ...input,
+                    sessionId: f.scope.sessionId,
+                    lifecycleRevision: null,
+                    eventJson: JSON.stringify({
+                      type: "custom",
+                      customType: "synthetic-receipt",
+                      id: `new-event-${mode}`,
+                      parentId: null,
+                      data: { content: "x".repeat(6 * 1024) },
+                    }),
+                  },
+                };
         await f.prepare(selected);
         const outcome = f.mutate(selected);
         assert(outcome.kind === "committed");
-        if (mode === "matching") {
+        if (mode !== "stale") {
           expect(serialize(outcome).byteLength).toBeLessThan(16 * 1024);
+          const restored = restoreSessionActorCommittedOutcome(outcome, before);
+
+          expect(restored.receipt.postimage).toEqual(f.read());
+          expect(restored.receipt.postimage.entry?.skillsSnapshot).toBe(
+            before.entry?.skillsSnapshot,
+          );
         } else {
           expect(outcome.receipt.postimage).toEqual(f.read());
           outcome.receipt.postimage.entry!.skillsSnapshot!.prompt = "caller edit";

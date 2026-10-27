@@ -80,7 +80,7 @@ export async function projectSessionEntryLifecycleMutationInWorker(
     !params.input.allowCanonicalRepair &&
     params.input.removals.length === 0 &&
     params.upserts.length === 1 &&
-    !upsert?.relatedSessionKeys?.length
+    !upsert?.relatedSessionKeys?.some((key) => key !== sessionKey)
       ? readSessionActorEntryFacts({ database: identity, sessionKey })
       : undefined;
   const retained =

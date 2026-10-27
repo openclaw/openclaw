@@ -5,7 +5,11 @@ import {
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  captureAnthropicRequest,
+  registerParityHostLifecycle,
+} from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import {
@@ -24,10 +28,13 @@ import { createProcessSessionFixture } from "../../bash-process-registry.test-he
 import * as referencePaths from "../../docs-path.js";
 import * as runtimePrompt from "../../runtime-prompt.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { convertToLlm } from "../../sessions/messages.js";
+import { buildSubagentSpawnEnvelope } from "../../subagents/spawn/subagent-system-prompt.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { ToolSearchCatalogRef } from "../../tool-search-types.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { createEmptyPromptBootstrap } from "./attempt-system-prompt.test-support.js";
+import { buildSystemUpdateMessage } from "./runtime-context-prompt.js";
 import { buildTurnDeliveryContextFragments } from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -184,6 +191,124 @@ async function preparePermissionPrompt({
 }
 
 describe("buildAttemptSystemPrompt", () => {
+  registerParityHostLifecycle();
+
+  it.each(["conversation", "ephemeral", "persistent", "leaf"] as const)(
+    "preserves the provider prefix and standing policy across %s follow-ups",
+    async (kind) =>
+      withOpenClawTestState({ label: `suffix-${kind}` }, async () => {
+        const config = { agents: { defaults: { subagents: { maxSpawnDepth: 2 } } } };
+        setRuntimeConfigSnapshot(config);
+        const childSessionKey = `agent:main:subagent:prefix-${kind}`;
+        const childDepth = kind === "leaf" ? 2 : 1;
+        const spawnMode = kind === "persistent" ? "session" : "run";
+        if (kind !== "conversation") {
+          await upsertSessionEntryCore(
+            { sessionKey: childSessionKey },
+            {
+              sessionId: "prefix-fixture",
+              updatedAt: 1,
+              spawnDepth: childDepth,
+            },
+          );
+        }
+        const requests: Record<string, unknown>[] = [];
+        const messages: Parameters<typeof convertToLlm>[0] = [];
+        const child = buildSubagentSpawnEnvelope({
+          completionMode: kind === "persistent" ? "thread-direct" : "collector",
+          spawnMode,
+          childDepth,
+          maxSpawnDepth: 2,
+          task: "Inspect synthetic inputs.",
+          childSessionKey,
+        });
+        for (const turn of ["operator", "completion"]) {
+          if (kind !== "conversation" && turn === "completion") {
+            const { addSubagentRunForTests } =
+              await import("../../subagents/registry/subagent-registry.test-helpers.js");
+            onTestFinished(async () => {
+              const { resetSubagentRegistryForTests } =
+                await import("../../subagents/registry/subagent-registry.test-helpers.js");
+              await resetSubagentRegistryForTests({ persist: false });
+            });
+            await addSubagentRunForTests({
+              runId: `prefix-${kind}-run`,
+              childSessionKey,
+              childAgentId: "main",
+              spawnMode,
+              endedAt: 2,
+            });
+          }
+          const context = `Current conversation: ${turn}. Use this turn's delivery target.`;
+          const { prepared } = await preparePermissionPrompt({
+            attemptOverrides:
+              kind === "conversation"
+                ? {
+                    extraSystemPrompt: `Persistent policy.\n\n${context}\n\nLater configured guidance.`,
+                    extraSystemPromptTurnContext: {
+                      start: "Persistent policy.\n\n".length,
+                      text: context,
+                    },
+                  }
+                : {
+                    sessionKey: childSessionKey,
+                    promptMode: "minimal",
+                    config,
+                    cleanupBundleMcpOnRunEnd:
+                      turn === "operator" ? spawnMode !== "session" : undefined,
+                    extraSystemPrompt: turn === "operator" ? child.systemPrompt : undefined,
+                  },
+          });
+          messages.push({
+            role: "user",
+            content:
+              kind !== "conversation" && turn === "operator" ? child.message : `Handle ${turn}`,
+            timestamp: 1,
+          });
+          for (const fragment of prepared.runtimeContextFragments ?? []) {
+            messages.push(buildSystemUpdateMessage(fragment.text, "runtime-context", true));
+          }
+          const { payload } = await captureAnthropicRequest("transport", {
+            model: { id: "claude-opus-4-6" },
+            cacheRetention: "none",
+            context: { systemPrompt: prepared.systemPromptText, messages: convertToLlm(messages) },
+          });
+          requests.push(payload);
+          const system = JSON.stringify(payload.system);
+          if (kind === "conversation") {
+            expect(system).toContain("Persistent policy.");
+            expect(system).toContain("Later configured guidance.");
+            expect(system).not.toContain(context);
+            expect(JSON.stringify(payload.messages)).toContain(context);
+          } else {
+            for (const rule of [
+              "## Your Role",
+              "Focus: assigned task only.",
+              "## Output Format",
+              "No automations/persistent state.",
+              kind === "leaf"
+                ? "Leaf worker: cannot spawn. Assigned task only."
+                : "May delegate descendants for parallel/complex work. Decide local vs child ownership.",
+              `- You are not ${kind === "leaf" ? "parent orchestrator" : "main agent"}.`,
+            ]) {
+              expect(system).toContain(rule);
+            }
+            expect(system.includes("4. Ephemeral: termination after completion is normal.")).toBe(
+              spawnMode === "run",
+            );
+            expect(system).not.toContain("apply only to this turn");
+            expect(system).not.toContain("Inspect synthetic inputs.");
+            expect(system.match(/(?<!#)# Subagent Context/g)).toHaveLength(1);
+          }
+        }
+        expect(JSON.stringify(requests[1]!.system)).toBe(JSON.stringify(requests[0]!.system));
+        const firstMessages = requests[0]!.messages as unknown[];
+        expect((requests[1]!.messages as unknown[]).slice(0, firstMessages.length)).toEqual(
+          firstMessages,
+        );
+      }),
+  );
+
   it("keeps watched membership and titles out of the system prefix across turns and refresh", async () => {
     await withOpenClawTestState({ label: "watched-turn-context" }, async () => {
       setRuntimeConfigSnapshot({});

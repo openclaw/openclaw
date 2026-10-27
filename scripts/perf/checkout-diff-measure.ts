@@ -11,6 +11,8 @@
 // Accept identical response hashes and fewer filesystem reads with lower CPU/allocation;
 // report wall-time spread and host load instead of gating on noisy short tails.
 // Git byte counts measure captured output passed to the owner, after output caps.
+// Seed with --detached to measure detached checkouts. --revisions-owner <baseline.ts>
+// selects a saved session-diff-revisions.ts for owner comparisons on the same fixture.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -40,6 +42,8 @@ const { values } = parseArgs({
     "changed-tracked": { type: "string", default: "0" },
     "changed-lines": { type: "string", default: "1" },
     "diff-owner": { type: "string" },
+    "revisions-owner": { type: "string" },
+    detached: { type: "boolean" },
     allocation: { type: "boolean" },
     boundary: { type: "string", default: "worker" },
     cold: { type: "boolean" },
@@ -203,8 +207,12 @@ type GitObservation = { args: string[]; elapsedMs: number; capturedStdoutBytes: 
 const gitObservations: GitObservation[] = [];
 const filesystemCounts = { lstat: 0, realpath: 0 };
 let diffOwnerLoads = 0;
+let revisionsOwnerLoads = 0;
+assert(!values["revisions-owner"] || values.boundary === "owner");
 if (values.boundary === "owner") {
   const ownerUrl = new URL("../../src/sessions/session-diff.runtime.ts", import.meta.url).href;
+  const revisionsUrl = new URL("../../src/sessions/session-diff-revisions.ts", import.meta.url)
+    .href;
   const gitUrl = new URL("../../src/agents/worktrees/git.ts", import.meta.url).href;
   const originalGitUrl = `${gitUrl}?benchmark-original`;
   const wrapperUrl = "openclaw-benchmark:git-observer";
@@ -215,6 +223,9 @@ if (values.boundary === "owner") {
   const observationChannel = channel("openclaw.benchmark.git-output");
   observationChannel.subscribe((event) => gitObservations.push(event as GitObservation));
   const source = values["diff-owner"] ? readFileSync(values["diff-owner"], "utf8") : undefined;
+  const revisionsSource = values["revisions-owner"]
+    ? readFileSync(values["revisions-owner"], "utf8")
+    : undefined;
   registerHooks({
     resolve(specifier, context, nextResolve) {
       if (context.parentURL === ownerUrl && specifier === "node:fs/promises") {
@@ -224,6 +235,10 @@ if (values.boundary === "owner") {
       return result.url === gitUrl ? { ...result, url: wrapperUrl } : result;
     },
     load(url, context, nextLoad) {
+      if (url === revisionsUrl && revisionsSource !== undefined) {
+        revisionsOwnerLoads++;
+        return { format: "module-typescript", shortCircuit: true, source: revisionsSource };
+      }
       if (url === ownerUrl && source !== undefined) {
         diffOwnerLoads++;
         return { format: "module-typescript", shortCircuit: true, source };
@@ -356,6 +371,9 @@ async function seed() {
     await fs.writeFile(path.join(repo, `changed-${index}.txt`), changedContent(index, true));
   }
   const head = (await git("rev-parse", "HEAD")).stdout.trim();
+  if (values.detached) {
+    await git("checkout", "--detach", "--quiet", head);
+  }
   await fs.writeFile(path.join(repo, "modified.txt"), "Synthetic tracked content\nChanged 0\n");
   await fs.writeFile(path.join(repo, "staged.txt"), "Synthetic staged content\n");
   await git("add", "staged.txt");
@@ -634,6 +652,9 @@ async function measure() {
     };
     if (values["diff-owner"]) {
       assert(diffOwnerLoads > 0, "the selected diff owner was not loaded");
+    }
+    if (values["revisions-owner"]) {
+      assert(revisionsOwnerLoads > 0, "the selected revisions owner was not loaded");
     }
     if (readCacheOwner) {
       assert(readCacheOwnerLoads > 0, "the selected Git read-cache owner was not loaded");

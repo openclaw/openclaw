@@ -1130,7 +1130,8 @@ in the top-right corner still lets you switch between the diagram and source
 or choose **Expand diagram**.
 The copy button appears on hover or keyboard focus and stays visible on touch
 screens. It copies the original Mermaid text.
-Diagram colors and fonts follow the current UI theme.
+Diagram colors and fonts follow the current UI theme. Mermaid source is rendered
+by Pele in the Control UI and native apps; its layout can differ from Mermaid.js.
 
 An unfinished streaming fence stays readable as code. Rendering starts when the
 closing fence arrives or the response finishes. Invalid or overly complex
@@ -1140,7 +1141,7 @@ images, or add custom CSS to the Control UI.
 
 Renderer loading or timeout errors instead suggest reloading the dashboard and
 checking proxy authentication. The renderer runs in an isolated frame, so its
-`assets/mermaid.min-*.js` and `assets/frame-*.js` requests do not send `SameSite=Lax`
+`assets/pele.min-*.js` and `assets/frame-*.js` requests do not send `SameSite=Lax`
 or `SameSite=Strict` cookies. Behind a cookie-authenticated reverse proxy, those
 static asset URLs must be reachable without those cookies, including under any
 configured `gateway.controlUi.basePath`. Check the browser Network panel for

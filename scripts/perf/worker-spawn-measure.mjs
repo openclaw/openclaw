@@ -1,10 +1,13 @@
 // Cold worker imports and first tasks, with TypeScript compilation prepared outside measurement.
 // node --import ./scripts/tsx.mjs scripts/perf/worker-spawn-measure.mjs --output .local/spawn/head.json --samples 10
 // Add --baseline-dir .local/spawn/base (a partial tree of original source files) for a baseline arm.
-// --worker session-transcript|openclaw-state-read|git-operation|code-mode-node selects one owner.
+// --built --build-dir <checkout> measures shipped dist without a TypeScript loader in workers.
+// --worker <name> selects one owner. --compare-build-dir <base> alternates base/candidate
+// order per sample against --build-dir <candidate>, reporting both arms for each worker.
+// Example: node --import ./scripts/tsx.mjs scripts/perf/worker-spawn-measure.mjs --built --build-dir . --samples 5 --output .local/spawn/built.json
 // Run arms in alternating order. Every sample owns a fresh isolate; one unmeasured preparation
-// isolate per owner caches transpiled source bytes. This is source-graph proof, not a dist/Gateway
-// load test: loader resolution remains, and shared build chunks can change the shipped graph.
+// isolate per owner caches transpiled source bytes in source mode. Built mode uses the shipped
+// chunk graph. Neither mode is a full Gateway load test. Census excludes this benchmark module.
 // State-read uses its admit handshake without opening a DB; transcript resolves an explicit
 // agent path. Git reads a real synthetic repository; Code Mode evaluates an arithmetic cell.
 // Counters are exact isolate allocation/thread CPU (Node 26.12+), not process RSS or host CPU.
@@ -27,6 +30,16 @@ const entries = {
   "openclaw-state-read": "src/state/openclaw-state-read.worker.ts",
   "git-operation": "src/infra/git-operation.worker.ts",
   "code-mode-node": "src/agents/code-mode-node.worker.ts",
+  "cron-stream-matcher": "src/gateway/cron-stream-matcher.worker.ts",
+  "file-tool-planning": "src/agents/sessions/tools/file-tool-planning.worker.ts",
+  "identity-file": "src/agents/identity-file.worker.ts",
+  "identity-avatar-file": "src/agents/identity-avatar-file.worker.ts",
+  "image-processor": "src/media/image-processor.worker.ts",
+  "fs-safe-copy": "src/infra/fs-safe-copy.worker.ts",
+  "control-ui-file": "src/gateway/control-ui-file.worker.ts",
+  "control-ui-public-session-card": "src/gateway/control-ui-public-session-card.worker.ts",
+  "catalog-page": "extensions/codex/catalog-page.worker.ts",
+  "session-transcript-reconcile": "src/config/sessions/session-transcript-reconcile.worker.ts",
 };
 
 function snapshot() {
@@ -68,65 +81,75 @@ if (!isMainThread) {
   const compiler = workerData.prepare ? await import("esbuild") : undefined;
   const loaded = new Set();
   const overlays = new Set();
-  registerHooks({
-    load(url, context, next) {
-      if (!url.startsWith("file:")) {
-        return next(url, context);
-      }
-      const filename = fileURLToPath(url);
-      const relative = path.relative(root, filename);
-      if (/\.[cm]?ts$/.test(filename)) {
-        const cacheFile = path.join(
-          workerData.cache,
-          createHash("sha256").update(url).digest("hex"),
-        );
-        let source;
-        if (workerData.prepare) {
-          const selected = workerData.baselineFiles[relative] ?? filename;
-          if (selected !== filename) {
-            overlays.add(relative);
-          }
-          source = compiler.transformSync(fs.readFileSync(selected, "utf8"), {
-            loader: "ts",
-            format: "esm",
-            target: "esnext",
-            tsconfigRaw: { compilerOptions: { verbatimModuleSyntax: true } },
-          }).code;
-          fs.writeFileSync(cacheFile, source);
-        } else {
-          assert(fs.existsSync(cacheFile), `Unprepared TypeScript module: ${relative}`);
-          source = fs.readFileSync(cacheFile, "utf8");
+  if (!workerData.built) {
+    registerHooks({
+      load(url, context, next) {
+        if (!url.startsWith("file:")) {
+          return next(url, context);
         }
-        loaded.add(url);
-        return { format: "module", source, shortCircuit: true };
-      }
-      const result = next(url, context);
-      if (result.format === "module" || result.format === "commonjs") {
-        loaded.add(url);
-      }
-      return result;
-    },
-  });
+        const filename = fileURLToPath(url);
+        const relative = path.relative(root, filename);
+        if (/\.[cm]?ts$/.test(filename)) {
+          const cacheFile = path.join(
+            workerData.cache,
+            createHash("sha256").update(url).digest("hex"),
+          );
+          let source;
+          if (workerData.prepare) {
+            const selected = workerData.baselineFiles[relative] ?? filename;
+            if (selected !== filename) {
+              overlays.add(relative);
+            }
+            source = compiler.transformSync(fs.readFileSync(selected, "utf8"), {
+              loader: "ts",
+              format: "esm",
+              target: "esnext",
+              tsconfigRaw: { compilerOptions: { verbatimModuleSyntax: true } },
+            }).code;
+            fs.writeFileSync(cacheFile, source);
+          } else {
+            assert(fs.existsSync(cacheFile), `Unprepared TypeScript module: ${relative}`);
+            source = fs.readFileSync(cacheFile, "utf8");
+          }
+          loaded.add(url);
+          return { format: "module", source, shortCircuit: true };
+        }
+        const result = next(url, context);
+        if (result.format === "module" || result.format === "commonjs") {
+          loaded.add(url);
+        }
+        return result;
+      },
+    });
+  }
   const before = snapshot();
-  await import(pathToFileURL(path.join(root, workerData.entry)).href);
-  const cold = { ...delta(before), loadedModules: loaded.size };
+  await import(workerData.entry);
+  const cold = { ...delta(before), ...(!workerData.built ? { loadedModules: loaded.size } : {}) };
   let taskStart;
   async function handleProbe(message) {
     if (message.probe === "begin") {
       taskStart = snapshot();
       parentPort.postMessage({ probe: "begin" }, []);
     } else if (message.probe === "end") {
-      const firstTask = { ...delta(taskStart), loadedModules: loaded.size };
+      const firstTask = {
+        ...delta(taskStart),
+        ...(!workerData.built ? { loadedModules: loaded.size } : {}),
+      };
       // Census runs only after both measured intervals, so debugger allocations do not enter them.
       const inspector = new Session();
       inspector.connect();
-      const evaluated = new Set();
+      const evaluated = new Map();
       inspector.on("Debugger.scriptParsed", ({ params }) => {
-        if (params.url.startsWith("file:")) {
-          evaluated.add(params.url);
+        if (params.url.startsWith("file:") && params.url !== import.meta.url) {
+          evaluated.set(params.scriptId, params.url);
         }
       });
       await inspector.post("Debugger.enable");
+      let parsedSourceBytes = 0;
+      for (const scriptId of evaluated.keys()) {
+        const { scriptSource } = await inspector.post("Debugger.getScriptSource", { scriptId });
+        parsedSourceBytes += Buffer.byteLength(scriptSource);
+      }
       await inspector.post("Debugger.disable");
       inspector.disconnect();
       await compiler?.stop();
@@ -134,7 +157,8 @@ if (!isMainThread) {
         {
           probe: "end",
           firstTask,
-          evaluatedModules: evaluated.size,
+          evaluatedModules: new Set(evaluated.values()).size,
+          parsedSourceBytes,
           overlays: [...overlays],
         },
         [],
@@ -156,9 +180,17 @@ if (!isMainThread) {
       samples: { type: "string", default: "10" },
       worker: { type: "string" },
       "baseline-dir": { type: "string" },
+      built: { type: "boolean" },
+      "build-dir": { type: "string" },
+      "compare-build-dir": { type: "string" },
     },
   });
   assert(values.output, "--output is required");
+  assert(!values["build-dir"] || values.built, "--build-dir requires --built");
+  assert(!values["compare-build-dir"] || values.built, "--compare-build-dir requires --built");
+  assert(!values.built || !values["baseline-dir"], "--baseline-dir is source-only");
+  const buildRoot = path.resolve(values["build-dir"] ?? root);
+  const comparisonRoot = values["compare-build-dir"] && path.resolve(values["compare-build-dir"]);
   const samples = Number(values.samples);
   assert(Number.isSafeInteger(samples) && samples > 0, "--samples must be positive");
   assert(!values.worker || Object.hasOwn(entries, values.worker), "Unknown --worker");
@@ -193,7 +225,14 @@ if (!isMainThread) {
     OPENCLAW_STATE_DIR: state,
     TMPDIR: path.join(scratch, "tmp"),
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_SUPERVISOR_MODE: "external",
   };
+  fs.writeFileSync(path.join(scratch, "IDENTITY.md"), "# Identity\n- Name: Synthetic benchmark\n");
+  const image = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  fs.writeFileSync(path.join(scratch, "avatar.png"), image);
   let gitHost;
   if (!values.worker || values.worker === "git-operation") {
     const git = (...args) =>
@@ -235,6 +274,48 @@ if (!isMainThread) {
     };
   }
   function requestForWorker(name) {
+    if (name === "cron-stream-matcher") {
+      return { pattern: "needle", lines: ["hay", "needle"] };
+    }
+    if (name === "file-tool-planning") {
+      return { kind: "write", path: "fixture.txt", beforeText: "before\n", content: "after\n" };
+    }
+    if (name === "identity-file") {
+      return { identityPath: path.join(scratch, "IDENTITY.md") };
+    }
+    if (name === "identity-avatar-file") {
+      return { workspaceDir: scratch, source: "avatar.png", readBody: true };
+    }
+    if (name === "image-processor") {
+      return { kind: "transparency", input: image };
+    }
+    if (name === "fs-safe-copy") {
+      return { type: "metadata", paths: [path.join(scratch, "IDENTITY.md")] };
+    }
+    if (name === "control-ui-file") {
+      return {
+        rootPath: scratch,
+        filePath: path.join(scratch, "IDENTITY.md"),
+        rejectHardlinks: true,
+        readBody: true,
+      };
+    }
+    if (name === "control-ui-public-session-card") {
+      return {
+        title: "Synthetic benchmark",
+        messageCount: 2,
+        host: "example.invalid",
+        status: "Done",
+      };
+    }
+    if (name === "catalog-page") {
+      const id = 2 ** 52 + 1;
+      return {
+        bytes: Buffer.from(JSON.stringify({ id, result: { data: [], nextCursor: null } })),
+        route: { id, kind: "list" },
+        remainingRows: 100,
+      };
+    }
     if (name === "openclaw-state-read") {
       return {
         command: { type: "admit" },
@@ -282,7 +363,32 @@ if (!isMainThread) {
     };
   }
   function verify(name, reply) {
-    if (name === "code-mode-node") {
+    if (name === "cron-stream-matcher") {
+      assert.equal(reply, true);
+    } else if (name === "file-tool-planning") {
+      assert.equal(reply.kind, "write");
+      assert(reply.receipt.patch.includes("+after"));
+    } else if (name === "identity-file") {
+      assert.equal(reply.kind, "loaded");
+      assert.equal(reply.identity.name, "Synthetic benchmark");
+    } else if (name === "identity-avatar-file") {
+      assert(reply.ok);
+      assert.deepEqual(Buffer.from(reply.file.body), image);
+    } else if (name === "image-processor") {
+      assert.equal(reply.kind, "transparency", JSON.stringify(reply));
+      assert.equal(typeof reply.value.hasTransparentPixels, "boolean");
+    } else if (name === "fs-safe-copy") {
+      assert.equal(reply.type, "metadata");
+      assert.equal(reply.entries.length, 1);
+      assert(reply.entries[0]);
+    } else if (name === "control-ui-file") {
+      assert.equal(Buffer.from(reply.body).toString(), "# Identity\n- Name: Synthetic benchmark\n");
+    } else if (name === "control-ui-public-session-card") {
+      assert.equal(Buffer.from(reply).subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+    } else if (name === "catalog-page") {
+      assert.deepEqual(reply.failures, []);
+      assert.deepEqual(reply.message.result.data, []);
+    } else if (name === "code-mode-node") {
       assert.equal(reply.status, "completed", JSON.stringify(reply));
       assert.equal(reply.value.json, "8128");
     } else {
@@ -296,8 +402,70 @@ if (!isMainThread) {
       }
     }
   }
-  async function run(name, cache, prepare) {
+  let reconcile;
+  async function run(name, cache, prepare, releaseTask, selectedBuildRoot = buildRoot) {
+    if (name === "session-transcript-reconcile" && !releaseTask) {
+      // Use the real lifecycle owner; fixture creation and admission are outside measurement.
+      Object.assign(process.env, environment);
+      reconcile ??= await Promise.all([
+        import("../../src/state/openclaw-agent-db-lease.js"),
+        import("../../src/state/openclaw-state-db.js"),
+        import("../../src/state/openclaw-state-worker-context.js"),
+        import("../../src/config/sessions/session-accessor.sqlite-worker-coordination.js"),
+      ]);
+      const [lease, database, contextOwner, coordinationOwner] = reconcile;
+      const agentPath = path.join(state, "agents", "benchmark", "agent.sqlite");
+      const leaseId = lease.claimOpenClawAgentDatabaseLease({
+        agentId: "benchmark",
+        path: agentPath,
+        env: environment,
+      });
+      database.closeOpenClawStateDatabase();
+      const context = contextOwner.captureOpenClawStateWorkerContext({ env: environment });
+      return await coordinationOwner.withSqliteWorkerLifecycleCoordination(
+        context,
+        `worker-spawn:${leaseId}`,
+        async (coordination) => {
+          const result = await run(
+            name,
+            cache,
+            prepare,
+            {
+              input: {
+                mode: "release",
+                stateDir: state,
+                externallySupervised: true,
+                leaseId,
+                path: agentPath,
+              },
+              coordination,
+            },
+            selectedBuildRoot,
+          );
+          assert.equal(
+            database
+              .openOpenClawStateDatabase({ env: environment })
+              .db.prepare("SELECT lease_id FROM agent_database_leases WHERE lease_id = ?")
+              .get(leaseId),
+            undefined,
+          );
+          return result;
+        },
+        async () => {}, // run() always joins the worker in its finally block.
+        "reconciliation",
+      );
+    }
     const channel = new MessageChannel();
+    const releaseChannel = releaseTask ? new MessageChannel() : undefined;
+    const released = releaseChannel ? Promise.withResolvers() : undefined;
+    void released?.promise.catch(() => {});
+    releaseChannel?.port1.on("message", (message) => {
+      if (message.type === "lease-released") {
+        released.resolve();
+      } else {
+        released.reject(new Error(JSON.stringify(message)));
+      }
+    });
     const probes = new Map();
     const cold = Promise.withResolvers();
     const ready = Promise.withResolvers();
@@ -308,14 +476,24 @@ if (!isMainThread) {
     const started = performance.now();
     const worker = new Worker(new URL(import.meta.url), {
       env: environment,
+      ...(values.built ? { execArgv: [] } : {}),
       workerData: {
-        entry: entries[name],
+        entry: pathToFileURL(
+          path.join(
+            values.built ? selectedBuildRoot : root,
+            values.built
+              ? `dist/${entries[name].replace(/^src\//, "").replace(/\.ts$/, ".js")}`
+              : entries[name],
+          ),
+        ).href,
+        built: values.built,
         cache,
         prepare,
         baselineFiles: prepare ? baselineFiles : undefined,
       },
     });
     const fail = (error) => {
+      released?.reject(error);
       for (const pending of [cold, ready, task, ...probes.values()]) {
         pending.reject(error);
       }
@@ -370,14 +548,31 @@ if (!isMainThread) {
       const spawnToReadyMs = performance.now() - started;
       await probe("begin");
       const firstStarted = performance.now();
-      channel.port1.postMessage({
-        taskId: 1,
-        input: requestForWorker(name),
-        interactive: true,
-        nativeSections: new SharedArrayBuffer(4),
-        taskContext: { deletedAgentDatabaseFences: [] },
-      });
-      verify(name, await task.promise);
+      channel.port1.postMessage(
+        {
+          taskId: 1,
+          input: releaseTask
+            ? { ...releaseTask, port: releaseChannel.port2 }
+            : requestForWorker(name),
+          interactive: true,
+          nativeSections: new SharedArrayBuffer(4),
+          taskContext: { deletedAgentDatabaseFences: [] },
+        },
+        releaseTask
+          ? [
+              releaseChannel.port2,
+              ...(releaseTask.coordination.databaseAdmission
+                ? [releaseTask.coordination.databaseAdmission]
+                : []),
+            ]
+          : [],
+      );
+      const reply = await task.promise;
+      if (releaseTask) {
+        await released.promise;
+      } else {
+        verify(name, reply);
+      }
       const firstRoundTripMs = performance.now() - firstStarted;
       const result = await probe("end");
       return {
@@ -388,8 +583,10 @@ if (!isMainThread) {
           cpuMs: coldResult.cpuMs + result.firstTask.cpuMs,
           allocatedBytes: coldResult.allocatedBytes + result.firstTask.allocatedBytes,
         },
+        spawnToReadyMs,
         spawnToFirstReplyMs: spawnToReadyMs + firstRoundTripMs,
         evaluatedModules: result.evaluatedModules,
+        parsedSourceBytes: result.parsedSourceBytes,
         overlays: result.overlays,
         hostLoad: os.loadavg(),
       };
@@ -398,16 +595,25 @@ if (!isMainThread) {
       await worker.terminate();
       channel.port1.close();
       channel.port2.close();
+      releaseChannel?.port1.close();
+      releaseChannel?.port2.close();
     }
   }
   const report = {
     node: process.version,
     samples,
     baselineDir: values["baseline-dir"] ?? null,
+    built: values.built === true,
+    buildRoot: values.built ? buildRoot : null,
+    comparisonRoot: comparisonRoot ?? null,
+    order: comparisonRoot ? "AB/BA per sample: base then candidate on even indices" : "single arm",
     workers: {},
     limitations: [
-      "Source module graph with prepared TypeScript bytes, not shipped dist chunk graph",
-      "Cold load count is loader-observed; evaluated-module census after first task includes benchmark/loader modules",
+      values.built
+        ? "Built worker graph with native Node loading; debugger census runs after measured intervals"
+        : "Source module graph with prepared TypeScript bytes, not shipped dist chunk graph",
+      "Cold load count is source-loader-only; census excludes the benchmark module but source mode includes loader modules",
+      "Reconcile measures release of an existing synthetic lease, not transcript indexing; fixture admission is outside timing",
       "First-task counters include task transport and host wait, not host Git subprocess CPU",
       "State admit does not open a database; transcript sqlite-target uses an explicit agent path",
       "No full Gateway load, main-thread CPU, RSS, or GC/promotion claim",
@@ -420,33 +626,52 @@ if (!isMainThread) {
       }
       const cache = path.join(scratch, `compiled-${name}`);
       fs.mkdirSync(cache);
-      const preparation = await run(name, cache, true);
-      const rows = [];
+      const preparation = values.built ? undefined : await run(name, cache, true);
+      const arms = comparisonRoot
+        ? { base: comparisonRoot, candidate: buildRoot }
+        : { candidate: buildRoot };
+      const rowsByArm = Object.fromEntries(Object.keys(arms).map((arm) => [arm, []]));
       for (let index = 0; index < samples; index++) {
-        rows.push(await run(name, cache, false));
+        const ordered = Object.entries(arms);
+        for (const [arm, directory] of index % 2 ? ordered.toReversed() : ordered) {
+          rowsByArm[arm].push(await run(name, cache, false, undefined, directory));
+        }
       }
-      report.workers[name] = {
-        preparationModules: preparation.evaluatedModules,
-        overlays: preparation.overlays,
-        cold: summarize(rows.map((row) => row.cold)),
-        firstTask: summarize(rows.map((row) => row.firstTask)),
-        total: summarize(rows.map((row) => row.total)),
-        spawnToFirstReplyMs: summarize(rows.map((row) => ({ value: row.spawnToFirstReplyMs })))
-          .value,
-        evaluatedModules: rows.map((row) => row.evaluatedModules),
-        rows,
-      };
+      const results = Object.fromEntries(
+        Object.entries(rowsByArm).map(([arm, rows]) => [
+          arm,
+          {
+            preparationModules: preparation?.evaluatedModules,
+            overlays: preparation?.overlays,
+            cold: summarize(rows.map((row) => row.cold)),
+            firstTask: summarize(rows.map((row) => row.firstTask)),
+            total: summarize(rows.map((row) => row.total)),
+            spawnToReadyMs: summarize(rows.map((row) => ({ value: row.spawnToReadyMs }))).value,
+            spawnToFirstReplyMs: summarize(rows.map((row) => ({ value: row.spawnToFirstReplyMs })))
+              .value,
+            parsedSourceBytes: rows.map((row) => row.parsedSourceBytes),
+            evaluatedModules: rows.map((row) => row.evaluatedModules),
+            rows,
+          },
+        ]),
+      );
+      report.workers[name] = comparisonRoot ? results : results.candidate;
       fs.writeFileSync(output, JSON.stringify(report, null, 2));
       console.log(
         JSON.stringify({
           worker: name,
           samples,
-          total: report.workers[name].total,
-          cold: report.workers[name].cold,
+          arms: Object.fromEntries(
+            Object.entries(results).map(([arm, result]) => [
+              arm,
+              { total: result.total, cold: result.cold },
+            ]),
+          ),
         }),
       );
     }
   } finally {
+    await reconcile?.[1].closeOpenClawStateDatabaseAsync();
     fs.rmSync(scratch, { recursive: true, force: true });
   }
 }

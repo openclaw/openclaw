@@ -2743,6 +2743,11 @@ openclaw-chat-ci-details {
   flex: 0 0 auto;
 }
 
+.agent-chat__disabled-banner .btn[data-authority-pending] {
+  opacity: 1;
+  cursor: default;
+}
+
 .agent-chat__disabled-banner--neutral {
   color: inherit;
 }

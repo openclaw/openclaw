@@ -34,6 +34,23 @@ export const runtimeProcessCoreEntrypoints = [
   managedMemoryEntrypoint,
 ];
 
+const privateChunkRuntimeProcessEntrypoints = [
+  runtimeProcessEntrypoints.sessionDiskBudget,
+  runtimeProcessEntrypoints.pluginModelCatalogRead,
+  runtimeProcessEntrypoints.attachmentProcessor,
+  runtimeProcessEntrypoints.codeModeNode,
+  runtimeProcessEntrypoints.imageProcessor,
+  runtimeProcessEntrypoints.identityFile,
+  runtimeProcessEntrypoints.localAgentAvatar,
+  runtimeProcessEntrypoints.fsSafeCopy,
+  runtimeProcessEntrypoints.controlUiFile,
+  runtimeProcessEntrypoints.publicSessionCard,
+  runtimeProcessEntrypoints.sessionTranscriptReconcile,
+  runtimeProcessEntrypoints.gitOperations,
+  runtimeProcessEntrypoints.cronStreamMatcher,
+  runtimeProcessEntrypoints.fileToolPlanning,
+];
+
 // Keep small helper processes out of the shared runtime bundle.
 export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEntries([
   managedMemoryEntrypoint,
@@ -45,6 +62,7 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
   runtimeProcessEntrypoints.sqliteSourceRevision,
   runtimeProcessEntrypoints.stateRead,
   runtimeProcessEntrypoints.sessionTranscript,
+  ...privateChunkRuntimeProcessEntrypoints,
   runtimeProcessEntrypoints.shellSnapshotEnvironment,
   runtimeProcessEntrypoints.nativeHookRelayClient,
   runtimeProcessEntrypoints.spawnBroker,
@@ -55,6 +73,14 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
 ]);
 
 export function getStandaloneRuntimeProcessOutputOptions(name: string) {
+  if (
+    privateChunkRuntimeProcessEntrypoints.some(
+      (entry) => entry.distWorkerPath.replace(/\.js$/u, "") === name,
+    )
+  ) {
+    // Small workers must not evaluate shared Gateway chunks; keep optional paths lazy.
+    return { codeSplitting: true, chunkFileNames: `${name}-[name]-[hash].mjs` };
+  }
   const pluginPreparationEntry =
     runtimeProcessEntrypoints.pluginGenerationPreparation.distWorkerPath.replace(/\.js$/u, "");
   const stateReadEntry = runtimeProcessEntrypoints.stateRead.distWorkerPath.replace(/\.js$/u, "");

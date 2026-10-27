@@ -35,6 +35,7 @@ const voiceOwners = [
 const lifecycleOwners = [
   /^scripts\/ios-access-restart-proof\.py$/u,
   /^apps\/ios\/Tests\/(?:CloudflareAccessClientTests|CloudflareAccessBrowserPresenterTests|CloudflareAccessTransferTests|CloudflareAccessSessionStoreTests|CloudflareAccessTestTokens|ChatTypingFocusTests|ChatSendHydrationTests|GatewayIngressControllerTests|GatewayIngressActivationTests|GatewayIngressWireTests|GatewayIngressLoginPreparationTests|GatewayAccessRestartTests|GatewayOperatorFleetTests|GatewayConnectionControllerTests|GatewayConnectionSecurityTests|GatewaySettingsStoreTests|IOSMediaArtifactLoaderTests|OpenClawTypographyTests)\.swift$/u,
+  /^apps\/shared\/OpenClawKit\/Tests\/OpenClawKitTests\/ChatComposerTextViewIOSTests\.swift$/u,
 ];
 
 /** Select simulator execution only; the app and test products still compile. */

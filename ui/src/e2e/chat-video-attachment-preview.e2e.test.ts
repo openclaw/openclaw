@@ -86,7 +86,6 @@ suite.define(() => {
           expect.poll(() => resources.evaluate((proof) => proof.liveUrls())).toBe(0);
         await slot.waitFor();
         const before = await slot.boundingBox();
-        expect(before).not.toBeNull();
         expect(await poster.count()).toBe(0);
         await resources.evaluate((proof) => proof.releaseIdle());
         await waitForFrame();

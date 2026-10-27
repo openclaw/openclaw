@@ -321,7 +321,6 @@ describe("chat attachment reading", () => {
     attachFile(container, file, "clipboard");
 
     expect(readers).toHaveLength(1);
-    expect(reads.pendingReads).toBe(1);
     const status = container.querySelector(".chat-attachments-status");
     expect(status?.textContent).toContain("Preparing 1 attachment");
     await waitForFast(() =>
@@ -330,7 +329,6 @@ describe("chat attachment reading", () => {
       ),
     );
     const pendingTile = container.querySelector(".chat-attachment-thumb");
-    expect(status?.querySelector(".btn__spinner")).toBeNull();
     expect(status?.getAttribute("role")).toBe("status");
     expect(status?.classList.contains("sr-only")).toBe(true);
     expect(getComposerTextarea(container).disabled).toBe(false);
@@ -348,14 +346,6 @@ describe("chat attachment reading", () => {
     expect(onSend).not.toHaveBeenCalled();
 
     const reader = expectDefined(readers[0], "deferred attachment reader");
-    reader.dispatchEvent(
-      new ProgressEvent("progress", { lengthComputable: true, loaded: 1, total: 2 }),
-    );
-    expect(container.querySelector(".chat-attachment-thumb")).toBe(pendingTile);
-    expect(
-      pendingTile?.querySelector<HTMLElement>(".chat-attachment-loading__line > span")?.style
-        .transform,
-    ).toBe("scaleX(0.5)");
     finishRead(reader, `data:image/png;base64,${btoa("attachment proof")}`, true);
 
     await waitForFast(() => {

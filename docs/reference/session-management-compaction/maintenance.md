@@ -166,6 +166,17 @@ asynchronous restoration first. Storage and usage inventory can count cold
 transcripts without restoring them. Usage refreshes and exact-range reports read
 verified archive chunks directly when existing rollups cannot answer the request;
 they keep transcript payloads cold and store results in the existing usage cache.
+Full raw-transcript reads, exact event matching, message-presence checks, and
+latest-assistant text reads also consume verified archive chunks without restoring
+payloads. Matching preserves newest-first selection and active-branch membership;
+a stale active projection still uses restoration and reconciliation. These reads
+verify the entire archive before returning a result, so corruption cannot look
+like missing history. Repeated reads decompress the archive again rather than
+keeping its payload resident. Conversation writes, indexed chat pages, model-context
+reads, and activity-summary generation retain their existing restoration path.
+Archive/unarchive notifications check recap freshness before loading a transcript;
+a current recap does not trigger restoration. New activity and terminal runs still
+request recap work.
 Text search excludes cold transcript contents and
 reports how many archived transcripts it excluded; restored transcripts become
 searchable again. Import and cross-store repair refuse cold transcripts that

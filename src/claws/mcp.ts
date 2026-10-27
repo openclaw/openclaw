@@ -29,6 +29,13 @@ export function digestClawMcpServer(server: Record<string, unknown>): string {
   return digestClawValue(canonicalizeConfiguredMcpServer(server));
 }
 
+/** A rejected write may still have committed; claim it only when the stored config matches. */
+async function isClawMcpServerCommitted(name: string, configDigest: string): Promise<boolean> {
+  const listed = await listConfiguredMcpServers().catch(() => null);
+  const current = listed?.ok ? listed.mcpServers[name] : undefined;
+  return current !== undefined && digestClawMcpServer(current) === configDigest;
+}
+
 /** Add a shared MCP requirement without creating a Claw ownership record. */
 export async function installClawMcpServersStateless(
   plan: ClawAddPlan,
@@ -100,6 +107,11 @@ export async function installClawMcpServersStateless(
         } catch (error) {
           if (error instanceof ClawMcpInstallError) {
             throw error;
+          }
+          // The config write can commit before a later step fails (post-commit assertion, OAuth
+          // cleanup, or a lost acknowledgement); claim the entry so the caller can roll it back.
+          if (!refs.includes(ref) && (await isClawMcpServerCommitted(action.id, configDigest))) {
+            refs.push(ref);
           }
           throw new ClawMcpInstallError(coerceErrorMessage(error), refs);
         }
