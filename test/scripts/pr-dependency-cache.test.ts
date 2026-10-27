@@ -87,22 +87,27 @@ describePosix("frozen PR dependency identity", () => {
         .filter(Boolean)
         .map((row) => row.replace(/ 0\t/, "\t").replace(" ", " blob "));
     const auditedRows = rows().filter((row) => !row.endsWith("\tsrc/page.ts"));
+    // The bootstrap runs in Node even when Vitest runs in Bun.
+    const node = requireNodeTool("node");
+    const childRuntime = spawnSync(
+      node,
+      ["-p", "[process.platform, process.arch, process.versions.modules].join(' ')"],
+      { encoding: "utf8" },
+    );
+    expect(childRuntime.status, childRuntime.stderr).toBe(0);
+    const [platform, arch, modules] = childRuntime.stdout.trim().split(" ");
     const audit = {
       files: ["scripts/prepare.mjs", "schema.sql"],
       directories: ["packages/example/src"],
       presence: ["src"],
-      runtime: {
-        platform: process.platform,
-        arch: process.arch,
-        modules: process.versions.modules,
-      },
+      runtime: { platform, arch, modules },
       auditSha256: createHash("sha256").update(auditedRows.join("\0")).digest("hex"),
     };
     const key = (policy: typeof audit | null = audit) => {
       git("add", ".");
       const payload = join(tempDirs.make("pr-key-payload-"), "input.json");
       writeFileSync(payload, JSON.stringify([rows(), git("write-tree"), policy]));
-      const result = spawnSync(requireNodeTool("node"), ["--input-type=module", "-", payload], {
+      const result = spawnSync(node, ["--input-type=module", "-", payload], {
         input: bootstrapSource().replace(
           "materializeDependencies(...process.argv.slice(2));",
           "process.stdout.write(dependencyKey(...JSON.parse(readFileSync(process.argv[2], 'utf8'))));",
