@@ -104,16 +104,13 @@ describe("memory forget", () => {
         `[main/sessions/main/target#L1] ${sourceSnippet}\n[main/sessions/main/survivor#L1] keep\n`,
       );
       await fs.writeFile(removedCorpusPath, `[main/sessions/main/target#L2] ${assistantSnippet}\n`);
-      await h.writeEntries(SHORT_TERM_RECALL_NAMESPACE, [
-        {
-          key: "mixed-entry",
-          value: { key: "mixed-entry", path: "memory/source.md", snippet: "erase" },
-        },
-        {
-          key: "clean-entry",
-          value: { key: "clean-entry", path: "memory/source.md", snippet: "keep" },
-        },
-      ]);
+      await h.writeEntries(
+        SHORT_TERM_RECALL_NAMESPACE,
+        Object.entries({ "mixed-entry": "erase", "clean-entry": "keep" }).map(([key, snippet]) => ({
+          key,
+          value: { key, path: "memory/source.md", snippet },
+        })),
+      );
       await writePhaseSignalStore(h.workspaceDir, {
         version: 1,
         updatedAt: "2026-08-26T00:00:00.000Z",
