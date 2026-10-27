@@ -6,7 +6,6 @@ import {
   isDashboardSessionKey,
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
-import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "../pages/chat/session-snapshot-prewarm.ts";
 import {
@@ -14,7 +13,6 @@ import {
   retirePendingBootRecord,
   bootRecordOwner,
   sameBootRecordOwner,
-  type BootRecordOwner,
   subscribeBootRecordChanges,
   readOfflineStorageScope,
   persistBootRecord,
@@ -23,6 +21,7 @@ import {
 } from "./boot-record.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import { clearWarmBootState } from "./warm-boot-retirement.ts";
 
 export function prewarmBootChat(
   record: BootRecord,
@@ -67,18 +66,6 @@ export function prewarmBootChat(
       ),
     );
   }
-}
-
-export function clearWarmBootState(gatewayScope: string, owner: BootRecordOwner): Promise<void> {
-  // The boot record gates the next warm boot, so it must be gone before any
-  // await: a reload during storage cleanup must fail closed.
-  clearBootRecords(gatewayScope, owner);
-  const recoveryScope = owner.recoveryScope;
-  if (!recoveryScope) {
-    return Promise.resolve();
-  }
-  // Invalidate visible history and its cursor before pane subscribers resume startup.
-  return clearStoredChatSnapshots(`scope:${JSON.stringify([gatewayScope, recoveryScope])}\u0000`);
 }
 
 export function subscribeWarmBootConnection(

@@ -495,6 +495,8 @@ describe("app launch catalog", () => {
     };
     current.resolve({ servers: [server] });
     await current.promise;
+    flush();
+    await vi.dynamicImportSettled();
     await waitForSolid(() => {
       expect(sidebar.textContent).toContain("Library");
       expect(thread.querySelector("button")).not.toBeNull();

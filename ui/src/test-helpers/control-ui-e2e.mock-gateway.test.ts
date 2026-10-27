@@ -325,6 +325,33 @@ it("publishes a catalog adoption only after its deferred response succeeds", asy
   });
 });
 
+it("keeps a same-session observer subscribed when another observer releases", async ({
+  gatewayPage,
+}) => {
+  gatewayPage.execute(createControlUiMockGatewayInitScript());
+  const gateway = getGateway(gatewayPage.window);
+  const { frames, request } = gatewayPage.connect();
+  await flushMockTimers();
+  await request("connect", "connect", { caps: ["session-scoped-events"] });
+  const key = "agent:main:shared-observers";
+  await request("first", "sessions.messages.subscribe", { key, subscriptionId: "first" });
+  await request("second", "sessions.messages.subscribe", { key, subscriptionId: "second" });
+  await request("release-first", "sessions.messages.unsubscribe", { key, subscriptionId: "first" });
+  const final = { sessionKey: key, runId: "shared-run", state: "final" };
+  gateway.emit("chat", final);
+  expect(frames.filter((frame) => frame.type === "event" && frame.event === "chat")).toEqual([
+    expect.objectContaining({ payload: final }),
+  ]);
+  await request("release-second", "sessions.messages.unsubscribe", {
+    key,
+    subscriptionId: "second",
+  });
+  gateway.emit("chat", final);
+  expect(frames.filter((frame) => frame.type === "event" && frame.event === "chat")).toHaveLength(
+    1,
+  );
+});
+
 it("keeps repeated events scoped after unsubscribe and reconnect without filtering roster messages", async ({
   gatewayPage,
 }) => {

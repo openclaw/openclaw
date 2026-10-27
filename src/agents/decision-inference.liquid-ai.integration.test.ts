@@ -10,10 +10,12 @@ import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import type { ProviderPrepareRuntimeAuthContextV2 } from "../plugins/provider-runtime.types.js";
 import {
   createColdPluginFixture,
   createColdPluginHermeticEnv,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
@@ -28,7 +30,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it.each(["profile", "environment", "missing-native"] as const)(
+it.each(["profile", "environment", "missing-native", "exchange"] as const)(
   "keeps Liquid AI %s auth isolated while dispatch authority changes",
   async (authSource) => {
     const state = await createOpenClawTestState({ applyEnv: false });
@@ -46,19 +48,37 @@ it.each(["profile", "environment", "missing-native"] as const)(
       consumer.runtimeSource,
       'const trace=globalThis[Symbol.for("openclaw.test.liquid-ai-decision-path")]; module.exports={id:"liquid-decision-consumer",register(api){trace.runtime=api.runtime.decisions;}};',
     );
-    const trace: { runtime?: DecisionRuntimeV2 } = {};
+    let exchangeGate: (() => Promise<void>) | undefined;
+    const exchange = vi.fn(async (context: ProviderPrepareRuntimeAuthContextV2) => {
+      expect(context.capability).toBe("decision");
+      expect(context.model).not.toHaveProperty("contextWindow");
+      await exchangeGate?.();
+      return {
+        apiKey: "synthetic-exchanged-token",
+        request: { headers: { "x-fixture-exchanged": "true" } },
+      };
+    });
+    const trace: { runtime?: DecisionRuntimeV2; exchange: typeof exchange } = { exchange };
     Reflect.set(globalThis, traceKey, trace);
-    const received: Array<{ url?: string; authorization?: string; body: unknown }> = [];
+    let arrivals = 0;
+    const received: Array<{
+      url?: string;
+      authorization?: string;
+      exchanged?: string | string[];
+      body: unknown;
+    }> = [];
     // The fixture replaces only Liquid's HTTP service, not the guarded transport.
     // Hosted entitlement and model quality still require separate live proof.
     await withServer(
       (request, response) => {
+        arrivals += 1;
         const chunks: Buffer[] = [];
         request.on("data", (chunk: Buffer) => chunks.push(chunk));
         request.on("end", () => {
           received.push({
             url: request.url,
             authorization: request.headers.authorization,
+            exchanged: request.headers["x-fixture-exchanged"],
             body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
           });
           response.writeHead(200, { "content-type": "application/json" });
@@ -81,6 +101,30 @@ it.each(["profile", "environment", "missing-native"] as const)(
             fs.copyFileSync(path.join(sourceRoot, file.name), path.join(pluginRoot, file.name));
           }
         }
+        if (authSource === "exchange") {
+          // Capture the synthetic hook in every prepared registry generation;
+          // the real native plugin, auth owner and guarded transport remain intact.
+          fs.renameSync(
+            path.join(pluginRoot, "index.ts"),
+            path.join(pluginRoot, "provider-entry.ts"),
+          );
+          fs.writeFileSync(
+            path.join(pluginRoot, "index.ts"),
+            `import plugin from "./provider-entry.js";
+const trace = globalThis[Symbol.for("openclaw.test.liquid-ai-decision-path")];
+export default {
+  ...plugin,
+  register(api) {
+    plugin.register({
+      ...api,
+      registerProvider(provider) {
+        api.registerProvider({ ...provider, prepareRuntimeAuthV2: trace.exchange });
+      },
+    });
+  },
+};`,
+          );
+        }
         const manifest = loadPluginManifest(sourceRoot);
         if (!manifest.ok) {
           throw new Error(manifest.error);
@@ -99,7 +143,7 @@ it.each(["profile", "environment", "missing-native"] as const)(
             defaults: {
               model: "liquid/liquid.auto",
               decisionModel:
-                authSource === "profile"
+                authSource === "profile" || authSource === "exchange"
                   ? "liquid-ai/d1-ultra@liquid-ai:fixture"
                   : "liquid-ai/d1-ultra",
               workspace: path.join(state.root, "workspace"),
@@ -165,7 +209,7 @@ it.each(["profile", "environment", "missing-native"] as const)(
                   provider: "liquid",
                   key: "synthetic-exchange-profile-key",
                 },
-                ...(authSource === "profile"
+                ...(authSource === "profile" || authSource === "exchange"
                   ? {
                       "liquid-ai:fixture": {
                         type: "api_key",
@@ -209,6 +253,8 @@ it.each(["profile", "environment", "missing-native"] as const)(
                 reason: "credentials-unavailable",
               });
               expect(received).toHaveLength(0);
+              expect(arrivals).toBe(0);
+              expect(exchange).not.toHaveBeenCalled();
               expect(cfg.agents?.defaults?.model).toBe("liquid/liquid.auto");
               return;
             }
@@ -221,6 +267,8 @@ it.each(["profile", "environment", "missing-native"] as const)(
               code: "LLM_COMPLETION_NOT_AUTHORIZED",
             });
             expect(received).toHaveLength(0);
+            expect(arrivals).toBe(0);
+            expect(exchange).not.toHaveBeenCalled();
 
             setRuntimeConfigSnapshot(cfg);
             const outcome = await runtime.evaluateV2(batch, options());
@@ -237,9 +285,12 @@ it.each(["profile", "environment", "missing-native"] as const)(
               {
                 url: "/tenant/decisions/v1/systemone",
                 authorization:
-                  authSource === "profile"
-                    ? "Bearer synthetic-liquid-profile-key"
-                    : "Bearer synthetic-native-env-key",
+                  authSource === "exchange"
+                    ? "Bearer synthetic-exchanged-token"
+                    : authSource === "profile"
+                      ? "Bearer synthetic-liquid-profile-key"
+                      : "Bearer synthetic-native-env-key",
+                exchanged: authSource === "exchange" ? "true" : undefined,
                 body: {
                   model: "d1-ultra",
                   state: "Synthetic evidence",
@@ -247,6 +298,50 @@ it.each(["profile", "environment", "missing-native"] as const)(
                 },
               },
             ]);
+            expect(arrivals).toBe(1);
+            if (authSource === "exchange") {
+              expect(exchange).toHaveBeenCalledOnce();
+              const entered = createDeferredCore();
+              const release = createDeferredCore();
+              exchangeGate = async () => {
+                entered.resolve();
+                await release.promise;
+              };
+              const pending = runtime.evaluateV2(batch, options());
+              let settled = false;
+              const settlement = pending.then(
+                (exchangeOutcome) => {
+                  settled = true;
+                  return { outcome: exchangeOutcome };
+                },
+                (error: unknown) => {
+                  settled = true;
+                  return { error };
+                },
+              );
+              try {
+                await Promise.race([entered.promise, settlement]);
+                expect(settled).toBe(false);
+                setRuntimeConfigSnapshot({
+                  ...cfg,
+                  agents: { defaults: { ...cfg.agents?.defaults, decisionModel: "" } },
+                });
+                release.resolve();
+                expect(await settlement).toMatchObject({
+                  outcome: { status: "unavailable", reason: "retiring" },
+                });
+                expect(exchange).toHaveBeenCalledTimes(2);
+                expect(received).toHaveLength(1);
+                expect(arrivals).toBe(1);
+              } finally {
+                release.resolve();
+                await settlement;
+                exchangeGate = undefined;
+                setRuntimeConfigSnapshot(cfg);
+              }
+            } else {
+              expect(exchange).not.toHaveBeenCalled();
+            }
 
             const foreign = structuredClone(cfg);
             foreign.models!.providers!["liquid-ai"]!.baseUrl = origin + "/undeclared";
@@ -256,6 +351,7 @@ it.each(["profile", "environment", "missing-native"] as const)(
               reason: "unsupported-input",
             });
             expect(received).toHaveLength(1);
+            expect(arrivals).toBe(1);
             setRuntimeConfigSnapshot(cfg);
 
             const evaluate = provider.evaluate.bind(provider);
@@ -278,6 +374,7 @@ it.each(["profile", "environment", "missing-native"] as const)(
             });
             expect(revokedDuringPreparation).toBe(true);
             expect(received).toHaveLength(1);
+            expect(arrivals).toBe(1);
             expect(cfg.agents?.defaults?.model).toBe("liquid/liquid.auto");
             await resetPreparedModelRuntimeSnapshotsForTest();
           },

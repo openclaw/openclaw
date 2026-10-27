@@ -74,6 +74,16 @@ Installed plugins, catalog entries, skills, and tool summaries each contain 1,00
 items. The catalog uses 100-item cursor pages. The agent roster contains 300 agents;
 the tool report has 40 groups of 25 tools with effective-access diagnostics.
 
+Catalog counts below describe the complete represented result set, not the number of
+mounted cards. Large result grids, including uncapped publisher groups in search,
+mount a window while retaining all loaded entries in the catalog owner. Appending
+keeps visible cards keyed by plugin ID; native Tab and Shift+Tab traversal retain
+the focused row, its neighbors, and the first and last rows. Intermediate offscreen
+cards have no DOM node to focus directly. Browser Find can only match mounted
+cards; use catalog search to find offscreen plugins. `data-catalog-scroll` records
+the mounted window and retained cards after scrolling to the final entry. The catalog
+`-100ms` variants delay only the browse RPC, not the whole network.
+
 | Scenario                     | Measured action and visible assertion                                         |
 | ---------------------------- | ----------------------------------------------------------------------------- |
 | `data-plugins-render`        | Open installed-plugin settings; assert 1,000 rows.                            |

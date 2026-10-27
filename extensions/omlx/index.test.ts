@@ -337,6 +337,7 @@ function runtimeContext(
   model = chatModel(providerConfig.baseUrl),
 ) {
   return {
+    capability: "chat" as const,
     config: { models: { providers: { omlx: providerConfig } } },
     env: {},
     provider: "omlx",
@@ -416,9 +417,9 @@ it.each<
       baseUrl,
       ...configured,
     });
-    expect(await provider?.prepareRuntimeAuth?.(runtimeContext(providerConfig, sourceKey))).toEqual(
-      { apiKey: runtimeKey },
-    );
+    expect(
+      await provider?.prepareRuntimeAuthV2?.(runtimeContext(providerConfig, sourceKey)),
+    ).toEqual({ apiKey: runtimeKey });
   },
 );
 
@@ -464,7 +465,7 @@ it.each<{
   );
 
   await expect(
-    provider?.prepareRuntimeAuth?.(runtimeContext(providerConfig, "fixture-profile-key", model)),
+    provider?.prepareRuntimeAuthV2?.(runtimeContext(providerConfig, "fixture-profile-key", model)),
   ).resolves.toEqual(scenario.expectedAuth);
 });
 
@@ -495,7 +496,7 @@ it("keeps configured keys and unoverridden profile credentials authoritative", a
     chatProvider({ request: { auth: { mode: "provider-default" } } }),
   ]) {
     expect(
-      await provider?.prepareRuntimeAuth?.(runtimeContext(providerConfig, "fixture-profile-key")),
+      await provider?.prepareRuntimeAuthV2?.(runtimeContext(providerConfig, "fixture-profile-key")),
     ).toBeUndefined();
   }
 });

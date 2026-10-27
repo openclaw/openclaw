@@ -4,6 +4,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import {
   readSessionEntriesFromStoreInWorker,
   withSessionEntriesFromStoresInWorker,
@@ -16,6 +18,7 @@ import {
   isSessionControllerWorkActive,
 } from "../sessions/session-controller.lifecycle.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
 import type {
   CreatedGatewaySession,
   CreateGatewaySessionParams,
@@ -36,6 +39,7 @@ export async function withSessionCreateAdmission(
   create: (
     params: CreateGatewaySessionParams,
     agentId: string,
+    generatedKey?: string,
   ) => Promise<CreateGatewaySessionResult>,
 ): Promise<CreateGatewaySessionResult> {
   const selectedAgent = resolveSessionCreateAgentId(params.cfg, {
@@ -60,11 +64,63 @@ export async function withSessionCreateAdmission(
   });
   try {
     return await admission.run(() =>
-      create({ ...params, commitGuard: assertCurrent }, selectedAgent.agentId),
+      createAdmittedGatewaySession(
+        { ...params, commitGuard: assertCurrent },
+        selectedAgent.agentId,
+        create,
+      ),
     );
   } finally {
     admission.release();
   }
+}
+
+async function createAdmittedGatewaySession(
+  params: CreateGatewaySessionParams,
+  agentId: string,
+  create: (
+    params: CreateGatewaySessionParams,
+    agentId: string,
+    generatedKey?: string,
+  ) => Promise<CreateGatewaySessionResult>,
+): Promise<CreateGatewaySessionResult> {
+  const incognito = params.incognito === true || isIncognitoSessionKey(params.parentSessionKey);
+  const generatedKey =
+    !params.key?.trim() && incognito
+      ? buildDashboardSessionKey(agentId, { incognito: true })
+      : undefined;
+  const sessionKey =
+    generatedKey ??
+    resolveSessionCreateTargetKey({
+      cfg: params.cfg,
+      agentId,
+      requestedKey: normalizeOptionalString(params.key),
+    });
+  const assertCurrent = () => params.commitGuard?.();
+  const created = await withSessionActorStorage(
+    { sessionKey, agentId },
+    {
+      create: true,
+      lifetime: { assertCurrent, assertReadable: assertCurrent },
+      authority: { assertCurrent, authorize() {} },
+    },
+    async (memory) => {
+      try {
+        return await create(params, agentId, generatedKey);
+      } finally {
+        const captured = captureSessionActorStorageOwner({ sessionActor: memory });
+        // Failed creation may outlive its caller's authority; only empty state is discarded.
+        const entry = captured?.owner?.readSession(memory.actor.target.sessionKey, {
+          assertCurrent() {},
+          authorize() {},
+        })?.entry;
+        if (!entry) {
+          captured?.owner?.closeSession(memory.actor.target.sessionKey);
+        }
+      }
+    },
+  );
+  return created ?? create(params, agentId, generatedKey);
 }
 
 export async function validateSessionCreateIncognitoTarget(

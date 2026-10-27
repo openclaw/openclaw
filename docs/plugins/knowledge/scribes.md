@@ -14,7 +14,9 @@ to the viewed agent's store. Part of the [Knowledge plugin](/plugins/knowledge)
 guide.
 
 Open **Knowledge** in the Control UI and select the **Scribes** tab. Scribes
-that are set up are listed under **On**; the rest are under **Available**.
+that are starting, on, paused, failing, or need reauthorization are listed under
+**On**. The rest are under **Available**, including a once scribe that is done,
+which can be started again.
 
 ## The scribes
 
@@ -77,7 +79,7 @@ alert, and recent runs.
 
 | Control           | Effect                                                                                                  |
 | ----------------- | ------------------------------------------------------------------------------------------------------- |
-| Run now           | Runs the automation immediately.                                                                        |
+| Run now           | Runs the automation immediately. If a run is already in progress, it does not start another.            |
 | Pause / Resume    | Disables or enables the automation.                                                                     |
 | Turn off…         | Removes the automation. The conversation is kept.                                                       |
 | Open conversation | Opens the scribe's conversation.                                                                        |

@@ -1,7 +1,13 @@
 // Synthetic loopback sessions.list traffic; the child owns only its fixture.
+// Cold restart burst (65 clients, one cold + one warm full sidebar page, no preconditioning):
+// node --import ./scripts/tsx.mjs scripts/perf/team-shape-measure.ts --cold-burst \
+//   --state-dir <synthetic-fixture> --entry <already-built-revision>/dist/entry.js
+// Repeat against each revision with the same fixture; result.json records selection equality,
+// startup/connect timings, client samples, raw handler phases/work, and host load.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { loadavg } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
@@ -25,7 +31,8 @@ const { values } = parseArgs({
     port: { type: "string", default: "40967" },
     samples: { type: "string", default: "5" },
     limit: { type: "string", default: "100" },
-    clients: { type: "string", default: "35" },
+    clients: { type: "string" },
+    "cold-burst": { type: "boolean", default: false },
     "poll-ms": { type: "string", default: "5000" },
     "state-dir": { type: "string" },
     entry: { type: "string", default: "dist/entry.js" },
@@ -42,9 +49,19 @@ if (port > 65535) {
 }
 const samples = integer(values.samples, "--samples");
 const limit = integer(values.limit, "--limit");
-const clientCount = integer(values.clients, "--clients");
+const coldBurst = values["cold-burst"];
+const clientCount = integer(values.clients ?? (coldBurst ? "65" : "35"), "--clients");
 const pollMs = integer(values["poll-ms"], "--poll-ms", 0);
 const mutationMs = integer(values["mutation-ms"], "--mutation-ms", 0);
+if (
+  coldBurst &&
+  (path.basename(values.entry) !== "entry.js" ||
+    path.basename(path.dirname(path.resolve(values.entry))) !== "dist" ||
+    values["start-at"] ||
+    mutationMs)
+) {
+  throw new Error("--cold-burst requires a built dist/entry.js and no --start-at or mutations");
+}
 if (!values["state-dir"]) {
   throw new Error("--state-dir is required (offline team-shape fixture)");
 }
@@ -102,6 +119,12 @@ async function connect() {
   });
   return client;
 }
+async function connectCohort() {
+  // 32 is the server's per-IP preauthentication budget.
+  for (let offset = 0; offset < clientCount; offset += 30) {
+    await Promise.all(Array.from({ length: Math.min(30, clientCount - offset) }, connect));
+  }
+}
 async function closeClients() {
   closing = true;
   await Promise.all(
@@ -136,8 +159,12 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     void cleanup().finally(() => process.exit(signal === "SIGINT" ? 130 : 143));
   });
 }
-try {
+async function measure() {
   let fixture: unknown;
+  let startedAt: number;
+  let processStarted: number;
+  let readyMs: number;
+  const hostLoadBefore = loadavg();
   {
     fixture = JSON.parse(readFileSync(path.join(root, "team-shape-summary.json"), "utf8"));
     if (!isRecord(fixture) || fixture.format !== "openclaw-team-shape-v1") {
@@ -162,7 +189,30 @@ try {
     const preload = path.join(output, "rpc-preload.mjs");
     writeFileSync(
       preload,
-      `import { isMainThread } from 'node:worker_threads';
+      coldBurst
+        ? `import { isMainThread } from 'node:worker_threads';
+import { channel } from 'node:diagnostics_channel';
+if (isMainThread) {
+  let rows = [];
+  channel('openclaw.session.list').subscribe(event => {
+    if (event.operation !== 'sessions.list' || rows.length >= ${clientCount * 2}) return;
+    const row = { phaseDurationsMs: event.phaseDurationsMs };
+    for (const key of ['handlerElapsedMs', 'prepareThreadCpuMs', 'rowThreadCpuMs',
+      'responseThreadCpuMs', 'prepareSyncMs', 'rowSyncMs', 'yieldWaitMs', 'yieldCount',
+      'selectedRowCount', 'dirtyRowCount', 'materializedRowCount', 'reusedRowCount']) {
+      if (typeof event[key] === 'number') row[key] = event[key];
+    }
+    rows.push(row);
+  });
+  process.on('message', message => {
+    if (message?.channel !== 'cold-list-capture') return;
+    process.channel?.ref();
+    process.send({ channel: 'cold-list-capture', rows }, () => process.channel?.unref());
+    rows = [];
+  });
+  process.channel?.unref();
+}`
+        : `import { isMainThread } from 'node:worker_threads';
 import { channel } from 'node:diagnostics_channel';
 const sessionLists = channel('openclaw.session.list');
 if (isMainThread) {
@@ -197,21 +247,29 @@ if (isMainThread) {
 }`,
     );
     const profile = `team-shape-${port}`;
+    startedAt = Date.now();
+    processStarted = performance.now();
     gateway = spawn(
       process.execPath,
-      buildGatewayBenchChildArgs(values.entry, port, [
-        "--import",
-        "./scripts/tsx.mjs",
-        "--import",
-        preload,
-        "--import",
-        "./scripts/lib/gateway-bench-profile-preload.ts",
-      ]),
+      buildGatewayBenchChildArgs(
+        values.entry,
+        port,
+        coldBurst
+          ? ["--import", preload]
+          : [
+              "--import",
+              "./scripts/tsx.mjs",
+              "--import",
+              preload,
+              "--import",
+              "./scripts/lib/gateway-bench-profile-preload.ts",
+            ],
+      ),
       {
         detached: true,
         stdio: ["ignore", "pipe", "pipe", "ipc"],
         env: createGatewayBenchEnv(path.join(root, "home"), configPath, {
-          startupTrace: false,
+          startupTrace: coldBurst,
           caseEnv: {
             OPENCLAW_STATE_DIR: root,
             OPENCLAW_PROFILE: profile,
@@ -250,10 +308,123 @@ if (isMainThread) {
       ) {
         break;
       }
-      await delay(250);
+      await delay(coldBurst ? 25 : 250);
     }
-    await readGatewayCpuUsage(gateway);
-    await delay(10_000);
+    readyMs = performance.now() - processStarted;
+    if (!coldBurst) {
+      await readGatewayCpuUsage(gateway);
+      await delay(10_000);
+    }
+  }
+  if (coldBurst) {
+    await connectCohort();
+    const connectedMs = performance.now() - processStarted;
+    const child = gateway;
+    const results = [];
+    let selection: { keys: string[]; totalCount: number } | undefined;
+    let equalSelection = true;
+    for (const phase of ["cold", "warm"] as const) {
+      const cohort = await Promise.all(
+        clients.map(async (client) => {
+          const at = performance.now();
+          const result = await rpc(client, "sessions.list", {
+            source: "sidebar",
+            rowMode: "sidebar",
+            limit,
+            archived: false,
+          });
+          const finishedMs = performance.now() - processStarted;
+          const latencyMs = performance.now() - at;
+          if (
+            !isRecord(result) ||
+            !Array.isArray(result.sessions) ||
+            !result.sessions.length ||
+            result.count !== result.sessions.length ||
+            typeof result.totalCount !== "number" ||
+            result.totalCount < result.sessions.length
+          ) {
+            throw new Error("Cold burst requires a nonempty full sessions.list result");
+          }
+          const keys = result.sessions.map((row: unknown) => {
+            if (!isRecord(row) || typeof row.key !== "string") {
+              throw new Error("sessions.list returned a row without its stable key");
+            }
+            return row.key;
+          });
+          const selected = { keys, totalCount: result.totalCount };
+          selection ??= selected;
+          equalSelection &&= JSON.stringify(selected) === JSON.stringify(selection);
+          return { latencyMs, finishedMs, count: keys.length, totalCount: result.totalCount };
+        }),
+      );
+      if (clientFailure) {
+        throw clientFailure;
+      }
+      const handlers = await new Promise<unknown[]>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          child.off("message", listener);
+          reject(new Error("Cold burst handler capture timed out"));
+        }, 30_000);
+        const listener = (message: unknown) => {
+          if (!isRecord(message) || message.channel !== "cold-list-capture") {
+            return;
+          }
+          clearTimeout(timer);
+          child.off("message", listener);
+          if (!Array.isArray(message.rows) || message.rows.length !== clientCount) {
+            reject(new Error("Incomplete cold burst handler capture"));
+            return;
+          }
+          resolve(message.rows);
+        };
+        child.on("message", listener);
+        child.send({ channel: "cold-list-capture" });
+      });
+      results.push({
+        phase,
+        latencyMs: summarize(cohort.map((sample) => sample.latencyMs)),
+        firstResultFromStartMs: Math.min(...cohort.map((sample) => sample.finishedMs)),
+        samples: cohort,
+        handlers,
+      });
+    }
+    const report = {
+      mode: "cold-burst",
+      revision: values.revision,
+      entry: path.resolve(values.entry),
+      fixture,
+      port,
+      clientCount,
+      limit,
+      startedAt,
+      readyMs,
+      connectedMs,
+      reconnectMs: connectedMs - readyMs,
+      hostLoadBefore,
+      hostLoadAfter: loadavg(),
+      selection,
+      equalSelection,
+      results,
+    };
+    writeFileSync(path.join(output, "result.json"), JSON.stringify(report, null, 2));
+    if (!equalSelection) {
+      throw new Error(`Cold/warm session selections differ: ${output}`);
+    }
+    console.log(
+      JSON.stringify({
+        output,
+        completed: true,
+        readyMs,
+        connectedMs,
+        equalSelection,
+        results: results.map((result) => ({
+          phase: result.phase,
+          latencyMs: result.latencyMs,
+          firstResultFromStartMs: result.firstResultFromStartMs,
+        })),
+      }),
+    );
+    return;
   }
   const variants: Array<{ name: string; params: SessionsListParams }> = [
     { name: "sidebar", params: { rowMode: "sidebar", source: "sidebar" } },
@@ -319,10 +490,7 @@ if (isMainThread) {
     await delay(startAt - Date.now());
   }
   const connectStart = performance.now();
-  // 32 is the server's per-IP preauthentication budget; reconnect overflow remains explicit.
-  for (let offset = 0; offset < clientCount; offset += 30) {
-    await Promise.all(Array.from({ length: Math.min(30, clientCount - offset) }, connect));
-  }
+  await connectCohort();
   const reconnectMs = performance.now() - connectStart;
   const child = gateway;
   const results = [];
@@ -503,6 +671,9 @@ if (isMainThread) {
   };
   writeFileSync(path.join(output, "result.json"), JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ output, reconnectMs, completed: true }));
+}
+try {
+  await measure();
 } finally {
   await cleanup();
 }
