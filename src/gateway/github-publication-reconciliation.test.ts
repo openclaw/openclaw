@@ -163,7 +163,6 @@ it("recovers independent worktrees while preserving each worktree's publication 
     await first.placements.startDispatch({
       ...session,
       agentId: "main",
-      profileId: "development",
       executionMode: "worker-turn",
     });
   }
