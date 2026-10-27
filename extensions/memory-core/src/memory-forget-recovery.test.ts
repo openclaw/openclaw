@@ -47,6 +47,7 @@ import type {
 
 const h = memoryForgetHarness();
 const { origins, tombstones, readText } = h;
+const targetTombstone = { agentId: "main", sessionId: "target", reason: "forgotten" };
 
 describe("memory forget", () => {
   const forget = (dryRun = false) => h.forget({ hookSources: ["gmail"], dryRun });
@@ -358,14 +359,7 @@ describe("memory forget", () => {
       );
       expect((await origins()).map((origin) => origin.entryKey)).toEqual(["clean-entry"]);
       const savedTombstones = tombstones();
-      expect(savedTombstones).toEqual([
-        {
-          agentId: "main",
-          sessionId: "target",
-          reason: "forgotten",
-          createdAt: expect.any(Number),
-        },
-      ]);
+      expect(savedTombstones).toEqual([{ ...targetTombstone, createdAt: expect.any(Number) }]);
 
       const repeated = await forget();
       expect(repeated.sessionIds).toEqual(["target"]);
@@ -608,14 +602,7 @@ describe("memory forget worker settlement", () => {
           message: expect.stringContaining("injected committed " + failResult + " reply failure"),
         });
         const savedTombstones = h.tombstones();
-        expect(savedTombstones).toEqual([
-          {
-            sessionId: "target",
-            agentId: "main",
-            reason: "forgotten",
-            createdAt: expect.any(Number),
-          },
-        ]);
+        expect(savedTombstones).toEqual([{ ...targetTombstone, createdAt: expect.any(Number) }]);
         expect(await state.snapshot()).toEqual({
           ...before,
           derived: failResult === "forget.mark" ? before.derived : empty,
