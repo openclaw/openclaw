@@ -66,6 +66,7 @@ it("reuses model search vocabulary until the row facts owner publishes a change"
       registerAgentHarness({
         id: "late-runtime",
         label: "Late runtime",
+        supports: () => ({ supported: true }),
         runAttempt: () => {
           throw new Error("Search must not execute a turn");
         },
