@@ -3958,7 +3958,6 @@
 ["src/commands/onboard-config-provenance.integration.test.ts","./onboard-non-interactive/config-write.js","44098fd88c689e040e22c048342914e4c02856fef2144a0b522f00890339e8d5",1]
 ["src/commands/onboard-config-provenance.integration.test.ts","./onboard-non-interactive/local/auth-choice-inference.js","4c0ac3126ae354ee28445ce32955fbe485b7bcdc19171b22a499081aab2c07a2",1]
 ["src/commands/onboard-config-provenance.integration.test.ts","./onboard-remote.js","98a101169c3da200871b8184ef75f4a975be3732e57749c05119db33bf19fba3",1]
-["src/commands/onboard-custom.test.ts","../plugins/provider-auth-input.js","d214eecf8d1f3d0c6f078a754f960e02bb30580fac8633fcbf22062dd5a9d998",1]
 ["src/commands/onboard-guided-manual.test.ts","../agents/auth-profiles.runtime.js","ce46e3ac14f3f2e75aafe79caf2f3078596ff077bb05e7693131c31d11eae8bb",1]
 ["src/commands/onboard-guided-manual.test.ts","../flows/provider-flow.js","4fb4ea2f6d48ec6c90d7ea06db70ecb92534a4802a33ee8463382bdb4d3fd7a0",1]
 ["src/commands/onboard-guided-manual.test.ts","../plugins/provider-setup-availability.js","22461a5805c73219ba4bbfe5ee5bb3a55590861ba659c0d88ad1a5fb8ea85cd6",1]
