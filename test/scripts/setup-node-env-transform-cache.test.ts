@@ -8,7 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("retains transform inputs while excluding only the two database membership inventories", () => {
+it("retains transform inputs while excluding audited membership inventories", () => {
   const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
   const step = action.runs.steps.find(
     (candidate: { name: string }) => candidate.name === "Resolve Vitest transform cache generation",
@@ -35,11 +35,13 @@ it("retains transform inputs while excluding only the two database membership in
     "test/vitest/vitest.ui-e2e.bundled.global-setup.ts",
     "test/vitest/vitest.channel-paths.mjs",
     "test/vitest/nested/vitest.database-worker-core-paths.mjs",
+    "test/vitest/nested/vitest.unit-fast-paths.mjs",
     "src/state/schema.sql",
   ];
   const excluded = [
     "test/vitest/vitest.database-worker-core-paths.mjs",
     "test/vitest/vitest.extension-database-workers-paths.mjs",
+    "test/vitest/vitest.unit-fast-paths.mjs",
     "node_modules/example/package.json",
     ".ci-harness/package.json",
     "docs/example.md",
