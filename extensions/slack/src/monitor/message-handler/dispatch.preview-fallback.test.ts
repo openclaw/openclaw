@@ -628,6 +628,21 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
           await params.replyOptions?.onItemEvent?.({ ...payload, kind: itemKind });
         } else if (entry.kind === "command_output" || entry.kind === "tool_start") {
           await emitSlackToolProgressTestEvent(params.replyOptions, entry, index);
+        } else if (entry.kind === "patch") {
+          const { kind: _kind, ...payload } = entry;
+          await params.replyOptions?.onPatchSummary?.(payload);
+          if (entry.phase === "end") {
+            await params.replyOptions?.onItemEvent?.({
+              itemId: entry.itemId,
+              toolCallId: entry.toolCallId,
+              kind: "patch",
+              phase: "end",
+              status: "completed",
+              title: entry.title ?? "Apply Patch",
+              name: entry.name,
+              meta: entry.summary,
+            });
+          }
         } else if (entry.kind === "plan") {
           const { kind: _kind, ...payload } = entry;
           await params.replyOptions?.onPlanUpdate?.(payload);
@@ -1272,20 +1287,14 @@ it.each([
   ["code", "```\n| Name | Value |\n| ---- | ----- |\n| Beta | 2     |\n```"],
   ["bullets", "*Beta*\n• Value: 2"],
 ] as const)(
-  "preserves %s table mode without normalizing the block fallback as authored text",
+  "preserves %s table mode when finalizing authored preview text",
   async (tables, expected) => {
     const { normalizeSlackOutboundText } =
       await vi.importActual<typeof import("../../format.js")>("../../format.js");
     normalizeSlackOutboundTextMock.mockImplementation(normalizeSlackOutboundText);
     try {
       finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
-      mockedDispatchSequence = [
-        finalReply(
-          presentation("| Name | Value |\n| --- | --- |\n| Beta | 2 |", [
-            { type: "buttons", buttons: [{ label: "Owner", value: "owner" }] },
-          ]),
-        ),
-      ];
+      mockedDispatchSequence = [textReply("| Name | Value |\n| --- | --- |\n| Beta | 2 |")];
 
       await dispatch({ cfg: { channels: { slack: { markdown: { tables } } } } });
 
@@ -1294,7 +1303,6 @@ it.each([
         channelId: "C123",
         messageId: "171234.567",
         text: expected,
-        blocks: expect.arrayContaining([expect.objectContaining({ type: "actions" })]),
       });
       expect(deliverRepliesMock).not.toHaveBeenCalled();
     } finally {
@@ -1308,11 +1316,12 @@ it.each([
     operation: "add",
     error: "missing_scope",
     details: { needed: "reactions:write", provided: "chat:write" },
+    suffix: "; needed: reactions:write; provided: chat:write",
   },
-  { operation: "remove", error: "invalid_auth", details: undefined },
+  { operation: "remove", error: "invalid_auth", details: undefined, suffix: "" },
 ])(
   "logs the formatted Slack error when typing reaction $operation fails",
-  async ({ operation, error, details }) => {
+  async ({ operation, error, details, suffix }) => {
     (operation === "add" ? reactSlackMessageMock : removeSlackReactionMock).mockRejectedValueOnce(
       createSlackPlatformError(error, details),
     );
@@ -1322,7 +1331,9 @@ it.each([
     if (operation === "remove") {
       await expect(typing.stop?.()).resolves.toBeUndefined();
     }
-    expect(logVerboseMock).toHaveBeenCalledWith(expect.stringContaining(error));
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      `slack send: typing reaction${operation === "remove" ? " removal" : ""} failed: An API error occurred: ${error}; code: slack_webapi_platform_error; slack error: ${error}${suffix}`,
+    );
   },
 );
 
@@ -1673,6 +1684,25 @@ it.each<{
       }),
     ],
   },
+  {
+    name: "patch item identity",
+    events: [
+      {
+        kind: "patch",
+        itemId: "patch:item-1",
+        toolCallId: "patch-call-1",
+        name: "apply_patch",
+        phase: "end",
+        summary: "updated Slack progress tests",
+      },
+    ],
+    updates: [
+      planUpdate("Apply Patch — updated Slack progress tests"),
+      taskUpdate(expect.stringMatching(/^patch_item_1_[a-f0-9]{8}$/), "Apply Patch", "complete", {
+        details: "updated Slack progress tests",
+      }),
+    ],
+  },
 ])("renders native progress from $name", async ({ events, updates, progress }) => {
   await dispatchNativeProgressScenario(events, { progress });
   expectNativeProgressStart(updates);
@@ -1933,18 +1963,24 @@ it("settles a failed native progress rotation before starting the queued turn", 
 });
 
 it("completes a native Slack progress plan even when no final text is sent", async () => {
-  const tools = ["tool one", "tool two", "tool three"];
-  await dispatchNativeProgressScenario([{ kind: "concurrent_items", progressTexts: tools }], {
-    finalPayload: null,
-  });
+  await dispatchNativeProgressScenario(
+    [{ kind: "concurrent_items", progressTexts: ["tool one", "tool two", "tool three"] }],
+    { finalPayload: null },
+  );
 
   expectNativeProgressStart([
     planUpdate("tool three"),
-    ...tools.map((title) => taskUpdate(contentTaskId("item"), title, "in_progress")),
+    taskUpdate(contentTaskId("item"), "tool one", "in_progress"),
+    taskUpdate(contentTaskId("item"), "tool two", "in_progress"),
+    taskUpdate(contentTaskId("item"), "tool three", "in_progress"),
   ]);
   expectNoCalls(appendSlackStreamMock, deliverRepliesMock);
   expectMockCallArgFields(stopSlackStreamMock, 0, {
-    chunks: tools.map((title) => taskUpdate(contentTaskId("item"), title, "complete")),
+    chunks: [
+      taskUpdate(contentTaskId("item"), "tool one", "complete"),
+      taskUpdate(contentTaskId("item"), "tool two", "complete"),
+      taskUpdate(contentTaskId("item"), "tool three", "complete"),
+    ],
   });
 });
 
@@ -2297,6 +2333,15 @@ it("retracts and resumes Slack plans while retaining other block progress", asyn
       expect(text).toContain("blocked");
       expect(text).toContain("▸ Resume");
     }),
+    { kind: "assistant_start" },
+    { kind: "plan", phase: "update", steps: [] },
+    checkpoint(async () => {
+      const text = draftUpdateTexts(draftStream).at(-1);
+      expect(text).toContain("Independent work");
+      expect(text).toContain("blocked");
+      expect(text).not.toContain("Resume");
+      expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    }),
   ];
 
   await dispatch({
@@ -2409,7 +2454,26 @@ it.each(["interrupted", "already-visible", "chart"] as const)(
       mockedReplyThreadTsSequence = [undefined];
     }
     if (scenario === "chart") {
-      mockedSlackReplyBlocks = [section(spokenText)];
+      mockedSlackReplyBlocks = [
+        { type: "section", text: { type: "mrkdwn", text: "Spoken answer", verbatim: true } },
+        {
+          type: "data_visualization",
+          title: "Revenue",
+          chart: {
+            type: "bar",
+            series: [
+              {
+                name: "<@U123>",
+                data: [
+                  { label: "Q1", value: 12 },
+                  { label: "Q2", value: 18 },
+                ],
+              },
+            ],
+            axis_config: { categories: ["Q1", "Q2"] },
+          },
+        },
+      ];
     }
     const payload = {
       ...ttsPayload(spokenText, previouslyVisible),
@@ -2435,13 +2499,7 @@ it.each(["interrupted", "already-visible", "chart"] as const)(
     if (scenario === "chart") {
       expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, {
         text: "Spoken answer\n\nRevenue (bar chart)\n- &lt;@U123&gt;: Q1: 12; Q2: 18",
-        blocks: expect.arrayContaining([
-          expect.objectContaining({
-            type: "section",
-            text: expect.objectContaining({ text: spokenText }),
-          }),
-          expect.objectContaining({ type: "data_visualization", title: "Revenue" }),
-        ]),
+        blocks: mockedSlackReplyBlocks,
       });
       expect(normalizeSlackOutboundTextMock).not.toHaveBeenCalled();
     } else if (scenario === "already-visible") {
@@ -2620,6 +2678,26 @@ it.each(["acknowledged-final", "append", "stop"] as const)(
     }
   },
 );
+it("normalizes only authored preview text when blocks own their fallback", async () => {
+  useDraftStream(true);
+  mockedDispatchSequence = [
+    finalReply(
+      presentation("**Summary**", [
+        {
+          type: "buttons",
+          buttons: [{ label: "Owner <@U123>", action: { type: "callback", value: "owner" } }],
+        },
+      ]),
+    ),
+  ];
+
+  await dispatch();
+
+  expect(normalizeSlackOutboundTextMock).toHaveBeenCalledTimes(1);
+  expect(normalizeSlackOutboundTextMock).toHaveBeenCalledWith("**Summary**", { tableMode: "code" });
+  expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, { text: "**Summary**" });
+});
+
 it.each(["plain", "detailed"] as const)(
   "deduplicates a %s plan headline and preamble",
   async (format) => {
