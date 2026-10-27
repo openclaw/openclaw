@@ -7,7 +7,6 @@ import type { Usage } from "../../llm/types.js";
 import { normalizeUsage } from "../usage.js";
 import * as promptCacheFacts from "./prompt-cache-facts.js";
 import {
-  beginPromptCacheObservation,
   collectPromptCacheTools,
   completePromptCacheObservation,
   recordAggregateTruncation,
