@@ -1,6 +1,7 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { connections } from "./connections.js";
 import { markdown, extractLinks, resolveLinks, wikiHref } from "./markdown-links.js";
+import { effectiveRecord } from "./merge.js";
 import type { Envelope, LoadedRecord } from "./model.js";
 import { recordPath } from "./record-path.js";
 import { useTestTempDirs } from "./test-support.js";
@@ -27,6 +28,82 @@ const record = (
   revision: 1,
   // Fixture metadata carries only the envelope fields link resolution reads.
   metadata: { aliases: [], lifecycle: "active", ...extra } as Envelope,
+});
+
+it("keeps a live record's link parse warm across unrelated document churn", () => {
+  const source = record("live", "Live", "people/live.md", "[[live cache owner]]");
+  const candidates = [source];
+  resolveLinks(source, candidates);
+  for (let index = 0; index < 20_001; index++) {
+    resolveLinks(record(`other-${index}`, "Other", "people/other.md", `churn ${index}`), []);
+  }
+  const lexer = vi.spyOn(markdown, "lexer");
+  try {
+    resolveLinks({ ...source }, candidates);
+    expect(lexer).not.toHaveBeenCalled();
+    source.body = "[[changed cache owner]]";
+    expect(resolveLinks(source, candidates)).toEqual([
+      { href: wikiHref("changed cache owner"), status: "missing" },
+    ]);
+    expect(lexer).toHaveBeenCalledOnce();
+  } finally {
+    lexer.mockRestore();
+  }
+});
+
+it("shares link extraction with merged projections before their first parse", () => {
+  const source = record("source", "Source", "people/source.md", "[[Target]]", {
+    dependencies: ["old-target"],
+  });
+  const target = record("target", "Target", "people/target.md");
+  const redirects = new Map([["old-target", "target"]]);
+  const candidates = [target];
+  const lexer = vi.spyOn(markdown, "lexer");
+  try {
+    expect(resolveLinks(effectiveRecord(source, redirects), candidates)).toEqual([
+      { href: wikiHref("Target"), status: "resolved", id: "target" },
+    ]);
+    resolveLinks(effectiveRecord(source, redirects), candidates);
+    resolveLinks(source, candidates);
+    expect(lexer).toHaveBeenCalledOnce();
+    const projection = effectiveRecord(source, redirects);
+    expect(resolveLinks({ ...projection, body: "[[Changed]]" }, candidates)).toEqual([
+      { href: wikiHref("Changed"), status: "missing" },
+    ]);
+    expect(resolveLinks(source, candidates)).toEqual([
+      { href: wikiHref("Target"), status: "resolved", id: "target" },
+    ]);
+  } finally {
+    lexer.mockRestore();
+  }
+});
+
+it("revalidates unsettled files while reusing links only for unchanged bytes", async () => {
+  const { cp, readFile, writeFile } = await import("node:fs/promises");
+  const { SampleVault } = await import("./vault.js");
+  const { sampleVaultRoot } = await import("./plugin-files.js");
+  const root = tempDirs.make("knowledge-unsettled-links-");
+  await cp(sampleVaultRoot(), root, { recursive: true });
+  const cache: import("./vault.js").ScanCache = {};
+  const vault = new SampleVault(root, { visibility: "sample" }, false, undefined, cache);
+  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+  const lexer = vi.spyOn(markdown, "lexer");
+  try {
+    const first = await vault.scan();
+    lexer.mockClear();
+    expect(await vault.scan()).not.toBe(first);
+    expect(lexer).not.toHaveBeenCalled();
+    const file = root + "/people/alex-rivera.md";
+    await writeFile(file, (await readFile(file, "utf8")) + "\n[[New missing target]]\n");
+    const changed = await vault.scan();
+    expect(changed.issues.some((issue) => issue.message.includes("New%20missing%20target"))).toBe(
+      true,
+    );
+    expect(lexer).toHaveBeenCalledOnce();
+  } finally {
+    lexer.mockRestore();
+    clock.mockRestore();
+  }
 });
 
 it("Markdown tokenization excludes code, escapes, HTML, images and generated backlinks", () => {

@@ -170,6 +170,7 @@ const { values } = parseArgs({
     "worker-snapshots": { type: "boolean", default: false },
     "worker-retained-heap": { type: "boolean", default: false },
     "worker-heap-snapshot": { type: "boolean", default: false },
+    "knowledge-worker-heap": { type: "boolean", default: false },
     "worker-heap-done-file": { type: "string" },
     "worker-heap-peer-done-file": { type: "string" },
     "worker-baseline-dir": { type: "string" },
@@ -1082,7 +1083,9 @@ async function workerHeapCommand(worker: WorkerHeapEvidence, operation: string) 
   }
 }
 const targetWorkerScript = (script: string) =>
-  /^(sqlite-store|prepared-model-catalog|git-operation)\.worker\.[cm]?[jt]s$/.test(script);
+  /^(?:(sqlite-store|prepared-model-catalog|git-operation)\.worker|storage-worker)\.[cm]?[jt]s$/.test(
+    script,
+  );
 const project = Array.isArray(fixture.projectWorktrees) ? fixture.projectWorktrees[0] : undefined;
 const coldBaseRefs =
   isRecord(project) && Array.isArray(project.coldBaseRefs)
@@ -1391,6 +1394,41 @@ if (teamPluginCatalog) {
   for (const id of bundled) {
     cfg.plugins.entries[id] = { ...cfg.plugins.entries[id], enabled: true };
   }
+}
+let knowledgeRoot: string | undefined;
+let knowledgeRevision = 0;
+const knowledgeLatencies: number[] = [];
+const writeKnowledgeRecord = (index: number) => {
+  const title = `Synthetic person ${index}`;
+  const body =
+    `# ${title}\n\n[[Synthetic person ${(index + 1) % 256}]]\n\n` +
+    `Synthetic knowledge paragraph ${index} revision ${knowledgeRevision}.\n\n`.repeat(300);
+  writeFileSync(
+    path.join(knowledgeRoot!, `person-${index}.md`),
+    `---\nformat: knowledge-record-v1\nid: synthetic_person_${index}\nrevision: ${knowledgeRevision + 1}\nkind: page\ntitle: ${title}\nscope:\n  visibility: private\nrecorded_at: 2026-10-01T00:00:00Z\nupdated_at: 2026-10-01T00:00:00Z\nlifecycle: active\ntype: person\n---\n${body}`,
+  );
+};
+if (values["knowledge-worker-heap"]) {
+  const { StoreRegistry } = await import("../../extensions/knowledge/src/store-registry.ts");
+  const registry = new StoreRegistry(path.join(root, "knowledge"));
+  try {
+    const snapshot = registry.provision("agent:main");
+    knowledgeRoot = path.join(
+      snapshot.stores[snapshot.bindings["agent:main"]!]!.root,
+      "private",
+      "people",
+    );
+    mkdirSync(knowledgeRoot, { recursive: true });
+    for (let index = 0; index < 256; index++) {
+      writeKnowledgeRecord(index);
+    }
+  } finally {
+    registry.close();
+  }
+  cfg.plugins.enabled = true;
+  cfg.plugins.allow = [...new Set([...(cfg.plugins.allow ?? []), "knowledge"])];
+  cfg.plugins.slots = { ...cfg.plugins.slots, memory: "knowledge" };
+  cfg.plugins.entries.knowledge = { enabled: true, config: { writesEnabled: false } };
 }
 const dashboardBoardId = "synthetic-soak-board";
 const dashboardPreviewUrl = "https://github.com/openclaw-fixture/soak/issues/1";
@@ -5607,6 +5645,26 @@ try {
     }
   };
   const runScenario = async (measuredRound?: number, operationCount = operations) => {
+    if (knowledgeRoot) {
+      knowledgeRevision++;
+      for (let index = 0; index < 25; index++) {
+        writeKnowledgeRecord((knowledgeRevision * 25 + index) % 256);
+      }
+      const started = performance.now();
+      const response = await rpc(sender, "plugins.sessionAction", {
+        pluginId: "knowledge",
+        actionId: "agent_query",
+        payload: { agent: "main", operation: "status", input: {} },
+      });
+      if (!isRecord(response) || response.ok !== true) {
+        throw new Error(`Knowledge scan failed: ${JSON.stringify(response)}`);
+      }
+      knowledgeLatencies.push(performance.now() - started);
+      writeFileSync(
+        path.join(output, "knowledge-latencies.json"),
+        JSON.stringify(knowledgeLatencies),
+      );
+    }
     if (idleScenario) {
       idleTurnCohorts = [];
       for (let offset = 0; offset < keys.length; offset += runCount) {
@@ -5895,6 +5953,21 @@ try {
     await drainEvents();
   }
   const warmupStartedAt = performance.now();
+  if (values["knowledge-worker-heap"]) {
+    const response = await rpc(sender, "plugins.sessionAction", {
+      pluginId: "knowledge",
+      actionId: "agent_query",
+      payload: { agent: "main", operation: "status", input: {} },
+    });
+    if (
+      !isRecord(response) ||
+      response.ok !== true ||
+      !isRecord(response.result) ||
+      response.result.records !== 256
+    ) {
+      throw new Error(`Knowledge worker warmup failed: ${JSON.stringify(response)}`);
+    }
+  }
   if (scenario === "chat.startup" && startupTemperature === "warm") {
     for (const target of startupTargets) {
       await readStartup(sender, target);
@@ -5961,7 +6034,11 @@ try {
       workerHeapEvidence.workers.push(evidence);
       evidence.before = await workerHeapCommand(evidence, "collect");
     }
-    for (const script of ["sqlite-store.worker.js", "prepared-model-catalog.worker.js"]) {
+    for (const script of [
+      "sqlite-store.worker.js",
+      "prepared-model-catalog.worker.js",
+      ...(values["knowledge-worker-heap"] ? ["storage-worker.js"] : []),
+    ]) {
       const workers = workerHeapEvidence.workers.filter((worker) => worker.script === script);
       if (!workers.length) {
         workerHeapEvidence.complete = false;
@@ -7410,6 +7487,7 @@ try {
       "sqlite-store.worker.js",
       "prepared-model-catalog.worker.js",
       "git-operation.worker.js",
+      ...(values["knowledge-worker-heap"] ? ["storage-worker.js"] : []),
     ]) {
       const largest = startedHeapWorkers
         .filter((worker) => worker.script === script && worker.after?.ok === true)

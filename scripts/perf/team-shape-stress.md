@@ -171,6 +171,17 @@ the largest SQLite-store, model-catalog, and Git-operation worker after the meas
 The worker profiler and explicit collections make this diagnostic evidence;
 use an ordinary timing pass for latency and GC acceptance.
 
+Add `--knowledge-worker-heap --worker-heap-snapshot` to include the Knowledge
+storage worker. This selects Knowledge as the memory plugin, provisions one
+synthetic private store with 256 linked person pages of about 14 KiB each, and
+edits 25 pages before each round's status RPC. The post-window snapshot includes
+the storage worker; `knowledge-latencies.json` records status round trips.
+These documents are a controlled retention workload, not a production corpus.
+The existing 40-plugin catalog remains enabled, with Knowledge added to it.
+RSS remains process-wide; a worker's heap snapshot does not establish its share
+of native RSS. Use `knowledge-worker-heap-measure.mjs --scan-pages 256` for a
+larger operation-latency sample and worker CPU/allocation counters.
+
 Add `--worktree-tool-churn` to create managed worktrees for foreground sessions
 and exercise provisioning workers before measuring the same concurrent turn workload.
 
