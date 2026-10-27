@@ -102,7 +102,10 @@ export function createActivityPage(context: ApplicationContext, initial?: RouteL
 }
 
 export async function settleActivity() {
-  await new Promise(requestAnimationFrame);
+  // Live Activity publishes in a queued task, which need not precede the next frame.
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
   flush();
 }
 
